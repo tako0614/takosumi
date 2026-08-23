@@ -1,11 +1,11 @@
-# Takosumi Cloud
+# Takosumi hosted service
 
-Takosumi Cloud is hosted Takosumi for running OpenTofu modules from Git and
-connecting them to the cloud services they need. A Workspace keeps the plan,
+The Takosumi hosted service runs OpenTofu modules from Git and connects them to
+the cloud services they need. A Workspace keeps the plan,
 apply, state, outputs, audit, usage, and prepaid credit together.
 
 > **Status:** Pre-GA. Code or a catalog entry does not mean a service is
-> available. The Dashboard and the authenticated Cloud catalog expose the
+> available. The Dashboard and the authenticated Takosumi catalog expose the
 > current `available` state.
 
 ## Your first deployment
@@ -29,9 +29,9 @@ runner's point of view. Each provider control plane owns the lifecycle of the
 objects it creates. Takosumi does not duplicate those objects into a second
 resource ledger.
 
-## What Takosumi Cloud owns
+## What the Takosumi hosted service owns
 
-Takosumi Cloud provides:
+The Takosumi hosted service provides:
 
 - the hosted dashboard, Accounts, runner, state, outputs, and audit;
 - provider connections and runner-only credential materialization;
@@ -39,23 +39,23 @@ Takosumi Cloud provides:
 - available hosted services and standard protocol endpoints; and
 - Interface and InterfaceBinding authorization for deployed services.
 
-Cloud availability, price, capacity, billing, and support are separate from
+Hosted-service availability, price, capacity, billing, and support are separate from
 Takoform Form maturity. Publishing a provider or schema alone does not enable
-a Cloud service.
+a hosted service.
 
 ## Takoform
 
-Takosumi Cloud intends to be the official Takoform Host, but the current Host
+The Takosumi hosted service intends to be the official Takoform Host, but the current Host
 candidate is unpublished and unmounted. Pre-release FormRefs, schema digests,
 and Host routes are not advertised as production capabilities.
 
 After release, Takoform will still be an ordinary provider rather than a hidden
-runner mode. The Cloud default uses ProviderConnection and ProviderBinding, and
+runner mode. The hosted-service default uses ProviderConnection and ProviderBinding, and
 users may replace it with their own compatible Host connection.
 
 ## Data endpoints
 
-Takosumi Cloud can expose S3-compatible object access and OpenAI-compatible AI
+The Takosumi hosted service can expose S3-compatible object access and OpenAI-compatible AI
 access for existing services. These are data paths, not creation APIs. The
 repository's provider graph owns lifecycle; outputs and Interfaces provide the
 endpoint and authorization.

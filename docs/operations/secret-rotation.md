@@ -1,7 +1,7 @@
 # Secret rotation runbook
 
 This runbook covers Takosumi OSS and Takosumi for Operator secret classes.
-Closed Takosumi Cloud payment, Cloud-capacity, and AI-upstream secrets are
+Closed Takosumi hosted service payment, Cloud-capacity, and AI-upstream secrets are
 owned by `takosumi-cloud/docs/operations/secret-rotation.md`.
 
 Cadence, audit requirements, and responsibility follow
@@ -150,7 +150,7 @@ operator must use its reviewed deployment adapter, validate the exact selected
 secret names, pass values without logging them, perform a fixed readback, and
 keep only public IDs/digests in evidence.
 
-Takosumi Cloud is stricter: runtime-secret mutation is part of the fixed
+Takosumi hosted service is stricter: runtime-secret mutation is part of the fixed
 controller release and raw Wrangler secret/deploy commands are not an operator
 path. The closed adapter accepts an exact value-free
 `takosumi.cloud-runtime-secret-files@v1` manifest whose paths point to

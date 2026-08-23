@@ -1205,9 +1205,9 @@ export const ja = {
     "登録しました。ブラウザの確認ダイアログに応じてください。",
   "account.installTarget.unsupported":
     "このブラウザはこの機能に未対応です。ストア側でインスタンス URL を入力してください。",
-  "account.apiKeys.title": "Cloud API キー",
+  "account.apiKeys.title": "Takosumi API キー",
   "account.apiKeys.subtitle":
-    "CLIや外部ツールからTakosumi Cloudを操作するためのキーを発行・失効できます。",
+    "CLIや外部ツールから /api/v1 の Takosumi API を使うためのキーを発行・失効できます。",
   "account.apiKeys.secretOnce": "秘密値は作成時のみ表示",
   "account.apiKeys.name": "キーの名前",
   "account.apiKeys.namePlaceholder": "例: 開発用 CLI",
@@ -1278,7 +1278,7 @@ export const ja = {
   "billing.commercial.pageSubtitle":
     "利用可能クレジットの確認、プリペイドクレジットの追加、自動チャージの管理を行います。",
   "billing.commercial.description":
-    "プリペイドクレジットはTakosumi Cloudの使用量に充当され、有効期限はありません。",
+    "プリペイドクレジットはTakosumiの使用量に充当され、有効期限はありません。",
   "billing.commercial.loadError":
     "プリペイドクレジットと支払い情報を読み込めませんでした: {message}",
   "billing.commercial.actionError":
@@ -1291,18 +1291,18 @@ export const ja = {
     "支払い設定をキャンセルしました。変更はありません。",
   "billing.commercial.manage": "支払い方法を管理",
   "billing.commercial.status.unknown": "不明",
-  "billing.commercial.account.status.active": "クラウド利用可能",
-  "billing.commercial.account.status.trialing": "クラウド利用可能",
+  "billing.commercial.account.status.active": "Takosumi 利用可能",
+  "billing.commercial.account.status.trialing": "Takosumi 利用可能",
   "billing.commercial.account.status.pastDue": "支払い確認が必要",
-  "billing.commercial.account.status.disabled": "クラウド利用停止中",
+  "billing.commercial.account.status.disabled": "Takosumi 利用停止中",
   "billing.commercial.account.blocked.paymentDisputed":
-    "支払いに異議申し立てがあるため、新しいTakosumi Cloudの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い設定で異議申し立てを解決してください。",
+    "支払いに異議申し立てがあるため、新しいTakosumiの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い設定で異議申し立てを解決してください。",
   "billing.commercial.account.blocked.paymentPastDue":
-    "支払いを確認できないため、新しいTakosumi Cloudの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い方法を確認してください。",
+    "支払いを確認できないため、新しいTakosumiの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い方法を確認してください。",
   "billing.commercial.account.blocked.disabled":
-    "課金アカウントが無効なため、新しいTakosumi Cloudの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い設定を確認してください。",
+    "課金アカウントが無効なため、新しいTakosumiの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い設定を確認してください。",
   "billing.commercial.account.blocked.suspended":
-    "課金アカウントの確認が必要なため、新しいTakosumi Cloudの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い設定を確認してください。",
+    "課金アカウントの確認が必要なため、新しいTakosumiの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い設定を確認してください。",
   "billing.commercial.lowCredit.autoRecharge":
     "利用可能クレジットが少なくなっています。保存済みのしきい値で自動チャージされます。",
   "billing.commercial.lowCredit.manual":

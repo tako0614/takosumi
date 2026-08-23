@@ -41,7 +41,7 @@ blockerとして扱います。無関係なroutine artifact releaseは一律に�
   必要に応じて追加し、Project / Capsule graph、ProviderConnection、Secret、StateVersion、
   Output、AuditEvent の isolation scope とする。
 - **Quota/showback ledger**: Takosumi platform worker が持つ operator-selected disabled/showback records。
-  official billing / payment processor records are Takosumi Cloud-only commercial records.
+  official billing / payment processor records are Takosumi hosted service-only commercial records.
 - **Cloud account**: provider account used by a Workspace-owned ProviderConnection.
   AWS/GitHub/Kubernetes/custom provider access is restored through
   ProviderConnections / Secret / provider policy state, not by taking over a

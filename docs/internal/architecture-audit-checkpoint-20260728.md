@@ -248,7 +248,7 @@ The following passed after the final focused fixes:
 - Takosumi Store tests: 207;
 - `mobile-kit` check and tests: 190;
 - `takosumi-mobile` check and tests: 19;
-- Takosumi Cloud focused billing/usage/Stripe tests: 91;
+- Takosumi hosted service focused billing/usage/Stripe tests: 91;
 - Cloud generated binding verification, platform typecheck, bundle, and dry-run;
 - `git diff --check` in all eleven affected repositories.
 

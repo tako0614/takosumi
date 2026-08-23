@@ -8,8 +8,8 @@ import {
   TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES,
 } from "@takosjp/takosumi-accounts-contract";
 import {
-  buildSelfServiceCloudApiKeyRequest,
-  normalizeCloudApiKeyScopeCatalog,
+  buildSelfServiceTakosumiApiKeyRequest,
+  normalizeTakosumiApiKeyScopeCatalog,
 } from "../../../../../dashboard/src/views/account/lib/tokens.ts";
 import { en } from "../../../../../dashboard/src/i18n/en.ts";
 import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
@@ -24,7 +24,7 @@ const read = (relativePath: string) =>
     "utf8",
   );
 
-const component = read("components/CloudApiKeysCard.tsx");
+const component = read("components/TakosumiApiKeysCard.tsx");
 const client = read("lib/tokens.ts");
 
 const CATALOG = {
@@ -73,7 +73,7 @@ const CATALOG = {
   ],
 } as const;
 
-describe("Cloud API key management", () => {
+describe("Takosumi API key management", () => {
   test("uses the canonical Accounts PAT contract and supports revoke", () => {
     expect(client).toContain("TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH");
     expect(client).toContain("TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH");
@@ -109,7 +109,7 @@ describe("Cloud API key management", () => {
       "read",
       "write",
     ]);
-    expect(component).toContain("listCloudApiKeyScopeCatalog");
+    expect(component).toContain("listTakosumiApiKeyScopeCatalog");
     expect(component).toContain("selfService");
     expect(component).toContain('workspaceBinding === "required"');
     expect(component).not.toContain(
@@ -122,7 +122,7 @@ describe("Cloud API key management", () => {
 
   test("never sends operator-issued admin scope through self-service", () => {
     expect(() =>
-      buildSelfServiceCloudApiKeyRequest(
+      buildSelfServiceTakosumiApiKeyRequest(
         {
           name: "Development CLI",
           scopes: ["read", "admin", "write"],
@@ -134,7 +134,7 @@ describe("Cloud API key management", () => {
 
   test("accepts only catalog-advertised self-service scopes", () => {
     expect(
-      buildSelfServiceCloudApiKeyRequest(
+      buildSelfServiceTakosumiApiKeyRequest(
         {
           name: "Development CLI",
           scopes: ["read", "write"],
@@ -149,14 +149,14 @@ describe("Cloud API key management", () => {
 
   test("requires a workspace for every required-binding scope", () => {
     expect(() =>
-      buildSelfServiceCloudApiKeyRequest(
+      buildSelfServiceTakosumiApiKeyRequest(
         { name: "Inventory", scopes: ["resources:read"] },
         CATALOG.scopes,
       ),
     ).toThrow("requires a workspace binding");
 
     expect(
-      buildSelfServiceCloudApiKeyRequest(
+      buildSelfServiceTakosumiApiKeyRequest(
         {
           name: "Inventory",
           scopes: ["resources:read"],
@@ -173,13 +173,13 @@ describe("Cloud API key management", () => {
 
   test("rejects empty and duplicate create scopes", () => {
     expect(() =>
-      buildSelfServiceCloudApiKeyRequest(
+      buildSelfServiceTakosumiApiKeyRequest(
         { name: "Empty", scopes: [] },
         CATALOG.scopes,
       ),
     ).toThrow("at least one scope");
     expect(() =>
-      buildSelfServiceCloudApiKeyRequest(
+      buildSelfServiceTakosumiApiKeyRequest(
         { name: "Duplicate", scopes: ["read", "read"] },
         CATALOG.scopes,
       ),
@@ -187,15 +187,15 @@ describe("Cloud API key management", () => {
   });
 
   test("rejects malformed or unversioned scope catalogs", () => {
-    expect(normalizeCloudApiKeyScopeCatalog(CATALOG)).toEqual(CATALOG);
+    expect(normalizeTakosumiApiKeyScopeCatalog(CATALOG)).toEqual(CATALOG);
     expect(() =>
-      normalizeCloudApiKeyScopeCatalog({
+      normalizeTakosumiApiKeyScopeCatalog({
         kind: "takosumi.account-pat-scope-catalog@old",
         scopes: CATALOG.scopes,
       }),
     ).toThrow("scope catalog");
     expect(() =>
-      normalizeCloudApiKeyScopeCatalog({
+      normalizeTakosumiApiKeyScopeCatalog({
         kind: TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_KIND,
         scopes: ["read"],
       }),
@@ -204,10 +204,10 @@ describe("Cloud API key management", () => {
 
   test("rejects catalog key drift and widened built-in authority", () => {
     expect(() =>
-      normalizeCloudApiKeyScopeCatalog({ ...CATALOG, extra: true }),
+      normalizeTakosumiApiKeyScopeCatalog({ ...CATALOG, extra: true }),
     ).toThrow("scope catalog");
     expect(() =>
-      normalizeCloudApiKeyScopeCatalog({
+      normalizeTakosumiApiKeyScopeCatalog({
         ...CATALOG,
         scopes: [
           { ...CATALOG.scopes[0], extra: true },
@@ -216,7 +216,7 @@ describe("Cloud API key management", () => {
       }),
     ).toThrow("scope catalog");
     expect(() =>
-      normalizeCloudApiKeyScopeCatalog({
+      normalizeTakosumiApiKeyScopeCatalog({
         ...CATALOG,
         scopes: [
           {
@@ -228,7 +228,7 @@ describe("Cloud API key management", () => {
       }),
     ).toThrow("scope catalog");
     expect(() =>
-      normalizeCloudApiKeyScopeCatalog({
+      normalizeTakosumiApiKeyScopeCatalog({
         ...CATALOG,
         scopes: CATALOG.scopes.map((entry) =>
           entry.scope === "admin" ? { ...entry, selfService: true } : entry,
@@ -236,7 +236,7 @@ describe("Cloud API key management", () => {
       }),
     ).toThrow("scope catalog");
     expect(() =>
-      normalizeCloudApiKeyScopeCatalog({
+      normalizeTakosumiApiKeyScopeCatalog({
         ...CATALOG,
         scopes: CATALOG.scopes.map((entry) =>
           entry.scope === "resources:read"
@@ -246,7 +246,7 @@ describe("Cloud API key management", () => {
       }),
     ).toThrow("scope catalog");
     expect(() =>
-      normalizeCloudApiKeyScopeCatalog({
+      normalizeTakosumiApiKeyScopeCatalog({
         ...CATALOG,
         scopes: CATALOG.scopes.map((entry) =>
           entry.scope === "read"

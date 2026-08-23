@@ -16,7 +16,7 @@ The present Takosumi OSS contract is [Core Spec](./core-spec.md). In brief:
 - generic Interface/InterfaceBinding and Offering contracts remain available;
 - Takosumi OSS does not host a Form Registry, FormActivation lifecycle,
   TargetPool, SpacePolicy, or hosted Form instances; and
-- Takosumi Cloud is an external Host owner for hosted Forms, backend lifecycle,
+- Takosumi hosted service is an external Host owner for hosted Forms, backend lifecycle,
   managed capacity, commercial offerings, billing, SLA, and support.
 
 ## Retained migration note

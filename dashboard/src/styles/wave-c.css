@@ -312,7 +312,7 @@
   color: var(--tg-fg);
 }
 
-/* Account-scoped Cloud API keys. The secret reveal is intentionally visually
+/* Account-scoped Takosumi API keys. The secret reveal is intentionally visually
    distinct from the durable metadata table because it exists only in memory. */
 .wc-card-title-with-icon {
   display: inline-flex;

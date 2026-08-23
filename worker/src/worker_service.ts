@@ -781,9 +781,6 @@ export function workerInterfaceOAuth2ResourceAuthorizer(
 > {
   return async (input) => {
     if (operatorControlMcpResourceAuthorized(env, input)) {
-	  console.log(
-	    `[DEBUG-task0034-interface-token] ${JSON.stringify({ phase: "worker_authorizer_builtin", interfaceId: input.interfaceId })}`,
-	  );
       // The host proves only its own enabled, versioned adapter route. The
       // Capsule still cannot grant a Binding; an operator/installer owns that
       // separate service-side authorization.
@@ -797,15 +794,9 @@ export function workerInterfaceOAuth2ResourceAuthorizer(
         reservation.workspaceId === input.workspaceId &&
         reservation.capsuleId === input.ownerRef.id
       ) {
-		console.log(
-		  `[DEBUG-task0034-interface-token] ${JSON.stringify({ phase: "worker_authorizer_reservation", interfaceId: input.interfaceId })}`,
-		);
         return true;
       }
     }
-	console.log(
-	  `[DEBUG-task0034-interface-token] ${JSON.stringify({ phase: "worker_authorizer_external", interfaceId: input.interfaceId })}`,
-	);
     return additional ? await additional(input) : false;
   };
 }

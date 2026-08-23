@@ -14,7 +14,7 @@ This CLI has two different operating boundaries:
   backend limits.
 
 Migration 44 performs data-preserving canonical table rebuilds in one
-transaction. Takosumi Cloud's roughly 726 MB production D1 is not a valid
+transaction. Takosumi hosted service's roughly 726 MB production D1 is not a valid
 in-place target: D1 requests/batches have a 30-second limit. The official Cloud
 path deploys a schema-independent bridge, permanently fences the legacy DB,
 exports it, transforms the full export locally, imports an empty candidate,
@@ -189,7 +189,7 @@ approval in the backup and rollback runbooks.
 
 ## Bounded self-host staging, then production
 
-This in-place sequence is not the Takosumi Cloud procedure. Use it only after
+This in-place sequence is not the Takosumi hosted service procedure. Use it only after
 the self-host operator has proved that the complete dataset and every migration
 batch fit its backend limits. Large or uncertain databases use the host's
 fenced export/candidate procedure instead.
@@ -265,7 +265,7 @@ independent authorities:
 1. apply and verify this OSS control manifest;
 2. only after it succeeds, apply and verify the host-owned manifest.
 
-Takosumi Cloud implements that ownership ordering during an offline candidate
+Takosumi hosted service implements that ownership ordering during an offline candidate
 transform, not by invoking this CLI's remote `apply` against production. Its
 private manifest does not replace this OSS gate, and this OSS CLI does not know
 about Cloud tables, billing, Cloud capacity, or closed runtime internals.

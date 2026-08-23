@@ -85,7 +85,7 @@ export function providerConnectionMatchesProviderSource(
  *
  * The connection owner chooses the persisted display name. In particular,
  * workspace-bindable operator connections are a generic credential source;
- * this helper must not relabel every such connection as Takosumi Cloud.
+ * this helper must not relabel every such connection as Takosumi hosted service.
  */
 export function providerConnectionDisplayName(
   connection: ProviderConnection,

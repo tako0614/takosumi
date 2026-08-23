@@ -1,11 +1,11 @@
-# Takosumi Cloud
+# Takosumi hosted service
 
-Takosumi Cloud は、Git repository の OpenTofu module を実行し、必要なクラウドサービスと
-接続できる hosted Takosumi です。plan、apply、state、output、監査、利用量、クレジットを
+Takosumi hosted service は、Git repository の OpenTofu module を実行し、必要なクラウドサービスに
+接続する Takosumi のホスティングサービスです。plan、apply、state、output、監査、利用量、クレジットを
 一つの Workspace で確認できます。
 
 > **Status:** Pre-GA。コードや catalog entry が存在しても、利用可能とは限りません。
-> Dashboard と認証済み Cloud catalog に表示される `available` が現在の提供状態です。
+> Dashboard と認証済み Takosumi catalog に表示される `available` が現在の提供状態です。
 
 ## 最初のデプロイ
 
@@ -27,9 +27,9 @@ Cloudflare、AWS、Takoform などは runner から見ると同じ通常の prov
 の control plane が作成した object の lifecycle を所有し、Takosumi は同じ object を別の
 resource ledger に複製しません。
 
-## Takosumi Cloud の役割
+## Takosumi hosted service の役割
 
-Takosumi Cloud は次を提供します。
+Takosumi hosted service は次を提供します。
 
 - hosted dashboard、Accounts、runner、state、Output、audit
 - provider connection と credential の runner-only materialization
@@ -37,21 +37,21 @@ Takosumi Cloud は次を提供します。
 - 利用可能な hosted service と標準 protocol endpoint
 - deployed service へ安全に接続する Interface / InterfaceBinding
 
-Cloud 独自の提供可否、価格、容量、請求、support は Takoform の Form maturity とは別です。
-provider や schema が公開されただけでは Cloud service は有効になりません。
+Takosumi hosted service 独自の提供可否、価格、容量、請求、support は Takoform の Form maturity とは別です。
+provider や schema が公開されただけでは hosted service は有効になりません。
 
 ## Takoform
 
-Takosumi Cloud は official Takoform Host になる予定ですが、現在の candidate Host は未公開・
+Takosumi hosted service は official Takoform Host になる予定ですが、現在の candidate Host は未公開・
 未接続です。公開前の FormRef、schema digest、Host route は production capability として
 広告しません。
 
-公開後も Takoform は hidden runner mode にはなりません。Cloud の既定接続は通常の
+公開後も Takoform は hidden runner mode にはなりません。hosted service の既定接続は通常の
 ProviderConnection / ProviderBinding を使い、利用者は自分の互換 Host 接続へ差し替えられます。
 
 ## Data endpoints
 
-既存サービスのデータを扱うため、Takosumi Cloud は S3-compatible object access と
+既存サービスのデータを扱うため、Takosumi hosted service は S3-compatible object access と
 OpenAI-compatible AI access を提供できます。これらは作成 API ではありません。service の
 lifecycle は repository の provider graph が管理し、endpoint と権限は Output / Interface
 から取得します。

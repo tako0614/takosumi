@@ -32,7 +32,7 @@ import {
   PageHeader,
 } from "../../components/ui/index.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
-import CloudApiKeysCard from "./components/CloudApiKeysCard.tsx";
+import TakosumiApiKeysCard from "./components/TakosumiApiKeysCard.tsx";
 
 const THEME_LABEL_KEY: Record<ThemePreference, MessageKey> = {
   system: "theme.system",
@@ -186,7 +186,7 @@ function Inner(props: { readonly session: SessionRecord }) {
           </CardSection>
         </Card>
 
-        <CloudApiKeysCard
+        <TakosumiApiKeysCard
           workspaceId={currentWorkspaceId() || undefined}
         />
 

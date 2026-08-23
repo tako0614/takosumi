@@ -23,7 +23,7 @@ does not ship a first-party provider, a Takosumi DSL, or a second desired-state
 ledger.
 
 Takoform owns portable Form definitions, FormRef and package publication,
-provider releases, and conformance. A Takosumi Cloud deployment or another
+provider releases, and conformance. A Takosumi hosted service deployment or another
 external Host owns hosted Form instances, the Form Host lifecycle, backend
 implementations, targets, capacity, billing, SLA, support, and abuse controls.
 An external Host therefore owns the Form lifecycle; historical package or

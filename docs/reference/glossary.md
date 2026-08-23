@@ -145,5 +145,5 @@ curl -s https://takosumi.example.com/.well-known/takosumi
 | 用語           | 意味                                                      | 詳しい説明                                       |
 | -------------- | --------------------------------------------------------- | ------------------------------------------------ |
 | Operator       | Takosumi を自分や自分のユーザーのために運用する主体です。 | [製品の境界](../concepts/boundaries.md)          |
-| Takosumi Cloud | 公式に運用している hosted サービスです。                  | [製品の境界](../concepts/boundaries.md)          |
+| Takosumi hosted service | 公式に運用している hosted サービスです。          | [製品の境界](../concepts/boundaries.md)          |
 | showback       | 使った量を記録して見せるところまでを行う課金モードです。  | [利用量と課金](../concepts/usage-and-billing.md) |

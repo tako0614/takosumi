@@ -8,7 +8,7 @@ StateVersion, Output, Runner, AuditEvent, and Operator. OSS Takosumi runs
 existing OpenTofu/Terraform providers as-is. Compatibility API framework and
 scoped provider compatibility profiles are Takosumi capabilities; official
 managed resources, billing enforcement, and operated backend capacity belong to
-Takosumi for Operator / Takosumi Cloud.
+Takosumi for Operator / Takosumi hosted service.
 
 The directories under `deploy/` are therefore **build-target templates and
 substrate runbooks**, not a separate public product surface. The canonical

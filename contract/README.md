@@ -87,7 +87,7 @@ OSS product concepts. Compatibility API profiles are scoped capabilities such as
 `compat.s3.v1`, `compat.oci.v1`, `compat.cloudevents.v1`, and
 `compat.kubernetes.crd.v1`; operator-provided deployment targets, billing
 enforcement, quota, usage rating, support, and resource backends belong to
-Takosumi for Operator / Takosumi Cloud composition.
+Takosumi for Operator / Takosumi hosted service composition.
 
 A CredentialRecipe auth mode may carry localized `presentation`, `inputHints`,
 and an HTTPS setup guide. Those fields let any service-installed recipe render

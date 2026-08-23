@@ -9,7 +9,7 @@
 
 Takoform は `registry.terraform.io/tako0614/takoform` から使う通常の OpenTofu
 provider です。Form の定義、package、provider、conformance、および Form を保存して
-実体化する Host は Takoform または Takosumi Cloud など外部の project/operator が所有
+実体化する Host は Takoform または Takosumi hosted service など外部の project/operator が所有
 します。Takosumi OSS は Form Host を自動で提供せず、TargetPool や SpacePolicy を
 利用者向け authoring surface として公開しません。
 

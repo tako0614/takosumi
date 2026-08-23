@@ -69,12 +69,12 @@ const COMPLETE_BASELINE = [
   {
     path: "app-docs/index.md",
     content:
-      "認証済み Cloud catalog の `available` が現在の提供状態です。",
+      "認証済み Takosumi catalog の `available` が現在の提供状態です。",
   },
   {
     path: "app-docs/en/index.md",
     content:
-      "The authenticated Cloud catalog exposes the current `available` state.",
+      "The authenticated Takosumi catalog exposes the current `available` state.",
   },
 ] as const;
 
@@ -116,7 +116,7 @@ test("authoritative docs require matching Japanese and English retirement claims
 test("authoritative docs reject a split Cloud GA availability contract", () => {
   const staleFinalPlan = [
     "Takosumi ships no first-party Terraform/OpenTofu provider.",
-    "## 11. Takosumi Cloud Public Offering",
+    "## 11. Takosumi hosted service Public Offering",
     "Stable:\n  EdgeWorker",
     "Preview:\n  VectorIndex",
     "## 12. Billing Boundary",
@@ -154,7 +154,7 @@ test("hosted docs use the authenticated catalog instead of a hard-coded service 
 
   expect(violations).toContainEqual(
     expect.objectContaining({
-      ruleId: "cloud-docs-catalog-authority-missing",
+      ruleId: "hosted-docs-catalog-authority-missing",
       path: "app-docs/en/index.md",
     }),
   );

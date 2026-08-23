@@ -17,7 +17,7 @@ Use these locations for the corresponding kind of material:
 docs/                 published product/API docs
 docs/internal/        current contract, conformance, and historical decisions
 docs/operations/       operator procedures and migration runbooks
-app-docs/              hosted Takosumi Cloud service documentation
+app-docs/              hosted Takosumi hosted service service documentation
 ```
 
 Internal navigation:
@@ -29,7 +29,7 @@ Internal navigation:
 - [Generalization audit](./generalization-audit.md) — allowed specialization
   and boundary checks.
 - [AI Gateway boundary](./ai-gateway.md) — generic OSS extension seam; hosted
-  behavior belongs to Takosumi Cloud.
+  behavior belongs to Takosumi hosted service.
 
 The public build excludes `internal/**/*.md` and `operations/**/*.md`. When a
 contract becomes user-facing, copy only the stable external behavior into

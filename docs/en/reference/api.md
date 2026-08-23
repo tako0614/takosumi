@@ -81,7 +81,7 @@ Authorization: Bearer <token>
 ```
 
 Each Takosumi endpoint publishes the session / bearer token model enabled by
-its operator through capabilities. Takosumi Cloud API keys are Takosumi
+its operator through capabilities. Takosumi API keys are Takosumi
 Accounts personal access tokens. Endpoints with their own standard signing
 model, such as S3-compatible storage, use that protocol's signature instead.
 
@@ -102,7 +102,7 @@ authentication and input errors, carries `Cache-Control: no-store` and
 
 The scope catalog marks only core `read` / `write` and allowlisted extension
 scopes explicitly declared by the same owning route through
-`selfServicePatScopes` as self-service. Cloud AI `ai.models.read`, `ai.chat`,
+`selfServicePatScopes` as self-service. Takosumi hosted AI `ai.models.read`, `ai.chat`,
 and `ai.embeddings`, plus `resources:read`, require a Workspace binding.
 Accounts never infers self-service authority from request scopes and never
 exposes `admin` or an undeclared scope for self-service issuance.
@@ -339,8 +339,8 @@ hostname first-come-first-served.
 Managed hostname reservations and vanity slots belong to the Capsule lifetime.
 A successful Capsule destroy releases them; deleting an individual route does
 not. User-owned custom domains use a separate verified-domain lifecycle rather
-than this mode. In Takosumi Cloud that verification and certificate lifecycle is
-not implemented, so the feature is Planned and requests against Cloud-managed
+than this mode. In the Takosumi hosted service that verification and certificate lifecycle is
+not implemented, so the feature is Planned and requests against hosted-service-managed
 routes fail closed. This does not prevent an ordinary OpenTofu URL/route variable
 from being passed to a BYOC provider. The setting selects control-plane
 allocation policy; it does not bypass or replace the OpenTofu variables.
@@ -438,7 +438,7 @@ public surface. Core does not expose fixed AWS, GCP, or Kubernetes federation
 routes or credential kinds. A future workload-identity surface must use generic
 OIDC principals, Resource Credential/Policy, or explicit Credential Recipe
 pre-run actions and ship only with matching implementation and discovery.
-Operator/Cloud may add Enterprise SSO, SCIM, and commercial audit export through
+Operator/hosted service may add Enterprise SSO, SCIM, and commercial audit export through
 that generic seam.
 
 A Capsule-projected public OIDC client can declare required scopes through
@@ -495,12 +495,12 @@ Cloudflare resources use a normal ProviderConnection and plain Stack flow.
 
 Compatibility profiles do not create hostnames implicitly. Runtime routes use a
 canonical `http.route` Interface plus InterfaceBinding, while hostname
-ownership belongs to the OSS reservation authority or the Operator/Cloud
+ownership belongs to the OSS reservation authority or the Operator/hosted-service
 VerifiedDomain lifecycle. Routing caches and backend state are never hostname
 ownership authority.
 
-Takosumi Cloud-specific endpoint examples live in
-[Cloud endpoints](https://app.takosumi.com/docs/en/endpoints).
+Takosumi hosted service-specific endpoint examples live in
+[hosted service endpoints](https://app.takosumi.com/docs/en/endpoints).
 
 ## Error Shape
 
@@ -534,5 +534,5 @@ v1:
   backward compatibility maintained. No field removals.
 ```
 
-OSS / Operator / Cloud differences are represented by capabilities, not API
+OSS / Operator / hosted-service differences are represented by capabilities, not API
 version.

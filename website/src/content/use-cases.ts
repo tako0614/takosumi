@@ -47,6 +47,6 @@ export const USE_CASES: readonly UseCase[] = [
     desc: "リンクから追加",
     note: "Store または Git URL から追加",
     href: "https://app.takosumi.com/new",
-    cta: "Cloud で追加",
+    cta: "Takosumi で追加",
   },
 ];

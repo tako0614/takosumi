@@ -26,7 +26,7 @@ export default function Hero() {
             href="https://app.takosumi.com/"
             rel="noopener"
           >
-            Takosumi Cloud を開く
+            Takosumi を開く
           </a>
           <a
             class="btn btn-secondary"

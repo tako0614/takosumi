@@ -571,7 +571,7 @@ test("local-substrate ingress blocks private and retired control seams", () => {
     "@private path /internal/* /api/spaces /api/spaces/* /api/connections /api/connections/*",
   );
   expect(caddyfile).toContain("respond @private 404");
-  expect(caddyfile).toContain("/hooks/* /mcp/* /gateway/ai/v1*");
+  expect(caddyfile).toContain("/hooks/* /mcp/* /internal/*");
 });
 
 test("local-substrate ships no fixed dev session bearer and keeps ingress loopback by default", () => {

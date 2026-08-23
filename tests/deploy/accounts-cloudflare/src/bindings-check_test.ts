@@ -55,7 +55,7 @@ test("requireAssets:false allows an API-only deploy without ASSETS", () => {
 test("Cloud extension handlers are not part of OSS/operator readiness", () => {
   // The OSS readiness check never names a Cloud-feature handler: cloud extension
   // handler keys are config-driven (TAKOSUMI_PLATFORM_EXTENSIONS) and resolved by
-  // the closed Takosumi Cloud wrapper, so a fully-bound OSS env passes without
+  // the closed Takosumi hosted service wrapper, so a fully-bound OSS env passes without
   // any TAKOSUMI_CLOUD_* extension handler present.
   const env = fullEnv();
   expect("TAKOSUMI_CLOUD_AI_GATEWAY" in env).toBe(false);

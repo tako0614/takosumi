@@ -14,7 +14,7 @@ takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
-Takosumi Cloud を使う場合の hosted endpoint は `https://app.takosumi.com` です。
+Takosumi hosted service を使う場合の endpoint は `https://app.takosumi.com` です。
 
 CLI は OpenTofu を直接実行しません。通常の作成フローは dashboard の Git URL install で、
 ここで Source / Capsule / Run を作ります。Run の source identity として Git commit / ref /
@@ -162,7 +162,7 @@ collection planning では uncategorized になります。
 
 validate が返す `takosumi.platform-readiness-report@v2` には、組み合わせた定義の
 `requiredDomainIds` / `requiredRehearsalStepIds` も含まれます。進捗を集計する側は
-OSS 固定の ID ではなくこの配列を使います。そうすることで、Operator / Cloud の
+OSS 固定の ID ではなくこの配列を使います。そうすることで、Operator / hosted service の
 contribution を含めた total と complete の件数を正確に数えられます。
 
 ## ProviderConnection を登録する

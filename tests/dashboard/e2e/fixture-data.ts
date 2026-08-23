@@ -67,9 +67,9 @@ export const PORTABLE_SOURCE_OPTION_DOCUMENTS = {
     options: [
       {
         id: "takosumi-cloud",
-        title: "Takosumi Cloud",
+        title: "Takosumi hosted service",
         description:
-          "Run Yurucommu on cloud resources provided by Takosumi Cloud.",
+          "Run Yurucommu on cloud resources provided by Takosumi hosted service.",
         source: {
           url: "https://github.com/tako0614/yurucommu.git",
           path: "deploy/takoform",
@@ -105,7 +105,7 @@ export const PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS = [
     providerSource: "registry.opentofu.org/cloudflare/cloudflare",
     scope: "operator",
     status: "verified",
-    displayName: "Takosumi Cloud",
+    displayName: "Takosumi hosted service",
     materialization: "managed",
     envNames: [],
     credentialRecipe: {

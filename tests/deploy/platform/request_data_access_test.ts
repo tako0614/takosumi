@@ -195,6 +195,35 @@ describe("classifyPlatformRequestDataAccess", () => {
     ).toEqual({ kind: "stateful-or-unknown" });
   });
 
+  test("account subscription extension is admitted before Accounts fallback", () => {
+    const env = routingEnv({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        {
+          basePath: "/api/v1/account/subscription",
+          handlerKey: "HOSTED",
+        },
+      ]),
+    });
+    expect(
+      classifyPlatformRequestDataAccess(
+        request("/api/v1/account/subscription"),
+        env,
+      ),
+    ).toEqual({ kind: "stateful-or-unknown" });
+    expect(
+      classifyPlatformRequestDataAccess(
+        request("/api/v1/account/subscription/resources"),
+        env,
+      ),
+    ).toEqual({ kind: "stateful-or-unknown" });
+    expect(
+      classifyPlatformRequestDataAccess(
+        request("/api/v1/hosted/subscription"),
+        env,
+      ),
+    ).toEqual({ kind: "stateful-or-unknown" });
+  });
+
   test("mutations, encoded ambiguity, malformed routing, and missing assets fail closed", () => {
     for (const input of [
       ["/", "POST"],

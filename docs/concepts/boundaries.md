@@ -1,4 +1,4 @@
-# Takosumi と Takosumi Cloud
+# Takosumi と Takosumi hosted service
 
 同じ名前がソフトウェアと公式サービスを指さないよう、このドキュメントでは次のように
 区別します。
@@ -6,7 +6,7 @@
 | 名前               | 意味                                                 |
 | ------------------ | ---------------------------------------------------- |
 | **Takosumi**       | このリポジトリで公開している AGPL-3.0 のソフトウェア |
-| **Takosumi Cloud** | `app.takosumi.com` で提供する公式ホスティング        |
+| **Takosumi hosted service** | `app.takosumi.com` で提供する公式ホスティング        |
 
 ## ソフトウェアが提供するもの
 
@@ -24,7 +24,7 @@ Takosumi OSS には次が含まれます。
 複製して、第二の lifecycle を作ることもしません。
 
 Resource Shape / Form Host を Takosumi OSS が提供する、という旧来の説明は廃止しました。
-Form の定義、provider、package、hosted instance は Takoform または Takosumi Cloud
+Form の定義、provider、package、hosted instance は Takoform または Takosumi hosted service
 などの外部 Host が所有します。OSS に残る Resource API、schema、migration は過去の
 保存データを安全に扱うための temporary migration internals であり、supported product
 としての authoring surface ではありません。
@@ -34,7 +34,7 @@ Form の定義、provider、package、hosted instance は Takoform または Tak
 同じ Takosumi を動かしていても、設置先によって次は異なります。
 
 - 利用する provider とその実行環境
-- 外部 Host または Takosumi Cloud が提供する hosted Form instance
+- 外部 Host または Takosumi hosted service が提供する hosted Form instance
 - 保存容量、利用上限、バックアップ期間
 - 利用量を記録するだけか、請求まで行うか
 - 更新、障害対応、support、SLA
@@ -47,15 +47,15 @@ curl https://takosumi.example.com/.well-known/takosumi
 
 または、認証済みの API から `/api/v1/capabilities` を取得します。
 
-## Takosumi Cloud が追加するもの
+## Takosumi hosted service が追加するもの
 
-Takosumi Cloud は、Takosumi OSS を運用した公式サービスです。Cloud が追加するのは、
-Cloud が提供する hosted Form/service の実装、公式の容量、料金と支払い、support、SLA、abuse 対策です。
+Takosumi hosted service は、Takosumi OSS を運用した公式サービスです。hosted service が
+追加するのは、hosted Form/service の実装、公式の容量、料金と支払い、support、SLA、abuse 対策です。
 
 これらは OSS の一般仕様ではありません。料金や利用上限を確認するときは
-[Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)を参照してください。
+[Takosumi hosted service のドキュメント](https://app.takosumi.com/docs/)を参照してください。
 
-Cloud 側の実装は OSS の contract を利用しますが、OSS から Cloud の private code や
+hosted service 側の実装は OSS の contract を利用しますが、OSS から hosted service の private code や
 Stripe へ依存することはありません。
 
 ## Takoform と外部 Host の位置づけ
@@ -70,9 +70,9 @@ provider です。ただし、実行後の authority は同じではありませ
 - Cloudflare / AWS などの provider を module から直接使う場合は、共通の
   Run、state、output、監査記録を使います。provider 側の resource は必ずしも
   Takosumi の Resource 台帳には入りません。
-- Takoform の host または Takosumi Cloud が hosted Form instance を提供する場合、その
+- Takoform の host または Takosumi hosted service が hosted Form instance を提供する場合、その
   lifecycle と実装の authority は外部 Host 側にあります。
-- Takosumi OSS の runner が Cloud 専用の provider や TargetPool を暗黙に選ぶ仕組みは
+- Takosumi OSS の runner が hosted service 専用の provider や TargetPool を暗黙に選ぶ仕組みは
   ありません。
 
 ## self-host する場合

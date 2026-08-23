@@ -682,8 +682,9 @@ function hasHostedDiscovery(value: unknown, origin: string): boolean {
   }
   const extensions = value.endpoints.extensions;
   return (
-    extensions["takosumi.hosted.subscription.v1"] ===
-    `${origin}/api/v1/hosted/subscription`
+    extensions["takosumi.account.subscription.v1"] ===
+      `${origin}/api/v1/account/subscription` &&
+    extensions["openai.chat-completions.v1"] === `${origin}/api/v1/ai`
   );
 }
 
@@ -725,7 +726,9 @@ export function assertConfigTargetsSource(
           (entry as Record<string, unknown>).handlerKey === "HOSTED",
       );
       hostedRouteValid =
-        hosted.length === 1 && matchesHostedSponsorshipRoute(hosted[0]);
+        hosted.length === 2 &&
+        hosted.some(matchesHostedSponsorshipRoute) &&
+        hosted.some(matchesHostedAiRoute);
     }
   } catch {
     hostedRouteValid = false;
@@ -769,7 +772,7 @@ function matchesHostedSponsorshipRoute(value: unknown): boolean {
         ].sort(),
       ) &&
     value.id === "takosumi-hosted-sponsorship" &&
-    value.basePath === "/api/v1/hosted/subscription" &&
+    value.basePath === "/api/v1/account/subscription" &&
     value.handlerKey === "HOSTED" &&
     value.authDelivery === "context" &&
     value.ownsPathSubtree === true &&
@@ -781,12 +784,53 @@ function matchesHostedSponsorshipRoute(value: unknown): boolean {
     Array.isArray(value.capabilities) &&
     JSON.stringify(value.capabilities) ===
       JSON.stringify([
-        "takosumi.hosted.subscription.v1",
+        "takosumi.account.subscription.v1",
         "hosted-resource.inventory.v1",
       ]) &&
     matchesHostedInventoryContribution(value.contributions) &&
     matchesHostedRunCredential(value.runCredential) &&
     matchesHostedProviderCredentialBroker(value.providerCredentialBroker)
+  );
+}
+
+function matchesHostedAiRoute(value: unknown): boolean {
+  if (!record(value)) return false;
+  return (
+    JSON.stringify(Object.keys(value).sort()) ===
+      JSON.stringify(
+        [
+          "authDelivery",
+          "basePath",
+          "capabilities",
+          "handlerKey",
+          "id",
+          "ownsPathSubtree",
+          "requestScopeRules",
+          "selfServicePatScopes",
+        ].sort(),
+      ) &&
+    value.id === "takosumi-ai" &&
+    value.basePath === "/api/v1/ai" &&
+    value.handlerKey === "HOSTED" &&
+    value.authDelivery === "context" &&
+    value.ownsPathSubtree === true &&
+    JSON.stringify(value.selfServicePatScopes) ===
+      JSON.stringify(["ai.models.read", "ai.chat"]) &&
+    JSON.stringify(value.requestScopeRules) ===
+      JSON.stringify([
+        {
+          path: "/models",
+          methods: ["GET"],
+          requiredScopes: ["ai.models.read"],
+        },
+        {
+          path: "/chat/completions",
+          methods: ["POST"],
+          requiredScopes: ["ai.chat"],
+        },
+      ]) &&
+    JSON.stringify(value.capabilities) ===
+      JSON.stringify(["openai.models.v1", "openai.chat-completions.v1"])
   );
 }
 
@@ -825,7 +869,7 @@ function matchesHostedInventoryContribution(value: unknown): boolean {
       ) &&
     contribution.id === "takoserver-hosted-resources" &&
     contribution.slot === "workspace.hosted-resources" &&
-    contribution.href === "/api/v1/hosted/subscription/resources" &&
+    contribution.href === "/api/v1/account/subscription/resources" &&
     contribution.presentation === "native" &&
     contribution.label === "Hosted resources" &&
     contribution.description ===

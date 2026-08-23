@@ -10,8 +10,9 @@
  *
  * The retired `/v1` namespace is reserved wholesale and cannot be reclaimed
  * by an extension. Optional features are allowlisted at their exact
- * `/api/v1/...` roots; currently billing and Hosted subscription are the only
- * such roots. Concrete Takosumi/Accounts authorities are not delegated.
+ * `/api/v1/...` roots; currently billing, account subscription, and the
+ * authenticated AI data plane are the only such roots. Concrete
+ * Takosumi/Accounts authorities are not delegated.
  * The `/.well-known` namespace is handled separately:
  * the root, the two core leaves, and the retired Takoform v1alpha1/v1alpha2/
  * v1alpha3 leaves stay reserved, while an explicitly exact descriptor may
@@ -49,7 +50,8 @@ export const PLATFORM_EXTENSION_RESERVED_PREFIXES = [
 /** Exact optional extension roots permitted inside the otherwise reserved `/api`. */
 export const PLATFORM_EXTENSION_ALLOWLISTED_BASE_PATHS = [
   "/api/v1/billing",
-  "/api/v1/hosted/subscription",
+  "/api/v1/account/subscription",
+  "/api/v1/ai",
 ] as const;
 
 /** Exact well-known routes owned by Takosumi/Accounts or held unavailable. */

@@ -7,7 +7,7 @@
 The supported OSS deployment is a Git/OpenTofu/Terraform Stack using ordinary
 providers. Takoform owns package publication and signatures. A hosted Form
 installation, executable implementation, activation/audience policy, target
-selection, and backend lifecycle belong to Takosumi Cloud or another external
+selection, and backend lifecycle belong to Takosumi hosted service or another external
 Host; follow that Host's private runbook and authority checks.
 
 Do not set a package trust policy to make an OSS Form surface appear. The

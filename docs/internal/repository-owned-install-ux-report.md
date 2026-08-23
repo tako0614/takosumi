@@ -85,7 +85,7 @@ The ownership split is:
 - the selected module owns variable types, defaults, validation, resources, and
   Outputs;
 - a TCS Store node owns discovery and browse presentation only;
-- an operator or Takosumi Cloud owns which targets, domains, providers, and
+- an operator or Takosumi hosted service owns which targets, domains, providers, and
   managed integrations are actually available.
 
 The ordinary Yurucommu install should require zero values when Takosumi-managed

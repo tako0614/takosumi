@@ -147,5 +147,5 @@ curl -s https://takosumi.example.com/.well-known/takosumi
 | Term           | Meaning                                                           |
 | -------------- | ----------------------------------------------------------------- |
 | Operator       | The party running Takosumi for themselves or for their own users. |
-| Takosumi Cloud | The hosted service run officially.                                |
+| Takosumi hosted service | The hosted service run officially.                        |
 | showback       | The billing mode that goes as far as recording and showing usage. |

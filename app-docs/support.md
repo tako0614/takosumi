@@ -1,8 +1,8 @@
-# Takosumi Cloud サポート
+# Takosumi サポート
 
 ## 公式窓口
 
-Takosumi Cloudの公式サポート窓口は
+Takosumi hosted service の公式サポート窓口は
 [support@takosumi.com](mailto:support@takosumi.com) です。電話、チャット、
 SNSのDMは公式受付として扱いません。
 
@@ -12,7 +12,7 @@ SNSのDMは公式受付として扱いません。
 ## 対応できる内容
 
 - サインイン、Workspace、Dashboard、Runの不具合
-- Takosumi Cloud のリソースと Cloud URL
+- Takosumi hosted service のリソースと hosted service URL
 - 使用量、請求、支払い方法、重複または誤った請求の調査
 - データexport、アカウント削除、privacyに関する依頼
 - セキュリティ上の問題

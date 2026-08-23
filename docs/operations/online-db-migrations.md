@@ -23,7 +23,7 @@ bun run deploy
 schema/data/topologyを変更するdeployは`state-change` classであり、
 独立review、isolated rehearsal、forward-repair計画を要求します。以下のCLI例は
 self-host operatorまたは固定adapterのimplementation building blockであり、公式
-Takosumi Cloudへのraw migration authorityではありません。
+Takosumi hosted serviceへのraw migration authorityではありません。
 
 ## Scope
 

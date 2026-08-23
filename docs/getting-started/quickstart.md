@@ -133,4 +133,4 @@ Postgres のデータと証明書も消す場合は `bash scripts/down.sh -v` �
 - [CLI](../reference/cli.md)
 
 公式ホスティングを使う場合は
-[Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)を参照してください。
+[Takosumi hosted service のドキュメント](https://app.takosumi.com/docs/)を参照してください。

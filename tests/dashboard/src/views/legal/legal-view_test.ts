@@ -22,7 +22,7 @@ test("OSS legal routes stay generic while hosted policies are contributions", ()
 
   expect(legal).toContain("operator");
   expect(legal).toContain("OSS Takosumi does not process payments");
-  expect(legal).not.toContain("Takosumi Cloud");
+  expect(legal).not.toContain("Takosumi hosted service");
   expect(legal).not.toContain("Stripe");
   expect(legal).not.toContain("takosumi.com/docs");
 });

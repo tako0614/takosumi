@@ -16,17 +16,17 @@ import { apiFetch } from "./http.ts";
 
 const TOKEN_PAGE_LIMIT = 200;
 
-export type CreateCloudApiKeyInput = Omit<
+export type CreateTakosumiApiKeyInput = Omit<
   TakosumiAccountsCreatePatRequest,
   "scopes"
 > & {
   readonly scopes: readonly TakosumiAccountsPatScope[];
 };
 
-export function buildSelfServiceCloudApiKeyRequest(
+export function buildSelfServiceTakosumiApiKeyRequest(
   input: TakosumiAccountsCreatePatRequest,
   catalog: readonly TakosumiAccountsPatScopeCatalogEntry[],
-): CreateCloudApiKeyInput {
+): CreateTakosumiApiKeyInput {
   if (input.scopes.length === 0) {
     throw new TypeError("Self-service PAT creation requires at least one scope");
   }
@@ -127,7 +127,7 @@ function isScopeCatalogEntry(
 }
 
 /** Fail closed when a successful response does not match the versioned catalog. */
-export function normalizeCloudApiKeyScopeCatalog(
+export function normalizeTakosumiApiKeyScopeCatalog(
   value: unknown,
 ): TakosumiAccountsPatScopeCatalogResponse {
   if (
@@ -149,17 +149,17 @@ export function normalizeCloudApiKeyScopeCatalog(
   };
 }
 
-export async function listCloudApiKeyScopeCatalog(): Promise<
+export async function listTakosumiApiKeyScopeCatalog(): Promise<
   TakosumiAccountsPatScopeCatalogResponse
 > {
   const response = await apiFetch<unknown>(
     TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH,
   );
-  return normalizeCloudApiKeyScopeCatalog(response);
+  return normalizeTakosumiApiKeyScopeCatalog(response);
 }
 
-/** Takosumi Cloud API keys are Accounts personal access tokens. */
-export async function listCloudApiKeys(): Promise<
+/** Takosumi API keys are Accounts personal access tokens. */
+export async function listTakosumiApiKeys(): Promise<
   readonly TakosumiAccountsPatMetadata[]
 > {
   const response = await apiFetch<TakosumiAccountsListPatsResponse>(
@@ -168,20 +168,20 @@ export async function listCloudApiKeys(): Promise<
   return response.tokens;
 }
 
-export async function createCloudApiKey(
-  input: CreateCloudApiKeyInput,
+export async function createTakosumiApiKey(
+  input: CreateTakosumiApiKeyInput,
   catalog: readonly TakosumiAccountsPatScopeCatalogEntry[],
 ): Promise<TakosumiAccountsCreatePatResponse> {
   return await apiFetch<TakosumiAccountsCreatePatResponse>(
     TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
     {
       method: "POST",
-      body: buildSelfServiceCloudApiKeyRequest(input, catalog),
+      body: buildSelfServiceTakosumiApiKeyRequest(input, catalog),
     },
   );
 }
 
-export async function revokeCloudApiKey(tokenId: string): Promise<void> {
+export async function revokeTakosumiApiKey(tokenId: string): Promise<void> {
   await apiFetch(takosumiAccountsAccountTokenRevokePath(tokenId), {
     method: "POST",
   });

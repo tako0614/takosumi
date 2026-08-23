@@ -12,7 +12,7 @@ Cloudflare Worker、Bun + Postgres、Kubernetes、VM など特定の substrate �
 public contract に固定するものではありません。公開 repo の
 `deploy/platform` は Cloudflare reference composition、`deploy/node-postgres`
 は Bun + Postgres composition です。公式 Cloud の realized origin
-`app.takosumi.com` は Takosumi Cloud の運用値であり、一般の Operator の
+`app.takosumi.com` は Takosumi hosted service の運用値であり、一般の Operator の
 default hostname ではありません。
 
 Takos product worker はユーザーが自分のインフラに self-host する別 build

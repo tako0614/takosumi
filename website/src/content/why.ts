@@ -10,7 +10,7 @@ export const PILLARS: readonly Pillar[] = [
   },
   {
     title: "クラウドでも VM でも同じ形",
-    body: "OSS 版は、AWS・GCP・Cloudflare・Hetzner などの既存プロバイダーをそのまま使えます。範囲を絞った互換 API と adapter の仕組みも OSS の機能です。公式のマネージドな実行先や公式課金は、Takosumi for Operator / Cloud 側の役割です。",
+    body: "OSS 版は、AWS・GCP・Cloudflare・Hetzner などの既存プロバイダーをそのまま使えます。範囲を絞った互換 API と adapter の仕組みも OSS の機能です。公式のマネージドな実行先や公式課金は、Takosumi for Operator / hosted service 側の役割です。",
   },
   {
     title: "ロックインなし、引っ越せる、終わらない",

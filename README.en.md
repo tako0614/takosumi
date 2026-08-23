@@ -19,7 +19,7 @@ AWS, Kubernetes, and other systems are still managed by their existing
 providers.
 
 [Software documentation](https://takosumi.com/docs/) ·
-[Takosumi Cloud documentation](https://app.takosumi.com/docs/en/)
+[Takosumi hosted service documentation](https://app.takosumi.com/docs/en/)
 
 ## Check it locally in five minutes
 
@@ -88,14 +88,15 @@ the current OSS supported product surface. Retained compatibility APIs,
 schemas, and persistence are migration internals; they are not user setup
 instructions or dashboard navigation.
 
-## Takosumi and Takosumi Cloud
+## Takosumi and the hosted service
 
 - **Takosumi** is the software in this repository. You can operate it in your
   own environment.
-- **Takosumi Cloud** is the official hosted service at `app.takosumi.com`.
-  Hosted Forms/services, prices, capacity, and support are Cloud decisions.
+- **Takosumi hosted service** is the official service at `app.takosumi.com`.
+  Hosted Forms/services, prices, capacity, and support are decisions made by
+  the hosted service.
 
-The OSS software runs without the hosted service. Cloud pricing, Stripe, and
+The OSS software runs without the hosted service. Hosted-service pricing, Stripe, and
 private deployment targets are not public contracts of this repository. See
 [Product boundaries](docs/en/concepts/boundaries.md).
 
@@ -126,7 +127,7 @@ The main directories are `contract/` for public contracts, `core/` for the
 control plane, `dashboard/` for the UI, `runner/` for execution, `deploy/` for
 deployment compositions, and `docs/` for documentation.
 
-This standalone OSS clone does not proxy hosted Cloud GA or production billing
+This standalone OSS clone does not proxy Takosumi hosted-service GA or production billing
 operations.
 
 Takosumi is licensed under [AGPL-3.0-only](LICENSE). See

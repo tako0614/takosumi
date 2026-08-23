@@ -4,7 +4,7 @@ This runbook covers the Takosumi OSS source/module release. The current
 supported product is one Git/OpenTofu/Terraform Stack flow with arbitrary
 providers, generic Interfaces, and generic Offerings. It does not publish a
 Takosumi Form Host, Form Registry, FormActivation, TargetPool, or SpacePolicy
-surface. Takosumi Cloud release and commercial readiness are separate external
+surface. Takosumi hosted service release and commercial readiness are separate external
 Host decisions.
 
 This procedure is evidence and failure handling, not release authorization.

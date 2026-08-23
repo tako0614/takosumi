@@ -86,6 +86,6 @@ Read [State and outputs](./state-and-outputs.md) and
 
 These docs describe behavior shared by Takosumi OSS installations. Hosted Form
 instances, storage limits, pricing, and SLAs are operator decisions. Details
-specific to the official hosted service stay in the Takosumi Cloud docs.
+specific to the official hosted service stay in the Takosumi hosted service docs.
 
 See [Product boundaries](./boundaries.md) for the exact split.

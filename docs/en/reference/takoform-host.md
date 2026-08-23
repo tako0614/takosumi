@@ -11,7 +11,7 @@ selected by a repository module, like Cloudflare, AWS, or any other provider.
 OSS retains one generic in-process compatibility composition for migrating an
 existing exact v1alpha1 Resource. It is mounted only when host code explicitly
 injects the complete maintenance lane. A normal OSS edge or text environment
-flag cannot enable it. The external Host (for example Takosumi Cloud) owns the
+flag cannot enable it. The external Host (for example, the Takosumi hosted service) owns the
 backend, installed and retained Forms, and the explicit transition-pair policy.
 
 ## Execution path

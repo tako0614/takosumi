@@ -29,7 +29,7 @@ The public entrypoint is on the Takosumi origin selected by the operator:
 https://<takosumi-origin>/install
 ```
 
-The official Takosumi Cloud origin is `app.takosumi.com`, but the same protocol
+The official Takosumi hosted service origin is `app.takosumi.com`, but the same protocol
 works at any explicit self-hosted or Operator origin.
 
 The dashboard may canonicalize the flow to `/new`, but external clients should

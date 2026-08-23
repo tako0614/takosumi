@@ -12,7 +12,7 @@ route は bearer の有無にかかわらず `404` のままです。Takoform �
 OSS は Resource/Form Host、Form Registry、FormActivation、TargetPool、SpacePolicy の
 supported authoring surface を提供しません。retained Resource/Form rows と typed
 operations は migration custody のためだけに残り、実際の Host、backend、許可する
-transition pair、Form の install/retain は Takosumi Cloud または別の external Host が
+transition pair、Form の install/retain は Takosumi hosted service または別の external Host が
 所有します。
 
 ## 実行経路
@@ -37,8 +37,8 @@ Host endpoint と credential は通常の ProviderConnection として Workspace
 ProviderBinding で module の provider requirement に結びます。credential は runner に
 だけ渡され、repository、plan 表示、state、Output、Interface document には保存しません。
 
-Takosumi Cloud が current Takoform Host を公開した場合も、この経路は変わりません。
-Cloud の既定接続は便利な初期値であり、hidden runner mode や first-party provider では
+Takosumi hosted service が current Takoform Host を公開した場合も、この経路は変わりません。
+hosted service の既定接続は便利な初期値であり、hidden runner mode や first-party provider では
 ありません。利用者は自分が選んだ互換 Host 接続に差し替えられます。
 
 ## Protocol version

@@ -959,7 +959,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
-  test("Yurucommu source options keep Takosumi Cloud and Cloudflare direct distinct", async ({
+  test("Yurucommu source options keep Takosumi hosted service and Cloudflare direct distinct", async ({
     page,
   }) => {
     test.skip(
@@ -987,7 +987,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     const cards = page.locator(".iv-entry-card");
     await expect(page.getByRole("heading", { name: fixture.metadata.title })).toBeVisible();
     await expect(cards).toHaveCount(fixture.options.length);
-    await expect(cards.nth(0)).toContainText("Takosumi Cloud");
+    await expect(cards.nth(0)).toContainText("Takosumi hosted service");
     await expect(cards.nth(1)).toContainText("Cloudflare (direct)");
     await expect(cards.nth(0)).toContainText(fixture.options[0]!.source.url);
     await expect(cards.nth(1)).toContainText(fixture.options[1]!.source.url);
@@ -999,7 +999,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
-  test("supported resources use the managed Takosumi Cloud destination before Plan", async ({
+  test("supported resources use the managed Takosumi hosted service destination before Plan", async ({
     page,
   }) => {
     test.skip(
@@ -1056,7 +1056,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       '[data-install-provider-destination="auto-selected"]',
     );
     await expect(destination).toBeVisible();
-    await expect(destination).toContainText("Runs on Takosumi Cloud");
+    await expect(destination).toContainText("Runs on Takosumi hosted service");
     await expect(destination).toHaveAttribute(
       "data-provider-connection-id",
       "pc_takosumi_cloud_v02",
@@ -1065,7 +1065,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(destinationControl).toHaveCount(1);
     await expect(destinationControl).toHaveValue("pc_takosumi_cloud_v02");
     await expect(destinationControl.locator("option:checked")).toHaveText(
-      "Takosumi Cloud",
+      "Takosumi hosted service",
     );
     await expect(destinationControl).toBeDisabled();
     await expect
@@ -1271,7 +1271,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
       id: "pc_takosumi_cloud_v01",
       providerSource: "registry.opentofu.org/cloudflare/cloudflare-v01",
-      displayName: "Takosumi Cloud",
+      displayName: "Takosumi hosted service",
     };
     const state = await stubProviderDestinationFixture(
       page,
@@ -1750,10 +1750,10 @@ test.describe("Takosumi dashboard browser surface", () => {
         deploymentProfiles: [
           {
             key: "takosumi-cloud",
-            label: { ja: "Takosumi Cloud", en: "Takosumi Cloud" },
+            label: { ja: "Takosumi hosted service", en: "Takosumi hosted service" },
             description: {
-              ja: "Run on Takosumi Cloud",
-              en: "Run on Takosumi Cloud",
+              ja: "Run on Takosumi hosted service",
+              en: "Run on Takosumi hosted service",
             },
             order: 10,
             recommended: true,
@@ -1795,7 +1795,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await hostingOption.selectOption("takosumi-cloud");
     await expect(hostingOption).toHaveValue("takosumi-cloud");
     await expect(
-      page.getByText("Run on Takosumi Cloud", { exact: true }),
+      page.getByText("Run on Takosumi hosted service", { exact: true }),
     ).toBeVisible();
     const confirmation = page.getByRole("checkbox", {
       name: /このデプロイ方法で追加することを確認しました|I confirm this hosting option/u,

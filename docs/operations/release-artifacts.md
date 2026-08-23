@@ -45,7 +45,7 @@ runner ports. `deploy/platform` is the Cloudflare reference adapter;
 `deploy/node-postgres` is another composition. Realized config and secrets live
 in operator-owned state outside source repositories. The official
 `app.takosumi.com` deployment, Cloud wrapper, hosted docs overlay, and realized
-Cloudflare revisions are Takosumi Cloud artifacts documented under
+Cloudflare revisions are Takosumi hosted service artifacts documented under
 `takosumi-cloud/docs/operations`.
 
 Capsule application artifacts are not Takosumi platform release artifacts. If a

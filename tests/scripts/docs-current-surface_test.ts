@@ -183,7 +183,7 @@ test("Takosumi public docs are rebuilt around the current public surface", async
   }
 });
 
-test("hosted Cloud docs keep lifecycle provider-owned", async () => {
+test("hosted Takosumi docs keep lifecycle provider-owned", async () => {
   for (const path of ["app-docs/resources.md", "app-docs/en/resources.md"]) {
     const doc = await readText(new URL(path, ROOT));
     assert.match(doc, /required_providers/);
@@ -194,7 +194,7 @@ test("hosted Cloud docs keep lifecycle provider-owned", async () => {
   }
 });
 
-test("hosted Cloud availability stays catalog-driven and separate from Form maturity", async () => {
+test("hosted Takosumi availability stays catalog-driven and separate from Form maturity", async () => {
   const indexes = await Promise.all(
     ["app-docs/index.md", "app-docs/en/index.md"].map((path) =>
       readText(new URL(path, ROOT)),
@@ -207,7 +207,7 @@ test("hosted Cloud availability stays catalog-driven and separate from Form matu
   for (const index of indexes) {
     assert.match(index, /Pre-GA/);
     assert.match(index, /Form maturity/);
-    assert.match(index, /authenticated Cloud catalog|認証済み Cloud catalog/);
+    assert.match(index, /authenticated Takosumi catalog|認証済み Takosumi catalog/);
     assert.match(index, /`available`/);
     assert.doesNotMatch(
       index,
@@ -221,7 +221,7 @@ test("hosted Cloud availability stays catalog-driven and separate from Form matu
   assert.match(resources, /unpublished candidate is\s+never marked available/);
   assert.match(endpoints, /data paths?, not creation APIs?|not an object lifecycle API/);
   assert.match(endpoints, /\/compat\/s3\/v1/);
-  assert.match(endpoints, /\/gateway\/ai\/v1/);
+  assert.match(endpoints, /\/api\/v1\/ai/);
   assert.doesNotMatch(endpoints, /Resource Shape|TargetPool|NativeResource/);
 });
 
@@ -231,7 +231,7 @@ test("Form package operations require exact Host Support facts, not retired admi
   );
   assert.match(runbook, /superseded/);
   assert.match(runbook, /(?:does not|no longer) host(?:s)? a Form Registry/);
-  assert.match(runbook, /Takosumi Cloud or another external\s+Host/);
+  assert.match(runbook, /Takosumi hosted service or another external\s+Host/);
   assert.match(runbook, /exact `FormRef` and `packageDigest`/);
   assert.doesNotMatch(runbook, /exact `FormActivation` with principal audience/);
 });
@@ -414,7 +414,7 @@ test("core spec names the final OSS model and excludes operator-provided capacit
   assert.match(coreSpec, /any runner-installable OpenTofu\/Terraform\s+provider/);
   assert.match(coreSpec, /Takoform is an ordinary external provider/);
   assert.match(coreSpec, /does not host a Form Registry/);
-  assert.match(coreSpec, /Takosumi Cloud or another external Host/);
+  assert.match(coreSpec, /Takosumi hosted service or another external Host/);
   assert.match(coreSpec, /old `Resource Shape`.*HTTP families are retired/s);
   assert.match(coreSpec, /unconditional `404`/);
   assert.doesNotMatch(coreSpec, /Final Plan.*current direction|Final Plan.*authoritative/);
@@ -464,7 +464,7 @@ test("current docs keep retired Resource HTTP surfaces absent and externalize Fo
   assert.match(combined, /unconditionally retired.*`404`/s);
   assert.match(combined, /discovery[^\n]*(?:unavailable|remain unavailable|retired)/i);
   assert.match(combined, /writes[^\n]*(?:unavailable|remain unavailable|disabled|retired)/i);
-  assert.match(combined, /Takosumi Cloud (?:or another external )?Host/i);
+  assert.match(combined, /Takosumi hosted service (?:or another external )?Host/i);
   assert.match(combined, /ordinary provider/i);
 
   const config = docs.find(({ path }) => path === "docs/reference/configuration.md")?.text ?? "";
@@ -489,7 +489,7 @@ test("workspace packages stay private source modules", async () => {
   }
 });
 
-test("hosted Cloud publishes the reviewed SLA and support boundary", async () => {
+test("hosted Takosumi publishes the reviewed SLA and support boundary", async () => {
   const jaSla = await readText(new URL("app-docs/sla.md", ROOT));
   const enSla = await readText(new URL("app-docs/en/sla.md", ROOT));
   const jaSupport = await readText(new URL("app-docs/support.md", ROOT));

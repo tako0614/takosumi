@@ -46,7 +46,7 @@ external Host can prove its own exact package, implementation, activation, and
 principal-audience state; those checks are not an OSS Form Registry or
 FormActivation contract.
 
-Takosumi Cloud may attach implementation, capacity, SKU, price, quota, billing,
+Takosumi hosted service may attach implementation, capacity, SKU, price, quota, billing,
 SLA, and support to an exact `OfferingSelection` in its closed commercial
 binding. That binding cannot replace the OSS subject resolver, select another
 Offering implicitly, or create a second Resource lifecycle.

@@ -27,7 +27,7 @@ Takosumi フローを実行します。connection payload をクライアント�
 https://<takosumi-origin>/install
 ```
 
-公式 Takosumi Cloud の origin は `app.takosumi.com` です。self-host や Operator が
+公式 Takosumi hosted service の origin は `app.takosumi.com` です。self-host や Operator が
 明示した origin でも、protocol は同じように動きます。
 
 dashboard 内では `/new` に正規化されることがありますが、外部クライアントは

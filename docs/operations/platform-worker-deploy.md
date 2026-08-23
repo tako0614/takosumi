@@ -4,7 +4,7 @@ This runbook covers the OSS Takosumi platform worker, including the official
 Takosumi service. The official composition runs this repository's ordinary
 worker and connects optional commercial products through the public
 `PlatformExtensionRoute` plus private service bindings. It does not use a
-Takosumi Cloud wrapper.
+Takosumi hosted service wrapper.
 
 The official Worker entry is `deploy/platform/entry-worker.ts`. Besides the
 default HTTP handler it exports

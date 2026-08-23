@@ -13,7 +13,7 @@ export const AUDIENCES: readonly Audience[] = [
     persona:
       "難しい運用を抱えずに、自分のサービスを 1 つホストしたい。",
     exampleStack: "自分の静的サイト / Web サービス",
-    cta: { label: "Cloud を開く", href: "https://app.takosumi.com/" },
+    cta: { label: "Takosumi を開く", href: "https://app.takosumi.com/" },
   },
   {
     name: "Indie hacker / 個人開発者",

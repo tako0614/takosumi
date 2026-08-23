@@ -81,6 +81,6 @@ Takosumi では、デプロイしたものが提供する接続方法の説明�
 
 このドキュメントは Takosumi OSS の共通動作を説明します。hosted Form instance、
 保存容量、料金、SLA は endpoint の運用者が決めます。公式ホスティング固有の内容は
-Takosumi Cloud のドキュメントに分けています。
+Takosumi hosted service のドキュメントに分けています。
 
 [製品の境界](./boundaries.md)で、どこまでがソフトウェアの責任かを確認できます。

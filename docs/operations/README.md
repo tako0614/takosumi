@@ -5,7 +5,7 @@
 扱います。これらは not published product docs であり、not customer-facing です。
 公開 website には含めません。
 
-公式の Takosumi Cloud だけに関係する Stripe、Cloud capacity、本番環境の手順は
+公式の Takosumi hosted service だけに関係する Stripe、Cloud capacity、本番環境の手順は
 Cloud 側のリポジトリで管理します。
 
 ## 最初に確認すること

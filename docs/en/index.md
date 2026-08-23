@@ -18,7 +18,7 @@ different plan after review, so the changes you read are the changes it applies.
 
 ### Keep credentials out of modules
 
-Cloud API keys and tokens are stored in Takosumi. Their values cannot be read
+Takosumi API keys and tokens are stored in Takosumi. Their values cannot be read
 back and are released only to the runner while the relevant Run is active. The
 same module can serve development and production with different connections.
 
@@ -85,5 +85,5 @@ The old Resource Shape / Form Host API is documented only in the
 [Resource migration note](./concepts/resources.md); it is not a new authoring
 surface.
 
-Pricing, Cloud resources, and support for the official hosted service are in
-the [Takosumi Cloud documentation](https://app.takosumi.com/docs/en/).
+Pricing, hosted resources, and support for the official hosted service are in
+the [Takosumi hosted service documentation](https://app.takosumi.com/docs/en/).

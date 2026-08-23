@@ -1,23 +1,24 @@
-# Takosumi Cloud SLA
+# Takosumi hosted service SLA
 
-このページは Takosumi Cloud の可用性目標とインシデント時の公開方針です。
+このページは Takosumi hosted service の可用性目標とインシデント時の公開方針です。
 一般公開ゲートを開くまでは GA 後の運用目標として扱い、ゲートを開いた時点から
 `sla://takosumi-cloud/official-sla-v1` を適用します。
+この技術識別子は互換性のため変更しません。
 
 ## 月間可用性目標
 
 | 対象 | 目標 |
 | --- | ---: |
 | Control plane API、サインイン、Dashboard、Run受付・参照 | 99.9% |
-| Stable として提供する公式 Cloud capacity | 99.9% |
+| Stable として提供する公式 hosted capacity | 99.9% |
 | AI Gateway（upstream modelを除く） | 99.5% |
 
-可用性は UTC の暦月単位で測定します。Takosumi Cloud が原因の5xxと、
+可用性は UTC の暦月単位で測定します。Takosumi hosted service が原因の5xxと、
 5分間隔のproduction synthetic probe失敗を対象にします。顧客コードのエラー、
 4xx、顧客が設定した上限、spend guard、AUPに基づく停止、外部providerの障害は
-Takosumi Cloudの停止時間に含めません。
+Takosumi hosted service の停止時間に含めません。
 
-AI Gatewayの目標はTakosumi Cloudのgateway部分に適用し、選択したAI modelや
+AI Gatewayの目標はTakosumi hosted service のgateway部分に適用し、選択したAI modelや
 upstream APIそのものの可用性は含みません。
 
 ## 計画メンテナンス
@@ -62,6 +63,6 @@ Workspace、Resource、provider object、secretなどの顧客識別情報を含
 
 ## 対象外
 
-このSLAは公式のTakosumi Cloud hosted serviceだけに適用します。Takosumi OSS、
+このSLAは公式のTakosumi hosted serviceだけに適用します。Takosumi OSS、
 self-host環境、顧客自身のProvider Connection、顧客コード、previewまたは
 experimentalと明示した機能には適用しません。

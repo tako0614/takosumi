@@ -11,7 +11,6 @@ export default function Pricing() {
         <>
           セルフホストは<em class="em">無料</em>
           のオープンソース。自分のインフラに置いて、自分で所有します。Takosumi
-          Cloud
           は公式ホスティング版で、ブラウザからサービスを追加・更新できます。
         </>
       }

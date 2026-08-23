@@ -81,7 +81,7 @@ test("extension descriptors parse exact request scope rules without changing the
   const [route] = platformExtensionRoutes({
     TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
       {
-        basePath: "/gateway/ai/v1",
+        basePath: "/api/v1/ai",
         handlerKey: "AI_GATEWAY",
         requestScopeRules: [
           {
@@ -105,7 +105,7 @@ test("extension descriptors parse exact request scope rules without changing the
   });
 
   expect(route).toMatchObject({
-    basePath: "/gateway/ai/v1",
+    basePath: "/api/v1/ai",
     requestScopeRules: [
       {
         path: "/models",
@@ -126,28 +126,28 @@ test("extension descriptors parse exact request scope rules without changing the
   });
 
   const models = resolvePlatformExtensionRequestScopeRoute(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+    new Request("https://app.takosumi.com/api/v1/ai/models", {
       method: "GET",
     }),
     route!,
   );
   expect(models).toMatchObject({
-    basePath: "/gateway/ai/v1",
+    basePath: "/api/v1/ai",
     requiredScopes: ["ai.models.read"],
   });
   const preflight = resolvePlatformExtensionRequestScopeRoute(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+    new Request("https://app.takosumi.com/api/v1/ai/models", {
       method: "OPTIONS",
     }),
     route!,
   );
   expect(preflight).toMatchObject({
-    basePath: "/gateway/ai/v1",
+    basePath: "/api/v1/ai",
     requiredScopes: [],
   });
   expect(
     resolvePlatformExtensionRequestScopeRoute(
-      new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      new Request("https://app.takosumi.com/api/v1/ai/chat/completions", {
         method: "GET",
       }),
       route!,
@@ -155,7 +155,7 @@ test("extension descriptors parse exact request scope rules without changing the
   ).toBeUndefined();
   expect(
     resolvePlatformExtensionRequestScopeRoute(
-      new Request("https://app.takosumi.com/gateway/ai/v1/unknown", {
+      new Request("https://app.takosumi.com/api/v1/ai/unknown", {
         method: "GET",
       }),
       route!,
@@ -600,26 +600,67 @@ test("core route prefixes cannot be delegated to extensions", () => {
   ).toThrow("overlaps a Takosumi core route prefix");
 });
 
-test("Hosted subscription keeps its exact optional route while retired /v1 is closed", () => {
+test("account subscription keeps its exact optional route while Hosted alias is closed", () => {
   const [hosted] = platformExtensionRoutes({
     TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
       {
-        basePath: "/api/v1/hosted/subscription",
+        basePath: "/api/v1/account/subscription",
         handlerKey: "HOSTED",
       },
     ]),
   });
-  expect(hosted?.basePath).toBe("/api/v1/hosted/subscription");
+  expect(hosted?.basePath).toBe("/api/v1/account/subscription");
+  expect(
+    matchPlatformExtensionRoute(
+      "/api/v1/account/subscription/resources",
+      [hosted!],
+    ),
+  ).toBe(hosted);
+  expect(
+    matchPlatformExtensionRoute(
+      "/api/v1/hosted/subscription/resources",
+      [hosted!],
+    ),
+  ).toBeUndefined();
   expect(() =>
     platformExtensionRoutes({
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
-          basePath: "/v1/hosted/subscription",
+          basePath: "/api/v1/hosted/subscription",
           handlerKey: "HOSTED",
         },
       ]),
     }),
   ).toThrow("overlaps a Takosumi core route prefix");
+});
+
+test("AI keeps one exact Takosumi API route without opening arbitrary API paths", () => {
+  const [ai] = platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      {
+        basePath: "/api/v1/ai",
+        handlerKey: "HOSTED",
+        authDelivery: "context",
+        ownsPathSubtree: true,
+        selfServicePatScopes: ["ai.models.read", "ai.chat"],
+        requestScopeRules: [
+          {
+            path: "/models",
+            methods: ["GET"],
+            requiredScopes: ["ai.models.read"],
+          },
+          {
+            path: "/chat/completions",
+            methods: ["POST"],
+            requiredScopes: ["ai.chat"],
+          },
+        ],
+      },
+    ]),
+  });
+  expect(ai?.basePath).toBe("/api/v1/ai");
+  expect(matchPlatformExtensionRoute("/api/v1/ai/chat/completions", [ai!])).toBe(ai);
+  expect(matchPlatformExtensionRoute("/api/v1/cloud/ai", [ai!])).toBeUndefined();
 });
 
 test("compatibility routes require explicit control and data planes", () => {

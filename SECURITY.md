@@ -12,7 +12,7 @@ before sending it.
 
 This policy covers the Takosumi OSS control plane, Accounts/OIDC plane,
 dashboard, CLI, reference runner, OpenTofu modules, and operator reference
-composition in this repository. Closed Takosumi Cloud implementation and
+composition in this repository. Closed Takosumi hosted service implementation and
 official managed capacity follow the Cloud operator policy in addition to this
 baseline.
 

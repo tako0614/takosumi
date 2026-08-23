@@ -1,6 +1,6 @@
 # Data endpoints
 
-Takosumi Cloud は既存の service instance に標準 protocol で接続する data endpoint を提供
+Takosumi hosted service は既存の service instance に標準 protocol で接続する data endpoint を提供
 できます。endpoint は object の lifecycle API ではありません。作成、更新、削除は Git
 repository の OpenTofu provider graph で行います。
 
@@ -9,12 +9,12 @@ repository の OpenTofu provider graph で行います。
 endpoint URL、audience、必要な permission は Run の Output または authorized Interface
 から取得します。base URL や tenant hostname を推測しないでください。
 
-認証済み Cloud catalog は現在利用できる protocol family を返します。この catalog endpoint は
-hosted Cloud owner が定義する外部 surface です。Takosumi OSS platform worker は retired
+認証済み Takosumi catalog は現在利用できる protocol family を返します。この catalog endpoint は
+hosted service owner が定義する外部 surface です。Takosumi OSS platform worker は retired
 `/v1/cloud/catalog` を mount せず、`/api/v1/cloud/catalog` という互換 alias も提供しません。
-実際の URL は hosted Cloud owner の契約または authorized Interface から取得してください。
+実際の URL は hosted service owner の契約または authorized Interface から取得してください。
 
-通常の Cloud API key、S3 access key、runtime Interface credential は別の authority です。
+通常の Takosumi API key、S3 access key、runtime Interface credential は別の authority です。
 相互に使い回しません。
 
 ## S3-compatible object access
@@ -22,7 +22,7 @@ hosted Cloud owner が定義する外部 surface です。Takosumi OSS platform 
 Base path: `/compat/s3/v1`
 
 S3 client は、その bucket に対して発行された access key を AWS Signature Version 4 で
-使用します。通常の Takosumi Cloud API key は S3 secret access key ではありません。
+使用します。通常の Takosumi API key は S3 secret access key ではありません。
 
 ```text
 endpoint: https://app.takosumi.com/compat/s3/v1
@@ -35,27 +35,27 @@ authentication: AWS SigV4
 
 ## OpenAI-compatible AI access
 
-Base path: `/gateway/ai/v1`
+Base path: `/api/v1/ai`
 
 OpenAI-compatible client は、その AI service / Interface に許可された bearer credential を
 使用します。
 
 ```text
-base URL: https://app.takosumi.com/gateway/ai/v1
+base URL: https://app.takosumi.com/api/v1/ai
 authentication: Bearer
 ```
 
-model availability、limits、price は Cloud catalog と [Pricing](./pricing.md) を確認して
+model availability、limits、price は Takosumi catalog と [Pricing](./pricing.md) を確認して
 ください。この endpoint は model resource や provider configuration を作成しません。
 
-## API keys
+## Takosumi API keys
 
-Account settings で Cloud API key を作成し、表示された secret を一度だけ保存します。
+Account settings で Takosumi API key を作成し、表示された secret を一度だけ保存します。
 automation では最小 scope と一つの Workspace を選びます。secret は repository、OpenTofu
 state、Output、Interface document に書きません。
 
 data endpoint 固有の credential は、対応する service の Interface / credential flow から
-取得します。Cloud API key を data-plane credential へ変換しません。
+取得します。Takosumi API key を data-plane credential へ変換しません。
 
 ## Billing and failure behavior
 

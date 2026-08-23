@@ -82,7 +82,7 @@ Authorization: Bearer <token>
 ```
 
 どの Takosumi endpoint も、operator が有効化した session / bearer token 方式を
-capability として公開します。Takosumi Cloud の API key は、Takosumi Accounts の
+capability として公開します。Takosumi API key は、Takosumi Accounts の
 personal access token です。S3-compatible endpoint のように標準 protocol 自体が
 署名方式を持つ場合は、その protocol の署名を使います。
 
@@ -102,7 +102,7 @@ PAT の公開 Accounts surface は次のとおりです。これらの応答は�
 
 scope catalog は core の `read` / `write` と、同じ owning route が
 `selfServicePatScopes` で明示した allowlist 済み extension scope だけを
-self-service として返します。Cloud AI の `ai.models.read` / `ai.chat` /
+self-service として返します。Takosumi hosted AI の `ai.models.read` / `ai.chat` /
 `ai.embeddings` と `resources:read` は Workspace binding 必須です。`admin` や
 route が明示していない scope を request scope から推測して公開しません。
 
@@ -369,8 +369,8 @@ first-come-first-served に予約します。
 
 Hostname reservation と vanity slot は Capsule lifetime に属します。成功した
 Capsule destroy で解放し、個別 route の削除では解放しません。ユーザー所有 custom
-domain は、この mode ではなく別の verified-domain lifecycle を使います。Takosumi Cloud
-では verification / certificate lifecycle が未実装のため Planned です。Cloud の
+domain は、この mode ではなく別の verified-domain lifecycle を使います。Takosumi hosted service
+では verification / certificate lifecycle が未実装のため Planned です。hosted service の
 route への要求は安全側に停止します。通常の OpenTofu の URL / route 変数を
 BYOC provider へ渡す経路は、これとは別にそのまま使えます。
 
@@ -432,7 +432,7 @@ AWS / GCP / Kubernetes ごとの固定 route や credential kind も Core には
 将来の workload identity は、汎用 OIDC principal、Resource Credential / Policy、または
 Credential Recipe の明示的な pre-run action として設計します。公開するのは、実装と
 discovery が揃ってからです。
-Operator / Cloud はその汎用 seam に Enterprise SSO、SCIM、商用 audit export を追加できます。
+Operator / hosted service はその汎用 seam に Enterprise SSO、SCIM、商用 audit export を追加できます。
 
 Capsule が公開する OIDC client は `installExperience.oidc_client.scopes`
 で必要な scope を宣言できます。`openid` は必須です。Accounts が発行する
@@ -475,11 +475,11 @@ capability surface には含まれません。利用者自身の Cloudflare acco
 
 compatibility profile は Cloud hostname を作りません。runtime route は
 `http.route` Interface と InterfaceBinding で公開します。hostname の所有権は OSS の
-reservation authority、または operator / Cloud の VerifiedDomain lifecycle が管理します。
+reservation authority、または operator / hosted service の VerifiedDomain lifecycle が管理します。
 routing cache や backend state を hostname 所有権の正本にはしません。
 
-Takosumi Cloud 固有の endpoint 例は
-[Cloud endpoints](https://app.takosumi.com/docs/endpoints) を見てください。
+Takosumi hosted service 固有の endpoint 例は
+[hosted service endpoints](https://app.takosumi.com/docs/endpoints) を見てください。
 
 ## エラーの形式
 
@@ -507,4 +507,4 @@ secret の値、一時的な credential、内部 adapter の credential は erro
 | `v1beta1`  | 大枠は固定。upgrade / conversion guidance を必須とする |
 | `v1`       | 後方互換を維持。field は削除しない                     |
 
-OSS / Operator / Cloud の違いは API version ではなく capabilities で表します。
+OSS / Operator / hosted service の違いは API version ではなく capabilities で表します。

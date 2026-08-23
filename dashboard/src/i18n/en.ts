@@ -1193,9 +1193,9 @@ export const en: Record<keyof typeof ja, string> = {
   "account.installTarget.done": "Registered — approve your browser’s prompt.",
   "account.installTarget.unsupported":
     "This browser doesn’t support this. Enter your instance URL on the store instead.",
-  "account.apiKeys.title": "Cloud API keys",
+  "account.apiKeys.title": "Takosumi API keys",
   "account.apiKeys.subtitle":
-    "Create and revoke keys for the CLI and external tools that use Takosumi Cloud.",
+    "Create and revoke keys for the CLI and external tools that use the Takosumi API at /api/v1.",
   "account.apiKeys.secretOnce": "Secret shown once",
   "account.apiKeys.name": "Key name",
   "account.apiKeys.namePlaceholder": "For example: Development CLI",
@@ -1267,7 +1267,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.commercial.pageSubtitle":
     "Review available credit, add prepaid credits, and manage auto-recharge.",
   "billing.commercial.description":
-    "Prepaid credits fund Takosumi Cloud usage and do not expire.",
+    "Prepaid credits fund Takosumi usage and do not expire.",
   "billing.commercial.loadError":
     "Could not load prepaid credit and payment details: {message}",
   "billing.commercial.actionError":
@@ -1280,18 +1280,18 @@ export const en: Record<keyof typeof ja, string> = {
     "Payment setup was cancelled. No changes were made.",
   "billing.commercial.manage": "Manage payment method",
   "billing.commercial.status.unknown": "Unknown",
-  "billing.commercial.account.status.active": "Cloud usage available",
-  "billing.commercial.account.status.trialing": "Cloud usage available",
+  "billing.commercial.account.status.active": "Takosumi usage available",
+  "billing.commercial.account.status.trialing": "Takosumi usage available",
   "billing.commercial.account.status.pastDue": "Payment needs attention",
-  "billing.commercial.account.status.disabled": "Cloud usage suspended",
+  "billing.commercial.account.status.disabled": "Takosumi usage suspended",
   "billing.commercial.account.blocked.paymentDisputed":
-    "New Takosumi Cloud usage is blocked while a payment dispute is open. Your visible prepaid credit does not expire. Resolve the dispute in payment settings.",
+    "New Takosumi usage is blocked while a payment dispute is open. Your visible prepaid credit does not expire. Resolve the dispute in payment settings.",
   "billing.commercial.account.blocked.paymentPastDue":
-    "New Takosumi Cloud usage is blocked because payment could not be confirmed. Your visible prepaid credit does not expire. Review your payment method.",
+    "New Takosumi usage is blocked because payment could not be confirmed. Your visible prepaid credit does not expire. Review your payment method.",
   "billing.commercial.account.blocked.disabled":
-    "New Takosumi Cloud usage is blocked because the billing account is disabled. Your visible prepaid credit does not expire. Review payment settings.",
+    "New Takosumi usage is blocked because the billing account is disabled. Your visible prepaid credit does not expire. Review payment settings.",
   "billing.commercial.account.blocked.suspended":
-    "New Takosumi Cloud usage is blocked while the billing account needs attention. Your visible prepaid credit does not expire. Review payment settings.",
+    "New Takosumi usage is blocked while the billing account needs attention. Your visible prepaid credit does not expire. Review payment settings.",
   "billing.commercial.lowCredit.autoRecharge":
     "Available credit is low. Auto-recharge will add prepaid credit at the saved threshold.",
   "billing.commercial.lowCredit.manual":

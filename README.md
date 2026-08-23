@@ -17,7 +17,7 @@ Takosumi 専用の `.tf` 記法や first-party provider はありません。Clo
 Kubernetes などは、それぞれの既存 provider が操作します。
 
 [ソフトウェアのドキュメント](https://takosumi.com/docs/) ·
-[Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)
+[Takosumi hosted service のドキュメント](https://app.takosumi.com/docs/)
 
 ## 5 分で動作を確認する
 
@@ -80,13 +80,13 @@ Form をホストして実体化するサービスはこのリポジトリの所
 ではありません。互換用の API、schema、保存データを残している箇所は migration
 internal として扱い、通常の利用者向け手順やナビゲーションには掲載しません。
 
-## Takosumi と Takosumi Cloud
+## Takosumi と Takosumi hosted service
 
 - **Takosumi** はこのリポジトリのソフトウェアです。自分の環境で運用できます。
-- **Takosumi Cloud** は `app.takosumi.com` で提供する公式ホスティングです。Cloud が提供する
-  hosted Form/service、料金、容量、サポートは Cloud 側が決めます。
+- **Takosumi hosted service** は `app.takosumi.com` で提供する公式ホスティングです。hosted
+  Form/service、料金、容量、サポートは hosted service 側が決めます。
 
-OSS は Cloud がなくても動きます。Cloud 固有の価格、Stripe、内部の配置先はこの
+OSS は hosted service がなくても動きます。hosted service 固有の価格、Stripe、内部の配置先はこの
 リポジトリの公開仕様ではありません。境界の詳細は
 [製品の境界](docs/concepts/boundaries.md)にあります。
 
@@ -115,7 +115,7 @@ bun run docs:build
 
 主なディレクトリは、公開 contract の `contract/`、control plane の `core/`、画面の
 `dashboard/`、runner の `runner/`、配布構成の `deploy/`、ドキュメントの `docs/` です。
-standalone OSS clone は hosted Cloud の GA や本番課金の操作を代理実行しません。
+standalone OSS clone は Takosumi hosted service の GA や本番課金の操作を代理実行しません。
 
 ライセンスは [AGPL-3.0-only](LICENSE) です。脆弱性の報告方法は
 [SECURITY.md](SECURITY.md)を参照してください。

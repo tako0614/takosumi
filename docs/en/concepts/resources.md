@@ -10,7 +10,7 @@
 Takoform is an ordinary OpenTofu provider installed from
 `registry.terraform.io/tako0614/takoform`. Form definitions, packages,
 provider releases, conformance, and any Host that stores and realizes Forms are
-owned by Takoform or an external project/operator such as Takosumi Cloud.
+owned by Takoform or an external project/operator such as the Takosumi hosted service.
 Takosumi OSS does not automatically provide a Form Host or expose TargetPool
 and SpacePolicy as a user authoring surface.
 

@@ -195,7 +195,7 @@ test("hosted catalog requires an exact GET scope for request-rule routes", () =>
 test("hosted catalog accepts canonical public OPTIONS request rules", () => {
   const cloudAiGateway = {
     id: "cloud-ai-gateway",
-    basePath: "/gateway/ai/v1",
+    basePath: "/api/v1/ai",
     configured: true,
     requestScopeRules: [
       {

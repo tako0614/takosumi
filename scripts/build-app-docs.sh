@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the hosted Takosumi Cloud docs and embed them under the platform app
+# Build the Takosumi hosted service docs and embed them under the platform app
 # static asset root so app.takosumi.com/docs serves them.
 
 set -euo pipefail
@@ -36,7 +36,7 @@ if [ ! -x "${VITEPRESS_BIN}" ]; then
   install_docs_node_modules
 fi
 
-echo "[takosumi/app-docs] build hosted Cloud docs"
+echo "[takosumi/app-docs] build Takosumi hosted service docs"
 cd "${APP_DOCS_DIR}"
 VITEPRESS_BASE="${VITEPRESS_BASE:-/docs/}" "${VITEPRESS_BIN}" build
 

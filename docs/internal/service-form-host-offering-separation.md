@@ -13,7 +13,7 @@ The current split is:
 | --- | --- |
 | Git/OpenTofu control plane, Runs, state, Outputs, audit, provider connections, credential recipes, provider bindings, Interfaces, InterfaceBindings, and generic Offerings | Takosumi OSS |
 | Portable Form schemas, packages, provider releases, and conformance | Takoform |
-| Hosted Form instances, Form Host lifecycle, target/capacity/backend management, commercial offerings, billing, SLA, and support | Takosumi Cloud (external Host) |
+| Hosted Form instances, Form Host lifecycle, target/capacity/backend management, commercial offerings, billing, SLA, and support | Takosumi hosted service (external Host) |
 
 Resource/Form rows and old route names remain only as migration custody. They do
 not make OSS a Form Host or a Resource authoring authority. The old `/v1`

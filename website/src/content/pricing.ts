@@ -1,5 +1,5 @@
 /**
- * Pricing / ownership facts. Takosumi Cloud has no subscription tier or fixed
+ * Pricing / ownership facts. The Takosumi hosted service has no subscription tier or fixed
  * monthly fee. Customers add prepaid credits and pay the published usage
  * prices; automatic recharge is an explicit, default-off owner setting.
  * Internal allowance, payment-provider IDs, cost estimates, and readiness
@@ -44,7 +44,7 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
   },
   {
     id: "platform",
-    name: "Takosumi Cloud",
+    name: "Takosumi",
     price: "月額固定費なし",
     priceNote:
       "$5 からプリペイドクレジットを追加。自動チャージは初期状態で無効です。",
@@ -64,7 +64,7 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
           "残高不足や設定上限を超える操作は、バックエンド実行前に停止します",
       },
     ],
-    cta: { label: "Cloud を開く", href: "https://app.takosumi.com/" },
+    cta: { label: "Takosumi を開く", href: "https://app.takosumi.com/" },
     highlight: true,
   },
 ];

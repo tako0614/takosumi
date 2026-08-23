@@ -82,4 +82,4 @@ dashboard、サインイン、永続データベース、OpenTofu runner を含�
 にまとめています。新しい authoring surface ではありません。
 
 公式ホスティングの料金、hosted service、サポートは
-[Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)にあります。
+[Takosumi hosted service のドキュメント](https://app.takosumi.com/docs/)にあります。

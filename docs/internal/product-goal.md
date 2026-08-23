@@ -21,7 +21,7 @@ coherent product:
    plane. An operator can run the supported Stack flow through the canonical
    `Run` / `StateVersion` / `Output` / audit lifecycle, with explicit provider
    connections and no hidden provider, Form, or Cloud authority.
-2. **Takosumi Cloud** is the official hosted service composed one-way around
+2. **Takosumi hosted service** is the official hosted service composed one-way around
    that OSS contract. It adds hosted capacity, offerings, billing, support,
    SLA, and abuse/incident operations in its own repository and operator
    evidence. Those additions never become an OSS default or a second ledger.
@@ -58,7 +58,7 @@ migration or compatibility material and are not current Takosumi routes.
 This goal does not redesign Takoform's Form Definition, FormRef, package,
 provider, Host API, maturity, or publication process. A change to those
 portable semantics belongs in Takoform first and is then adopted through an
-explicit Takosumi integration decision. Takosumi Cloud may host an exact
+explicit Takosumi integration decision. Takosumi hosted service may host an exact
 external Form, but it owns the implementation, activation, capacity, and
 commercial policy around it.
 
@@ -72,7 +72,7 @@ from the layer that owns the operation.
 | --- | --- | --- |
 | Self-host install and control-plane loop | From a clean checkout and operator-owned deployment, a user can register a Git source, create a Capsule, run plan/apply, read the resulting `StateVersion` and ordinary `Output`, and complete an approved destroy. The final Run, state, Output, and audit lineage are durable; replay, stale fences, and secret-like values fail closed. | Takosumi OSS portable gate, [`critical-journeys.md`](./critical-journeys.md), and the operator's live control-plane smoke. |
 | Self-host provider path | The same Stack flow works with a runner-installable provider selected in the user's module and explicit `ProviderConnection` / `CredentialRecipe` / `ProviderBinding` records. No first-party provider, implicit credential, or second resource ledger is required. | Core Spec / Core Conformance and the OSS provider-neutral tests. |
-| Hosted user loop | An authenticated user can discover an actually available Cloud offering, create and operate the corresponding hosted service through the same source → plan → apply → readback → destroy shape, and observe tenant isolation, usage/billing, recovery, and redacted audit evidence. | Takosumi Cloud's exact hosted smoke and private readiness evidence; this document does not reproduce it. |
+| Hosted user loop | An authenticated user can discover an actually available Cloud offering, create and operate the corresponding hosted service through the same source → plan → apply → readback → destroy shape, and observe tenant isolation, usage/billing, recovery, and redacted audit evidence. | Takosumi hosted service's exact hosted smoke and private readiness evidence; this document does not reproduce it. |
 | Hosted release loop | The candidate OSS commit and Cloud revision are provenance-bound, staging is qualified before production, post-conditions are read back, and reversal or forward-repair behavior is recorded. Hosted GA is reported only by the Cloud owner gate and launch-readiness authority. | [Cloud GA smoke](https://github.com/tako0614/takosumi-cloud/blob/main/docs/operations/ga-smoke.md), [hosted readiness profile](https://github.com/tako0614/takosumi-cloud/blob/main/docs/operations/hosted-readiness-profile.md), and [real-cloud staging procedure](https://github.com/tako0614/takosumi-cloud/blob/main/docs/operations/real-cloud-staging.md). |
 
 The local critical-journey lane must keep all groups covered by existing
@@ -89,7 +89,7 @@ The destination is inside this envelope:
   model with explicit provider selection, one canonical Run/state/Output/audit
   lineage, and fail-closed unknown or stale identities.
 - **Ownership fidelity:** Takoform owns portable Form semantics; Takosumi OSS
-  owns the generic control plane; Takosumi Cloud owns official hosted
+  owns the generic control plane; Takosumi hosted service owns official hosted
   implementation, capacity, billing, SLA, support, and abuse operations.
   Cloud composes OSS one-way and never makes hosted facts implicit in OSS.
 - **Security and privacy:** credential values never enter Outputs, state,
@@ -163,5 +163,5 @@ gate, or this document never authorizes production mutation.
   provenance and release obligations.
 - [Takoform published contract](https://github.com/tako0614/terraform-provider-takoform/blob/main/README.md)
   — external portable semantics and publication status.
-- [Takosumi Cloud operator runbooks](https://github.com/tako0614/takosumi-cloud/blob/main/docs/operations/README.md)
+- [Takosumi hosted service operator runbooks](https://github.com/tako0614/takosumi-cloud/blob/main/docs/operations/README.md)
   — hosted evidence and release authority.

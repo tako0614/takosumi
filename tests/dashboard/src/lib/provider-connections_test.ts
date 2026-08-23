@@ -138,7 +138,7 @@ describe("dashboard ProviderConnection candidates", () => {
     const managed = connection({
       id: "connection_managed",
       scope: "operator",
-      displayName: "Takosumi Cloud",
+      displayName: "Takosumi hosted service",
       credentialRecipe: {
         id: "operator-run",
         authMode: "capsule-run",
@@ -201,7 +201,7 @@ describe("dashboard ProviderConnection candidates", () => {
       id: "connection_v01",
       providerSource: "registry.opentofu.org/example/provider-v01",
       scope: "operator",
-      displayName: "Takosumi Cloud",
+      displayName: "Takosumi hosted service",
       credentialRecipe: {
         id: "operator-run",
         authMode: "capsule-run",
@@ -218,7 +218,7 @@ describe("dashboard ProviderConnection candidates", () => {
       id: "connection_v02",
       providerSource: "registry.opentofu.org/example/provider-v02",
       scope: "operator",
-      displayName: "Takosumi Cloud",
+      displayName: "Takosumi hosted service",
       credentialRecipe: v01.credentialRecipe,
     });
 
@@ -233,8 +233,8 @@ describe("dashboard ProviderConnection candidates", () => {
     expect(
       providerConnectionMatchesProviderSource("example/provider-v02", v02),
     ).toBe(true);
-    expect(providerConnectionDisplayName(v01)).toBe("Takosumi Cloud");
-    expect(providerConnectionDisplayName(v02)).toBe("Takosumi Cloud");
+    expect(providerConnectionDisplayName(v01)).toBe("Takosumi hosted service");
+    expect(providerConnectionDisplayName(v02)).toBe("Takosumi hosted service");
   });
 
   test("keeps managed and BYOC destinations disjoint for one provider source", () => {

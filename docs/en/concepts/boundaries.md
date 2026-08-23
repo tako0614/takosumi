@@ -1,4 +1,4 @@
-# Takosumi and Takosumi Cloud
+# Takosumi and the Takosumi hosted service
 
 These docs use two names so the software and the official service are not
 confused.
@@ -6,7 +6,7 @@ confused.
 | Name               | Meaning                                            |
 | ------------------ | -------------------------------------------------- |
 | **Takosumi**       | the AGPL-3.0 software published in this repository |
-| **Takosumi Cloud** | the official hosted service at `app.takosumi.com`  |
+| **Takosumi hosted service** | the official hosted service at `app.takosumi.com`  |
 
 ## What the software provides
 
@@ -28,7 +28,7 @@ lifecycle for them.
 
 Older descriptions that made Takosumi OSS a Resource Shape or Form Host are
 retired. Form definitions, providers, packages, and hosted Form instances are
-owned by Takoform or an external Host such as Takosumi Cloud. Retained Resource
+owned by Takoform or an external Host such as the Takosumi hosted service. Retained Resource
 APIs, schemas, and persistence exist only as temporary migration internals;
 they are not a supported OSS authoring surface.
 
@@ -37,7 +37,7 @@ they are not a supported OSS authoring surface.
 Two installations of the same software can differ in:
 
 - provider configuration and execution environment
-- the external Host or Takosumi Cloud that supplies hosted Form instances
+- the external Host or the Takosumi hosted service that supplies hosted Form instances
 - storage capacity, usage limits, and backup retention
 - whether usage is only recorded or also billed
 - updates, incident response, support, and SLA
@@ -50,24 +50,24 @@ curl https://takosumi.example.com/.well-known/takosumi
 
 An authenticated client can also read `/api/v1/capabilities`.
 
-## What Takosumi Cloud adds
+## What the Takosumi hosted service adds
 
-Takosumi Cloud is an official operation of the OSS software. It adds hosted
-Form instances and their implementations, official capacity, pricing and
-payment, support, SLA, and abuse controls.
+The Takosumi hosted service is an official operation of the OSS software. It
+adds hosted Form instances and their implementations, official capacity,
+pricing and payment, support, SLA, and abuse controls.
 
 Those are not general OSS contracts. Use the
-[Takosumi Cloud documentation](https://app.takosumi.com/docs/en/) for prices
+[Takosumi hosted service documentation](https://app.takosumi.com/docs/en/) for prices
 and limits.
 
-Cloud code consumes OSS contracts. The OSS software does not depend on private
-Cloud code or Stripe.
+Hosted-service code consumes OSS contracts. The OSS software does not depend on
+private hosted-service code or Stripe.
 
 ## Where Takoform and external Hosts fit
 
 Takoform is an independent specification, provider, and package project. From
 Takosumi's perspective it is an ordinary OpenTofu provider. A Form Host or
-hosted instance is owned by Takoform's host implementation, Takosumi Cloud, or
+hosted instance is owned by Takoform's host implementation, the Takosumi hosted service, or
 another external operator—not by the OSS control plane.
 
 Cloudflare, AWS, and other Terraform or OpenTofu providers remain ordinary
@@ -79,7 +79,7 @@ execution is not identical, however.
   necessarily enter Takosumi's Resource ledger.
 - A hosted Form instance is resolved and operated by its external Host. It is
   not an implicit Takosumi Resource or TargetPool selection.
-- The runner does not silently select a Cloud-specific provider.
+- The runner does not silently select a hosted-service-specific provider.
 
 Takos is a separate product. Its self-hosted product worker does not embed
 Accounts, deploy-control, the Dashboard, or the runner; it connects to a

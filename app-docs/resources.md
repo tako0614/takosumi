@@ -1,6 +1,6 @@
 # Resources and providers
 
-Takosumi Cloud で使う cloud resource は、Git repository の OpenTofu module が宣言し、
+Takosumi hosted service で使う cloud resource は、Git repository の OpenTofu module が宣言し、
 選択した provider が作成します。Takosumi は provider を置き換えず、Run と state の境界を
 提供します。
 
@@ -11,9 +11,9 @@ module の `required_providers` が選択の正本です。例えば次の経路
 
 - 自分の Cloudflare、AWS、その他の cloud account
 - self-host または third-party provider endpoint
-- 公開後の Takosumi Cloud Takoform Host
+- 公開後の Takosumi hosted service Takoform Host
 
-Takosumi Cloud は provider 名から account、region、secret、価格を推測しません。
+Takosumi hosted service は provider 名から account、region、secret、価格を推測しません。
 Connection を作り、module の provider requirement へ Binding します。credential は Run の
 間だけ runner に materialize され、plan 表示、Output、Interface、ログへ書きません。
 
@@ -31,19 +31,19 @@ repository commit
 作り直しません。provider が失敗した場合は Run に診断を残し、別 backend へ勝手に迂回せず
 fail closed します。
 
-## Cloud catalog
+## Takosumi catalog
 
-認証済み Cloud catalog（hosted Cloud owner が提供する外部 surface）は、現在の Workspace で
+認証済み Takosumi catalog（hosted service owner が提供する外部 surface）は、現在の Workspace で
 利用できる hosted service、価格、protocol、availability を返します。catalog は discovery と
 表示のための情報で、OpenTofu state や provider graph の authority ではありません。
 Takosumi OSS platform worker は legacy `/v1/cloud/catalog` を mount せず、
 `/api/v1/cloud/catalog` という新しい alias も定義しません。実際の catalog endpoint は
-hosted Cloud owner の契約から取得してください。
+hosted service owner の契約から取得してください。
 
 次は別々に判定されます。
 
 - provider / protocol が公開済みか
-- Cloud backend と容量が構成済みか
+- hosted-service backend と容量が構成済みか
 - commercial offering が有効か
 - Workspace の credit、quota、permission が足りるか
 
@@ -60,7 +60,7 @@ document に入れません。表示された endpoint を利用し、hostname �
 
 ## Takoform の提供状態
 
-Takoform は portable contract と OpenTofu/Terraform provider を所有します。Takosumi Cloud
+Takoform は portable contract と OpenTofu/Terraform provider を所有します。Takosumi hosted service
 は official Host を提供する予定ですが、未公開 candidate を catalog に available として
 出しません。公開済みの exact contract、production adapter、billing/recovery、staging
 evidence がそろった後にだけ利用可能になります。

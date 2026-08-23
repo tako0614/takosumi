@@ -1,4 +1,4 @@
-# Takosumi Cloudflare deploy runbook
+# Takosumi hosted serviceflare deploy runbook
 
 This runbook covers the public Takosumi website/docs property and the managed account surface.
 

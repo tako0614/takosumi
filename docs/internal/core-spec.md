@@ -25,7 +25,7 @@ and does not host a Form Registry or hosted Form lifecycle.
 | --- | --- |
 | Git sources, OpenTofu/Terraform init/validate/plan/apply/destroy, Runs, state, Outputs, audit, provider connections, credential recipes, provider bindings, Interfaces, InterfaceBindings | Takosumi OSS |
 | Portable Form schema, FormRef, data-only Form Packages, typed provider, package signatures, and conformance | Takoform |
-| Hosted Form instances, Form Host lifecycle, backend implementations, targets/capacity, commercial offerings, billing, SLA, support, and abuse controls | Takosumi Cloud or another external Host |
+| Hosted Form instances, Form Host lifecycle, backend implementations, targets/capacity, commercial offerings, billing, SLA, support, and abuse controls | Takosumi hosted service or another external Host |
 
 The portable project owns no Resource ID, lifecycle ledger, Run, StateVersion,
 Output, Target, credential, Policy, Adapter, Interface, or InterfaceBinding.
@@ -163,7 +163,7 @@ POST /internal/v1/offering-selections/resolve
 Catalogs are operator/deploy-control surfaces, not a customer Form installer.
 There is no `latest` fallback, implicit provider selection, commercial field,
 or implicit capacity. Empty catalogs are valid and the Stack flow works with
-none installed. Takosumi Cloud may attach its own closed commercial binding to
+none installed. Takosumi hosted service may attach its own closed commercial binding to
 an exact selection; it cannot replace the generic resolver or create a second
 lifecycle ledger.
 
@@ -226,7 +226,7 @@ supported OSS surface.
 The owning repository/operator deploys each production surface. A task, branch
 name, green check, or this document never authorizes production mutation. A
 release must bind the reviewed commit and artifact, prove post-conditions,
-state reversal/forward-repair, and record failure handling. Takosumi Cloud
+state reversal/forward-repair, and record failure handling. Takosumi hosted service
 deployment and commercial readiness are separate external-Host decisions.
 
 ## Conformance reading order

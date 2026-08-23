@@ -1,25 +1,26 @@
-# Takosumi Cloud SLA
+# Takosumi hosted service SLA
 
-This page defines Takosumi Cloud availability targets and public incident
+This page defines Takosumi hosted service availability targets and public incident
 communications. Until the public-access gate opens, these are the operating
 targets for GA. `sla://takosumi-cloud/official-sla-v1` takes effect when that
 gate opens.
+The technical identifier remains unchanged for compatibility.
 
 ## Monthly availability targets
 
 | Scope | Target |
 | --- | ---: |
 | Control-plane API, sign-in, Dashboard, and Run submission and reads | 99.9% |
-| Official Cloud capacity offered as Stable | 99.9% |
+| Official hosted capacity offered as Stable | 99.9% |
 | AI Gateway, excluding upstream models | 99.5% |
 
 Availability is measured by UTC calendar month. It counts 5xx responses caused
-by Takosumi Cloud and failures of the five-minute production synthetic probe.
+by the Takosumi hosted service and failures of the five-minute production synthetic probe.
 Customer-code errors, 4xx responses, customer-configured budgets, spend guards,
-AUP enforcement, and failures of external providers are not Takosumi Cloud
+AUP enforcement, and failures of external providers are not Takosumi hosted service
 downtime.
 
-The AI Gateway target covers the Takosumi Cloud gateway. It does not include
+The AI Gateway target covers the Takosumi hosted service gateway. It does not include
 availability of the selected AI model or upstream API.
 
 ## Planned maintenance
@@ -70,7 +71,7 @@ billing-support process rather than as SLA credits.
 
 ## Exclusions
 
-This SLA applies only to the official hosted Takosumi Cloud service. It does
+This SLA applies only to the official Takosumi hosted service. It does
 not apply to Takosumi OSS, self-hosted environments, customer Provider
 Connections, customer code, or features explicitly marked preview or
 experimental.

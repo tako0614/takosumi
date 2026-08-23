@@ -6,5 +6,5 @@ This app is not a public documentation surface.
 
 ## Documentation
 
-- [Takosumi Cloud documentation](https://app.takosumi.com/docs/)
+- [Takosumi hosted service documentation](https://app.takosumi.com/docs/)
 - [Takosumi software documentation](https://takosumi.com/docs/)

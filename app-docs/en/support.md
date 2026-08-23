@@ -1,8 +1,8 @@
-# Takosumi Cloud support
+# Takosumi support
 
 ## Official channel
 
-The official Takosumi Cloud support channel is
+The official Takosumi hosted service support channel is
 [support@takosumi.com](mailto:support@takosumi.com). Phone, chat, and social
 media direct messages are not official support channels.
 
@@ -12,7 +12,7 @@ and planned maintenance.
 ## What we support
 
 - Sign-in, Workspace, Dashboard, and Run failures
-- Takosumi Cloud resources and Cloud URLs
+- Takosumi hosted service resources and hosted-service URLs
 - Usage, billing, payment methods, and incorrect or duplicate charges
 - Data export, account deletion, and privacy requests
 - Security concerns

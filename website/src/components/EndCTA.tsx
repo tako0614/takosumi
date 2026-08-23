@@ -4,7 +4,7 @@ export default function EndCTA() {
       <div class="container">
         <h2>始めよう。</h2>
         <p class="lede" style="margin-left: auto; margin-right: auto;">
-          Cloud ならブラウザから。セルフホストなら自分のインフラに。
+          Takosumi ならブラウザから。セルフホストなら自分のインフラに。
         </p>
         <div class="cta-row" style="justify-content: center;">
           <a
@@ -12,7 +12,7 @@ export default function EndCTA() {
             href="https://app.takosumi.com/"
             rel="noopener"
           >
-            Takosumi Cloud を開く
+            Takosumi を開く
           </a>
           <a
             class="btn btn-secondary"

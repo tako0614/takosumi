@@ -35,7 +35,7 @@ platformのsecret lifecycleではありません。
 | Internal accounts/control-plane bearer or handshake token pair                                  | 6 months        | 12 months        | Production only                               |
 | Run credential HMAC signer (`TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET`)                             | 6 months        | 12 months        | Drain or retry active Runs                    |
 | Upstream OAuth provider secrets                                                                 | 6 months        | 12 months        | No if client id unchanged                     |
-| Takosumi Cloud payment processor secrets                                                        | 6 months        | 12 months        | Takosumi Cloud only                           |
+| Takosumi hosted service payment processor secrets                                                        | 6 months        | 12 months        | Takosumi hosted service only                           |
 | Operator default connection bootstrap credentials                                               | 6 months        | 12 months        | Production if plan/apply may mint credentials |
 | Source Git and operator-installed CredentialRecipe ProviderConnection secrets                   | 6 months        | 12 months        | Per ProviderConnection status                 |
 | Emergency rotation (suspected exposure, leaked credential, departed operator with prior access) | Immediate       | n/a              | Per-secret class                              |

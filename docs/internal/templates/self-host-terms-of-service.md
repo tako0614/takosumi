@@ -21,7 +21,7 @@ Takosumi OSS may include Compatibility API framework, compatibility profiles,
 Resource Shape APIs, adapter contracts, and usage-event emission. Official
 operator-provided deployment targets, Takosumi-owned native resource internals, enforced
 billing/payment, official usage metering sold as a service, and official
-support/abuse workflows are Takosumi for Operator / Takosumi Cloud operation
+support/abuse workflows are Takosumi for Operator / Takosumi hosted service operation
 features and are governed by the relevant hosted operator terms when used.
 
 Self-hosted operators may replace this page with their own terms. If a hosted

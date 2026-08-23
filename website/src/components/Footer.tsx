@@ -16,7 +16,7 @@ export default function Footer() {
             GitHub
           </a>
           <a href="https://app.takosumi.com/" rel="noopener">
-            Takosumi Cloud
+            Takosumi
           </a>
         </nav>
       </div>

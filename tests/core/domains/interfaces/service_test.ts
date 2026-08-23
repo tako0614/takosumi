@@ -211,7 +211,7 @@ test("Capsule required Interface grants the exact pairwise Principal idempotentl
       inputs: {
         endpoint: {
           source: "literal",
-          value: "https://platform.example.test/gateway/ai/v1",
+          value: "https://platform.example.test/api/v1/ai",
         },
       },
       access: { visibility: "workspace", resourceUriInput: "endpoint" },
@@ -228,7 +228,7 @@ test("Capsule required Interface grants the exact pairwise Principal idempotentl
       inputs: {
         endpoint: {
           source: "literal",
-          value: "https://capsule.example.test/gateway/ai/v1",
+          value: "https://capsule.example.test/api/v1/ai",
         },
       },
       access: { visibility: "private", resourceUriInput: "endpoint" },

@@ -136,4 +136,4 @@ Use `bash scripts/down.sh -v` to also remove Postgres data and certificates.
 - [CLI](../reference/cli.md)
 
 For the official hosted service, use the
-[Takosumi Cloud documentation](https://app.takosumi.com/docs/en/).
+[Takosumi hosted service documentation](https://app.takosumi.com/docs/en/).

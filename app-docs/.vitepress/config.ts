@@ -1,7 +1,7 @@
 import type { DefaultTheme, UserConfig } from "vitepress";
 
 const jaNav: DefaultTheme.NavItem[] = [
-  { text: "Cloud", link: "/" },
+  { text: "Takosumi", link: "/" },
   { text: "Pricing", link: "/pricing" },
   { text: "Resources", link: "/resources" },
   { text: "Endpoints", link: "/endpoints" },
@@ -11,7 +11,7 @@ const jaNav: DefaultTheme.NavItem[] = [
 ];
 
 const enNav: DefaultTheme.NavItem[] = [
-  { text: "Cloud", link: "/en/" },
+  { text: "Takosumi", link: "/en/" },
   { text: "Pricing", link: "/en/pricing" },
   { text: "Resources", link: "/en/resources" },
   { text: "Endpoints", link: "/en/endpoints" },
@@ -23,7 +23,7 @@ const enNav: DefaultTheme.NavItem[] = [
 const jaSidebar: DefaultTheme.SidebarMulti = {
   "/": [
     {
-      text: "Takosumi Cloud",
+      text: "Takosumi hosted service",
       items: [
         { text: "Overview", link: "/" },
         { text: "Pricing", link: "/pricing" },
@@ -39,7 +39,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
 const enSidebar: DefaultTheme.SidebarMulti = {
   "/en/": [
     {
-      text: "Takosumi Cloud",
+      text: "Takosumi hosted service",
       items: [
         { text: "Overview", link: "/en/" },
         { text: "Pricing", link: "/en/pricing" },
@@ -53,8 +53,8 @@ const enSidebar: DefaultTheme.SidebarMulti = {
 };
 
 const config: UserConfig = {
-  title: "Takosumi Cloud",
-  description: "Hosted Takosumi Cloud service documentation",
+  title: "Takosumi",
+  description: "Takosumi hosted service documentation",
   lang: "ja",
   // Local-search indexing mutates MiniSearch as pages finish. A single worker
   // keeps document ids and content-hashed chunks reproducible for release pins.
@@ -83,8 +83,8 @@ const config: UserConfig = {
     root: {
       label: "日本語",
       lang: "ja",
-      title: "Takosumi Cloud",
-      description: "Hosted Takosumi Cloud service documentation",
+      title: "Takosumi",
+      description: "Takosumi hosted service documentation",
       themeConfig: {
         nav: jaNav,
         sidebar: jaSidebar,
@@ -95,7 +95,7 @@ const config: UserConfig = {
         sidebarMenuLabel: "メニュー",
         returnToTopLabel: "トップへ戻る",
         footer: {
-          message: "Takosumi Cloud hosted service docs",
+          message: "Takosumi hosted service docs",
           copyright: "© Takosumi contributors",
         },
         editLink: {
@@ -109,8 +109,8 @@ const config: UserConfig = {
       label: "English",
       link: "/en/",
       lang: "en-US",
-      title: "Takosumi Cloud",
-      description: "Hosted Takosumi Cloud service documentation",
+      title: "Takosumi",
+      description: "Takosumi hosted service documentation",
       themeConfig: {
         nav: enNav,
         sidebar: enSidebar,
@@ -121,7 +121,7 @@ const config: UserConfig = {
         sidebarMenuLabel: "Menu",
         returnToTopLabel: "Return to top",
         footer: {
-          message: "Takosumi Cloud hosted service docs",
+          message: "Takosumi hosted service docs",
           copyright: "© Takosumi contributors",
         },
         editLink: {

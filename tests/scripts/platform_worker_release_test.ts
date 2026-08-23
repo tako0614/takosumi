@@ -32,7 +32,7 @@ test("production config must bind the isolated production Hosted service", () =>
     service: string,
     main = resolve(root, "deploy/platform/entry-worker.ts"),
     includeBroker = true,
-    basePath = "/api/v1/hosted/subscription",
+    basePath = "/api/v1/account/subscription",
     includeVersionMetadata = true,
   ) => `
 name = "takosumi"
@@ -62,14 +62,14 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
         },
       ],
       capabilities: [
-        "takosumi.hosted.subscription.v1",
+        "takosumi.account.subscription.v1",
         "hosted-resource.inventory.v1",
       ],
       contributions: [
         {
           id: "takoserver-hosted-resources",
           slot: "workspace.hosted-resources",
-          href: "/api/v1/hosted/subscription/resources",
+          href: "/api/v1/account/subscription/resources",
           presentation: "native",
           label: "Hosted resources",
           labels: { ja: "ホスト済みリソース" },
@@ -100,6 +100,27 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
             },
           }
         : {}),
+    },
+    {
+      id: "takosumi-ai",
+      basePath: "/api/v1/ai",
+      handlerKey: "HOSTED",
+      authDelivery: "context",
+      ownsPathSubtree: true,
+      selfServicePatScopes: ["ai.models.read", "ai.chat"],
+      requestScopeRules: [
+        {
+          path: "/models",
+          methods: ["GET"],
+          requiredScopes: ["ai.models.read"],
+        },
+        {
+          path: "/chat/completions",
+          methods: ["POST"],
+          requiredScopes: ["ai.chat"],
+        },
+      ],
+      capabilities: ["openai.models.v1", "openai.chat-completions.v1"],
     },
   ])}'
 `;

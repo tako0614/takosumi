@@ -11,7 +11,7 @@ control-plane API と永続化された ledger を運用上の正本にします
 
 ## Boundary
 
-| Surface                                    | OSS Takosumi                 | Host extension / Takosumi Cloud                      |
+| Surface                                    | OSS Takosumi                 | Host extension / Takosumi hosted service                      |
 | ------------------------------------------ | ---------------------------- | ---------------------------------------------------- |
 | Workspace setting                          | `disabled` / `showback`      | OSS settingを入力として利用可能                      |
 | Plan estimate                              | `RunCost.estimatedUsdMicros` | injected `ShowbackRater` が価格を決定                |

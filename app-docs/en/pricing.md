@@ -1,7 +1,7 @@
-# Takosumi Cloud pricing
+# Takosumi hosted service pricing
 
-Takosumi Cloud uses tax-exclusive USD prepaid credits. There is no monthly
-subscription. Every account uses the same Cloud Offering catalog; Resource
+The Takosumi hosted service uses tax-exclusive USD prepaid credits. There is no monthly
+subscription. Every account uses the same Takosumi Offering catalog; Resource
 counts are common safety ceilings, not tier features.
 
 ## Credit billing
@@ -10,7 +10,7 @@ counts are common safety ceilings, not tier features.
 | ------------------ | --------------------------------------------------------------------------- |
 | Manual recharge    | Add `$5`, `$10`, `$25`, `$50`, or `$100` of credit                          |
 | Automatic recharge | Off by default; the owner selects a threshold, amount, and hard monthly cap |
-| Cloud resources   | Deduct exact PriceCatalog usage from the credit balance                     |
+| Hosted resources   | Deduct exact PriceCatalog usage from the credit balance                     |
 
 An owner starts without a card or declared country and receives one `$0.25`
 onboarding credit. The credit is not renewed or redeemable for cash.
@@ -29,7 +29,7 @@ are billed directly by that provider and do not consume the grant.
 
 ## Usage and Limits
 
-The one-time onboarding credit is applied first to metered Takosumi Cloud
+The one-time onboarding credit is applied first to metered Takosumi hosted-service
 resources and services. Usage and billing are aggregated for the owner account
 while preserving Workspace and Resource attribution for the usage breakdown.
 
@@ -40,10 +40,10 @@ domains. These are shared abuse and safety limits, not tier features.
 
 ## Usage Prices
 
-Takosumi Cloud's versioned PriceCatalog is the authority for Cloud capacity
+The Takosumi hosted service's versioned PriceCatalog is the authority for hosted capacity
 prices. Provider public prices remain cost-comparison inputs, but provider
 invoices do not define tenant usage. Provider shared free tiers and fixed
-platform costs are absorbed by Takosumi Cloud rather than allocated as hidden
+platform costs are absorbed by the Takosumi hosted service rather than allocated as hidden
 per-tenant discounts. Catalog changes are versioned and effective-dated and never re-rate
 old usage.
 
@@ -129,7 +129,7 @@ cleanup normally remain available without another precharge.
 
 ## Bring your own key
 
-Takosumi Cloud does not meter or spend-gate an external provider connected with
+The Takosumi hosted service does not meter or spend-gate an external provider connected with
 your own Provider Connection. Billing and provider free tiers follow your
 contract with that provider. Provider credentials, API keys, DSNs, AI upstream
 keys, and payment secrets are never stored in usage events, invoice projections,

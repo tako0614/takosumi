@@ -10,7 +10,7 @@ providers. Takosumi OSS does not install packages, execute hosted Forms,
 publish FormActivation, select TargetPool, or expose Form Host discovery.
 
 Takoform owns portable Form schemas, packages, provider releases, and lifecycle
-labels. Takosumi Cloud (or another external Host) owns any hosted Form
+labels. Takosumi hosted service (or another external Host) owns any hosted Form
 registry, executable implementation, activation/audience policy, targets,
 backend lifecycle, and commercial offering. Portable maturity or historical
 package evidence does not grant runtime support.

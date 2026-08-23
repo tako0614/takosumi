@@ -136,7 +136,7 @@ test("Store deployment profiles accept only the exact bounded public shape", () 
   const deploymentProfile = {
     key: "managed-v1",
     label: { ja: "おまかせ", en: "Managed" },
-    description: { ja: "Takosumi Cloud", en: "Takosumi Cloud" },
+    description: { ja: "Takosumi hosted service", en: "Takosumi hosted service" },
     order: 10,
     recommended: true,
     management: {

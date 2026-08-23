@@ -123,7 +123,7 @@ export TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR="/tmp/takosumi-provider-cache"
 
 ## Form Package configuration (external Host only)
 
-Takosumi OSS does not install or host Form Packages. A Cloud or operator
+Takosumi OSS does not install or host Form Packages. A hosted service or operator
 composition that owns a Form Host may document its private trust policy and
 artifact bindings in that Host's runbook; those settings are not a supported
 Takosumi OSS deployment path and do not create a FormActivation or Offering.

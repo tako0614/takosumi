@@ -35,20 +35,20 @@ import {
 import { friendlyError } from "../../../lib/error-copy.ts";
 import { formatDateTime, locale, t } from "../../../i18n/index.ts";
 import {
-  createCloudApiKey,
-  listCloudApiKeys,
-  listCloudApiKeyScopeCatalog,
-  revokeCloudApiKey,
+  createTakosumiApiKey,
+  listTakosumiApiKeys,
+  listTakosumiApiKeyScopeCatalog,
+  revokeTakosumiApiKey,
 } from "../lib/tokens.ts";
 
 const EXPIRATION_DAYS = [30, 90, 365] as const;
 
-export default function CloudApiKeysCard(props: {
+export default function TakosumiApiKeysCard(props: {
   readonly workspaceId?: string;
 }) {
-  const [keys, { refetch }] = createResource(listCloudApiKeys);
+  const [keys, { refetch }] = createResource(listTakosumiApiKeys);
   const [scopeCatalog, { refetch: refetchScopeCatalog }] = createResource(
-    listCloudApiKeyScopeCatalog,
+    listTakosumiApiKeyScopeCatalog,
   );
   const [name, setName] = createSignal("");
   const [expirationDays, setExpirationDays] = createSignal(90);
@@ -198,7 +198,7 @@ export default function CloudApiKeysCard(props: {
     setError(undefined);
     setCopied(false);
     try {
-      const result = await createCloudApiKey(
+      const result = await createTakosumiApiKey(
         {
           name: normalizedName,
           scopes: scopes(),
@@ -227,7 +227,7 @@ export default function CloudApiKeysCard(props: {
     setBusy(true);
     setError(undefined);
     try {
-      await revokeCloudApiKey(tokenId);
+      await revokeTakosumiApiKey(tokenId);
       setConfirmingRevoke(undefined);
       await refetch();
     } catch (cause) {

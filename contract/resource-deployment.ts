@@ -7,7 +7,7 @@
  * the same plan digest and, when a host prices the service, the same quote.
  *
  * OSS does not ship a price catalog. A self-hosted endpoint may omit `quote`;
- * Takosumi Cloud injects a rated quote and implements reserve/capture/release.
+ * Takosumi hosted service injects a rated quote and implements reserve/capture/release.
  */
 
 import type { NativeResourceRef } from "./resolution.ts";

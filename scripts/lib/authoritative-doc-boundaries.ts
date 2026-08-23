@@ -247,7 +247,7 @@ export function findAuthoritativeDocViolations(
         line: lineAt(finalPlan.content, finalPlan.content.indexOf("## 11.")),
         message:
           "Final Plan section 11 must name the single all-or-nothing Pre-GA Cloud launch contract",
-        excerpt: "## 11. Takosumi Cloud Public Offering",
+        excerpt: "## 11. Takosumi hosted service Public Offering",
       });
     }
     for (const service of [
@@ -271,18 +271,18 @@ export function findAuthoritativeDocViolations(
     const source = byPath.get(path);
     if (!source) continue;
     if (
-      !/authenticated[\s\S]{0,160}Cloud catalog|認証済み[\s\S]{0,160}Cloud catalog/iu.test(
+      !/authenticated[\s\S]{0,160}Takosumi catalog|認証済み[\s\S]{0,160}Takosumi catalog/iu.test(
         source.content,
       ) ||
       !/`available`/u.test(source.content)
     ) {
       violations.push({
-        ruleId: "cloud-docs-catalog-authority-missing",
+        ruleId: "hosted-docs-catalog-authority-missing",
         path,
         line: 1,
         message:
-          "hosted Cloud availability must come from the authenticated catalog and its available field",
-        excerpt: "authenticated Cloud catalog: available",
+          "hosted service availability must come from the authenticated Takosumi catalog and its available field",
+        excerpt: "authenticated Takosumi catalog: available",
       });
     }
     const staleStatus =

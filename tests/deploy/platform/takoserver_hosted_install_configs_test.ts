@@ -134,13 +134,13 @@ test("Takoserver Hosted connection descriptor is accepted and publicly discovera
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
           id: "takosumi-hosted-sponsorship",
-          basePath: "/api/v1/hosted/subscription",
+          basePath: "/api/v1/account/subscription",
           handlerKey: "HOSTED",
           authDelivery: "context",
           ownsPathSubtree: true,
           workspaceContext: "query-required",
           requiredScopes: [],
-          capabilities: ["takosumi.hosted.subscription.v1"],
+          capabilities: ["takosumi.account.subscription.v1"],
           runCredential: {
             audience: "takosumi-hosted.takoserver.takoform.v1",
             requiredScopes: ["takoform.run"],
@@ -163,7 +163,7 @@ test("Takoserver Hosted connection descriptor is accepted and publicly discovera
 
   expect(response.status).toBe(200);
   expect((await response.json()).endpoints.extensions).toEqual({
-    "takosumi.hosted.subscription.v1":
-      "https://app-staging.takosumi.com/api/v1/hosted/subscription",
+    "takosumi.account.subscription.v1":
+      "https://app-staging.takosumi.com/api/v1/account/subscription",
   });
 });

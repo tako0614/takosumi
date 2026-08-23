@@ -15,7 +15,7 @@ takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
-When using Takosumi Cloud, the hosted endpoint is `https://app.takosumi.com`.
+When using the Takosumi hosted service, the endpoint is `https://app.takosumi.com`.
 
 The CLI does not run OpenTofu directly. The normal creation flow is dashboard
 Git URL install, which creates Source / Capsule / Run records and pins the Git
@@ -64,7 +64,7 @@ validation but is uncategorized for collection planning.
 The `takosumi.platform-readiness-report@v2` validation result also returns the
 composed definition's `requiredDomainIds` and `requiredRehearsalStepIds`.
 Progress consumers use those arrays instead of OSS-only fixed IDs, so totals and
-completed counts remain exact when Operator or Cloud contributions are present.
+completed counts remain exact when Operator or hosted-service contributions are present.
 
 ## Connections
 

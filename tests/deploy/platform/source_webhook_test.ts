@@ -1258,7 +1258,7 @@ test("platformExtensionRoutes parses opaque descriptors", () => {
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
           id: "ai",
-          basePath: "/gateway/ai/v1",
+          basePath: "/api/v1/ai",
           handlerKey: "TEST_AI_EXTENSION",
           capabilities: ["openai.chat_completions", "openai.embeddings"],
           authMode: "platform",
@@ -1271,7 +1271,7 @@ test("platformExtensionRoutes parses opaque descriptors", () => {
   ).toEqual([
     {
       id: "ai",
-      basePath: "/gateway/ai/v1",
+      basePath: "/api/v1/ai",
       handlerKey: "TEST_AI_EXTENSION",
       capabilities: ["openai.chat_completions", "openai.embeddings"],
       authMode: "platform",
@@ -1414,7 +1414,7 @@ test("the seam claims no extension path when TAKOSUMI_PLATFORM_EXTENSIONS is uns
   // is NOT claimed (returns undefined) and falls through to the accounts handler
   // — i.e. an OSS worker with no Cloud config exposes no extension paths.
   const result = await handlePlatformExtensionRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models"),
+    new Request("https://app.takosumi.com/api/v1/ai/models"),
     {
       // A binding object exists on env, but with no descriptors it is unreachable.
       TEST_AI_EXTENSION: { fetch: async () => Response.json({}) },
@@ -1557,7 +1557,7 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
     {
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
-          basePath: "/gateway/ai/v1",
+          basePath: "/api/v1/ai",
           handlerKey: "TEST_AI_EXTENSION",
           capabilities: ["ai.gateway"],
         },
@@ -2889,12 +2889,12 @@ test("a configured platform extension rejects an unverified bearer", async () =>
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const forwarded: { url: string; authorization: string | null }[] = [];
   const response = await worker.fetch(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+    new Request("https://app.takosumi.com/api/v1/ai/models", {
       headers: { authorization: "Bearer runtime-token" },
     }),
     {
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
-        { basePath: "/gateway/ai/v1", handlerKey: "TEST_AI_EXTENSION" },
+        { basePath: "/api/v1/ai", handlerKey: "TEST_AI_EXTENSION" },
       ]),
       TEST_AI_EXTENSION: {
         fetch: async (request: Request) => {
@@ -2914,10 +2914,10 @@ test("a configured platform extension rejects an unverified bearer", async () =>
 test("a configured platform extension 404s when its handler is absent", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const response = await worker.fetch(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models"),
+    new Request("https://app.takosumi.com/api/v1/ai/models"),
     {
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
-        { basePath: "/gateway/ai/v1", handlerKey: "TEST_AI_EXTENSION" },
+        { basePath: "/api/v1/ai", handlerKey: "TEST_AI_EXTENSION" },
       ]),
     } as never,
   );
@@ -2998,7 +2998,7 @@ test("platform extension route injects verified session context and strips raw c
     billingWorkspaceId: string | null;
   }[] = [];
   const response = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+    new Request("https://app.takosumi.com/api/v1/ai/models", {
       headers: {
         authorization: "Bearer raw-token",
         cookie: "takosumi_session=sess_cookie",
@@ -3026,7 +3026,7 @@ test("platform extension route injects verified session context and strips raw c
         },
       },
     } as never,
-    { basePath: "/gateway/ai/v1", handlerKey: "TEST_AI_EXTENSION" },
+    { basePath: "/api/v1/ai", handlerKey: "TEST_AI_EXTENSION" },
     async () => ({
       authenticated: true,
       authKind: "session",
@@ -3051,7 +3051,7 @@ test("platform extension route injects verified session context and strips raw c
 test("platform extension route replaces spoofed Workspace context", async () => {
   let forwarded = false;
   const response = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions", {
       method: "POST",
       headers: {
         "x-takosumi-platform-workspace-id": "space_attacker",
@@ -3066,7 +3066,7 @@ test("platform extension route replaces spoofed Workspace context", async () => 
         },
       },
     } as never,
-    { basePath: "/gateway/ai/v1", handlerKey: "TEST_AI_EXTENSION" },
+    { basePath: "/api/v1/ai", handlerKey: "TEST_AI_EXTENSION" },
     async () => ({
       authenticated: true,
       authKind: "session",
@@ -3325,13 +3325,13 @@ test("platform extension requiredScopes gate token auth", async () => {
     TEST_AI_EXTENSION: { fetch: async () => Response.json({ ok: true }) },
   } as never;
   const route = {
-    basePath: "/gateway/ai/v1",
+    basePath: "/api/v1/ai",
     handlerKey: "TEST_AI_EXTENSION",
     requiredScopes: ["ai.chat"],
   };
 
   const denied = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions", {
       method: "POST",
       headers: { origin: "https://app.takosumi.com" },
     }),
@@ -3347,7 +3347,7 @@ test("platform extension requiredScopes gate token auth", async () => {
   expect(denied.status).toBe(401);
 
   const allowed = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions", {
       method: "POST",
     }),
     binding,
@@ -3364,7 +3364,7 @@ test("platform extension requiredScopes gate token auth", async () => {
   // A full human session is allowed through regardless of descriptor scopes;
   // the Cloud handler performs any finer authorization.
   const session = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions", {
       method: "POST",
       headers: { origin: "https://app.takosumi.com" },
     }),
@@ -3382,7 +3382,7 @@ test("platform extension requiredScopes gate token auth", async () => {
 test("platform extension request scope rules select one permission per exact AI path", async () => {
   const calls: string[] = [];
   const route = {
-    basePath: "/gateway/ai/v1",
+    basePath: "/api/v1/ai",
     handlerKey: "TEST_AI_EXTENSION",
     requestScopeRules: [
       {
@@ -3439,7 +3439,7 @@ test("platform extension request scope rules select one permission per exact AI 
   } as never;
 
   const preflight = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions", {
       method: "OPTIONS",
       headers: { authorization: "Bearer should-not-reach-handler" },
     }),
@@ -3454,7 +3454,7 @@ test("platform extension request scope rules select one permission per exact AI 
 
   presentedScopes = ["ai.models.read"];
   const models = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models"),
+    new Request("https://app.takosumi.com/api/v1/ai/models"),
     binding,
     route,
     verifier,
@@ -3463,7 +3463,7 @@ test("platform extension request scope rules select one permission per exact AI 
 
   presentedScopes = ["ai.models.read"];
   const deniedChat = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions", {
       method: "POST",
     }),
     binding,
@@ -3474,7 +3474,7 @@ test("platform extension request scope rules select one permission per exact AI 
 
   presentedScopes = ["ai.chat"];
   const chat = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions", {
       method: "POST",
     }),
     binding,
@@ -3483,13 +3483,13 @@ test("platform extension request scope rules select one permission per exact AI 
   );
   expect(chat.status).toBe(200);
   expect(calls).toEqual([
-    "/gateway/ai/v1:ai.models.read",
-    "/gateway/ai/v1:ai.chat",
-    "/gateway/ai/v1:ai.chat",
+    "/api/v1/ai:ai.models.read",
+    "/api/v1/ai:ai.chat",
+    "/api/v1/ai:ai.chat",
   ]);
 
   const unknown = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/unknown"),
+    new Request("https://app.takosumi.com/api/v1/ai/unknown"),
     binding,
     route,
     verifier,
@@ -3585,7 +3585,7 @@ test("platform session mutations require the exact configured issuer Origin", as
     TEST_AI_EXTENSION: { fetch: async () => Response.json({ ok: true }) },
   } as never;
   const route = {
-    basePath: "/gateway/ai/v1",
+    basePath: "/api/v1/ai",
     handlerKey: "TEST_AI_EXTENSION",
   };
   const verifier = async () => ({
@@ -3595,7 +3595,7 @@ test("platform session mutations require the exact configured issuer Origin", as
   });
 
   const denied = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions", {
       method: "POST",
     }),
     {
@@ -3609,7 +3609,7 @@ test("platform session mutations require the exact configured issuer Origin", as
   expect((await denied.json()).error).toBe("csrf_failed");
 
   const explicitBearer = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions", {
       method: "POST",
       headers: {
         authorization: "Bearer sess_explicit",
@@ -3626,7 +3626,7 @@ test("platform session mutations require the exact configured issuer Origin", as
   expect(explicitBearer.status).toBe(200);
 
   const allowed = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions", {
       method: "POST",
       headers: { origin: "https://app.takosumi.com" },
     }),
@@ -3643,7 +3643,7 @@ test("platform session mutations require the exact configured issuer Origin", as
 test("platform extension derives personal access identity from introspection claims, not token prefixes", async () => {
   const introspectionRequests: { url: string; body: string }[] = [];
   const context = await verifyPlatformExtensionBearerToken(
-    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+    new Request("https://app.takosumi.com/api/v1/ai/models", {
       headers: { authorization: "Bearer opaque-personal-credential" },
     }),
     {
@@ -3651,7 +3651,7 @@ test("platform extension derives personal access identity from introspection cla
       TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
     } as never,
     "opaque-personal-credential",
-    { basePath: "/gateway/ai/v1", handlerKey: "TEST_AI_EXTENSION" },
+    { basePath: "/api/v1/ai", handlerKey: "TEST_AI_EXTENSION" },
     async (request: Request) => {
       introspectionRequests.push({
         url: request.url,
@@ -3681,7 +3681,7 @@ test("platform extension derives personal access identity from introspection cla
     "token=opaque-personal-credential",
   );
   expect(introspectionRequests[0]?.body).toContain(
-    "resource=https%3A%2F%2Fapp.takosumi.com%2Fgateway%2Fai%2Fv1",
+    "resource=https%3A%2F%2Fapp.takosumi.com%2Fapi%2Fv1%2Fai",
   );
 });
 
@@ -4143,12 +4143,12 @@ test("platform extension accepts exact-audience Interface OAuth evidence as an a
     TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
   } as never;
   const route = {
-    basePath: "/gateway/ai/v1",
+    basePath: "/api/v1/ai",
     handlerKey: "TEST_AI_EXTENSION",
     requiredScopes: ["ai.chat"],
   };
   const introspect =
-    (scope: string, audience = "https://app.takosumi.com/gateway/ai/v1") =>
+    (scope: string, audience = "https://app.takosumi.com/api/v1/ai") =>
     async () =>
       Response.json({
         active: true,
@@ -4166,7 +4166,7 @@ test("platform extension accepts exact-audience Interface OAuth evidence as an a
       });
 
   const denied = await verifyPlatformExtensionBearerToken(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions", {
       method: "POST",
     }),
     env,
@@ -4177,7 +4177,7 @@ test("platform extension accepts exact-audience Interface OAuth evidence as an a
   expect(denied).toEqual({ authenticated: false });
 
   const allowed = await verifyPlatformExtensionBearerToken(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions", {
       method: "POST",
     }),
     env,
@@ -4191,7 +4191,7 @@ test("platform extension accepts exact-audience Interface OAuth evidence as an a
     subject: "principal_a",
     workspaceId: "workspace_a",
     capsuleId: "capsule_a",
-    audience: "https://app.takosumi.com/gateway/ai/v1",
+    audience: "https://app.takosumi.com/api/v1/ai",
     interfaceId: "interface_ai",
     interfaceBindingId: "binding_ai",
     interfaceResolvedRevision: 4,
@@ -4199,7 +4199,7 @@ test("platform extension accepts exact-audience Interface OAuth evidence as an a
   });
 
   const wrongAudience = await verifyPlatformExtensionBearerToken(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions"),
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions"),
     env,
     "opaque-interface-credential",
     route,
@@ -4208,7 +4208,7 @@ test("platform extension accepts exact-audience Interface OAuth evidence as an a
   expect(wrongAudience).toEqual({ authenticated: false });
 
   const unknownTokenUse = await verifyPlatformExtensionBearerToken(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions"),
+    new Request("https://app.takosumi.com/api/v1/ai/chat/completions"),
     env,
     "opaque-unknown-credential",
     route,
@@ -4225,11 +4225,11 @@ test("platform extension accepts exact-audience Interface OAuth evidence as an a
 
 test("platform extension request scope rules preserve the Interface OAuth audience", async () => {
   const request = new Request(
-    "https://app.takosumi.com/gateway/ai/v1/chat/completions",
+    "https://app.takosumi.com/api/v1/ai/chat/completions",
     { method: "POST" },
   );
   const route = {
-    basePath: "/gateway/ai/v1",
+    basePath: "/api/v1/ai",
     handlerKey: "TEST_AI_EXTENSION",
     requestScopeRules: [
       {
@@ -4244,7 +4244,7 @@ test("platform extension request scope rules preserve the Interface OAuth audien
     route,
   );
   expect(effectiveRoute).toMatchObject({
-    basePath: "/gateway/ai/v1",
+    basePath: "/api/v1/ai",
     requiredScopes: ["ai.chat"],
   });
   const session = await verifyPlatformExtensionBearerToken(
@@ -4259,7 +4259,7 @@ test("platform extension request scope rules preserve the Interface OAuth audien
       Response.json({
         active: true,
         token_use: "interface_oauth",
-        aud: "https://app.takosumi.com/gateway/ai/v1",
+        aud: "https://app.takosumi.com/api/v1/ai",
         scope: "ai.chat",
         sub: "principal_a",
         takosumi: {
@@ -4272,7 +4272,7 @@ test("platform extension request scope rules preserve the Interface OAuth audien
   );
   expect(session).toMatchObject({
     authenticated: true,
-    audience: "https://app.takosumi.com/gateway/ai/v1",
+    audience: "https://app.takosumi.com/api/v1/ai",
     scopes: ["ai.chat"],
   });
 });
@@ -4280,15 +4280,15 @@ test("platform extension request scope rules preserve the Interface OAuth audien
 test("platform extension route matcher rejects near-prefixes", () => {
   const routes = platformExtensionRoutes({
     TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
-      { basePath: "/gateway/ai/v1", handlerKey: "TEST_AI_EXTENSION" },
+      { basePath: "/api/v1/ai", handlerKey: "TEST_AI_EXTENSION" },
     ]),
   });
-  expect(matchPlatformExtensionRoute("/gateway/ai/v1", routes)).toBeDefined();
+  expect(matchPlatformExtensionRoute("/api/v1/ai", routes)).toBeDefined();
   expect(
-    matchPlatformExtensionRoute("/gateway/ai/v1/models", routes),
+    matchPlatformExtensionRoute("/api/v1/ai/models", routes),
   ).toBeDefined();
   expect(
-    matchPlatformExtensionRoute("/gateway/ai/v1-other", routes),
+    matchPlatformExtensionRoute("/api/v1/ai-other", routes),
   ).toBeUndefined();
   expect(matchPlatformExtensionRoute("/gateway/ai", routes)).toBeUndefined();
 });
@@ -4298,7 +4298,7 @@ test("platform extension catalog reports configured extensions without binding n
     TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
       {
         id: "ai",
-        basePath: "/gateway/ai/v1",
+        basePath: "/api/v1/ai",
         handlerKey: "TEST_AI_EXTENSION",
         capabilities: ["openai.chat_completions"],
         requiredScopes: ["ai.chat"],
@@ -4313,7 +4313,7 @@ test("platform extension catalog reports configured extensions without binding n
   expect(catalog.extensions).toEqual([
     {
       id: "ai",
-      basePath: "/gateway/ai/v1",
+      basePath: "/api/v1/ai",
       configured: true,
       capabilities: ["openai.chat_completions"],
       requiredScopes: ["ai.chat"],

@@ -12,8 +12,8 @@ const sourcePath = resolve(
 const source = readFileSync(sourcePath, "utf8");
 
 describe("AccountView", () => {
-  test("includes first-party Cloud API key management", () => {
-    expect(source).toContain("CloudApiKeysCard");
+  test("includes first-party Takosumi API key management", () => {
+    expect(source).toContain("TakosumiApiKeysCard");
     expect(source).toContain("workspaceId={currentWorkspaceId() || undefined}");
   });
 

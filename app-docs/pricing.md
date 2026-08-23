@@ -1,7 +1,7 @@
-# Takosumi Cloud pricing
+# Takosumi hosted service pricing
 
-Takosumi Cloud は、税別 USD のプリペイドクレジット方式です。月額サブスクリプションは
-ありません。すべてのアカウントが同じ Cloud Offering catalog を利用し、Resource 数は
+Takosumi hosted service は、税別 USD のプリペイドクレジット方式です。月額サブスクリプションは
+ありません。すべてのアカウントが同じ Takosumi Offering catalog を利用し、Resource 数は
 契約ランクではなく共通の安全上限です。
 
 ## Credit billing
@@ -10,7 +10,7 @@ Takosumi Cloud は、税別 USD のプリペイドクレジット方式です。
 | ---------------- | -------------------------------------------------------------------- |
 | 手動チャージ     | `$5` / `$10` / `$25` / `$50` / `$100` のクレジットを追加             |
 | 自動チャージ     | 初期状態は無効。残高しきい値、1回の金額、月間上限を owner が明示設定 |
-| Cloud resource | PriceCatalog の実利用額をクレジット残高から差し引く                  |
+| Hosted resource | PriceCatalog の実利用額をクレジット残高から差し引く                  |
 
 owner はカードや国情報を登録せず開始でき、最初に一度だけ
 `$0.25` の onboarding credit を受け取ります。credit は再付与・現金化されず、
@@ -28,7 +28,7 @@ Provider Connection を使う外部 provider は grant の対象外で、その 
 
 ## Usage and Limits
 
-一度限りの onboarding credit は、Takosumi Cloud が提供する resource と service の従量料金に先に充当されます。
+一度限りの onboarding credit は、Takosumi hosted service が提供する resource と service の従量料金に先に充当されます。
 利用量と請求は所有アカウントに集約し、Workspace / Resource 別の内訳も確認できます。
 
 owner-account safety ceiling は total 250 Resources、Edge/Object/KV/Queue/
@@ -38,9 +38,9 @@ abuse / safety 上限です。
 
 ## Usage Prices
 
-Cloud capacity の価格は Takosumi Cloud の versioned PriceCatalog が正本です。
+Hosted capacity の価格は Takosumi hosted service の versioned PriceCatalog が正本です。
 provider 公開価格は原価比較に使いますが、provider invoice を tenant 使用量の正本には
-しません。provider の共有 free tier と platform 固定費は Takosumi Cloud が吸収し、tenant ごとの
+しません。provider の共有 free tier と platform 固定費は Takosumi hosted service が吸収し、tenant ごとの
 隠れた割引にはしません。価格変更は version と effective date を持ち、過去の
 usage を再計算しません。
 
@@ -126,7 +126,7 @@ Destroy / DELETE cleanup は、残高不足で既存 Resource を消せなくな
 
 ## Bring your own key
 
-自分の Provider Connection で接続した外部 provider は Takosumi Cloud が
+自分の Provider Connection で接続した外部 provider は Takosumi hosted service が
 metering / spend-gate しません。請求と provider free tier はその provider との
 契約に従います。Takosumi の usage event、invoice projection、catalog、status に
 provider credential、API key、DSN、AI upstream key、payment secret は保存しません。

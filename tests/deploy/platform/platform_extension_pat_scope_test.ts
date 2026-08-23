@@ -34,7 +34,7 @@ test("extension self-service PAT scopes require explicit metadata", () => {
 
 test("AI request scopes are self-service only when the owning route declares them", () => {
   const aiDescriptor = {
-    basePath: "/gateway/ai/v1",
+    basePath: "/api/v1/ai",
     handlerKey: "CLOUD_AI_GATEWAY",
     requestScopeRules: [
       {

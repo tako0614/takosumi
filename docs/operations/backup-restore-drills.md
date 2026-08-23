@@ -73,7 +73,7 @@ control restore 後に必要な Capsule だけ restore / reattach します。
 - Capsule service-data export / provider snapshot / custom command archive
 
 operator control backup は metadata、state/artifact manifest、operator quota/showback ledger、
-AuditEvent ledger を対象にします。Takosumi Cloud official billing / payment processor records are
+AuditEvent ledger を対象にします。Takosumi hosted service official billing / payment processor records are
 Cloud-private commercial records and are not part of the OSS control backup contract. Raw state bytes と raw
 outputs は host artifact store の opaque ref inventory と digest で復元・照合
 します。filesystem、S3-compatible storage、R2などのphysical placementは

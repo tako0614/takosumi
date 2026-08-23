@@ -93,7 +93,7 @@ test("retired /v1 families stay reserved without route-specific descriptors", ()
   }
 });
 
-test("optional billing belongs to /api/v1 and cannot reclaim retired /v1", () => {
+test("optional account subscription belongs to /api/v1 while account stays reserved", () => {
   expect(
     platformExtensionBasePathIsReserved("/api/v1/billing", "subtree"),
   ).toBe(false);
@@ -114,18 +114,39 @@ test("optional billing belongs to /api/v1 and cannot reclaim retired /v1", () =>
   ).toBe(true);
   expect(
     platformExtensionBasePathIsReserved(
-      "/api/v1/hosted/subscription",
+      "/api/v1/account/subscription",
       "subtree",
     ),
   ).toBe(false);
   expect(
     platformExtensionBasePathIsReserved(
-      "/api/v1/hosted/subscription",
+      "/api/v1/account/subscription",
       "exact",
     ),
   ).toBe(false);
   expect(
+    platformExtensionBasePathIsReserved(
+      "/api/v1/hosted/subscription",
+      "subtree",
+    ),
+  ).toBe(true);
+  expect(
+    platformExtensionBasePathIsReserved(
+      "/api/v1/hosted/subscription",
+      "exact",
+    ),
+  ).toBe(true);
+  expect(
     platformExtensionBasePathIsReserved("/api/v1/hosted", "subtree"),
+  ).toBe(true);
+  expect(
+    platformExtensionBasePathIsReserved("/api/v1/ai", "subtree"),
+  ).toBe(false);
+  expect(
+    platformExtensionBasePathIsReserved("/api/v1/ai", "exact"),
+  ).toBe(false);
+  expect(
+    platformExtensionBasePathIsReserved("/api/v1/ai-shadow", "subtree"),
   ).toBe(true);
   expect(
     platformExtensionBasePathIsReserved("/api/v1/unlisted", "subtree"),

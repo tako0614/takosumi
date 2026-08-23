@@ -281,7 +281,7 @@ describe("dashboard shell navigation layout", () => {
       "<BillingTab workspaceId={id} />",
     );
     expect(workspaceSettingsSource).not.toContain("CloudResourcesPanel");
-    expect(workspaceSettingsSource).not.toContain("CloudApiKeysPanel");
+    expect(workspaceSettingsSource).not.toContain("TakosumiApiKeysCard");
     expect(workspaceSettingsSource).not.toContain(
       "<BillingTab workspaceId={id()} />",
     );

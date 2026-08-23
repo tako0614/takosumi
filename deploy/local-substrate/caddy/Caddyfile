@@ -59,13 +59,13 @@ jaeger.takosumi.test {
 # API handler is evaluated before the SPA fallback (Caddy's directive sorter
 # would otherwise put the catch-all `handle` first). The @api matcher (deploy control
 # / oauth / oidc / exports) goes to the composed app; the dashboard SPA
-# and hosted Cloud docs under /docs are served from static build output,
+# and hosted-service docs under /docs are served from static build output,
 # exactly like the worker mirror below.
 app.takosumi.test {
 	route {
 		@private path /internal/* /api/spaces /api/spaces/* /api/connections /api/connections/*
 		respond @private 404
-		@api path /api/* /v1/* /oauth/* /.well-known/* /hooks/* /mcp/* /gateway/ai/v1* /internal/* /healthz /readyz
+		@api path /api/* /v1/* /oauth/* /.well-known/* /hooks/* /mcp/* /internal/* /healthz /readyz
 		handle @api {
 			reverse_proxy {$TAKOSUMI_LOCAL_APP_UPSTREAM}
 		}
