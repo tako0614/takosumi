@@ -61,7 +61,7 @@ export const ja = {
   "installStore.sourceRegistrationUnconfirmed":
     "サービスのデプロイは開始されていません。Source の登録結果を確認できませんでした。同じ試行を確認するために「追加」を再実行できますが、新しいSourceは作成しません。",
   "installStore.sourceBaselineUnavailable":
-    "サービスのデプロイは開始されていません。Source の一覧を確認できなかったため、登録を開始できませんでした。Source 一覧が利用できるようになってから再試行してください。",
+    "サービスのデプロイは開始されていません。一時的に Source の一覧を確認できなかったため、登録を開始しませんでした。少し待ってから「追加」を再実行してください。",
   "installStore.compatibilityFailed":
     "このサービスは現在の環境に追加できません。",
   "installStore.providerTitle": "接続が必要です",
