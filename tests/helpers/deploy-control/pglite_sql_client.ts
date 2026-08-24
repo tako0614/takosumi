@@ -24,7 +24,7 @@ import type {
 } from "../../../core/adapters/storage/sql.ts";
 import { postgresStorageMigrationStatements } from "../../../core/adapters/storage/migrations.ts";
 
-type PGliteQueryRunner = Pick<PGlite, "query"> | PGliteTransaction;
+type PGliteQueryRunner = Pick<PGlite, "query" | "exec"> | PGliteTransaction;
 
 /** Splits a multi-statement migration body on SQL `;` boundaries. */
 export function splitSqlStatements(sql: string): string[] {
@@ -147,15 +147,23 @@ export class PGliteSqlClient implements SqlClient {
       for (const migration of postgresStorageMigrationStatements.filter(
         (entry) => entry.version <= maximumVersion,
       )) {
-        for (const statement of splitSqlStatements(migration.sql)) {
-          try {
-            await db.exec(statement);
-          } catch (error) {
-            throw new Error(
-              `PGlite migration ${migration.id} failed on statement: ` +
-                `${statement.slice(0, 120)} — ${(error as Error).message}`,
-            );
+        const statements = splitSqlStatements(migration.sql);
+        const applyStatements = async (runner: PGliteQueryRunner) => {
+          for (const statement of statements) {
+            try {
+              await runner.exec(statement);
+            } catch (error) {
+              throw new Error(
+                `PGlite migration ${migration.id} failed on statement: ` +
+                  `${statement.slice(0, 120)} — ${(error as Error).message}`,
+              );
+            }
           }
+        };
+        if (statements.some((statement) => /^lock\s+table\b/iu.test(statement))) {
+          await db.transaction(applyStatements);
+        } else {
+          await applyStatements(db);
         }
       }
       return new PGliteSqlClient(db);

@@ -191,7 +191,7 @@ describe("dashboard UI-surface Interface consumer", () => {
     expect(parseUiSurfaceInterface(resourceOwned, "ws_1")).toBeNull();
   });
 
-  test("accepts an explicitly related Resource-owned opaque launcher without guessing its type or Output name", () => {
+  test("rejects a retired Resource-owned launcher even when its relation is explicit", () => {
     const base = uiInterface();
     const parsed = parseUiSurfaceInterface(
       {
@@ -229,12 +229,7 @@ describe("dashboard UI-surface Interface consumer", () => {
       },
       "ws_1",
     );
-    expect(parsed).toMatchObject({
-      interfaceId: "if_ui",
-      capsuleId: "cap_1",
-      name: "Yurucommu",
-      url: "https://yuru.example.test/chat",
-    });
+    expect(parsed).toBeNull();
   });
 
   test("fails closed for stale revisions, undeclared URL inputs, and embedded credentials", () => {

@@ -382,7 +382,7 @@ test("extension auth delivery and subtree ownership validate closed fields with 
   }
 });
 
-test("context delivery rejects handler-auth and compatibility routes", () => {
+test("context delivery rejects handler-auth routes", () => {
   expect(() =>
     platformExtensionRoutes({
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
@@ -395,20 +395,6 @@ test("context delivery rejects handler-auth and compatibility routes", () => {
       ]),
     }),
   ).toThrow("authDelivery=context requires platform authentication");
-  expect(() =>
-    platformExtensionRoutes({
-      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
-        {
-          basePath: "/compat/example/v1",
-          handlerKey: "COMPAT",
-          authDelivery: "context",
-          compatibilityProfiles: [
-            { profile: "compat.example.v1", planes: ["data"] },
-          ],
-        },
-      ]),
-    }),
-  ).toThrow("authDelivery=context is not supported for compatibilityProfiles");
 });
 
 test("subtree ownership rejects parent/child route collisions in either order", () => {
@@ -661,56 +647,4 @@ test("AI keeps one exact Takosumi API route without opening arbitrary API paths"
   expect(ai?.basePath).toBe("/api/v1/ai");
   expect(matchPlatformExtensionRoute("/api/v1/ai/chat/completions", [ai!])).toBe(ai);
   expect(matchPlatformExtensionRoute("/api/v1/cloud/ai", [ai!])).toBeUndefined();
-});
-
-test("compatibility routes require explicit control and data planes", () => {
-  const [route] = platformExtensionRoutes({
-    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
-      {
-        basePath: "/compat/example/v1",
-        handlerKey: "EXAMPLE_COMPAT",
-        compatibilityProfiles: [
-          {
-            profile: "compat.example.v1",
-            planes: ["control", "data", "control"],
-          },
-        ],
-      },
-    ]),
-  });
-  expect(route?.compatibilityProfiles).toEqual([
-    {
-      profile: "compat.example.v1",
-      planes: ["control", "data"],
-    },
-  ]);
-  expect(route?.capabilities).toEqual(["compat.example.v1"]);
-
-  expect(() =>
-    platformExtensionRoutes({
-      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
-        {
-          basePath: "/compat/example/v1",
-          handlerKey: "EXAMPLE_COMPAT",
-          capabilities: ["compat.example.v1"],
-        },
-      ]),
-    }),
-  ).toThrow(
-    "requires an explicit compatibilityProfiles control/data declaration",
-  );
-
-  expect(() =>
-    platformExtensionRoutes({
-      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
-        {
-          basePath: "/compat/example/unversioned",
-          handlerKey: "EXAMPLE_COMPAT",
-          compatibilityProfiles: [
-            { profile: "compat.example", planes: ["data"] },
-          ],
-        },
-      ]),
-    }),
-  ).toThrow("must be a scoped compat.* version token");
 });

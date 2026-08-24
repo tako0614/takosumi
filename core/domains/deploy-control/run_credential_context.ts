@@ -1,9 +1,4 @@
 import type { OpenTofuControlStore } from "./store.ts";
-import {
-  HOST_RUNTIME_MATERIALIZATION_CONTRACT,
-  parseInstallConfigHostRuntimeMaterialization,
-  type HostRuntimeMaterializationRequest,
-} from "takosumi-contract";
 
 export type CapsuleRunCredentialPhase = "plan" | "apply" | "destroy";
 export type CapsuleRunCredentialLifecycleIntent = "provision" | "destroy";
@@ -21,7 +16,6 @@ export interface CanonicalCapsuleRunCredentialContext {
   readonly phase: CapsuleRunCredentialPhase;
   /** Derived only from the canonical PlanRun operation, never caller input. */
   readonly lifecycleIntent: CapsuleRunCredentialLifecycleIntent;
-  readonly hostRuntimeMaterialization?: HostRuntimeMaterializationRequest;
 }
 
 export type CanonicalCapsuleRunCredentialContextResult =
@@ -46,8 +40,7 @@ export type CapsuleRunCredentialLedger = Pick<
   | "getPlanRun"
   | "getApplyRun"
   | "getCapsuleRuntimeSafety"
-> &
-  Partial<Pick<OpenTofuControlStore, "getInstallConfig">>;
+>;
 
 export async function resolveCanonicalCapsuleRunCredentialContext(
   store: CapsuleRunCredentialLedger,
@@ -164,30 +157,6 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
     return { ok: false, reason: "runtime_safety_mismatch" };
   }
 
-  let hostRuntimeMaterialization: HostRuntimeMaterializationRequest | undefined;
-  if (store.getInstallConfig) {
-    const config = await store.getInstallConfig(capsule.installConfigId);
-    if (!config || config.workspaceId !== workspaceId) {
-      return { ok: false, reason: "capsule_unavailable" };
-    }
-    if (config.hostRuntimeMaterialization) {
-      const declaration = parseInstallConfigHostRuntimeMaterialization(
-        config.hostRuntimeMaterialization,
-      );
-      hostRuntimeMaterialization = {
-        contract: HOST_RUNTIME_MATERIALIZATION_CONTRACT,
-        installConfigId: config.id,
-        workspaceId,
-        capsuleId,
-        installingPrincipalId,
-        requirements: declaration.requirements,
-        ...(declaration.backgroundActivations
-          ? { backgroundActivations: declaration.backgroundActivations }
-          : {}),
-      };
-    }
-  }
-
   return {
     ok: true,
     context: {
@@ -197,9 +166,6 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
       installingPrincipalId,
       phase: input.phase,
       lifecycleIntent: planOperation === "destroy" ? "destroy" : "provision",
-      ...(hostRuntimeMaterialization
-        ? { hostRuntimeMaterialization }
-        : {}),
     },
   };
 }

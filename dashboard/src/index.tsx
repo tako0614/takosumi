@@ -182,10 +182,6 @@ function App() {
         <Route path="/workloads" component={WorkloadListView} />
         <Route path="/new" component={InstallView} />
         <Route path="/install" component={InstallEntryRoute} />
-        <Route
-          path="/composition/install"
-          component={() => <RedirectWithQuery to="/new" />}
-        />
         <Route path="/connections" component={ConnectionsView} />
         <Route path="/workloads/:id" component={WorkloadDetailView} />
         <Route path="/workloads/:id/:tab" component={WorkloadDetailView} />

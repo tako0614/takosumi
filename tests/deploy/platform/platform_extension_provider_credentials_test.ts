@@ -99,22 +99,6 @@ test("a configured extension contributes one exact run-issued provider broker", 
       installingPrincipalId: "acct_1",
       phase: "apply",
       lifecycleIntent: "provision",
-      hostRuntimeMaterialization: {
-        contract: "takosumi.host-runtime-materialization/v1",
-        installConfigId: "icfg_1",
-        workspaceId: "ws_1",
-        capsuleId: "cap_1",
-        installingPrincipalId: "acct_1",
-        requirements: [
-          {
-            kind: "generated_secret",
-            binding: "ENCRYPTION_KEY",
-            secretRef: "secret:repository/encryption-key",
-            bytes: 32,
-            encoding: "base64url",
-          },
-        ],
-      },
     },
     issueRunCredential: async () => ({
       token: "platform_run_token",
@@ -171,22 +155,6 @@ test("a configured extension contributes one exact run-issued provider broker", 
     scopes: ["takoform.run"],
     phase: "apply",
     lifecycleIntent: "provision",
-    hostRuntimeMaterialization: {
-      contract: "takosumi.host-runtime-materialization/v1",
-      installConfigId: "icfg_1",
-      workspaceId: "ws_1",
-      capsuleId: "cap_1",
-      installingPrincipalId: "acct_1",
-      requirements: [
-        {
-          kind: "generated_secret",
-          binding: "ENCRYPTION_KEY",
-          secretRef: "secret:repository/encryption-key",
-          bytes: 32,
-          encoding: "base64url",
-        },
-      ],
-    },
   });
 });
 

@@ -10,6 +10,7 @@ import type {
   JsonRecord,
   OpenTofuModuleSource,
   GeneratedRoot,
+  LegacySourcelessDestroyModuleSource,
   OperatorModule,
   PlanScopeSelector,
   SourceBuildConfig,
@@ -42,6 +43,14 @@ export function parseRefreshOnly(request: unknown): boolean {
   return isRecord(planRun) && planRun.refreshOnly === true;
 }
 
+const LEGACY_SOURCELESS_DESTROY_ERROR =
+  "operator_module is limited to internal legacy source-less destroy recovery";
+
+export interface LegacySourcelessDestroyRecoveryInput {
+  readonly source: LegacySourcelessDestroyModuleSource;
+  readonly operatorModule: OperatorModule;
+}
+
 export function parseSource(request: unknown): OpenTofuModuleSource {
   const planRun = recordField(request, "planRun");
   const source = recordField(planRun, "source");
@@ -61,13 +70,46 @@ export function parseSource(request: unknown): OpenTofuModuleSource {
       ...(modulePath ? { modulePath } : {}),
     };
   }
-  if (kind === "operator_module") {
-    return {
+  if (kind === "operator_module") throw new Error(LEGACY_SOURCELESS_DESTROY_ERROR);
+  throw new Error("planRun.source.kind must be git");
+}
+
+/**
+ * Decodes the one retained internal drain. The top-level marker is emitted by
+ * Core after it proves an eligible historical Capsule; it is not a PlanRun
+ * create field. Any operator module outside this exact destroy shape fails.
+ */
+export function parseLegacySourcelessDestroyRecovery(
+  request: unknown,
+): LegacySourcelessDestroyRecoveryInput | undefined {
+  const planRun = recordField(request, "planRun");
+  const source = recordField(planRun, "source");
+  const kind = stringField(source, "kind");
+  const operatorModuleValue = recordField(request, "operatorModule");
+  const marked =
+    isRecord(request) && request.legacySourcelessDestroyRecovery === true;
+  if (!marked) {
+    if (kind === "operator_module" || operatorModuleValue !== undefined) {
+      throw new Error(LEGACY_SOURCELESS_DESTROY_ERROR);
+    }
+    return undefined;
+  }
+  if (
+    parseOperation(request) !== "destroy" ||
+    kind !== "operator_module" ||
+    !isRecord(source)
+  ) {
+    throw new Error(LEGACY_SOURCELESS_DESTROY_ERROR);
+  }
+  const operatorModule = parseOperatorModule(request);
+  if (!operatorModule) throw new Error(LEGACY_SOURCELESS_DESTROY_ERROR);
+  return {
+    source: {
       kind,
       digest: requiredStringField(source, "digest"),
-    };
-  }
-  throw new Error("planRun.source.kind must be git or operator_module");
+    },
+    operatorModule,
+  };
 }
 
 export function parseGeneratedRoot(
@@ -92,7 +134,7 @@ export function parseGeneratedRoot(
   }
   if (recordField(generated, "moduleFiles") !== undefined) {
     throw new Error(
-      "generatedRoot.moduleFiles is retired; Capsule modules come from SourceSnapshot and Resource Shape modules use operatorModule",
+      "generatedRoot.moduleFiles is retired; current modules come from Git SourceSnapshot archives",
     );
   }
   return { files: out };

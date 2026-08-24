@@ -105,8 +105,6 @@ type StoreInputField = StoreEntry["inputs"][number];
 type StoreInstallFeature = NonNullable<
   NonNullable<InstallConfig["installExperience"]>["features"]
 >[number];
-type StoreAuthMode = "oidc" | "password";
-
 export interface SourceBuildPreview {
   readonly commands: readonly {
     readonly argv: readonly string[];
@@ -338,7 +336,7 @@ function sourceFetchErrorMessage(
 function safeControlApiErrorMessage(
   apiError: ControlApiError | undefined,
 ): string | undefined {
-  if (apiError?.isAppHostnameUnavailable || apiError?.isDuplicateService) {
+  if (apiError?.isDuplicateService) {
     return undefined;
   }
   const message = safeText(apiError?.message).replace(/\s+/gu, " ");
@@ -356,22 +354,11 @@ function safeControlApiErrorMessage(
 }
 
 function addFlowErrorMessage(apiError: ControlApiError | undefined): string {
-  if (apiError?.isAppHostnameUnavailable) {
-    return t("new.error.appHostnameUnavailable");
-  }
-  if (apiError?.isManagedPublicHostnameSlotLimitReached) {
-    return t("new.error.managedHostnameSlotLimit");
-  }
   if (apiError?.isDuplicateService) {
     return t("new.error.alreadyExistsGeneric");
   }
   if (apiError?.reason === "provider_connection_setup_required") {
     return t("new.error.connectionRequired");
-  }
-  // Scoped managed hosts: the slug + workspace handle exceeded the hostname
-  // budget — ask for a shorter name instead of the raw English sentence.
-  if (apiError?.reason === "invalid_app_hostname") {
-    return t("new.error.invalidHostname");
   }
   const message = safeControlApiErrorMessage(apiError);
   return message
@@ -458,86 +445,12 @@ function managedServiceLabel(
   return `${workspace}-${service.slice(0, maxServiceLength).replace(/-+$/u, "")}`;
 }
 
-function publicEndpointHost(url: string): string | undefined {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "https:" ? parsed.hostname.toLowerCase() : "";
-  } catch {
-    return undefined;
-  }
-}
-
-function hostIsManagedBaseDomainSubdomain(
-  host: string,
-  baseDomain: string,
-): boolean {
-  const normalizedHost = host.toLowerCase();
-  const normalizedBase = baseDomain.toLowerCase();
-  if (!normalizedHost.endsWith(`.${normalizedBase}`)) return false;
-  const prefix = normalizedHost.slice(
-    0,
-    normalizedHost.length - normalizedBase.length - 1,
-  );
-  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(prefix);
-}
-
-function isManagedSubdomainLabel(value: string): boolean {
-  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(value.trim());
-}
-
 function isSha256Hex(value: string): boolean {
   return /^[a-f0-9]{64}$/iu.test(value.trim());
 }
 
 function storeInputKey(entryId: string, fieldName: string): string {
   return `${entryId}:${fieldName}`;
-}
-
-function storePublicEndpoint(entry: StoreEntry) {
-  const projections = entry.installExperience?.projections;
-  if (!Array.isArray(projections)) return undefined;
-  const projection = projections.find(
-    (candidate) => candidate?.kind === "public_endpoint",
-  );
-  if (
-    projection?.kind !== "public_endpoint" ||
-    !projection.variables ||
-    typeof projection.variables !== "object"
-  ) {
-    return undefined;
-  }
-  const subdomainVariable = safeText(projection.variables.subdomain);
-  const urlVariable = safeText(projection.variables.url);
-  const routePatternVariable = safeText(projection.variables.routePattern);
-  const baseDomain = safeText(projection.baseDomain);
-  if (!subdomainVariable && !urlVariable && !routePatternVariable) {
-    return undefined;
-  }
-  return {
-    ...(subdomainVariable ? { subdomainVariable } : {}),
-    ...(urlVariable ? { urlVariable } : {}),
-    ...(routePatternVariable ? { routePatternVariable } : {}),
-    ...(baseDomain ? { baseDomain } : {}),
-  };
-}
-
-function storeEndpointField(
-  entry: StoreEntry,
-  name: string | undefined,
-): StoreInputField | undefined {
-  const normalized = name?.trim();
-  return normalized
-    ? entry.inputs.find((field) => field.name === normalized)
-    : undefined;
-}
-
-function storePublicEndpointSubdomainField(
-  entry: StoreEntry,
-): StoreInputField | undefined {
-  return storeEndpointField(
-    entry,
-    storePublicEndpoint(entry)?.subdomainVariable,
-  );
 }
 
 function storeServiceNameVariable(
@@ -559,18 +472,6 @@ function storeServiceNameField(entry: StoreEntry): StoreInputField | undefined {
     : undefined;
 }
 
-function isStorePublicEndpointField(
-  entry: StoreEntry,
-  field: StoreInputField,
-): boolean {
-  const endpoint = storePublicEndpoint(entry);
-  return (
-    field.name === endpoint?.subdomainVariable ||
-    field.name === endpoint?.urlVariable ||
-    field.name === endpoint?.routePatternVariable
-  );
-}
-
 function storeInitialSecretField(
   entry: StoreEntry,
 ): StoreInputField | undefined {
@@ -584,31 +485,6 @@ function storeInitialSecretField(
   return variable
     ? entry.inputs.find((field) => field.name === variable)
     : undefined;
-}
-
-function storeSupportsOidc(entry: StoreEntry): boolean {
-  const projections = entry.installExperience?.projections;
-  if (!Array.isArray(projections)) return false;
-  return projections.some((projection) => {
-    if (
-      projection?.kind !== "oidc_client" ||
-      !projection.variables ||
-      typeof projection.variables !== "object"
-    ) {
-      return false;
-    }
-    const callbackPath = safeText(projection.callbackPath);
-    return (
-      callbackPath.startsWith("/") &&
-      !callbackPath.startsWith("//") &&
-      !callbackPath.includes("://")
-    );
-  });
-}
-
-function defaultStoreAuthMode(entry: StoreEntry): StoreAuthMode | undefined {
-  if (storeSupportsOidc(entry)) return "oidc";
-  return storeInitialSecretField(entry) ? "password" : undefined;
 }
 
 function storeInstallFeatures(
@@ -666,8 +542,6 @@ function storeDefaultInputValue(
   field: StoreInputField,
   workspaceHandle: string | undefined,
   serviceSlug?: string,
-  managedPublicBaseDomain?: string,
-  managedPublicHostnameMode: "scoped" | "vanity" = "scoped",
 ): string {
   const base = slugInputValue(entry.suggestedName);
   const requestedServiceSlug = slugInputValue(serviceSlug || base);
@@ -675,27 +549,6 @@ function storeDefaultInputValue(
     workspaceHandle,
     requestedServiceSlug,
   );
-  const publicEndpoint = storePublicEndpoint(entry);
-  if (field.name === publicEndpoint?.subdomainVariable) {
-    return requestedServiceSlug;
-  }
-  if (
-    field.name === publicEndpoint?.urlVariable &&
-    (managedPublicBaseDomain || publicEndpoint.baseDomain)
-  ) {
-    // Normalize the operator/listing-owned base domain (strip wildcard and
-    // trailing dot) exactly like the control plane.
-    const publicServiceSlug =
-      managedPublicHostnameMode === "vanity"
-        ? requestedServiceSlug
-        : scopedServiceSlug;
-    const baseDomain = managedBaseDomain(
-      managedPublicBaseDomain ?? publicEndpoint.baseDomain,
-    );
-    return publicServiceSlug && baseDomain
-      ? `https://${publicServiceSlug}.${baseDomain}`
-      : "";
-  }
   switch (field.defaultValue?.source) {
     case "capsule_name":
       return requestedServiceSlug;
@@ -821,34 +674,6 @@ function isJsonRecord(
 
 function installVariableDisplayValue(value: JsonValue): string {
   return typeof value === "string" ? value : JSON.stringify(value);
-}
-
-function routePatternFromAppUrl(
-  value: JsonValue | undefined,
-): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "https:" || !url.hostname) return undefined;
-    return `${url.hostname}/*`;
-  } catch {
-    return undefined;
-  }
-}
-
-function managedBaseDomain(value: string | undefined): string | undefined {
-  const trimmed = (value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/^\*\./u, "")
-    .replace(/\.$/u, "");
-  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u.test(
-    trimmed,
-  )
-    ? trimmed
-    : undefined;
 }
 
 function isSafePlainEnvName(name: string): boolean {
@@ -1196,7 +1021,6 @@ export type {
   StoreEntry,
   StoreInputField,
   StoreInstallFeature,
-  StoreAuthMode,
 };
 export {
   DEFAULT_STORE_BADGE,
@@ -1226,19 +1050,11 @@ export {
   slugInputValue,
   uniqueServiceIdCandidate,
   managedServiceLabel,
-  publicEndpointHost,
-  hostIsManagedBaseDomainSubdomain,
-  isManagedSubdomainLabel,
   isSha256Hex,
   storeInputKey,
-  storePublicEndpoint,
-  storeEndpointField,
-  storePublicEndpointSubdomainField,
   storeServiceNameVariable,
   storeServiceNameField,
   storeInitialSecretField,
-  storeSupportsOidc,
-  defaultStoreAuthMode,
   storeInstallFeatures,
   storeFeatureInputNames,
   storeFeatureInputs,
@@ -1248,7 +1064,6 @@ export {
   storeInputHelper,
   storeFeatureLabel,
   localizedStoreText,
-  isStorePublicEndpointField,
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   storeDefaultInputValue,
   serviceNameHintIsGenerated,
@@ -1260,8 +1075,6 @@ export {
   setStoreJsonVariable,
   isJsonRecord,
   installVariableDisplayValue,
-  routePatternFromAppUrl,
-  managedBaseDomain,
   isSafePlainEnvName,
   storeKindFromStoreListing,
   storeSurfaceFromStoreListing,

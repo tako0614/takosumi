@@ -47,7 +47,6 @@ import type {
   InstallConfig,
   InstallConfigVariableDefault,
   InstallConfigVariablePresentation,
-  ManagedPublicHostnameAllocation,
   Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
@@ -56,9 +55,7 @@ import type {
 } from "takosumi-contract/install-configs";
 import {
   capsuleInterfaceBlueprintsNeedInstallingPrincipal,
-  capsuleResourceInterfaceBindingsNeedInstallingPrincipal,
   resolveCapsuleInterfaceBlueprintInstallingPrincipal,
-  resolveCapsuleResourceInterfaceBindingInstallingPrincipal,
 } from "takosumi-contract/interfaces";
 import {
   parseScopeBoundaryPolicy,
@@ -129,7 +126,6 @@ import {
   controlPlaneUnavailable,
   controllerErrorCode,
   controllerErrorResponse,
-  isRecord,
   jsonStatus,
   parseControlPageParams,
   publicApplyActionResponse,
@@ -176,7 +172,6 @@ import {
   pageSorted,
 } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { ensureTakosumiAccountsOidcForCapsule } from "./capsule-oidc.ts";
 import {
   adoptRepoOwnedInstallConfig,
   hydrateRepoOwnedStoreConfig,
@@ -184,7 +179,6 @@ import {
 } from "./repo-owned-install-config.ts";
 import { handleWorkspaceProjects } from "./projects.ts";
 import { maybeEnsurePersonalWorkspaceForSubject } from "../control-personal-workspace.ts";
-import { handleWorkspaceResourcesView } from "./workspace-views.ts";
 import { handleWorkspaceInstallPlans } from "./install-plans.ts";
 
 function sourceWorkspaceId(
@@ -227,17 +221,6 @@ export async function handleWorkspaces(
       segments[4] === "restores"
     ) {
       return errorJson("not_found", "not found", 404);
-    }
-    // WorkspaceViews owns one request-bounded authorization + projection
-    // operation. Dispatch it before the generic two-call Workspace/member gate
-    // so a D1 adapter can co-read authority, maintenance, and page data without
-    // duplicating access checks.
-    if (
-      leaf === "views" &&
-      segments.length === 4 &&
-      segments[3] === "resources.v1"
-    ) {
-      return await handleWorkspaceResourcesView(ctx, workspaceId, method);
     }
     const auth = await requireWorkspaceAccess({
       operations,
@@ -335,13 +318,6 @@ export async function handleWorkspaces(
           parsedPage.params,
           capsuleId,
         );
-      const resourceIds = [
-        ...new Set(
-          candidatePage.items
-            .filter((iface) => iface.metadata.ownerRef.kind === "Resource")
-            .map((iface) => iface.metadata.ownerRef.id),
-        ),
-      ];
       const capsuleIds = [
         ...new Set(
           candidatePage.items
@@ -349,19 +325,12 @@ export async function handleWorkspaces(
             .map((iface) => iface.metadata.ownerRef.id),
         ),
       ];
-      const [capsules, ownerEntries] = await Promise.all([
+      const capsules =
         capsuleIds.length > 0
-          ? operations.capsules.getCapsulesByIds(capsuleIds)
-          : Promise.resolve([]),
-        resourceIds.length > 0 && operations.resourceCapsuleOwners
-          ? operations.resourceCapsuleOwners.getMany(resourceIds)
-          : Promise.resolve([]),
-      ]);
+          ? await operations.capsules.getCapsulesByIds(capsuleIds)
+          : [];
       const capsuleById = new Map(
         capsules.map((candidate) => [candidate.id, candidate]),
-      );
-      const owners = new Map(
-        ownerEntries.map((entry) => [entry.resourceId, entry.owner]),
       );
       const interfaces = candidatePage.items.flatMap((iface) => {
         if (iface.metadata.ownerRef.kind === "Capsule") {
@@ -374,29 +343,6 @@ export async function handleWorkspaces(
             iface.status.phase === "Resolved"
             ? [iface]
             : [];
-        }
-        if (iface.metadata.ownerRef.kind === "Resource") {
-          if (
-            iface.metadata.workspaceId !== workspaceId ||
-            iface.status.phase !== "Resolved" ||
-            !isLauncherDocument(iface.spec.document)
-          ) {
-            return [];
-          }
-          const owner = owners.get(iface.metadata.ownerRef.id);
-          if (
-            !owner ||
-            owner.workspaceId !== workspaceId ||
-            (capsuleId && owner.id !== capsuleId)
-          ) {
-            return [];
-          }
-          return [
-            {
-              ...iface,
-              launcherOwner: { capsuleId: owner.id },
-            },
-          ];
         }
         return [];
       });
@@ -440,10 +386,8 @@ export async function handleWorkspaces(
           request,
           operations,
           store,
-          ctx.issuer,
           ctx.session,
           workspaceId,
-          ctx.managedPublicBaseDomain,
         );
       }
       return methodNotAllowed("GET, POST");
@@ -1331,13 +1275,21 @@ async function createCapsule(
   request: Request,
   operations: ControlPlaneOperations,
   store: AccountsStore,
-  issuer: string | undefined,
   session: ControlSession,
   workspaceId: string,
-  managedPublicBaseDomain?: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
+  const unexpectedFields = Object.keys(body).filter(
+    (field) => !CAPSULE_CREATE_FIELDS.has(field),
+  );
+  if (unexpectedFields.length > 0) {
+    return errorJson(
+      "invalid_request",
+      `body contains unknown fields: ${unexpectedFields.sort().join(", ")}`,
+      400,
+    );
+  }
   const name = stringValue(body.name);
   const projectId = stringValue(body.projectId);
   const environment = stringValue(body.environment);
@@ -1357,9 +1309,6 @@ async function createCapsule(
   const storeMetadata = installConfigStoreValue(body.store);
   const modulePath = modulePathValue(body.modulePath);
   const sourceBuild = sourceBuildValue(body.sourceBuild);
-  const managedPublicHostname = managedPublicHostnameValue(
-    body.managedPublicHostname,
-  );
   if (body.modulePath !== undefined && modulePath === undefined) {
     return errorJson(
       "invalid_request",
@@ -1386,16 +1335,6 @@ async function createCapsule(
     !interfaceBlueprintsResult.ok
   ) {
     return errorJson("invalid_request", interfaceBlueprintsResult.message, 400);
-  }
-  if (
-    body.managedPublicHostname !== undefined &&
-    managedPublicHostname === undefined
-  ) {
-    return errorJson(
-      "invalid_request",
-      "managedPublicHostname must be { mode: 'scoped' | 'vanity' }",
-      400,
-    );
   }
   if (body.store !== undefined && storeMetadata === undefined) {
     return errorJson(
@@ -1444,7 +1383,6 @@ async function createCapsule(
     );
   }
   let resolvedInstallConfigId = installConfigId;
-  let resolvedInstallConfig: InstallConfig | undefined;
   const baseConfig =
     await operations.capsules.getInstallConfig(installConfigId);
   if (
@@ -1568,18 +1506,10 @@ async function createCapsule(
   const needsInstallingPrincipalScope =
     capsuleInterfaceBlueprintsNeedInstallingPrincipal(
       selectedInterfaceBlueprints,
-    ) ||
-    capsuleResourceInterfaceBindingsNeedInstallingPrincipal(
-      baseConfig.resourceInterfaceBindingProposals,
     );
   const resolvedInterfaceBlueprints =
     resolveCapsuleInterfaceBlueprintInstallingPrincipal(
       selectedInterfaceBlueprints,
-      session.subject,
-    );
-  const resolvedResourceInterfaceBindingProposals =
-    resolveCapsuleResourceInterfaceBindingInstallingPrincipal(
-      baseConfig.resourceInterfaceBindingProposals,
       session.subject,
     );
   if (
@@ -1590,7 +1520,6 @@ async function createCapsule(
     resolvedStoreMetadata !== undefined ||
     resolvedModulePath !== undefined ||
     sourceBuild !== undefined ||
-    managedPublicHostname !== undefined ||
     interfaceBlueprints !== undefined ||
     needsInstallingPrincipalScope ||
     repoInstallUx.status === "accepted"
@@ -1629,12 +1558,6 @@ async function createCapsule(
         ? {
             variablePresentation: repoInstallUx.variablePresentation,
             installExperience: repoInstallUx.installExperience,
-            ...(repoInstallUx.hostRuntimeMaterialization
-              ? {
-                  hostRuntimeMaterialization:
-                    repoInstallUx.hostRuntimeMaterialization,
-                }
-              : {}),
           }
         : {}),
       ...(resolvedStoreMetadata ? { store: resolvedStoreMetadata } : {}),
@@ -1646,19 +1569,12 @@ async function createCapsule(
             repoInstallUx.sourceBuild !== undefined
           ? { sourceBuild: repoInstallUx.sourceBuild }
           : {}),
-      ...(managedPublicHostname ? { managedPublicHostname } : {}),
       ...(resolvedInterfaceBlueprints
         ? { interfaceBlueprints: resolvedInterfaceBlueprints }
         : {}),
       ...(repoInstallUx.status === "accepted" &&
       repoInstallUx.requiredInterfaces !== undefined
         ? { requiredInterfaces: repoInstallUx.requiredInterfaces }
-        : {}),
-      ...(resolvedResourceInterfaceBindingProposals
-        ? {
-            resourceInterfaceBindingProposals:
-              resolvedResourceInterfaceBindingProposals,
-          }
         : {}),
       outputAllowlist: repoOwnedInterfaceProposalAccepted
         ? repoInstallUx.outputAllowlist
@@ -1667,7 +1583,6 @@ async function createCapsule(
       updatedAt: now,
     });
     resolvedInstallConfigId = config.id;
-    resolvedInstallConfig = config;
   }
   const capsule = await operations.capsules.createCapsule({
     workspaceId,
@@ -1679,43 +1594,25 @@ async function createCapsule(
     installingPrincipalId: session.subject,
     ...(autoUpdate ? { autoUpdate: true } : {}),
   });
-  if (resolvedInstallConfig && issuer) {
-    try {
-      await ensureTakosumiAccountsOidcForCapsule({
-        operations,
-        store,
-        issuer,
-        capsule,
-        installConfig: resolvedInstallConfig,
-        ...(managedPublicBaseDomain ? { managedPublicBaseDomain } : {}),
-      });
-    } catch (error) {
-      // Compensate: never leave a half-created capsule behind when the OIDC
-      // client provisioning fails — the caller sees the error, and without
-      // this the workspace keeps a ghost capsule that was never installable.
-      try {
-        await operations.capsules.abandonUnappliedCapsule?.(
-          capsule.id,
-          "takosumi accounts oidc provisioning failed during create",
-        );
-      } catch {
-        // Best-effort; surface the original failure.
-      }
-      throw error;
-    }
-  }
   return jsonStatus({ capsule: publicCapsule(capsule) }, 201);
 }
 
-function managedPublicHostnameValue(
-  value: unknown,
-): ManagedPublicHostnameAllocation | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value)) return undefined;
-  return value.mode === "scoped" || value.mode === "vanity"
-    ? { mode: value.mode }
-    : undefined;
-}
+const CAPSULE_CREATE_FIELDS = new Set([
+  "autoUpdate",
+  "environment",
+  "installConfigId",
+  "interfaceBlueprints",
+  "modulePath",
+  "name",
+  "outputAllowlist",
+  "projectId",
+  "runnerId",
+  "runnerProfileId",
+  "sourceBuild",
+  "sourceId",
+  "store",
+  "vars",
+]);
 
 function variablePresentationDefaultMapping(
   presentation: InstallConfig["variablePresentation"] | undefined,

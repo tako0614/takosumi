@@ -50,17 +50,8 @@ export function interfaceOAuth2ResourceUri(
         iface.status.resolvedInputs?.[inputName],
       )
     : undefined;
-  const materialized = iface.metadata.materializedFrom;
-  const formResource =
-    iface.metadata.ownerRef.kind === "Resource" &&
-    materialized?.source === "form_descriptor"
-      ? canonicalInterfaceOAuth2ResourceUri(iface.status.resourceUri)
-      : undefined;
   if (inputName && !inputResource) return undefined;
-  if (inputResource && formResource && inputResource !== formResource) {
-    return undefined;
-  }
-  return inputResource ?? formResource;
+  return inputResource;
 }
 
 const SECRET_URL_PARAMETER_NAMES = new Set([

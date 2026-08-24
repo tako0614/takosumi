@@ -30,8 +30,6 @@ import type {
   RunLogsResponse,
 } from "takosumi-contract/runs";
 import {
-  isResourceOperationRun,
-  type ResourceOperationRun,
   type OpenTofuControlStore,
   type RecoverableOpenTofuRunListOptions,
   type StoredRunRecord,
@@ -51,7 +49,6 @@ import {
  */
 export interface RunCapsuleProjection {
   capsuleId?: string;
-  resourceId?: string;
   environment?: string;
   sourceSnapshotId?: string;
   compatibilityReportId?: string;
@@ -94,9 +91,6 @@ export class RunQueryService {
     }
     const sync = await this.#store.getSourceSyncRun(id);
     if (sync) return projectSourceSyncRun(sync);
-    const resourceOperation = await this.#store.getResourceOperationRun(id);
-    if (resourceOperation)
-      return projectResourceOperationRun(resourceOperation);
     const compatibilityCheck = await this.#store.getCompatibilityCheckRun(id);
     if (compatibilityCheck) return compatibilityCheck;
     const backupRun = await this.#store.getBackupRun(id);
@@ -138,9 +132,6 @@ export class RunQueryService {
       return projectApplyRun(row, plan ? this.capsuleProjection(plan) : {});
     }
     if (isStoredSourceSyncRun(row)) return projectSourceSyncRun(row);
-    if (isResourceOperationRun(row)) {
-      return projectResourceOperationRun(row);
-    }
     if (isPublicRunRecord(row)) return row;
     const _exhaustive: never = row;
     void _exhaustive;
@@ -229,21 +220,6 @@ export class RunQueryService {
         auditEvents: [],
       };
     }
-    const resourceOperation = await this.#store.getResourceOperationRun(id);
-    if (resourceOperation) {
-      return {
-        diagnostics: resourceOperation.errorCode
-          ? [
-              {
-                severity: "error",
-                code: resourceOperation.errorCode,
-                message: resourceOperation.errorCode,
-              },
-            ]
-          : [],
-        auditEvents: [],
-      };
-    }
     const compatibilityCheck = await this.#store.getCompatibilityCheckRun(id);
     if (compatibilityCheck) {
       return {
@@ -288,12 +264,6 @@ export class RunQueryService {
         ? {
             capsuleId: planRun.capsuleContext.capsuleId,
             environment: planRun.capsuleContext.environment,
-          }
-        : {}),
-      ...(planRun.resourceContext
-        ? {
-            resourceId: planRun.resourceContext.resourceId,
-            environment: planRun.resourceContext.environment,
           }
         : {}),
       ...(planRun.sourceSnapshotId
@@ -360,22 +330,6 @@ function isStoredSourceSyncRun(row: StoredRunRecord): row is SourceSyncRun {
 
 function isPublicRunRecord(row: StoredRunRecord): row is Run {
   return typeof (row as Partial<Run>).type === "string";
-}
-
-function projectResourceOperationRun(run: ResourceOperationRun): Run {
-  return {
-    id: run.id,
-    workspaceId: run.workspaceId,
-    subject: run.subject,
-    resourceOperation: run.resourceOperation,
-    type: run.type,
-    status: run.status,
-    createdBy: run.createdBy,
-    createdAt: run.createdAt,
-    ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
-    ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),
-    ...(run.errorCode !== undefined ? { errorCode: run.errorCode } : {}),
-  };
 }
 
 function sourceSyncDiagnostics(sync: SourceSyncRun): readonly RunDiagnostic[] {

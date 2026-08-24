@@ -1,11 +1,9 @@
 import { expect, test } from "bun:test";
 import type { Interface } from "takosumi-contract/interfaces";
-import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import {
   createInMemoryInterfaceStores,
   InterfaceService,
 } from "../../../../core/domains/interfaces/mod.ts";
-import { createInMemoryResourceShapeStores } from "../../../../core/domains/resource-shape/mod.ts";
 
 const NOW = "2026-07-14T00:00:00.000Z";
 
@@ -103,89 +101,6 @@ test("Interface transitions project immediately and a failed host sink is repair
   expect(phases.slice(-3)).toEqual(["Pending", "Resolved", "Retired"]);
 });
 
-test("bootstrap attaches coherent Ready Resource generation and NativeResource evidence", async () => {
-  const resourceId = "tkrn:space_1:EdgeWorker:app";
-  const resourceStores = createInMemoryResourceShapeStores();
-  expect(
-    await resourceStores.resources.create({
-      id: resourceId,
-      spaceId: "space_1",
-      kind: "EdgeWorker",
-      name: "app",
-      managedBy: "opentofu",
-      spec: {},
-      phase: "Ready",
-      generation: 3,
-      observedGeneration: 3,
-      outputs: { endpoint: "https://app.example.test" },
-      createdAt: NOW,
-      updatedAt: NOW,
-    }),
-  ).toMatchObject({ status: "created" });
-  await resourceStores.locks.put({
-    resourceId,
-    selectedImplementation: "cloud.edge-worker.v1",
-    target: "cloud/default",
-    locked: true,
-    reason: ["test"],
-    nativeResources: [
-      { type: "cloudflare_workers_script", id: "native-app-v3" },
-    ],
-    lockedAt: NOW,
-    updatedAt: NOW,
-  });
-  const snapshots: import("takosumi-contract/interfaces").InterfaceProjectionSnapshot[] =
-    [];
-  const { operations } = await createTakosumiService({
-    role: "takosumi-api",
-    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
-    resourceShapeStores: resourceStores,
-    resolveResourceInterfaceWorkspace: ({ resourceSpaceId }) =>
-      Promise.resolve(
-        resourceSpaceId === "space_1" ? "workspace_1" : undefined,
-      ),
-    interfaceProjectionSink: {
-      project(snapshot) {
-        snapshots.push(structuredClone(snapshot));
-        return Promise.resolve();
-      },
-    },
-  });
-
-  const iface = await operations.interfaces.create({
-    workspaceId: "workspace_1",
-    name: "runtime-route",
-    ownerRef: { kind: "Resource", id: resourceId },
-    spec: {
-      type: "http.route",
-      version: "v1alpha1",
-      document: {},
-      inputs: {
-        endpoint: {
-          source: "resource_output",
-          resourceId,
-          outputName: "endpoint",
-        },
-      },
-      access: { visibility: "public", resourceUriInput: "endpoint" },
-    },
-  });
-
-  expect(iface.status).toMatchObject({
-    phase: "Resolved",
-    provenance: {
-      endpoint: { source: "resource_output", resourceGeneration: 3 },
-    },
-  });
-  expect(snapshots.at(-1)?.ownerResource).toEqual({
-    id: resourceId,
-    generation: 3,
-    nativeResources: [
-      { type: "cloudflare_workers_script", id: "native-app-v3" },
-    ],
-  });
-});
-
 function interfaceRecord(index: number): Interface {
   const suffix = index.toString().padStart(4, "0");
   return {
@@ -196,8 +111,8 @@ function interfaceRecord(index: number): Interface {
       workspaceId: `workspace_${index % 3}`,
       name: `runtime-${suffix}`,
       ownerRef: {
-        kind: "Resource",
-        id: `tkrn:workspace_${index % 3}:EdgeWorker:worker-${suffix}`,
+        kind: "Capsule",
+        id: `capsule-${suffix}`,
       },
       generation: 1,
       createdAt: NOW,

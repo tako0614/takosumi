@@ -21,9 +21,6 @@
       "takosumi-contract/platform-extension-routes": [
         "./contract/platform-extension-routes.ts"
       ],
-      "takosumi-contract/resource-deployment": [
-        "./contract/resource-deployment.ts"
-      ],
       "takosumi-contract/mobile": ["./contract/mobile.ts"],
       "takosumi-contract/deploy-control-api": [
         "./contract/deploy-control-api.ts"

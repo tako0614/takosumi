@@ -11,7 +11,6 @@
  * source surfaces. Method bodies are moved byte-for-byte.
  */
 import {
-  installExperiencePublicEndpoint,
   planScopeSelectors,
   type JsonValue,
 } from "takosumi-contract";
@@ -24,6 +23,7 @@ import type {
   DispatchGeneratedRoot,
   InstallConfig,
   Capsule,
+  OpenTofuExecutionSource,
   OpenTofuModuleSource,
   PlanRun,
   PlanRunCapsuleContext,
@@ -48,9 +48,6 @@ import {
   type InstallConfigLifecycleAction,
   type InstallConfigLifecycleCommandAction,
   type InstallConfigLifecyclePhase,
-  type ManagedPublicHostnameClaimRequest,
-  type ManagedPublicHostnameClaimResult,
-  type ManagedPublicHostnameMode,
   type OutputAllowlistEntry,
 } from "takosumi-contract/install-configs";
 import type { Output } from "takosumi-contract/outputs";
@@ -107,7 +104,6 @@ import {
   type CapsuleCoordination,
   type LeaseHandle,
   withCapsuleLease,
-  withCapsuleResourceAdmission,
   withPlanLease,
 } from "../capsule_lease.ts";
 import {
@@ -148,16 +144,6 @@ import {
   type PlanRunInputs,
 } from "../store.ts";
 import {
-  managedPublicBaseDomainFromInstallConfig,
-  managedPublicHostFromLabel,
-  managedPublicHostnameMode,
-  managedPublicLabelForWorkspace,
-  normalizeManagedPublicHostLabel,
-  normalizeManagedPublicBaseDomain,
-  normalizeManagedPublicBaseDomains,
-  publicHostPolicyKind,
-} from "../managed_public_domains.ts";
-import {
   mergeInstallContextVariables,
   normalizeProviders,
   normalizeVariables,
@@ -176,11 +162,6 @@ import type { ResolvedDependencies } from "../dependency_resolution.ts";
 import type { DependencyResolutionService } from "../dependency_resolution.ts";
 import type { RunVerificationService } from "../run_verification.ts";
 import type { SourceLifecycleService } from "../source_lifecycle.ts";
-import {
-  CAPSULE_OWNED_RESOURCES_PENDING_REASON,
-  type CapsuleOwnedResourceFence,
-  type CapsuleOwnedResourceFenceResult,
-} from "../../capsules/mod.ts";
 // Shared helpers, constants, and run-engine types stay in the controller module
 // (`../mod.ts`) so the domain's public entry point and external importers are
 // unchanged; this engine imports the ones its moved bodies reference. The
@@ -217,7 +198,6 @@ import type { ArtifactReferenceAllocator } from "../../../adapters/storage/artif
 import type {
   CreateCapsulePlanInternal,
   ApplyRunInternalContext,
-  CapsuleHostRuntimeRetirement,
   DependencyValueSealer,
   DeployControlActorContext,
   EnqueueRun,
@@ -244,38 +224,21 @@ import type {
   TerminalRunPersistResult,
 } from "../mod.ts";
 
-function releaseCommandRunId(applyRunId: string): string {
-  return `release_${applyRunId.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
-}
+/** Internal-only widening used by the inventory-backed pre-v1 destroy drain. */
+type InternalCreatePlanRunRequest = Omit<CreatePlanRunRequest, "source"> & {
+  readonly source: OpenTofuExecutionSource;
+};
 
 /**
- * Config-driven import is permitted only when the reviewed plan proves one
- * import and no provider mutation. OpenTofu may report the imported object as
- * `no-op` plus `change.importing`; any create/update/delete action would turn
- * adoption into an infrastructure mutation and is rejected before apply.
+ * The marker is controller-owned context, not a request-body field. Only
+ * #createLegacySourcelessDestroyPlan constructs it after inventory checks.
  */
-export function resourceImportPolicyReasons(
-  planRun: PlanRun,
-  result: OpenTofuPlanResult,
-): readonly string[] {
-  if (planRun.resourceImport !== true) return [];
-  const changes = result.planResourceChanges ?? [];
-  const imports = changes.filter((change) => change.importing === true);
-  const reasons: string[] = [];
-  if (imports.length !== 1) {
-    reasons.push(
-      `resource import plan must contain exactly one import; observed ${imports.length}`,
-    );
-  }
-  const mutating = changes.filter((change) =>
-    change.actions.some((action) => action !== "no-op"),
-  );
-  if (mutating.length > 0) {
-    reasons.push(
-      `resource import plan contains ${mutating.length} native mutation action(s); align the requested spec with the existing backend resource before import`,
-    );
-  }
-  return reasons;
+type RunEnginePlanRunInternalContext = PlanRunInternalContext & {
+  readonly legacySourcelessDestroyRecovery?: true;
+};
+
+function releaseCommandRunId(applyRunId: string): string {
+  return `release_${applyRunId.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
 }
 
 function isRetryableRunnerInfrastructureError(error: unknown): boolean {
@@ -560,24 +523,6 @@ function declaredGenericCapsuleInputs(
   return { known: false, names: new Set() };
 }
 
-function publicEndpointVariableNames(
-  installConfig: InstallConfig,
-): ReadonlySet<string> {
-  const endpoint = installExperiencePublicEndpoint(
-    installConfig.installExperience,
-  );
-  if (!endpoint) return new Set();
-  return new Set(
-    [
-      endpoint.subdomainVariable,
-      endpoint.urlVariable,
-      endpoint.routePatternVariable,
-    ]
-      .map((name) => nonEmptyStringValue(name))
-      .filter((name): name is string => name !== undefined),
-  );
-}
-
 function requestedGenericCapsuleVariables(
   explicit: Readonly<Record<string, unknown>>,
   providerInputDefaults: Readonly<Record<string, JsonValue>>,
@@ -738,208 +683,6 @@ function genericCapsuleWorkspaceOutputAllowlist(
   return allowlist;
 }
 
-const MANAGED_WORKER_NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
-
-function nonEmptyStringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function validManagedWorkerName(value: string): boolean {
-  return MANAGED_WORKER_NAME_RE.test(value);
-}
-
-function hostFromHttpsUrlValue(value: unknown): string | undefined {
-  const raw = nonEmptyStringValue(value);
-  if (!raw) return undefined;
-  try {
-    const parsed = new URL(raw);
-    if (parsed.protocol !== "https:" || !parsed.hostname) return undefined;
-    return parsed.hostname.toLowerCase();
-  } catch {
-    return undefined;
-  }
-}
-
-function hostFromRoutePatternValue(value: unknown): string | undefined {
-  const raw = nonEmptyStringValue(value);
-  if (!raw) return undefined;
-  const host = raw.split("/", 1)[0]?.trim().toLowerCase();
-  return host && !host.includes("*") ? host : undefined;
-}
-
-function publicHostsFromInstallExperienceVariables(
-  variables: Readonly<Record<string, unknown>>,
-  installConfig: InstallConfig | undefined,
-  managedPublicBaseDomain?: string,
-): readonly string[] {
-  const endpoint = installExperiencePublicEndpoint(
-    installConfig?.installExperience,
-  );
-  if (!endpoint) return [];
-
-  const hosts = new Set<string>();
-  const baseDomain =
-    normalizeManagedPublicBaseDomain(managedPublicBaseDomain) ??
-    managedPublicBaseDomainFromInstallConfig(installConfig);
-  const subdomainVariable = nonEmptyStringValue(endpoint.subdomainVariable);
-  if (subdomainVariable && baseDomain) {
-    const host = managedPublicHostFromLabel(
-      variables[subdomainVariable],
-      baseDomain,
-    );
-    if (host) hosts.add(host);
-  }
-
-  const urlVariable = nonEmptyStringValue(endpoint.urlVariable);
-  if (urlVariable) {
-    const host = hostFromHttpsUrlValue(variables[urlVariable]);
-    if (host) hosts.add(host);
-  }
-
-  const routePatternVariable = nonEmptyStringValue(
-    endpoint.routePatternVariable,
-  );
-  if (routePatternVariable) {
-    const host = hostFromRoutePatternValue(variables[routePatternVariable]);
-    if (host) hosts.add(host);
-  }
-
-  return [...hosts].sort();
-}
-
-function finalizeManagedPublicHostVariables(input: {
-  readonly explicit: Readonly<Record<string, JsonValue>>;
-  readonly capsule: Capsule;
-  readonly installConfig: InstallConfig;
-  readonly declaredInputs: DeclaredGenericCapsuleInputs;
-  readonly workspaceHandle: string;
-  readonly endpointVariables: ReadonlySet<string>;
-  readonly managedPublicBaseDomain?: string;
-  readonly variables: Readonly<Record<string, JsonValue>>;
-}): Readonly<Record<string, JsonValue>> {
-  const endpoint = installExperiencePublicEndpoint(
-    input.installConfig.installExperience,
-  );
-  if (!endpoint || input.endpointVariables.size === 0) {
-    return input.variables;
-  }
-  const subdomainVariable = nonEmptyStringValue(endpoint.subdomainVariable);
-  if (!subdomainVariable) return input.variables;
-  const urlVariable = nonEmptyStringValue(endpoint.urlVariable);
-  const routePatternVariable = nonEmptyStringValue(
-    endpoint.routePatternVariable,
-  );
-  const baseDomain =
-    normalizeManagedPublicBaseDomain(input.managedPublicBaseDomain) ??
-    managedPublicBaseDomainFromInstallConfig(input.installConfig);
-  if (!baseDomain) return input.variables;
-  const declaredBaseDomain = managedPublicBaseDomainFromInstallConfig(
-    input.installConfig,
-  );
-  const canSet = (name: string) =>
-    Object.prototype.hasOwnProperty.call(input.variables, name) ||
-    input.declaredInputs.names.has(name) ||
-    (!input.declaredInputs.known && input.endpointVariables.has(name));
-  const out: Record<string, JsonValue> = { ...input.variables };
-  let requestedSlug = nonEmptyStringValue(out[subdomainVariable]);
-  const requestedSlugWasExplicit =
-    nonEmptyStringValue(input.explicit[subdomainVariable]) !== undefined;
-  if (
-    !requestedSlug &&
-    !nonEmptyStringValue(input.explicit[subdomainVariable]) &&
-    canSet(subdomainVariable)
-  ) {
-    requestedSlug = workerNameFromCapsule(input.capsule);
-  }
-  if (!requestedSlug) {
-    return out;
-  }
-  const hostnameMode = managedPublicHostnameMode(input.installConfig);
-  if (!requestedSlugWasExplicit && hostnameMode === "scoped") {
-    const maxSlugLength = Math.max(1, 62 - input.workspaceHandle.length);
-    requestedSlug = requestedSlug.slice(0, maxSlugLength).replace(/-+$/gu, "");
-  }
-  const publicLabel =
-    hostnameMode === "vanity"
-      ? normalizeManagedPublicHostLabel(requestedSlug)
-      : managedPublicLabelForWorkspace(input.workspaceHandle, requestedSlug);
-  if (!publicLabel || !validManagedWorkerName(publicLabel)) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      hostnameMode === "vanity"
-        ? "public hostname label is invalid or too long"
-        : "public hostname slug is invalid or too long for this Workspace handle",
-      { reason: "invalid_app_hostname" },
-    );
-  }
-  out[subdomainVariable] = publicLabel;
-  const host = `${publicLabel}.${baseDomain}`;
-  const explicitUrlHost = urlVariable
-    ? hostFromHttpsUrlValue(input.explicit[urlVariable])
-    : undefined;
-  const explicitUrlUsesManagedBase =
-    explicitUrlHost !== undefined &&
-    [baseDomain, declaredBaseDomain]
-      .filter((candidate): candidate is string => Boolean(candidate))
-      .some(
-        (candidate) =>
-          publicHostPolicyKindForBase(explicitUrlHost, candidate) ===
-          "managed_default_hostname",
-      );
-  if (
-    urlVariable &&
-    (!nonEmptyStringValue(input.explicit[urlVariable]) ||
-      explicitUrlUsesManagedBase) &&
-    canSet(urlVariable)
-  ) {
-    out[urlVariable] = `https://${host}`;
-  }
-  if (
-    routePatternVariable &&
-    canSet(routePatternVariable) &&
-    (!nonEmptyStringValue(input.explicit[routePatternVariable]) ||
-      [baseDomain, declaredBaseDomain]
-        .filter((candidate): candidate is string => Boolean(candidate))
-        .some(
-          (candidate) =>
-            publicHostPolicyKindForBase(
-              hostFromRoutePatternValue(input.explicit[routePatternVariable]) ??
-                "",
-              candidate,
-            ) === "managed_default_hostname",
-        ))
-  ) {
-    out[routePatternVariable] = `${host}/*`;
-  }
-  return out;
-}
-
-function publicHostPolicyKindForBase(
-  host: string,
-  baseDomain: string,
-): "managed_default_hostname" | "custom_domain" {
-  return host.endsWith(`.${baseDomain}`)
-    ? "managed_default_hostname"
-    : "custom_domain";
-}
-
-function workerNameFromCapsule(capsule: Capsule): string | undefined {
-  const preferred =
-    nonEmptyStringValue(capsule.slug) ?? nonEmptyStringValue(capsule.name);
-  if (!preferred) return undefined;
-  const base = preferred
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+/g, "")
-    .replace(/-+$/g, "")
-    .replace(/-{2,}/g, "-");
-  return base || undefined;
-}
-
-function publicHostUnavailableMessage(): string {
-  return "app_hostname_unavailable: already exists";
-}
-
 function lifecycleActionsForPlan(
   installConfig: InstallConfig,
   runnerProfile: RunnerProfile,
@@ -1097,7 +840,6 @@ export interface RunEngineDependencies {
   readonly activity: ActivityRecorder;
   readonly dependencyValueSealer?: DependencyValueSealer;
   readonly releaseActivator?: ReleaseActivator;
-  readonly capsuleHostRuntimeRetirement?: CapsuleHostRuntimeRetirement;
   readonly observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly metricTags: Record<string, string>;
   readonly allowOperatorScopedProviderConnections: boolean;
@@ -1114,9 +856,6 @@ export interface RunEngineDependencies {
   readonly sourceLifecycle: SourceLifecycleService;
   readonly capsules: CapsuleQuery;
   readonly runSerialized: RunSerialized;
-  readonly managedVanityHostnameSlotsPerOwner?: number;
-  /** Optional host-owned Resource lifecycle fence; absent keeps legacy behavior. */
-  readonly capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
 }
 
 export class RunEngine {
@@ -1134,7 +873,6 @@ export class RunEngine {
   readonly #activity: ActivityRecorder;
   readonly #dependencyValueSealer?: DependencyValueSealer;
   readonly #releaseActivator?: ReleaseActivator;
-  readonly #capsuleHostRuntimeRetirement?: CapsuleHostRuntimeRetirement;
   readonly #observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly #metricTags: Record<string, string>;
   readonly #allowOperatorScopedProviderConnections: boolean;
@@ -1151,8 +889,6 @@ export class RunEngine {
   readonly #sourceLifecycle: SourceLifecycleService;
   readonly #capsules: CapsuleQuery;
   readonly #runSerialized: RunSerialized;
-  readonly #managedVanityHostnameSlotsPerOwner?: number;
-  #capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
   #connectionsService?: ConnectionsService;
   #terminalObserver?: (run: PlanRun | ApplyRun) => Promise<void>;
   #planQueuedObserver?: (run: PlanRun) => Promise<void>;
@@ -1178,7 +914,6 @@ export class RunEngine {
     this.#activity = deps.activity;
     this.#dependencyValueSealer = deps.dependencyValueSealer;
     this.#releaseActivator = deps.releaseActivator;
-    this.#capsuleHostRuntimeRetirement = deps.capsuleHostRuntimeRetirement;
     this.#observability = deps.observability;
     this.#metricTags = deps.metricTags;
     this.#allowOperatorScopedProviderConnections =
@@ -1198,16 +933,6 @@ export class RunEngine {
     this.#sourceLifecycle = deps.sourceLifecycle;
     this.#capsules = deps.capsules;
     this.#runSerialized = deps.runSerialized;
-    this.#managedVanityHostnameSlotsPerOwner =
-      deps.managedVanityHostnameSlotsPerOwner;
-    this.#capsuleOwnedResourceFence = deps.capsuleOwnedResourceFence;
-  }
-
-  /** Late-binds the host-owned Resource inventory fence after composition. */
-  setCapsuleOwnedResourceFence(
-    fence: CapsuleOwnedResourceFence | undefined,
-  ): void {
-    this.#capsuleOwnedResourceFence = fence;
   }
 
   setTerminalObserver(
@@ -1360,21 +1085,19 @@ export class RunEngine {
   }
 
   async createPlanRun(
-    request: CreatePlanRunRequest,
+    request: InternalCreatePlanRunRequest,
     context: DeployControlActorContext = {},
-    internal: PlanRunInternalContext = {},
+    internal: RunEnginePlanRunInternalContext = {},
   ): Promise<PlanRunResponse> {
     const workspaceId = request.workspaceId;
     requireNonEmptyString(workspaceId, "workspaceId");
     const requestCapsuleId = request.capsuleId;
-    const resourceContext = internal.resourceContext;
     const operation =
       request.operation ?? (requestCapsuleId ? "update" : "create");
     const legacySourcelessDestroyRecovery =
       internal.legacySourcelessDestroyRecovery === true;
     if (legacySourcelessDestroyRecovery) {
       if (
-        resourceContext ||
         !requestCapsuleId ||
         operation !== "destroy" ||
         request.source.kind !== "operator_module" ||
@@ -1387,24 +1110,6 @@ export class RunEngine {
           "legacy source-less recovery requires an exact Capsule destroy with an operator module",
         );
       }
-    } else if (resourceContext) {
-      if (requestCapsuleId) {
-        throw new OpenTofuControllerError(
-          "invalid_argument",
-          "Resource run must not carry capsuleId",
-        );
-      }
-      if (
-        resourceContext.workspaceId !== workspaceId ||
-        request.source.kind !== "operator_module" ||
-        !internal.genericRootDispatch?.generatedRoot ||
-        !internal.genericRootDispatch.operatorModule
-      ) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          "Resource run requires matching workspace, operator_module source, generated root, and operator module",
-        );
-      }
     } else {
       validateSource(request.source);
     }
@@ -1414,31 +1119,18 @@ export class RunEngine {
     validateOperation(operation);
     if (
       internal.refreshOnly === true &&
-      (operation === "destroy" ||
-        internal.driftCheck === true ||
-        internal.resourceImport === true)
+      (operation === "destroy" || internal.driftCheck === true)
     ) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        "refreshOnly cannot be combined with destroy, driftCheck, or resourceImport",
-      );
-    }
-    if (
-      internal.resourceImport === true &&
-      (operation !== "create" ||
-        !resourceContext ||
-        internal.driftCheck === true)
-    ) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "resourceImport requires a create operation with Resource context and cannot be a driftCheck",
+        "refreshOnly cannot be combined with destroy or driftCheck",
       );
     }
     const capsule =
-      !resourceContext && requestCapsuleId !== undefined
+      requestCapsuleId !== undefined
         ? await this.#requireCapsule(requestCapsuleId)
         : undefined;
-    if (!capsule && !resourceContext) {
+    if (!capsule) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "plan requires an existing capsuleId (create the Capsule first)",
@@ -1464,7 +1156,6 @@ export class RunEngine {
     // `create` against a Capsule that already has a StateVersion would let a
     // principal scoped to `create` alone plan and apply over a deployed
     // Capsule. The label must match what the Capsule's state cursor implies.
-    // A Resource run legitimately uses `create` with no Capsule.
     if (
       capsule &&
       operation === "create" &&
@@ -1493,7 +1184,6 @@ export class RunEngine {
     );
     const allowNoProviders =
       (declaredProviders.length === 0 && requestCapsuleId !== undefined) ||
-      (declaredProviders.length === 0 && resourceContext !== undefined) ||
       (declaredProviders.length === 0 &&
         profile.allowedProviders.includes("*"));
     const basePolicy = evaluatePolicy({
@@ -1523,27 +1213,12 @@ export class RunEngine {
     const sourceDigest = await stableJsonDigest(request.source);
     const variablesDigest = await stableJsonDigest(variables);
     const policyDecisionDigest = await stableJsonDigest(policy);
-    if (
-      policy.status === "passed" &&
-      operation !== "destroy" &&
-      internal.driftCheck !== true &&
-      internal.refreshOnly !== true &&
-      internal.resourceImport !== true
-    ) {
-      if (capsule)
-        await this.#reservePublicHostsForPlan(
-          capsule,
-          variables,
-          now,
-          capsulePlan?.managedPublicBaseDomain,
-        );
-    }
     if (internal.planRunId !== undefined) {
       requireNonEmptyString(internal.planRunId, "planRunId");
     }
     const planRunId = internal.planRunId ?? this.#newId("plan");
     const sourceSnapshotId =
-      resourceContext || legacySourcelessDestroyRecovery
+      legacySourcelessDestroyRecovery
         ? undefined
         : (internal.sourceSnapshotId ??
           (await this.#resolvePlanSourceSnapshotId(capsule!)));
@@ -1571,11 +1246,9 @@ export class RunEngine {
         ? { compatibilityReportId: internal.compatibilityReportId }
         : {}),
       ...(capsuleContext ? { capsuleContext } : {}),
-      ...(resourceContext ? { resourceContext } : {}),
       ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
       ...(internal.driftCheck ? { driftCheck: true as const } : {}),
       ...(internal.refreshOnly ? { refreshOnly: true as const } : {}),
-      ...(internal.resourceImport ? { resourceImport: true as const } : {}),
       ...(internal.autoApplyRequested
         ? { autoApplyRequested: true as const }
         : {}),
@@ -1595,7 +1268,6 @@ export class RunEngine {
             variablesDigest,
             runnerProfileId: profile.id,
             ...(internal.refreshOnly ? { refreshOnly: true } : {}),
-            ...(internal.resourceImport ? { resourceImport: true } : {}),
           },
           context.actor,
         ),
@@ -1634,7 +1306,6 @@ export class RunEngine {
         capsuleId: planRun.capsuleId,
         policyStatus: planRun.policy.status,
         ...(planRun.refreshOnly ? { refreshOnly: true } : {}),
-        ...(planRun.resourceImport ? { resourceImport: true } : {}),
       },
     });
     if (planRun.status === "failed") {
@@ -1646,9 +1317,9 @@ export class RunEngine {
     }
     const genericRootDispatch =
       internal.genericRootDispatch ??
-      (capsule
+      (capsule && request.source.kind === "git"
         ? await this.#defaultGenericRootDispatchForPlanRun(
-            request,
+            { ...request, source: request.source },
             capsule,
             internal.compatibilityReportId,
           )
@@ -1727,60 +1398,6 @@ export class RunEngine {
       context,
       internal,
     );
-  }
-
-  async claimManagedPublicHostname(
-    input: ManagedPublicHostnameClaimRequest,
-  ): Promise<ManagedPublicHostnameClaimResult> {
-    const capsule = await this.#store.getCapsule(input.capsuleId);
-    const workspaceId = capsule?.workspaceId;
-    if (
-      !capsule ||
-      capsule.status === "destroyed" ||
-      workspaceId !== input.workspaceId
-    ) {
-      return { ok: false, reason: "invalid_context" };
-    }
-    const [workspace, installConfig] = await Promise.all([
-      this.#store.getWorkspace(workspaceId),
-      this.#store.getInstallConfig(capsule.installConfigId),
-    ]);
-    if (!workspace || !installConfig) {
-      return { ok: false, reason: "invalid_context" };
-    }
-    const baseDomain = normalizeManagedPublicBaseDomain(
-      input.managedPublicBaseDomain,
-    );
-    const requestedLabel = normalizeManagedPublicHostLabel(
-      input.requestedLabel,
-    );
-    const mode = managedPublicHostnameMode(installConfig);
-    const publicLabel =
-      mode === "vanity"
-        ? requestedLabel
-        : managedPublicLabelForWorkspace(workspace.handle, requestedLabel);
-    if (!baseDomain || !publicLabel || !validManagedWorkerName(publicLabel)) {
-      return { ok: false, reason: "invalid_label" };
-    }
-    const hostname = `${publicLabel}.${baseDomain}`;
-    const expectedHostname =
-      typeof input.expectedHostname === "string"
-        ? input.expectedHostname.trim().toLowerCase()
-        : "";
-    if (expectedHostname !== hostname) {
-      return { ok: false, reason: "invalid_label" };
-    }
-    const reserved = await this.#reserveManagedPublicHost({
-      hostname,
-      capsule,
-      workspaceId,
-      mode,
-      now: this.#now(),
-    });
-    if (reserved.ok) {
-      return { ok: true, hostname, mode };
-    }
-    return reserved;
   }
 
   /**
@@ -2783,36 +2400,16 @@ export class RunEngine {
         capsuleId: input.capsule.id,
       },
     );
-    const workspace = await this.#store.getWorkspace(input.capsule.workspaceId);
-    if (!workspace) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "Workspace for Capsule public hostname resolution was not found",
-      );
-    }
-    const variables = finalizeManagedPublicHostVariables({
-      explicit: explicitVariables,
-      capsule: input.capsule,
-      installConfig: input.installConfig,
-      declaredInputs,
-      workspaceHandle: workspace.handle,
-      endpointVariables: publicEndpointVariableNames(input.installConfig),
-      ...(capsulePlan.managedPublicBaseDomain
-        ? {
-            managedPublicBaseDomain: capsulePlan.managedPublicBaseDomain,
-          }
-        : {}),
-      variables: normalizeVariables(
-        mergeJsonVariableDefaults(
+    const variables = normalizeVariables(
+      mergeJsonVariableDefaults(
+        capsulePlan.providerInputDefaults,
+        requestedGenericCapsuleVariables(
+          explicitVariables,
           capsulePlan.providerInputDefaults,
-          requestedGenericCapsuleVariables(
-            explicitVariables,
-            capsulePlan.providerInputDefaults,
-            declaredInputs,
-          ),
+          declaredInputs,
         ),
       ),
-    });
+    );
     return {
       capsulePlan,
       request: {
@@ -2832,165 +2429,6 @@ export class RunEngine {
           : {}),
       },
     };
-  }
-
-  async #reservePublicHostsForPlan(
-    capsule: Capsule,
-    variables: Readonly<Record<string, JsonValue>>,
-    now: number,
-    managedPublicBaseDomain?: string,
-  ): Promise<void> {
-    const installConfig = await this.#store.getInstallConfig(
-      capsule.installConfigId,
-    );
-    const requestedHosts = publicHostsFromInstallExperienceVariables(
-      variables,
-      installConfig,
-      managedPublicBaseDomain,
-    );
-    const managedBaseDomains = normalizeManagedPublicBaseDomains([
-      normalizeManagedPublicBaseDomain(managedPublicBaseDomain) ??
-        managedPublicBaseDomainFromInstallConfig(installConfig),
-    ]);
-    const reservations = await Promise.all(
-      requestedHosts.map(async (hostname) => ({
-        hostname,
-        reservation: await this.#store.getPublicHostReservation(hostname),
-      })),
-    );
-    const alreadyReservedForCapsule = new Set(
-      reservations
-        .filter(
-          ({ reservation }) =>
-            reservation?.status === "reserved" &&
-            reservation.workspaceId === capsule.workspaceId &&
-            reservation.capsuleId === capsule.id,
-        )
-        .map(({ hostname }) => hostname),
-    );
-    // The Core can claim an operator-owned managed namespace immediately.
-    // User-owned custom domains remain ordinary provider inputs until the
-    // selected adapter proves ownership; reserving them before proof would let
-    // an untrusted Capsule squat on somebody else's hostname.
-    const claimableHosts = requestedHosts.filter(
-      (host) =>
-        alreadyReservedForCapsule.has(host) ||
-        publicHostPolicyKind(host, managedBaseDomains) ===
-        "managed_default_hostname",
-    );
-    // Silently dropping the rest is what let a member point a managed-namespace
-    // Capsule at somebody else's hostname: the variable still reached the
-    // generated root, only the reservation and its collision check were skipped.
-    // OSS has no VerifiedDomain ownership authority, so refuse the claim
-    // outright rather than pass an unproven hostname through unrecorded. An
-    // operator with no managed namespace at all is self-hosting its own domain
-    // and is unaffected.
-    if (managedBaseDomains.length > 0) {
-      const unverifiedHosts = requestedHosts.filter(
-        (host) =>
-          !alreadyReservedForCapsule.has(host) &&
-          publicHostPolicyKind(host, managedBaseDomains) === "custom_domain",
-      );
-      if (unverifiedHosts.length > 0) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `custom_domain_not_verified: ${unverifiedHosts.join(", ")} has no proven ownership record on this host`,
-          { reason: "custom_domain_not_verified" },
-        );
-      }
-    }
-    if (claimableHosts.length === 0) return;
-    const workspaceId = capsule.workspaceId;
-    const workspace = await this.#store.getWorkspace(workspaceId);
-    if (!workspace) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "Workspace for public hostname reservation was not found",
-      );
-    }
-    const allocationKind = managedPublicHostnameMode(installConfig);
-    for (const host of claimableHosts) {
-      const result = await this.#reserveManagedPublicHost({
-        hostname: host,
-        workspaceId,
-        capsule,
-        mode: allocationKind,
-        now,
-      });
-      if (result.ok) continue;
-      if (result.reason === "slot_limit_reached") {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          "managed_public_hostname_slot_limit_reached: no short URL slots are available",
-          {
-            reason: "managed_public_hostname_slot_limit_reached",
-            ...(result.limit !== undefined ? { limit: result.limit } : {}),
-          },
-        );
-      }
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        publicHostUnavailableMessage(),
-        { reason: "app_hostname_unavailable" },
-      );
-    }
-  }
-
-  async #reserveManagedPublicHost(input: {
-    readonly hostname: string;
-    readonly workspaceId: string;
-    readonly capsule: Capsule;
-    readonly mode: ManagedPublicHostnameMode;
-    readonly now: number;
-  }): Promise<
-    | { readonly ok: true }
-    | {
-        readonly ok: false;
-        readonly reason:
-          "invalid_context" | "unavailable" | "slot_limit_reached";
-        readonly limit?: number;
-      }
-  > {
-    const result = await this.#store.reservePublicHost({
-      hostname: input.hostname,
-      workspaceId: input.workspaceId,
-      capsuleId: input.capsule.id,
-      capsuleName: input.capsule.name,
-      allocationKind: input.mode,
-      ...(input.mode === "vanity" &&
-      this.#managedVanityHostnameSlotsPerOwner !== undefined
-        ? { vanitySlotLimit: this.#managedVanityHostnameSlotsPerOwner }
-        : {}),
-      now: new Date(input.now).toISOString(),
-    });
-    if (result.reserved) return { ok: true };
-    if (result.reason === "capsule_inactive") {
-      return { ok: false, reason: "invalid_context" };
-    }
-    return result.reason === "owner_slot_limit_reached"
-      ? {
-          ok: false,
-          reason: "slot_limit_reached",
-          limit: result.vanitySlotLimit,
-        }
-      : { ok: false, reason: "unavailable" };
-  }
-
-  async #releasePublicHostsForCapsule(
-    capsuleId: string,
-    now: number,
-  ): Promise<void> {
-    try {
-      await this.#store.releasePublicHostsForCapsule(
-        capsuleId,
-        new Date(now).toISOString(),
-      );
-    } catch (error) {
-      log.warn("deploy_control.public_host_release_failed", {
-        capsuleId,
-        error,
-      });
-    }
   }
 
   async #genericRootDispatchForRequest(
@@ -4138,36 +3576,10 @@ export class RunEngine {
     // guard (single-isolate correctness). The held-lease handle is threaded into
     // #executeApply so a long apply can renew the lease + re-stamp its heartbeat
     // while a single blocking runner fetch is in flight.
-    const runWork = (handle?: LeaseHandle) => {
-      // Acquire the cross-domain Resource admission after the in-process
-      // Capsule serialization turn is available but before marking the Apply
-      // Run running. A busy fence therefore leaves the queue row untouched so
-      // redelivery does not wait for a stale heartbeat before retrying.
-      return this.#runSerialized(key, async () => {
-        const execute = (resourceAdmissionLease?: LeaseHandle) =>
-          this.#executeApply(
-            applyRun,
-            planRun,
-            profile,
-            dispatch,
-            combinedLeaseHandle(handle, resourceAdmissionLease),
-            planRun.operation === "destroy" &&
-              planRun.capsuleId !== undefined,
-          );
-        if (
-          this.#capsuleCoordination &&
-          planRun.operation === "destroy" &&
-          planRun.capsuleId
-        ) {
-          return await withCapsuleResourceAdmission(
-            this.#capsuleCoordination,
-            { capsuleId: planRun.capsuleId, holderId: applyRun.id },
-            execute,
-          );
-        }
-        return await execute();
-      });
-    };
+    const runWork = (handle?: LeaseHandle) =>
+      this.#runSerialized(key, () =>
+        this.#executeApply(applyRun, planRun, profile, dispatch, handle),
+      );
     if (this.#capsuleCoordination && planRun.capsuleId) {
       const environment =
         planRun.capsuleContext?.environment ??
@@ -4677,33 +4089,13 @@ export class RunEngine {
   }
 
   /**
-   * Resolves a subject-bound Run's Provider Bindings at mint time. Resource
-   * subjects resolve the Target-selected binding directly; Capsule subjects
-   * resolve their stored ProviderBinding set. Raw Runs return `undefined`.
-   * Missing, cross-Workspace, mismatched, or unverified Connections fail closed.
+   * Resolves a Capsule-bound Run's Provider Bindings at mint time. Raw Runs
+   * return `undefined`; missing, cross-Workspace, mismatched, or unverified
+   * Connections fail closed.
    */
   async #resolveRunProviderBindings(
     planRun: PlanRun,
   ): Promise<readonly ResolvedCapsuleProviderBinding[] | undefined> {
-    if (planRun.resourceContext) {
-      this.#connectionsService ??= new ConnectionsService({
-        store: this.#store,
-        operatorProviderConnections: this.#operatorProviderConnections,
-        allowOperatorScopedProviderConnections:
-          this.#allowOperatorScopedProviderConnections,
-      });
-      const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
-      const binding = planRun.resourceContext.providerBinding;
-      return await this.#connectionsService.resolveResourceProviderBinding({
-        workspaceId: planRun.resourceContext.workspaceId,
-        provider: binding.providerSource,
-        ...(binding.alias ? { alias: binding.alias } : {}),
-        ...(binding.connectionId ? { connectionId: binding.connectionId } : {}),
-        required:
-          profile.requireProviderBindings === true &&
-          planRun.requiredProviders.length > 0,
-      });
-    }
     const ctx = planRun.capsuleContext;
     if (!ctx) return undefined;
     const capsule = await this.#store.getCapsule(ctx.capsuleId);
@@ -4758,7 +4150,7 @@ export class RunEngine {
    * asserts this digest is unchanged. A failed/denied plan is never applied.
    */
   async #pinResolvedBindingsDigest(planRun: PlanRun): Promise<PlanRun> {
-    if (!planRun.capsuleContext && !planRun.resourceContext) return planRun;
+    if (!planRun.capsuleContext) return planRun;
     const resolved = await this.#resolveRunProviderBindings(planRun);
     if (resolved === undefined) return planRun;
     const digest = await resolvedProviderBindingsDigest(resolved);
@@ -6067,7 +5459,10 @@ export class RunEngine {
               ? { generatedRoot: dispatch.generatedRoot }
               : {}),
             ...(dispatch.operatorModule
-              ? { operatorModule: dispatch.operatorModule }
+              ? {
+                  operatorModule: dispatch.operatorModule,
+                  legacySourcelessDestroyRecovery: true as const,
+                }
               : {}),
             ...(dispatch.sourceBuild
               ? { sourceBuild: dispatch.sourceBuild }
@@ -6237,7 +5632,6 @@ export class RunEngine {
       ...(layered.quota?.reasons ?? []),
       ...(layered.providerLockfile?.reasons ?? []),
       ...(layered.providerInstallation?.reasons ?? []),
-      ...resourceImportPolicyReasons(running, result),
     ];
     const runPolicy = await this.#policyForPlanRun(running);
     const compatibilityPolicy = await this.#evaluateCapsuleCompatibilityPolicy({
@@ -6286,7 +5680,6 @@ export class RunEngine {
     const requiresApproval =
       running.driftCheck !== true &&
       running.refreshOnly !== true &&
-      running.resourceImport !== true &&
       layered.action?.requiresApproval === true;
     return {
       requiredProviders,
@@ -6494,20 +5887,10 @@ export class RunEngine {
   /**
    * Resolves the Workspace + InstallConfig policy for an capsule-context plan.
    * Workspace policy is a ceiling; InstallConfig policy can narrow it but not widen
-   * it. Returns `undefined` for runs without capsule context or when the
+  * it. Returns `undefined` for runs without capsule context or when the
    * Capsule / config is absent.
-   */
+  */
   async #policyForPlanRun(planRun: PlanRun): Promise<PolicyConfig | undefined> {
-    if (planRun.resourceContext) {
-      const [workspace, profile] = await Promise.all([
-        this.#store.getWorkspace(planRun.resourceContext.workspaceId),
-        this.#store.getRunnerProfile(planRun.runnerProfileId),
-      ]);
-      return withDefaultProviderSupplyChainPolicy(workspace?.policy, {
-        providerInstallationRequireMirror:
-          defaultProviderMirrorRequiredForProfile(profile),
-      });
-    }
     const capsuleId = planRun.capsuleContext?.capsuleId ?? planRun.capsuleId;
     if (!capsuleId) return undefined;
     const capsule = await this.#store.getCapsule(capsuleId);
@@ -6655,7 +6038,6 @@ export class RunEngine {
     profile: RunnerProfile,
     dispatch: RunModuleDispatch,
     lease?: LeaseHandle,
-    resourceAdmissionHeld = false,
   ): Promise<ApplyRunResponse> {
     const startedAt = this.#now();
     const claim = await this.#markApplyRunning(applyRun, profile, startedAt);
@@ -6709,7 +6091,6 @@ export class RunEngine {
           dispatch,
           leaseToken,
           lease,
-          resourceAdmissionHeld,
         );
       }
       // Renewal harness: #dispatchApply's runner.apply() is ONE awaited blocking
@@ -6745,12 +6126,6 @@ export class RunEngine {
       );
       const now = this.#now();
       if (result.providerExecutionFailure) {
-        if (planRun.resourceContext) {
-          throw new OpenTofuControllerError(
-            "failed_precondition",
-            "failed OpenTofu Resource apply state recovery is not supported by the Capsule ledger",
-          );
-        }
         const committedFailure =
           await this.#commitFailedProviderApplyWithState({
             running: runningWithEnv,
@@ -6773,21 +6148,6 @@ export class RunEngine {
         return await this.#completeFailedProviderApply({
           ...committedFailure,
           planRun,
-          startedAt,
-          now,
-        });
-      }
-      if (planRun.resourceContext) {
-        return await this.#commitResourceApply({
-          running: runningWithEnv,
-          planRun,
-          profile,
-          result,
-          envDispatch,
-          dispatch,
-          persistGeneration,
-          providerInstallationPolicy,
-          leaseToken,
           startedAt,
           now,
         });
@@ -6916,10 +6276,9 @@ export class RunEngine {
         now,
       });
     } catch (error) {
-      // A busy cross-domain Capsule Resource admission fence is a queue
-      // contention signal, not an Apply failure. Leave the claimed Run
-      // retryable so the queue owner redelivers after the Resource claim or
-      // destroy terminalization releases the shared scope.
+      // A busy Capsule lease is a queue contention signal, not an Apply
+      // failure. Leave the claimed Run retryable so the queue owner redelivers
+      // after the lease holder releases the shared scope.
       if (error instanceof CapsuleLeaseBusyError) throw error;
       if (ledgerCommitted) {
         // The atomic provider ledger is already authoritative. Never route a
@@ -7077,162 +6436,6 @@ export class RunEngine {
     }
   }
 
-  async #commitResourceApply(input: {
-    readonly running: ApplyRun;
-    readonly planRun: PlanRun;
-    readonly profile: RunnerProfile;
-    readonly result: OpenTofuApplyResult;
-    readonly envDispatch: RunExecutionDispatch;
-    readonly dispatch: RunModuleDispatch;
-    readonly persistGeneration: number;
-    readonly providerInstallationPolicy:
-      { readonly requireMirror: boolean } | undefined;
-    readonly leaseToken: string;
-    readonly startedAt: number;
-    readonly now: number;
-  }): Promise<ApplyRunResponse> {
-    const resource = input.planRun.resourceContext;
-    const scope = input.envDispatch.stateScope;
-    if (!resource || !scope || scope.subject?.kind !== "resource") {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "Resource apply completed without a durable Resource state scope",
-      );
-    }
-    if (!input.result.stateDigest?.trim()) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `Resource apply ${input.running.id} completed without a durable state digest`,
-      );
-    }
-    const outputs = this.#projectApplyOutputs(
-      input.planRun,
-      input.result,
-      input.dispatch,
-    );
-    const diagnostics = redactRunDiagnostics(input.result.diagnostics);
-    const completed = this.#withPendingApplyBillingCapture(
-      {
-        ...input.running,
-        resourceResult: {
-          resourceId: resource.resourceId,
-          stateGeneration: input.persistGeneration,
-          stateRef: scope.stateRef,
-          stateDigest: input.result.stateDigest,
-          ...(input.envDispatch.rawOutputRef
-            ? { rawOutputRef: input.envDispatch.rawOutputRef }
-            : {}),
-          outputs,
-        },
-        status: "succeeded",
-        stateLock:
-          input.result.stateLock ??
-          stateLockEvidence(
-            input.profile.stateBackend,
-            input.startedAt,
-            input.now,
-            "recorded",
-          ),
-        ...(diagnostics ? { diagnostics } : {}),
-        auditEvents: [
-          ...input.running.auditEvents,
-          ...providerInstallationAuditEvents(
-            input.running.id,
-            "apply",
-            input.now,
-            input.result.providerInstallation,
-            input.providerInstallationPolicy,
-          ),
-          auditEvent(
-            input.running.id,
-            input.planRun.resourceImport === true
-              ? "resource.import.completed"
-              : input.planRun.refreshOnly === true
-                ? "resource.refresh.completed"
-                : "resource.apply.completed",
-            input.now,
-            {
-              resourceId: resource.resourceId,
-              stateGeneration: input.persistGeneration,
-              outputCount: Object.keys(outputs).length,
-            },
-          ),
-        ],
-        updatedAt: input.now,
-        finishedAt: input.now,
-      },
-      input.now,
-    );
-    const appliedPlan: PlanRun = {
-      ...input.planRun,
-      appliedApplyRunId: input.running.id,
-      updatedAt: input.now,
-    };
-    let committed: Awaited<
-      ReturnType<OpenTofuControlStore["commitResourceRun"]>
-    >;
-    try {
-      committed = await this.#store.commitResourceRun({
-        applyRunTerminal: completed,
-        planRunApplied: appliedPlan,
-        applyRunLeaseToken: input.leaseToken,
-      });
-    } catch (error) {
-      throw new ArtifactLedgerTailAmbiguousError(input.running.id, error);
-    }
-    if (committed.applyRunLeaseLost) {
-      return { applyRun: (await this.getApplyRun(input.running.id)).applyRun };
-    }
-    await this.#notifyTerminal(completed);
-    const finalized = await this.#tryFinalizeApplyBilling(
-      input.planRun,
-      completed,
-    );
-    try {
-      await this.#recordRunnerMinuteUsage({
-        workspaceId: completed.workspaceId,
-        runId: completed.id,
-        startedAt: input.startedAt,
-        finishedAt: input.now,
-      });
-      await this.#recordDeployOperationMetric({
-        run: completed,
-        operationKind: "apply",
-        status: "succeeded",
-        startedAt: input.startedAt,
-        finishedAt: input.now,
-        recordApplyDuration: true,
-      });
-      await this.#store.deletePlanRunInputs(input.planRun.id);
-    } catch (error) {
-      log.warn("deploy_control.resource_apply_post_commit_cleanup_failed", {
-        planRunId: input.planRun.id,
-        applyRunId: completed.id,
-        message: errorMessage(error),
-      });
-    }
-    await this.#recordActivity({
-      workspaceId: completed.workspaceId,
-      action:
-        input.planRun.resourceImport === true
-          ? "resource.run.imported"
-          : input.planRun.refreshOnly === true
-            ? "resource.run.refreshed"
-            : "resource.run.applied",
-      targetType: "resource",
-      targetId: resource.resourceId,
-      runId: completed.id,
-      metadata: {
-        resourceId: resource.resourceId,
-        stateGeneration: input.persistGeneration,
-        outputCount: Object.keys(outputs).length,
-        ...(input.planRun.refreshOnly ? { refreshOnly: true } : {}),
-        ...(input.planRun.resourceImport ? { resourceImport: true } : {}),
-      },
-    });
-    return { applyRun: finalized };
-  }
-
   /** Projects only the DB-owned public allowlist after redaction. */
   #projectApplyOutputs(
     _planRun: PlanRun,
@@ -7368,7 +6571,10 @@ export class RunEngine {
           ? { generatedRoot: dispatch.generatedRoot }
           : {}),
         ...(dispatch.operatorModule
-          ? { operatorModule: dispatch.operatorModule }
+          ? {
+              operatorModule: dispatch.operatorModule,
+              legacySourcelessDestroyRecovery: true as const,
+            }
           : {}),
         ...(dispatch.sourceBuild ? { sourceBuild: dispatch.sourceBuild } : {}),
         // M2 env dispatch (state scope at base+1 + source archive).
@@ -8597,25 +7803,12 @@ export class RunEngine {
     dispatch: RunModuleDispatch,
     leaseToken: string,
     lease?: LeaseHandle,
-    resourceAdmissionHeld = false,
   ): Promise<ApplyRunResponse> {
     if (!planRun.planArtifact) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `plan run ${planRun.id} has no immutable destroy plan artifact`,
       );
-    }
-    if (planRun.resourceContext) {
-      return await this.#executeResourceDestroyApply({
-        running,
-        planRun,
-        profile,
-        startedAt,
-        credentials,
-        dispatch,
-        leaseToken,
-        lease,
-      });
     }
     if (!planRun.capsuleId) {
       throw new OpenTofuControllerError(
@@ -8625,32 +7818,6 @@ export class RunEngine {
     }
     const capsule =
       plannedCapsule ?? (await this.#requireCurrentPlannedCapsule(planRun));
-    if (this.#capsuleCoordination && !resourceAdmissionHeld) {
-      return await withCapsuleResourceAdmission(
-        this.#capsuleCoordination,
-        { capsuleId: capsule.id, holderId: running.id },
-        async () =>
-          await this.#executeDestroyApply(
-            running,
-            planRun,
-            profile,
-            startedAt,
-            capsule,
-            credentials,
-            dispatch,
-            leaseToken,
-            lease,
-            true,
-          ),
-      );
-    }
-    // Capsule-owned Resources may be present here because the reviewed
-    // OpenTofu destroy is the operation that retires them through their own
-    // lifecycle authority. Requiring an empty owner inventory before dispatch
-    // would make every Capsule that declares a Resource impossible to destroy.
-    // The inventory is checked after provider teardown and immediately before
-    // the atomic terminal commit below, so a lingering or newly-created
-    // Resource still prevents the Capsule from becoming destroyed.
     // A destroy_apply persists the post-teardown state at `base + 1`. Empty for
     // runs without capsule context.
     const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
@@ -8762,25 +7929,6 @@ export class RunEngine {
           effectiveRunning = persistedLifecycle.run as ApplyRun;
         }
       }
-      if (this.#capsuleHostRuntimeRetirement) {
-        // Host-owned identity/credential authority is outside OpenTofu state,
-        // so the provider cannot retire it. Remove it under the same Run and
-        // Capsule lease immediately before provider destroy. Failure stays
-        // pre-dispatch and leaves the deployed runtime and Capsule active.
-        // A lost acknowledgement may re-enter this call; the host contract is
-        // therefore explicitly idempotent and must confirm current absence.
-        await this.#withRunRenewal(
-          "apply",
-          effectiveRunning,
-          leaseToken,
-          lease,
-          async () => {
-            await this.#capsuleHostRuntimeRetirement!({
-              capsuleId: capsule.id,
-            });
-          },
-        );
-      }
       runnerDispatched = true;
       const destroyFn = runner.destroy;
       // Renewal harness: destroy is ONE awaited blocking fetch for the whole
@@ -8808,7 +7956,10 @@ export class RunEngine {
                 ? { generatedRoot: dispatch.generatedRoot }
                 : {}),
               ...(dispatch.operatorModule
-                ? { operatorModule: dispatch.operatorModule }
+                ? {
+                    operatorModule: dispatch.operatorModule,
+                    legacySourcelessDestroyRecovery: true as const,
+                  }
                 : {}),
               ...(dispatch.sourceBuild
                 ? { sourceBuild: dispatch.sourceBuild }
@@ -8910,10 +8061,6 @@ export class RunEngine {
         appliedApplyRunId: running.id,
         updatedAt: now,
       };
-      // Check immediately before the atomic terminal commit. If provider
-      // teardown left an owned Resource behind, or a new one appeared during
-      // destroy, leave both ledgers nonterminal and fail the ApplyRun closed.
-      await this.#assertCapsuleOwnedResourcesClear(capsule, "destroy_apply");
       let committed: Awaited<
         ReturnType<OpenTofuControlStore["commitRunState"]>
       >;
@@ -8953,7 +8100,6 @@ export class RunEngine {
           recordApplyDuration: true,
         });
         await this.#store.deletePlanRunInputs(planRun.id);
-        await this.#releasePublicHostsForCapsule(capsule.id, now);
       } catch (error) {
         log.warn("deploy_control.destroy_post_commit_cleanup_failed", {
           planRunId: planRun.id,
@@ -9115,233 +8261,6 @@ export class RunEngine {
     }
   }
 
-  async #executeResourceDestroyApply(input: {
-    readonly running: ApplyRun;
-    readonly planRun: PlanRun;
-    readonly profile: RunnerProfile;
-    readonly startedAt: number;
-    readonly credentials: RunCredentials | undefined;
-    readonly dispatch: RunModuleDispatch;
-    readonly leaseToken: string;
-    readonly lease?: LeaseHandle;
-  }): Promise<ApplyRunResponse> {
-    const { running, planRun, profile, dispatch } = input;
-    const resource = planRun.resourceContext;
-    if (!resource || !planRun.planArtifact) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "Resource destroy requires a Resource subject and immutable plan artifact",
-      );
-    }
-    const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
-    const envDispatch = await this.#verification.executionDispatch(
-      planRun,
-      persistGeneration,
-      dispatch.stateAdoption,
-      dispatch.priorState,
-    );
-    const scope = envDispatch.stateScope;
-    if (!scope || scope.subject?.kind !== "resource") {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "Resource destroy has no Resource state scope",
-      );
-    }
-    const planPolicy = await this.#policyForPlanRun(planRun);
-    const providerInstallationPolicy =
-      planPolicy?.providerInstallation?.requireMirror === true
-        ? { requireMirror: true }
-        : undefined;
-    const runner = this.#runnerForProfile(profile);
-    if (typeof runner.destroy !== "function") {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "runner does not implement destroy",
-      );
-    }
-    const result = await this.#withRunRenewal(
-      "apply",
-      running,
-      input.leaseToken,
-      input.lease,
-      (signal) =>
-        runner.destroy!(
-          {
-            applyRun: running,
-            planRun,
-            planArtifact: planRun.planArtifact!,
-            runnerProfile: profile,
-            ...(providerInstallationPolicy
-              ? { providerInstallationPolicy }
-              : {}),
-            ...(dispatch.generatedRoot
-              ? { generatedRoot: dispatch.generatedRoot }
-              : {}),
-            ...(dispatch.operatorModule
-              ? { operatorModule: dispatch.operatorModule }
-              : {}),
-            ...(envDispatch.stateScope
-              ? { stateScope: envDispatch.stateScope }
-              : {}),
-            ...(envDispatch.stateAdoption
-              ? { stateAdoption: envDispatch.stateAdoption }
-              : {}),
-            ...(input.credentials ? { credentials: input.credentials } : {}),
-          },
-          { signal },
-        ),
-    );
-    const now = this.#now();
-    if (!result.stateDigest?.trim()) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `Resource destroy ${running.id} completed without a durable state digest`,
-      );
-    }
-    const diagnostics = redactRunDiagnostics(result.diagnostics);
-    const completed = this.#withPendingApplyBillingCapture(
-      {
-        ...running,
-        resourceResult: {
-          resourceId: resource.resourceId,
-          stateGeneration: persistGeneration,
-          stateRef: scope.stateRef,
-          stateDigest: result.stateDigest,
-          outputs: {},
-        },
-        status: "succeeded",
-        stateLock: stateLockEvidence(
-          profile.stateBackend,
-          input.startedAt,
-          now,
-          "recorded",
-        ),
-        ...(diagnostics ? { diagnostics } : {}),
-        auditEvents: [
-          ...running.auditEvents,
-          ...providerInstallationAuditEvents(
-            running.id,
-            "destroy",
-            now,
-            result.providerInstallation,
-            providerInstallationPolicy,
-          ),
-          auditEvent(running.id, "resource.destroy.completed", now, {
-            resourceId: resource.resourceId,
-            stateGeneration: persistGeneration,
-          }),
-        ],
-        updatedAt: now,
-        finishedAt: now,
-      },
-      now,
-    );
-    const appliedPlan: PlanRun = {
-      ...planRun,
-      appliedApplyRunId: running.id,
-      updatedAt: now,
-    };
-    let committed: Awaited<
-      ReturnType<OpenTofuControlStore["commitResourceRun"]>
-    >;
-    try {
-      committed = await this.#store.commitResourceRun({
-        applyRunTerminal: completed,
-        planRunApplied: appliedPlan,
-        applyRunLeaseToken: input.leaseToken,
-      });
-    } catch (error) {
-      throw new ArtifactLedgerTailAmbiguousError(running.id, error);
-    }
-    if (committed.applyRunLeaseLost) {
-      return { applyRun: (await this.getApplyRun(running.id)).applyRun };
-    }
-    await this.#notifyTerminal(completed);
-    const finalized = await this.#tryFinalizeApplyBilling(planRun, completed);
-    try {
-      await this.#recordRunnerMinuteUsage({
-        workspaceId: completed.workspaceId,
-        runId: completed.id,
-        startedAt: input.startedAt,
-        finishedAt: now,
-      });
-      await this.#recordDeployOperationMetric({
-        run: completed,
-        operationKind: "destroy_apply",
-        status: "succeeded",
-        startedAt: input.startedAt,
-        finishedAt: now,
-        recordApplyDuration: true,
-      });
-      await this.#store.deletePlanRunInputs(planRun.id);
-    } catch (error) {
-      log.warn("deploy_control.resource_destroy_post_commit_cleanup_failed", {
-        planRunId: planRun.id,
-        applyRunId: completed.id,
-        message: errorMessage(error),
-      });
-    }
-    await this.#recordActivity({
-      workspaceId: completed.workspaceId,
-      action: "resource.run.destroyed",
-      targetType: "resource",
-      targetId: resource.resourceId,
-      runId: completed.id,
-      metadata: { resourceId: resource.resourceId },
-    });
-    return { applyRun: finalized };
-  }
-
-  async #assertCapsuleOwnedResourcesClear(
-    capsule: Capsule,
-    phase: "abandon" | "destroy_apply",
-  ): Promise<void> {
-    const fence = this.#capsuleOwnedResourceFence;
-    if (!fence) return;
-
-    let result: CapsuleOwnedResourceFenceResult;
-    try {
-      result = await fence({ capsule, phase });
-    } catch (error) {
-      // Resource inventory is an authority boundary. An unavailable or
-      // malformed host response must not be treated as an empty inventory.
-      if (
-        error instanceof OpenTofuControllerError &&
-        error.code === "failed_precondition" &&
-        typeof error.details === "object" &&
-        error.details !== null &&
-        !Array.isArray(error.details) &&
-        (error.details as { readonly reason?: unknown }).reason ===
-          CAPSULE_OWNED_RESOURCES_PENDING_REASON
-      ) {
-        throw error;
-      }
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `capsule ${capsule.id} Resource ownership could not be verified`,
-        { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
-      );
-    }
-    if (result?.status === "clear") return;
-    const status = result?.status;
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `capsule ${capsule.id} has Capsule-owned Resources pending destruction`,
-      {
-        reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON,
-        ...(status === "invalid_ownership"
-          ? {
-              ownership: "invalid" as const,
-              ...(result?.reason
-                ? { ownershipReason: result.reason }
-                : {}),
-            }
-          : {}),
-        ...(result?.resourceId ? { resourceId: result.resourceId } : {}),
-      },
-    );
-  }
-
   async #requireRunnerProfile(id: string): Promise<RunnerProfile> {
     requireNonEmptyString(id, "runnerProfileId");
     const configuredProfile = this.#runnerProfilesById.get(id);
@@ -9382,36 +8301,6 @@ export class RunEngine {
     validatePlannedCapsuleCurrent({ planRun, capsule: capsule });
     return capsule;
   }
-}
-
-/**
- * Renews both independent execution fences as one run-renewal target.
- * Release remains owned by each surrounding `with*Lease` scope; this handle
- * only makes a long destroy fail closed if either lease is lost.
- */
-function combinedLeaseHandle(
-  primary: LeaseHandle | undefined,
-  secondary: LeaseHandle | undefined,
-): LeaseHandle | undefined {
-  if (!primary) return secondary;
-  if (!secondary) return primary;
-  return {
-    scope: `${primary.scope}+${secondary.scope}`,
-    holderId: primary.holderId,
-    token: `${primary.token}:${secondary.token}`,
-    renew: async (ttlMs) => {
-      const [primaryRenewed, secondaryRenewed] = await Promise.all([
-        primary.renew(ttlMs),
-        secondary.renew(ttlMs),
-      ]);
-      if (!primaryRenewed.acquired) return primaryRenewed;
-      if (!secondaryRenewed.acquired) return secondaryRenewed;
-      return Date.parse(primaryRenewed.expiresAt) <=
-        Date.parse(secondaryRenewed.expiresAt)
-        ? primaryRenewed
-        : secondaryRenewed;
-    },
-  };
 }
 
 async function assertApplyRunCreationAuthority(

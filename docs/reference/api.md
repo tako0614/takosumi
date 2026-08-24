@@ -19,7 +19,7 @@ provider です。その他の API / instance lifecycle は、それを提供す
 Takosumi は自前の Terraform / OpenTofu provider を配布しません。Takoform は通常の
 provider として使います。外部 provider は plain Stack flow でそのまま実行され、
 Interface / InterfaceBinding は provider-neutral な接続認可を表します。
-Cloudflare 固有の import/deploy compatibility profile は廃止済みです。
+Cloudflare 固有の import/deploy compatibility profile は廃止済みです。この API の一部ではありません。
 
 ## エンドポイントの探索
 
@@ -51,8 +51,6 @@ capability を参照します。
     "opentofu_runner": true,
     "oidc": true,
     "workload_identity": true,
-    "compat_framework": true,
-    "compatibility_profiles": [],
     "interfaces": true
   },
   "endpoints": {
@@ -67,10 +65,8 @@ capability を参照します。
 field 名は snake_case です。`product` は常に `takosumi` で、client は最初にこれを
 確認します。`endpoints.api` は origin そのものではなく `<origin>/api/v1` です。
 
-`features.compatibility_profiles` は文字列の配列です。その endpoint の operator が
-実際に有効化した互換プロファイルの token だけが並びます。既定値はなく、何も
-設定していない endpoint では空配列です。mobile client 用の OIDC client id を
-設定した endpoint は `oidcClientId` も返します。追加の endpoint family を公開する
+mobile client 用の OIDC client id を設定した endpoint は `oidcClientId` も返します。
+追加の endpoint family を公開する
 endpoint は `endpoints.extensions` を併せて返します。
 
 ## 認証
@@ -152,7 +148,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 87 件です。
+次の 86 件です。
 
 **Account views**
 
@@ -352,27 +348,9 @@ Git checkout 内の相対 path に限り、provider credential は build phase �
 指定しない場合は通常どおり、OpenTofu module が成果物を解決します。参照元は
 release artifact の URL / digest、provider、data source などです。
 
-repository の `public_endpoint` projection が Cloud hostname を使う場合、Capsule
-作成時に割り当て方を選べます。省略時は `scoped` です。この値は、同じ `subdomain` /
-`url` / `routePattern` 変数を確定するための control-plane policy です。
-
-```json
-{
-  "managedPublicHostname": { "mode": "vanity" }
-}
-```
-
-`scoped` は `<workspace-handle>-<label>.<managed-base-domain>` で枠を消費しません。
-`vanity` は `<label>.<managed-base-domain>` をそのまま使い、Workspace の変更不可な
-owner account の有限枠を 1 つ消費します。どちらも hostname 単位で
-first-come-first-served に予約します。
-
-Hostname reservation と vanity slot は Capsule lifetime に属します。成功した
-Capsule destroy で解放し、個別 route の削除では解放しません。ユーザー所有 custom
-domain は、この mode ではなく別の verified-domain lifecycle を使います。Takosumi hosted service
-では verification / certificate lifecycle が未実装のため Planned です。hosted service の
-route への要求は安全側に停止します。通常の OpenTofu の URL / route 変数を
-BYOC provider へ渡す経路は、これとは別にそのまま使えます。
+公開 hostname、DNS、application endpoint は Git checkout 内の通常の OpenTofu
+module と provider が所有します。Takosumi は Capsule 用 hostname を合成または予約せず、
+`public_endpoint` は apply 済み Output を UI に投影するための metadata として扱います。
 
 Run には次を保存します。
 
@@ -434,13 +412,13 @@ Credential Recipe の明示的な pre-run action として設計します。公�
 discovery が揃ってからです。
 Operator / hosted service はその汎用 seam に Enterprise SSO、SCIM、商用 audit export を追加できます。
 
-Capsule が公開する OIDC client は `installExperience.oidc_client.scopes`
-で必要な scope を宣言できます。`openid` は必須です。Accounts が発行する
-`capsules:read` / `capsules:write` access token は単一 Workspace に束縛されます。
-canonical Capsule ledger の参照と Interface 呼び出しでは、scope と Workspace の
-両方を検証します。`offline_access` を許可した client は refresh token を受け取れます。
-token の実体は利用側の secret store に暗号化して保存し、OpenTofu state や Output には
-保存しません。
+Takosumi は Capsule または InstallConfig から Accounts OIDC client を自動登録しません。
+OIDC client は operator/composition が明示的に登録します。既に登録済みの
+Capsule client は移行中も current Capsule / InstallConfig / Workspace membership / scope
+を利用時に再検証し、無効な terminal binding は best-effort で revoke します。
+Accounts が発行する Workspace-scoped token と Interface 呼び出しは、引き続き scope と
+Workspace の両方を検証します。token の実体は利用側の secret store に暗号化して保存し、
+OpenTofu state や Output には保存しません。
 
 `GET /oauth/authorize` の任意の `workspace_id` は、複数 Workspace を持つ
 Principal が発行先を明示するための選択子です。Accounts は認可コードの発行直前に
@@ -448,38 +426,6 @@ Principal が発行先を明示するための選択子です。Accounts は認�
 Workspace も照合します。重複値、空値、制御文字、過長値、または権限のない
 Workspace は拒否され、発行された access token には検証済み Workspace と role だけが
 記録されます。
-
-## Compatibility API
-
-Compatibility API は標準 protocol / API の scoped facade です。control-plane profile は
-supported control-plane API の translation client として働きます。data-plane profile は
-認可済み Interface への access surface になります。
-
-| profile                    | 範囲                                            |
-| -------------------------- | ----------------------------------------------- |
-| `compat.s3.v1`             | S3 互換の Object Storage の data / control path |
-| `compat.oci.v1`            | Artifact / ContainerImage の lifecycle          |
-| `compat.cloudevents.v1`    | Queue / EventHandler への event ingress         |
-| `compat.kubernetes.crd.v1` | Kubernetes northbound API                       |
-
-これは full vendor API 互換を意味しません。範囲は capability と compatibility
-matrix で明示します。
-
-明示的に導入した protocol adapter、dashboard、CLI は公開する protocol がそれぞれ
-違っても、同じ supported control-plane lifecycle に収束します。表現できない操作は
-互換のように成功させず、compatibility matrix で範囲を明示して安全側に停止します。
-
-Cloudflare 固有の import/deploy compatibility profile は廃止済みで、v1 API と
-capability surface には含まれません。利用者自身の Cloudflare account に作る Stack は
-通常の ProviderConnection として扱います。
-
-compatibility profile は Cloud hostname を作りません。runtime route は
-`http.route` Interface と InterfaceBinding で公開します。hostname の所有権は OSS の
-reservation authority、または operator / hosted service の VerifiedDomain lifecycle が管理します。
-routing cache や backend state を hostname 所有権の正本にはしません。
-
-Takosumi hosted service 固有の endpoint 例は
-[hosted service endpoints](https://app.takosumi.com/docs/endpoints) を見てください。
 
 ## エラーの形式
 

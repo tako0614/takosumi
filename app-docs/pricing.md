@@ -1,7 +1,7 @@
 # Takosumi hosted service pricing
 
 Takosumi hosted service は、税別 USD のプリペイドクレジット方式です。月額サブスクリプションは
-ありません。すべてのアカウントが同じ Takosumi Offering catalog を利用し、Resource 数は
+ありません。すべてのアカウントが同じ hosted-service PriceCatalog を利用し、Resource 数は
 契約ランクではなく共通の安全上限です。
 
 ## Credit billing

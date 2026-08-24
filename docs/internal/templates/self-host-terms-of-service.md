@@ -17,9 +17,9 @@ records are backing material; they do not grant broad operator access to user
 provider accounts. Account-plane projection material must not be embedded in
 OpenTofu outputs.
 
-Takosumi OSS may include Compatibility API framework, compatibility profiles,
-Resource Shape APIs, adapter contracts, and usage-event emission. Official
-operator-provided deployment targets, Takosumi-owned native resource internals, enforced
+Takosumi OSS includes provider-neutral adapter contracts and usage-event
+emission. Official operator-provided deployment targets, Takosumi-owned
+provider internals, enforced
 billing/payment, official usage metering sold as a service, and official
 support/abuse workflows are Takosumi for Operator / Takosumi hosted service operation
 features and are governed by the relevant hosted operator terms when used.

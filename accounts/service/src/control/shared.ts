@@ -139,7 +139,6 @@ export interface ControlDispatchContext {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
   readonly issuer?: string;
-  readonly managedPublicBaseDomain?: string;
   readonly session: ControlSession;
 }
 
@@ -392,13 +391,6 @@ function publicControllerError(error: unknown): {
 } {
   const message = error instanceof Error ? error.message : String(error);
   const details = isRecord(error) ? error.details : undefined;
-  const reason = isRecord(details) ? details.reason : undefined;
-  if (reason === "app_hostname_unavailable") {
-    return {
-      message: "app_hostname_unavailable: already exists",
-      details: { reason: "app_hostname_unavailable" },
-    };
-  }
   return {
     message,
     ...(details !== undefined ? { details } : {}),

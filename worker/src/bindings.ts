@@ -27,27 +27,6 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
   readonly R2_ARTIFACTS: R2Bucket;
   /**
-   * Operator-owned immutable Takoform package envelopes and digest-pinned
-   * Sigstore TrustedRoot. This binding has no implicit package or publisher.
-   */
-  readonly R2_FORM_PACKAGES?: R2Bucket;
-  /**
-   * Non-secret host trust-policy JSON for R2 Form Package verification.
-   * Presence requires R2_FORM_PACKAGES and installs no package by itself.
-   */
-  readonly TAKOSUMI_FORM_PACKAGE_TRUST_POLICY?: string;
-  /**
-   * Host-code override for custom readers/verifiers. This is a runtime object,
-   * not a text var and not portable Form definition authority.
-   */
-  readonly TAKOSUMI_FORM_PACKAGE_HOST_COMPOSITION?: import("../../core/adapters/takoform/mod.ts").TakoformPackageHostComposition;
-  /**
-   * Complete code-level generic Offering contribution. This may contain
-   * database-backed catalog readers and open subject resolvers; it is never a
-   * serialized Worker var and contains no commercial binding data.
-   */
-  readonly TAKOSUMI_OFFERING_HOST_COMPOSITION?: import("takosumi-contract").OfferingHostComposition;
-  /**
    * Source-archive bucket (`takosumi-source`). The OpenTofu runner DO persists
    * the deterministic source archive produced by a `source_sync` run here, under
    * the agreed key layout
@@ -75,45 +54,10 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   /** Optional Operator/Cloud commercial billing extension (Seam B). */
   readonly TAKOSUMI_BILLING_EXTENSION_FACTORY?: import("takosumi-contract/billing").BillingExtensionFactory;
   /**
-   * Optional host-code admission port for Resource deployment quotes and
-   * reserve/capture/release settlement. OSS contributes no pricing policy and
-   * therefore leaves this unset; an operator composition may inject a durable
-   * implementation without changing the canonical typed Resource lifecycle.
-   */
-  readonly TAKOSUMI_RESOURCE_DEPLOYMENT_ADMISSION?: import("takosumi-contract/resource-deployment").ResourceDeploymentAdmission;
-  /**
-   * Code-only immutable artifact storage port. This is never a serialized
-   * Wrangler variable and never carries credentials through Run/Output rows.
-   */
-  readonly TAKOSUMI_RESOURCE_ARTIFACT_WRITER?: import("takosumi-contract").ResourceArtifactWriter;
-  /**
    * Host-code projector for recoverable runtime routing/activation state.
    * Canonical Interface and Binding rows remain authority.
    */
   readonly TAKOSUMI_INTERFACE_PROJECTION_SINK?: import("takosumi-contract/interfaces").InterfaceProjectionSink;
-  /**
-   * Code-only hosted runtime lifecycle. It is injected by the platform root,
-   * never accepted from Wrangler text configuration.
-   */
-  readonly TAKOSUMI_HOST_RUNTIME_RESOURCE_LIFECYCLE?: import("../../core/domains/resource-shape/host_runtime_materialization.ts").HostRuntimeResourceLifecycle;
-  /**
-   * Code-only composition that performs and reads back one exact same-native
-   * Resource Form transition. A text/JSON Worker variable is never accepted.
-   */
-  readonly TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST?: import("../../core/domains/resource-shape/form_transition.ts").ResourceFormTransitionHost;
-  /** Code-only product/module authority for an explicitly allowed exact pair. */
-  readonly TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE?: import("../../core/domains/resource-shape/form_transition.ts").ResourceFormTransitionEvidenceAuthority;
-  /**
-   * Explicit code-owned mount for the frozen v1alpha1 maintenance host. The
-   * platform edge remains 404 unless a composing host supplies this descriptor
-   * together with transition host/evidence and current Run credential ports.
-   * This is deliberately not a text flag: OSS does not generally re-enable
-   * the retired portable Form-host surface.
-   */
-  readonly TAKOSUMI_TAKOFORM_V1ALPHA1_COMPATIBILITY_HOST?: {
-    readonly apiVersion: "forms.takoform.com/v1alpha1";
-    readonly mode: "frozen-maintenance";
-  };
   /**
    * Enables the optional, versioned operator-control MCP adapter at the
    * platform worker's `/mcp/operator-control/v1` route. The route is absent
@@ -121,25 +65,7 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * Principal `mcp.invoke` InterfaceBinding and invocation-time OAuth token.
    */
   readonly TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED?: string;
-  /**
-   * Explicit host-code bridge from a Resource Shape namespace to the Workspace
-   * allowed to own that Resource's runtime Interfaces. Resource and Workspace
-   * ids are independent namespaces in OSS; absence therefore keeps
-   * Resource-owned and `resource_output` Interfaces fail-closed. A composing
-   * host may inject a policy-backed resolver, but this is never a text var or
-   * an implicit equal-id fallback.
-   */
-  readonly TAKOSUMI_RESOURCE_INTERFACE_WORKSPACE_RESOLVER?: import("../../core/domains/interfaces/mod.ts").ResourceInterfaceWorkspaceResolver;
-  /**
-   * Host-code resolver for a portable Form descriptor's canonical
-   * `resource_uri` input. It is never accepted as a serialized Wrangler var.
-   */
-  readonly TAKOSUMI_FORM_INTERFACE_RESOURCE_URI_RESOLVER?: import("../../core/domains/interfaces/mod.ts").FormInterfaceResourceUriResolver;
-  /**
-   * Additional host-code proof for Resource-owned OAuth2 Interface audiences.
-   * OSS contributes no external Resource audience. This must be a runtime
-   * function supplied by the composing host, never a Wrangler text variable.
-   */
+  /** Optional host-code proof for custom Interface OAuth2 resources. */
   readonly TAKOSUMI_INTERFACE_OAUTH2_RESOURCE_AUTHORIZER?: import("../../core/domains/interfaces/mod.ts").InterfaceOAuth2ResourceAuthorizer;
   readonly TAKOSUMI_ENVIRONMENT?: string;
   /**
@@ -230,24 +156,6 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * validator. Check-specific private documents stay outside the Worker.
    */
   readonly TAKOSUMI_PLATFORM_HARDENING_EVIDENCE?: string;
-  /** Operator allowlist for retained Resource Shape compatibility kinds. */
-  readonly TAKOSUMI_RESOURCE_SHAPES?: string;
-  /**
-   * Host-code contribution for operator-defined Resource Shape validation.
-   * This is a runtime object supplied by a composing Worker, not a text var or
-   * an OpenTofu output. Custom shape tokens are rejected without it.
-   */
-  readonly TAKOSUMI_RESOURCE_SHAPE_SCHEMA_REGISTRY?: import("../../core/domains/resource-shape/mod.ts").ResourceShapeSchemaRegistry;
-  /**
-   * Host-code lookup for reviewed OpenTofu module templates named by Target
-   * implementation descriptors. Takosumi OSS ships no implicit module catalog.
-   */
-  readonly TAKOSUMI_RESOURCE_SHAPE_MODULE_REGISTRY?: import("../../core/domains/resource-shape/mod.ts").ResourceShapeModuleRegistry;
-  /**
-   * Operator-installed Resource Shape adapter capability tokens advertised
-   * through `/api/v1/capabilities`. CSV/whitespace list or JSON string array.
-   */
-  readonly TAKOSUMI_RESOURCE_ADAPTERS?: string;
   /**
    * Operator-only operational capabilities advertised through
    * `/api/v1/capabilities`. CSV/whitespace list, JSON string array, or `all`.
@@ -256,29 +164,11 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_OPERATOR_CAPABILITIES?: string;
   /**
-   * Operator-installed Resource Shape adapter plugins. JSON array of
-   * `{ "plugin": "...", "handlerKey": "..." }`. The handler key must resolve
-   * to a fetch-compatible binding on the host Worker env. OSS treats this as a
-   * generic adapter seam; the concrete handler belongs to the operator/Cloud.
-   */
-  readonly TAKOSUMI_RESOURCE_ADAPTER_PLUGIN_HANDLERS?: string;
-  /**
-   * Operator-managed provider/compat API base URLs that may appear in Resource
-   * Shape TargetPool implementation options and in a Provider Connection's
-   * `scopeHints.providerConfig`. CSV/whitespace list or JSON string array.
-   * Unset means provider base URL overrides are rejected.
-   */
-  readonly TAKOSUMI_RESOURCE_PROVIDER_BASE_URL_ALLOWLIST?: string;
-  /**
    * Cloud/Operator-only switch that lets verified operator-scoped managed
    * Provider Connections back Workspace OpenTofu runs. OSS/self-host default is
    * off unless the operator deliberately sets this.
    */
   readonly TAKOSUMI_ALLOW_OPERATOR_BACKED_PROVIDER_ENVS?: string;
-  /** Public hostname namespace owned by the operator-provided deployment target. */
-  readonly TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN?: string;
-  /** Owner-account allowance for short names under the managed base domain. */
-  readonly TAKOSUMI_MANAGED_VANITY_HOST_SLOTS_PER_OWNER?: string;
 }
 
 /**

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
 import {
   DatabaseBootMigrationConfigurationError,
   resolveDatabaseBootMigrationMode,
@@ -52,4 +53,29 @@ test("database auto-migrate flag rejects ambiguous values", () => {
       TAKOSUMI_DB_AUTO_MIGRATE: "yes",
     })
   ).toThrow("TAKOSUMI_DB_AUTO_MIGRATE must be true or false");
+});
+
+test("service boot loads the installed pg dependency with a Bun-compatible specifier", async () => {
+  const pgModule = await import("pg");
+  expect(pgModule.default?.Pool ?? pgModule.Pool).toBeFunction();
+
+  const source = await readFile(
+    new URL("../../core/index.ts", import.meta.url),
+    "utf8",
+  );
+  expect(source).toContain('const pgSpecifier = "pg";');
+  expect(source).not.toContain('const pgSpecifier = "npm:pg@^8.11.0";');
+});
+
+test("the executable service entrypoint runs only after startup error classes initialize", async () => {
+  const source = await readFile(
+    new URL("../../core/index.ts", import.meta.url),
+    "utf8",
+  );
+  const mainEntrypoint = source.indexOf("if (import.meta.main)");
+  const migrationError = source.indexOf(
+    "export class DatabaseBootMigrationConfigurationError",
+  );
+
+  expect(mainEntrypoint).toBeGreaterThan(migrationError);
 });

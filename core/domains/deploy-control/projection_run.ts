@@ -180,14 +180,6 @@ export function projectPlanRun(
     id: planRun.id,
     ...(planRun.runGroupId ? { runGroupId: planRun.runGroupId } : {}),
     workspaceId: planRun.workspaceId,
-    ...(planRun.resourceContext
-      ? {
-          subject: {
-            kind: "resource" as const,
-            id: planRun.resourceContext.resourceId,
-          },
-        }
-      : {}),
     ...(options.capsuleId ? { capsuleId: options.capsuleId } : {}),
     ...(options.environment ? { environment: options.environment } : {}),
     type,
@@ -272,7 +264,6 @@ function projectApplyExpectedGuard(planRun: PlanRun): Run["applyExpected"] {
 
 export interface ProjectApplyRunOptions {
   readonly capsuleId?: string;
-  readonly resourceId?: string;
   readonly environment?: string;
   readonly sourceSnapshotId?: string;
   /** Compatibility review pinned by the source PlanRun. */
@@ -296,9 +287,6 @@ export function projectApplyRun(
     ...(options.runGroupId ? { runGroupId: options.runGroupId } : {}),
     workspaceId: applyRun.workspaceId,
     planRunId: applyRun.planRunId,
-    ...(options.resourceId
-      ? { subject: { kind: "resource" as const, id: options.resourceId } }
-      : {}),
     ...(options.capsuleId ? { capsuleId: options.capsuleId } : {}),
     ...(options.environment ? { environment: options.environment } : {}),
     type,

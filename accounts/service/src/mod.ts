@@ -204,8 +204,6 @@ export interface AccountsHandlerOptions {
   personalAccessTokenSelfServiceScopes?: readonly TakosumiAccountsPatScope[];
   /** Canonical current-state check for short-lived Interface OAuth tokens. */
   interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
-  /** Operator-owned hostname namespace used for managed Capsule endpoints. */
-  managedPublicBaseDomain?: string;
   loginEmailAllowlist?: LoginEmailAllowlist;
   /**
    * Operator-only token for marking privacy export/delete requests complete.
@@ -234,7 +232,6 @@ export interface EphemeralAccountsHandlerOptions {
   /** Explicit extension-contributed scopes allowed on self-service PATs. */
   personalAccessTokenSelfServiceScopes?: readonly TakosumiAccountsPatScope[];
   interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
-  managedPublicBaseDomain?: string;
   loginEmailAllowlist?: LoginEmailAllowlist;
   privacyOperationsToken?: string;
   privacyRetentionPolicyRef?: string;
@@ -356,9 +353,6 @@ export async function createEphemeralAccountsHandler(
     personalAccessTokenSelfServiceScopes:
       options.personalAccessTokenSelfServiceScopes,
     interfaceOAuthActivityValidator: options.interfaceOAuthActivityValidator,
-    ...(options.managedPublicBaseDomain
-      ? { managedPublicBaseDomain: options.managedPublicBaseDomain }
-      : {}),
     loginEmailAllowlist: options.loginEmailAllowlist,
     privacyOperationsToken: options.privacyOperationsToken,
     privacyRetentionPolicyRef: options.privacyRetentionPolicyRef,
@@ -859,9 +853,6 @@ export function createAccountsHandler(
             issuer,
             operations: options.controlPlaneOperations,
             resolveOperations: resolveControlPlaneOperations,
-            ...(options.managedPublicBaseDomain
-              ? { managedPublicBaseDomain: options.managedPublicBaseDomain }
-              : {}),
           }),
       );
       if (controlResponse) return appendServerTiming(controlResponse, timings);

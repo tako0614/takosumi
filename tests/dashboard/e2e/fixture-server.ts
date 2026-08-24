@@ -125,8 +125,6 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
       apiVersion: "takosumi.dev/v1alpha1",
       resources: {},
       adapters: {},
-      compat: {},
-      compatibilityProfiles: { "compat.e2e.v1": { planes: ["control"] } },
       identity: {},
       operator: {},
       extensions: [],

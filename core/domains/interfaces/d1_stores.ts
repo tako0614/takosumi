@@ -9,7 +9,7 @@ import {
   UI_SURFACE_INTERFACE_VERSION,
 } from "takosumi-contract";
 import { deployControlD1TableNames as names } from "../../adapters/storage/drizzle/schema/logical.ts";
-import type { D1Like } from "../resource-shape/d1_stores.ts";
+import type { D1Like } from "../../adapters/storage/d1.ts";
 import type {
   InterfaceAuthorizationPageInput,
   InterfaceAuthorizationQuery,
@@ -19,7 +19,6 @@ import type {
   InterfaceStores,
   InterfaceWriteGuard,
 } from "./stores.ts";
-import { interfaceFormLineage } from "./stores.ts";
 import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 
 interface JsonRow {
@@ -37,9 +36,8 @@ class D1InterfaceStore implements InterfaceStore {
         `insert or ignore into ${this.#table} (
         id, workspace_id, owner_kind, owner_id, name, interface_type,
         phase, generation, resolved_revision, oauth_resource_uri,
-        form_ref_key, form_schema_digest, descriptor_name, descriptor_version,
         record_json, created_at, updated_at
-      ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      ) values (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .bind(...interfaceParameters(record, false))
       .run();
@@ -132,7 +130,6 @@ class D1InterfaceStore implements InterfaceStore {
           phase=?, generation=?, resolved_revision=?,
           oauth_resource_uri=case
             when oauth_resource_uri=? then oauth_resource_uri else null end,
-          form_ref_key=?, form_schema_digest=?, descriptor_name=?, descriptor_version=?,
           record_json=?,
           created_at=?, updated_at=?
          where id=? and generation=? and resolved_revision=? and record_json=?`,
@@ -291,17 +288,9 @@ class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
         ? "and i.owner_id = ?"
         : "";
       clauses.push(
-        `(
-          (
-            i.owner_kind = 'Capsule' and i.interface_type = ?
-            and json_extract(i.record_json, '$.spec.version') = ?
-            ${capsuleOwnerClause}
-          )
-          or (
-            i.owner_kind = 'Resource'
-            and json_extract(i.record_json, '$.spec.document.launcher') = 1
-          )
-        )`,
+        `(i.owner_kind = 'Capsule' and i.interface_type = ?
+          and json_extract(i.record_json, '$.spec.version') = ?
+          ${capsuleOwnerClause})`,
       );
       parameters.push(
         UI_SURFACE_INTERFACE_TYPE,
@@ -375,7 +364,6 @@ function interfaceParameters(
   record: Interface,
   preserveClaim: boolean,
 ): readonly unknown[] {
-  const form = interfaceFormLineage(record);
   return [
     record.metadata.id,
     record.metadata.workspaceId,
@@ -387,10 +375,6 @@ function interfaceParameters(
     record.metadata.generation,
     record.status.resolvedRevision,
     preserveClaim ? (interfaceOAuth2ResourceUri(record) ?? null) : null,
-    form?.formRefKey ?? null,
-    form?.formSchemaDigest ?? null,
-    form?.descriptorName ?? null,
-    form?.descriptorVersion ?? null,
     JSON.stringify(record),
     record.metadata.createdAt,
     record.metadata.updatedAt,

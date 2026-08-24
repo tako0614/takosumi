@@ -13,7 +13,6 @@ import {
   storeInstallFeatures,
   storeInitialSecretField,
   storeSourceMatchesListing,
-  storeSupportsOidc,
   storeUsesRepositoryInstallUx,
   uniqueStoreInstallConfigForSource,
   sourceBuildPreview,
@@ -630,63 +629,6 @@ describe("store install metadata", () => {
     expect(entry.installExperience).toEqual(installExperience);
   });
 
-  test("operator managed domain overrides the repository fallback in defaults", () => {
-    const listing: TcsListing = {
-      id: "publisher/example",
-      source: { url: "https://example.test/example.git", path: "." },
-      kind: "app",
-      surface: "service",
-      provider: "cloudflare",
-      category: "example",
-      suggestedName: "example",
-      name: { ja: "Example", en: "Example" },
-      description: { ja: "Example", en: "Example" },
-      badge: { ja: "追加", en: "Install" },
-      createdAt: "2026-07-10T00:00:00.000Z",
-      updatedAt: "2026-07-10T00:00:00.000Z",
-    };
-    const config = installConfig({
-      variablePresentation: [
-        {
-          name: "public_url",
-          type: "string",
-          format: "url",
-          label: { ja: "公開URL", en: "Public URL" },
-        },
-      ],
-      installExperience: {
-        projections: [
-          {
-            kind: "public_endpoint",
-            variables: { url: "public_url" },
-            baseDomain: "app.takos.jp",
-          },
-        ],
-      },
-    });
-    const entry = storeEntryFromStoreListing(listing, config);
-
-    expect(
-      storeDefaultInputValue(
-        entry,
-        entry.inputs[0]!,
-        "workspace",
-        "service",
-        "app-staging.takos.jp",
-      ),
-    ).toBe("https://workspace-service.app-staging.takos.jp");
-    expect(
-      storeDefaultInputValue(
-        entry,
-        entry.inputs[0]!,
-        "workspace",
-        "service",
-        "app-staging.takos.jp",
-        "vanity",
-      ),
-    ).toBe("https://service.app-staging.takos.jp");
-  });
-
   test("normalizes malformed public rows instead of calling trim on undefined", () => {
     const malformedListing = {
       id: "publisher/malformed",
@@ -742,7 +684,7 @@ describe("store install metadata", () => {
     expect(entry.setupProjectionInvalid).toBe(true);
   });
 
-  test("reads authentication and features only from compiled InstallConfig", () => {
+  test("reads initial-secret and feature metadata only from compiled InstallConfig", () => {
     const config = installConfig({
       variablePresentation: [
         {
@@ -765,11 +707,6 @@ describe("store install metadata", () => {
             kind: "initial_secret",
             variable: "admin_password",
             secretKind: "password",
-          },
-          {
-            kind: "oidc_client",
-            variables: { issuerUrl: "oidc_issuer" },
-            callbackPath: "/api/auth/callback",
           },
         ],
         features: [
@@ -798,7 +735,6 @@ describe("store install metadata", () => {
     } satisfies TcsListing;
     const entry = storeEntryFromStoreListing(listing, config);
 
-    expect(storeSupportsOidc(entry)).toBe(true);
     expect(storeInitialSecretField(entry)?.name).toBe("admin_password");
     expect(storeInstallFeatures(entry).map((feature) => feature.id)).toEqual([
       "notifications",

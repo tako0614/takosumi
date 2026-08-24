@@ -97,11 +97,6 @@ import { friendlyError } from "../../lib/error-copy.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
 import {
-  parseCompositionInstallLink,
-  parseCompositionManifestText,
-  type CapsuleCompositionComponent,
-} from "../../lib/composition-manifest.ts";
-import {
   CAPSULE_NAME_PATTERN,
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultWorkspaceHandle,
@@ -118,11 +113,7 @@ import {
   storeInputKey,
   storeInputLabel,
   storeInputHelper,
-  storePublicEndpoint,
-  storePublicEndpointSubdomainField,
   storeInitialSecretField,
-  storeSupportsOidc,
-  defaultStoreAuthMode,
   storeInstallFeatures,
   storeFeatureInputs,
   storeFeatureLabel,
@@ -174,7 +165,7 @@ interface EntryChoice {
 }
 
 interface EntryEvidence {
-  readonly kind: "composition" | "source-options";
+  readonly kind: "source-options";
   readonly url: string;
   readonly requestedRef?: string;
   readonly resolvedTag?: string;
@@ -183,8 +174,6 @@ interface EntryEvidence {
   readonly digest: string;
   readonly sizeBytes?: number;
 }
-
-type ManagedPublicHostnameMode = "scoped" | "vanity";
 
 function canonicalProviderSource(provider: string): string {
   const normalized = provider.toLowerCase().trim();
@@ -237,10 +226,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const location = useLocation();
   const initial = parseInstallPrefill(location.search);
   const appHandoff = appHandoffFromSearch(location.search);
-  const compositionEntry = () => parseCompositionInstallLink(location.search);
   const sourceOptionsEntry = () =>
     parseCapsuleSourceOptionsInstallLink(location.search);
-  const externalDocument = () => compositionEntry() ?? sourceOptionsEntry();
+  const externalDocument = sourceOptionsEntry;
   const initialExternalDocument = externalDocument();
   const [phase, setPhase] = createSignal<Phase>(
     initialExternalDocument
@@ -301,14 +289,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [storeInputTouched, setStoreInputTouched] = createSignal<
     Record<string, boolean>
   >({});
-  const [storeAuthMode, setStoreAuthMode] = createSignal<"oidc" | "password">(
-    "oidc",
-  );
   const [storeFeatureSelections, setStoreFeatureSelections] = createSignal<
     Record<string, boolean>
   >({});
-  const [managedPublicHostnameMode, setManagedPublicHostnameMode] =
-    createSignal<ManagedPublicHostnameMode>("scoped");
   const [capsuleId, setCapsuleId] = createSignal<string>();
   const [planRunId, setPlanRunId] = createSignal<string>();
   const [error, setError] = createSignal<string>();
@@ -474,7 +457,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const storeRequiresUnavailableSecretMaterialization = (
     entry: StoreEntry,
   ): boolean =>
-    (!storeSupportsOidc(entry) && Boolean(storeInitialSecretField(entry))) ||
+    Boolean(storeInitialSecretField(entry)) ||
     storeInstallFeatures(entry).some(
       (feature) =>
         !feature.optional &&
@@ -498,10 +481,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     if (field.secret) return false;
     const feature = storeFeatureForInput(entry, field);
     if (feature && !storeFeatureEnabled(entry, feature)) return false;
-    const initialSecret = storeInitialSecretField(entry);
-    if (initialSecret?.name === field.name) {
-      return storeAuthMode() === "password";
-    }
     return true;
   };
 
@@ -524,8 +503,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         field,
         workspaceHandle(),
         name(),
-        storePublicEndpoint(entry)?.baseDomain,
-        managedPublicHostnameMode(),
       )
     );
   };
@@ -954,10 +931,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         ? storeEntryFromStoreListing(selectedListing, config)
         : undefined;
       setStoreEntry(entry);
-      setStoreAuthMode(
-        entry ? (defaultStoreAuthMode(entry) ?? "oidc") : "oidc",
-      );
-      setManagedPublicHostnameMode("scoped");
       setStoreFeatureSelections(
         entry
           ? Object.fromEntries(
@@ -1109,9 +1082,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           ...(Object.keys(config.outputAllowlist).length > 0
             ? { outputAllowlist: config.outputAllowlist }
             : {}),
-          ...(storeEntry() && storePublicEndpoint(storeEntry()!)
-            ? { managedPublicHostname: { mode: managedPublicHostnameMode() } }
-            : {}),
         });
         if (!workspaceIsCurrent(workspace)) return;
         currentCapsuleId = capsule.id;
@@ -1192,9 +1162,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
   const loadExternalEntry = async () => {
     const tcs = parseInitialTcsHandoff(location.search);
-    const composition = parseCompositionInstallLink(location.search);
     const options = parseCapsuleSourceOptionsInstallLink(location.search);
-    if (!tcs && !composition && !options) return;
+    if (!tcs && !options) return;
     setPhase("preparing");
     setBusy(true);
     try {
@@ -1212,40 +1181,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         throw new Error(t("workspace.selectMessage"));
       }
       setWorkspaceId(workspace);
-      if (composition) {
-        const { file, commit, resolvedTag } = await readSnapshotDocument({
-          workspaceId: workspace,
-          namePrefix: "composition",
-          git: composition.git,
-          ref: composition.ref,
-          path: composition.path,
-          read: readSourceSnapshotFile,
-        });
-        if (!workspaceIsCurrent(workspace)) return;
-        const loaded = await parseCompositionManifestText(file.text);
-        setEntryEvidence({
-          kind: "composition",
-          url: composition.git,
-          requestedRef: composition.ref,
-          ...(resolvedTag ? { resolvedTag } : {}),
-          commit,
-          path: composition.path,
-          digest: loaded.digest,
-        });
-        setEntryTitle(loaded.manifest.metadata.title);
-        setEntryChoices(
-          loaded.manifest.components.map(
-            (component: CapsuleCompositionComponent) => ({
-              id: component.id,
-              title: component.title,
-              ...(component.description
-                ? { description: component.description }
-                : {}),
-              source: component.source,
-            }),
-          ),
-        );
-      } else if (options) {
+      if (options) {
         const { file, commit, resolvedTag } = await readSnapshotDocument({
           workspaceId: workspace,
           namePrefix: "options",
@@ -1280,7 +1216,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       setPhase("entry");
     } catch (cause) {
       setError(friendlyError(cause, t).message);
-      setPhase(composition || options ? "entry-confirm" : "browse");
+      setPhase(options ? "entry-confirm" : "browse");
     } finally {
       setBusy(false);
     }
@@ -1517,7 +1453,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           </div>
           <aside class="iv-source-evidence" role="note">
             <strong>
-              {compositionEntry() ? "Composition" : "CapsuleSourceOptions"}
+              CapsuleSourceOptions
             </strong>
             <p>
               <code>{externalDocument()?.git}</code>
@@ -1962,15 +1898,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                     <p>{t("installStore.setupInvalid")}</p>
                   </aside>
                 </Show>
-                <Show when={storeSupportsOidc(entry())}>
-                  <aside class="iv-setup-note" role="status">
-                    <strong>Takosumi account sign-in</strong>
-                    <p>
-                      This service uses its declared OIDC client projection. No
-                      password is sent as a Capsule variable.
-                    </p>
-                  </aside>
-                </Show>
                 <Show
                   when={storeRequiresUnavailableSecretMaterialization(entry())}
                 >
@@ -1978,27 +1905,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                     <strong>Secret setup is unavailable</strong>
                     <p>{t("installStore.secretUnavailable")}</p>
                   </aside>
-                </Show>
-                <Show when={storePublicEndpoint(entry())}>
-                  <FormField
-                    label="Managed hostname"
-                    hint="The selected mode is passed to the service-owned public endpoint allocation."
-                  >
-                    <Select
-                      value={managedPublicHostnameMode()}
-                      onChange={(event) => {
-                        setManagedPublicHostnameMode(
-                          event.currentTarget
-                            .value as ManagedPublicHostnameMode,
-                        );
-                        setCapsuleId(undefined);
-                        setPlanRunId(undefined);
-                      }}
-                    >
-                      <option value="scoped">Workspace-scoped hostname</option>
-                      <option value="vanity">Vanity hostname</option>
-                    </Select>
-                  </FormField>
                 </Show>
                 <Show when={visibleStoreInstallFeatures(entry()).length > 0}>
                   <section class="iv-feature-list">

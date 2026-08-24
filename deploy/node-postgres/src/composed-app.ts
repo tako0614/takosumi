@@ -48,10 +48,6 @@ import {
 } from "@takosumi/providers";
 import { createConnectionOAuthHelpers } from "../../../core/api/connection_oauth_helpers.ts";
 import {
-  createNodeTakoformPackageHostComposition,
-  type NodeTakoformPackageTrustPolicy,
-} from "./takoform-package-composition.ts";
-import {
   InMemoryCapsuleCoordination,
   type CapsuleCoordination,
 } from "../../../core/domains/deploy-control/capsule_lease.ts";
@@ -84,15 +80,6 @@ export interface ComposedAppInput {
    * service falls back to its in-memory ledger (fine for dev / local-substrate).
    */
   readonly sqlClient?: CreateTakosumiServiceArg["sqlClient"];
-  /** Opaque package reader selected by the operator trust policy. */
-  readonly formPackageArtifactReader?: CreateTakosumiServiceArg["formPackageArtifactReader"];
-  /** Trusted data-only package verifier selected by the operator trust policy. */
-  readonly formPackageVerifier?: CreateTakosumiServiceArg["formPackageVerifier"];
-  /**
-   * Standard private-file Takoform composition. Explicit reader/verifier ports
-   * above take precedence for custom hosts.
-   */
-  readonly takoformPackageTrustPolicy?: NodeTakoformPackageTrustPolicy;
   /**
    * Optional OpenTofu runner injected by an operator composition. The generic
    * reference server leaves this absent; local-substrate wires a local runner
@@ -102,7 +89,6 @@ export interface ComposedAppInput {
   readonly opentofuRunnerExecutors?: CreateTakosumiServiceArg["opentofuRunnerExecutors"];
   readonly runnerProfiles?: CreateTakosumiServiceArg["runnerProfiles"];
   readonly defaultRunnerProfileId?: CreateTakosumiServiceArg["defaultRunnerProfileId"];
-  readonly managedVanityHostnameSlotsPerOwner?: CreateTakosumiServiceArg["managedVanityHostnameSlotsPerOwner"];
   /**
    * Shared Capsule lifecycle coordinator. The single-process Bun composition
    * defaults to one in-memory instance; multi-replica operators must inject a
@@ -166,20 +152,6 @@ export async function buildComposedApp(
       stateSecret: runtimeEnv.TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET,
       descriptors: connectionOAuthDescriptorsFromEnv(runtimeEnv),
     });
-  if (
-    Boolean(input.formPackageArtifactReader) !==
-    Boolean(input.formPackageVerifier)
-  ) {
-    throw new TypeError(
-      "Form Package reader and verifier must be injected together",
-    );
-  }
-  const takoformPackageHost =
-    !input.formPackageArtifactReader && input.takoformPackageTrustPolicy
-      ? await createNodeTakoformPackageHostComposition(
-          input.takoformPackageTrustPolicy,
-        )
-      : undefined;
   const capsuleCoordination =
     input.capsuleCoordination ?? new InMemoryCapsuleCoordination();
   let controlPlaneOperations: CreatedTakosumiService["operations"] | undefined;
@@ -204,22 +176,6 @@ export async function buildComposedApp(
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.buildConnectionSetupRequest,
     ...(connectionOAuthHelpers ? { connectionOAuthHelpers } : {}),
     ...(input.sqlClient ? { sqlClient: input.sqlClient } : {}),
-    // The reference platform maps the verified Workspace id to the matching
-    // Resource authorization scope; custom hosts own this mapping.
-    resolveResourceBackupScope: (workspaceId) => workspaceId,
-    ...((input.formPackageArtifactReader ?? takoformPackageHost?.artifactReader)
-      ? {
-          formPackageArtifactReader:
-            input.formPackageArtifactReader ??
-            takoformPackageHost!.artifactReader,
-        }
-      : {}),
-    ...((input.formPackageVerifier ?? takoformPackageHost?.verifier)
-      ? {
-          formPackageVerifier:
-            input.formPackageVerifier ?? takoformPackageHost!.verifier,
-        }
-      : {}),
     ...(input.opentofuRunner ? { opentofuRunner: input.opentofuRunner } : {}),
     ...(input.opentofuRunnerExecutors
       ? { opentofuRunnerExecutors: input.opentofuRunnerExecutors }
@@ -228,12 +184,6 @@ export async function buildComposedApp(
     capsuleCoordination,
     ...(input.defaultRunnerProfileId
       ? { defaultRunnerProfileId: input.defaultRunnerProfileId }
-      : {}),
-    ...(input.managedVanityHostnameSlotsPerOwner !== undefined
-      ? {
-          managedVanityHostnameSlotsPerOwner:
-            input.managedVanityHostnameSlotsPerOwner,
-        }
       : {}),
     ...(input.interfaceOAuth2ResourceAuthorizer
       ? {

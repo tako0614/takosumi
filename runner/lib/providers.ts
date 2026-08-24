@@ -37,7 +37,11 @@ import {
   commandContextFromRequest,
   assertCredentialEnvAvailable,
 } from "./credentials.ts";
-import { parseSource, parseRequiredProviders } from "./parsing.ts";
+import {
+  parseLegacySourcelessDestroyRecovery,
+  parseSource,
+  parseRequiredProviders,
+} from "./parsing.ts";
 import { canonicalProviderSource } from "../../contract/provider-env-rules.ts";
 import { resourceTypeMatchesPattern } from "../../contract/plan-scope.ts";
 
@@ -236,7 +240,7 @@ export function assertRunnerPolicyBeforeInit(
   options: RunnerPolicyBeforeInitOptions = {},
 ): void {
   if (!runnerProfile) return;
-  parseSource(request);
+  parseLegacySourcelessDestroyRecovery(request) ?? parseSource(request);
   const requiredProviders =
     options.requiredProviders ?? parseRequiredProviders(request);
   const allowedProviders = stringArray(

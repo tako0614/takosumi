@@ -609,12 +609,6 @@ async function seedImmediatePredecessorV55(
     .run();
 }
 
-async function seedImmediatePredecessorV64(
-  database: D1Database,
-): Promise<void> {
-  await database.prepare(`delete from schema_migrations where version = 65`).run();
-}
-
 async function readPredecessorInterfaceRows(database: D1Database) {
   return {
     interface: await database
@@ -668,15 +662,24 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
   expect(plan.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.ledgerDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(plan.migrations.at(-1)?.version).toBe(65);
-  expect(plan.migrations).toHaveLength(62);
+  expect(plan.migrations.at(-1)?.version).toBe(66);
+  expect(plan.migrations).toHaveLength(63);
   expect(plan.migrations.at(-1)?.name).toBe(
-    "d1_git_install_plans",
+    "d1_retired_host_schema_drop_empty",
   );
-  expect(plan.tables.some((table) => table.name === "target_pools")).toBe(true);
+  expect(plan.tables.some((table) => table.name === "target_pools")).toBe(false);
   expect(
     plan.tables.some((table) => table.name === "resource_identity_fences"),
-  ).toBe(true);
+  ).toBe(false);
+  expect(plan.retiredTables).toEqual(
+    expect.arrayContaining([
+      "offering_catalogs",
+      "resource_identity_fences",
+      "resource_shapes",
+      "service_form_packages",
+      "target_pools",
+    ]),
+  );
   expect(
     plan.tables.some((table) => table.name === "takosumi_target_pools"),
   ).toBe(false);
@@ -693,19 +696,26 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
     true,
   );
   const interfaces = plan.tables.find((table) => table.name === "interfaces");
-  expect(interfaces?.columns.map((column) => column.name)).toEqual(
-    expect.arrayContaining([
-      "form_ref_key",
-      "form_schema_digest",
-      "descriptor_name",
-      "descriptor_version",
-    ]),
-  );
+  expect(interfaces?.columns.map((column) => column.name)).toEqual([
+    "id",
+    "workspace_id",
+    "owner_kind",
+    "owner_id",
+    "name",
+    "interface_type",
+    "phase",
+    "generation",
+    "resolved_revision",
+    "oauth_resource_uri",
+    "record_json",
+    "created_at",
+    "updated_at",
+  ]);
   expect(
     interfaces?.indexes.some(
       (index) => index.name === "interfaces_form_descriptor_idx",
     ),
-  ).toBe(true);
+  ).toBe(false);
   expect(
     interfaces?.indexes.some(
       (index) => index.name === "interfaces_authorized_page_idx",
@@ -781,7 +791,7 @@ test("control D1 verify is read-only and accepts host extension tables", async (
     const verification = await verifyControlD1Schema(database, plan);
     expect(verification.status).toBe("ready");
     expect(verification.issues).toEqual([]);
-    expect(verification.latestMigrationVersion).toBe(65);
+    expect(verification.latestMigrationVersion).toBe(66);
   } finally {
     database.close();
   }
@@ -1733,8 +1743,10 @@ for (const fixture of [
     sha256: "76b930c0fde893d49ef9b9bf2738f9882103d5de0da18f134593e52f2f349848",
   },
 ] as const) {
-  test(`control D1 candidate converges the ${fixture.environment} live v24 schema export`, async () => {
-    const plan = await buildControlD1SchemaPlan();
+  test(`control D1 candidate converges the ${fixture.environment} live v24 schema export through preserved v65 lineage`, async () => {
+    const plan = await buildControlD1SchemaPlan({
+      throughMigrationVersion: 65,
+    });
     const database = new SqliteControlD1Database();
     const sql = await Bun.file(
       resolve(
@@ -2232,7 +2244,7 @@ test("control D1 CLI verify reports a ready remote ledger", async () => {
       mode: "verify",
       environment: "staging",
       status: "ready",
-      verification: { latestMigrationVersion: 65 },
+      verification: { latestMigrationVersion: 66 },
     });
   } finally {
     database.close();
@@ -3839,8 +3851,9 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
   const plan = await buildControlD1SchemaPlan();
   const database = new SqliteControlD1Database();
   try {
-    await ensureD1OpenTofuLedgerSchema(database);
-    await seedImmediatePredecessorV64(database);
+    await ensureD1OpenTofuLedgerSchema(database, {
+      throughMigrationVersion: 65,
+    });
     const predecessorFence = await acquireControlD1MaintenanceFence(
       database,
       {
@@ -3892,7 +3905,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
     expect(code).toBe(0);
     expect(transcript).toMatchObject({
       status: "ready",
-      appliedMigrationVersions: [65],
+      appliedMigrationVersions: [66],
       maintenanceFenceTransition: {
         predecessorSourceCommit: PREDECESSOR_SOURCE_COMMIT,
         predecessorManifestDigest: PREDECESSOR_MANIFEST_DIGEST,
@@ -3922,8 +3935,9 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
   const plan = await buildControlD1SchemaPlan();
   const database = new SqliteControlD1Database();
   try {
-    await ensureD1OpenTofuLedgerSchema(database);
-    await seedImmediatePredecessorV64(database);
+    await ensureD1OpenTofuLedgerSchema(database, {
+      throughMigrationVersion: 65,
+    });
     await database
       .prepare(
         `create trigger unexpected_workspace_trigger
@@ -4008,7 +4022,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
       await database
         .prepare(`select max(version) as version from schema_migrations`)
         .first(),
-    ).toEqual({ version: 65 });
+    ).toEqual({ version: 66 });
     await expect(
       database
         .prepare(
@@ -4590,7 +4604,9 @@ test("control D1 REST compound renderer fails closed on bind mismatch", async ()
 });
 
 test("control D1 REST import transport converges the live v24 fixture through canonical v50 triggers", async () => {
-  const plan = await buildControlD1SchemaPlan();
+  const plan = await buildControlD1SchemaPlan({
+    throughMigrationVersion: 65,
+  });
   const backing = new SqliteControlD1Database();
   const sql = await Bun.file(
     resolve(

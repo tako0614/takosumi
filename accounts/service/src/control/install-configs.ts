@@ -80,7 +80,6 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
-import { installExperiencePublicEndpoint } from "takosumi-contract";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
@@ -275,22 +274,6 @@ async function patchScopedInstallConfig(
     return errorJson(
       "invalid_request",
       "installExperience must be a valid service-side projection declaration",
-      400,
-    );
-  }
-  // The public_endpoint projection is what makes a plan reserve — and check the
-  // ownership of — the Capsule's public hostname. A patch that drops it keeps
-  // the endpoint variables flowing into the generated root while the plan skips
-  // reservation entirely, so a member could point `app_url` at another
-  // Workspace's host. A patch may refine the projections, never remove this one.
-  if (
-    installExperiencePatch !== undefined &&
-    installExperiencePublicEndpoint(config.installExperience) !== undefined &&
-    installExperiencePublicEndpoint(installExperiencePatch) === undefined
-  ) {
-    return errorJson(
-      "invalid_request",
-      "installExperience cannot remove the public_endpoint projection",
       400,
     );
   }

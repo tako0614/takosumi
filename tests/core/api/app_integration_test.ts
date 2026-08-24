@@ -113,7 +113,7 @@ test("createApiApp exposes product capabilities without inventory auth", async (
   const body = await response.json();
   assert.equal(body.apiVersion, TAKOSUMI_API_VERSION);
   assert.equal(body.resources.Stack, true);
-  assert.equal(body.compat.framework, true);
+  assert.equal(body.adapters.opentofu, true);
   assert.equal(body.operator.runner_pools, false);
   assert.equal(body.operator.cli_api_operations, false);
 });

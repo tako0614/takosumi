@@ -13,7 +13,6 @@ import {
 import { hashSessionIdWithSalt } from "../../../accounts/service/src/session-hash-salt.ts";
 import { deployControlD1TableNames } from "../../../core/adapters/storage/drizzle/schema/logical.ts";
 import { defaultProjectId } from "../../../core/domains/projects/mod.ts";
-import { formatResourceShapeId } from "../../../core/domains/resource-shape/records.ts";
 import {
   createCloudflareD1WorkspaceBootstrapReader,
   readWorkspaceBootstrapRequest,
@@ -179,14 +178,6 @@ test("workspace bootstrap returns exact authenticated-owner facts in three bound
     workspace: workspaceRecord(),
     membership: membershipRecord(),
     defaultProject: projectRecord(),
-    defaultTargetPool: {
-      id: formatResourceShapeId(WORKSPACE_ID, "TargetPool", "default"),
-      workspaceId: WORKSPACE_ID,
-      name: "default",
-      spec: targetPoolSpec(),
-      createdAt: CREATED_AT,
-      updatedAt: UPDATED_AT,
-    },
   });
   expect(accountsDb.prepared).toHaveLength(1);
   expect(controlDb.prepared).toHaveLength(2);
@@ -196,7 +187,6 @@ test("workspace bootstrap returns exact authenticated-owner facts in three bound
   );
   expect(controlDb.prepared[1]).toContain(deployControlD1TableNames.workspaces);
   expect(controlDb.prepared[1]).toContain(deployControlD1TableNames.projects);
-  expect(controlDb.prepared[1]).toContain(deployControlD1TableNames.targetPools);
   expect(
     [...accountsDb.prepared, ...controlDb.prepared].every((sql) =>
       sql.toLowerCase().includes("limit 2"),
@@ -210,8 +200,6 @@ test("workspace bootstrap returns exact authenticated-owner facts in three bound
     [
       WORKSPACE_ID,
       defaultProjectId(WORKSPACE_ID),
-      WORKSPACE_ID,
-      formatResourceShapeId(WORKSPACE_ID, "TargetPool", "default"),
       WORKSPACE_ID,
     ],
   ]);
@@ -375,7 +363,7 @@ test("workspace bootstrap distinguishes non-owner from malformed or duplicate ev
   for (const aggregateRows of [
     [evidence.control[0]!, evidence.control[0]!],
     [{ ...evidence.control[0], project_id: "prj_wrong" }],
-    [{ ...evidence.control[0], target_pool_spec_json: "[]" }],
+    [{ ...evidence.control[0], project_record_json: "[]" }],
     [undefined],
     [null],
     [
@@ -487,19 +475,6 @@ function projectRecord() {
   };
 }
 
-function targetPoolSpec() {
-  return {
-    classes: ["managed"],
-    targets: [
-      {
-        name: "cloud",
-        type: "cloudflare",
-        priority: 100,
-      },
-    ],
-  };
-}
-
 function controlRow() {
   const workspace = workspaceRecord();
   const project = projectRecord();
@@ -516,16 +491,6 @@ function controlRow() {
     project_record_json: JSON.stringify(project),
     project_created_at: project.createdAt,
     project_updated_at: project.updatedAt,
-    target_pool_id: formatResourceShapeId(
-      WORKSPACE_ID,
-      "TargetPool",
-      "default",
-    ),
-    target_pool_space_id: WORKSPACE_ID,
-    target_pool_name: "default",
-    target_pool_spec_json: JSON.stringify(targetPoolSpec()),
-    target_pool_created_at: CREATED_AT,
-    target_pool_updated_at: UPDATED_AT,
   };
 }
 

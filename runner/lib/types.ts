@@ -15,19 +15,24 @@ export type RunRequest = {
   readonly request?: unknown;
 };
 
-export type OpenTofuModuleSource =
-  | {
-      readonly kind: "git";
-      readonly url: string;
-      readonly ref?: string;
-      readonly commit?: string;
-      readonly modulePath?: string;
-    }
-  | {
-      /** Internal Resource Run identity; bytes arrive through operatorModule. */
-      readonly kind: "operator_module";
-      readonly digest: string;
-    };
+/** Current runner input. */
+export interface OpenTofuModuleSource {
+  readonly kind: "git";
+  readonly url: string;
+  readonly ref?: string;
+  readonly commit?: string;
+  readonly modulePath?: string;
+}
+
+/** Internal identity for the pre-v1 source-less destroy drain only. */
+export interface LegacySourcelessDestroyModuleSource {
+  readonly kind: "operator_module";
+  readonly digest: string;
+}
+
+export type OpenTofuExecutionSource =
+  | OpenTofuModuleSource
+  | LegacySourcelessDestroyModuleSource;
 
 export interface RunWorkspace {
   readonly root: string;
@@ -53,7 +58,7 @@ export interface GeneratedRoot {
   readonly files: Record<string, string>;
 }
 
-/** Operator-injected module used only by an explicit Resource Shape descriptor. */
+/** Module sidecar for the marked pre-v1 source-less destroy drain only. */
 export interface OperatorModule {
   readonly files: readonly OperatorModuleFile[];
 }

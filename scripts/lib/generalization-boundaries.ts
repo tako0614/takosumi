@@ -60,21 +60,6 @@ const STACK_FLOW_PREFIXES = [
   "worker/",
 ] as const;
 
-const RESOURCE_SHAPE_PATHS = [
-  "cli/src/cli-resource-shape-commands.ts",
-  "contract/resource-shape.ts",
-  "contract/resolution.ts",
-  "contract/target.ts",
-  "core/api/resource_routes.ts",
-  // Although mounted under the operator deploy-control seam, this route owns
-  // only Service Form-backed Resource/ResolutionLock migration semantics.
-  "core/api/deploy_control_resource_form_pin_routes.ts",
-  "core/domains/resource-shape/",
-  "dashboard/src/lib/resource-shapes.ts",
-  "dashboard/src/views/resources/",
-  "provider/",
-] as const;
-
 const RULES: readonly BoundaryRule[] = [
   {
     id: "retired-contract-subpath",
@@ -100,9 +85,7 @@ const RULES: readonly BoundaryRule[] = [
     id: "retired-stack-alias",
     message:
       "source-and-run code must use Workspace/Project/Capsule, not the retired Space/Installation aliases",
-    appliesTo: (path) =>
-      startsWithAny(path, STACK_FLOW_PREFIXES) &&
-      !startsWithAny(path, RESOURCE_SHAPE_PATHS),
+    appliesTo: (path) => startsWithAny(path, STACK_FLOW_PREFIXES),
     patterns: [
       /\b(?:Installation|installationId|installationIds|getInstallation|putInstallation|patchInstallation|listInstallations|publicInstallation)\b/,
       /\b(?:Space|spaceId|spaceIds|getSpace|putSpace|patchSpace|listSpaces|publicSpace)\b/,
@@ -654,51 +637,6 @@ const RULES: readonly BoundaryRule[] = [
     patterns: [/\bdeliveryIsImplemented\b/],
   },
   {
-    id: "resource-space-workspace-inference",
-    message:
-      "Resource Shape Space and Stack Workspace are separate namespaces; Interface ownership requires an explicit service-side mapping",
-    appliesTo: (path) =>
-      path === "core/bootstrap.ts" ||
-      path === "core/domains/interfaces/output_resolver.ts",
-    patterns: [
-      /resource\??\.spaceId\s*={2,3}\s*workspaceId/,
-      /workspaceId\s*={2,3}\s*resource\??\.spaceId/,
-      /interfaceService\.(?:reconcileResource|markResourceUnknown|markResourceTerminating|retireResource)\(\s*event\.spaceId/,
-    ],
-  },
-  {
-    id: "closed-resource-shape-kind",
-    message:
-      "bundled typed shapes are not a global enum; operator shape tokens require an explicit schema registry and adapter/plugin",
-    appliesTo: (path) =>
-      path === "contract/resource-shape.ts" ||
-      path === "core/domains/resource-shape/resolver.ts" ||
-      path === "core/domains/resource-shape/service.ts" ||
-      path === "deploy/platform/worker.ts",
-    patterns: [
-      /export\s+type\s+ResourceShapeKind\s*=\s*BundledResourceShapeKind\b/,
-      /RESOURCE_SHAPE_KINDS[^\n]*\.includes\([^\n]*(?:resource\.kind|shape)/,
-      /parseCapabilityList\(\s*env\.TAKOSUMI_RESOURCE_SHAPES\s*,\s*RESOURCE_CAPABILITY_KEYS\s*\)/,
-    ],
-  },
-  {
-    id: "closed-resource-capability-taxonomy",
-    message:
-      "Resource connection, projection, manager, and engine values are open capability tokens whose execution requires explicit Target evidence",
-    appliesTo: (path) =>
-      path === "contract/resource-shape.ts" ||
-      path === "core/domains/resource-shape/planner.ts" ||
-      path === "core/domains/resource-shape/resolver.ts",
-    patterns: [
-      /type\s+ResourceManagedBy\s*=\s*["']opentofu["']\s*\|/,
-      /\bRESOURCE_(?:CONNECTION_PERMISSIONS|PROJECTION_KINDS)\b/,
-      /\bSHAPE_INTERFACE_REQUIREMENTS\b/,
-      /StringOneOf\(\s*["']sqlite["']\s*,\s*["']postgres["']\s*,\s*["']mysql["']\s*\)/,
-      /SetStringsOneOf\(\s*1\s*,\s*["']read["']/,
-      /engine\s*===?\s*["']postgres["']\s*\?\s*["']postgres_protocol["']/,
-    ],
-  },
-  {
     id: "closed-condition-reason-taxonomy",
     message:
       "Condition.reason is an open adapter-extensible token; OpenAPI must not expose the Core reason catalog as a closed enum",
@@ -706,27 +644,6 @@ const RULES: readonly BoundaryRule[] = [
     patterns: [
       /reason:\s*\{\s*\$ref:\s*["'`]#\/components\/schemas\/CoreConditionReason["'`]/,
       /CoreConditionReason:\s*\{[\s\S]{0,160}\benum\s*:/,
-    ],
-  },
-  {
-    id: "retired-resource-descriptor-alias",
-    message:
-      "the canonical operator implementation record is TargetImplementationDescriptor; pre-v1 compatibility aliases must not remain active",
-    appliesTo: (path) => path === "contract/target.ts",
-    patterns: [/\bTargetPoolImplementation\b/, /\bTargetPoolModuleOutput\b/],
-  },
-  {
-    id: "provider-token-catalog-in-resource-core",
-    message:
-      "Resource Shape secret guards must be provider-neutral; provider token formats belong to Credential/Adapter validation",
-    appliesTo: (path) => path.startsWith("core/domains/resource-shape/"),
-    patterns: [
-      /github_pat_/,
-      /gh\[pousr\]/,
-      /xox\[baprs\]/,
-      /AKIA\[0-9A-Z\]/,
-      /ASIA\[0-9A-Z\]/,
-      /sk-\[A-Za-z0-9_/,
     ],
   },
   {
@@ -738,8 +655,7 @@ const RULES: readonly BoundaryRule[] = [
         path.startsWith("accounts/") ||
         path.startsWith("dashboard/src/") ||
         path.startsWith("deploy/node-postgres/")) &&
-      path !== "contract/redaction.ts" &&
-      !path.startsWith("core/domains/resource-shape/"),
+      path !== "contract/redaction.ts",
     patterns: [
       /github_pat_/,
       /gh\[pousr\]/,
@@ -762,7 +678,7 @@ const RULES: readonly BoundaryRule[] = [
   {
     id: "ambiguous-observability-scope",
     message:
-      "observability contracts must identify Stack Workspace/RunGroup explicitly; Resource Shape Space is a separate namespace and physical SQL names stay adapter-private",
+      "observability contracts must identify Workspace/RunGroup explicitly and keep physical SQL names adapter-private",
     appliesTo: (path) =>
       path.startsWith("core/domains/audit/") ||
       path.startsWith("core/domains/observability/") ||
@@ -1065,16 +981,6 @@ export function findGeneralizationBoundaryViolations(
         for (const match of source.content.matchAll(regex)) {
           const index = match.index ?? 0;
           const line = lineNumberAt(source.content, index);
-          if (
-            isAllowedResourceShapeSpaceLocation(
-              rule.id,
-              path,
-              source.content,
-              index,
-            )
-          ) {
-            continue;
-          }
           if (isAllowedTypeofMessageCheck(rule.id, source.content, index)) {
             continue;
           }
@@ -1118,111 +1024,6 @@ function isAllowedTypeofMessageCheck(
       after,
     )
   );
-}
-
-/**
- * `Space` is retired only in the source-and-run model. Resource Shape has a
- * canonical Space namespace, including a few mixed composition/UI files that
- * cannot be excluded as whole paths without hiding genuine stack regressions.
- * Keep those exceptions bounded by existing section/function markers.
- */
-function isAllowedResourceShapeSpaceLocation(
-  ruleId: string,
-  path: string,
-  content: string,
-  index: number,
-): boolean {
-  if (
-    ruleId !== "retired-stack-alias" &&
-    ruleId !== "retired-stack-request-alias"
-  ) {
-    return false;
-  }
-
-  if (
-    ruleId === "retired-stack-alias" &&
-    startsWithAny(path, RESOURCE_SHAPE_PATHS)
-  ) {
-    return true;
-  }
-
-  if (
-    ruleId === "retired-stack-alias" &&
-    (path === "dashboard/src/i18n/en.ts" || path === "dashboard/src/i18n/ja.ts")
-  ) {
-    return isBetweenMarkers(
-      content,
-      index,
-      "// --- Resource Shape",
-      "// --- account",
-    );
-  }
-
-  if (
-    ruleId === "retired-stack-alias" &&
-    path === "dashboard/src/lib/control-api.ts"
-  ) {
-    return isBetweenMarkers(
-      content,
-      index,
-      "// --- Resource Shape API",
-      "// Helpers shared by the control views",
-    );
-  }
-
-  if (ruleId === "retired-stack-alias" && path === "core/bootstrap.ts") {
-    return isBetweenMarkers(
-      content,
-      index,
-      "// --- Resource Shape host inventory",
-      "// --- End Resource Shape host inventory",
-    );
-  }
-
-  if (path !== "deploy/platform/worker.ts") return false;
-
-  if (
-    ruleId === "retired-stack-alias" &&
-    isBetweenMarkers(
-      content,
-      index,
-      "async function platformResourceShapeExternalRequest(",
-      "function platformInterfaceAccessFailure(",
-    )
-  ) {
-    return true;
-  }
-
-  if (
-    ruleId === "retired-stack-request-alias" &&
-    isBetweenMarkers(
-      content,
-      index,
-      "export function createPlatformCanonicalResourceReadAuthority(",
-      "async function resolveReadyCompatibilityEvidence(",
-    )
-  ) {
-    return true;
-  }
-
-  return isBetweenMarkers(
-    content,
-    index,
-    "function platformResourceShapeRequestedSpaces(",
-    "function platformResourceShapeActorContext(",
-  );
-}
-
-function isBetweenMarkers(
-  content: string,
-  index: number,
-  startMarker: string,
-  endMarker: string,
-): boolean {
-  const start = content.indexOf(startMarker);
-  if (start < 0 || index < start) return false;
-  const end = content.indexOf(endMarker, start + startMarker.length);
-  return end >= 0 && index < end;
 }
 
 function isImplementationPath(path: string): boolean {

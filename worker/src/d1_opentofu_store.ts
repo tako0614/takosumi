@@ -90,11 +90,8 @@ import type {
 import type {
   CommitRunStateInput,
   CommitRunStateResult,
-  CommitResourceRunInput,
-  CommitResourceRunResult,
   CommitRestoredStateInput,
   CommitRestoredStateResult,
-  BeginResourceOperationRunResult,
   BeginApplyRunResult,
   CapsuleExecutionAuthority,
   CapsuleExecutionAuthorityInput,
@@ -105,26 +102,17 @@ import type {
   PlanRunInputs,
   PublicHostReservation,
   RecoverableOpenTofuRunListOptions,
-  RecoverableResourceOperationRunListOptions,
-  ResourceOperationRun,
-  ReservePublicHostInput,
-  ReservePublicHostResult,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
   CapsuleListPageParams,
   TransitionRunInput,
   TransitionRunResult,
-  TransitionResourceOperationRunInput,
-  TransitionResourceOperationRunResult,
 } from "../../core/domains/deploy-control/store.ts";
 import {
-  assertResourceOperationRun,
-  assertResourceOperationRunStart,
   boundedActivityWorkspaceIds,
   clampActivityLimit,
   clampRecoverableOpenTofuRunListLimit,
-  clampRecoverableResourceOperationRunListLimit,
   clampRunListLimit,
   capsuleRuntimeSafetyFromRun,
   compareStoredRunRecordsAsc,
@@ -133,9 +121,6 @@ import {
   isApplyRunRecord,
   isPlanRunRecord,
   isRecoverableOpenTofuRunRecord,
-  resourceOperationRunTransitionAllowed,
-  resourceOperationRunNeedsRecovery,
-  sameResourceOperationIdentity,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
@@ -171,7 +156,6 @@ const RUN_KIND_PLAN = "plan" as const;
 const RUN_KIND_APPLY = "apply" as const;
 const RUN_KIND_SOURCE_SYNC = "source_sync" as const;
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check" as const;
-const RUN_KIND_RESOURCE_OPERATION = "resource_operation" as const;
 const RUN_KIND_BACKUP = "backup" as const;
 const RUN_KIND_RESTORE = "restore" as const;
 
@@ -1023,139 +1007,6 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
   async getCompatibilityCheckRun(id: string): Promise<Run | undefined> {
     return await this.#getRun<Run>(id, [RUN_KIND_COMPATIBILITY_CHECK]);
-  }
-
-  async beginResourceOperationRun(
-    run: ResourceOperationRun,
-  ): Promise<BeginResourceOperationRunResult> {
-    assertResourceOperationRunStart(run);
-    await this.#ensureSchema();
-    const inserted = await this.#orm
-      .insert(schema.runs)
-      .values({
-        id: run.id,
-        runGroupId: null,
-        workspaceId: run.workspaceId,
-        sourceId: null,
-        capsuleId: null,
-        environment: run.environment ?? null,
-        type: RUN_KIND_RESOURCE_OPERATION,
-        status: run.status,
-        leaseToken: null,
-        heartbeatAt: null,
-        runJson: run as unknown,
-        createdAt: String(run.createdAt),
-      })
-      .onConflictDoNothing({ target: schema.runs.id })
-      .run();
-    if (changes(inserted as D1Result) > 0) {
-      return { status: "created", run };
-    }
-    const current = await this.getResourceOperationRun(run.id);
-    if (!current) return { status: "conflict" };
-    return sameResourceOperationIdentity(current, run)
-      ? { status: "existing", run: current }
-      : { status: "conflict", run: current };
-  }
-
-  async getResourceOperationRun(
-    id: string,
-  ): Promise<ResourceOperationRun | undefined> {
-    return await this.#getRun<ResourceOperationRun>(id, [
-      RUN_KIND_RESOURCE_OPERATION,
-    ]);
-  }
-
-  async getResourceFormTransitionRun(input: {
-    readonly workspaceId: string;
-    readonly resourceId: string;
-    readonly operationId: string;
-  }): Promise<ResourceOperationRun | undefined> {
-    const rows = await this.#drizzleManyJson<ResourceOperationRun>(
-      schema.runs,
-      schema.runs.runJson,
-      {
-        where: and(
-          eq(schema.runs.type, RUN_KIND_RESOURCE_OPERATION),
-          eq(schema.runs.workspaceId, input.workspaceId),
-          sql`json_extract(${schema.runs.runJson}, '$.resourceOperation') = 'form_transition'`,
-          sql`json_extract(${schema.runs.runJson}, '$.subject.id') = ${input.resourceId}`,
-          sql`json_extract(${schema.runs.runJson}, '$.resourceOperationKey') = ${input.operationId}`,
-        ),
-        limit: 1,
-      },
-    );
-    return rows[0];
-  }
-
-  async transitionResourceOperationRun(
-    input: TransitionResourceOperationRunInput,
-  ): Promise<TransitionResourceOperationRunResult> {
-    assertResourceOperationRun(input.run);
-    if (
-      input.run.resourceOperationKey !== input.operationKey ||
-      input.run.resourceOperationVersion !== input.expectedVersion + 1
-    ) {
-      throw new TypeError("invalid Resource operation Run transition identity");
-    }
-    const expected = await this.getResourceOperationRun(input.id);
-    if (
-      !expected ||
-      expected.resourceOperationVersion !== input.expectedVersion ||
-      !input.expectFrom.includes(expected.status) ||
-      !resourceOperationRunTransitionAllowed(expected, input.run)
-    ) {
-      return { won: false, ...(expected ? { run: expected } : {}) };
-    }
-    await this.#ensureSchema();
-    const result = await this.#orm
-      .update(schema.runs)
-      .set({
-        status: input.run.status,
-        runJson: input.run as unknown,
-      })
-      .where(
-        and(
-          eq(schema.runs.id, input.id),
-          eq(schema.runs.type, RUN_KIND_RESOURCE_OPERATION),
-          inArray(schema.runs.status, [...input.expectFrom]),
-          sql`json_extract(${schema.runs.runJson}, '$.resourceOperationKey') = ${input.operationKey}`,
-          sql`json_extract(${schema.runs.runJson}, '$.resourceOperationVersion') = ${input.expectedVersion}`,
-        ),
-      )
-      .run();
-    if (changes(result as D1Result) > 0) {
-      return { won: true, run: input.run };
-    }
-    const current = await this.getResourceOperationRun(input.id);
-    return { won: false, ...(current ? { run: current } : {}) };
-  }
-
-  async listRecoverableResourceOperationRuns(
-    options: RecoverableResourceOperationRunListOptions = {},
-  ): Promise<readonly ResourceOperationRun[]> {
-    const rows = await this.#drizzleManyJson<ResourceOperationRun>(
-      schema.runs,
-      schema.runs.runJson,
-      {
-        where: and(
-          eq(schema.runs.type, RUN_KIND_RESOURCE_OPERATION),
-          options.workspaceId === undefined
-            ? undefined
-            : eq(schema.runs.workspaceId, options.workspaceId),
-          or(
-            and(
-              eq(schema.runs.status, "running"),
-              sql`json_extract(${schema.runs.runJson}, '$.resourceOperation') NOT IN ('artifact', 'form_transition')`,
-            ),
-            sql`json_extract(${schema.runs.runJson}, '$.resourceOperationAudit.status') = 'pending'`,
-          ),
-        ),
-        orderBy: [asc(d1RunCreatedAtMillisOrder()), asc(schema.runs.id)],
-        limit: clampRecoverableResourceOperationRunListLimit(options.limit),
-      },
-    );
-    return rows.filter(resourceOperationRunNeedsRecovery);
   }
 
   async putBackupRun(run: Run): Promise<Run> {
@@ -2288,159 +2139,6 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return pageFromProbe(rows.map(normalizeCapsuleRecord), limit);
   }
 
-  async reservePublicHost(
-    input: ReservePublicHostInput,
-  ): Promise<ReservePublicHostResult> {
-    await this.#ensureSchema();
-    const hostname = input.hostname.toLowerCase();
-    const workspace = await this.getWorkspace(input.workspaceId);
-    if (!workspace) {
-      throw new Error("public host reservation workspace was not found");
-    }
-    const ownerUserId = workspace.ownerUserId;
-    const vanitySlotLimit =
-      input.allocationKind === "vanity" && input.vanitySlotLimit !== undefined
-        ? Math.max(0, Math.floor(input.vanitySlotLimit))
-        : -1;
-    await this.db
-      .prepare(
-        `insert into public_host_reservations (
-           hostname, owner_user_id, workspace_id, installation_id,
-           installation_name, allocation_kind, status,
-           reserved_at, updated_at, released_at
-         )
-         select ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, null
-         from capsules
-         where id = ?
-           and space_id = ?
-           and status != 'destroyed'
-           and (
-             ? < 0
-             or (
-               select count(*)
-               from public_host_reservations
-               where owner_user_id = ?
-                 and allocation_kind = 'vanity'
-                 and status = 'reserved'
-                 and hostname != ?
-             ) < ?
-           )
-         on conflict(hostname) do update
-         set owner_user_id = excluded.owner_user_id,
-             workspace_id = excluded.workspace_id,
-             installation_id = excluded.installation_id,
-             installation_name = excluded.installation_name,
-             allocation_kind = excluded.allocation_kind,
-             status = 'reserved',
-             reserved_at = case
-               when public_host_reservations.installation_id = excluded.installation_id
-               then public_host_reservations.reserved_at
-               else excluded.reserved_at
-             end,
-             updated_at = excluded.updated_at,
-             released_at = null
-         where public_host_reservations.status = 'released'
-            or public_host_reservations.installation_id = excluded.installation_id`,
-      )
-      .bind(
-        hostname,
-        ownerUserId,
-        input.workspaceId,
-        input.capsuleId,
-        input.capsuleName,
-        input.allocationKind,
-        input.now,
-        input.now,
-        input.capsuleId,
-        input.workspaceId,
-        vanitySlotLimit,
-        ownerUserId,
-        hostname,
-        vanitySlotLimit,
-      )
-      .run();
-    const reservation = await this.db
-      .prepare(
-        `select hostname, owner_user_id, workspace_id, installation_id,
-                installation_name, allocation_kind, status,
-                reserved_at, updated_at, released_at
-         from public_host_reservations
-         where hostname = ?`,
-      )
-      .bind(hostname)
-      .first<Record<string, unknown>>();
-    const normalized = reservation
-      ? publicHostReservationFromD1Row(reservation)
-      : undefined;
-    if (
-      normalized?.status === "reserved" &&
-      normalized.capsuleId !== input.capsuleId
-    ) {
-      return {
-        reserved: false,
-        reservation: normalized,
-        reason: "already_reserved",
-      };
-    }
-    const activeCapsule = await this.db
-      .prepare(
-        `select id
-         from capsules
-         where id = ?
-           and space_id = ?
-           and status != 'destroyed'
-         limit 1`,
-      )
-      .bind(input.capsuleId, input.workspaceId)
-      .first<{ readonly id: string }>();
-    if (!activeCapsule) {
-      return { reserved: false, reason: "capsule_inactive" };
-    }
-    if (normalized?.status === "reserved") {
-      if (
-        normalized.capsuleId === input.capsuleId &&
-        normalized.allocationKind === input.allocationKind
-      ) {
-        return { reserved: true, reservation: normalized };
-      }
-      return {
-        reserved: false,
-        reservation: normalized,
-        reason: "already_reserved",
-      };
-    }
-    if (vanitySlotLimit >= 0) {
-      const count = await this.db
-        .prepare(
-          `select count(*) as count
-           from public_host_reservations
-           where owner_user_id = ?
-             and allocation_kind = 'vanity'
-             and status = 'reserved'
-             and hostname != ?`,
-        )
-        .bind(ownerUserId, hostname)
-        .first<{ readonly count: number | string }>();
-      if (Number(count?.count ?? 0) >= vanitySlotLimit) {
-        return {
-          reserved: false,
-          reason: "owner_slot_limit_reached",
-          vanitySlotLimit: vanitySlotLimit,
-        };
-      }
-    }
-    if (!normalized) {
-      throw new Error(
-        "public host reservation mutation did not return a reservation",
-      );
-    }
-    return {
-      reserved: false,
-      reservation: normalized,
-      reason: "already_reserved",
-    };
-  }
-
   async getPublicHostReservation(
     hostname: string,
   ): Promise<PublicHostReservation | undefined> {
@@ -2677,55 +2375,6 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       throw error;
     }
     return { capsule: updated };
-  }
-
-  async commitResourceRun(
-    input: CommitResourceRunInput,
-  ): Promise<CommitResourceRunResult> {
-    assertD1AtomicCommitBatch(this.db, "commitResourceRun");
-    await this.#ensureSchema();
-    const row = await this.#orm
-      .select({ leaseToken: schema.runs.leaseToken })
-      .from(schema.runs)
-      .where(
-        and(
-          eq(schema.runs.id, input.applyRunTerminal.id),
-          inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
-        ),
-      )
-      .get();
-    if (row?.leaseToken !== input.applyRunLeaseToken) {
-      return { applyRunLeaseLost: true };
-    }
-    const statements = [
-      d1RunLeaseGuardStmt(
-        this.#orm,
-        input.applyRunTerminal.id,
-        input.applyRunLeaseToken,
-        [RUN_KIND_APPLY, "destroy_apply"],
-      ),
-      d1UpsertRunStmt(
-        this.#orm,
-        applyRunType(input.applyRunTerminal),
-        input.applyRunTerminal,
-      ),
-      d1UpsertRunStmt(
-        this.#orm,
-        planRunType(input.planRunApplied),
-        input.planRunApplied,
-      ),
-    ];
-    try {
-      await this.#orm.batch(
-        statements as [(typeof statements)[number], ...typeof statements],
-      );
-    } catch (error) {
-      if (isD1RunLeaseLostError(error)) {
-        return { applyRunLeaseLost: true };
-      }
-      throw error;
-    }
-    return {};
   }
 
   async commitRestoredState(
@@ -4412,7 +4061,7 @@ function d1InvalidCapsuleGuardRow(capsuleId: string) {
 
 function assertD1AtomicCommitBatch(
   db: D1Database,
-  operation: "commitRunState" | "commitResourceRun" | "commitRestoredState",
+  operation: "commitRunState" | "commitRestoredState",
 ): void {
   if (typeof db.batch !== "function") {
     throw new Error(`D1 ${operation} requires atomic batch support`);
@@ -4893,6 +4542,349 @@ const D1_OFFERING_CATALOG_STATEMENTS = [
     on offering_catalogs (created_at, catalog_key)`,
   `create index if not exists offering_catalogs_effective_key_idx
     on offering_catalogs (effective_at, catalog_key)`,
+] as const;
+
+/**
+ * Exact former OSS Host tables retired by migration v66. The migration keeps
+ * the immutable v1-v65 lineage replayable, but the current schema exports and
+ * bootstrap no longer expose these tables as application storage.
+ */
+export const D1_RETIRED_HOST_TABLES = [
+  "offering_catalogs",
+  "portable_host_idempotency",
+  "resource_identity_fences",
+  "resource_shapes",
+  "resolution_locks",
+  "service_form_activations",
+  "service_form_activations__takoform_v1alpha1",
+  "service_form_definitions",
+  "service_form_definitions__takoform_v1alpha1",
+  "service_form_packages",
+  "service_form_packages__takoform_v1alpha1",
+  "space_policies",
+  "target_pools",
+] as const;
+
+const D1_RETIRED_HOST_DISPOSITION_GUARD =
+  "retired_host_rows_require_operator_disposition";
+const D1_RETAINED_INTERFACE_HOST_EVIDENCE_GUARD =
+  "retained_interface_host_evidence_requires_operator_disposition";
+const D1_RETIRED_HOST_DISPOSITION_GUARD_TABLE =
+  "__takosumi_retired_host_disposition_guard";
+
+export const D1_RETIRED_HOST_SCHEMA_RETIREMENT_STATEMENTS = [
+  `create table ${D1_RETIRED_HOST_DISPOSITION_GUARD_TABLE} (
+    safe integer not null
+      constraint ${D1_RETIRED_HOST_DISPOSITION_GUARD}
+      check (safe = 1),
+    retained_interface_safe integer not null
+      constraint ${D1_RETAINED_INTERFACE_HOST_EVIDENCE_GUARD}
+      check (retained_interface_safe = 1)
+  )`,
+  `insert into ${D1_RETIRED_HOST_DISPOSITION_GUARD_TABLE} (
+     safe, retained_interface_safe
+   )
+   select
+     case when (
+       exists (select 1 from resource_shapes limit 1)
+       or exists (select 1 from resolution_locks limit 1)
+       or exists (select 1 from target_pools limit 1)
+       or exists (select 1 from space_policies limit 1)
+       or exists (select 1 from resource_identity_fences limit 1)
+       or exists (select 1 from service_form_packages limit 1)
+       or exists (select 1 from service_form_definitions limit 1)
+       or exists (select 1 from service_form_activations limit 1)
+       or exists (
+         select 1 from service_form_packages__takoform_v1alpha1 limit 1
+       )
+       or exists (
+         select 1 from service_form_definitions__takoform_v1alpha1 limit 1
+       )
+       or exists (
+         select 1 from service_form_activations__takoform_v1alpha1 limit 1
+       )
+       or exists (select 1 from portable_host_idempotency limit 1)
+       or exists (select 1 from offering_catalogs limit 1)
+     ) then 0 else 1 end,
+     case when (
+       exists (
+         select 1 from interfaces
+         where case
+           when json_valid(record_json) = 0 then 1
+           when json_type(record_json) is not 'object' then 1
+           when owner_kind = 'Resource' then 1
+           when form_ref_key is not null then 1
+           when form_schema_digest is not null then 1
+           when descriptor_name is not null then 1
+           when descriptor_version is not null then 1
+           when json_type(record_json, '$.metadata') is not 'object' then 1
+           when json_type(
+             record_json, '$.metadata.ownerRef'
+           ) is not 'object' then 1
+           when json_type(
+             record_json, '$.metadata.ownerRef.kind'
+           ) is not 'text' then 1
+           when json_extract(
+             record_json, '$.metadata.ownerRef.kind'
+           ) = 'Resource' then 1
+           when json_type(
+             record_json, '$.metadata.materializedFrom'
+           ) is not null and json_type(
+             record_json, '$.metadata.materializedFrom'
+           ) is not 'object' then 1
+           when json_type(
+             record_json, '$.metadata.materializedFrom'
+           ) = 'object' and json_type(
+             record_json, '$.metadata.materializedFrom.source'
+           ) is not 'text' then 1
+           when json_extract(
+             record_json, '$.metadata.materializedFrom.source'
+           ) = 'form_descriptor' then 1
+           when json_type(record_json, '$.spec') is not 'object' then 1
+           when json_type(
+             record_json, '$.spec.inputs'
+           ) is not null and json_type(
+             record_json, '$.spec.inputs'
+           ) is not 'object' then 1
+           when exists (
+             select 1
+             from json_each(record_json, '$.spec.inputs') as input
+             where case
+               when input.type <> 'object' then 1
+               when json_type(input.value, '$.source') is not 'text' then 1
+               when json_extract(input.value, '$.source') = 'resource_output'
+                 then 1
+               else 0
+             end = 1
+           ) then 1
+           when json_type(record_json, '$.status') is not 'object' then 1
+           when json_type(
+             record_json, '$.status.provenance'
+           ) is not null and json_type(
+             record_json, '$.status.provenance'
+           ) is not 'object' then 1
+           when exists (
+             select 1
+             from json_each(record_json, '$.status.provenance') as provenance
+             where case
+               when provenance.type <> 'object' then 1
+               when json_type(
+                 provenance.value, '$.source'
+               ) is not 'text' then 1
+               when json_extract(
+                 provenance.value, '$.source'
+               ) = 'resource_output' then 1
+               else 0
+             end = 1
+           ) then 1
+           else 0
+         end = 1
+         limit 1
+       )
+       or exists (
+         select 1 from interface_bindings
+         where case
+           when json_valid(record_json) = 0 then 1
+           when json_type(record_json) is not 'object' then 1
+           when subject_kind = 'Resource' then 1
+           when json_type(record_json, '$.metadata') is not 'object' then 1
+           when json_type(
+             record_json, '$.metadata.materializedFrom'
+           ) is not null and json_type(
+             record_json, '$.metadata.materializedFrom'
+           ) is not 'object' then 1
+           when json_type(
+             record_json, '$.metadata.materializedFrom'
+           ) = 'object' and json_type(
+             record_json, '$.metadata.materializedFrom.source'
+           ) is not 'text' then 1
+           when json_extract(
+             record_json, '$.metadata.materializedFrom.source'
+           ) in ('form_host_descriptor', 'capsule_resource_binding') then 1
+           when json_type(record_json, '$.spec') is not 'object' then 1
+           when json_type(
+             record_json, '$.spec.subjectRef'
+           ) is not 'object' then 1
+           when json_type(
+             record_json, '$.spec.subjectRef.kind'
+           ) is not 'text' then 1
+           when json_extract(
+             record_json, '$.spec.subjectRef.kind'
+           ) = 'Resource' then 1
+           when json_type(record_json, '$.status') is not 'object' then 1
+           else 0
+         end = 1
+         limit 1
+       )
+     ) then 0 else 1 end`,
+  `drop table ${D1_RETIRED_HOST_DISPOSITION_GUARD_TABLE}`,
+  `drop table service_form_activations`,
+  `drop table service_form_activations__takoform_v1alpha1`,
+  `drop table resource_shapes`,
+  `drop table resolution_locks`,
+  `drop table service_form_definitions`,
+  `drop table service_form_definitions__takoform_v1alpha1`,
+  `drop table service_form_packages`,
+  `drop table service_form_packages__takoform_v1alpha1`,
+  `drop table resource_identity_fences`,
+  `drop table space_policies`,
+  `drop table target_pools`,
+  `drop table portable_host_idempotency`,
+  `drop table offering_catalogs`,
+  `drop table if exists interfaces__takosumi_v66`,
+  `create table interfaces__takosumi_v66 (
+    id text primary key,
+    workspace_id text not null,
+    owner_kind text not null,
+    owner_id text not null,
+    name text not null,
+    interface_type text not null,
+    phase text not null,
+    generation integer not null,
+    resolved_revision integer not null,
+    oauth_resource_uri text,
+    record_json text not null,
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `insert into interfaces__takosumi_v66 (
+     id, workspace_id, owner_kind, owner_id, name, interface_type, phase,
+     generation, resolved_revision, oauth_resource_uri, record_json,
+     created_at, updated_at
+   )
+   select id, workspace_id, owner_kind, owner_id, name, interface_type, phase,
+          generation, resolved_revision, oauth_resource_uri, record_json,
+          created_at, updated_at
+   from interfaces`,
+  `drop table interfaces`,
+  `alter table interfaces__takosumi_v66 rename to interfaces`,
+  `create unique index interfaces_active_name_unique
+     on interfaces (workspace_id, owner_kind, owner_id, name)
+     where phase <> 'Retired'`,
+  `create index interfaces_workspace_type_phase_idx
+     on interfaces (workspace_id, interface_type, phase)`,
+  `create index interfaces_authorized_page_idx
+     on interfaces (workspace_id, phase, created_at, id)`,
+  `create unique index interfaces_oauth_resource_claim_unique
+     on interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
+     where oauth_resource_uri is not null`,
+] as const;
+
+/**
+ * Fresh databases still replay the immutable Host migration lineage. These
+ * tables exist only as a transient pre-v28 scaffold and are removed by v66;
+ * they are deliberately absent from the current bootstrap statement list.
+ */
+const D1_RETIRED_RESOURCE_MIGRATION_REPLAY_TABLES = [
+  {
+    table: "resource_shapes",
+    statements: [
+      `create table resource_shapes (
+    id text primary key,
+    space_id text not null,
+    project text,
+    environment text,
+    kind text not null,
+    form_ref_json text,
+    package_digest text,
+    name text not null,
+    managed_by text not null,
+    spec_json text not null,
+    phase text not null,
+    generation integer not null,
+    observed_generation integer not null,
+    outputs_json text,
+    execution_json text,
+    state_adoption_json text,
+    conditions_json text,
+    labels_json text,
+    created_at text not null,
+    updated_at text not null,
+    observation_lease_id text,
+    observation_claimed_at text,
+    last_observation_attempt_at text,
+    last_operation_run_id text,
+    pending_operation_json text,
+    owner_json text
+  )`,
+      `create unique index if not exists resource_shapes_space_kind_name_unique
+    on resource_shapes (space_id, kind, name)`,
+      `create index if not exists resource_shapes_space_idx
+    on resource_shapes (space_id)`,
+      `create index if not exists resource_shapes_space_created_id_idx
+    on resource_shapes (space_id, created_at, id)`,
+      `create index if not exists resource_shapes_ready_kind_created_id_idx
+    on resource_shapes (kind, phase, created_at, id)`,
+      `create index if not exists resource_shapes_observation_due_idx
+    on resource_shapes (
+      phase, last_observation_attempt_at, observation_claimed_at, id
+    )`,
+      `create index resource_shapes_unpinned_form_kind_id_idx
+        on resource_shapes (kind, id) where form_ref_json is null`,
+    ],
+  },
+  {
+    table: "resolution_locks",
+    statements: [
+      `create table resolution_locks (
+    resource_id text primary key,
+    form_ref_json text,
+    package_digest text,
+    selected_implementation text not null,
+    target_pool text,
+    target text not null,
+    target_snapshot_json text,
+    implementation_snapshot_json text,
+    implementation_plugin text,
+    implementation_options_json text,
+    implementation_fingerprint text,
+    locked integer not null,
+    reason_json text not null,
+    portability text,
+    native_resources_json text,
+    locked_at text not null,
+    updated_at text not null
+  )`,
+      `create index resolution_locks_unpinned_form_resource_idx
+        on resolution_locks (resource_id) where form_ref_json is null`,
+    ],
+  },
+  {
+    table: "target_pools",
+    statements: [
+      `create table target_pools (
+    id text primary key,
+    space_id text not null,
+    name text not null,
+    spec_json text not null,
+    created_at text not null,
+    updated_at text not null
+  )`,
+      `create unique index if not exists target_pools_space_name_unique
+    on target_pools (space_id, name)`,
+      `create index if not exists target_pools_space_idx
+    on target_pools (space_id)`,
+      `create index target_pools_space_created_id_idx
+        on target_pools (space_id, created_at, id)`,
+    ],
+  },
+  {
+    table: "space_policies",
+    statements: [
+      `create table space_policies (
+    id text primary key,
+    space_id text not null,
+    name text not null,
+    spec_json text not null,
+    created_at text not null,
+    updated_at text not null
+  )`,
+      `create unique index if not exists space_policies_space_name_unique
+    on space_policies (space_id, name)`,
+      `create index space_policies_space_idx
+        on space_policies (space_id)`,
+    ],
+  },
 ] as const;
 
 // Migration-only by design: do not add these to the pre-migration bootstrap
@@ -5499,96 +5491,6 @@ export async function ensureD1OpenTofuLedgerSchema(
       on backups (space_id)`,
     `create index if not exists backups_installation_idx
       on backups (installation_id)`,
-    // Resource Shape flow (`takosumi.dev/v1alpha1`) durable projections.
-    `create table if not exists resource_shapes (
-      id text primary key,
-      space_id text not null,
-      project text,
-      environment text,
-      kind text not null,
-      form_ref_json text,
-      package_digest text,
-      name text not null,
-      managed_by text not null,
-      spec_json text not null,
-      phase text not null,
-      generation integer not null,
-      observed_generation integer not null,
-      outputs_json text,
-      execution_json text,
-      state_adoption_json text,
-      conditions_json text,
-      labels_json text,
-      created_at text not null,
-      updated_at text not null,
-      observation_lease_id text,
-      observation_claimed_at text,
-      last_observation_attempt_at text,
-      last_operation_run_id text,
-      pending_operation_json text,
-      owner_json text
-    )`,
-    `create unique index if not exists resource_shapes_space_kind_name_unique
-      on resource_shapes (space_id, kind, name)`,
-    `create index if not exists resource_shapes_space_idx
-      on resource_shapes (space_id)`,
-    `create index if not exists resource_shapes_space_created_id_idx
-      on resource_shapes (space_id, created_at, id)`,
-    `create index if not exists resource_shapes_ready_kind_created_id_idx
-      on resource_shapes (kind, phase, created_at, id)`,
-    `create index if not exists resource_shapes_observation_due_idx
-      on resource_shapes (
-        phase, last_observation_attempt_at, observation_claimed_at, id
-      )`,
-    `create index if not exists resource_shapes_unpinned_form_kind_id_idx
-      on resource_shapes (kind, id) where form_ref_json is null`,
-    `create table if not exists resolution_locks (
-      resource_id text primary key,
-      form_ref_json text,
-      package_digest text,
-      selected_implementation text not null,
-      target_pool text,
-      target text not null,
-      target_snapshot_json text,
-      implementation_snapshot_json text,
-      implementation_plugin text,
-      implementation_options_json text,
-      implementation_fingerprint text,
-      locked integer not null,
-      reason_json text not null,
-      portability text,
-      native_resources_json text,
-      locked_at text not null,
-      updated_at text not null
-    )`,
-    `create index if not exists resolution_locks_unpinned_form_resource_idx
-      on resolution_locks (resource_id) where form_ref_json is null`,
-    `create table if not exists target_pools (
-      id text primary key,
-      space_id text not null,
-      name text not null,
-      spec_json text not null,
-      created_at text not null,
-      updated_at text not null
-    )`,
-    `create unique index if not exists target_pools_space_name_unique
-      on target_pools (space_id, name)`,
-    `create index if not exists target_pools_space_idx
-      on target_pools (space_id)`,
-    `create index if not exists target_pools_space_created_id_idx
-      on target_pools (space_id, created_at, id)`,
-    `create table if not exists space_policies (
-      id text primary key,
-      space_id text not null,
-      name text not null,
-      spec_json text not null,
-      created_at text not null,
-      updated_at text not null
-    )`,
-    `create unique index if not exists space_policies_space_name_unique
-      on space_policies (space_id, name)`,
-    `create index if not exists space_policies_space_idx
-      on space_policies (space_id)`,
     // Runtime declaration layer. Values are non-secret declaration documents
     // and resolved public output inputs; credentials remain references only.
     `create table if not exists interfaces (
@@ -5602,10 +5504,6 @@ export async function ensureD1OpenTofuLedgerSchema(
       generation integer not null,
       resolved_revision integer not null,
       oauth_resource_uri text,
-      form_ref_key text,
-      form_schema_digest text,
-      descriptor_name text,
-      descriptor_version text,
       record_json text not null,
       created_at text not null,
       updated_at text not null
@@ -5621,11 +5519,6 @@ export async function ensureD1OpenTofuLedgerSchema(
     `create unique index if not exists interfaces_oauth_resource_claim_unique
       on interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
       where oauth_resource_uri is not null`,
-    `create index if not exists interfaces_form_descriptor_idx
-      on interfaces (
-        workspace_id, form_ref_key, form_schema_digest,
-        descriptor_name, descriptor_version
-      ) where form_ref_key is not null`,
     `create table if not exists interface_bindings (
       id text primary key,
       workspace_id text not null,
@@ -5648,10 +5541,6 @@ export async function ensureD1OpenTofuLedgerSchema(
     ...(throughMigrationVersion >= 58
       ? [D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS[1]]
       : []),
-    ...D1_SERVICE_FORM_REGISTRY_STATEMENTS.filter(
-      (sql) => !isD1IndexStatement(sql),
-    ),
-    ...(throughMigrationVersion >= 50 ? D1_OFFERING_CATALOG_STATEMENTS : []),
   ];
   const tableStatements = statements.filter((sql) => !isD1IndexStatement(sql));
   const indexStatements = statements.filter((sql) => isD1IndexStatement(sql));
@@ -5666,9 +5555,14 @@ export async function ensureD1OpenTofuLedgerSchema(
     await db.prepare(sql).run();
   }
   await migrateD1OpenTofuLedgerSchema(db, throughMigrationVersion);
-  const serviceFormIndexStatements = (
-    await d1ServiceFormRegistryReplayStatements(db)
-  ).filter((sql) => isD1IndexStatement(sql));
+  const serviceFormIndexStatements = (await d1TableExists(
+    db,
+    "service_form_definitions",
+  ))
+    ? (await d1ServiceFormRegistryReplayStatements(db)).filter((sql) =>
+        isD1IndexStatement(sql),
+      )
+    : [];
   const hasRestoreSafeServiceFormUnique =
     await d1ServiceFormDefinitionHasInlineUnique(db);
   const bootstrapIndexStatements = indexStatements.filter(
@@ -5737,11 +5631,51 @@ async function migrateD1OpenTofuLedgerSchema(
   // A legacy/empty database can acquire the fence before this ledger exists.
   // Cover the newly created table before the migration chain yields.
   await repairControlD1MaintenanceGuards(db);
+  await prepareRetiredD1HostMigrationReplaySchema(db);
   await prepareRetiredD1WorkspaceOutputSyncMigration(db);
   for (const migration of D1_OPEN_TOFU_SCHEMA_MIGRATIONS) {
     if (migration.version > throughMigrationVersion) break;
     await applyD1OpenTofuSchemaMigration(db, migration);
   }
+}
+
+/**
+ * Historical D1 migrations before v66 assume the four Resource projection
+ * tables were supplied by request-time bootstrap. Recreate that precondition
+ * only while replaying the immutable lineage; v66 removes the empty scaffold
+ * in the same migration chain. Once v66 is recorded, startup never recreates
+ * the retired schema.
+ */
+async function prepareRetiredD1HostMigrationReplaySchema(
+  db: D1Database,
+): Promise<void> {
+  const retired = await db
+    .prepare(`select version from schema_migrations where version = ?`)
+    .bind(66)
+    .first<{ readonly version: number }>();
+  if (retired) return;
+
+  const newlyCreatedTables = new Set<string>();
+  const statements: string[] = [];
+  for (const replay of D1_RETIRED_RESOURCE_MIGRATION_REPLAY_TABLES) {
+    if (await d1TableExists(db, replay.table)) continue;
+    newlyCreatedTables.add(replay.table);
+    statements.push(...replay.statements);
+  }
+  if (statements.length === 0) return;
+
+  const prepared = statements.map((sql) => db.prepare(sql));
+  const fence = await activeControlD1MaintenanceFence(db);
+  if (!fence) {
+    await runD1AtomicStatements(db, prepared);
+    return;
+  }
+  await runD1AtomicStatements(
+    db,
+    await wrapControlD1MaintenanceMigrationBatch(db, fence, prepared, {
+      newlyCreatedTables,
+    }),
+  );
 }
 
 /**
@@ -7835,6 +7769,29 @@ ${D1_GIT_INSTALL_PLAN_STATEMENTS.join("\n---\n")}
     },
     async apply(db) {
       await runD1AtomicSql(db, D1_GIT_INSTALL_PLAN_STATEMENTS);
+    },
+  },
+  {
+    version: 66,
+    name: "d1_retired_host_schema_drop_empty",
+    checksumSource: () => `
+Takosumi no longer owns the embedded Resource Form Host or generic Offering schema
+all current and retained Host tables must be empty before any physical drop
+populated or unknown durable state requires operator inventory export and explicit disposition
+the preflight drops and migration ledger insert execute in one atomic D1 batch
+fresh databases replay immutable v1-v65 history before converging to the Host-free schema
+${D1_RETIRED_HOST_SCHEMA_RETIREMENT_STATEMENTS.join("\n---\n")}
+`,
+    async atomicStatements() {
+      return D1_RETIRED_HOST_SCHEMA_RETIREMENT_STATEMENTS;
+    },
+    permanentlyDroppedTables: [
+      ...D1_RETIRED_HOST_TABLES,
+      D1_RETIRED_HOST_DISPOSITION_GUARD_TABLE,
+      "interfaces__takosumi_v66",
+    ],
+    async apply(db) {
+      await runD1AtomicSql(db, D1_RETIRED_HOST_SCHEMA_RETIREMENT_STATEMENTS);
     },
   },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];

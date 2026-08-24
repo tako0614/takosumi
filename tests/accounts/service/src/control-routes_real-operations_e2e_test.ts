@@ -32,11 +32,6 @@ import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-co
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/capsules/default_install_config.ts";
 import {
-  formatResourceShapeId,
-  type ResourceShapeRecord,
-} from "../../../../core/domains/resource-shape/records.ts";
-import { createInMemoryResourceShapeStores } from "../../../../core/domains/resource-shape/stores.ts";
-import {
   fakeProviderVault,
   FIXTURE_ARCHIVE_DIGEST,
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
@@ -498,111 +493,6 @@ function applyRunner(input: {
   };
 }
 
-test("no-state Capsule DELETE returns 409 for owned or invalid Resource claims", async () => {
-  const cases = [
-    {
-      name: "owned-observed-mismatch",
-      phase: "Ready" as const,
-      generation: 2,
-      observedGeneration: 1,
-      owner: (workspaceId: string, capsuleId: string) => ({
-        kind: "Capsule" as const,
-        id: capsuleId,
-        workspaceId,
-        installingPrincipalId: "user_test",
-      }),
-    },
-    {
-      name: "workspace-mismatch",
-      phase: "Deleting" as const,
-      generation: 1,
-      observedGeneration: 1,
-      owner: (_workspaceId: string, capsuleId: string) => ({
-        kind: "Capsule" as const,
-        id: capsuleId,
-        workspaceId: "ws_wrong_owner",
-        installingPrincipalId: "user_test",
-      }),
-    },
-    {
-      name: "corrupt-owner",
-      phase: "Failed" as const,
-      generation: 1,
-      observedGeneration: 0,
-      owner: (workspaceId: string, capsuleId: string) => ({
-        kind: "Capsule" as const,
-        id: capsuleId,
-        workspaceId,
-      }),
-    },
-  ];
-
-  for (const item of cases) {
-    const accountStore = new InMemoryAccountsStore();
-    const cookie = seedSession(accountStore);
-    const deployStore = new InMemoryOpenTofuControlStore();
-    const resourceStores = createInMemoryResourceShapeStores();
-    const { operations } = await createTakosumiService({
-      role: "takosumi-api",
-      runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
-      opentofuControlStore: deployStore,
-      resourceShapeStores: resourceStores,
-    });
-    const workspaceId = `ws_delete_fence_${item.name}`;
-    const capsuleId = `cap_delete_fence_${item.name}`;
-    const seeded = await seedCapsuleModel(deployStore, {
-      workspaceId,
-      capsuleId,
-    });
-    await deployStore.putCapsule({
-      ...seeded.capsule,
-      installingPrincipalId: "user_test",
-    });
-    const resourceId = formatResourceShapeId(
-      workspaceId,
-      "EdgeWorker",
-      `resource-${item.name}`,
-    );
-    await resourceStores.resources.upsert({
-      id: resourceId,
-      spaceId: workspaceId,
-      kind: "EdgeWorker",
-      name: `resource-${item.name}`,
-      managedBy: "portable_iac",
-      spec: { name: `resource-${item.name}` },
-      phase: item.phase,
-      generation: item.generation,
-      observedGeneration: item.observedGeneration,
-      owner: item.owner(workspaceId, capsuleId),
-      createdAt: seeded.capsule.createdAt,
-      updatedAt: seeded.capsule.updatedAt,
-    } as ResourceShapeRecord);
-
-    const result = await controlJson<{
-      readonly error: {
-        readonly code: string;
-        readonly details?: { readonly reason?: string };
-      };
-    }>(
-      {
-        operations,
-        store: accountStore,
-        cookie,
-        method: "DELETE",
-        path: `/api/v1/capsules/${capsuleId}`,
-      },
-      409,
-    );
-
-    expect(result.error).toMatchObject({
-      code: "failed_precondition",
-      details: { reason: "capsule_owned_resources_pending" },
-    });
-    expect((await deployStore.getCapsule(capsuleId))?.status).toBe("pending");
-    expect(await resourceStores.resources.get(resourceId)).toBeDefined();
-  }
-});
-
 test("default service coordination returns 409 while provider Apply holds the Capsule lease", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
@@ -664,7 +554,7 @@ test("default service coordination returns 409 while provider Apply holds the Ca
     expect(await response?.json()).toMatchObject({
       error: {
         code: "failed_precondition",
-        details: { reason: "capsule_owned_resources_pending" },
+        details: { reason: "capsule_lifecycle_busy" },
       },
     });
     expect((await deployStore.getCapsule(seeded.capsule.id))?.status).toBe(
@@ -681,7 +571,7 @@ test("default service coordination returns 409 while provider Apply holds the Ca
   );
 });
 
-test("abandon wins both admission leases before a queued Apply rechecks destroyed status", async () => {
+test("abandon wins the Capsule lifecycle lease before a queued Apply rechecks destroyed status", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
@@ -724,7 +614,6 @@ test("abandon wins both admission leases before a queued Apply rechecks destroye
   );
   expect(acquiredScopes).toEqual([
     `capsule:${seeded.capsule.id}:${seeded.capsule.environment}`,
-    `capsule-resource-admission:${seeded.capsule.id}`,
   ]);
   expect((await deployStore.getCapsule(seeded.capsule.id))?.status).toBe(
     "destroyed",
@@ -1751,7 +1640,7 @@ test("a Workspace session cannot grant itself operator lifecycle actions through
   expect(stored.policy.lifecycleActions?.allowedExecutors).toEqual(["runner"]);
 });
 
-test("a Capsule config patch cannot drop the public_endpoint projection that reserves the hostname", async () => {
+test("a Capsule config patch may drop public_endpoint metadata without host reservation authority", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
@@ -1779,9 +1668,9 @@ test("a Capsule config patch cannot drop the public_endpoint projection that res
     },
   });
 
-  // Erasing the projection while keeping the endpoint variable would make the
-  // plan skip host reservation entirely and let `app_url` name someone else's
-  // host — `installExperienceValue({})` parses, so this must be rejected here.
+  // Endpoint/DNS ownership is ordinary Git OpenTofu/provider work. The
+  // presentation projection grants no hostname reservation authority, so its
+  // removal is an ordinary config patch.
   const built = request(
     "PATCH",
     `/api/v1/capsule-configs/${seeded.installConfig.id}`,
@@ -1800,14 +1689,14 @@ test("a Capsule config patch cannot drop the public_endpoint projection that res
     operations,
   });
 
-  expect(response?.status).toEqual(400);
+  expect(response?.status).toEqual(200);
   const stored = await operations.capsules.getInstallConfig(
     seeded.installConfig.id,
   );
-  expect(stored.installExperience?.projections).toEqual([
-    { kind: "public_endpoint", variables: { url: "app_url" } },
-  ]);
-  expect(stored.variableMapping.app_url).toBe("https://mine.app.takosumi.test");
+  expect(stored.installExperience?.projections).toBeUndefined();
+  expect(stored.variableMapping.app_url).toBe(
+    "https://victim.app.takosumi.test",
+  );
 });
 
 test("account session control routes execute plan and apply through the real OpenTofu controller", async () => {

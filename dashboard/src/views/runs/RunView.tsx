@@ -244,19 +244,6 @@ function diagnosticDisplayText(value: string | undefined): string | undefined {
   return redacted.length > 4_000 ? `${redacted.slice(0, 4_000)}...` : redacted;
 }
 
-function isManagedHostnameSlotLimitRun(
-  run: Run,
-  diagnostics: readonly RunDiagnostic[],
-): boolean {
-  return (
-    run.errorCode === "managed_public_hostname_slot_limit_reached" ||
-    diagnostics.some(
-      (diagnostic) =>
-        diagnostic.code === "managed_public_hostname_slot_limit_reached",
-    )
-  );
-}
-
 type AccessIssueKind =
   | "connection_verification"
   | "connection_setup"
@@ -355,28 +342,22 @@ function accessIssueDiagnostic(issue: AccessIssueKind): {
 }
 
 function DiagnosticRow(props: { diagnostic: RunDiagnostic }) {
-  const hostnameSlotLimit = () =>
-    props.diagnostic.code === "managed_public_hostname_slot_limit_reached";
   const accessIssue = () => accessIssueFromErrorCode(props.diagnostic.code);
   const message = () =>
-    hostnameSlotLimit()
-      ? t("run.diagnostics.hostnameSlotLimitShort")
-      : accessIssue()
-        ? accessIssueDiagnostic(accessIssue()!).short
-        : (diagnosticDisplayText(props.diagnostic.message) ?? "diagnostic");
+    accessIssue()
+      ? accessIssueDiagnostic(accessIssue()!).short
+      : (diagnosticDisplayText(props.diagnostic.message) ?? "diagnostic");
   const detail = () =>
-    hostnameSlotLimit()
-      ? t("run.diagnostics.hostnameSlotLimitDetail")
-      : accessIssue()
-        ? accessIssueDiagnostic(accessIssue()!).detail
-        : diagnosticDisplayText(props.diagnostic.detail);
+    accessIssue()
+      ? accessIssueDiagnostic(accessIssue()!).detail
+      : diagnosticDisplayText(props.diagnostic.detail);
   // A raw (code-less) runner error keeps its own newlines — the .wa-diag-msg
   // span flattens them into flowing prose. Render multi-line raw text in a
   // <pre> (THEME's .wa-pre applies white-space: pre-wrap). Classified issues
   // stay a tidy one-line span. Provider-connection causes are selected only by
   // the diagnostic's stable code and receive friendly copy above.
   const rawMultilineMessage = () =>
-    !hostnameSlotLimit() && !accessIssue() && /\n/u.test(message());
+    !accessIssue() && /\n/u.test(message());
   return (
     <li class={`wa-diag wa-diag-${props.diagnostic.severity}`}>
       <span class="wa-diag-sev">
@@ -1445,13 +1426,6 @@ function Inner() {
         };
       }
       if (r.status === "failed") {
-        if (isManagedHostnameSlotLimitRun(r, diagnosticRows())) {
-          return {
-            kind: "action",
-            text: t("run.summary.hostnameSlotLimit"),
-            sub: t("run.summary.hostnameSlotLimitHint"),
-          };
-        }
         const accessIssue = accessIssueForRun(r, diagnosticRows());
         if (accessIssue) {
           const accessSummary = accessIssueSummary(accessIssue);
@@ -1533,13 +1507,6 @@ function Inner() {
               };
         }
         case "failed":
-          if (isManagedHostnameSlotLimitRun(r, diagnosticRows())) {
-            return {
-              kind: "action",
-              text: t("run.summary.hostnameSlotLimit"),
-              sub: t("run.summary.hostnameSlotLimitHint"),
-            };
-          }
           const accessIssue = accessIssueForRun(r, diagnosticRows());
           if (accessIssue) {
             const accessSummary = accessIssueSummary(accessIssue);

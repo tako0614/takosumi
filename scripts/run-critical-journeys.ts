@@ -86,22 +86,12 @@ export const CRITICAL_JOURNEYS: readonly CriticalJourney[] = [
     id: "destroy-recreate-idempotency",
     title: "destroy/recreate/idempotency conflict handling",
     tests: [
-      "tests/core/api/portable_host_idempotency_test.ts",
-      "tests/core/api/form_host_idempotency_resume_test.ts",
-      "tests/core/domains/resource-shape/service_test.ts",
+      "tests/core/domains/interfaces/service_test.ts",
     ],
     negativeControls: [
       {
-        path: "tests/core/api/portable_host_idempotency_test.ts",
-        description: "rejects tenant/request substitution and corrupt replays",
-      },
-      {
-        path: "tests/core/api/form_host_idempotency_resume_test.ts",
-        description: "retries only the exact interrupted mutation key",
-      },
-      {
-        path: "tests/core/domains/resource-shape/service_test.ts",
-        description: "advances the Resource incarnation and rejects stale delete conflicts",
+        path: "tests/core/domains/interfaces/service_test.ts",
+        description: "keeps Interface and Binding lifecycle authority scoped",
       },
     ],
   },

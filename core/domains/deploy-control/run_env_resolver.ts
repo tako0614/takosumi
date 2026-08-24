@@ -190,7 +190,7 @@ export class RunEnvResolver {
         resolvedBindings: undefined,
       };
     }
-    if (!planRun.capsuleContext && !planRun.resourceContext) {
+    if (!planRun.capsuleContext) {
       return {
         providerResolutions: planRun.requiredProviders.map((provider) => {
           const requirement = providerRequirement(planRun, provider);

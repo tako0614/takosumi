@@ -11,7 +11,6 @@ import type {
 } from "takosumi-contract/interfaces";
 import type {
   InstallConfig,
-  InstallConfigHostRuntimeMaterialization,
   InstallConfigInstallExperience,
   InstallConfigInstallProjection,
   OutputAllowlistEntry,
@@ -35,7 +34,6 @@ import {
   parseRepositorySourceBuild,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
 } from "takosumi-contract/repository-manifest";
-import { HOST_RUNTIME_MATERIALIZATION_CONTRACT } from "takosumi-contract";
 import type { JsonValue } from "takosumi-contract/types";
 
 const SUPPORTED_SOURCE_KINDS = [
@@ -46,7 +44,6 @@ const SUPPORTED_SOURCE_KINDS = [
 ] as const;
 
 const SUPPORTED_REQUIREMENT_KINDS = [
-  "identity.oidc",
   "secret.generated",
   "http.endpoint",
   "interface.consume",
@@ -65,9 +62,6 @@ const RESERVED_RUNTIME_BINDINGS: ReadonlySet<string> = new Set([
   "TAKOSUMI_WORKSPACE_ID",
   "TAKOSUMI_RUN_ID",
 ]);
-
-const DEFAULT_GENERATED_SECRET_BYTES = 32;
-const DEFAULT_GENERATED_SECRET_ENCODING = "base64url" as const;
 
 const MAX_DIAGNOSTIC_MESSAGE_LENGTH = 240;
 const PLAIN_ENV_VARIABLE = "env";
@@ -92,7 +86,6 @@ export type RepositoryInstallUxDiagnosticCode =
   | "repository_install_ux_source_disallowed"
   | "repository_install_ux_requirement_disallowed"
   | "repository_install_ux_requirement_target_invalid"
-  | "repository_install_ux_oidc_scope_disallowed"
   | "repository_install_ux_feature_input_invalid"
   | "repository_install_ux_secret_materialization_required"
   | "repository_install_ux_interface_version_unsupported"
@@ -121,7 +114,6 @@ export interface RepositoryInstallUxDiagnostic {
 export interface RepositoryInstallUxCompilerPolicy {
   readonly allowedSourceKinds?: readonly RepositoryInstallUxInputSource["kind"][];
   readonly allowedRequirementKinds?: readonly RepositoryRuntimeRequirement["kind"][];
-  readonly allowedOidcScopes?: readonly string[];
   /** Permission tokens accepted from repository-owned binding requests. */
   readonly allowedInterfacePermissions?: readonly string[];
   /** Delivery tokens accepted from repository-owned binding requests. */
@@ -160,12 +152,6 @@ export interface CompiledRepositoryInstallUx {
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   /** Credential-free source preparation persisted into InstallConfig. */
   readonly sourceBuild?: InstallConfig["sourceBuild"];
-  /**
-   * Requirements the repository asked the host to satisfy directly in the
-   * application runtime. Absent when every requirement is delivered through
-   * module variables instead.
-   */
-  readonly hostRuntimeMaterialization?: InstallConfigHostRuntimeMaterialization;
 }
 
 export type CompileRepositoryInstallUxResult =
@@ -288,7 +274,6 @@ export function compileRepositoryInstallUx(
       requirement,
       declarationByName,
       requirementKinds,
-      input.policy?.allowedOidcScopes,
       input.policy?.allowedInterfacePermissions,
       input.policy?.allowedInterfaceDeliveryTypes,
       input.policy?.allowedInterfaceBindingProfiles,
@@ -388,15 +373,11 @@ export function compileRepositoryInstallUx(
   }
 
   const projections = compileVariableProjections(requirements, module.inputs);
-  const hostRuntimeMaterialization = compileHostRuntimeMaterialization(
-    requirements,
-  );
   const requiredInterfaces = compileRequiredInterfaces(requirements);
 
   return {
     ok: true,
     compiled: {
-      ...(hostRuntimeMaterialization ? { hostRuntimeMaterialization } : {}),
       variablePresentation,
       installExperience: {
         ...(projections.length > 0 ? { projections } : {}),
@@ -449,7 +430,7 @@ type CompileInterfaceDeclarationsResult =
  * Normalize repository-owned generic Interface proposals into the exact
  * service-side blueprint and Output projection shapes. This function does not
  * create a grant or add lifecycle authority; binding requests remain explicit
- * proposals for the existing InstallConfig materializer.
+ * proposals for the existing InstallConfig projection.
  */
 function compileInterfaceDeclarations(
   input: CompileInterfaceDeclarationsInput,
@@ -894,17 +875,28 @@ function validateRequirement(
   requirement: RepositoryRuntimeRequirement,
   declarations: ReadonlyMap<string, CapsuleRootModuleVariableDeclaration>,
   allowedKinds: ReadonlySet<RepositoryRuntimeRequirement["kind"]>,
-  allowedOidcScopes: readonly string[] | undefined,
   allowedInterfacePermissions: readonly string[] | undefined,
   allowedInterfaceDeliveryTypes: readonly string[] | undefined,
   allowedInterfaceBindingProfiles:
     | RepositoryInstallUxCompilerPolicy["allowedInterfaceBindingProfiles"]
     | undefined,
 ): CompileRepositoryInstallUxResult | undefined {
+  if (requirement.kind === "identity.oidc") {
+    return invalid(
+      "repository_install_ux_requirement_disallowed",
+      "Capsule-specific OIDC client materialization is not part of the Git-owned install flow.",
+    );
+  }
   if (!allowedKinds.has(requirement.kind)) {
     return invalid(
       "repository_install_ux_requirement_disallowed",
       `The ${requirement.kind} requirement is not allowed by operator policy.`,
+    );
+  }
+  if (requirement.kind === "secret.generated") {
+    return invalid(
+      "repository_install_ux_requirement_disallowed",
+      "Generated runtime secrets are not supported by the generic Capsule install flow.",
     );
   }
   if (requirement.kind === "interface.consume") {
@@ -984,32 +976,6 @@ function validateRequirement(
       "repository_install_ux_requirement_target_invalid",
       "An http.endpoint requirement must name a url or subdomain target.",
     );
-  }
-  if (requirement.kind === "identity.oidc") {
-    const allowed = new Set(allowedOidcScopes ?? []);
-    const scopes = requirement.scopes ?? ["openid", "profile", "email"];
-    if (
-      !scopes.includes("openid") ||
-      scopes.some((scope: string) => !allowed.has(scope))
-    ) {
-      return invalid(
-        "repository_install_ux_oidc_scope_disallowed",
-        "The OIDC requirement requests a scope outside the Accounts operator allowlist.",
-      );
-    }
-    if (!deliversToVariables(requirement.deliver)) {
-      // A runtime receives sealed OIDC material as a whole or not at all: a
-      // partial set would leave the app with an unusable half-configuration.
-      const missing = (
-        ["issuerUrl", "clientId", "ownerSubject", "redirectUri"] as const
-      ).filter((slot) => !targets[slot]);
-      if (missing.length > 0) {
-        return invalid(
-          "repository_install_ux_requirement_target_invalid",
-          `An identity.oidc requirement delivered to bindings must name every binding; missing ${missing.join(", ")}.`,
-        );
-      }
-    }
   }
   return undefined;
 }
@@ -1151,90 +1117,10 @@ function compileVariableProjections(
       projections.push({ kind: "public_endpoint", variables: { ...variables } });
       continue;
     }
-    if (requirement.kind === "identity.oidc") {
-      projections.push({
-        kind: "oidc_client",
-        variables: { ...variables },
-        callbackPath: requirement.callbackPath,
-        ...(requirement.scopes
-          ? { scopes: canonicalOidcScopes(requirement.scopes) }
-          : {}),
-      });
-    }
     // A generated secret has no variable form: the host never writes a secret
     // into portable module state.
   }
   return projections;
-}
-
-function oidcBinding(binding: string): {
-  readonly binding: string;
-  readonly capabilityRef: `capability:${string}`;
-} {
-  return {
-    binding,
-    capabilityRef: `capability:repository/${binding}`,
-  };
-}
-
-/**
- * Binding-delivered requirements become the provider-neutral host runtime
- * declaration. Values never appear here — only the opaque refs the host
- * resolves inside its own boundary.
- */
-function compileHostRuntimeMaterialization(
-  requirements: readonly RepositoryRuntimeRequirement[],
-): InstallConfigHostRuntimeMaterialization | undefined {
-  const materialized = requirements.filter(
-    (
-      requirement,
-    ): requirement is Exclude<
-      RepositoryRuntimeRequirement,
-      { readonly kind: "interface.consume" }
-    > =>
-      requirement.kind !== "interface.consume" &&
-      !deliversToVariables(requirement.deliver),
-  );
-  if (materialized.length === 0) return undefined;
-  const compiled: InstallConfigHostRuntimeMaterialization["requirements"][number][] =
-    [];
-  for (const requirement of materialized) {
-    const targets = deliveryTargets(requirement.deliver);
-    if (requirement.kind === "secret.generated") {
-      const binding = targets.value!;
-      compiled.push({
-        kind: "generated_secret",
-        binding,
-        secretRef: `secret:repository/${binding}`,
-        bytes: requirement.bytes ?? DEFAULT_GENERATED_SECRET_BYTES,
-        encoding: requirement.encoding ?? DEFAULT_GENERATED_SECRET_ENCODING,
-      });
-      continue;
-    }
-    if (requirement.kind === "identity.oidc") {
-      compiled.push({
-        kind: "public_oidc",
-        id: "repository-oidc",
-        callbackPath: requirement.callbackPath,
-        scopes: canonicalOidcScopes(
-          requirement.scopes ?? ["openid", "profile"],
-        ),
-        bindings: {
-          issuerUrl: oidcBinding(targets.issuerUrl!),
-          clientId: oidcBinding(targets.clientId!),
-          ownerSubject: oidcBinding(targets.ownerSubject!),
-          redirectUri: oidcBinding(targets.redirectUri!),
-        },
-      });
-    }
-    // http.endpoint has no binding form: the managed hostname is the runtime
-    // location itself, not a value the host injects.
-  }
-  if (compiled.length === 0) return undefined;
-  return {
-    contract: HOST_RUNTIME_MATERIALIZATION_CONTRACT,
-    requirements: compiled,
-  };
 }
 
 function compileRequiredInterfaces(
@@ -1256,15 +1142,6 @@ function compileRequiredInterfaces(
       delivery: { type: requirement.delivery.type },
     }))
     .sort((left, right) => left.key.localeCompare(right.key));
-}
-
-/**
- * OAuth scopes are a set, while the host runtime contract stores sets in one
- * deterministic order. Repository metadata may use any order, so canonicalize
- * it at the repository-to-host authority seam before persistence validation.
- */
-function canonicalOidcScopes(scopes: readonly string[]): readonly string[] {
-  return [...new Set(scopes)].sort();
 }
 
 function jsonValueMatchesType(

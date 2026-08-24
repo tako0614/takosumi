@@ -19,14 +19,13 @@ for (const forbidden of [
   }
 }
 
-for (const expected of [
-  "schema_validators.generated.ts",
+for (const retiredHostSchemaMarker of [
   "draft_2020_schema.generated.ts",
   "@cfworker/json-schema",
 ] as const) {
-  if (!bundle.includes(expected)) {
+  if (bundle.includes(retiredHostSchemaMarker)) {
     throw new Error(
-      `Cloudflare Worker bundle is missing expected schema runtime marker ${expected}`,
+      `Cloudflare Worker bundle contains retired Host schema marker ${retiredHostSchemaMarker}`,
     );
   }
 }

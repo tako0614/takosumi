@@ -930,101 +930,6 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [["space_id"], ["run_id"], ["severity"]],
     },
     {
-      name: "takosumi_resource_shapes",
-      domain: "resources",
-      columns: [
-        "id",
-        "space_id",
-        "project",
-        "environment",
-        "kind",
-        "form_ref_json",
-        "package_digest",
-        "name",
-        "managed_by",
-        "spec_json",
-        "phase",
-        "generation",
-        "observed_generation",
-        "outputs_json",
-        "execution_json",
-        "state_adoption_json",
-        "conditions_json",
-        "labels_json",
-        "created_at",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      uniqueConstraints: [["space_id", "kind", "name"]],
-      indexes: [["space_id"], ["kind", "id"]],
-    },
-    {
-      name: "takosumi_resolution_locks",
-      domain: "resources",
-      columns: [
-        "resource_id",
-        "form_ref_json",
-        "package_digest",
-        "selected_implementation",
-        "target_pool",
-        "target",
-        "target_snapshot_json",
-        "implementation_snapshot_json",
-        "implementation_plugin",
-        "implementation_options_json",
-        "implementation_fingerprint",
-        "locked",
-        "reason_json",
-        "portability",
-        "native_resources_json",
-        "locked_at",
-        "updated_at",
-      ],
-      primaryKey: ["resource_id"],
-      indexes: [["resource_id"]],
-    },
-    {
-      name: "takosumi_target_pools",
-      domain: "resources",
-      columns: [
-        "id",
-        "space_id",
-        "name",
-        "spec_json",
-        "created_at",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      uniqueConstraints: [["space_id", "name"]],
-      indexes: [["space_id"]],
-    },
-    {
-      name: "takosumi_space_policies",
-      domain: "resources",
-      columns: [
-        "id",
-        "space_id",
-        "name",
-        "spec_json",
-        "created_at",
-        "updated_at",
-      ],
-      primaryKey: ["id"],
-      uniqueConstraints: [["space_id", "name"]],
-      indexes: [["space_id"]],
-    },
-    {
-      name: "takosumi_resource_identity_fences",
-      domain: "resources",
-      columns: [
-        "resource_id",
-        "last_generation",
-        "fence_revision",
-        "retired_owner_json",
-      ],
-      primaryKey: ["resource_id"],
-    },
-    {
       name: "takosumi_interfaces",
       domain: "runtime",
       columns: [
@@ -4717,5 +4622,174 @@ create unique index if not exists takosumi_git_install_plans_actor_key_unique
 create index if not exists takosumi_git_install_plans_workspace_phase_idx
   on takosumi_git_install_plans (workspace_id, phase);`,
       down: `drop table if exists takosumi_git_install_plans;`,
+    },
+    {
+      id: "retired.host_schema.drop_empty",
+      version: 110,
+      domain: "core",
+      description:
+        "Retire the embedded Resource/Form Host and generic Offering schema only after an atomic empty-row preflight. Unknown or populated durable state requires operator inventory, export, and explicit disposition before retrying.",
+      sql: `lock table
+  takosumi_interface_bindings,
+  takosumi_interfaces,
+  takosumi_offering_catalogs,
+  takosumi_resource_identity_fences,
+  takosumi_resource_shapes,
+  takosumi_resolution_locks,
+  takosumi_service_form_activations,
+  takosumi_service_form_activations__takoform_v1alpha1,
+  takosumi_service_form_definitions,
+  takosumi_service_form_definitions__takoform_v1alpha1,
+  takosumi_service_form_packages,
+  takosumi_service_form_packages__takoform_v1alpha1,
+  takosumi_space_policies,
+  takosumi_target_pools
+in access exclusive mode;
+do $retired_host_schema$
+begin
+  if exists (select 1 from takosumi_resource_shapes)
+     or exists (select 1 from takosumi_resolution_locks)
+     or exists (select 1 from takosumi_target_pools)
+     or exists (select 1 from takosumi_space_policies)
+     or exists (select 1 from takosumi_resource_identity_fences)
+     or exists (select 1 from takosumi_service_form_packages)
+     or exists (select 1 from takosumi_service_form_definitions)
+     or exists (select 1 from takosumi_service_form_activations)
+     or exists (select 1 from takosumi_service_form_packages__takoform_v1alpha1)
+     or exists (select 1 from takosumi_service_form_definitions__takoform_v1alpha1)
+     or exists (select 1 from takosumi_service_form_activations__takoform_v1alpha1)
+     or exists (select 1 from takosumi_offering_catalogs) then
+    raise exception 'RETIRED_HOST_ROWS_REQUIRE_OPERATOR_DISPOSITION: retired Resource/Form Host or Offering rows exist; inventory and export them, record an explicit disposition, then retry the forward migration';
+  end if;
+  if exists (
+       select 1 from takosumi_interfaces
+       where jsonb_typeof(record_json) is distinct from 'object'
+          or owner_kind = 'Resource'
+          or form_ref_key is not null
+          or form_schema_digest is not null
+          or descriptor_name is not null
+          or descriptor_version is not null
+          or jsonb_typeof(record_json->'metadata') is distinct from 'object'
+          or jsonb_typeof(
+               record_json #> '{metadata,ownerRef}'
+             ) is distinct from 'object'
+          or jsonb_typeof(
+               record_json #> '{metadata,ownerRef,kind}'
+             ) is distinct from 'string'
+          or record_json #>> '{metadata,ownerRef,kind}' = 'Resource'
+          or (
+               record_json #> '{metadata,materializedFrom}' is not null
+               and jsonb_typeof(
+                 record_json #> '{metadata,materializedFrom}'
+               ) is distinct from 'object'
+             )
+          or (
+               jsonb_typeof(
+                 record_json #> '{metadata,materializedFrom}'
+               ) = 'object'
+               and jsonb_typeof(
+                 record_json #> '{metadata,materializedFrom,source}'
+               ) is distinct from 'string'
+             )
+          or record_json #>> '{metadata,materializedFrom,source}' =
+               'form_descriptor'
+          or jsonb_typeof(record_json->'spec') is distinct from 'object'
+          or (
+               record_json #> '{spec,inputs}' is not null
+               and jsonb_typeof(
+                 record_json #> '{spec,inputs}'
+               ) is distinct from 'object'
+             )
+          or exists (
+               select 1
+               from jsonb_each(
+                 case
+                   when jsonb_typeof(record_json #> '{spec,inputs}') = 'object'
+                     then record_json #> '{spec,inputs}'
+                   else '{}'::jsonb
+                 end
+               ) as input
+               where jsonb_typeof(input.value) is distinct from 'object'
+                  or jsonb_typeof(input.value->'source') is distinct from 'string'
+                  or input.value->>'source' = 'resource_output'
+             )
+          or jsonb_typeof(record_json->'status') is distinct from 'object'
+          or (
+               record_json #> '{status,provenance}' is not null
+               and jsonb_typeof(
+                 record_json #> '{status,provenance}'
+               ) is distinct from 'object'
+             )
+          or exists (
+               select 1
+               from jsonb_each(
+                 case
+                   when jsonb_typeof(
+                     record_json #> '{status,provenance}'
+                   ) = 'object'
+                     then record_json #> '{status,provenance}'
+                   else '{}'::jsonb
+                 end
+               ) as provenance
+               where jsonb_typeof(provenance.value) is distinct from 'object'
+                  or jsonb_typeof(
+                       provenance.value->'source'
+                     ) is distinct from 'string'
+                  or provenance.value->>'source' = 'resource_output'
+             )
+     )
+     or exists (
+       select 1 from takosumi_interface_bindings
+       where jsonb_typeof(record_json) is distinct from 'object'
+          or subject_kind = 'Resource'
+          or jsonb_typeof(record_json->'metadata') is distinct from 'object'
+          or (
+               record_json #> '{metadata,materializedFrom}' is not null
+               and jsonb_typeof(
+                 record_json #> '{metadata,materializedFrom}'
+               ) is distinct from 'object'
+             )
+          or (
+               jsonb_typeof(
+                 record_json #> '{metadata,materializedFrom}'
+               ) = 'object'
+               and jsonb_typeof(
+                 record_json #> '{metadata,materializedFrom,source}'
+               ) is distinct from 'string'
+             )
+          or record_json #>> '{metadata,materializedFrom,source}' in
+               ('form_host_descriptor', 'capsule_resource_binding')
+          or jsonb_typeof(record_json->'spec') is distinct from 'object'
+          or jsonb_typeof(
+               record_json #> '{spec,subjectRef}'
+             ) is distinct from 'object'
+          or jsonb_typeof(
+               record_json #> '{spec,subjectRef,kind}'
+             ) is distinct from 'string'
+          or record_json #>> '{spec,subjectRef,kind}' = 'Resource'
+          or jsonb_typeof(record_json->'status') is distinct from 'object'
+     ) then
+    raise exception 'RETAINED_INTERFACE_HOST_EVIDENCE_REQUIRES_OPERATOR_DISPOSITION: retained Interface or InterfaceBinding rows depend on retired Resource/Form Host state, or their structured record_json cannot prove otherwise; inventory and export them, record an explicit disposition, then retry the forward migration';
+  end if;
+end
+$retired_host_schema$;
+drop table takosumi_service_form_activations;
+drop table takosumi_service_form_activations__takoform_v1alpha1;
+drop table takosumi_resource_shapes;
+drop table takosumi_resolution_locks;
+drop table takosumi_service_form_definitions;
+drop table takosumi_service_form_definitions__takoform_v1alpha1;
+drop table takosumi_service_form_packages;
+drop table takosumi_service_form_packages__takoform_v1alpha1;
+drop table takosumi_resource_identity_fences;
+drop table takosumi_space_policies;
+drop table takosumi_target_pools;
+drop table takosumi_offering_catalogs;
+drop index if exists takosumi_interfaces_form_descriptor_idx;
+alter table takosumi_interfaces
+  drop column descriptor_version,
+  drop column descriptor_name,
+  drop column form_schema_digest,
+  drop column form_ref_key;`,
     },
   ]);

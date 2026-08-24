@@ -5,16 +5,7 @@ import {
   edgeApiPathExposure,
   edgeExposureForEndpointPath,
 } from "../../../core/api/edge_public_paths.ts";
-import {
-  registerResourceShapeRoutes,
-  type RegisterResourceShapeRoutesOptions,
-} from "../../../core/api/resource_routes.ts";
 import { registerInterfaceRoutes } from "../../../core/api/interface_routes.ts";
-import { ROUTE_FAMILIES } from "../../../core/api/route_families.ts";
-import {
-  TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH,
-  TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
-} from "takosumi-contract";
 
 /**
  * The gate the platform worker uses is static, so nothing stops it from
@@ -25,10 +16,6 @@ import {
 function mountedRouterPaths(): readonly string[] {
   const app = new Hono();
   const stub = {} as never;
-  registerResourceShapeRoutes(app, {
-    service: stub,
-    interfaceDeclarations: stub,
-  } as unknown as RegisterResourceShapeRoutesOptions);
   registerInterfaceRoutes(app, { service: stub } as never);
   return [...new Set(app.routes.map((route) => route.path))];
 }
@@ -61,10 +48,12 @@ test("every session-exposed route path is routed by the platform gate", () => {
 test("legacy Flow-B paths stay off the default edge gate", () => {
   for (const path of [
     "/v1/form-availability",
-    TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
+    "/.well-known/takoform",
+    "/.well-known/takoform/v1alpha1",
     "/apis/forms.takoform.com/v1alpha1/forms",
-    `${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/ObjectBucket`,
+    "/apis/forms.takoform.com/v1alpha1/form-definitions/ObjectBucket",
     "/apis/forms.takoform.com/v1alpha1/resources/EdgeWorker/site",
+    "/apis/forms.takoform.com/v1alpha1/resources/EdgeWorker/site/form-transitions",
     "/v1/resources/ObjectBucket/site",
     "/v1/target-pools/default",
     "/v1/space-policies/default",
@@ -89,21 +78,13 @@ test("account-plane and operator-only surfaces stay off the edge gate", () => {
   assert.equal(edgeApiPathExposure("/metrics"), undefined);
 });
 
-test("the retained portable Form host facade stays out of edge discovery", () => {
-  const resourceShape = ROUTE_FAMILIES.find(
-    (family) => family.id === "resource-shape",
-  );
-  assert.notEqual(resourceShape, undefined);
-  const paths = resourceShape?.endpoints.map((endpoint) => endpoint.path) ?? [];
-  assert.equal(paths.includes(TAKOFORM_FORM_HOST_WELL_KNOWN_PATH), true);
-  assert.equal(
-    paths.includes(`${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/:kind`),
-    true,
-  );
-  assert.equal(paths.includes("/v1/form-availability"), false);
-  assert.equal(
-    edgeExposureForEndpointPath(TAKOFORM_FORM_HOST_WELL_KNOWN_PATH),
-    "off",
-  );
-  assert.equal(edgeApiPathExposure("/v1/form-availability"), undefined);
+test("retired Takoform host lanes are absent from edge inventory", () => {
+  for (const path of [
+    "/.well-known/takoform",
+    "/apis/forms.takoform.com/v1alpha1",
+    "/apis/forms.takoform.com/v1alpha1/forms",
+    "/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/site/form-transitions",
+  ]) {
+    assert.equal(edgeApiPathExposure(path), undefined, path);
+  }
 });

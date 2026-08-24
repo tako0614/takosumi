@@ -44,7 +44,6 @@ function testConfig(): NodeAccountsServerConfig {
     bindHost: "127.0.0.1",
     port: 8787,
     issuer: "http://localhost:8787",
-    managedPublicBaseDomain: undefined,
     databaseUrl: "postgres://unused",
     clients: undefined,
     loginEmailAllowlist: undefined,
@@ -185,7 +184,6 @@ test("Bun composition forwards one shared coordinator to ordered Capsule abandon
   assert.equal(abandoned.status, "destroyed");
   assert.deepEqual(acquiredScopes, [
     `capsule:${capsule.id}:${capsule.environment}`,
-    `capsule-resource-admission:${capsule.id}`,
   ]);
 });
 
@@ -230,10 +228,58 @@ test("composed app 404s retired Form HTTP paths even with the operator bearer", 
       }),
     runtimeEnv: {
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN,
+      // Retired host/resource/package knobs must be inert in the composed
+      // reference app. Keep these set so a future accidental opt-in cannot
+      // reintroduce a second API lane.
+      TAKOSUMI_RESOURCE_SHAPES: "1",
+      TAKOSUMI_RESOURCE_ADAPTERS: "1",
+      TAKOSUMI_TAKOFORM_V1ALPHA1_COMPATIBILITY_HOST: "1",
+      TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST: "1",
+      TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE: "1",
+      R2_FORM_PACKAGES: "retired",
+      TAKOSUMI_FORM_PACKAGE_TRUST_POLICY: "retired",
+      TAKOSUMI_FORM_PACKAGE_HOST_COMPOSITION: "retired",
     },
   });
 
   for (const retired of [
+    { method: "GET", path: "/.well-known/takoform" },
+    { method: "GET", path: "/.well-known/takoform/v1alpha1" },
+    { method: "GET", path: "/.well-known/takoform/v1alpha2" },
+    { method: "GET", path: "/.well-known/takoform/v1alpha3" },
+    { method: "GET", path: "/apis/forms.takoform.com/v1alpha1" },
+    { method: "GET", path: "/apis/forms.takoform.com/v1alpha1/forms" },
+    {
+      method: "GET",
+      path: "/apis/forms.takoform.com/v1alpha1/form-definitions",
+    },
+    { method: "GET", path: "/apis/forms.takoform.com/v1alpha1/interfaces" },
+    { method: "GET", path: "/apis/forms.takoform.com/v1alpha1/resources" },
+    {
+      method: "POST",
+      path: "/apis/forms.takoform.com/v1alpha1/resources/preview",
+      body: "{}",
+    },
+    {
+      method: "POST",
+      path: "/apis/forms.takoform.com/v1alpha1/resources/observe",
+      body: "{}",
+    },
+    {
+      method: "POST",
+      path: "/apis/forms.takoform.com/v1alpha1/resources/a/form-transitions",
+      body: "{}",
+    },
+    {
+      method: "POST",
+      path: "/internal/v1/form-packages/install",
+      body: "{}",
+    },
+    {
+      method: "POST",
+      path: "/internal/v1/form-packages/reverify",
+      body: "{}",
+    },
     { method: "GET", path: "/v1/form-activations" },
     {
       method: "POST",
@@ -254,17 +300,19 @@ test("composed app 404s retired Form HTTP paths even with the operator bearer", 
     { method: "GET", path: "/v1/space-policies?space=space_1" },
     { method: "GET", path: "/v1/space-policies/default?space=space_1" },
   ]) {
-    const response = await created.app.fetch(
-      new Request(`http://localhost${retired.path}`, {
-        method: retired.method,
-        headers: {
-          authorization: `Bearer ${TEST_DEPLOY_CONTROL_TOKEN}`,
-          ...(retired.body ? { "content-type": "application/json" } : {}),
-        },
-        ...(retired.body ? { body: retired.body } : {}),
-      }),
-    );
-    assert.equal(response.status, 404, retired.path);
+    for (const authorization of [undefined, `Bearer ${TEST_DEPLOY_CONTROL_TOKEN}`]) {
+      const response = await created.app.fetch(
+        new Request(`http://localhost${retired.path}`, {
+          method: retired.method,
+          headers: {
+            ...(authorization ? { authorization } : {}),
+            ...(retired.body ? { "content-type": "application/json" } : {}),
+          },
+          ...(retired.body ? { body: retired.body } : {}),
+        }),
+      );
+      assert.equal(response.status, 404, `${retired.path} (${authorization ?? "anonymous"})`);
+    }
   }
 
   const inventoryHeaders = {

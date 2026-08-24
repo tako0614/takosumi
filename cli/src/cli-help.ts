@@ -25,8 +25,6 @@ export function helpText(): string {
       "Operator:",
       "  connections             operator connection と internal resolver を管理",
       "  install-configs         versioned service-side config patch を適用",
-      "  form-packages           信頼済み Form Package を install / reverify",
-      "  offering-catalogs       汎用 Offering catalog と利用可否を管理",
       "",
       "Install link の例:",
       "  export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com",
@@ -48,8 +46,6 @@ export function helpText(): string {
     "Operator:",
     "  connections             Manage operator connections and internal resolvers",
     "  install-configs         Apply versioned service-side config patches",
-    "  form-packages           Install or reverify trusted Form Packages",
-    "  offering-catalogs       Manage generic Offering catalogs and availability",
     "",
     "Install link example:",
     "  export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com",
@@ -99,66 +95,6 @@ export function installConfigsPatchHelpText(): string {
     "",
     "The file kind must be takosumi.install-config-patch@v1.",
     "--url <Takosumi origin> / --token <operator bearer> / --json",
-  ].join("\n");
-}
-
-export function offeringCatalogsHelpText(): string {
-  if (isJapaneseCli()) {
-    return [
-      "takosumi offering-catalogs <command>",
-      "",
-      "コマンド:",
-      "  list [--limit <n> --cursor <opaque>]",
-      "  get <catalog-id> <catalog-version>",
-      "  publish --file <offering-catalog.json>",
-      "  availability --file <availability-query.json>",
-      "  resolve --file <exact-selection-query.json>",
-      "",
-      "Takoform は subject の一種です。任意の namespaced subject と installed resolver を同じ方式で扱います。",
-      "価格、SKU、請求、容量、manager、SLA、support は OSS Offering catalog に含めません。",
-      "共通オプション: --url、--token、--json",
-    ].join("\n");
-  }
-  return [
-    "takosumi offering-catalogs <command>",
-    "",
-    "Commands:",
-    "  list [--limit <n> --cursor <opaque>]",
-    "  get <catalog-id> <catalog-version>",
-    "  publish --file <offering-catalog.json>",
-    "  availability --file <availability-query.json>",
-    "  resolve --file <exact-selection-query.json>",
-    "",
-    "Takoform is one subject type. Any namespaced subject with an installed resolver uses the same mechanism.",
-    "OSS Offering catalogs contain no price, SKU, billing, capacity, manager, SLA, or support data.",
-    "Common options: --url, --token, --json",
-  ].join("\n");
-}
-
-export function formPackagesHelpText(): string {
-  if (isJapaneseCli()) {
-    return [
-      "takosumi form-packages <command>",
-      "",
-      "コマンド:",
-      "  install --file <package-install.json>",
-      "  reverify --file <installed-form-reference.json>",
-      "",
-      "host-internal deploy-control URL と instance-wide operator bearer が必要です。",
-      "package bytes、署名 trust policy、secret は request file に含めません。",
-      "共通オプション: --url、--token、--json",
-    ].join("\n");
-  }
-  return [
-    "takosumi form-packages <command>",
-    "",
-    "Commands:",
-    "  install --file <package-install.json>",
-    "  reverify --file <installed-form-reference.json>",
-    "",
-    "Requires the host-internal deploy-control URL and an instance-wide operator bearer.",
-    "Do not put package bytes, signing trust policy, or secrets in the request file.",
-    "Common options: --url, --token, --json",
   ].join("\n");
 }
 

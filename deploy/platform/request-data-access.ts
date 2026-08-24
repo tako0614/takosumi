@@ -79,7 +79,6 @@ export const DASHBOARD_DOCUMENT_ROUTES = [
   "/workloads",
   "/new",
   "/install",
-  "/composition/install",
   "/connections",
   "/workloads/:id",
   "/workloads/:id/:tab",

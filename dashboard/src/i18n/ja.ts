@@ -519,8 +519,6 @@ export const ja = {
     "公開名、URL、初期ログイン、サービスが使う値を変更できます。保存後、次のデプロイ確認に反映されます。",
   "app.config.publicUrl": "公開URL",
   "app.config.subdomain": "公開サブドメイン",
-  "app.config.oidc": "自動ログイン",
-  "app.config.oidcOn": "有効",
   "app.config.updatedAt": "最終更新",
   "app.config.empty": "編集できる設定値はありません。",
   "app.config.notReady":
@@ -666,9 +664,6 @@ export const ja = {
   "runError.runFailed": "実行に失敗しました。もう一度お試しください。",
   "runError.backupFailed":
     "復元ポイントの作成に失敗しました。もう一度お試しください。",
-  "run.summary.hostnameSlotLimit": "短いURLの空き枠がありません。",
-  "run.summary.hostnameSlotLimitHint":
-    "通常URLを使うか、既存の短いURLを解放してからもう一度実行してください。",
   "run.summary.connectionVerificationRequired":
     "接続済みアカウントの確認が必要です。",
   "run.summary.connectionVerificationHint":
@@ -782,9 +777,6 @@ export const ja = {
   "run.diag.severity.info": "情報",
   "run.diagnostics.failed":
     "完了できませんでした。原因を確認する場合だけ詳細を開いてください。",
-  "run.diagnostics.hostnameSlotLimitShort": "短いURLの空き枠がありません。",
-  "run.diagnostics.hostnameSlotLimitDetail":
-    "通常URLを使うか、既存の短いURLを解放してからもう一度実行してください。",
   "run.diagnostics.connectionVerificationRequired":
     "接続済みアカウントへのアクセス準備中に停止しました。接続が利用可能になっている場合は、もう一度変更を確認してからデプロイしてください。",
   "run.diagnostics.connectionVerificationShort":
@@ -865,14 +857,8 @@ export const ja = {
     "サービスの追加に失敗しました。内容を確認して、もう一度お試しください。",
   "new.error.genericWithDetails":
     "サービスの追加に失敗しました。詳細: {message}",
-  "new.error.invalidHostname":
-    "この公開名は長すぎるか、使えない文字を含んでいます。もう少し短い名前にして、もう一度お試しください。",
   "new.error.connectionRequired":
     "このサービスの公開にはクラウドアカウントの接続が必要です。接続を設定してから、もう一度お試しください。",
-  "new.error.appHostnameUnavailable":
-    "この公開URL名は既に使われています。別の名前にして、もう一度お試しください。",
-  "new.error.managedHostnameSlotLimit":
-    "短いURLの空き枠がありません。通常URLを使うか、既存の短いURLを解放してください。",
   "new.error.alreadyExistsGeneric":
     "このサービスは既に追加されています。一覧から既存サービスを開いてください。",
   "workspaceSettings.title": "設定",

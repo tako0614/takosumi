@@ -73,7 +73,6 @@ import {
   RUN_LIST_DEFAULT_LIMIT,
   RUN_LIST_MAX_LIMIT,
   type ArtifactRecord,
-  type ResourceOperation,
   type Run,
   type RunGroup,
 } from "takosumi-contract/runs";
@@ -84,28 +83,9 @@ import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "takosumi-contract/security";
-import type {
-  InstalledFormReference,
-  JsonObject,
-  JsonValue,
-  NativeResourceRef,
-  ResourceCapsuleOwner,
-  ResourceManagedBy,
-  ResourcePhase,
-  ResourceShapeKind,
-  TakoformNativeIdentity,
-  TakoformResourceFormTransitionEvidence,
-} from "takosumi-contract";
-import {
-  installedFormReferenceKey,
-  isInstalledFormReference,
-} from "takosumi-contract";
+import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 import { log } from "../../shared/log.ts";
-import type {
-  ResolutionLockRecord,
-  ResourceIdentityFenceRecord,
-} from "../resource-shape/records.ts";
 
 export interface CapsuleListPageParams extends PageParams {
   readonly includeDestroyed?: boolean;
@@ -148,16 +128,16 @@ export interface PlanRunInputs {
   readonly variables: Readonly<Record<string, JsonValue>>;
   /** Optional child-module wrapper generated from DB/provider configuration. */
   readonly generatedRoot?: DispatchGeneratedRoot;
-  /** Resource Shape-only operator module; never sourced from Capsule input. */
+  /** Operator module wrapper; never sourced from Capsule input. */
   readonly operatorModule?: {
     readonly files: readonly {
       readonly path: string;
       readonly text: string;
     }[];
   };
-  /** Confirmed one-shot Resource state adoption; never part of a public Run. */
+  /** Historical one-shot state adoption; no current route creates it. */
   readonly stateAdoption?: DispatchStateAdoption;
-  /** Exact canonical Resource state descriptor; never part of a public Run. */
+  /** Exact canonical state descriptor; never part of a public Run. */
   readonly priorState?: DispatchPriorState;
   /** Workspace-local, non-secret capture selection; never a public projection. */
   readonly workspaceOutputAllowlist?: Readonly<
@@ -302,7 +282,7 @@ export interface CommitRunStateResult {
 }
 
 export type PublicHostReservationStatus = "reserved" | "released";
-export type ManagedPublicHostnameReservationKind = "scoped" | "vanity";
+export type HistoricalPublicHostAllocationKind = "scoped" | "vanity";
 
 export interface PublicHostReservation {
   readonly hostname: string;
@@ -310,43 +290,12 @@ export interface PublicHostReservation {
   readonly workspaceId: string;
   readonly capsuleId: string;
   readonly capsuleName: string;
-  readonly allocationKind: ManagedPublicHostnameReservationKind;
+  readonly allocationKind: HistoricalPublicHostAllocationKind;
   readonly status: PublicHostReservationStatus;
   readonly reservedAt: string;
   readonly updatedAt: string;
   readonly releasedAt?: string;
 }
-
-export interface ReservePublicHostInput {
-  readonly hostname: string;
-  readonly workspaceId: string;
-  readonly capsuleId: string;
-  readonly capsuleName: string;
-  readonly allocationKind: ManagedPublicHostnameReservationKind;
-  /** Omitted means the operator does not limit owner vanity slots. */
-  readonly vanitySlotLimit?: number;
-  readonly now: string;
-}
-
-export type ReservePublicHostResult =
-  | {
-      readonly reserved: true;
-      readonly reservation: PublicHostReservation;
-    }
-  | {
-      readonly reserved: false;
-      readonly reason: "already_reserved";
-      readonly reservation: PublicHostReservation;
-    }
-  | {
-      readonly reserved: false;
-      readonly reason: "owner_slot_limit_reached";
-      readonly vanitySlotLimit: number;
-    }
-  | {
-      readonly reserved: false;
-      readonly reason: "capsule_inactive";
-    };
 
 /** Fields a controller may patch on a Capsule row. */
 export type CapsulePatch = Partial<
@@ -394,17 +343,6 @@ export interface CommitRunStateInput {
    * Source PlanRun with its `appliedApplyRunId` marker (apply-once).
    */
   readonly planRunApplied?: PlanRun;
-}
-
-/** Atomic terminal commit for a first-class Resource apply/destroy Run. */
-export interface CommitResourceRunInput {
-  readonly applyRunTerminal: ApplyRun;
-  readonly planRunApplied: PlanRun;
-  readonly applyRunLeaseToken: string;
-}
-
-export interface CommitResourceRunResult {
-  readonly applyRunLeaseLost?: true;
 }
 
 export interface CommitRestoredStateResult {
@@ -500,133 +438,11 @@ export interface TransitionRunResult {
 
 export type StoredRunRecord = PlanRun | ApplyRun | SourceSyncRun | Run;
 
-/**
- * Canonical single-ledger Run used only for direct Resource adapter plugins.
- * Module-backed OpenTofu adapters continue to own their existing plan/apply
- * Resource Runs and must never create this second row.
- */
-export type ResourceOperationRun = Run & {
-  readonly subject: { readonly kind: "resource"; readonly id: string };
-  readonly resourceOperation: ResourceOperation;
-  /**
-   * Exact immutable Form identity for a pinned Resource operation. Missing
-   * only on direct-operation Runs created before exact FormRef migration.
-   */
-  readonly resourceForm?: InstalledFormReference;
-  readonly resourceOperationKey: string;
-  readonly resourceOperationVersion: number;
-  readonly resourceOperationResult?: ResourceOperationResultEvidence;
-  readonly resourceOperationAudit?: ResourceOperationAuditEvidence;
-  /**
-   * Immutable, value-free canonical precondition snapshot for the separate
-   * exact-Form transition saga. It is recorded before host dispatch and is not
-   * accepted from the portable request.
-   */
-  readonly resourceFormTransition?: ResourceFormTransitionRunEvidence;
-  /**
-   * Durable one-way dispatch fence. Once present, neither retries nor generic
-   * recovery may invoke the transition host again; only exact readback may
-   * reconcile the outcome.
-   */
-  readonly resourceFormTransitionDispatch?: {
-    readonly status: "attempted";
-    readonly attemptedAt: string;
-  };
-};
-
-export interface ResourceFormTransitionRunEvidence {
-  readonly operationId: string;
-  readonly requestDigest: `sha256:${string}`;
-  readonly desiredSpecDigest: `sha256:${string}`;
-  readonly fromForm: InstalledFormReference;
-  readonly toForm: InstalledFormReference;
-  readonly transitionEvidence: TakoformResourceFormTransitionEvidence;
-  readonly expected: {
-    readonly resourceVersion: string;
-    readonly nativeIdentity?: TakoformNativeIdentity;
-  };
-  readonly resource: {
-    readonly id: string;
-    readonly workspaceId: string;
-    readonly kind: ResourceShapeKind;
-    readonly name: string;
-    readonly managedBy: ResourceManagedBy;
-    readonly owner: ResourceCapsuleOwner;
-    readonly phase: ResourcePhase;
-    readonly generation: number;
-    readonly revision: number;
-    readonly observedGeneration: number;
-    readonly createdAt: string;
-    readonly updatedAt: string;
-    readonly revisionId: string;
-  };
-  /** Predicted exact Resource CAS result used as the pre-dispatch claim. */
-  readonly claim: {
-    readonly updatedAt: string;
-    readonly revision: number;
-  };
-  /** Exact hidden desired-generation fence observed before host dispatch. */
-  readonly identityFence: ResourceIdentityFenceRecord | null;
-  /** Exact hidden lock/native evidence; never projected through public Run APIs. */
-  readonly resolutionLock: ResolutionLockRecord;
-}
-
-/** Internal restart-safe direct-adapter result; never projected publicly. */
-export interface ResourceOperationResultEvidence {
-  readonly summary: string;
-  /** Exact Form identity repeated with replayable backend evidence. */
-  readonly resourceForm?: InstalledFormReference;
-  readonly nativeResources?: readonly NativeResourceRef[];
-  readonly outputs?: JsonObject;
-  readonly observationStatus?: "current" | "drifted" | "missing";
-  /** Opaque backend correlation evidence only; never a canonical Run id. */
-  readonly backendOperationId?: string;
-  /** Immutable artifact evidence. Bytes never enter the Run ledger. */
-  readonly artifact?: {
-    readonly kind: string;
-    readonly ref: string;
-    readonly digest: `sha256:${string}`;
-    readonly sizeBytes: number;
-  };
-}
-
-/** Internal durable Activity outbox carried by the single Run row. */
-export interface ResourceOperationAuditEvidence {
-  readonly status: "pending" | "completed";
-  readonly eventId: string;
-  readonly action: string;
-  readonly metadata: Readonly<Record<string, JsonValue>>;
-  readonly createdAt: string;
-}
-
-export type BeginResourceOperationRunResult =
-  | { readonly status: "created"; readonly run: ResourceOperationRun }
-  | { readonly status: "existing"; readonly run: ResourceOperationRun }
-  | { readonly status: "conflict"; readonly run?: ResourceOperationRun };
-
 /** Atomic insert-or-adopt result for an immutable ApplyRun creation row. */
 export type BeginApplyRunResult =
   | { readonly status: "created"; readonly run: ApplyRun }
   | { readonly status: "existing"; readonly run: ApplyRun }
   | { readonly status: "conflict"; readonly run?: ApplyRun };
-
-export interface TransitionResourceOperationRunInput {
-  readonly id: string;
-  readonly operationKey: string;
-  readonly expectedVersion: number;
-  readonly expectFrom: readonly RunStatus[];
-  readonly run: ResourceOperationRun;
-}
-
-export interface TransitionResourceOperationRunResult {
-  readonly won: boolean;
-  readonly run?: ResourceOperationRun;
-}
-
-export interface RecoverableResourceOperationRunListOptions {
-  readonly workspaceId?: string;
-  readonly limit?: number;
-}
 
 export interface RecoverableOpenTofuRunListOptions {
   readonly staleQueuedBeforeMs: number;
@@ -721,27 +537,6 @@ export interface OpenTofuControlStore {
   listSourceSyncRuns(sourceId: string): Promise<readonly SourceSyncRun[]>;
   putCompatibilityCheckRun(run: Run): Promise<Run>;
   getCompatibilityCheckRun(id: string): Promise<Run | undefined>;
-  /** Insert-only start for a deterministic direct Resource adapter Run. */
-  beginResourceOperationRun(
-    run: ResourceOperationRun,
-  ): Promise<BeginResourceOperationRunResult>;
-  getResourceOperationRun(
-    id: string,
-  ): Promise<ResourceOperationRun | undefined>;
-  /** Exact transition lookup for operation readback; never a paginated scan. */
-  getResourceFormTransitionRun(input: {
-    readonly workspaceId: string;
-    readonly resourceId: string;
-    readonly operationId: string;
-  }): Promise<ResourceOperationRun | undefined>;
-  /** Version- and status-fenced transition; terminal outcomes are never upserted. */
-  transitionResourceOperationRun(
-    input: TransitionResourceOperationRunInput,
-  ): Promise<TransitionResourceOperationRunResult>;
-  /** Running sagas and terminal Runs with a pending audit outbox. */
-  listRecoverableResourceOperationRuns(
-    options?: RecoverableResourceOperationRunListOptions,
-  ): Promise<readonly ResourceOperationRun[]>;
   putBackupRun(run: Run): Promise<Run>;
   getBackupRun(id: string): Promise<Run | undefined>;
   listRunsByWorkspace(
@@ -888,9 +683,6 @@ export interface OpenTofuControlStore {
     workspaceId: string,
     params: CapsuleListPageParams,
   ): Promise<Page<Capsule>>;
-  reservePublicHost(
-    input: ReservePublicHostInput,
-  ): Promise<ReservePublicHostResult>;
   getPublicHostReservation(
     hostname: string,
   ): Promise<PublicHostReservation | undefined>;
@@ -903,9 +695,6 @@ export interface OpenTofuControlStore {
 
   /** Atomically commits terminal Run + StateVersion + optional Output + Capsule cursor. */
   commitRunState(input: CommitRunStateInput): Promise<CommitRunStateResult>;
-  commitResourceRun(
-    input: CommitResourceRunInput,
-  ): Promise<CommitResourceRunResult>;
 
   commitRestoredState(
     input: CommitRestoredStateInput,
@@ -1448,88 +1237,6 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
-  beginResourceOperationRun(
-    run: ResourceOperationRun,
-  ): Promise<BeginResourceOperationRunResult> {
-    assertResourceOperationRunStart(run);
-    const current = this.#runs.get(run.id);
-    if (!current) {
-      this.#runs.set(run.id, run);
-      return Promise.resolve({ status: "created", run });
-    }
-    if (!isResourceOperationRun(current)) {
-      return Promise.resolve({ status: "conflict" });
-    }
-    return Promise.resolve(
-      sameResourceOperationIdentity(current, run)
-        ? { status: "existing", run: current }
-        : { status: "conflict", run: current },
-    );
-  }
-
-  getResourceOperationRun(
-    id: string,
-  ): Promise<ResourceOperationRun | undefined> {
-    const run = this.#runs.get(id);
-    return Promise.resolve(
-      run && isResourceOperationRun(run) ? run : undefined,
-    );
-  }
-
-  getResourceFormTransitionRun(input: {
-    readonly workspaceId: string;
-    readonly resourceId: string;
-    readonly operationId: string;
-  }): Promise<ResourceOperationRun | undefined> {
-    const run = Array.from(this.#runs.values()).find(
-      (candidate): candidate is ResourceOperationRun =>
-        isResourceOperationRun(candidate) &&
-        candidate.resourceOperation === "form_transition" &&
-        candidate.workspaceId === input.workspaceId &&
-        candidate.subject.id === input.resourceId &&
-        candidate.resourceOperationKey === input.operationId,
-    );
-    return Promise.resolve(run);
-  }
-
-  transitionResourceOperationRun(
-    input: TransitionResourceOperationRunInput,
-  ): Promise<TransitionResourceOperationRunResult> {
-    assertResourceOperationRun(input.run);
-    const current = this.#runs.get(input.id);
-    if (!current || !isResourceOperationRun(current)) {
-      return Promise.resolve({ won: false });
-    }
-    if (
-      current.resourceOperationKey !== input.operationKey ||
-      current.resourceOperationVersion !== input.expectedVersion ||
-      !input.expectFrom.includes(current.status) ||
-      !resourceOperationRunTransitionAllowed(current, input.run)
-    ) {
-      return Promise.resolve({ won: false, run: current });
-    }
-    this.#runs.set(input.id, input.run);
-    return Promise.resolve({ won: true, run: input.run });
-  }
-
-  listRecoverableResourceOperationRuns(
-    options: RecoverableResourceOperationRunListOptions = {},
-  ): Promise<readonly ResourceOperationRun[]> {
-    const limit = clampRecoverableResourceOperationRunListLimit(options.limit);
-    return Promise.resolve(
-      Array.from(this.#runs.values())
-        .filter(isResourceOperationRun)
-        .filter(
-          (run) =>
-            (options.workspaceId === undefined ||
-              run.workspaceId === options.workspaceId) &&
-            resourceOperationRunNeedsRecovery(run),
-        )
-        .sort(compareStoredRunRecordsAsc)
-        .slice(0, limit),
-    );
-  }
-
   putBackupRun(run: Run): Promise<Run> {
     if (run.type !== "backup" && run.type !== "restore") {
       return Promise.reject(
@@ -2033,84 +1740,6 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return pageSorted(visibleRows, params);
   }
 
-  async reservePublicHost(
-    input: ReservePublicHostInput,
-  ): Promise<ReservePublicHostResult> {
-    const hostname = input.hostname.toLowerCase();
-    const workspace = this.#workspaces.get(input.workspaceId);
-    if (!workspace) {
-      throw new Error("public host reservation workspace was not found");
-    }
-    const ownerUserId = workspace.ownerUserId;
-    const existing = this.#publicHostReservations.get(hostname);
-    if (
-      existing &&
-      existing.status === "reserved" &&
-      existing.capsuleId !== input.capsuleId
-    ) {
-      return {
-        reserved: false,
-        reservation: existing,
-        reason: "already_reserved",
-      };
-    }
-    const capsule = this.#capsules.get(input.capsuleId);
-    if (
-      !capsule ||
-      capsule.workspaceId !== input.workspaceId ||
-      capsule.status === "destroyed"
-    ) {
-      return { reserved: false, reason: "capsule_inactive" };
-    }
-    if (
-      input.allocationKind === "vanity" &&
-      input.vanitySlotLimit !== undefined
-    ) {
-      const occupiedHostnames = new Set(
-        [...this.#publicHostReservations.values()]
-          .filter(
-            (reservation) =>
-              reservation.status === "reserved" &&
-              reservation.ownerUserId === ownerUserId &&
-              reservation.allocationKind === "vanity" &&
-              reservation.hostname !== hostname,
-          )
-          .map((reservation) => reservation.hostname),
-      );
-      if (occupiedHostnames.size >= input.vanitySlotLimit) {
-        return {
-          reserved: false,
-          reason: "owner_slot_limit_reached",
-          vanitySlotLimit: input.vanitySlotLimit,
-        };
-      }
-    }
-    const currentCapsule = this.#capsules.get(input.capsuleId);
-    if (
-      !currentCapsule ||
-      currentCapsule.workspaceId !== input.workspaceId ||
-      currentCapsule.status === "destroyed"
-    ) {
-      return { reserved: false, reason: "capsule_inactive" };
-    }
-    const reservation: PublicHostReservation = {
-      hostname,
-      ownerUserId,
-      workspaceId: input.workspaceId,
-      capsuleId: input.capsuleId,
-      capsuleName: input.capsuleName,
-      allocationKind: input.allocationKind,
-      status: "reserved",
-      reservedAt:
-        existing?.capsuleId === input.capsuleId
-          ? existing.reservedAt
-          : input.now,
-      updatedAt: input.now,
-    };
-    this.#publicHostReservations.set(hostname, reservation);
-    return { reserved: true, reservation };
-  }
-
   getPublicHostReservation(
     hostname: string,
   ): Promise<PublicHostReservation | undefined> {
@@ -2229,21 +1858,6 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     });
     this.#setCapsule(updated);
     return Promise.resolve({ capsule: updated });
-  }
-
-  commitResourceRun(
-    input: CommitResourceRunInput,
-  ): Promise<CommitResourceRunResult> {
-    if (
-      this.#runLeases.get(input.applyRunTerminal.id) !==
-      input.applyRunLeaseToken
-    ) {
-      return Promise.resolve({ applyRunLeaseLost: true });
-    }
-    this.#runs.set(input.applyRunTerminal.id, input.applyRunTerminal);
-    this.#runs.set(input.planRunApplied.id, input.planRunApplied);
-    this.#runLeases.delete(input.applyRunTerminal.id);
-    return Promise.resolve({});
   }
 
   commitRestoredState(
@@ -2990,290 +2604,6 @@ export function clampRecoverableOpenTofuRunListLimit(
     return RECOVERABLE_RUN_LIST_MAX_LIMIT;
   }
   return floored;
-}
-
-export function clampRecoverableResourceOperationRunListLimit(
-  limit: number | undefined,
-): number {
-  return clampRecoverableOpenTofuRunListLimit(limit);
-}
-
-export function isResourceOperationRun(
-  row: StoredRunRecord,
-): row is ResourceOperationRun {
-  const candidate = row as Partial<ResourceOperationRun>;
-  return (
-    isPublicRunRecord(row) &&
-    candidate.subject?.kind === "resource" &&
-    isResourceOperationToken(candidate.resourceOperation) &&
-    (candidate.resourceForm === undefined ||
-      isInstalledFormReference(candidate.resourceForm)) &&
-    (candidate.resourceOperationResult?.resourceForm === undefined ||
-      isInstalledFormReference(
-        candidate.resourceOperationResult.resourceForm,
-      )) &&
-    (candidate.resourceOperation !== "form_transition" ||
-      (isResourceFormTransitionRunEvidence(candidate.resourceFormTransition) &&
-        isResourceFormTransitionDispatch(
-          candidate.resourceFormTransitionDispatch,
-        ))) &&
-    (candidate.resourceOperation === "form_transition" ||
-      (candidate.resourceFormTransition === undefined &&
-        candidate.resourceFormTransitionDispatch === undefined)) &&
-    resourceOperationRunType(candidate.resourceOperation) === candidate.type &&
-    typeof candidate.resourceOperationKey === "string" &&
-    candidate.resourceOperationKey.length > 0 &&
-    Number.isSafeInteger(candidate.resourceOperationVersion) &&
-    (candidate.resourceOperationVersion ?? 0) > 0
-  );
-}
-
-export function resourceOperationRunNeedsRecovery(
-  run: ResourceOperationRun,
-): boolean {
-  // A running artifact Run can only resume when the caller retries with the
-  // original bytes. ResourceShapeService's scheduled reconciliation has no
-  // byte authority and must not attempt to infer or fetch them. Once the
-  // exact bytes and terminal artifact evidence have committed, however, the
-  // ordinary Activity outbox repair no longer needs those bytes.
-  if (run.resourceOperation === "artifact" && run.status === "running") {
-    return false;
-  }
-  // A Form transition may only continue through its exact public operation
-  // readback. The generic scheduler has no host-ledger proof authority and
-  // must never redispatch or infer this operation.
-  if (run.resourceOperation === "form_transition" && run.status === "running") {
-    return false;
-  }
-  return (
-    run.status === "running" || run.resourceOperationAudit?.status === "pending"
-  );
-}
-
-export function assertResourceOperationRun(run: ResourceOperationRun): void {
-  if (!isResourceOperationRun(run)) {
-    throw new TypeError("invalid canonical Resource operation Run");
-  }
-  if (run.id.trim() === "" || run.workspaceId.trim() === "") {
-    throw new TypeError("Resource operation Run id/workspaceId are required");
-  }
-}
-
-export function assertResourceOperationRunStart(
-  run: ResourceOperationRun,
-): void {
-  assertResourceOperationRun(run);
-  if (
-    run.status !== "running" ||
-    run.resourceOperationVersion !== 1 ||
-    run.resourceOperationResult !== undefined ||
-    run.resourceOperationAudit !== undefined ||
-    run.resourceFormTransitionDispatch !== undefined ||
-    run.finishedAt !== undefined ||
-    run.errorCode !== undefined
-  ) {
-    throw new TypeError(
-      "a canonical Resource operation Run must start at running version 1 without terminal/result evidence",
-    );
-  }
-}
-
-function isResourceOperationToken(value: unknown): value is ResourceOperation {
-  return (
-    value === "artifact" ||
-    value === "preview" ||
-    value === "apply" ||
-    value === "import" ||
-    value === "observe" ||
-    value === "refresh" ||
-    value === "form_transition" ||
-    value === "delete"
-  );
-}
-
-function resourceOperationRunType(
-  operation: ResourceOperation,
-): ResourceOperationRun["type"] {
-  if (operation === "artifact") return "artifact";
-  if (operation === "preview") return "plan";
-  if (operation === "observe") return "drift_check";
-  if (operation === "delete") return "destroy_apply";
-  return "apply";
-}
-
-export function sameResourceOperationIdentity(
-  left: ResourceOperationRun,
-  right: ResourceOperationRun,
-): boolean {
-  return (
-    left.id === right.id &&
-    left.workspaceId === right.workspaceId &&
-    left.subject.id === right.subject.id &&
-    left.resourceOperation === right.resourceOperation &&
-    optionalInstalledFormReferenceKey(left.resourceForm) ===
-      optionalInstalledFormReferenceKey(right.resourceForm) &&
-    left.resourceOperationKey === right.resourceOperationKey &&
-    canonicalStoreJson(left.resourceFormTransition) ===
-      canonicalStoreJson(right.resourceFormTransition) &&
-    left.type === right.type
-  );
-}
-
-function isResourceFormTransitionRunEvidence(
-  value: unknown,
-): value is ResourceFormTransitionRunEvidence {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const evidence = value as Partial<ResourceFormTransitionRunEvidence>;
-  return (
-    typeof evidence.operationId === "string" &&
-    evidence.operationId.length > 0 &&
-    typeof evidence.requestDigest === "string" &&
-    typeof evidence.expected === "object" &&
-    evidence.expected !== null &&
-    typeof evidence.expected.resourceVersion === "string" &&
-    isInstalledFormReference(evidence.fromForm) &&
-    isInstalledFormReference(evidence.toForm) &&
-    typeof evidence.resource === "object" &&
-    evidence.resource !== null &&
-    typeof evidence.claim === "object" &&
-    evidence.claim !== null &&
-    typeof evidence.claim.updatedAt === "string" &&
-    Number.isSafeInteger(evidence.claim.revision) &&
-    (evidence.identityFence === null ||
-      (typeof evidence.identityFence === "object" &&
-        evidence.identityFence !== null)) &&
-    typeof evidence.resolutionLock === "object" &&
-    evidence.resolutionLock !== null
-  );
-}
-
-function isResourceFormTransitionDispatch(
-  value: ResourceOperationRun["resourceFormTransitionDispatch"],
-): boolean {
-  return (
-    value === undefined ||
-    (value.status === "attempted" &&
-      typeof value.attemptedAt === "string" &&
-      value.attemptedAt.length > 0 &&
-      value.attemptedAt === value.attemptedAt.trim())
-  );
-}
-
-function optionalInstalledFormReferenceKey(
-  value: InstalledFormReference | undefined,
-): string | undefined {
-  return value === undefined ? undefined : installedFormReferenceKey(value);
-}
-
-/**
- * Direct Resource Runs are monotonic sagas. A running row may accumulate one
- * immutable backend result and one pending success-Activity intent before its
- * terminal transition. A succeeded row may only acknowledge that exact
- * pending Activity; no terminal outcome or evidence can be rewritten.
- */
-export function resourceOperationRunTransitionAllowed(
-  current: ResourceOperationRun,
-  next: ResourceOperationRun,
-): boolean {
-  if (
-    !sameResourceOperationIdentity(current, next) ||
-    next.resourceOperationVersion !== current.resourceOperationVersion + 1 ||
-    resourceOperationRunImmutableJson(current) !==
-      resourceOperationRunImmutableJson(next)
-  ) {
-    return false;
-  }
-  if (
-    current.resourceFormTransitionDispatch !== undefined &&
-    canonicalStoreJson(current.resourceFormTransitionDispatch) !==
-      canonicalStoreJson(next.resourceFormTransitionDispatch)
-  ) {
-    return false;
-  }
-  if (
-    current.resourceFormTransitionDispatch === undefined &&
-    next.resourceFormTransitionDispatch !== undefined &&
-    (current.resourceOperation !== "form_transition" ||
-      current.status !== "running" ||
-      next.status !== "running")
-  ) {
-    return false;
-  }
-  if (current.status === "running") {
-    if (
-      next.status !== "running" &&
-      next.status !== "succeeded" &&
-      next.status !== "failed"
-    ) {
-      return false;
-    }
-    if (
-      current.resourceOperationResult &&
-      canonicalStoreJson(current.resourceOperationResult) !==
-        canonicalStoreJson(next.resourceOperationResult)
-    ) {
-      return false;
-    }
-    if (current.resourceOperationAudit) {
-      if (next.status === "failed") {
-        return next.resourceOperationAudit === undefined;
-      }
-      return (
-        canonicalStoreJson(current.resourceOperationAudit) ===
-        canonicalStoreJson(next.resourceOperationAudit)
-      );
-    }
-    return next.resourceOperationAudit?.status !== "completed";
-  }
-  if (current.status !== "succeeded" || next.status !== "succeeded") {
-    return false;
-  }
-  const currentAudit = current.resourceOperationAudit;
-  const nextAudit = next.resourceOperationAudit;
-  return (
-    current.finishedAt === next.finishedAt &&
-    current.errorCode === next.errorCode &&
-    canonicalStoreJson(current.resourceOperationResult) ===
-      canonicalStoreJson(next.resourceOperationResult) &&
-    currentAudit?.status === "pending" &&
-    nextAudit?.status === "completed" &&
-    currentAudit.eventId === nextAudit.eventId &&
-    currentAudit.action === nextAudit.action &&
-    currentAudit.createdAt === nextAudit.createdAt &&
-    canonicalStoreJson(currentAudit.metadata) ===
-      canonicalStoreJson(nextAudit.metadata)
-  );
-}
-
-function resourceOperationRunImmutableJson(run: ResourceOperationRun): string {
-  const {
-    status: _status,
-    resourceOperationVersion: _version,
-    resourceOperationResult: _result,
-    resourceOperationAudit: _audit,
-    resourceFormTransitionDispatch: _transitionDispatch,
-    finishedAt: _finishedAt,
-    errorCode: _errorCode,
-    ...immutable
-  } = run;
-  return canonicalStoreJson(immutable);
-}
-
-function canonicalStoreJson(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    const encoded = JSON.stringify(value);
-    return encoded === undefined ? "undefined" : encoded;
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalStoreJson).join(",")}]`;
-  }
-  const object = value as Readonly<Record<string, unknown>>;
-  return `{${Object.keys(object)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonicalStoreJson(object[key])}`)
-    .join(",")}}`;
 }
 
 /** True only for rows that can change whether a Capsule runtime is safe. */

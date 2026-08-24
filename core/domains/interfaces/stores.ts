@@ -21,26 +21,6 @@ export interface InterfaceListFilter {
   readonly includeRetired?: boolean;
 }
 
-/** Nullable query projection for exact portable Form descriptor lineage. */
-export function interfaceFormLineage(record: Interface):
-  | {
-      readonly formRefKey: string;
-      readonly formSchemaDigest: string;
-      readonly descriptorName: string;
-      readonly descriptorVersion: string;
-    }
-  | undefined {
-  const source = record.metadata.materializedFrom;
-  return source?.source === "form_descriptor"
-    ? {
-        formRefKey: source.formRefKey,
-        formSchemaDigest: source.formSchemaDigest,
-        descriptorName: source.descriptorName,
-        descriptorVersion: source.descriptorVersion,
-      }
-    : undefined;
-}
-
 export interface InterfaceWriteGuard {
   readonly generation: number;
   readonly resolvedRevision: number;
@@ -117,7 +97,7 @@ export interface InterfaceAuthorizationPageInput {
    * the dashboard still validates the complete type-specific document.
    */
   readonly uiSurfaceCandidates?: boolean;
-  /** Applies only to Capsule-owned candidates; Resource ownership is joined later. */
+  /** Applies only to Capsule-owned candidates. */
   readonly capsuleId?: string;
 }
 
@@ -441,13 +421,7 @@ function isUiSurfaceCandidate(
       iface.spec.version === UI_SURFACE_INTERFACE_VERSION
     );
   }
-  return (
-    iface.metadata.ownerRef.kind === "Resource" &&
-    iface.spec.document !== null &&
-    typeof iface.spec.document === "object" &&
-    !Array.isArray(iface.spec.document) &&
-    iface.spec.document.launcher === true
-  );
+  return false;
 }
 
 function isCurrentPrincipalGrant(

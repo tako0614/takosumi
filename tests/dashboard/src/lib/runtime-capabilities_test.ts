@@ -7,8 +7,6 @@ const capabilities = {
   apiVersion: "takosumi.dev/v1alpha1",
   resources: { Stack: true },
   adapters: { opentofu: true },
-  compat: { framework: true },
-  compatibilityProfiles: {},
   identity: {
     oidc_issuer: true,
     external_oidc_login: true,
@@ -78,7 +76,7 @@ test("dashboard rejects cross-origin capability endpoints", async () => {
   ).rejects.toThrow("same-origin");
 });
 
-test("dashboard rejects capability documents without typed compatibility authority", async () => {
+test("dashboard rejects capability documents without provider-neutral resources", async () => {
   const fetchImpl: typeof fetch = async (input) => {
     if (String(input).endsWith("/.well-known/takosumi")) {
       return Response.json({
@@ -92,11 +90,7 @@ test("dashboard rejects capability documents without typed compatibility authori
         },
       });
     }
-    const untyped = Object.fromEntries(
-      Object.entries(capabilities).filter(
-        ([key]) => key !== "compatibilityProfiles",
-      ),
-    );
+    const { resources: _resources, ...untyped } = capabilities;
     return Response.json(untyped);
   };
 

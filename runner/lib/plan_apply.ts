@@ -17,6 +17,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import type {
   JsonRecord,
+  OpenTofuExecutionSource,
   OpenTofuModuleSource,
   RunWorkspace,
   GeneratedRoot,
@@ -67,9 +68,9 @@ import {
 import {
   parseOperation,
   parseRefreshOnly,
+  parseLegacySourcelessDestroyRecovery,
   parseSource,
   parseGeneratedRoot,
-  parseOperatorModule,
   parseVariables,
   parseSourceBuild,
   assertNoLegacyArtifactDispatch,
@@ -105,15 +106,14 @@ export async function runPlan(
   if (generatedRoot) {
     return await runGeneratedRootPlan(runId, request, generatedRoot, signal);
   }
-  if (parseOperatorModule(request)) {
+  if (parseLegacySourcelessDestroyRecovery(request)) {
     throw new Error("operatorModule requires a generated root");
   }
   return await runDirectRootPlan(runId, request, signal);
 }
 
-// Generated-root path: used only when explicit provider alias/configuration
-// requires a child-module wrapper, or by an explicit Resource Shape operator
-// module. Ordinary Git Capsules execute their selected module as the root.
+// Generated-root path: used when explicit provider alias/configuration requires
+// a child-module wrapper, plus the internal pre-v1 source-less destroy drain.
 export async function runGeneratedRootPlan(
   runId: string,
   request: unknown,
@@ -123,11 +123,12 @@ export async function runGeneratedRootPlan(
   const operation = parseOperation(request);
   const refreshOnly = parseRefreshOnly(request);
   assertNoLegacyArtifactDispatch(request);
-  const source = parseSource(request);
+  const legacyRecovery = parseLegacySourcelessDestroyRecovery(request);
+  const source = legacyRecovery?.source ?? parseSource(request);
   const sourceBuild = parseSourceBuild(request);
   const runnerProfile = parseRunnerProfile(request);
   const outputAllowlist = parseOutputAllowlist(request);
-  const operatorModule = parseOperatorModule(request);
+  const operatorModule = legacyRecovery?.operatorModule;
   const scopeSelectors = parsePlanScopeSelectors(request);
   const commandContext = commandContextFromRequest(
     request,
@@ -243,9 +244,6 @@ export async function runDirectRootPlan(
   const refreshOnly = parseRefreshOnly(request);
   assertNoLegacyArtifactDispatch(request);
   const source = parseSource(request);
-  if (source.kind === "operator_module") {
-    throw new Error("operator_module source requires a generated root");
-  }
   const sourceBuild = parseSourceBuild(request);
   const runnerProfile = parseRunnerProfile(request);
   const outputAllowlist = parseOutputAllowlist(request);
@@ -488,7 +486,8 @@ export async function runReviewedPlanApply(
   signal?: AbortSignal,
 ): Promise<JsonRecord> {
   const generatedRoot = parseGeneratedRoot(request);
-  const operatorModule = parseOperatorModule(request);
+  const legacyRecovery = parseLegacySourcelessDestroyRecovery(request);
+  const operatorModule = legacyRecovery?.operatorModule;
   const sourceBuild = parseSourceBuild(request);
   const runnerProfile = parseRunnerProfile(request);
   const commandContext = commandContextFromRequest(
@@ -506,7 +505,7 @@ export async function runReviewedPlanApply(
   const moduleDir = generatedRoot
     ? await restoreGeneratedRootApplyWorkspace(
         runId,
-        parseSource(request),
+        legacyRecovery?.source ?? parseSource(request),
         commandContext,
         generatedRoot,
         operatorModule,
@@ -630,7 +629,7 @@ export async function runReviewedPlanApply(
 // identical root layout.
 export async function restoreGeneratedRootApplyWorkspace(
   runId: string,
-  source: OpenTofuModuleSource,
+  source: OpenTofuExecutionSource,
   context: CommandContext,
   generatedRoot: GeneratedRoot,
   operatorModule?: OperatorModule,
@@ -684,9 +683,6 @@ export async function restoreDirectRootApplyWorkspace(
   context: CommandContext,
   sourceBuild?: SourceBuildConfig,
 ): Promise<string> {
-  if (source.kind === "operator_module") {
-    throw new Error("operator_module source requires a generated root");
-  }
   const workspace = workspaceForRun(runId);
   await mkdir(workspace.root, { recursive: true });
   await ensureSourceAvailable(source, workspace.sourceRoot);

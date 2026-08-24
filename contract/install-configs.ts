@@ -13,10 +13,7 @@
 import type {
   CapsuleInterfaceBlueprint,
   CapsuleRequiredInterface,
-  CapsuleResourceInterfaceBindingProposal,
 } from "./interfaces.ts";
-import type { InstallConfigHostRuntimeMaterialization } from "./host-runtime-materialization.ts";
-export type { InstallConfigHostRuntimeMaterialization } from "./host-runtime-materialization.ts";
 import type { ScopeBoundaryPolicy } from "./plan-scope.ts";
 import type { RepositoryManifestInterfaceApiVersion } from "./repository-manifest.ts";
 import type { JsonValue } from "./types.ts";
@@ -155,60 +152,6 @@ export interface InstallConfigResourceMigrationAction {
 
 export type InstallConfigLifecycleAction =
   InstallConfigLifecycleCommandAction | InstallConfigResourceMigrationAction;
-
-/**
- * Allocation mode for one operator-managed public hostname.
- *
- * `scoped` is the default address whose DNS label is namespaced by the
- * Workspace handle. `vanity` keeps the requested one-label name unchanged and
- * consumes one owner-account vanity slot. User-owned custom domains remain
- * ordinary `public_endpoint` URL/route variables and use the selected target's
- * ownership-verification lifecycle.
- */
-export type ManagedPublicHostnameMode = "scoped" | "vanity";
-
-export interface ManagedPublicHostnameAllocation {
-  readonly mode: ManagedPublicHostnameMode;
-}
-
-/**
- * In-process operator request for claiming one managed public hostname.
- * Identity is always resolved from the referenced Capsule and Workspace;
- * callers never supply an owner account id.
- */
-export interface ManagedPublicHostnameClaimRequest {
-  readonly workspaceId: string;
-  readonly capsuleId: string;
-  readonly requestedLabel: string;
-  readonly managedPublicBaseDomain: string;
-  /**
-   * Exact hostname the caller is about to persist. The controller validates it
-   * against the Capsule-derived allocation before mutating the reservation.
-   */
-  readonly expectedHostname: string;
-}
-
-/** Non-disclosing result returned to compatibility and managed-target adapters. */
-export type ManagedPublicHostnameClaimResult =
-  | {
-      readonly ok: true;
-      readonly hostname: string;
-      readonly mode: ManagedPublicHostnameMode;
-    }
-  | {
-      readonly ok: false;
-      readonly reason:
-        | "invalid_context"
-        | "invalid_label"
-        | "unavailable"
-        | "slot_limit_reached";
-      readonly limit?: number;
-    };
-
-/** Optional composition port exposed by an operator-hosted Takosumi process. */
-export type ManagedPublicHostnameClaimer = (
-  request: ManagedPublicHostnameClaimRequest,
-) => Promise<ManagedPublicHostnameClaimResult>;
 
 /**
  * Policy attached to an InstallConfig. Layered evaluation happens
@@ -675,8 +618,6 @@ export interface InstallConfig {
    * as lifecycle declarations.
    */
   readonly lifecycleActions?: readonly InstallConfigLifecycleAction[];
-  /** Managed hostname allocation choice. Absent means `scoped`. */
-  readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
   /**
    * Service-side runner preference for this Capsule. This is operator policy
    * selected at install/deploy time, not repo metadata.
@@ -720,23 +661,11 @@ export interface InstallConfig {
    */
   readonly interfaceBlueprints?: readonly CapsuleInterfaceBlueprint[];
   /**
-   * Binding-only service proposals for Resource-owned Interfaces declared by
-   * portable IaC. This field never carries an Interface document or spec.
-   */
-  readonly resourceInterfaceBindingProposals?: readonly CapsuleResourceInterfaceBindingProposal[];
-  /**
    * Host Interface contracts this Capsule runtime must be authorized to use.
    * The exact Interface and pairwise OIDC Principal are resolved by the host;
    * this record carries no Interface id or credential.
    */
   readonly requiredInterfaces?: readonly CapsuleRequiredInterface[];
-  /**
-   * DB-owned, provider-neutral runtime materialization requirements. Core
-   * forwards only opaque secret/capability refs where required; Resource
-   * bindings carry no runtime credential and resolved values remain inside the
-   * host.
-   */
-  readonly hostRuntimeMaterialization?: InstallConfigHostRuntimeMaterialization;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -746,9 +675,7 @@ export type PublicInstallConfig = Omit<
   InstallConfig,
   | "runnerId"
   | "internal"
-  | "resourceInterfaceBindingProposals"
   | "requiredInterfaces"
-  | "hostRuntimeMaterialization"
 >;
 
 /**

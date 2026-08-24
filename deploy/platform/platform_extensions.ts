@@ -6,10 +6,6 @@
 // pricing, metering, commercial policy, and provider-specific behavior belong to
 // the extension implementation.
 
-import {
-  isTakosumiCompatibilityProfileToken,
-  type TakosumiCompatibilityPlane,
-} from "takosumi-contract/capabilities";
 import type { WorkspaceRole } from "takosumi-contract/workspaces";
 import {
   canonicalProviderSource,
@@ -18,7 +14,6 @@ import {
 } from "takosumi-contract/provider-env-rules";
 import { canonicalRunCredentialSettings } from "takosumi-contract/connections";
 import type { JsonValue } from "takosumi-contract";
-import type { HostRuntimeMaterializationRequest } from "takosumi-contract";
 import {
   PLATFORM_EXTENSION_ALLOWLISTED_BASE_PATHS,
   PLATFORM_EXTENSION_RESERVED_PREFIXES,
@@ -27,13 +22,6 @@ import {
   platformExtensionRouteMatchesPath,
   type PlatformExtensionMatchMode,
 } from "takosumi-contract/platform-extension-routes";
-
-export interface PlatformCompatibilityProfile {
-  /** Exact scoped, versioned capability token, for example `compat.s3.v1`. */
-  readonly profile: `compat.${string}`;
-  /** Explicit authority planes. Profiles that expose both list both values. */
-  readonly planes: readonly TakosumiCompatibilityPlane[];
-}
 
 export interface PlatformExtensionRoute {
   /** Stable public catalog id. */
@@ -84,12 +72,6 @@ export interface PlatformExtensionRoute {
   readonly providerCredentialBroker?: PlatformExtensionProviderCredentialBroker;
   /** Public capability tokens advertised by discovery. */
   readonly capabilities?: readonly string[];
-  /**
-   * Compatibility profiles mounted on this route. Presence switches dispatch
-   * to the restricted compatibility handler contract; raw extension fetch is
-   * never used for these profiles.
-   */
-  readonly compatibilityProfiles?: readonly PlatformCompatibilityProfile[];
   /** Safe dashboard links contributed by the extension. */
   readonly contributions?: readonly PlatformExtensionContribution[];
 }
@@ -133,8 +115,6 @@ export interface PlatformExtensionAuthenticatedContext {
   readonly phase?: "plan" | "apply" | "destroy";
   /** Canonical Run lifecycle intent; present only for Run credentials. */
   readonly lifecycleIntent?: "provision" | "destroy";
-  /** Opaque DB-owned requirements, present only on exact Run credential RPC. */
-  readonly hostRuntimeMaterialization?: HostRuntimeMaterializationRequest;
 }
 
 /** Handler contract for routes using `authDelivery: "context"`. */
@@ -322,10 +302,6 @@ function platformExtensionRouteFromJson(
     label,
     "capabilities",
   );
-  const compatibilityProfiles = optionalCompatibilityProfiles(
-    record.compatibilityProfiles,
-    label,
-  );
   if (authDelivery === "context" && authMode === "handler") {
     throw new TypeError(
       `${label}.authDelivery=context requires platform authentication`,
@@ -341,37 +317,7 @@ function platformExtensionRouteFromJson(
       `${label}.providerCredentialBroker requires runCredential`,
     );
   }
-  if (authDelivery === "context" && (compatibilityProfiles?.length ?? 0) > 0) {
-    throw new TypeError(
-      `${label}.authDelivery=context is not supported for compatibilityProfiles`,
-    );
-  }
-  const declaredCompatibilityTokens = (declaredCapabilities ?? []).filter(
-    isCompatibilityProfileToken,
-  );
-  const typedCompatibilityTokens = new Set(
-    (compatibilityProfiles ?? []).map(({ profile }) => profile),
-  );
-  const untypedCompatibilityToken = declaredCompatibilityTokens.find(
-    (token) => !typedCompatibilityTokens.has(token),
-  );
-  if (untypedCompatibilityToken) {
-    throw new TypeError(
-      `${label}.capabilities profile ${untypedCompatibilityToken} requires an explicit compatibilityProfiles control/data declaration`,
-    );
-  }
-  if (
-    pathIsUnderBase(basePath, "/compat") &&
-    (compatibilityProfiles?.length ?? 0) === 0
-  ) {
-    throw new TypeError(
-      `${label}.basePath under /compat requires compatibilityProfiles`,
-    );
-  }
-  const capabilities = uniqueStrings([
-    ...(declaredCapabilities ?? []),
-    ...(compatibilityProfiles ?? []).map(({ profile }) => profile),
-  ]);
+  const capabilities = uniqueStrings(declaredCapabilities ?? []);
   const contributions = optionalContributions(
     record.contributions,
     label,
@@ -392,7 +338,6 @@ function platformExtensionRouteFromJson(
     ...(runCredential ? { runCredential } : {}),
     ...(providerCredentialBroker ? { providerCredentialBroker } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
-    ...(compatibilityProfiles ? { compatibilityProfiles } : {}),
     ...(contributions ? { contributions } : {}),
   };
 }
@@ -604,7 +549,6 @@ function mergePlatformExtensionRoutes(
   }
   const merged = new Map<string, PlatformExtensionRoute>();
   const runCredentialAudienceOwners = new Map<string, string>();
-  const compatibilityProfileOwners = new Map<string, string>();
   for (const route of routes) {
     if (route.runCredential) {
       const owner = runCredentialAudienceOwners.get(
@@ -619,15 +563,6 @@ function mergePlatformExtensionRoutes(
         route.runCredential.audience,
         route.basePath,
       );
-    }
-    for (const { profile } of route.compatibilityProfiles ?? []) {
-      const owner = compatibilityProfileOwners.get(profile);
-      if (owner && owner !== route.basePath) {
-        throw new TypeError(
-          `compatibility profile ${profile} has multiple route owners`,
-        );
-      }
-      compatibilityProfileOwners.set(profile, route.basePath);
     }
     const existing = merged.get(route.basePath);
     if (
@@ -671,17 +606,10 @@ function mergePlatformExtensionRoutes(
               ...(existing.contributions ?? []),
               ...(route.contributions ?? []),
             ]);
-            const compatibilityProfiles = mergeCompatibilityProfiles([
-              ...(existing.compatibilityProfiles ?? []),
-              ...(route.compatibilityProfiles ?? []),
-            ]);
             return {
               ...existing,
               ...(capabilities.length > 0 ? { capabilities } : {}),
               ...(contributions.length > 0 ? { contributions } : {}),
-              ...(compatibilityProfiles.length > 0
-                ? { compatibilityProfiles }
-                : {}),
             };
           })()
         : route,
@@ -728,67 +656,6 @@ function sameRunCredential(
     left?.audience === right?.audience &&
     sameStrings(left?.requiredScopes, right?.requiredScopes)
   );
-}
-
-function optionalCompatibilityProfiles(
-  value: unknown,
-  label: string,
-): readonly PlatformCompatibilityProfile[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${label}.compatibilityProfiles must be an array`);
-  }
-  const profiles = value.map((entry, index) => {
-    const itemLabel = `${label}.compatibilityProfiles[${index}]`;
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new TypeError(`${itemLabel} must be an object`);
-    }
-    const record = entry as Record<string, unknown>;
-    const profile = nonEmptyString(record.profile);
-    if (!profile || !isCompatibilityProfileToken(profile)) {
-      throw new TypeError(
-        `${itemLabel}.profile must be a scoped compat.* version token`,
-      );
-    }
-    if (!Array.isArray(record.planes) || record.planes.length === 0) {
-      throw new TypeError(`${itemLabel}.planes must contain control or data`);
-    }
-    const planes = uniqueStrings(
-      record.planes.map((plane) => {
-        if (plane !== "control" && plane !== "data") {
-          throw new TypeError(
-            `${itemLabel}.planes entries must be control or data`,
-          );
-        }
-        return plane;
-      }),
-    ) as readonly TakosumiCompatibilityPlane[];
-    return { profile, planes } as PlatformCompatibilityProfile;
-  });
-  const merged = mergeCompatibilityProfiles(profiles);
-  return merged.length > 0 ? merged : undefined;
-}
-
-function mergeCompatibilityProfiles(
-  profiles: readonly PlatformCompatibilityProfile[],
-): readonly PlatformCompatibilityProfile[] {
-  const merged = new Map<string, Set<TakosumiCompatibilityPlane>>();
-  for (const { profile, planes } of profiles) {
-    const existing =
-      merged.get(profile) ?? new Set<TakosumiCompatibilityPlane>();
-    for (const plane of planes) existing.add(plane);
-    merged.set(profile, existing);
-  }
-  return [...merged].map(([profile, planes]) => ({
-    profile: profile as `compat.${string}`,
-    planes: [...planes].sort(),
-  }));
-}
-
-function isCompatibilityProfileToken(
-  value: string,
-): value is `compat.${string}` {
-  return isTakosumiCompatibilityProfileToken(value);
 }
 
 function optionalContributions(

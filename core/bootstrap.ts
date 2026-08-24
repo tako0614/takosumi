@@ -9,7 +9,6 @@ import {
   createConsoleApiRequestLogger,
   parseApiLogLevel,
 } from "./api/request_correlation.ts";
-import type { PortableHostIdempotencyCoordinator } from "./api/portable_host_idempotency.ts";
 import {
   type AppContext,
   type AppContextOptions,
@@ -31,7 +30,6 @@ import type { ArtifactReferenceAllocator } from "./adapters/storage/artifact-ref
 import { currentRuntime } from "./shared/runtime/index.ts";
 import { createRoleReadinessProbes } from "./bootstrap/readiness.ts";
 import {
-  type CapsuleHostRuntimeRetirement,
   type DependencyValueSealer,
   type EnqueueRun,
   OpenTofuControllerError,
@@ -48,16 +46,7 @@ import type {
   QuotaPolicy,
   ShowbackRater,
 } from "takosumi-contract/billing";
-import type {
-  OfferingHostComposition,
-  ResourceArtifactWriter,
-  ResourceDeploymentAdmission,
-} from "takosumi-contract";
-import type {
-  InstallConfig,
-  ManagedPublicHostnameClaimRequest,
-  ManagedPublicHostnameClaimResult,
-} from "takosumi-contract/install-configs";
+import type { InstallConfig } from "takosumi-contract/install-configs";
 import type {
   CapsuleCurrentResourceInventoryResponse,
 } from "takosumi-contract/current-resource-inventory";
@@ -65,7 +54,6 @@ import {
   CapsuleLeaseBusyError,
   InMemoryCapsuleCoordination,
   withCapsuleLease,
-  withCapsuleResourceAdmission,
   type CapsuleCoordination,
 } from "./domains/deploy-control/capsule_lease.ts";
 import {
@@ -73,20 +61,10 @@ import {
   SourcesService,
 } from "./domains/sources/mod.ts";
 import {
-  CAPSULE_OWNED_RESOURCES_PENDING_REASON,
+  CAPSULE_LIFECYCLE_BUSY_REASON,
   CapsulesService,
-  type CapsuleAbandonAdmission,
-  type CapsuleOwnedResourceAdmission,
-  type CapsuleOwnedResourceFence,
 } from "./domains/capsules/mod.ts";
 import { WorkspacesService } from "./domains/workspaces/mod.ts";
-import {
-  type WorkspaceViewControlStoreFactory,
-  type WorkspaceResourcesProjectionReader,
-  type WorkspaceViews,
-  SqlWorkspaceResourcesProjectionReader,
-  WorkspaceViewsService,
-} from "./domains/workspace-views/mod.ts";
 import { ProjectsService } from "./domains/projects/mod.ts";
 import { ConnectionsService } from "./domains/connections/mod.ts";
 import { DependenciesService } from "./domains/dependencies/mod.ts";
@@ -102,74 +80,16 @@ import type { SecretBoundaryCrypto } from "./adapters/secret-store/memory.ts";
 import { RunGroupsService } from "./domains/run-groups/mod.ts";
 import { ActivityService } from "./domains/activity/mod.ts";
 import {
-  createInMemoryResourceShapeStores,
-  collectResourceFormPinBackupEntries,
-  formatResourceShapeId,
-  LegacyResourceStateAdoptionService,
-  matchesApplyLock,
-  matchesVersion,
-  ResourceFormPinInventoryService,
-  ResourceFormPinOperations,
-  ResourceFormTransitionService,
-  ResourceArtifactService,
-  ResourceShapeService,
-  type ResourceAdapter,
-  type ResourceObservationClaimInput,
-  resourceRecordRevision,
-  type ResolutionLockRecord,
-  type ResourceShapeModuleRegistry,
-  type ResourceShapeRecord,
-  type ResourceShapeRecordId,
-  type ResourceRecordVersion,
-  type ResourceShapeSchemaRegistry,
-  type ResourceShapeStores,
-  type ResourceFormTransitionHost,
-  type ResourceFormTransitionEvidenceAuthority,
-} from "./domains/resource-shape/mod.ts";
-import { createSqlResourceShapeStores } from "./domains/resource-shape/sql_stores.ts";
-import {
-  createDbOwnedHostRuntimeMaterializationResolver,
-  scheduleHostRuntimeReconcileTarget,
-  withDbOwnedHostRuntimeMaterialization,
-  type HostRuntimeResourceLifecycle,
-} from "./domains/resource-shape/host_runtime_materialization.ts";
-import {
   createInMemoryInterfaceStores,
-  createPortableDeclarationReader,
-  createPortableDeclarationWriter,
-  ensureFormDescriptorInterfaces,
   InterfaceService,
   LegacyOutputInterfaceMigrationService,
   OutputBackedInterfaceInputResolver,
-  RequiredFormInterfaceError,
-  resourceInterfaceWorkspaceInput,
-  resourceLifecycleInterfaceWorkspaceInput,
-  type ResourceInterfaceWorkspaceResolver,
-  type FormInterfaceResourceUriResolver,
   type InterfaceBindingDeliveryHandlerRegistry,
   type InterfaceCredentialIssuer,
   type InterfaceOAuth2ResourceAuthorizer,
   type InterfaceStores,
-  type RuntimeCapabilityReader,
 } from "./domains/interfaces/mod.ts";
 import { createSqlInterfaceStores } from "./domains/interfaces/sql_stores.ts";
-import { canonicalInterfaceOAuth2ResourceUri } from "./domains/interfaces/oauth_resource.ts";
-import {
-  FormRegistryService,
-  createSqlFormRegistryStore,
-  type FormPackageArtifactReader,
-  type FormPackageVerifier,
-  type FormRegistryStore,
-} from "./domains/service-forms/mod.ts";
-import {
-  CompositeOfferingCatalogReader,
-  createSqlOfferingCatalogStore,
-  FormOfferingSubjectResolver,
-  InMemoryOfferingCatalogReader,
-  OfferingCatalogAdminService,
-  OfferingService,
-  type OfferingCatalogStore,
-} from "./domains/offerings/mod.ts";
 import {
   type BackupArtifactStore,
   type BackupObjectReader,
@@ -257,16 +177,6 @@ import type {
 import type {
   ActorContext,
   InterfaceProjectionSink,
-  InterfaceProjectionSnapshot,
-  NativeResourceRef,
-  ResourceObject,
-  ResourceCapsuleOwner,
-  ResourceShapeKind,
-} from "takosumi-contract";
-import {
-  formRefKey,
-  formRefOfInstalled,
-  isResourceCapsuleOwner,
 } from "takosumi-contract";
 import type {
   CredentialRecipeDriverRegistry,
@@ -291,52 +201,6 @@ function resolveOpenTofuStore(input: {
   return {
     ...(store ? { store } : {}),
     durable: store?.persistence === "durable",
-  };
-}
-
-function withCanonicalResourceProjectionEvidence(
-  sink: InterfaceProjectionSink,
-  stores: ResourceShapeStores,
-): InterfaceProjectionSink {
-  return {
-    async project(snapshot: InterfaceProjectionSnapshot): Promise<void> {
-      const owner = snapshot.interface.metadata.ownerRef;
-      if (owner.kind !== "Resource") {
-        await sink.project(snapshot);
-        return;
-      }
-
-      // The Resource record and ResolutionLock remain the authority. Re-read
-      // the record around the lock read so an Interface projector cannot pair
-      // a known-stale Resource generation with current native identity.
-      const before = await stores.resources.get(owner.id);
-      const lock = await stores.locks.get(owner.id);
-      const after = await stores.resources.get(owner.id);
-      if (
-        !before ||
-        !after ||
-        !lock ||
-        lock.resourceId !== owner.id ||
-        before.phase !== "Ready" ||
-        before.observedGeneration !== before.generation ||
-        after.phase !== before.phase ||
-        after.generation !== before.generation ||
-        after.observedGeneration !== before.observedGeneration ||
-        after.updatedAt !== before.updatedAt
-      ) {
-        await sink.project(snapshot);
-        return;
-      }
-
-      await sink.project({
-        ...snapshot,
-        ownerResource: {
-          id: owner.id,
-          generation: before.generation,
-          nativeResources: structuredClone(lock.nativeResources ?? []),
-        },
-      });
-    },
   };
 }
 
@@ -439,55 +303,6 @@ function assertDurableInterfaceStoresOrWarn(input: {
   });
 }
 
-function assertDurableResourceShapeStoresOrWarn(input: {
-  readonly environment?: string;
-  readonly exposed: boolean;
-  readonly durable: boolean;
-}): void {
-  if (!input.exposed || input.durable) return;
-  const strict =
-    input.environment === "production" || input.environment === "staging";
-  if (strict) {
-    throw new Error(
-      `${input.environment} runtime exposes the Resource Shape API but no ` +
-        `durable Resource/ResolutionLock/TargetPool/SpacePolicy stores are ` +
-        `configured; desired resources and resolution evidence would be lost ` +
-        `on restart. Inject durable resourceShapeStores (or a sqlClient).`,
-    );
-  }
-  log.warn("service.resourceShape.in_memory_store", {
-    environment: input.environment ?? "unknown",
-    hint:
-      "Resource, ResolutionLock, TargetPool, and SpacePolicy records will not " +
-      "persist across restart. Inject durable resourceShapeStores (or a " +
-      "sqlClient) for production/staging.",
-  });
-}
-
-function assertDurableOfferingCatalogStoreOrWarn(input: {
-  readonly environment?: string;
-  readonly exposed: boolean;
-  readonly durable: boolean;
-}): void {
-  if (!input.exposed || input.durable) return;
-  const strict =
-    input.environment === "production" || input.environment === "staging";
-  if (strict) {
-    throw new Error(
-      `${input.environment} runtime exposes the Offering catalog API but no ` +
-        `durable Offering catalog store is configured; published exact ` +
-        `catalog authority would be lost on restart. Inject a durable ` +
-        `offeringCatalogStore (or a sqlClient).`,
-    );
-  }
-  log.warn("service.offeringCatalog.in_memory_store", {
-    environment: input.environment ?? "unknown",
-    hint:
-      "Published Offering catalogs will not persist across restart. Inject " +
-      "a durable offeringCatalogStore (or a sqlClient) for production/staging.",
-  });
-}
-
 function assertDurableGitInstallPlanStoreOrWarn(input: {
   readonly environment?: string;
   readonly durable: boolean;
@@ -510,12 +325,6 @@ function assertDurableGitInstallPlanStoreOrWarn(input: {
       "persist across restart. Inject a durable gitInstallPlanStore (or a " +
       "sqlClient) for production/staging.",
   });
-}
-
-export interface ResourceShapeAdapterFactoryDeps {
-  readonly controller: OpenTofuController;
-  readonly capsules: CapsulesService;
-  readonly workspaces: WorkspacesService;
 }
 
 export interface CreateTakosumiServiceOptions extends AppContextOptions {
@@ -573,28 +382,6 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly gitInstallPlanStore?: GitInstallPlanStore;
   /**
-   * Host-local exact FormRef/package/activation registry. When omitted,
-   * `sqlClient` supplies the durable Postgres implementation; a zero-form host
-   * with neither dependency simply leaves the registry operation seam absent.
-   */
-  readonly formRegistryStore?: FormRegistryStore;
-  /** Opaque package bytes reader installed by the host trust policy. */
-  readonly formPackageArtifactReader?: FormPackageArtifactReader;
-  /** Trusted data-only package verifier installed by the host trust policy. */
-  readonly formPackageVerifier?: FormPackageVerifier;
-  /**
-   * Complete generic noncommercial Offering contribution. Omitted installs an
-   * empty catalog with no subject resolvers; plain OpenTofu and zero-form hosts
-   * therefore remain fully functional without an Offering dependency.
-   */
-  readonly offeringHostComposition?: OfferingHostComposition;
-  /**
-   * Durable immutable generic Offering catalog administration store. When
-   * omitted, `sqlClient` supplies Postgres; otherwise dev/test uses memory.
-   * Cloud commercial bindings are never persisted through this port.
-   */
-  readonly offeringCatalogStore?: OfferingCatalogStore;
-  /**
    * Pre-built durable store for the public OpenTofu run ledger. When omitted,
    * a configured `sqlClient` backs it with SQL; when neither is present the
    * controller falls back to an in-memory dev/test store (gated for
@@ -602,86 +389,14 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly opentofuControlStore?: OpenTofuControlStore;
   /**
-   * Fresh control-store factory for one interactive Workspace view read.
-   * Worker hosts use this to bind D1 maintenance admission to the request;
-   * node/in-memory hosts default to the service's shared control store.
-   */
-  readonly requestScopedOpenTofuControlStoreFactory?: WorkspaceViewControlStoreFactory;
-  /**
-   * Host projection optimized for the interactive resources view. Postgres is
-   * composed automatically from sqlClient; Worker/D1 hosts inject their reader.
-   */
-  readonly workspaceResourcesProjectionReader?: WorkspaceResourcesProjectionReader;
-  /**
    * Host-owned allocator for opaque source/state/output/backup artifact refs.
    * Required by execution and backup paths; Core never derives storage layouts.
    */
   readonly artifactReferenceAllocator?: ArtifactReferenceAllocator;
-  /** Resource Shape durable stores. When omitted, `sqlClient` is used. */
-  readonly resourceShapeStores?: ResourceShapeStores;
-  /** Operator-owned module registry for explicit Resource Shape moduleTemplate ids. */
-  readonly resourceShapeModuleRegistry?: ResourceShapeModuleRegistry;
-  /** Host-installed schemas for operator-defined Resource Shape tokens. */
-  readonly resourceShapeSchemaRegistry?: ResourceShapeSchemaRegistry;
   /** Durable Takosumi-managed runtime Interface declarations and bindings. */
   readonly interfaceStores?: InterfaceStores;
-  /** Read-only exact Resource/ResolutionLock/Interface/Binding capability port. */
-  readonly runtimeCapabilityReader?: RuntimeCapabilityReader;
   /** Recoverable host materialization of canonical Interface/Binding state. */
   readonly interfaceProjectionSink?: InterfaceProjectionSink;
-  /**
-   * Explicit bridge from Resource Shape namespace ownership to the Stack Workspace
-   * that may own Interfaces for that Resource. Without this mapping,
-   * Resource-owned/output Interfaces fail closed; matching id strings are not
-   * treated as authority.
-   */
-  readonly resolveResourceInterfaceWorkspace?: ResourceInterfaceWorkspaceResolver;
-  /**
-   * Host-authenticated run-context bridge for portable Resource ownership.
-   * Hosted compositions should resolve an existing run-scoped provider token;
-   * Core deliberately does not mint a second token vocabulary.
-   */
-  readonly resolveResourceCapsuleOwner?: (input: {
-    readonly actor: ActorContext;
-    readonly request: Request;
-    readonly space: string;
-    readonly kind: ResourceShapeKind;
-    readonly name: string;
-  }) =>
-    | ResourceCapsuleOwner
-    | undefined
-    | Promise<ResourceCapsuleOwner | undefined>;
-  /**
-   * Host-only post-adapter runtime lifecycle. Ready runs after Interface
-   * reconciliation; retire runs from the Terminating fence before delete.
-   */
-  readonly hostRuntimeResourceLifecycle?: HostRuntimeResourceLifecycle;
-  /**
-   * Host-owned canonical resource URI projection for portable Form Interface
-   * descriptors. Omission leaves `resource_uri` inputs unavailable and a
-   * required descriptor fails closed before the Resource is advertised Ready.
-   */
-  readonly resolveFormInterfaceResourceUri?: FormInterfaceResourceUriResolver;
-  /**
-   * Host-owned durable replay authority for portable Form lifecycle mutations.
-   * Omission keeps portable host discovery and mutation routes fail-closed.
-   */
-  readonly portableHostIdempotency?: PortableHostIdempotencyCoordinator;
-  /**
-   * Host composition that performs one same-native-resource Form transition
-   * and exposes exact operation-ledger readback. Core never supplies a
-   * backend-specific implementation.
-   */
-  readonly resourceFormTransitionHost?: ResourceFormTransitionHost;
-  /** Product/module evidence authority for explicitly allowed exact pairs. */
-  readonly resourceFormTransitionEvidence?: ResourceFormTransitionEvidenceAuthority;
-  /**
-   * Explicit host-owned Workspace -> Resource authorization-scope mapping used
-   * for the redacted exact-Form backup sidecar and exact FormRef migration.
-   */
-  readonly resolveResourceBackupScope?: (
-    workspaceId: string,
-  ) => string | undefined | Promise<string | undefined>;
   /**
    * Host-owned issuer for invocation-time Principal OAuth credentials. Core
    * authorizes the exact InterfaceBinding and never persists the returned raw
@@ -717,65 +432,8 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
     readonly workspaceId: string;
     readonly request: Request;
   }) => boolean | Promise<boolean>;
-  /**
-   * Adapter that materializes resolved Resource Shapes. The API is mounted only
-   * when the host explicitly injects an adapter or adapter factory; Core never
-   * selects a stub or target implementation implicitly.
-   */
-  readonly resourceShapeAdapter?: ResourceAdapter;
-  /**
-   * Builds a Resource Shape adapter after the shared OpenTofu controller exists.
-   * Host workers use this to wire the real opentofu-adapter, whose run port
-   * records a first-class Resource subject in the normal Run ledger.
-   */
-  readonly resourceShapeAdapterFactory?: (
-    deps: ResourceShapeAdapterFactoryDeps,
-  ) => ResourceAdapter | Promise<ResourceAdapter>;
-  /** Host price/quote and reserve/capture/release policy for Deploy API. */
-  readonly resourceDeploymentAdmission?: ResourceDeploymentAdmission;
-  /**
-   * Host-owned immutable byte storage for canonical Resource artifact staging.
-   * Core retains Run, digest, ArtifactRecord, authorization, and replay
-   * authority; the host returns an opaque ref and owns only physical storage.
-   */
-  readonly resourceArtifactWriter?: ResourceArtifactWriter;
-  /**
-   * Upper bound for a synchronous Resource Shape delete request. OpenTofu-backed
-   * deletes may perform a destroy plan and a destroy apply, so hosts that wire a
-   * real runner should set this longer than one runner wait window.
-   */
-  readonly resourceShapeDeleteTimeoutMs?: number;
-  /**
-   * Operator-managed compat/provider base URLs accepted in TargetPool
-   * implementation options. Empty rejects provider base URL overrides.
-   */
-  readonly resourceShapeAllowedProviderBaseUrls?: readonly string[];
-  /**
-   * Public Resource Shape kinds this service instance exposes for new desired
-   * state. Omitted means none. Every kind must also be installed through the
-   * explicit schema registry contribution.
-   */
-  readonly enabledResourceShapeKinds?: readonly ResourceShapeKind[];
-  readonly resourceCapabilities?: Partial<TakosumiResourceCapabilities>;
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
   readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
-  readonly resolveResourceShapeActor?: (
-    request: Request,
-  ) => ActorContext | Promise<ActorContext>;
-  readonly authorizeResourceShapeForceDelete?: (input: {
-    readonly actor: ActorContext;
-    readonly request: Request;
-    readonly space: string;
-    readonly kind: ResourceShapeKind;
-    readonly name: string;
-  }) => boolean | Promise<boolean>;
-  readonly authorizeResourceShapeApplyRecovery?: (input: {
-    readonly actor: ActorContext;
-    readonly request: Request;
-    readonly space: string;
-    readonly kind: ResourceShapeKind;
-    readonly name: string;
-  }) => boolean | Promise<boolean>;
   /**
    * OpenTofu executor explicitly bound to the reference
    * `opentofu.default` executor id. The reference Cloudflare distribution
@@ -869,11 +527,6 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * returns terminal `succeeded`; a missing executor is never deferred work.
    */
   readonly releaseActivator?: ReleaseActivator;
-  /**
-   * Required host cleanup for Capsule-scoped runtime authority outside
-   * OpenTofu state. A failure prevents provider destroy.
-   */
-  readonly capsuleHostRuntimeRetirement?: CapsuleHostRuntimeRetirement;
   /** Explicit host showback price policy; omitted leaves measurements unrated. */
   readonly showbackRater?: ShowbackRater;
   /**
@@ -896,8 +549,6 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * ports above remain available for focused tests and custom embeddings.
    */
   readonly billingExtensionFactory?: BillingExtensionFactory;
-  /** Operator policy for short managed hostnames; scoped names remain free. */
-  readonly managedVanityHostnameSlotsPerOwner?: number;
   /**
    * Internal compatibility seam for accounts-plane / CLI in-process callers.
    * Internet-facing platform hosts must leave this false so legacy `/v1/*`
@@ -918,24 +569,6 @@ export interface TakosumiOperations {
   readonly controller: OpenTofuController;
   /** Durable actor/idempotency-scoped Git install coordinator records. */
   readonly gitInstallPlans: GitInstallPlanStore;
-  /** Optional zero-form-capable portable Service Form host registry. */
-  readonly forms?: FormRegistryService;
-  /**
-   * Generic noncommercial availability and exact-selection engine. Commercial
-   * hosts bind manager/price/capacity evidence only after this returns an exact
-   * OfferingSelection.
-   */
-  readonly offerings: Pick<OfferingService, "listAvailability" | "resolve">;
-  /** Operator administration of immutable generic noncommercial catalogs. */
-  readonly offeringCatalogs: Pick<
-    OfferingCatalogAdminService,
-    "publish" | "get" | "list"
-  >;
-  /** Internal-only bounded exact-Form backfill and backup replay operation. */
-  readonly resourceFormPins?: ResourceFormPinOperations;
-  claimManagedPublicHostname(
-    input: ManagedPublicHostnameClaimRequest,
-  ): Promise<ManagedPublicHostnameClaimResult>;
   /** Workspace identity + handle uniqueness over the shared ledger. */
   readonly workspaces: WorkspacesService;
   /** Canonical Workspace-owned Project ledger. */
@@ -994,135 +627,8 @@ export interface TakosumiOperations {
    * workspace_drift_check RunGroups over the same shared ledger + controller.
    */
   readonly runGroups: RunGroupsService;
-  /** Runtime declarations shared by Capsule and Resource authoring flows. */
+  /** Runtime declarations shared by Capsule and OpenTofu authoring flows. */
   readonly interfaces: InterfaceService;
-  /** Exact runtime capability evidence over the canonical control-plane rows. */
-  readonly runtimeCapabilityReader?: RuntimeCapabilityReader;
-  /** Exact host-authenticated application owner for a canonical Resource. */
-  readonly resourceCapsuleOwners?: {
-    get(resourceId: string): Promise<ResourceCapsuleOwner | undefined>;
-    getMany(resourceIds: readonly string[]): Promise<
-      readonly {
-        readonly resourceId: string;
-        readonly owner: ResourceCapsuleOwner;
-      }[]
-    >;
-  };
-  /** Bounded, authorized first-paint Workspace read projections. */
-  readonly workspaceViews?: WorkspaceViews;
-  /**
-   * Narrow in-process seam for the bounded scheduled Resource observer. The
-   * lease is durable scheduler metadata only; lifecycle and condition updates
-   * still go through the canonical ResourceShapeService.
-   */
-  readonly resourceObservation?: {
-    claimCandidate(
-      input: ResourceObservationClaimInput,
-    ): Promise<ResourceShapeRecord | undefined>;
-    observe(
-      resource: ResourceShapeRecord,
-      actor: ActorContext,
-    ): Promise<boolean>;
-    finishClaim(
-      resourceId: ResourceShapeRecordId,
-      leaseId: string,
-      attemptedAt: string,
-    ): Promise<boolean>;
-  };
-  /** Bounded restart recovery for direct Resource adapter Run/audit sagas. */
-  readonly resourceOperationRepair?: {
-    repair(options?: {
-      readonly workspaceId?: string;
-      readonly limit?: number;
-    }): Promise<{
-      readonly scanned: number;
-      readonly recovered: number;
-      readonly completed: number;
-      readonly auditsRepaired: number;
-      readonly pending: number;
-    }>;
-  };
-  /**
-   * Exact recovery seam for a hosted EdgeWorker whose provider apply is
-   * durable but whose post-apply host-runtime activation temporarily fenced
-   * the Resource as Degraded. This is an in-process lifecycle port only; it
-   * never exposes Degraded Resources through the public Ready inventory.
-   */
-  readonly resourceHostRuntimeRecovery?: {
-    resolve(input: {
-      readonly resourceId: ResourceShapeRecordId;
-      readonly resourceGeneration: number;
-      readonly resourceRevisionId: string;
-    }): Promise<
-      | {
-          readonly resource: ResourceObject;
-          readonly resourceGeneration: number;
-          readonly resourceRevision: number;
-          readonly resourceRevisionId: string;
-          readonly nativeResources: readonly NativeResourceRef[];
-        }
-      | undefined
-    >;
-    complete(input: {
-      readonly resourceId: ResourceShapeRecordId;
-      readonly resourceGeneration: number;
-      readonly resourceRevisionId: string;
-    }): Promise<boolean>;
-  };
-  /**
-   * Read-only compatibility-profile projection. It returns evidence only for a
-   * fully observed Ready Resource with a durable ResolutionLock; lifecycle
-   * mutation remains exclusively on the Resource Deploy API.
-   */
-  readonly resourceCompatibility?: {
-    resolveReadyResource(input: {
-      readonly space: string;
-      readonly kind: ResourceShapeKind;
-      readonly name: string;
-    }): Promise<
-      | {
-          readonly resource: ResourceObject;
-          readonly resourceGeneration: number;
-          readonly resourceRevision: number;
-          readonly resourceRevisionId: string;
-          readonly nativeResources: readonly NativeResourceRef[];
-        }
-      | undefined
-    >;
-    /**
-     * Cheap exact Ready revision fence for callers holding pinned evidence.
-     * This deliberately reads only the canonical Resource and ResolutionLock
-     * rows; it never reconstructs a ResourceObject through the service layer.
-     */
-    fenceReadyResource(input: {
-      readonly resourceId: string;
-      readonly space: string;
-      readonly kind: ResourceShapeKind;
-      readonly name: string;
-      readonly resourceGeneration: number;
-      readonly resourceRevisionId: string;
-    }): Promise<boolean>;
-    /**
-     * Internal host inventory for bounded reconciliation jobs. This is not
-     * mounted as an HTTP route and exposes only coherent Ready evidence.
-     */
-    listReadyResourcesPage(input: {
-      readonly kind: ResourceShapeKind;
-      readonly space?: string;
-      readonly cursor?: string;
-      readonly limit?: number;
-    }): Promise<{
-      readonly items: readonly {
-        readonly resourceId: string;
-        readonly resource: ResourceObject;
-        readonly resourceGeneration: number;
-        readonly resourceRevision: number;
-        readonly resourceRevisionId: string;
-        readonly nativeResources: readonly NativeResourceRef[];
-      }[];
-      readonly nextCursor?: string;
-    }>;
-  };
   /**
    * Activity domain service (Core Specification §27 / §34): the Workspace-scoped
    * audit trail over the same shared ledger.
@@ -1431,27 +937,6 @@ export async function createTakosumiService(
     environment: runtimeConfig.environment,
     durable: gitInstallPlanStore.durable,
   });
-  const formRegistryStore =
-    options.formRegistryStore ??
-    (options.sqlClient
-      ? createSqlFormRegistryStore(options.sqlClient)
-      : undefined);
-  const formRegistryService = formRegistryStore
-    ? new FormRegistryService({
-        store: formRegistryStore,
-        ...(options.formPackageArtifactReader
-          ? { artifactReader: options.formPackageArtifactReader }
-          : {}),
-        ...(options.formPackageVerifier
-          ? { verifier: options.formPackageVerifier }
-          : {}),
-      })
-    : undefined;
-  const offeringCatalogStore =
-    options.offeringCatalogStore ??
-    (options.sqlClient
-      ? createSqlOfferingCatalogStore(options.sqlClient)
-      : new InMemoryOfferingCatalogReader());
   const billingExtension = options.billingExtensionFactory
     ? await options.billingExtensionFactory.create()
     : undefined;
@@ -1576,6 +1061,45 @@ export async function createTakosumiService(
     store: sharedOpenTofuStore,
     activity: activityService,
     projects: projectsService,
+    capsuleAbandonAdmission: async ({ capsule, holderId }, work) => {
+      try {
+        return await withCapsuleLease(
+          capsuleCoordination,
+          {
+            capsuleId: capsule.id,
+            environment: capsule.environment,
+            holderId,
+          },
+          async () => {
+            const current = await sharedOpenTofuStore.getCapsule(capsule.id);
+            if (
+              !current ||
+              current.workspaceId !== capsule.workspaceId ||
+              current.installingPrincipalId !==
+                capsule.installingPrincipalId ||
+              current.environment !== capsule.environment ||
+              current.status === "destroyed"
+            ) {
+              throw new OpenTofuControllerError(
+                "failed_precondition",
+                `capsule ${capsule.id} lifecycle changed before abandonment`,
+                { reason: CAPSULE_LIFECYCLE_BUSY_REASON },
+              );
+            }
+            return await work(current);
+          },
+        );
+      } catch (error) {
+        if (error instanceof CapsuleLeaseBusyError) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `capsule ${capsule.id} is busy with another lifecycle operation`,
+            { reason: CAPSULE_LIFECYCLE_BUSY_REASON },
+          );
+        }
+        throw error;
+      }
+    },
   });
   const dependenciesService = new DependenciesService({
     store: sharedOpenTofuStore,
@@ -1627,21 +1151,9 @@ export async function createTakosumiService(
     ...(options.releaseActivator
       ? { releaseActivator: options.releaseActivator }
       : {}),
-    ...(options.capsuleHostRuntimeRetirement
-      ? {
-          capsuleHostRuntimeRetirement:
-            options.capsuleHostRuntimeRetirement,
-        }
-      : {}),
     ...(showbackRater ? { showbackRater } : {}),
     ...(billingEnforcement ? { billingEnforcement } : {}),
     ...(quotaPolicy ? { quotaPolicy } : {}),
-    ...(options.managedVanityHostnameSlotsPerOwner !== undefined
-      ? {
-          managedVanityHostnameSlotsPerOwner:
-            options.managedVanityHostnameSlotsPerOwner,
-        }
-      : {}),
     observability: context.adapters.observability,
     metricTags,
   });
@@ -1654,138 +1166,8 @@ export async function createTakosumiService(
     controller: opentofuController,
     activity: activityService,
   });
-  const injectedResourceShapeAdapter =
-    options.resourceShapeAdapter ??
-    (options.resourceShapeAdapterFactory
-      ? await options.resourceShapeAdapterFactory({
-          controller: opentofuController,
-          capsules: capsulesService,
-          workspaces: workspacesService,
-        })
-      : undefined);
-  const hostRuntimeMaterializationResolver =
-    createDbOwnedHostRuntimeMaterializationResolver(capsulesService);
-  const resourceShapeAdapter = injectedResourceShapeAdapter
-    ? withDbOwnedHostRuntimeMaterialization(
-        injectedResourceShapeAdapter,
-        hostRuntimeMaterializationResolver,
-        options.hostRuntimeResourceLifecycle,
-      )
-    : undefined;
-  const resourceShapeStores =
-    options.resourceShapeStores ??
-    (options.sqlClient
-      ? createSqlResourceShapeStores(options.sqlClient)
-      : createInMemoryResourceShapeStores());
-  const capsuleOwnedResourceFence: CapsuleOwnedResourceFence = async ({
-    capsule,
-  }) => {
-    let cursor: string | undefined;
-    for (;;) {
-      const page = await resourceShapeStores.resources.listByCapsuleOwnerPage(
-        capsule.workspaceId,
-        capsule.id,
-        { limit: 100, ...(cursor ? { cursor } : {}) },
-      );
-      for (const resource of page.items) {
-        const owner = resource.owner;
-        if (
-          !isResourceCapsuleOwner(owner) ||
-          owner.workspaceId !== capsule.workspaceId ||
-          owner.id !== capsule.id ||
-          owner.installingPrincipalId !== capsule.installingPrincipalId
-        ) {
-          return {
-            status: "invalid_ownership",
-            resourceId: resource.id,
-            reason: isResourceCapsuleOwner(owner)
-              ? "principal_mismatch"
-              : "corrupt",
-          };
-        }
-        return { status: "pending", resourceId: resource.id };
-      }
-      if (!page.nextCursor) return { status: "clear" };
-      cursor = page.nextCursor;
-    }
-  };
-  const capsuleOwnedResourceAdmission: CapsuleOwnedResourceAdmission = async (
-    { capsule, holderId },
-    work,
-  ) =>
-    await withCapsuleResourceAdmission(
-      capsuleCoordination,
-      { capsuleId: capsule.id, holderId },
-      async () => {
-        const current = await sharedOpenTofuStore.getCapsule(capsule.id);
-        if (
-          !current ||
-          current.workspaceId !== capsule.workspaceId ||
-          current.installingPrincipalId !== capsule.installingPrincipalId ||
-          current.status === "destroyed"
-        ) {
-          throw new OpenTofuControllerError(
-            "failed_precondition",
-            `capsule ${capsule.id} is no longer available for Resource admission`,
-            { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
-          );
-        }
-        const runtimeSafety =
-          await sharedOpenTofuStore.getCapsuleRuntimeSafety(capsule.id);
-        if (
-          runtimeSafety?.phase === "terminating" ||
-          runtimeSafety?.phase === "retired"
-        ) {
-          throw new OpenTofuControllerError(
-            "failed_precondition",
-            `capsule ${capsule.id} is terminating; Resource admission is closed`,
-            { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
-          );
-        }
-        return await work(current);
-      },
-    );
-  const capsuleAbandonAdmission: CapsuleAbandonAdmission = async (
-    { capsule, holderId },
-    work,
-  ) => {
-    try {
-      // Keep the same global lock order as provider Apply/destroy:
-      // Capsule environment first, Capsule-owned Resource admission
-      // second. This prevents a no-state abandon from terminalizing the
-      // Capsule while an ordinary provider Apply is already in flight.
-      return await withCapsuleLease(
-        capsuleCoordination,
-        {
-          capsuleId: capsule.id,
-          environment: capsule.environment,
-          holderId,
-        },
-        async () =>
-          await capsuleOwnedResourceAdmission(
-            { capsule, holderId },
-            async (current) => await work(current),
-          ),
-      );
-    } catch (error) {
-      // Coordination contention is an ordinary lifecycle conflict for
-      // the synchronous Accounts DELETE surface, not an internal 500.
-      if (error instanceof CapsuleLeaseBusyError) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `capsule ${capsule.id} is busy with a provider or Resource mutation`,
-          { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
-        );
-      }
-      throw error;
-    }
-  };
-  capsulesService.setCapsuleOwnedResourceFence(capsuleOwnedResourceFence);
-  capsulesService.setCapsuleAbandonAdmission(capsuleAbandonAdmission);
-  opentofuController.setCapsuleOwnedResourceFence(capsuleOwnedResourceFence);
-  // Control-backups domain: exports a Workspace's control ledger as a sealed
-  // bundle. Resource exact pins require an explicit host-owned scope mapping;
-  // Core never infers matching ids.
+  // Control-backups domain: exports a Workspace's Git/OpenTofu control ledger
+  // as a sealed bundle. Form/Resource pin sidecars are retired.
   const backupsService = new BackupsService({
     store: sharedOpenTofuStore,
     activity: activityService,
@@ -1801,243 +1183,18 @@ export async function createTakosumiService(
     ...(options.serviceDataBackupRunner
       ? { serviceDataRunner: options.serviceDataBackupRunner }
       : {}),
-    ...(options.resolveResourceBackupScope
-      ? {
-          collectResourceFormPins: async (workspaceId: string) => {
-            const resourceScopeId =
-              await options.resolveResourceBackupScope!(workspaceId);
-            return resourceScopeId
-              ? await collectResourceFormPinBackupEntries(
-                  resourceShapeStores,
-                  resourceScopeId,
-                )
-              : { status: "ready" as const, entries: [] };
-          },
-        }
-      : {}),
-  });
-  const resourceFormPinOperations = formRegistryService
-    ? new ResourceFormPinOperations({
-        stores: resourceShapeStores,
-        forms: formRegistryService,
-        activity: activityService,
-      })
-    : undefined;
-  const resourceFormPinInventory = options.resolveResourceBackupScope
-    ? new ResourceFormPinInventoryService({
-        workspaces: workspacesService,
-        resources: resourceShapeStores.resources,
-        resolveSpace: options.resolveResourceBackupScope,
-      })
-    : undefined;
-  const legacyResourceStateAdoptionService =
-    new LegacyResourceStateAdoptionService(
-      resourceShapeStores,
-      sharedOpenTofuStore,
-      () => new Date().toISOString(),
-    );
-  const resolveResourceInterfaceWorkspace =
-    options.resolveResourceInterfaceWorkspace;
-  const resolveFormInterfaceResourceUri =
-    options.resolveFormInterfaceResourceUri;
-  const resourceShapeService = resourceShapeAdapter
-    ? new ResourceShapeService({
-        stores: resourceShapeStores,
-        adapter: resourceShapeAdapter,
-        activity: activityService,
-        operationRuns: sharedOpenTofuStore,
-        ...(options.resourceDeploymentAdmission
-          ? { deploymentAdmission: options.resourceDeploymentAdmission }
-          : {}),
-        capsuleOwnedResourceAdmission,
-        ...(options.resourceShapeModuleRegistry
-          ? { moduleRegistry: options.resourceShapeModuleRegistry }
-          : {}),
-        ...(options.resourceShapeSchemaRegistry
-          ? { schemaRegistry: options.resourceShapeSchemaRegistry }
-          : {}),
-        ...(formRegistryService ? { formRegistry: formRegistryService } : {}),
-        ...(formRegistryService
-          ? {
-              formDesiredStateAdmission: async ({ request }) =>
-                request.form
-                  ? await formRegistryService.validateDesiredState(
-                      request.form,
-                      request.spec,
-                    )
-                  : undefined,
-            }
-          : {}),
-        ...(formRegistryService
-          ? {
-              requiredFormInterfaceAdmission: async ({
-                request,
-                definition,
-              }) => {
-                if (
-                  !definition.interfaceDescriptors?.some(
-                    (descriptor) => descriptor.required === true,
-                  )
-                ) {
-                  return undefined;
-                }
-                if (!resolveResourceInterfaceWorkspace) {
-                  return "required Interface materialization needs an explicit Resource-to-Workspace bridge";
-                }
-                const workspaceId = await resolveResourceInterfaceWorkspace({
-                  resourceSpaceId: request.space,
-                  resourceId: formatResourceShapeId(
-                    request.space,
-                    request.kind,
-                    request.name,
-                  ),
-                });
-                if (!workspaceId) {
-                  return "required Interface materialization has no authorized Workspace mapping for this Resource";
-                }
-                const resourceId = formatResourceShapeId(
-                  request.space,
-                  request.kind,
-                  request.name,
-                );
-                for (const descriptor of definition.interfaceDescriptors ??
-                  []) {
-                  if (descriptor.required !== true) continue;
-                  const resourceUriInputs = (descriptor.inputs ?? []).filter(
-                    (declared) => declared.source === "resource_uri",
-                  );
-                  if (resourceUriInputs.length === 0) continue;
-                  if (
-                    descriptor.resourceUriInput === undefined ||
-                    resourceUriInputs.length !== 1 ||
-                    resourceUriInputs[0]?.name !==
-                      descriptor.resourceUriInput ||
-                    resourceUriInputs[0]?.pointer !== undefined ||
-                    resourceUriInputs[0]?.value !== undefined
-                  ) {
-                    return "required Interface has an invalid resource_uri declaration";
-                  }
-                  if (!resolveFormInterfaceResourceUri) {
-                    return "required Interface materialization needs a host resource URI resolver";
-                  }
-                  const resourceUri = await resolveFormInterfaceResourceUri({
-                    workspaceId,
-                    resourceId,
-                    form: definition.identity,
-                    descriptorName: descriptor.name,
-                    descriptorVersion: descriptor.version,
-                  });
-                  if (!canonicalInterfaceOAuth2ResourceUri(resourceUri)) {
-                    return "required Interface canonical resource URI is unavailable";
-                  }
-                }
-                return undefined;
-              },
-            }
-          : {}),
-        now: () => new Date().toISOString(),
-        ...(options.resourceShapeDeleteTimeoutMs !== undefined
-          ? { deleteTimeoutMs: options.resourceShapeDeleteTimeoutMs }
-          : {}),
-        ...(options.resourceShapeAllowedProviderBaseUrls
-          ? {
-              allowedProviderBaseUrls:
-                options.resourceShapeAllowedProviderBaseUrls,
-            }
-          : {}),
-      })
-    : undefined;
-  if (
-    Boolean(options.resourceFormTransitionHost) !==
-    Boolean(options.resourceFormTransitionEvidence)
-  ) {
-    throw new TypeError(
-      "Resource Form transition host and product/module evidence authority must be composed together",
-    );
-  }
-  const resourceFormTransition =
-    resourceShapeService &&
-    formRegistryService &&
-    options.resourceFormTransitionHost &&
-    options.resourceFormTransitionEvidence
-      ? new ResourceFormTransitionService({
-          stores: resourceShapeStores,
-          operations: sharedOpenTofuStore,
-          forms: formRegistryService,
-          evidence: options.resourceFormTransitionEvidence,
-          host: options.resourceFormTransitionHost,
-        })
-      : undefined;
-  const workspaceViews = resourceShapeService
-    ? new WorkspaceViewsService({
-        controlStoreFactory:
-          options.requestScopedOpenTofuControlStoreFactory ??
-          (() => sharedOpenTofuStore),
-        resourceStores: resourceShapeStores,
-        resourceShapeService,
-        ...(options.workspaceResourcesProjectionReader
-          ? {
-              resourcesProjectionReader:
-                options.workspaceResourcesProjectionReader,
-            }
-          : options.sqlClient
-            ? {
-                resourcesProjectionReader:
-                  new SqlWorkspaceResourcesProjectionReader(options.sqlClient),
-              }
-            : {}),
-      })
-    : undefined;
-  const resourceArtifactService =
-    resourceShapeService && options.resourceArtifactWriter
-      ? new ResourceArtifactService({
-          store: sharedOpenTofuStore,
-          activity: activityService,
-          writer: options.resourceArtifactWriter,
-        })
-      : undefined;
-  const offeringService = new OfferingService({
-    catalogs: options.offeringHostComposition?.catalogs
-      ? new CompositeOfferingCatalogReader([
-          offeringCatalogStore,
-          options.offeringHostComposition.catalogs,
-        ])
-      : offeringCatalogStore,
-    resolvers: [
-      ...(formRegistryService && resourceShapeService
-        ? [
-            new FormOfferingSubjectResolver({
-              forms: formRegistryService,
-              availability: resourceShapeService,
-            }),
-          ]
-        : []),
-      ...(options.offeringHostComposition?.resolvers ?? []),
-    ],
-  });
-  const offeringCatalogAdminService = new OfferingCatalogAdminService({
-    store: offeringCatalogStore,
   });
   const interfaceStores =
     options.interfaceStores ??
     (options.sqlClient
       ? createSqlInterfaceStores(options.sqlClient)
       : createInMemoryInterfaceStores());
-  const interfaceProjectionSink = options.interfaceProjectionSink
-    ? withCanonicalResourceProjectionEvidence(
-        options.interfaceProjectionSink,
-        resourceShapeStores,
-      )
-    : undefined;
+  const interfaceProjectionSink = options.interfaceProjectionSink;
   let interfaceService: InterfaceService;
   interfaceService = new InterfaceService({
     stores: interfaceStores,
     resolver: new OutputBackedInterfaceInputResolver({
       opentofu: sharedOpenTofuStore,
-      resources: resourceShapeStores.resources,
-      ...(resolveResourceInterfaceWorkspace
-        ? { resolveResourceWorkspace: resolveResourceInterfaceWorkspace }
-        : {}),
     }),
     activity: activityService,
     ...(interfaceProjectionSink
@@ -2045,9 +1202,6 @@ export async function createTakosumiService(
       : {}),
     ...(options.interfaceCredentialIssuer
       ? { credentialIssuer: options.interfaceCredentialIssuer }
-      : {}),
-    ...(options.runtimeCapabilityReader
-      ? { runtimeCapabilityReader: options.runtimeCapabilityReader }
       : {}),
     ...(options.interfaceBindingDeliveryHandlers
       ? { bindingDeliveryHandlers: options.interfaceBindingDeliveryHandlers }
@@ -2078,13 +1232,7 @@ export async function createTakosumiService(
             capsule.status !== "destroyed"
           );
         }
-        const resource = await resourceShapeStores.resources.get(ownerRef.id);
-        if (!resource || !resolveResourceInterfaceWorkspace) return false;
-        return (
-          (await resolveResourceInterfaceWorkspace(
-            resourceInterfaceWorkspaceInput(resource),
-          )) === workspaceId
-        );
+        return false;
       } catch {
         return false;
       }
@@ -2099,16 +1247,7 @@ export async function createTakosumiService(
             (capsule.status === "active" || capsule.status === "stale")
           );
         }
-        const resource = await resourceShapeStores.resources.get(ownerRef.id);
-        if (!resource || !resolveResourceInterfaceWorkspace) return false;
-        const resourceWorkspaceId = await resolveResourceInterfaceWorkspace(
-          resourceInterfaceWorkspaceInput(resource),
-        );
-        return (
-          resourceWorkspaceId === workspaceId &&
-          resource.phase === "Ready" &&
-          resource.observedGeneration === resource.generation
-        );
+        return false;
       } catch {
         return false;
       }
@@ -2207,493 +1346,6 @@ export async function createTakosumiService(
       return [...names].sort((left, right) => left.localeCompare(right));
     },
   );
-  const materializeFormDescriptorInterfaces = async (
-    resourceId: string,
-  ): Promise<void> => {
-    if (!formRegistryService || !resolveResourceInterfaceWorkspace) return;
-    const resource = await resourceShapeStores.resources.get(resourceId);
-    if (
-      !resource?.form ||
-      resource.phase !== "Ready" ||
-      resource.observedGeneration !== resource.generation
-    ) {
-      return;
-    }
-    const workspaceId = await resolveResourceInterfaceWorkspace(
-      resourceInterfaceWorkspaceInput(resource),
-    );
-    if (!workspaceId) return;
-    const definition = await formRegistryService.getDefinition(
-      formRefOfInstalled(resource.form),
-    );
-    if (!definition) return;
-    await ensureFormDescriptorInterfaces({
-      interfaces: interfaceService,
-      workspaceId,
-      resourceId,
-      form: resource.form,
-      descriptors: definition.interfaceDescriptors ?? [],
-      ...(resolveFormInterfaceResourceUri
-        ? { resolveResourceUri: resolveFormInterfaceResourceUri }
-        : {}),
-    });
-    // An EdgeWorker's own grants are derived from the exact Form it applied,
-    // for both ownership models. A bare form-host Resource has no installer to
-    // blueprint them; a Capsule cannot blueprint them either, because an
-    // InstallConfig proposal names a fixed subject and the subject here is the
-    // per-install EdgeWorker Resource. In both cases the authorization act is
-    // the same: the applied Form declared these connections, and the service
-    // already accepted the matching resource_binding requirements.
-    if (resource.kind === "EdgeWorker") {
-      const routeInterfaces = (
-        await interfaceService.list({
-          workspaceId,
-          ownerKind: "Resource",
-          ownerId: resourceId,
-        })
-      ).filter(
-        (iface) =>
-          iface.spec.type === "http.request" &&
-          iface.status.phase !== "Retired",
-      );
-      if (routeInterfaces.length === 1) {
-        await interfaceService.ensureFormHostDescriptorBinding({
-          iface: routeInterfaces[0]!,
-          resourceId,
-          formRefKey: formRefKey(formRefOfInstalled(resource.form)),
-          descriptorName: "http.request",
-          descriptorVersion: "1",
-          permission: "edge.request",
-        });
-      }
-      // Each resource binding becomes one grant on the provider Resource's own
-      // descriptor Interface, with the consumer EdgeWorker as the subject.
-      // The binding is provider-native and credentialless: the provider host
-      // attaches its native binding from this exact Resource-subject grant.
-      const runtime = await hostRuntimeMaterializationResolver({
-        owner: resource.owner,
-        resourceId,
-        validatedSpec: resource.spec,
-      });
-      for (const requirement of runtime?.requirements ?? []) {
-        if (requirement.kind !== "resource_binding") continue;
-        const declared = record(resource.spec.connections)[
-          requirement.connectionAlias
-        ];
-        const providerResourceId = canonicalConnectionResourceId(
-          record(declared).resource,
-          workspaceId,
-        );
-        if (!providerResourceId) continue;
-        const providerInterfaces = (
-          await interfaceService.list({
-            workspaceId,
-            ownerKind: "Resource",
-            ownerId: providerResourceId,
-          })
-        ).filter(
-          (iface) =>
-            iface.metadata.materializedFrom?.source === "form_descriptor" &&
-            iface.status.phase !== "Retired",
-        );
-        if (providerInterfaces.length !== 1) continue;
-        const providerInterface = providerInterfaces[0]!;
-        const providerFrom = providerInterface.metadata.materializedFrom;
-        if (providerFrom?.source !== "form_descriptor") continue;
-        await interfaceService.ensureFormHostDescriptorBinding({
-          iface: providerInterface,
-          resourceId: providerResourceId,
-          subjectResourceId: resourceId,
-          formRefKey: providerFrom.formRefKey,
-          descriptorName: providerInterface.spec.type,
-          descriptorVersion: providerInterface.spec.version,
-          permission: requirement.requiredPermission,
-        });
-      }
-    }
-  };
-  const degradeRequiredFormInterface = async (
-    resourceId: string,
-    error: unknown,
-  ): Promise<boolean> => {
-    if (!formRegistryService) return false;
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const current = await resourceShapeStores.resources.get(resourceId);
-      if (!current?.form) return false;
-      const definition = await formRegistryService.getDefinition(
-        formRefOfInstalled(current.form),
-      );
-      const required = definition?.interfaceDescriptors?.some(
-        (descriptor) => descriptor.required === true,
-      );
-      if (!required) return false;
-      if (
-        current.phase !== "Ready" ||
-        current.observedGeneration !== current.generation
-      ) {
-        return current.phase === "Degraded";
-      }
-      const at = new Date().toISOString();
-      const reason =
-        error instanceof RequiredFormInterfaceError
-          ? `${error.descriptorName}@${error.descriptorVersion}: ${error.reason}`
-          : "required Interface materialization is unavailable";
-      const degraded: ResourceShapeRecord = {
-        ...current,
-        phase: "Degraded",
-        conditions: [
-          ...(current.conditions ?? []).filter(
-            (condition) => condition.type.toLowerCase() !== "ready",
-          ),
-          {
-            type: "Ready",
-            status: "false",
-            reason: "RequiredInterfaceNotReady",
-            message: reason,
-            observedGeneration: current.generation,
-            lastTransitionAt: at,
-          },
-        ],
-        updatedAt: at,
-      };
-      const changed = await resourceShapeStores.resources.compareAndSet(
-        degraded,
-        {
-          generation: current.generation,
-          phase: current.phase,
-          updatedAt: current.updatedAt,
-        },
-      );
-      if (changed.status === "updated") return true;
-      if (changed.status === "not_found") return false;
-    }
-    return false;
-  };
-
-  /**
-   * A Ready Resource snapshot used to fence host-runtime side effects. The
-   * numeric Resource revision and the canonical backend revision are both
-   * required to match before a lifecycle failure may rewrite the Resource.
-   * This keeps a slow/stale Ready observer from degrading a newer generation.
-   */
-  type ReadyResourceLifecycleFence = {
-    readonly resourceId: string;
-    readonly resourceGeneration: number;
-    readonly resourceRevisionId?: string;
-    readonly resourceVersion: ResourceRecordVersion;
-  };
-  type ReadyResourceLifecycleSnapshot = ReadyResourceLifecycleFence & {
-    readonly resource: ResourceShapeRecord;
-  };
-
-  const readReadyResourceLifecycleSnapshot = async (
-    resourceId: string,
-    expected?: ResourceRecordVersion,
-  ): Promise<ReadyResourceLifecycleSnapshot | undefined> => {
-    const [resource, lock] = await Promise.all([
-      resourceShapeStores.resources.get(resourceId),
-      resourceShapeStores.locks.get(resourceId),
-    ]);
-    if (
-      !resource ||
-      !lock ||
-      resource.phase !== "Ready" ||
-      resource.observedGeneration !== resource.generation
-    ) {
-      return undefined;
-    }
-    const resourceVersion: ResourceRecordVersion = {
-      generation: resource.generation,
-      phase: "Ready",
-      updatedAt: resource.updatedAt,
-      revision: resourceRecordRevision(resource),
-    };
-    if (expected && !matchesVersion(resource, expected)) return undefined;
-    return {
-      resource,
-      resourceId,
-      resourceGeneration: resource.generation,
-      resourceRevisionId: canonicalReadyResourceRevisionId(resource, lock),
-      resourceVersion,
-    };
-  };
-
-  /**
-   * Fences a Ready Resource after a host runtime activation/reconciliation
-   * failure. The host operation is deliberately rethrown to the generic
-   * lifecycle observer (which retains its best-effort contract), while this
-   * bounded CAS removes the durable Ready claim when the exact snapshot still
-   * owns the Resource.
-   */
-  const degradeHostRuntimeResource = async (
-    fence: ReadyResourceLifecycleFence | undefined,
-  ): Promise<boolean> => {
-    if (!fence) return false;
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const current = await resourceShapeStores.resources.get(
-        fence.resourceId,
-      );
-      const lock = await resourceShapeStores.locks.get(fence.resourceId);
-      if (
-        !current ||
-        !lock ||
-        current.phase !== "Ready" ||
-        current.observedGeneration !== current.generation ||
-        !matchesVersion(current, fence.resourceVersion) ||
-        (fence.resourceRevisionId !== undefined &&
-          canonicalReadyResourceRevisionId(current, lock) !==
-            fence.resourceRevisionId)
-      ) {
-        return false;
-      }
-      const at = new Date().toISOString();
-      const degraded: ResourceShapeRecord = {
-        ...current,
-        phase: "Degraded",
-        conditions: [
-          ...(current.conditions ?? []).filter(
-            (condition) => condition.type.toLowerCase() !== "ready",
-          ),
-          {
-            type: "Ready",
-            status: "false",
-            reason: "HostRuntimeNotReady",
-            message: "host runtime lifecycle is unavailable; retry required",
-            observedGeneration: current.generation,
-            lastTransitionAt: at,
-          },
-        ],
-        updatedAt: at,
-      };
-      let changed;
-      try {
-        changed = await resourceShapeStores.replaceResourceAggregate({
-          record: degraded,
-          lock: { ...lock, updatedAt: at },
-          expectedResource: fence.resourceVersion,
-          expectedLock: lock,
-        });
-      } catch (persistenceError) {
-        log.warn("service.resource_shape.host_runtime_fence_failed", {
-          resourceId: fence.resourceId,
-          error: persistenceError,
-        });
-        return false;
-      }
-      if (changed.status === "replaced") return true;
-      if (changed.status === "not_found") return false;
-      // A CAS conflict may be a harmless concurrent write. Re-read once more
-      // so an exact same-generation retry can still fence the Ready claim;
-      // newer generations fail the snapshot check above.
-    }
-    return false;
-  };
-
-  const exactHostRuntimeLifecycleInput = async (
-    resourceId: string,
-    expected?: ResourceRecordVersion,
-  ) => {
-    if (!options.hostRuntimeResourceLifecycle) return undefined;
-    const snapshot = await readReadyResourceLifecycleSnapshot(
-      resourceId,
-      expected,
-    );
-    if (!snapshot || snapshot.resource.kind !== "EdgeWorker") return undefined;
-    const { resource, resourceRevisionId } = snapshot;
-    const request = await hostRuntimeMaterializationResolver({
-      owner: resource.owner,
-      resourceId,
-      validatedSpec: resource.spec,
-    });
-    if (!request) return undefined;
-    if (!resourceRevisionId) {
-      throw new Error(
-        `host runtime lifecycle has no canonical backend revision for ${resourceId}`,
-      );
-    }
-    return {
-      request,
-      resourceId,
-      resourceGeneration: resource.generation,
-      resourceRevisionId,
-      resourceVersion: snapshot.resourceVersion,
-    };
-  };
-  const reconcileScheduleHostRuntime = async (
-    resourceId: string,
-    expected?: ResourceRecordVersion,
-  ) => {
-    if (!options.hostRuntimeResourceLifecycle) return;
-    const sourceSnapshot = await readReadyResourceLifecycleSnapshot(
-      resourceId,
-      expected,
-    );
-    const source = sourceSnapshot?.resource;
-    // Only a Schedule owns a background activation edge. Avoid resolving the
-    // current Capsule InstallConfig for unrelated Resource lifecycle events,
-    // especially retained EdgeWorker teardown.
-    if (!source || source.kind !== "Schedule") return;
-    const request = await hostRuntimeMaterializationResolver({
-      owner: source.owner,
-      resourceId,
-      validatedSpec: source.spec,
-    });
-    if (!request) return;
-    const targetResourceId = scheduleHostRuntimeReconcileTarget({
-      request,
-      source,
-    });
-    if (!targetResourceId) return;
-    const target = await exactHostRuntimeLifecycleInput(targetResourceId);
-    if (!target) {
-      throw new Error(
-        `host runtime Schedule target is not an exact Ready EdgeWorker: ${targetResourceId}`,
-      );
-    }
-    await options.hostRuntimeResourceLifecycle.reconcile(target);
-  };
-  resourceShapeService?.setLifecycleObserver({
-    async observe(event) {
-      if (!resolveResourceInterfaceWorkspace) {
-        if (event.type === "ready") {
-          await degradeRequiredFormInterface(
-            event.resourceId,
-            new Error(
-              "required Interface materialization has no Resource-to-Workspace bridge",
-            ),
-          );
-        }
-        return;
-      }
-      const workspaceId = await resolveResourceInterfaceWorkspace(
-        resourceLifecycleInterfaceWorkspaceInput(event),
-      );
-      if (!workspaceId) {
-        if (event.type === "ready") {
-          await degradeRequiredFormInterface(
-            event.resourceId,
-            new Error(
-              "required Interface materialization has no authorized Workspace mapping",
-            ),
-          );
-        }
-        return;
-      }
-      switch (event.type) {
-        case "ready":
-          {
-            // Capture the exact Ready version before any asynchronous host or
-            // Interface work. A later generation must own its own lifecycle
-            // event; this event may only fence the snapshot it observed.
-            const readySnapshot = options.hostRuntimeResourceLifecycle
-              ? await readReadyResourceLifecycleSnapshot(event.resourceId)
-              : undefined;
-            try {
-              // Activation resolves the canonical connection graph, and that
-              // graph is only complete once each connection's grant exists.
-              // The grants are derived from the applied Form for both
-              // ownership models. Keep this authoritative materialization
-              // attempt inside the degradation fence so a required descriptor
-              // failure cannot leave a durable Ready Resource behind.
-              await materializeFormDescriptorInterfaces(event.resourceId);
-            } catch (error) {
-              if (await degradeRequiredFormInterface(event.resourceId, error)) {
-                await interfaceService.markResourceUnknown(
-                  workspaceId,
-                  event.resourceId,
-                  "required portable Interface did not become Ready",
-                );
-                return;
-              }
-              throw error;
-            }
-            let runtime:
-              | Awaited<
-                  ReturnType<typeof exactHostRuntimeLifecycleInput>
-                >
-              | undefined;
-            try {
-              runtime = readySnapshot
-                ? await exactHostRuntimeLifecycleInput(
-                    event.resourceId,
-                    readySnapshot.resourceVersion,
-                  )
-                : undefined;
-              if (runtime) {
-                await options.hostRuntimeResourceLifecycle!.activate(runtime);
-              }
-              if (readySnapshot) {
-                await reconcileScheduleHostRuntime(
-                  event.resourceId,
-                  readySnapshot.resourceVersion,
-                );
-              }
-            } catch (error) {
-              // ResourceShapeService has already committed Ready and retains a
-              // best-effort observer contract. Fence only the exact Resource
-              // snapshot whose host operation failed, then retain/rethrow the
-              // error so the observer log and bounded repair/sweep can retry.
-              const fenced = await degradeHostRuntimeResource(
-                runtime ?? readySnapshot,
-              );
-              if (fenced) {
-                try {
-                  const degraded = await resourceShapeStores.resources.get(
-                    (runtime ?? readySnapshot)!.resourceId,
-                  );
-                  const degradedWorkspace = degraded
-                    ? await resolveResourceInterfaceWorkspace(
-                        resourceInterfaceWorkspaceInput(degraded),
-                      )
-                    : undefined;
-                  const interfaceWorkspace = degradedWorkspace ?? workspaceId;
-                  if (interfaceWorkspace) {
-                    await interfaceService.markResourceUnknown(
-                      interfaceWorkspace,
-                      (runtime ?? readySnapshot)!.resourceId,
-                      "host runtime lifecycle is unavailable; retry required",
-                    );
-                  }
-                } catch (interfaceError) {
-                  log.warn(
-                    "service.resource_shape.host_runtime_interface_fence_failed",
-                    {
-                      resourceId: (runtime ?? readySnapshot)!.resourceId,
-                      error: interfaceError,
-                    },
-                  );
-                }
-              }
-              throw error;
-            }
-          }
-          await interfaceService.reconcileResource(
-            workspaceId,
-            event.resourceId,
-          );
-          return;
-        case "unknown":
-          await reconcileScheduleHostRuntime(event.resourceId);
-          await interfaceService.markResourceUnknown(
-            workspaceId,
-            event.resourceId,
-            `Resource ${event.operation} failed after backend dispatch`,
-          );
-          return;
-        case "terminating":
-          {
-            await reconcileScheduleHostRuntime(event.resourceId);
-          }
-          await interfaceService.markResourceTerminating(
-            workspaceId,
-            event.resourceId,
-          );
-          return;
-        case "retired":
-          await interfaceService.retireResource(workspaceId, event.resourceId);
-      }
-    },
-  });
   opentofuController.setPlanRunQueuedObserver(async (run) => {
     if (!run.capsuleId) return;
     await interfaceService.markCapsulePlanPending(
@@ -2862,11 +1514,6 @@ export async function createTakosumiService(
         : "OpenTofu restore failed",
     );
   });
-  assertDurableResourceShapeStoresOrWarn({
-    environment: runtimeConfig.environment,
-    exposed: resourceShapeService !== undefined,
-    durable: resourceShapeStores.persistence === "durable",
-  });
   assertInterfaceApiAuthOrWarn({
     environment: runtimeConfig.environment,
     exposed: role === "takosumi-api",
@@ -2878,40 +1525,7 @@ export async function createTakosumiService(
     exposed: role === "takosumi-api",
     durable: interfaceStores.persistence === "durable",
   });
-  assertDurableOfferingCatalogStoreOrWarn({
-    environment: runtimeConfig.environment,
-    exposed: role === "takosumi-api" && Boolean(deployControlToken),
-    durable: offeringCatalogStore.persistence === "durable",
-  });
   const connectionOAuthHelpers = options.connectionOAuthHelpers;
-  const installedResourceShapeKinds =
-    options.resourceShapeSchemaRegistry?.kinds() ?? [];
-  const enabledResourceShapeKinds = options.enabledResourceShapeKinds ?? [];
-  for (const kind of enabledResourceShapeKinds) {
-    if (!installedResourceShapeKinds.includes(kind)) {
-      throw new TypeError(
-        `enabled Resource Shape kind has no installed schema authority: ${kind}`,
-      );
-    }
-  }
-  const resourceCapabilities: Partial<TakosumiResourceCapabilities> = {
-    ...Object.fromEntries(
-      enabledResourceShapeKinds.map((kind) => [
-        kind,
-        resourceShapeService !== undefined,
-      ]),
-    ),
-    ...Object.fromEntries(
-      Object.entries(options.resourceCapabilities ?? {}).map(
-        ([token, enabled]) => [
-          token,
-          token === "Stack"
-            ? enabled
-            : resourceShapeService !== undefined && enabled === true,
-        ],
-      ),
-    ),
-  };
   const app = await createApiApp({
     role,
     registerReadinessRoutes: true,
@@ -2921,171 +1535,13 @@ export async function createTakosumiService(
       : {}),
     registerMetricsRoutes:
       role === "takosumi-api" && Boolean(metricsScrapeToken),
-    registerResourceShapeRoutes:
-      role === "takosumi-api" && resourceShapeService !== undefined,
-    registerOfferingCatalogRoutes:
-      role === "takosumi-api" && Boolean(deployControlToken),
     registerInterfaceRoutes: role === "takosumi-api",
-    resourceCapabilities,
     ...(options.adapterCapabilities
       ? { adapterCapabilities: options.adapterCapabilities }
       : {}),
     ...(options.operatorCapabilities
       ? { operatorCapabilities: options.operatorCapabilities }
       : {}),
-    resourceShapeRouteOptions: resourceShapeService
-      ? {
-          service: resourceShapeService,
-          ...(resourceArtifactService
-            ? { artifactService: resourceArtifactService }
-            : {}),
-          enabledResourceShapeKinds,
-          installedResourceShapeKinds,
-          ...(options.resolveResourceInterfaceWorkspace
-            ? {
-                interfaceDeclarations: {
-                  ...createPortableDeclarationReader({
-                    interfaces: interfaceService,
-                    listResources: (space, page) =>
-                      resourceShapeService.listPage(space, page),
-                    getResource: async (space, kind, name) => {
-                      const result = await resourceShapeService.get(
-                        space,
-                        kind,
-                        name,
-                      );
-                      return result.ok ? result.value : undefined;
-                    },
-                    resolveWorkspace: options.resolveResourceInterfaceWorkspace,
-                    ...(resolveFormInterfaceResourceUri
-                      ? {
-                          resolveResourceUri:
-                            resolveFormInterfaceResourceUri,
-                        }
-                      : {}),
-                    ensureResourceDeclarations: (resource) =>
-                      materializeFormDescriptorInterfaces(
-                        formatResourceShapeId(
-                          resource.metadata.space,
-                          resource.kind,
-                          resource.metadata.name,
-                        ),
-                      ),
-                  }),
-                  ...createPortableDeclarationWriter({
-                    interfaces: interfaceService,
-                    getResource: async (space, kind, name) => {
-                      const result = await resourceShapeService.get(
-                        space,
-                        kind,
-                        name,
-                      );
-                      return result.ok ? result.value : undefined;
-                    },
-                    resolveWorkspace: options.resolveResourceInterfaceWorkspace,
-                    ...(resolveFormInterfaceResourceUri
-                      ? {
-                          resolveResourceUri: resolveFormInterfaceResourceUri,
-                        }
-                      : {}),
-                    ensureBindings: async ({
-                      interface: iface,
-                      resource,
-                      workspaceId,
-                    }) => {
-                      const owner = resource.metadata.owner;
-                      if (!isResourceCapsuleOwner(owner)) return;
-                      if (owner.workspaceId !== workspaceId) {
-                        throw new Error(
-                          "Resource Capsule owner Workspace does not match Interface Workspace",
-                        );
-                      }
-                      const capsule = await capsulesService.getCapsule(
-                        owner.id,
-                      );
-                      if (
-                        capsule.workspaceId !== workspaceId ||
-                        capsule.installingPrincipalId !==
-                          owner.installingPrincipalId ||
-                        capsule.status === "destroyed"
-                      ) {
-                        throw new Error(
-                          "Resource Capsule owner no longer matches durable Capsule provenance",
-                        );
-                      }
-                      const config = await capsulesService.getInstallConfig(
-                        capsule.installConfigId,
-                      );
-                      const proposals = (
-                        config.resourceInterfaceBindingProposals ?? []
-                      ).filter(
-                        (proposal) =>
-                          proposal.interface.name === iface.spec.type &&
-                          proposal.interface.version === iface.spec.version &&
-                          (proposal.interface.resourceKind === undefined ||
-                            proposal.interface.resourceKind ===
-                              resource.kind) &&
-                          (proposal.interface.resourceName === undefined ||
-                            proposal.interface.resourceName ===
-                              resource.metadata.name),
-                      );
-                      if (proposals.length === 0) return;
-                      await interfaceService.ensureResourceInterfaceBindings({
-                        iface,
-                        capsuleId: capsule.id,
-                        installingPrincipalId: owner.installingPrincipalId,
-                        proposals,
-                      });
-                    },
-                  }),
-                },
-              }
-            : {}),
-          ...(deployControlToken
-            ? { getResourceShapeBearerToken: () => deployControlToken }
-            : {}),
-          ...(options.resolveResourceShapeActor
-            ? {
-                resolveActor: (c) =>
-                  options.resolveResourceShapeActor!(c.req.raw),
-              }
-            : {}),
-          ...(options.portableHostIdempotency
-            ? {
-                portableHostIdempotency:
-                  options.portableHostIdempotency,
-              }
-            : {}),
-          ...(resourceFormTransition
-            ? { resourceFormTransition }
-            : {}),
-          ...(options.resolveResourceCapsuleOwner
-            ? {
-                resolveResourceCapsuleOwner:
-                  options.resolveResourceCapsuleOwner,
-              }
-            : {}),
-          ...(options.authorizeResourceShapeForceDelete
-            ? {
-                authorizeResourceShapeForceDelete:
-                  options.authorizeResourceShapeForceDelete,
-              }
-            : {}),
-          ...(options.authorizeResourceShapeApplyRecovery
-            ? {
-                authorizeResourceShapeApplyRecovery:
-                  options.authorizeResourceShapeApplyRecovery,
-              }
-            : {}),
-        }
-      : undefined,
-    offeringCatalogRouteOptions: deployControlToken
-      ? {
-          catalogs: offeringCatalogAdminService,
-          offerings: offeringService,
-          getBearerToken: () => deployControlToken,
-        }
-      : undefined,
     interfaceRouteOptions: {
       service: interfaceService,
       ...(deployControlToken
@@ -3117,22 +1573,12 @@ export async function createTakosumiService(
       workspacesService,
       projectsService,
       capsulesService,
-      ...(resourceShapeService ? { resourceShapeService } : {}),
       connectionsService,
       dependenciesService,
       outputSharesService,
       runGroupsService,
       activityService,
       backupsService,
-      legacyResourceStateAdoptionService,
-      ...(resourceFormPinInventory ? { resourceFormPinInventory } : {}),
-      ...(resourceFormPinOperations && options.resolveResourceBackupScope
-        ? {
-            resourceFormPinOperations,
-            resolveResourceFormPinScope: options.resolveResourceBackupScope,
-          }
-        : {}),
-      ...(formRegistryService ? { formRegistryService } : {}),
       legacyOutputInterfaceMigrationService,
       ...(deployControlToken
         ? { getDeployControlToken: () => deployControlToken }
@@ -3181,14 +1627,6 @@ export async function createTakosumiService(
   const operations: TakosumiOperations = {
     controller: opentofuController,
     gitInstallPlans: gitInstallPlanStore,
-    ...(formRegistryService ? { forms: formRegistryService } : {}),
-    offerings: offeringService,
-    offeringCatalogs: offeringCatalogAdminService,
-    ...(resourceFormPinOperations
-      ? { resourceFormPins: resourceFormPinOperations }
-      : {}),
-    claimManagedPublicHostname: (input) =>
-      opentofuController.claimManagedPublicHostname(input),
     workspaces: workspacesService,
     projects: projectsService,
     capsules: capsulesService,
@@ -3202,540 +1640,6 @@ export async function createTakosumiService(
     outputShares: outputSharesService,
     runGroups: runGroupsService,
     interfaces: interfaceService,
-    ...(workspaceViews ? { workspaceViews } : {}),
-    ...(options.runtimeCapabilityReader
-      ? { runtimeCapabilityReader: options.runtimeCapabilityReader }
-      : {}),
-    // --- Resource Shape host inventory
-    ...(resourceShapeService
-      ? {
-          resourceCapsuleOwners: {
-            get: async (resourceId: string) => {
-              const owner = (
-                await resourceShapeStores.resources.get(resourceId)
-              )?.owner;
-              return isResourceCapsuleOwner(owner) ? owner : undefined;
-            },
-            getMany: async (resourceIds: readonly string[]) =>
-              (
-                await resourceShapeStores.resources.getMany(resourceIds)
-              ).flatMap((resource) =>
-                resource.phase === "Ready" &&
-                resource.observedGeneration === resource.generation &&
-                isResourceCapsuleOwner(resource.owner)
-                  ? [{ resourceId: resource.id, owner: resource.owner }]
-                  : [],
-              ),
-          },
-        }
-      : {}),
-    ...(resourceShapeService
-      ? {
-          resourceHostRuntimeRecovery: {
-            resolve: async (input: {
-              readonly resourceId: ResourceShapeRecordId;
-              readonly resourceGeneration: number;
-              readonly resourceRevisionId: string;
-            }) => {
-              const [recordBefore, lockBefore] = await Promise.all([
-                resourceShapeStores.resources.get(input.resourceId),
-                resourceShapeStores.locks.get(input.resourceId),
-              ]);
-              if (
-                !hostRuntimeRecoveryRecordMatches(
-                  recordBefore,
-                  lockBefore,
-                  input,
-                )
-              ) {
-                return undefined;
-              }
-              if (!lockBefore) {
-                throw new Error(
-                  `canonical host runtime recovery lock disappeared for ${input.resourceId}`,
-                );
-              }
-              const projected = await resourceShapeService.get(
-                recordBefore.spaceId,
-                recordBefore.kind,
-                recordBefore.name,
-              );
-              const [recordAfter, lockAfter] = await Promise.all([
-                resourceShapeStores.resources.get(input.resourceId),
-                resourceShapeStores.locks.get(input.resourceId),
-              ]);
-              if (
-                !projected.ok ||
-                !hostRuntimeRecoveryRecordMatches(
-                  recordAfter,
-                  lockAfter,
-                  input,
-                ) ||
-                recordAfter.updatedAt !== recordBefore.updatedAt ||
-                resourceRecordRevision(recordAfter) !==
-                  resourceRecordRevision(recordBefore) ||
-                !lockAfter ||
-                !matchesApplyLock(lockBefore, lockAfter)
-              ) {
-                throw new Error(
-                  `canonical host runtime recovery inventory conflict for ${input.resourceId}`,
-                );
-              }
-              return structuredClone({
-                resource: projected.value,
-                resourceGeneration: recordBefore.generation,
-                resourceRevision: resourceRecordRevision(recordBefore),
-                resourceRevisionId: input.resourceRevisionId,
-                nativeResources: lockBefore.nativeResources ?? [],
-              });
-            },
-            complete: async (input: {
-              readonly resourceId: ResourceShapeRecordId;
-              readonly resourceGeneration: number;
-              readonly resourceRevisionId: string;
-            }) => {
-              for (let attempt = 0; attempt < 4; attempt += 1) {
-                const [current, lock] = await Promise.all([
-                  resourceShapeStores.resources.get(input.resourceId),
-                  resourceShapeStores.locks.get(input.resourceId),
-                ]);
-                if (
-                  current?.phase === "Ready" &&
-                  current.id === input.resourceId &&
-                  current.kind === "EdgeWorker" &&
-                  lock !== undefined &&
-                  lock.resourceId === input.resourceId &&
-                  lock.locked === true &&
-                  current.generation === input.resourceGeneration &&
-                  current.observedGeneration === input.resourceGeneration &&
-                  canonicalReadyResourceRevisionId(current, lock) ===
-                    input.resourceRevisionId
-                ) {
-                  try {
-                    const workspaceId = resolveResourceInterfaceWorkspace
-                      ? await resolveResourceInterfaceWorkspace(
-                          resourceInterfaceWorkspaceInput(current),
-                        )
-                      : undefined;
-                    if (!workspaceId) {
-                      throw new Error(
-                        `Interface Workspace mapping is unavailable for ${input.resourceId}`,
-                      );
-                    }
-                    await interfaceService.reconcileResource(
-                      workspaceId,
-                      input.resourceId,
-                    );
-                    return true;
-                  } catch (error) {
-                    log.warn(
-                      "service.resource_shape.host_runtime_recovery_interface_failed",
-                      { resourceId: input.resourceId, error },
-                    );
-                    const at = new Date().toISOString();
-                    const degraded: ResourceShapeRecord = {
-                        ...current,
-                        phase: "Degraded",
-                        conditions: [
-                          ...(current.conditions ?? []).filter(
-                            (condition) =>
-                              condition.type.toLowerCase() !== "ready",
-                          ),
-                          {
-                            type: "Ready",
-                            status: "false",
-                            reason: "HostRuntimeNotReady",
-                            message:
-                              "host runtime Interface reconciliation is pending",
-                            observedGeneration: current.generation,
-                            lastTransitionAt: at,
-                          },
-                        ],
-                        updatedAt: at,
-                    };
-                    await resourceShapeStores.replaceResourceAggregate({
-                      record: degraded,
-                      lock: { ...lock, updatedAt: at },
-                      expectedResource: {
-                        generation: current.generation,
-                        phase: current.phase,
-                        updatedAt: current.updatedAt,
-                        revision: resourceRecordRevision(current),
-                      },
-                      expectedLock: lock,
-                    });
-                    return false;
-                  }
-                }
-                if (
-                  !hostRuntimeRecoveryRecordMatches(current, lock, input)
-                ) {
-                  return false;
-                }
-                if (!lock) return false;
-                const at = new Date().toISOString();
-                const recovered: ResourceShapeRecord = {
-                  ...current,
-                  phase: "Ready",
-                  conditions: [
-                    ...(current.conditions ?? []).filter(
-                      (condition) => condition.type.toLowerCase() !== "ready",
-                    ),
-                    {
-                      type: "Ready",
-                      status: "true",
-                      reason: "HostRuntimeActivated",
-                      observedGeneration: current.generation,
-                      lastTransitionAt: at,
-                    },
-                  ],
-                  updatedAt: at,
-                };
-                const changed =
-                  await resourceShapeStores.replaceResourceAggregate({
-                    record: recovered,
-                    lock: { ...lock, updatedAt: at },
-                    expectedResource: {
-                      generation: current.generation,
-                      phase: current.phase,
-                      updatedAt: current.updatedAt,
-                      revision: resourceRecordRevision(current),
-                    },
-                    expectedLock: lock,
-                  });
-                if (changed.status === "not_found") return false;
-                if (changed.status === "conflict") continue;
-                try {
-                  const workspaceId = resolveResourceInterfaceWorkspace
-                    ? await resolveResourceInterfaceWorkspace(
-                        resourceInterfaceWorkspaceInput(changed.record),
-                      )
-                    : undefined;
-                  if (!workspaceId) {
-                    throw new Error(
-                      `Interface Workspace mapping is unavailable for ${input.resourceId}`,
-                    );
-                  }
-                  await interfaceService.reconcileResource(
-                    workspaceId,
-                    input.resourceId,
-                  );
-                  return true;
-                } catch (error) {
-                  log.warn(
-                    "service.resource_shape.host_runtime_recovery_interface_failed",
-                    { resourceId: input.resourceId, error },
-                  );
-                  const rollbackAt = new Date().toISOString();
-                  const rolledBack =
-                    await resourceShapeStores.replaceResourceAggregate({
-                      record: { ...current, updatedAt: rollbackAt },
-                      lock: { ...lock, updatedAt: rollbackAt },
-                      expectedResource: {
-                        generation: changed.record.generation,
-                        phase: changed.record.phase,
-                        updatedAt: changed.record.updatedAt,
-                        revision: resourceRecordRevision(changed.record),
-                      },
-                      expectedLock: changed.lock,
-                    });
-                  if (rolledBack.status !== "replaced") {
-                    log.warn(
-                      "service.resource_shape.host_runtime_recovery_rollback_conflict",
-                      {
-                        resourceId: input.resourceId,
-                        status: rolledBack.status,
-                      },
-                    );
-                  }
-                  return false;
-                }
-              }
-              return false;
-            },
-          },
-        }
-      : {}),
-    ...(resourceShapeService
-      ? {
-          resourceCompatibility: {
-            resolveReadyResource: async (input: {
-              readonly space: string;
-              readonly kind: ResourceShapeKind;
-              readonly name: string;
-            }) => {
-              const resourceId = formatResourceShapeId(
-                input.space,
-                input.kind,
-                input.name,
-              );
-              const [recordBefore, lockBefore] = await Promise.all([
-                resourceShapeStores.resources.get(resourceId),
-                resourceShapeStores.locks.get(resourceId),
-              ]);
-              if (
-                !recordBefore ||
-                recordBefore.phase !== "Ready" ||
-                recordBefore.observedGeneration !== recordBefore.generation
-              ) {
-                return undefined;
-              }
-              const result = await resourceShapeService.get(
-                input.space,
-                input.kind,
-                input.name,
-              );
-              const [lockAfter, recordAfter] = await Promise.all([
-                resourceShapeStores.locks.get(resourceId),
-                resourceShapeStores.resources.get(resourceId),
-              ]);
-              const unchanged =
-                recordAfter &&
-                recordBefore.id === resourceId &&
-                recordAfter.id === resourceId &&
-                recordBefore.spaceId === input.space &&
-                recordAfter.spaceId === input.space &&
-                recordBefore.kind === input.kind &&
-                recordAfter.kind === input.kind &&
-                recordBefore.name === input.name &&
-                recordAfter.name === input.name &&
-                recordAfter.phase === "Ready" &&
-                recordAfter.generation === recordBefore.generation &&
-                recordAfter.observedGeneration === recordBefore.generation &&
-                recordAfter.lastOperationRunId ===
-                  recordBefore.lastOperationRunId &&
-                recordAfter.updatedAt === recordBefore.updatedAt;
-              const resourceRevisionId = canonicalReadyResourceRevisionId(
-                recordBefore,
-                lockBefore,
-              );
-              if (
-                !unchanged ||
-                !resourceRevisionId ||
-                !result.ok ||
-                result.value.status?.phase !== "Ready" ||
-                result.value.status.observedGeneration !==
-                  recordBefore.generation ||
-                !lockBefore ||
-                !lockAfter ||
-                !matchesApplyLock(lockBefore, lockAfter) ||
-                lockBefore.resourceId !== resourceId ||
-                lockBefore.locked !== true ||
-                result.value.status.resolution?.locked !== true ||
-                result.value.status.resolution.selectedImplementation !==
-                  lockBefore.selectedImplementation ||
-                result.value.status.resolution.target !== lockBefore.target
-              ) {
-                throw new Error(
-                  `canonical Ready Resource inventory conflict for ${resourceId}`,
-                );
-              }
-              return structuredClone({
-                resource: result.value,
-                resourceGeneration: recordBefore.generation,
-                resourceRevision: resourceRecordRevision(recordBefore),
-                resourceRevisionId,
-                nativeResources: lockBefore.nativeResources ?? [],
-              });
-            },
-            fenceReadyResource: async (input: {
-              readonly resourceId: string;
-              readonly space: string;
-              readonly kind: ResourceShapeKind;
-              readonly name: string;
-              readonly resourceGeneration: number;
-              readonly resourceRevisionId: string;
-            }) => {
-              const expectedResourceId = formatResourceShapeId(
-                input.space,
-                input.kind,
-                input.name,
-              );
-              if (
-                expectedResourceId !== input.resourceId ||
-                !Number.isSafeInteger(input.resourceGeneration) ||
-                input.resourceGeneration < 1 ||
-                typeof input.resourceRevisionId !== "string" ||
-                input.resourceRevisionId.trim() !== input.resourceRevisionId ||
-                input.resourceRevisionId.length === 0 ||
-                input.resourceRevisionId.length > 256 ||
-                /[\u0000-\u001f\u007f]/.test(input.resourceRevisionId)
-              ) {
-                return false;
-              }
-              const [record, lock] = await Promise.all([
-                resourceShapeStores.resources.get(input.resourceId),
-                resourceShapeStores.locks.get(input.resourceId),
-              ]);
-              if (
-                !record ||
-                !lock ||
-                record.id !== input.resourceId ||
-                record.spaceId !== input.space ||
-                record.kind !== input.kind ||
-                record.name !== input.name ||
-                record.phase !== "Ready" ||
-                record.generation !== input.resourceGeneration ||
-                record.observedGeneration !== input.resourceGeneration ||
-                lock.resourceId !== input.resourceId ||
-                lock.locked !== true ||
-                typeof lock.selectedImplementation !== "string" ||
-                lock.selectedImplementation.trim().length === 0 ||
-                typeof lock.target !== "string" ||
-                lock.target.trim().length === 0 ||
-                lock.updatedAt !== record.updatedAt ||
-                (lock.nativeResources !== undefined &&
-                  (!Array.isArray(lock.nativeResources) ||
-                    lock.nativeResources.some(
-                      (native) =>
-                        !native ||
-                        typeof native.type !== "string" ||
-                        native.type.trim().length === 0 ||
-                        typeof native.id !== "string" ||
-                        native.id.trim().length === 0,
-                    )))
-              ) {
-                return false;
-              }
-              return (
-                canonicalReadyResourceRevisionId(record, lock) ===
-                input.resourceRevisionId
-              );
-            },
-            listReadyResourcesPage: async (input: {
-              readonly kind: ResourceShapeKind;
-              readonly space?: string;
-              readonly cursor?: string;
-              readonly limit?: number;
-            }) => {
-              const page =
-                await resourceShapeStores.resources.listReadyByKindPage(
-                  input.kind,
-                  {
-                    ...(input.cursor ? { cursor: input.cursor } : {}),
-                    ...(input.limit !== undefined
-                      ? { limit: input.limit }
-                      : {}),
-                  },
-                  input.space,
-                );
-              const items = await Promise.all(
-                page.items.map(async (candidate) => {
-                  const currentBefore = await resourceShapeStores.resources.get(
-                    candidate.id,
-                  );
-                  const lockBefore = await resourceShapeStores.locks.get(
-                    candidate.id,
-                  );
-                  const projected = await resourceShapeService.get(
-                    candidate.spaceId,
-                    candidate.kind,
-                    candidate.name,
-                  );
-                  const lockAfter = await resourceShapeStores.locks.get(
-                    candidate.id,
-                  );
-                  const currentAfter = await resourceShapeStores.resources.get(
-                    candidate.id,
-                  );
-                  const unchanged =
-                    currentBefore &&
-                    currentAfter &&
-                    currentBefore.id === candidate.id &&
-                    currentAfter.id === candidate.id &&
-                    currentBefore.kind === input.kind &&
-                    currentAfter.kind === input.kind &&
-                    currentBefore.phase === "Ready" &&
-                    currentAfter.phase === "Ready" &&
-                    currentBefore.generation === candidate.generation &&
-                    currentAfter.generation === candidate.generation &&
-                    currentBefore.observedGeneration === candidate.generation &&
-                    currentAfter.observedGeneration === candidate.generation &&
-                    currentBefore.lastOperationRunId ===
-                      candidate.lastOperationRunId &&
-                    currentAfter.lastOperationRunId ===
-                      candidate.lastOperationRunId &&
-                    currentBefore.updatedAt === candidate.updatedAt &&
-                    currentAfter.updatedAt === candidate.updatedAt;
-                  const resourceRevisionId = canonicalReadyResourceRevisionId(
-                    currentBefore,
-                    lockBefore,
-                  );
-                  if (
-                    !unchanged ||
-                    !resourceRevisionId ||
-                    !projected.ok ||
-                    projected.value.status?.phase !== "Ready" ||
-                    projected.value.status.observedGeneration !==
-                      candidate.generation ||
-                    !lockBefore ||
-                    !lockAfter ||
-                    !matchesApplyLock(lockBefore, lockAfter) ||
-                    lockBefore.resourceId !== candidate.id ||
-                    lockBefore.locked !== true ||
-                    projected.value.status.resolution?.locked !== true ||
-                    projected.value.status.resolution.selectedImplementation !==
-                      lockBefore.selectedImplementation ||
-                    projected.value.status.resolution.target !==
-                      lockBefore.target
-                  ) {
-                    throw new Error(
-                      `canonical Ready Resource inventory conflict for ${candidate.id}`,
-                    );
-                  }
-                  return structuredClone({
-                    resourceId: candidate.id,
-                    resource: projected.value,
-                    resourceGeneration: candidate.generation,
-                    resourceRevision: resourceRecordRevision(currentBefore),
-                    resourceRevisionId,
-                    nativeResources: lockBefore.nativeResources ?? [],
-                  });
-                }),
-              );
-              return {
-                items,
-                ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
-              };
-            },
-            // --- End Resource Shape host inventory
-          },
-        }
-      : {}),
-    ...(resourceShapeService
-      ? {
-          resourceOperationRepair: {
-            repair: (options?: {
-              readonly workspaceId?: string;
-              readonly limit?: number;
-            }) => resourceShapeService.repairResourceOperationRuns(options),
-          },
-          resourceObservation: {
-            claimCandidate: (input: ResourceObservationClaimInput) =>
-              resourceShapeStores.resources.claimObservationCandidate(input),
-            observe: async (
-              resource: ResourceShapeRecord,
-              actor: ActorContext,
-            ) =>
-              (
-                await resourceShapeService.observeClaimedResource(
-                  resource,
-                  actor,
-                )
-              ).ok,
-            finishClaim: (
-              resourceId: ResourceShapeRecordId,
-              leaseId: string,
-              attemptedAt: string,
-            ) =>
-              resourceShapeStores.resources.finishObservationClaim(
-                resourceId,
-                leaseId,
-                attemptedAt,
-              ),
-          },
-        }
-      : {}),
     activity: activityService,
     getWorkspaceBilling: (workspaceId) =>
       opentofuController.getWorkspaceBilling(workspaceId),
@@ -3957,66 +1861,6 @@ function normalizedMetricTag(value: string | undefined): string | undefined {
   return normalized ? normalized : undefined;
 }
 
-function canonicalReadyResourceRevisionId(
-  record: ResourceShapeRecord | undefined,
-  lock:
-    | {
-        readonly implementationSnapshot?: {
-          readonly plugin?: string;
-        };
-        readonly selectedImplementationPlugin?: string;
-      }
-    | undefined,
-): string | undefined {
-  if (!record || !lock) return undefined;
-  let candidate: string | undefined;
-  if (
-    lock.implementationSnapshot?.plugin ||
-    lock.selectedImplementationPlugin
-  ) {
-    candidate = record.lastOperationRunId;
-  } else {
-    candidate = record.lastOperationRunId ?? record.execution?.runId;
-  }
-  return candidate &&
-    candidate.trim() === candidate &&
-    candidate.length <= 256 &&
-    !/[\u0000-\u001f\u007f]/.test(candidate)
-    ? candidate
-    : undefined;
-}
-
-function hostRuntimeRecoveryRecordMatches(
-  record: ResourceShapeRecord | undefined,
-  lock: ResolutionLockRecord | undefined,
-  input: {
-    readonly resourceId: ResourceShapeRecordId;
-    readonly resourceGeneration: number;
-    readonly resourceRevisionId: string;
-  },
-): record is ResourceShapeRecord {
-  return (
-    record !== undefined &&
-    lock !== undefined &&
-    record.id === input.resourceId &&
-    record.kind === "EdgeWorker" &&
-    record.phase === "Degraded" &&
-    record.generation === input.resourceGeneration &&
-    record.observedGeneration === input.resourceGeneration &&
-    lock.resourceId === input.resourceId &&
-    lock.locked === true &&
-    canonicalReadyResourceRevisionId(record, lock) ===
-      input.resourceRevisionId &&
-    (record.conditions ?? []).some(
-      (condition) =>
-        condition.type === "Ready" &&
-        condition.status === "false" &&
-        condition.reason === "HostRuntimeNotReady" &&
-        condition.observedGeneration === input.resourceGeneration,
-    )
-  );
-}
-
 function processRoleFromRuntimeConfig(
   runtimeConfig: AppRuntimeConfig,
 ): TakosumiProcessRole {
@@ -4029,23 +1873,4 @@ function record(value: unknown): Readonly<Record<string, unknown>> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Readonly<Record<string, unknown>>)
     : {};
-}
-
-/**
- * Accepts the canonical Resource id or the same-Workspace `Kind/name`
- * shorthand a portable Form may use; anything else is not a reference this
- * host will grant against.
- */
-function canonicalConnectionResourceId(
-  value: unknown,
-  workspaceId: string,
-): string | undefined {
-  if (typeof value !== "string" || !value) return undefined;
-  if (value.startsWith(`tkrn:${workspaceId}:`)) return value;
-  const shorthand = /^([A-Z][A-Za-z0-9]{0,63})\/([a-z][a-z0-9-]{0,62})$/u.exec(
-    value,
-  );
-  return shorthand
-    ? `tkrn:${workspaceId}:${shorthand[1]}:${shorthand[2]}`
-    : undefined;
 }

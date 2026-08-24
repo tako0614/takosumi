@@ -19,10 +19,12 @@ a module in any other Git repository.
 These examples do not create an allowlist. An operator may install different
 modules and providers without changing Takosumi Core.
 
-Resource Shape implementations use a separate, explicit operator module
-registry. A `TargetPool` implementation descriptor selects an opaque module id
-and the host supplies the corresponding files/digest. Resource Shape modules
-are not Capsule templates and are never inferred from a provider or shape name.
+Current Takosumi has no Resource Shape module registry, TargetPool selection,
+or configuration binding for either concept. Retained rows from the retired
+embedded Host schema are not runnable modules: before PostgreSQL v110 or D1 v66,
+an affected operator must inventory and export them on the immediate predecessor
+or with out-of-band database tooling, record an explicit disposition, and then
+retry the empty-only forward migration.
 
 ## Adding an example
 

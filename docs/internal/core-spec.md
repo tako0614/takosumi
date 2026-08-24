@@ -1,6 +1,6 @@
 # Takosumi Core Spec
 
-Last updated: 2026-08-09
+Last updated: 2026-08-23
 
 This document is the present Takosumi OSS contract. It supersedes historical
 planning notes such as [`final-plan.md`](./final-plan.md); those notes cannot
@@ -21,11 +21,11 @@ and does not host a Form Registry or hosted Form lifecycle.
 
 ## Ownership boundary
 
-| Area | Owner |
-| --- | --- |
-| Git sources, OpenTofu/Terraform init/validate/plan/apply/destroy, Runs, state, Outputs, audit, provider connections, credential recipes, provider bindings, Interfaces, InterfaceBindings | Takosumi OSS |
-| Portable Form schema, FormRef, data-only Form Packages, typed provider, package signatures, and conformance | Takoform |
-| Hosted Form instances, Form Host lifecycle, backend implementations, targets/capacity, commercial offerings, billing, SLA, support, and abuse controls | Takosumi hosted service or another external Host |
+| Area                                                                                                                                                                                      | Owner                                            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Git sources, OpenTofu/Terraform init/validate/plan/apply/destroy, Runs, state, Outputs, audit, provider connections, credential recipes, provider bindings, Interfaces, InterfaceBindings | Takosumi OSS                                     |
+| Portable Form schema, FormRef, data-only Form Packages, typed provider, package signatures, and conformance                                                                               | Takoform                                         |
+| Hosted Form instances, Form Host lifecycle, backend implementations, targets/capacity, commercial offerings, billing, SLA, support, and abuse controls                                    | Takosumi hosted service or another external Host |
 
 The portable project owns no Resource ID, lifecycle ledger, Run, StateVersion,
 Output, Target, credential, Policy, Adapter, Interface, or InterfaceBinding.
@@ -48,23 +48,23 @@ capacity is not an OSS Core responsibility.
 
 ## Supported Stack model
 
-| Concept | Meaning |
-| --- | --- |
-| Workspace | Personal purpose, resource, and security boundary for sources, secrets, state, Runs, and audit; optional membership and sharing extend it |
-| Project | A service or infrastructure grouping |
-| Capsule | One OpenTofu/Terraform module execution unit, with concrete environments such as `production` and `preview` |
-| Source | Git URL/ref/commit/path for a plain module |
-| Adopted Source revision | SourceSnapshot ref/path/commit derived from a Capsule's current StateVersion apply provenance; never a mutable Capsule or Source field |
-| GitInstallPlan / GitRevisionPlan | Durable idempotent coordinator evidence that stops at one reviewable Plan Run |
-| ProviderConnection | Stored provider credential configuration |
-| CredentialRecipe | How a provider credential becomes a temporary env/file/pre-run value |
-| ProviderBinding | Mapping from provider name/alias to a ProviderConnection |
-| Run | One guarded init/validate/plan/apply/destroy/refresh action |
-| StateVersion | State generation with storage and locking |
-| Output | Ordinary root-module output captured after a successful Run |
-| Interface | Provider-neutral connection or runtime declaration |
-| InterfaceBinding | Authorization of an Interface to an invocation principal |
-| AuditEvent | Actor/action/target/result evidence |
+| Concept                          | Meaning                                                                                                                                   |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace                        | Personal purpose, resource, and security boundary for sources, secrets, state, Runs, and audit; optional membership and sharing extend it |
+| Project                          | A service or infrastructure grouping                                                                                                      |
+| Capsule                          | One OpenTofu/Terraform module execution unit, with concrete environments such as `production` and `preview`                               |
+| Source                           | Git URL/ref/commit/path for a plain module                                                                                                |
+| Adopted Source revision          | SourceSnapshot ref/path/commit derived from a Capsule's current StateVersion apply provenance; never a mutable Capsule or Source field    |
+| GitInstallPlan / GitRevisionPlan | Durable idempotent coordinator evidence that stops at one reviewable Plan Run                                                             |
+| ProviderConnection               | Stored provider credential configuration                                                                                                  |
+| CredentialRecipe                 | How a provider credential becomes a temporary env/file/pre-run value                                                                      |
+| ProviderBinding                  | Mapping from provider name/alias to a ProviderConnection                                                                                  |
+| Run                              | One guarded init/validate/plan/apply/destroy/refresh action                                                                               |
+| StateVersion                     | State generation with storage and locking                                                                                                 |
+| Output                           | Ordinary root-module output captured after a successful Run                                                                               |
+| Interface                        | Provider-neutral connection or runtime declaration                                                                                        |
+| InterfaceBinding                 | Authorization of an Interface to an invocation principal                                                                                  |
+| AuditEvent                       | Actor/action/target/result evidence                                                                                                       |
 
 A Workspace is not a team-first container or an alias for a deployment
 environment. It is a personal context for a purpose such as Personal, Work,
@@ -91,6 +91,23 @@ Plan, Apply, Destroy, and Refresh are guarded Run operations, not separate
 ledgers. OpenTofu Outputs remain ordinary module values; an Interface may
 explicitly reference a Capsule output, but no reserved output name becomes a
 runtime registry or credential channel.
+
+Current PlanRun creation accepts only a pinned Git source. The historical
+`operator_module` payload is not a create/update compatibility surface; it is
+decoded only behind a controller-owned marker for exact pre-v1 source-less
+destroy/recovery of already-persisted state. That drain cannot create or update
+infrastructure and must be removed after operator inventory reaches zero.
+
+Public hostname, DNS, and application endpoint ownership stays inside the Git
+module and its provider. Takosumi does not synthesize or reserve Capsule
+hostnames, and `public_endpoint` is an ordinary applied-Output projection.
+Takosumi also does not auto-register Accounts OIDC clients for a Capsule.
+Generic Accounts OIDC and Interface/InterfaceBinding authorization remain;
+already-registered Capsule clients are drain-only and continue to receive
+current-state validation and best-effort revocation when a terminal binding is
+observed. Current Capsule lifecycle code does not release historical public-host
+reservation rows or perform bulk OIDC-client cleanup; physical retirement waits
+for operator inventory.
 
 Apply and Destroy are at-most-once provider dispatches. Before either request
 can reach the runner container, the runner Durable Object durably records the
@@ -141,31 +158,9 @@ migration records only.
 
 An InterfaceBinding authorizes one exact Interface revision for a principal and
 may issue invocation-scoped credentials through the host's credential
-brokerage. The binding does not infer a provider, create an Offering, or
+brokerage. The binding does not infer a provider or
 schedule a Workspace-wide reconciliation. Runtime handlers fail closed when
 the Interface, revision, Workspace, or binding evidence does not match.
-
-## Generic Offering
-
-Generic Offerings remain an independent OSS projection. An immutable catalog
-selects an exact namespaced subject type/ref/version/digest with explicit
-requirements and audience; an installed subject resolver returns an exact
-resolution fingerprint; the result is an `OfferingSelection`.
-
-```text
-POST /internal/v1/offering-catalogs
-GET  /internal/v1/offering-catalogs
-GET  /internal/v1/offering-catalogs/:catalogId/versions/:catalogVersion
-POST /internal/v1/offering-availability/query
-POST /internal/v1/offering-selections/resolve
-```
-
-Catalogs are operator/deploy-control surfaces, not a customer Form installer.
-There is no `latest` fallback, implicit provider selection, commercial field,
-or implicit capacity. Empty catalogs are valid and the Stack flow works with
-none installed. Takosumi hosted service may attach its own closed commercial binding to
-an exact selection; it cannot replace the generic resolver or create a second
-lifecycle ledger.
 
 ## Takoform and external Form Hosts
 
@@ -201,20 +196,26 @@ Core does not mount their `/v1` paths, CLI commands, or public
 capability/OpenAPI descriptors. Those paths remain unconditional `404` even
 when a bearer and retained rows are present.
 
-Resource schemas, stores, migrations, retained rows, and typed in-process
-operations remain available for migration custody and the portable Takoform
-protocol. The portable protocol owns its separate `/.well-known/takoform` and
-`/apis/forms...` paths and is not a compatibility alias for the retired `/v1`
-family. Operators must use typed operations or an owning external Host for
-any retained-row read, transition, or cleanup.
+The forward schema migrations physically retire this embedded Host schema only
+when every retired table is empty: PostgreSQL v110 and D1 v66 fail closed when
+they find populated rows. Current Takosumi serves no typed Host migration API,
+in-process operation, configuration binding, or portable-protocol compatibility
+alias. Before crossing that migration, an operator with retained rows must use
+the immediate predecessor release or out-of-band database tooling to inventory
+and export the rows, record an explicit disposition, and only then retry the
+forward migration. The portable Takoform protocol remains an external Host
+contract; it does not grant current Takosumi authority over those rows.
 
 ## Migration custody
 
-Retained Resource, Run, state, audit, TargetPool, SpacePolicy, FormRef, and
-package rows may be read and transitioned by an operator migration. Such work
-must use exact immutable identities, authenticated actor/Workspace mapping,
-bounded pages, idempotent evidence, and an isolated backup/restore drill. It
-must not infer an identity from `latest`, caller-selected Space, or kind alone.
+Retained Resource, TargetPool, SpacePolicy, FormRef, package, and other embedded
+Host rows are predecessor/out-of-band migration inputs, not current application
+records. Their inventory and export must use exact immutable identities,
+bounded pages, idempotent evidence, and an isolated backup/restore drill. Any
+transition or deletion requires an explicit operator disposition; it must not
+infer an identity from `latest`, caller-selected Space, or kind alone. Current
+Run, state, and audit records remain part of the supported Stack model and are
+not retired by Host-schema migrations v110/v66.
 
 Migration runbooks are historical procedures, not current authoring or release
 authority. A passing compatibility test or retained route does not make

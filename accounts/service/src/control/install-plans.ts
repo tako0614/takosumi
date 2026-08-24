@@ -44,7 +44,6 @@ import {
   previewRepoOwnedInstallConfig,
   resolveRepoOwnedInstallModulePath,
 } from "./repo-owned-install-config.ts";
-import { ensureTakosumiAccountsOidcForExistingCapsule } from "./capsule-oidc.ts";
 import {
   resolveStoreBaseInstallConfig,
 } from "./sources.ts";
@@ -608,16 +607,6 @@ async function createCapsule(
     }
     return progressed(plan, { capsuleId: capsule.id });
   }
-
-  await ensureTakosumiAccountsOidcForExistingCapsule({
-    operations,
-    store: ctx.store,
-    issuer: ctx.issuer,
-    capsule,
-    ...(ctx.managedPublicBaseDomain
-      ? { managedPublicBaseDomain: ctx.managedPublicBaseDomain }
-      : {}),
-  });
 
   const requestedBindings = requestedProviderBindings(plan);
   if (requestedBindings.length > 0) {

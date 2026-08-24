@@ -26,6 +26,8 @@ as an ordinary provider, and use this API, CLI, or dashboard for the supported
 Git/OpenTofu control-plane operations. External providers continue to run
 through plain Stack execution. Takosumi owns that Stack's Run, state, Output,
 and audit records; the provider and its state still own provider-side objects.
+The Cloudflare-specific import/deploy compatibility profile is retired and is
+not part of this API.
 
 ## Discovery
 
@@ -56,8 +58,6 @@ Example:
     "opentofu_runner": true,
     "oidc": true,
     "workload_identity": true,
-    "compat_framework": true,
-    "compatibility_profiles": [],
     "interfaces": true
   },
   "endpoints": {
@@ -160,7 +160,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 87
+`accounts/service/src/control-route-inventory.ts`; it currently contains 86
 public route descriptors. Representative operations from that inventory are:
 
 ```http
@@ -316,34 +316,10 @@ provider credential is passed to the build phase. When `sourceBuild` is not
 set, the OpenTofu module resolves its artifact as usual from a release
 artifact URL/digest, a provider, or a data source.
 
-When repository `public_endpoint` metadata projects a managed hostname, Capsule
-creation may choose its allocation mode. The default is `scoped`:
-
-```json
-{
-  "managedPublicHostname": { "mode": "vanity" }
-}
-```
-
-Reservation only runs for a Capsule config that carries the `public_endpoint`
-projection, so a per-install patch (`PATCH /api/v1/capsule-configs/:id`) cannot
-remove it — dropping it would leave the endpoint variables in place while
-skipping reservation and its ownership check.
-
-`scoped` produces
-`<workspace-handle>-<label>.<managed-base-domain>` without consuming a vanity
-slot. `vanity` keeps `<label>.<managed-base-domain>` and consumes one finite
-slot owned by the Workspace's immutable owner account. Both modes reserve the
-hostname first-come-first-served.
-
-Managed hostname reservations and vanity slots belong to the Capsule lifetime.
-A successful Capsule destroy releases them; deleting an individual route does
-not. User-owned custom domains use a separate verified-domain lifecycle rather
-than this mode. In the Takosumi hosted service that verification and certificate lifecycle is
-not implemented, so the feature is Planned and requests against hosted-service-managed
-routes fail closed. This does not prevent an ordinary OpenTofu URL/route variable
-from being passed to a BYOC provider. The setting selects control-plane
-allocation policy; it does not bypass or replace the OpenTofu variables.
+Public hostnames, DNS, and application endpoints belong to the ordinary
+OpenTofu module and provider in the Git checkout. Takosumi neither synthesizes
+nor reserves Capsule hostnames; `public_endpoint` metadata only projects an
+applied Output into the UI.
 
 A Run stores:
 
@@ -391,36 +367,6 @@ a user-reviewed plan and does not independently start another auto-update
 plan/apply. Continue only after the returned SourceSyncRun is `succeeded` and
 its `sourceSnapshotId` is present in the Source snapshot list.
 
-## Generic Offering catalog, availability, and selection API
-
-An OSS operator can publish an exact noncommercial Offering catalog and query
-availability for a subject or resolve an exact selection. These deploy-control
-operations are intentionally outside the public session API:
-
-```http
-POST /internal/v1/offering-catalogs
-GET  /internal/v1/offering-catalogs?limit={n}&cursor={opaque}
-GET  /internal/v1/offering-catalogs/{catalogId}/versions/{catalogVersion}
-POST /internal/v1/offering-availability/query
-POST /internal/v1/offering-selections/resolve
-```
-
-Each Offering pins an exact `catalog id/version + offering id/version`, an open
-subject `type + ref + version + digest`, exact requirement references, audience,
-profile, region, maturity, and active state. The API returns that exact choice
-as an `OfferingSelection`. It pins the subject and requirements, resolver id,
-resolution fingerprint, and resolution time.
-There is no `latest` fallback. Unknown subject types, absent resolvers, inactive
-catalogs/Offerings, audience mismatches, and stale requirements fail closed. A
-resolver rechecks the exact subject and requirement evidence before returning a
-selection.
-
-OSS Offering and selection state contains no price, SKU, payment, manager,
-credentials, raw capacity, SLA, or support. A hosted service can attach those
-details through a separate extension after Core has returned an exact
-selection. It does not replace the OSS catalog or selection engine.
-
-
 ## OIDC / Workload Identity
 
 Takosumi Accounts exposes the standard issuer surface for registered OIDC
@@ -441,16 +387,14 @@ pre-run actions and ship only with matching implementation and discovery.
 Operator/hosted service may add Enterprise SSO, SCIM, and commercial audit export through
 that generic seam.
 
-A Capsule-projected public OIDC client can declare required scopes through
-`installExperience.oidc_client.scopes`; `openid` is mandatory. A client id is
-owned by its Capsule: an install whose `clientIdVariable` names another
-Capsule's client id fails with `failed_precondition`
-(`oidc_client_id_already_bound`). Accounts access
-tokens carrying `capsules:read` or `capsules:write` are bound to one Workspace,
-and canonical Capsule-ledger reads and Interface invocations validate both scope and Workspace. Clients
-allowed to request `offline_access` may receive refresh tokens. Consumers must
-encrypt token material in their secret store and never place it in OpenTofu
-state or Outputs.
+Takosumi does not auto-register an Accounts OIDC client from a Capsule or
+InstallConfig. Operators/compositions register OIDC clients explicitly.
+Already-registered Capsule clients continue through the migration drain, but
+each use revalidates the current Capsule, InstallConfig, Workspace membership,
+and scopes; invalid terminal bindings are revoked best-effort. Accounts tokens
+and Interface invocations continue to validate both scope and Workspace.
+Consumers must encrypt token material in their secret store and never place it
+in OpenTofu state or Outputs.
 
 The optional `workspace_id` selector on `GET /oauth/authorize` lets a Principal
 with multiple Workspaces choose the token's authority scope. Accounts
@@ -459,48 +403,6 @@ and, for a Capsule-owned client, also verifies the Capsule's owning Workspace.
 Duplicate, empty, control-character, oversized, or unauthorized values are
 rejected. The resulting access token records only the verified Workspace and
 role.
-
-## Compatibility API
-
-Compatibility APIs preserve scoped standard protocol/API facades. Control-plane
-profiles are translation clients of the supported control-plane APIs, while
-data-plane profiles are authorized Interface access surfaces. They are not
-independent ledgers or backends.
-
-```text
-compat.s3.v1
-  S3-compatible Object Storage data/control path
-
-compat.oci.v1
-  Artifact / ContainerImage lifecycle
-
-compat.cloudevents.v1
-  Queue / EventHandler event ingress
-
-compat.kubernetes.crd.v1
-  Kubernetes northbound API
-```
-
-These are not complete provider API compatibility claims. Scope is
-published through capabilities and a compatibility matrix.
-
-Compatibility handlers, dashboard, and CLI use different public protocols but
-converge on the same supported control-plane lifecycle. Operations outside a
-scoped profile fail closed and are documented in the compatibility matrix
-instead of pretending full vendor compatibility.
-
-The Cloudflare-specific import/deploy compatibility profile is retired and is
-not part of the supported v1 API or capability surface. Customer-owned
-Cloudflare resources use a normal ProviderConnection and plain Stack flow.
-
-Compatibility profiles do not create hostnames implicitly. Runtime routes use a
-canonical `http.route` Interface plus InterfaceBinding, while hostname
-ownership belongs to the OSS reservation authority or the Operator/hosted-service
-VerifiedDomain lifecycle. Routing caches and backend state are never hostname
-ownership authority.
-
-Takosumi hosted service-specific endpoint examples live in
-[hosted service endpoints](https://app.takosumi.com/docs/en/endpoints).
 
 ## Error Shape
 

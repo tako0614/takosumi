@@ -47,7 +47,6 @@ import {
   InMemoryCapsuleCoordination,
   type CapsuleLease,
   capsuleLeaseScope,
-  capsuleResourceAdmissionScope,
   type ReleaseCapsuleLeaseInput,
   type RenewCapsuleLeaseInput,
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
@@ -77,7 +76,6 @@ import type {
   BillingEnforcement,
   ShowbackRater,
 } from "takosumi-contract/billing";
-import type { CapsuleOwnedResourceFence } from "../../../../core/domains/capsules/mod.ts";
 import {
   FIXTURE_ARCHIVE_DIGEST,
   seedCapsuleModel,
@@ -1354,210 +1352,6 @@ test("app_url stays an ordinary OpenTofu input without publicEndpoint mapping", 
   ).resolves.toBeUndefined();
 });
 
-test("a managed-namespace Capsule cannot claim an unverified custom domain", async () => {
-  // On an operator that runs a managed namespace, a custom hostname used to be
-  // filtered out of the reservation and then forgotten: the variable still
-  // reached the generated root, so the collision check that stops one Workspace
-  // pointing at another's host never ran. There is no VerifiedDomain ownership
-  // authority in OSS, so the plan has to refuse instead of silently proceeding.
-  const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
-  const seeded = await seedCapsuleModel(store, {
-    environment: "production",
-    installConfig: {
-      variableMapping: {
-        app_url: "https://someone-elses.example.com",
-        cloudflare: { account_id: null, api_base_url: null },
-      },
-      installExperience: {
-        projections: [
-          {
-            kind: "public_endpoint",
-            variables: { subdomain: "worker_name", url: "app_url" },
-            baseDomain: "app.takos.jp",
-          },
-        ],
-      },
-    },
-  });
-  await putConnectionWithProviderEnv(
-    store,
-    cloudflareConnection(
-      "conn_cloudflare_custom_domain",
-      seeded.capsule.workspaceId,
-    ),
-  );
-  await store.putProviderBindingSet({
-    id: "profile_cloudflare_custom_domain",
-    workspaceId: seeded.capsule.workspaceId,
-    capsuleId: seeded.capsule.id,
-    environment: seeded.capsule.environment,
-    bindings: [
-      {
-        provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
-        connectionId: "conn_cloudflare_custom_domain",
-      },
-    ],
-    createdAt: "2026-06-06T00:00:00.000Z",
-    updatedAt: "2026-06-06T00:00:00.000Z",
-  });
-  const profile = multiProviderRunnerProfile();
-  const controller = controllerWith(store, runner, {
-    runnerProfiles: [profile],
-    defaultRunnerProfileId: profile.id,
-  });
-
-  await expect(controller.createCapsulePlan(seeded.capsule.id)).rejects.toThrow(
-    /custom_domain_not_verified/u,
-  );
-  await expect(
-    store.getPublicHostReservation("someone-elses.example.com"),
-  ).resolves.toBeUndefined();
-});
-
-test("a host-assigned exact reservation authorizes its Capsule across managed namespace overrides", async () => {
-  const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
-  const assignedHost = "workspace-test-dashboard.apps-staging.example.test";
-  const seeded = await seedCapsuleModel(store, {
-    environment: "staging",
-    installConfig: {
-      variableMapping: {
-        public_subdomain: "dashboard",
-        public_url: `https://${assignedHost}`,
-        cloudflare: { account_id: null, api_base_url: null },
-      },
-      installExperience: {
-        projections: [
-          {
-            kind: "public_endpoint",
-            variables: {
-              subdomain: "public_subdomain",
-              url: "public_url",
-            },
-            baseDomain: "apps.example.test",
-          },
-        ],
-      },
-    },
-  });
-  await putConnectionWithProviderEnv(
-    store,
-    cloudflareConnection(
-      "conn_cloudflare_host_assigned",
-      seeded.capsule.workspaceId,
-    ),
-  );
-  await store.putProviderBindingSet({
-    id: "profile_cloudflare_host_assigned",
-    workspaceId: seeded.capsule.workspaceId,
-    capsuleId: seeded.capsule.id,
-    environment: seeded.capsule.environment,
-    bindings: [
-      {
-        provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
-        connectionId: "conn_cloudflare_host_assigned",
-      },
-    ],
-    createdAt: "2026-08-02T00:00:00.000Z",
-    updatedAt: "2026-08-02T00:00:00.000Z",
-  });
-  const profile = multiProviderRunnerProfile();
-  const controller = controllerWith(store, runner, {
-    runnerProfiles: [profile],
-    defaultRunnerProfileId: profile.id,
-  });
-  const mismatchedClaim = await controller.claimManagedPublicHostname({
-    workspaceId: seeded.capsule.workspaceId,
-    capsuleId: seeded.capsule.id,
-    requestedLabel: "dashboard",
-    managedPublicBaseDomain: "apps-staging.example.test",
-    expectedHostname: "unexpected.apps-staging.example.test",
-  });
-  expect(mismatchedClaim).toEqual({ ok: false, reason: "invalid_label" });
-  await expect(
-    store.getPublicHostReservation(assignedHost),
-  ).resolves.toBeUndefined();
-
-  const claim = await controller.claimManagedPublicHostname({
-    workspaceId: seeded.capsule.workspaceId,
-    capsuleId: seeded.capsule.id,
-    requestedLabel: "dashboard",
-    managedPublicBaseDomain: "apps-staging.example.test",
-    expectedHostname: assignedHost,
-  });
-  expect(claim).toEqual({
-    ok: true,
-    hostname: assignedHost,
-    mode: "scoped",
-  });
-
-  const { planRun } = await controller.createCapsulePlan(seeded.capsule.id);
-
-  expect(planRun.status).toEqual("succeeded");
-  expect(runner.planJobs).toHaveLength(1);
-  await expect(
-    store.getPublicHostReservation(assignedHost),
-  ).resolves.toMatchObject({
-    workspaceId: seeded.capsule.workspaceId,
-    capsuleId: seeded.capsule.id,
-    status: "reserved",
-  });
-});
-
-test("a managed hostname claim cannot reactivate after its Capsule is destroyed", async () => {
-  const store = new InMemoryOpenTofuControlStore();
-  const seeded = await seedCapsuleModel(store, {
-    environment: "staging",
-    installConfig: {
-      managedPublicHostname: { mode: "scoped" },
-    },
-  });
-  const configReadStarted = Promise.withResolvers<void>();
-  const resumeConfigRead = Promise.withResolvers<void>();
-  const getInstallConfig = store.getInstallConfig.bind(store);
-  let pauseNextRead = true;
-  store.getInstallConfig = async (id) => {
-    if (pauseNextRead) {
-      pauseNextRead = false;
-      configReadStarted.resolve();
-      await resumeConfigRead.promise;
-    }
-    return await getInstallConfig(id);
-  };
-  const controller = controllerWith(store, recordingRunner());
-  const hostname = "workspace-test-dashboard.apps-staging.example.test";
-  const pendingClaim = controller.claimManagedPublicHostname({
-    workspaceId: seeded.capsule.workspaceId,
-    capsuleId: seeded.capsule.id,
-    requestedLabel: "dashboard",
-    managedPublicBaseDomain: "apps-staging.example.test",
-    expectedHostname: hostname,
-  });
-
-  await configReadStarted.promise;
-  await store.putCapsule({
-    ...seeded.capsule,
-    status: "destroyed",
-    updatedAt: "2026-08-02T00:00:01.000Z",
-  });
-  await store.releasePublicHostsForCapsule(
-    seeded.capsule.id,
-    "2026-08-02T00:00:01.000Z",
-  );
-  resumeConfigRead.resolve();
-
-  await expect(pendingClaim).resolves.toEqual({
-    ok: false,
-    reason: "invalid_context",
-  });
-  await expect(
-    store.getPublicHostReservation(hostname),
-  ).resolves.toBeUndefined();
-});
-
 test("generic Capsule setup variables are filtered to the declared OpenTofu module interface", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
@@ -2063,6 +1857,7 @@ test("pre-v1 Resource Shape backing Capsule destroys from state without rebuildi
   expect(runner.planJobs).toHaveLength(2);
   expect(runner.planJobs[1]?.generatedRoot).toBeDefined();
   expect(runner.planJobs[1]?.operatorModule?.files).toHaveLength(1);
+  expect(runner.planJobs[1]?.legacySourcelessDestroyRecovery).toBe(true);
   expect(runner.planJobs[1]?.sourceArchive).toBeUndefined();
   expect(runner.planJobs[1]?.stateScope).toMatchObject({
     workspaceId: "ws_test001",
@@ -2081,6 +1876,7 @@ test("pre-v1 Resource Shape backing Capsule destroys from state without rebuildi
   expect(runner.destroyJobs).toHaveLength(1);
   expect(runner.destroyJobs[0]?.generatedRoot).toBeDefined();
   expect(runner.destroyJobs[0]?.operatorModule?.files).toHaveLength(1);
+  expect(runner.destroyJobs[0]?.legacySourcelessDestroyRecovery).toBe(true);
   expect(runner.destroyJobs[0]?.sourceArchive).toBeUndefined();
   expect(runner.destroyJobs[0]?.stateScope).toMatchObject({
     workspaceId: "ws_test001",
@@ -2121,6 +1917,7 @@ test("pre-v1 upload projection uses the same state-only delete bridge", async ()
   expect(destroy.planRun.source.kind).toBe("operator_module");
   expect(destroy.planRun.sourceSnapshotId).toBeUndefined();
   expect(runner.planJobs[1]?.operatorModule?.files).toHaveLength(1);
+  expect(runner.planJobs[1]?.legacySourcelessDestroyRecovery).toBe(true);
   expect(runner.planJobs[1]?.sourceArchive).toBeUndefined();
   expect(runner.planJobs[1]?.stateScope?.generation).toBe(1);
 });
@@ -5102,12 +4899,9 @@ test("pre-destroy failure remains secondary evidence when the final Capsule leas
     lifecycleActionStatus: "failed",
   });
   expect(initiallyRenewedDestroyScopes).toEqual(
-    new Set([
-      capsuleLeaseScope("cap_fixture1", "preview"),
-      capsuleResourceAdmissionScope("cap_fixture1"),
-    ]),
+    new Set([capsuleLeaseScope("cap_fixture1", "preview")]),
   );
-  expect(destroyRenewAttempts).toBeGreaterThanOrEqual(4);
+  expect(destroyRenewAttempts).toBeGreaterThanOrEqual(3);
   expect(runner.destroyJobs).toHaveLength(0);
 });
 
@@ -5183,10 +4977,7 @@ test("pre-destroy lifecycle execution renews before provider destroy dispatch", 
   expect(
     new Set(observed.renewedScopes().slice(renewCallsBeforeDestroy)),
   ).toEqual(
-    new Set([
-      capsuleLeaseScope("cap_fixture1", "preview"),
-      capsuleResourceAdmissionScope("cap_fixture1"),
-    ]),
+    new Set([capsuleLeaseScope("cap_fixture1", "preview")]),
   );
 
   expect(runner.destroyJobs).toHaveLength(0);
@@ -7799,145 +7590,6 @@ test("capsule destroy-plan apply tears down state at base+1 after approval and m
       (stateVersion) => stateVersion.generation,
     ),
   ).toEqual([1, 2]);
-});
-
-test("Capsule destroy fails closed before provider dispatch when host runtime authority cannot retire", async () => {
-  const { store, runner, controller } = await seededController({}, {
-    capsuleHostRuntimeRetirement: async ({ capsuleId }) => {
-      expect(capsuleId).toBe("cap_fixture1");
-      throw new Error("host runtime authority unavailable");
-    },
-  });
-  const create = await controller.createCapsulePlan("cap_fixture1");
-  await controller.createApplyRun({
-    planRunId: create.planRun.id,
-    expected: applyExpectedGuardFromPlanRun(create.planRun),
-  });
-
-  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
-  await controller.approveRun(destroy.planRun.id);
-  const response = await controller.createApplyRun({
-    planRunId: destroy.planRun.id,
-    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
-  });
-
-  expect(response.applyRun.status).toBe("failed");
-  expect(runner.destroyJobs).toHaveLength(0);
-  expect(response.capsule?.status).toBe("active");
-  expect(response.capsule?.currentStateGeneration).toBe(1);
-  expect(
-    (await store.getLatestStateVersion("cap_fixture1", "preview"))?.generation,
-  ).toBe(1);
-});
-
-test("Capsule destroy retires host runtime authority before provider teardown", async () => {
-  const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
-  const events: string[] = [];
-  const destroy = runner.destroy!.bind(runner);
-  runner.destroy = async (job) => {
-    events.push("provider_destroy");
-    return await destroy(job);
-  };
-  await seedRunnableCapsuleModel(store, { environment: "preview" });
-  const controller = controllerWith(store, runner, {
-    capsuleHostRuntimeRetirement: async ({ capsuleId }) => {
-      expect(capsuleId).toBe("cap_fixture1");
-      events.push("host_runtime_retire");
-    },
-  });
-  const create = await controller.createCapsulePlan("cap_fixture1");
-  await controller.createApplyRun({
-    planRunId: create.planRun.id,
-    expected: applyExpectedGuardFromPlanRun(create.planRun),
-  });
-
-  const destroyPlan = await controller.createCapsuleDestroyPlan("cap_fixture1");
-  await controller.approveRun(destroyPlan.planRun.id);
-  const response = await controller.createApplyRun({
-    planRunId: destroyPlan.planRun.id,
-    expected: applyExpectedGuardFromPlanRun(destroyPlan.planRun),
-  });
-
-  expect(response.applyRun.status).toBe("succeeded");
-  expect(events).toEqual(["host_runtime_retire", "provider_destroy"]);
-  expect((await store.getCapsule("cap_fixture1"))?.status).toBe("destroyed");
-});
-
-test("Capsule destroy Apply lets provider teardown retire owned Resources before terminalization", async () => {
-  const { store, runner, controller } = await seededController();
-  const create = await controller.createCapsulePlan("cap_fixture1");
-  await controller.createApplyRun({
-    planRunId: create.planRun.id,
-    expected: applyExpectedGuardFromPlanRun(create.planRun),
-  });
-
-  let fenceCalls = 0;
-  const fence: CapsuleOwnedResourceFence = async ({ capsule, phase }) => {
-    fenceCalls += 1;
-    expect(capsule.id).toBe("cap_fixture1");
-    expect(phase).toBe("destroy_apply");
-    // The provider teardown is what removes Capsule-owned Resources. The
-    // fence must therefore run only after destroy has been dispatched.
-    expect(runner.destroyJobs).toHaveLength(1);
-    return { status: "clear" };
-  };
-  controller.setCapsuleOwnedResourceFence(fence);
-
-  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
-  await controller.approveRun(destroy.planRun.id);
-  const response = await controller.createApplyRun({
-    planRunId: destroy.planRun.id,
-    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
-  });
-
-  expect(response.applyRun.status).toBe("succeeded");
-  expect(fenceCalls).toBe(1);
-  expect(runner.destroyJobs).toHaveLength(1);
-  expect((await store.getCapsule("cap_fixture1"))?.status).toBe("destroyed");
-  expect(
-    (await store.getLatestStateVersion("cap_fixture1", "preview"))?.generation,
-  ).toBe(2);
-});
-
-test("Capsule destroy Apply checks the Resource fence before terminal commit", async () => {
-  const { store, runner, controller } = await seededController();
-  const create = await controller.createCapsulePlan("cap_fixture1");
-  await controller.createApplyRun({
-    planRunId: create.planRun.id,
-    expected: applyExpectedGuardFromPlanRun(create.planRun),
-  });
-
-  let fenceCalls = 0;
-  const fence: CapsuleOwnedResourceFence = async ({ phase }) => {
-    expect(phase).toBe("destroy_apply");
-    fenceCalls += 1;
-    expect(runner.destroyJobs).toHaveLength(1);
-    return {
-      status: "pending",
-      resourceId: "tkrn:ws_test001:EdgeWorker:survived-destroy",
-    };
-  };
-  controller.setCapsuleOwnedResourceFence(fence);
-
-  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
-  await controller.approveRun(destroy.planRun.id);
-  const response = await controller.createApplyRun({
-    planRunId: destroy.planRun.id,
-    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
-  });
-
-  expect(response.applyRun.status).toBe("failed");
-  expect(response.applyRun.diagnostics).toContainEqual(
-    expect.objectContaining({ code: "capsule_owned_resources_pending" }),
-  );
-  expect(fenceCalls).toBe(1);
-  expect(runner.destroyJobs).toHaveLength(1);
-  expect(response.capsule?.status).toBe("active");
-  expect(response.capsule?.currentStateGeneration).toBe(1);
-  expect(
-    (await store.getLatestStateVersion("cap_fixture1", "preview"))?.generation,
-  ).toBe(1);
 });
 
 test("a second successful apply preserves StateVersion history and advances the cursor", async () => {

@@ -8,12 +8,10 @@ test("node-postgres parses substrate config without runtime projection knobs", (
   const config = parseEnv({
     TAKOSUMI_ACCOUNTS_DATABASE_URL: DATABASE_URL,
     TAKOSUMI_ACCOUNTS_ISSUER: "https://app.example.test",
-    TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN: "apps.example.test",
   });
   expect(config).toMatchObject({
     databaseUrl: DATABASE_URL,
     issuer: "https://app.example.test",
-    managedPublicBaseDomain: "apps.example.test",
   });
   expect("platformAccess" in config).toBe(false);
   expect("exportDownload" in config).toBe(false);

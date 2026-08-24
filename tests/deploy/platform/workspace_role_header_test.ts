@@ -57,7 +57,6 @@ test("platform extension strips forged Workspace role and propagates verified se
           subject: "verified-subject",
           scopes: ["role.read"],
         }),
-        undefined,
         async (_request, _env, workspaceId) => {
           checked.push(workspaceId);
           return workspaceRole;
@@ -156,7 +155,6 @@ test("platform extension denies cross-Workspace context before dispatch", async 
       workspaceId: "space_same",
       workspaceRole: "member",
     }),
-    undefined,
     async () => {
       checked = true;
       return "member";
@@ -189,7 +187,6 @@ test("platform extension denies an unknown verified Workspace role", async () =>
       subject: "verified-subject",
       workspaceRole: "unknown" as never,
     }),
-    undefined,
     async () => true,
   );
 
@@ -229,7 +226,6 @@ test("platform extension uses a live viewer role over stale owner authority", as
     binding,
     route,
     sessionVerifier,
-    undefined,
     workspaceAccess,
   );
   expect(getResponse.status).toBe(200);
@@ -250,7 +246,6 @@ test("platform extension uses a live viewer role over stale owner authority", as
     } as never,
     route,
     sessionVerifier,
-    undefined,
     workspaceAccess,
   );
 
@@ -288,7 +283,6 @@ test("platform extension does not fall back to a stale role after boolean live a
       workspaceRole: "owner" as const,
       scopes: ["read", "write"],
     }),
-    undefined,
     async () => true,
   );
 

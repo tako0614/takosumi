@@ -37,7 +37,6 @@ import {
   type BackupRecord,
   CONTROL_BACKUP_CONTENT_TYPE,
   type ListBackupsResponse,
-  type ResourceFormPinBackupEntry,
 } from "takosumi-contract/backups";
 import type { PageParams } from "takosumi-contract/pagination";
 import type {
@@ -48,10 +47,6 @@ import type {
 import type { Output as Output } from "takosumi-contract/outputs";
 import type { Run } from "takosumi-contract/runs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
-import {
-  isInstalledFormReference,
-  shapeKindForPortableType,
-} from "takosumi-contract";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import type {
   OpenTofuControlStore,
@@ -159,11 +154,6 @@ export interface BackupsServiceDependencies {
    * pointer/evidence.
    */
   readonly serviceDataRunner?: ServiceDataBackupRunner;
-  /** Host composition collector for the redacted exact-Form sidecar. */
-  readonly collectResourceFormPins?: (
-    workspaceId: string,
-  ) =>
-    ResourceFormPinBackupCollection | Promise<ResourceFormPinBackupCollection>;
   readonly activity?: ActivityRecorder;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
@@ -180,9 +170,6 @@ export class BackupsService {
   readonly #artifactReferenceAllocator: ArtifactReferenceAllocator | undefined;
   readonly #stateObjectReader: BackupObjectReader | undefined;
   readonly #serviceDataRunner: ServiceDataBackupRunner | undefined;
-  readonly #resourceFormPinCollector:
-    | ((workspaceId: string) => Promise<ResourceFormPinBackupCollection>)
-    | undefined;
   readonly #activity: ActivityRecorder;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => Date;
@@ -194,9 +181,6 @@ export class BackupsService {
     this.#artifactReferenceAllocator = deps.artifactReferenceAllocator;
     this.#stateObjectReader = deps.stateObjectReader;
     this.#serviceDataRunner = deps.serviceDataRunner;
-    this.#resourceFormPinCollector = deps.collectResourceFormPins
-      ? async (workspaceId) => await deps.collectResourceFormPins!(workspaceId)
-      : undefined;
     this.#activity = deps.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#newId = deps.newId ?? defaultId;
     this.#now = deps.now ?? (() => new Date());
@@ -454,7 +438,6 @@ export class BackupsService {
     );
     const usageEvents = await this.#store.listUsageEvents(workspaceId);
     const backupRecords = await this.#store.listBackupRecords(workspaceId);
-    const resourceFormPins = await this.#collectResourceFormPins(workspaceId);
 
     // Per-Capsule fan-out: source snapshots (by Source), StateVersion metadata,
     // and Output projections.
@@ -586,45 +569,7 @@ export class BackupsService {
       securityFindings: [...securityFindings],
       usageEvents: [...usageEvents],
       backupRecords: [...backupRecords],
-      resourceFormPins,
     };
-  }
-
-  async #collectResourceFormPins(
-    workspaceId: string,
-  ): Promise<readonly ResourceFormPinBackupEntry[]> {
-    if (!this.#resourceFormPinCollector) return [];
-    const collection = await this.#resourceFormPinCollector(workspaceId);
-    if (collection.status === "incoherent") {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `Resource ${collection.resourceId} has incoherent exact Form backup evidence`,
-      );
-    }
-    const pins: ResourceFormPinBackupEntry[] = [];
-    for (const entry of collection.entries) {
-      if (
-        entry.resourceId.trim() === "" ||
-        entry.resourceScopeId.trim() === "" ||
-        entry.kind.trim() === "" ||
-        !isInstalledFormReference(entry.identity) ||
-        shapeKindForPortableType(entry.identity.type) !== entry.kind
-      ) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          "Resource exact Form backup collector returned invalid evidence",
-        );
-      }
-      pins.push({
-        resourceId: entry.resourceId,
-        resourceScopeId: entry.resourceScopeId,
-        kind: entry.kind,
-        identity: entry.identity,
-      });
-    }
-    return pins.sort((left, right) =>
-      left.resourceId.localeCompare(right.resourceId),
-    );
   }
 
   async #writeStateArchive(input: {
@@ -926,13 +871,6 @@ export class BackupsService {
   }
 }
 
-export type ResourceFormPinBackupCollection =
-  | {
-      readonly status: "ready";
-      readonly entries: readonly ResourceFormPinBackupEntry[];
-    }
-  | { readonly status: "incoherent"; readonly resourceId: string };
-
 async function latestSourceSnapshot(
   store: OpenTofuControlStore,
   sourceId: string,
@@ -970,8 +908,6 @@ export interface ControlBackupBundle {
   readonly securityFindings: readonly unknown[];
   readonly usageEvents: readonly unknown[];
   readonly backupRecords: readonly unknown[];
-  /** Exact identities only: no Resource spec, output, target, or native value. */
-  readonly resourceFormPins: readonly ResourceFormPinBackupEntry[];
 }
 
 /** Sealed tar entry manifest for §33 service-data backup durable artifacts. */

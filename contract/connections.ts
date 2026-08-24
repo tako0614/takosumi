@@ -201,12 +201,6 @@ export interface ConnectionScopeHints {
   readonly providerSettings?: Readonly<Record<string, JsonValue>>;
   /** @deprecated Stored-row decode compatibility only; grants no authority. */
   readonly managedProviderProfile?: string;
-  /**
-   * Public hostname namespace owned by this deployment target. A hosted operator
-   * may use a different namespace per environment without rewriting repository
-   * install metadata (for example an operator-managed staging namespace).
-   */
-  readonly managedPublicBaseDomain?: string;
 }
 
 /** Detects decoder-only fields so every new write can reject them explicitly. */

@@ -108,19 +108,12 @@ test("pre-init policy still fails closed when no provider credential was minted"
   ).toThrow("explicit run credential recipe is required for provider");
 });
 
-test("pre-init policy allows Resource runs with explicit operator modules", () => {
+test("pre-init policy allows current Git runs with explicit generated roots", () => {
   expect(() =>
     assertRunnerPolicyForRequest(
       {
         ...REQUEST,
-        planRun: {
-          ...REQUEST.planRun,
-          source: {
-            kind: "operator_module",
-            digest:
-              "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-          },
-        },
+        planRun: REQUEST.planRun,
         generatedRoot: {
           files: {
             "main.tf": 'terraform { required_version = ">= 1.6.0" }',

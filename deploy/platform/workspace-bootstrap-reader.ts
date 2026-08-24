@@ -7,9 +7,6 @@ import {
   DEFAULT_PROJECT_SLUG,
   defaultProjectId,
 } from "../../core/domains/projects/mod.ts";
-import {
-  formatResourceShapeId,
-} from "../../core/domains/resource-shape/records.ts";
 import type { JsonObject, JsonValue } from "takosumi-contract";
 import type { Project } from "takosumi-contract/projects";
 import type {
@@ -29,22 +26,12 @@ export interface WorkspaceBootstrapReadInput {
   readonly now: number;
 }
 
-export interface PlatformWorkspaceBootstrapTargetPool {
-  readonly id: string;
-  readonly workspaceId: string;
-  readonly name: string;
-  readonly spec: JsonObject;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
 export interface PlatformWorkspaceBootstrapFacts {
   readonly status: "authenticated_owner";
   readonly subject: TakosumiSubject;
   readonly workspace: Workspace;
   readonly membership: WorkspaceMember;
   readonly defaultProject: Project;
-  readonly defaultTargetPool: PlatformWorkspaceBootstrapTargetPool;
 }
 
 export type WorkspaceBootstrapReadResult =
@@ -113,12 +100,6 @@ interface WorkspaceBootstrapControlRow {
   readonly project_record_json: unknown;
   readonly project_created_at: unknown;
   readonly project_updated_at: unknown;
-  readonly target_pool_id: unknown;
-  readonly target_pool_space_id: unknown;
-  readonly target_pool_name: unknown;
-  readonly target_pool_spec_json: unknown;
-  readonly target_pool_created_at: unknown;
-  readonly target_pool_updated_at: unknown;
 }
 
 type ReadOnlyD1PreparedStatement = ReturnType<
@@ -169,11 +150,6 @@ const WORKSPACE_BOOTSTRAP_CONTROL_SQL = `with selected_workspace as (
     from ${deployControlD1TableNames.projects}
    where id = ? and workspace_id = ? and slug = '${DEFAULT_PROJECT_SLUG}'
    limit 2
-), selected_target_pool as (
-  select id, space_id, name, spec_json, created_at, updated_at
-    from ${deployControlD1TableNames.targetPools}
-   where id = ? and space_id = ? and name = 'default'
-   limit 2
 )
 select workspace.id as workspace_id,
        workspace.handle as workspace_handle,
@@ -186,16 +162,9 @@ select workspace.id as workspace_id,
        project.slug as project_slug,
        project.record_json as project_record_json,
        project.created_at as project_created_at,
-       project.updated_at as project_updated_at,
-       target_pool.id as target_pool_id,
-       target_pool.space_id as target_pool_space_id,
-       target_pool.name as target_pool_name,
-       target_pool.spec_json as target_pool_spec_json,
-       target_pool.created_at as target_pool_created_at,
-       target_pool.updated_at as target_pool_updated_at
+       project.updated_at as project_updated_at
   from selected_workspace as workspace
  cross join selected_project as project
- cross join selected_target_pool as target_pool
  limit 2`;
 
 /**
@@ -263,7 +232,6 @@ export function createCloudflareD1WorkspaceBootstrapReader(
         workspace: control.workspace,
         membership,
         defaultProject: control.defaultProject,
-        defaultTargetPool: control.defaultTargetPool,
       };
     },
   };
@@ -341,22 +309,16 @@ async function readWorkspaceBootstrapControl(
       readonly status: "ready";
       readonly workspace: Workspace;
       readonly defaultProject: Project;
-      readonly defaultTargetPool: PlatformWorkspaceBootstrapTargetPool;
     }
   | { readonly status: "incomplete" }
   | { readonly status: "unavailable" }
 > {
   const projectId = defaultProjectId(workspaceId);
-  const targetPoolId = formatResourceShapeId(
-    workspaceId,
-    "TargetPool",
-    "default",
-  );
   let result;
   try {
     result = await db
       .prepare(WORKSPACE_BOOTSTRAP_CONTROL_SQL)
-      .bind(workspaceId, projectId, workspaceId, targetPoolId, workspaceId)
+      .bind(workspaceId, projectId, workspaceId)
       .all<WorkspaceBootstrapControlRow>();
   } catch {
     return { status: "unavailable" };
@@ -369,13 +331,11 @@ async function readWorkspaceBootstrapControl(
   if (!row || typeof row !== "object") return { status: "incomplete" };
   const workspace = workspaceFromRow(row, workspaceId, subject);
   const project = projectFromRow(row, workspaceId, projectId);
-  const targetPool = targetPoolFromRow(row, workspaceId, targetPoolId);
-  return workspace && project && targetPool
+  return workspace && project
     ? {
         status: "ready",
         workspace,
         defaultProject: project,
-        defaultTargetPool: targetPool,
       }
     : { status: "incomplete" };
 }
@@ -497,33 +457,6 @@ function projectFromRow(
     return undefined;
   }
   return value as unknown as Project;
-}
-
-function targetPoolFromRow(
-  row: WorkspaceBootstrapControlRow,
-  workspaceId: string,
-  targetPoolId: string,
-): PlatformWorkspaceBootstrapTargetPool | undefined {
-  if (
-    row.target_pool_id !== targetPoolId ||
-    row.target_pool_space_id !== workspaceId ||
-    row.target_pool_name !== "default" ||
-    typeof row.target_pool_spec_json !== "string" ||
-    !isCanonicalTimestamp(row.target_pool_created_at) ||
-    !isCanonicalTimestamp(row.target_pool_updated_at)
-  ) {
-    return undefined;
-  }
-  const spec = parseJsonObject(row.target_pool_spec_json);
-  if (!spec) return undefined;
-  return {
-    id: targetPoolId,
-    workspaceId,
-    name: "default",
-    spec: spec as JsonObject,
-    createdAt: row.target_pool_created_at,
-    updatedAt: row.target_pool_updated_at,
-  };
 }
 
 function workspaceBootstrapInputIsCanonical(

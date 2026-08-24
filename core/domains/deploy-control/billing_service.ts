@@ -296,8 +296,7 @@ export class BillingService {
 function planSkipsBillingReservation(planRun: PlanRun): boolean {
   return (
     planRun.operation === "destroy" ||
-    planRun.refreshOnly === true ||
-    planRun.resourceImport === true
+    planRun.refreshOnly === true
   );
 }
 

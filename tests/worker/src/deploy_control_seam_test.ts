@@ -1,45 +1,13 @@
 import { expect, test } from "bun:test";
 import {
-  cachedDeployControlService,
-  cachedRunOwnerDeployControlService,
   cachedServiceAttempt,
   deployControlServiceOptions,
-} from "../../../worker/src/deploy_control_seam.ts";
-import {
-  platformResourceCapsuleOwnerResolver,
-  TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER,
 } from "../../../worker/src/deploy_control_seam.ts";
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 import {
   createDefaultRunnerProfiles,
   type OpenTofuRunner,
 } from "../../../core/domains/deploy-control/mod.ts";
-
-test("actual deploy and RunOwner wrappers evict rejected composition attempts", async () => {
-  for (const create of [
-    cachedDeployControlService,
-    cachedRunOwnerDeployControlService,
-  ]) {
-    // Force the composition seam to reject before any D1/bootstrap side effect.
-    // Both wrappers still exercise their real per-environment cache and retry
-    // identity; the generic helper test below covers the underlying factory
-    // call count and stale-generation fence.
-    const env = {
-      TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST: {},
-    } as Parameters<typeof create>[0];
-    const first = create(env);
-    expect(create(env)).toBe(first);
-    await expect(first).rejects.toThrow(
-      "Resource Form transition host and evidence ports must be composed together",
-    );
-
-    const retry = create(env);
-    expect(retry).not.toBe(first);
-    await expect(retry).rejects.toThrow(
-      "Resource Form transition host and evidence ports must be composed together",
-    );
-  }
-});
 
 test("deploy and RunOwner service caches evict rejected attempts but share pending ones", async () => {
   for (const cacheKind of ["deploy", "run-owner"] as const) {
@@ -153,7 +121,7 @@ test("Worker composition accepts only a host-code Interface OAuth resource autho
     options.interfaceOAuth2ResourceAuthorizer!({
       workspaceId: "workspace_1",
       interfaceId: "interface_1",
-      ownerRef: { kind: "Resource", id: "tkrn:workspace_1:KVStore:cache" },
+      ownerRef: { kind: "Capsule", id: "capsule_1" },
       resource: "https://app.takosumi.com/v1/cloud/resources",
     }),
   ).resolves.toBeTrue();
@@ -180,98 +148,4 @@ test("Worker composition mounts ledger HTTP routes only for explicit private ing
       TAKOSUMI_EXPOSE_INTERNAL_EDGE: "1",
     } as unknown as CloudflareWorkerEnv).mountInternalLedgerRoutes,
   ).toBe(true);
-});
-
-test("Worker composes exact Form transition host/evidence ports only as code", () => {
-  const host = { dispatch: async () => ({ status: "rejected", code: "test" }), readback: async () => ({ status: "absent" }) };
-  const evidence = { authorize: async () => true };
-  const options = deployControlServiceOptions({
-    TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST: host,
-    TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE: evidence,
-  } as unknown as CloudflareWorkerEnv);
-  expect(options.resourceFormTransitionHost).toBe(host);
-  expect(options.resourceFormTransitionEvidence).toBe(evidence);
-  expect(() =>
-    deployControlServiceOptions({
-      TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST: host,
-    } as unknown as CloudflareWorkerEnv)
-  ).toThrow("must be composed together");
-});
-
-test("legacy managed-provider headers cannot manufacture Capsule ownership", async () => {
-  const resolver = platformResourceCapsuleOwnerResolver(
-    {} as unknown as CloudflareWorkerEnv,
-  );
-
-  await expect(
-    resolver({
-      actor: {
-        actorAccountId: "principal_1",
-        workspaceId: "workspace_1",
-        roles: ["owner"],
-        scopes: ["resources:*"],
-        requestId: "request_1",
-      },
-      request: new Request("https://app.takosumi.test/resources", {
-        headers: {
-          "x-takosumi-internal-managed-provider-run-token": "legacy-token",
-          "x-takosumi-internal-managed-provider-profile": "legacy-profile",
-        },
-      }),
-      space: "workspace_1",
-      kind: "ObjectBucket",
-      name: "assets",
-    }),
-  ).resolves.toBeUndefined();
-});
-
-test("only the trusted internal Run bridge resolves exact Capsule ownership", async () => {
-  const resolver = platformResourceCapsuleOwnerResolver(
-    {} as unknown as CloudflareWorkerEnv,
-  );
-  const owner = {
-    kind: "Capsule",
-    id: "capsule_1",
-    workspaceId: "workspace_1",
-    installingPrincipalId: "principal_1",
-  } as const;
-  await expect(
-    resolver({
-      actor: {
-        actorAccountId: "principal_1",
-        workspaceId: "workspace_1",
-        roles: ["operator"],
-        requestId: "request_1",
-      },
-      request: new Request("https://app.takosumi.test/resources", {
-        headers: {
-          [TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER]:
-            JSON.stringify(owner),
-        },
-      }),
-      space: "workspace_1",
-      kind: "RelationalDatabase",
-      name: "database",
-    }),
-  ).resolves.toEqual(owner);
-
-  await expect(
-    resolver({
-      actor: {
-        actorAccountId: "principal_other",
-        workspaceId: "workspace_1",
-        roles: ["operator"],
-        requestId: "request_2",
-      },
-      request: new Request("https://app.takosumi.test/resources", {
-        headers: {
-          [TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER]:
-            JSON.stringify(owner),
-        },
-      }),
-      space: "workspace_1",
-      kind: "RelationalDatabase",
-      name: "database",
-    }),
-  ).rejects.toThrow("owner authority is invalid");
 });

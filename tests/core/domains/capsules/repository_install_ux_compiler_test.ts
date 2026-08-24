@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
-import { parseInstallConfigHostRuntimeMaterialization } from "../../../../contract/host-runtime-materialization.ts";
 import { compileRepositoryInstallUx } from "../../../../core/domains/capsules/repository_install_ux_compiler.ts";
 
 const document: RepositoryManifestDocument = {
@@ -27,12 +26,6 @@ const document: RepositoryManifestDocument = {
           label: { ja: "公開 URL", en: "Public URL" },
         },
         {
-          name: "oidc_issuer",
-          source: { kind: "module_default" },
-          type: "string",
-          label: { ja: "OIDC issuer", en: "OIDC issuer" },
-        },
-        {
           name: "push_token",
           source: { kind: "user" },
           type: "string",
@@ -45,12 +38,6 @@ const document: RepositoryManifestDocument = {
         {
           kind: "http.endpoint" as const,
           deliver: { variables: { url: "app_url", subdomain: "project_name" } },
-        },
-        {
-          kind: "identity.oidc" as const,
-          callbackPath: "/api/auth/callback/takos",
-          scopes: ["openid", "profile", "email"],
-          deliver: { variables: { issuerUrl: "oidc_issuer" } },
         },
       ],
       features: [
@@ -83,15 +70,9 @@ function report(
     resources: [],
     dataSources: [],
     provisioners: [],
-    rootModuleVariables: [
-      "app_url",
-      "oidc_issuer",
-      "project_name",
-      "push_token",
-    ],
+    rootModuleVariables: ["app_url", "project_name", "push_token"],
     rootModuleVariableDeclarations: [
       { name: "app_url", type: "string", hasDefault: true },
-      { name: "oidc_issuer", type: "string", hasDefault: true },
       { name: "project_name", type: "string", hasDefault: false },
       { name: "push_token", type: "string", hasDefault: false },
     ],
@@ -111,9 +92,6 @@ function compile(
     compatibilityReport: report(),
     capsuleName: "Yuru Commu",
     workspaceId: "workspace_abcdef123456",
-    policy: {
-      allowedOidcScopes: ["openid", "profile", "email", "offline_access"],
-    },
     ...overrides,
   });
 }
@@ -140,12 +118,6 @@ describe("repository install UX compiler", () => {
         {
           kind: "public_endpoint",
           variables: { url: "app_url", subdomain: "project_name" },
-        },
-        {
-          kind: "oidc_client",
-          variables: { issuerUrl: "oidc_issuer" },
-          callbackPath: "/api/auth/callback/takos",
-          scopes: ["email", "openid", "profile"],
         },
       ],
       features: [
@@ -228,7 +200,7 @@ describe("repository install UX compiler", () => {
     });
   });
 
-  test("canonicalizes repository OIDC scopes before host runtime validation", () => {
+  test("rejects binding-delivered repository OIDC materialization", () => {
     const runtimeDocument = {
       apiVersion: "takosumi.com/v1",
       kind: "Repository",
@@ -243,10 +215,10 @@ describe("repository install UX compiler", () => {
                 scopes: ["openid", "profile", "email", "profile"],
                 deliver: {
                   bindings: {
-                    issuerUrl: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
-                    clientId: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
-                    ownerSubject: "TAKOSUMI_ACCOUNTS_OWNER_SUB",
-                    redirectUri: "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
+                    issuerUrl: "OIDC_ISSUER_URL",
+                    clientId: "OIDC_CLIENT_ID",
+                    ownerSubject: "OIDC_OWNER_SUB",
+                    redirectUri: "OIDC_REDIRECT_URI",
                   },
                 },
               },
@@ -263,16 +235,12 @@ describe("repository install UX compiler", () => {
       }),
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(
-      result.compiled.hostRuntimeMaterialization?.requirements[0],
-    ).toMatchObject({ scopes: ["email", "openid", "profile"] });
-    expect(() =>
-      parseInstallConfigHostRuntimeMaterialization(
-        result.compiled.hostRuntimeMaterialization,
-      ),
-    ).not.toThrow();
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostic: {
+        code: "repository_install_ux_requirement_disallowed",
+      },
+    });
   });
 
   test("compiles a consumed Interface into DB-owned requiredInterfaces", () => {
@@ -410,7 +378,6 @@ describe("repository install UX compiler", () => {
       compatibilityReport: report({
         rootModuleVariableDeclarations: [
           { name: "app_url", type: "boolean", hasDefault: true },
-          { name: "oidc_issuer", type: "string", hasDefault: true },
           { name: "project_name", type: "string", hasDefault: false },
           { name: "push_token", type: "string", hasDefault: false },
         ],
@@ -426,8 +393,7 @@ describe("repository install UX compiler", () => {
     const defaultMismatch = compile({
       compatibilityReport: report({
         rootModuleVariableDeclarations: [
-          { name: "app_url", type: "string", hasDefault: true },
-          { name: "oidc_issuer", type: "string", hasDefault: false },
+          { name: "app_url", type: "string", hasDefault: false },
           { name: "project_name", type: "string", hasDefault: false },
           { name: "push_token", type: "string", hasDefault: false },
         ],
@@ -454,22 +420,51 @@ describe("repository install UX compiler", () => {
     expect(JSON.stringify(result)).not.toContain(secret);
   });
 
-  test("enforces OIDC scope and requirement target policy", () => {
-    const scope = compile({
-      policy: { allowedOidcScopes: ["openid", "profile"] },
+  test("rejects Capsule-specific OIDC materialization and still validates ordinary targets", () => {
+    const oidcDocument: RepositoryManifestDocument = {
+      apiVersion: "takosumi.com/v1",
+      kind: "Repository",
+      install: {
+        modules: {
+          ".": {
+            inputs: [
+              {
+                name: "oidc_issuer",
+                source: { kind: "module_default" },
+                type: "string",
+                label: { ja: "OIDC issuer", en: "OIDC issuer" },
+              },
+            ],
+            requires: [
+              {
+                kind: "identity.oidc",
+                callbackPath: "/api/auth/callback/takos",
+                scopes: ["openid", "profile"],
+                deliver: { variables: { issuerUrl: "oidc_issuer" } },
+              },
+            ],
+          },
+        },
+      },
+    };
+    const oidc = compile({
+      document: oidcDocument,
+      compatibilityReport: report({
+        rootModuleVariables: ["oidc_issuer"],
+        rootModuleVariableDeclarations: [
+          { name: "oidc_issuer", type: "string", hasDefault: true },
+        ],
+      }),
     });
-    expect(scope.ok).toBe(false);
-    if (!scope.ok) {
-      expect(scope.diagnostic.code).toBe(
-        "repository_install_ux_oidc_scope_disallowed",
-      );
-    }
+    expect(oidc).toMatchObject({
+      ok: false,
+      diagnostic: { code: "repository_install_ux_requirement_disallowed" },
+    });
 
     const projection = compile({
       compatibilityReport: report({
         rootModuleVariableDeclarations: [
           { name: "app_url", type: "number", hasDefault: true },
-          { name: "oidc_issuer", type: "string", hasDefault: true },
           { name: "project_name", type: "string", hasDefault: false },
           { name: "push_token", type: "string", hasDefault: false },
         ],
@@ -488,7 +483,6 @@ describe("repository install UX compiler", () => {
     const source = compile({
       policy: {
         allowedSourceKinds: ["user", "module_default"],
-        allowedOidcScopes: ["openid", "profile", "email"],
       },
     });
     expect(source.ok).toBe(false);
@@ -500,8 +494,7 @@ describe("repository install UX compiler", () => {
 
     const requirement = compile({
       policy: {
-        allowedRequirementKinds: ["http.endpoint"],
-        allowedOidcScopes: ["openid", "profile", "email"],
+        allowedRequirementKinds: [],
       },
     });
     expect(requirement.ok).toBe(false);
@@ -597,7 +590,6 @@ describe("repository install UX compiler", () => {
         ],
       }),
       policy: {
-        allowedOidcScopes: ["openid", "profile", "email"],
         allowedInterfacePermissions: ["ui.open"],
       },
     });

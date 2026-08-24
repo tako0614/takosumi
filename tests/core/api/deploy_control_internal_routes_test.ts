@@ -11,7 +11,6 @@ import { sourceSyncRequiredError } from "../../../core/domains/deploy-control/er
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import { seedCapsuleModel } from "../../helpers/deploy-control/model_fixture.ts";
 import { OutputSharesService } from "../../../core/domains/output-shares/mod.ts";
-import type { LegacyResourceStateAdoptionService } from "../../../core/domains/resource-shape/legacy_state_adoption.ts";
 import type { Output as Output } from "takosumi-contract/outputs";
 import type { Workspace } from "takosumi-contract/workspaces";
 
@@ -76,42 +75,6 @@ test("runHandler preserves the structured source-sync reason", async () => {
   });
 });
 
-test("runHandler hides public hostname reservation owner details", async () => {
-  const context = {
-    req: {
-      path: "/internal/v1/test",
-      method: "POST",
-      header: () => undefined,
-    },
-    json: (body: unknown, status: number) =>
-      new Response(JSON.stringify(body), {
-        status,
-        headers: { "content-type": "application/json" },
-      }),
-  } as unknown as Context;
-
-  const response = await runHandler(context, async () => {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "app_hostname_unavailable: yurucommu.app.takos.jp is already claimed by Capsule yurucommu (cap_1) in Workspace ws_1",
-      { reason: "app_hostname_unavailable" },
-    );
-  });
-
-  expect(response.status).toEqual(409);
-  const body = await response.json();
-  expect(body).toMatchObject({
-    error: {
-      code: "failed_precondition",
-      message: "app_hostname_unavailable: already exists",
-      details: { reason: "app_hostname_unavailable" },
-    },
-  });
-  expect(JSON.stringify(body)).not.toMatch(
-    /\b(?:Workspace|Capsule|cap_1|ws_1|yurucommu\.app\.takos\.jp)\b/u,
-  );
-});
-
 test("deploy_control_internal_routes — internal seam endpoints respond with 501 when controller is absent", async () => {
   const app = await createApiApp({
     registerDeployControlInternalRoutes: true,
@@ -140,26 +103,6 @@ test("deploy_control_internal_routes — internal seam endpoints respond with 50
     ["GET", "/internal/v1/workspaces/ws_abcdef12/usage", undefined],
     [
       "GET",
-      "/internal/v1/workspaces/ws_abcdef12/migrations/resource-state-adoption",
-      undefined,
-    ],
-    [
-      "POST",
-      "/internal/v1/workspaces/ws_abcdef12/migrations/resource-state-adoption",
-      {},
-    ],
-    [
-      "POST",
-      "/internal/v1/workspaces/ws_abcdef12/migrations/resource-form-pins/backfill",
-      {},
-    ],
-    [
-      "POST",
-      "/internal/v1/workspaces/ws_abcdef12/migrations/resource-form-pins/restore",
-      {},
-    ],
-    [
-      "GET",
       "/internal/v1/workspaces/ws_abcdef12/migrations/output-interfaces",
       undefined,
     ],
@@ -185,46 +128,6 @@ test("deploy_control_internal_routes — internal seam endpoints respond with 50
     expect(typeof json.error.message).toEqual("string");
     expect(typeof json.error.requestId).toEqual("string");
   }
-});
-
-test("deploy_control_internal_routes — state adoption confirmation rejects incomplete report fields", async () => {
-  const store = new InMemoryOpenTofuControlStore();
-  const migration = {
-    async report(workspaceId: string) {
-      return { workspaceId, candidates: [], issues: [] };
-    },
-    async confirm() {
-      throw new Error("confirmation must not run for an invalid body");
-    },
-  } as unknown as LegacyResourceStateAdoptionService;
-  const app = await createApiApp({
-    registerDeployControlInternalRoutes: true,
-    deployControlInternalRouteOptions: {
-      mountInternalLedgerRoutes: true,
-      controller: new OpenTofuController({
-        store,
-        now: () => 1,
-        newId: () => "plan_abcdef12",
-      }),
-      legacyResourceStateAdoptionService: migration,
-      getDeployControlToken: () => "deploy-control-token",
-    },
-    requestCorrelation: false,
-  });
-
-  const response = await app.request(
-    "/internal/v1/workspaces/ws_abcdef12/migrations/resource-state-adoption",
-    {
-      method: "POST",
-      headers: {
-        authorization: "Bearer deploy-control-token",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ resourceId: "tkrn:ws_abcdef12:resource" }),
-    },
-  );
-  expect(response.status).toEqual(400);
-  expect((await response.json()).error.code).toEqual("invalid_argument");
 });
 
 test("deploy_control_internal_routes — disabled without TAKOSUMI_DEPLOY_CONTROL_TOKEN", async () => {
@@ -332,6 +235,59 @@ test("deploy_control_internal_routes — scoped bearer enforces Workspace and re
   expect(allowed.status).toEqual(201);
   const payload = await allowed.json();
   expect(payload.planRun.auditEvents[0].actor).toEqual("acct_123");
+});
+
+test("deploy_control_internal_routes — create and update reject operator_module sources", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { capsule } = await seedCapsuleModel(store, {
+    workspaceId: "ws_git_only",
+    capsuleId: "cap_git_only1",
+  });
+  const app = await createApiApp({
+    registerDeployControlInternalRoutes: true,
+    deployControlInternalRouteOptions: {
+      mountInternalLedgerRoutes: true,
+      controller: new OpenTofuController({ store }),
+      authorizeDeployControlBearer: ({ token }) =>
+        token === "scoped-token"
+          ? {
+              actor: "acct_git_only",
+              workspaceIds: ["ws_git_only"],
+              operations: ["create", "update"],
+              runnerProfileIds: ["opentofu-default"],
+            }
+          : undefined,
+    },
+    requestCorrelation: false,
+  });
+
+  for (const operation of ["create", "update"] as const) {
+    const response = await app.request("/internal/v1/plan-runs", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer scoped-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        workspaceId: "ws_git_only",
+        capsuleId: capsule.id,
+        operation,
+        source: {
+          kind: "operator_module",
+          digest: `sha256:${"a".repeat(64)}`,
+        },
+        runnerProfileId: "opentofu-default",
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "invalid_argument",
+        message: "source.kind must be git",
+      },
+    });
+  }
 });
 
 test("retired generic-env provider routes are not mounted", async () => {

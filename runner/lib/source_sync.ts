@@ -80,11 +80,6 @@ export async function ensureSourceAvailable(
   source: OpenTofuModuleSource,
   sourceRoot: string,
 ): Promise<void> {
-  if (source.kind !== "git") {
-    throw new Error(
-      "operator_module source requires an explicit generated root",
-    );
-  }
   try {
     await assertDirectory(sourceRoot, "source root");
     if ((await readdir(sourceRoot)).length > 0) return;

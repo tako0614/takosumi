@@ -1,9 +1,6 @@
 import { expect, test } from "bun:test";
 
-import {
-  CapsulesService,
-  type CapsuleOwnedResourceFence,
-} from "../../../../core/domains/capsules/mod.ts";
+import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import type {
   OpenTofuControlStore,
@@ -14,11 +11,13 @@ import {
   type InstallConfig,
 } from "takosumi-contract/install-configs";
 import type { Workspace } from "takosumi-contract/workspaces";
+import { withHistoricalPublicHostReservations } from "../../../helpers/deploy-control/historical_public_host_store.ts";
 
 const NOW = "2026-06-06T00:00:00.000Z";
 
-function build(capsuleOwnedResourceFence?: CapsuleOwnedResourceFence) {
-  const store = new InMemoryOpenTofuControlStore();
+function build(
+  store: OpenTofuControlStore = new InMemoryOpenTofuControlStore(),
+) {
   let counter = 0;
   const newId = (prefix: string) =>
     `${prefix}_test${(counter += 1).toString().padStart(8, "0")}`;
@@ -26,7 +25,6 @@ function build(capsuleOwnedResourceFence?: CapsuleOwnedResourceFence) {
     store,
     newId,
     now: () => new Date(NOW),
-    ...(capsuleOwnedResourceFence ? { capsuleOwnedResourceFence } : {}),
   });
   return { store, service };
 }
@@ -266,18 +264,30 @@ test("a destroyed Capsule does not reserve its former name", async () => {
   expect(replacement.status).toBe("pending");
 });
 
-test("abandonUnappliedCapsule closes the ledger row and releases owned bindings and hostnames", async () => {
-  const { store, service } = build();
+test("abandonUnappliedCapsule closes the ledger and bindings without mutating historical host reservations", async () => {
+  const baseStore = new InMemoryOpenTofuControlStore();
+  let releaseCalls = 0;
+  const store = withHistoricalPublicHostReservations(
+    baseStore,
+    [
+      {
+        hostname: "shop.app.example",
+        ownerUserId: "user_1",
+        workspaceId: "ws_1",
+        capsuleId: "cap_test00000001",
+        capsuleName: "shop",
+        allocationKind: "scoped",
+        status: "reserved",
+        reservedAt: NOW,
+        updatedAt: NOW,
+      },
+    ],
+    { onRelease: () => (releaseCalls += 1) },
+  );
+  const { service } = build(store);
   await seedAll(store);
   const capsule = await createCapsule(service);
-  await store.reservePublicHost({
-    hostname: "shop.app.example",
-    workspaceId: capsule.workspaceId,
-    capsuleId: capsule.id,
-    capsuleName: capsule.name,
-    allocationKind: "scoped",
-    now: NOW,
-  });
+  expect(capsule.id).toBe("cap_test00000001");
   await store.putProviderBindingSet({
     id: "pbind_1",
     workspaceId: capsule.workspaceId,
@@ -303,7 +313,8 @@ test("abandonUnappliedCapsule closes the ledger row and releases owned bindings 
   expect((await store.getCapsule(capsule.id))?.status).toBe("destroyed");
   expect(
     (await store.getPublicHostReservation("shop.app.example"))?.status,
-  ).toBe("released");
+  ).toBe("reserved");
+  expect(releaseCalls).toBe(0);
   expect(
     await service.getProviderBindingSetByCapsule(
       capsule.id,
@@ -311,74 +322,6 @@ test("abandonUnappliedCapsule closes the ledger row and releases owned bindings 
     ),
   ).toBeUndefined();
   expect((await createCapsule(service)).id).not.toBe(capsule.id);
-});
-
-test("abandonUnappliedCapsule fails closed while Capsule-owned Resources are pending", async () => {
-  const calls: Array<{ capsuleId: string; phase: string }> = [];
-  const { store, service } = build(async ({ capsule, phase }) => {
-    calls.push({ capsuleId: capsule.id, phase });
-    return { status: "pending", resourceId: "tkrn:ws_1:EdgeWorker:shop" };
-  });
-  await seedAll(store);
-  const capsule = await createCapsule(service);
-  await store.reservePublicHost({
-    hostname: "shop.app.example",
-    workspaceId: capsule.workspaceId,
-    capsuleId: capsule.id,
-    capsuleName: capsule.name,
-    allocationKind: "scoped",
-    now: NOW,
-  });
-  await store.putProviderBindingSet({
-    id: "pbind_pending",
-    workspaceId: capsule.workspaceId,
-    capsuleId: capsule.id,
-    environment: capsule.environment,
-    bindings: [],
-    createdAt: NOW,
-    updatedAt: NOW,
-  });
-
-  await expect(
-    service.abandonUnappliedCapsule(capsule.id, "test abandon"),
-  ).rejects.toMatchObject({
-    code: "failed_precondition",
-    details: { reason: "capsule_owned_resources_pending" },
-  });
-  expect(calls).toEqual([{ capsuleId: capsule.id, phase: "abandon" }]);
-  expect((await store.getCapsule(capsule.id))?.status).toBe("pending");
-  expect(
-    (await store.getPublicHostReservation("shop.app.example"))?.status,
-  ).toBe("reserved");
-  expect(
-    await service.getProviderBindingSetByCapsule(
-      capsule.id,
-      capsule.environment,
-    ),
-  ).toBeDefined();
-});
-
-test("abandonUnappliedCapsule blocks corrupt or Principal-mismatched ownership", async () => {
-  for (const reason of ["corrupt", "principal_mismatch"] as const) {
-    const { store, service } = build(async () => ({
-      status: "invalid_ownership",
-      reason,
-    }));
-    await seedAll(store);
-    const capsule = await createCapsule(service);
-
-    await expect(
-      service.abandonUnappliedCapsule(capsule.id, "test abandon"),
-    ).rejects.toMatchObject({
-      code: "failed_precondition",
-      details: {
-        reason: "capsule_owned_resources_pending",
-        ownership: "invalid",
-        ownershipReason: reason,
-      },
-    });
-    expect((await store.getCapsule(capsule.id))?.status).toBe("pending");
-  }
 });
 
 test("abandonUnappliedCapsule refuses a Capsule with applied state", async () => {

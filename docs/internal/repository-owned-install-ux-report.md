@@ -23,10 +23,9 @@ acceptance case.
   `install.defaultModule`; the matching host policy cannot override it.
 - Takosumi compiles the exact module declaration into an immutable,
   Workspace-scoped `InstallConfig` before Capsule creation.
-- App vocabulary and labels come from the repository declaration. Managed
-  hostname policy, database migration authority, installer binding authority,
-  provider selection, credentials, and runtime materialization remain
-  service/host owned.
+- App vocabulary and labels come from the repository declaration. Database
+  migration authority, installer binding authority, provider selection,
+  credentials, and runtime materialization remain service/host owned.
 - The managed module declares an IaC-owned launcher Interface. Takosumi adds
   only an explicit `ui.open` Binding for the authenticated installing
   principal; it does not recreate the Interface from an Output blueprint.
@@ -34,7 +33,7 @@ acceptance case.
   actionable compatibility failures.
 - `takosumi.com/v2.2` can request a host Interface by provider-neutral
   type/version. Takosumi resolves it from the persisted InstallConfig and binds
-  the Capsule OIDC client's pairwise Principal; repository metadata never
+  an authenticated Principal; repository metadata never
   carries an Interface ID, endpoint, provider name, or credential.
 - `takosumi.com/v2.3` can propose bounded, credential-free `sourceBuild` argv
   commands and produced paths per module. The compiler persists the exact
@@ -80,17 +79,17 @@ The ownership split is:
   and help shown for that choice, and the mapping from app concepts to its own
   OpenTofu variable names;
 - Takosumi owns whether a requested projection is supported, how Workspace,
-  hostname, OIDC, credential, generated-secret, provider, policy, and runtime
-  values are resolved, and the exact `InstallConfig` persisted for a Plan;
+  credential, provider, policy, and runtime values are resolved, and the exact
+  `InstallConfig` persisted for a Plan;
 - the selected module owns variable types, defaults, validation, resources, and
   Outputs;
 - a TCS Store node owns discovery and browse presentation only;
 - an operator or Takosumi hosted service owns which targets, domains, providers, and
   managed integrations are actually available.
 
-The ordinary Yurucommu install should require zero values when Takosumi-managed
-hostname allocation and Takosumi Accounts OIDC are available. A user may
-optionally change the public URL or select a password-based bootstrap mode.
+The ordinary Yurucommu install should derive only portable module defaults.
+Public hostname/DNS/endpoint work belongs to its Git-owned OpenTofu module and
+provider, and identity integration uses explicit generic OIDC/Interface seams.
 Cloud provider identifiers, resource names, bindings, release artifact
 coordinates, OIDC client identifiers, encryption material, route patterns, and
 raw environment-variable names must not appear as ordinary setup questions.
@@ -100,8 +99,7 @@ raw environment-variable names must not appear as ordinary setup questions.
 Takosumi currently combines three different concerns in one install surface:
 
 1. a human decision, such as the desired public URL or authentication mode;
-2. a value Takosumi can derive, such as a Capsule-scoped name, Workspace id,
-   managed hostname, OIDC issuer, or OIDC client id;
+2. a value Takosumi can derive, such as a Capsule-scoped name or Workspace id;
 3. an operator or module implementation detail, such as a Cloudflare account
    id, provider enable flag, release digest, route pattern, or binding name.
 
@@ -427,8 +425,8 @@ second install model.
             "en": "Public URL"
           },
           "helper": {
-            "ja": "空欄の場合は Takosumi が URL を割り当てます。",
-            "en": "Takosumi allocates a URL when omitted."
+            "ja": "URL は OpenTofu module と provider が設定します。",
+            "en": "The OpenTofu module and provider configure the URL."
           }
         }
       ],
@@ -450,15 +448,6 @@ second install model.
             "variable": "auth_password_hash",
             "secretKind": "password_or_hash",
             "optional": true
-          },
-          {
-            "kind": "oidc_client",
-            "variables": {
-              "issuerUrl": "takosumi_accounts_issuer_url",
-              "clientId": "takosumi_accounts_client_id"
-            },
-            "callbackPath": "/api/auth/callback/takos",
-            "scopes": ["openid", "profile", "email"]
           }
         ]
       },
@@ -728,8 +717,8 @@ This phase is separate from metadata adoption. Change the selectable path from
 the transitional root module to `deploy/takoform` only after:
 
 - exact provider and Form Package release/admission;
-- host materialization for encryption and OIDC/password bootstrap;
-- managed hostname allocation;
+- explicit generic identity/password bootstrap owned outside Capsule automation;
+- Git-owned OpenTofu/provider hostname, DNS, and endpoint output;
 - queue consumer and schedule execution;
 - D1/schema migration activation;
 - launcher/public URL readiness;

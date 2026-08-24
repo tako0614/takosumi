@@ -145,9 +145,6 @@ import {
   stringRecordValue,
 } from "./parse.ts";
 import {
-  CAPSULE_OWNED_RESOURCES_PENDING_REASON,
-} from "../../../../core/domains/capsules/mod.ts";
-import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
 } from "../../../../core/domains/capsules/default_install_config.ts";
@@ -155,7 +152,6 @@ import { OpenTofuControllerError } from "../../../../core/domains/deploy-control
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { ensureTakosumiAccountsOidcForExistingCapsule } from "./capsule-oidc.ts";
 import { handleCapsuleRevisionPlans } from "./revision-plans.ts";
 
 export async function handleCapsules(
@@ -213,15 +209,6 @@ export async function handleCapsules(
               body.runnerProfileId.trim()
             ? body.runnerProfileId.trim()
             : undefined;
-      await ensureTakosumiAccountsOidcForExistingCapsule({
-        operations,
-        store,
-        issuer: ctx.issuer,
-        capsule,
-        ...(ctx.managedPublicBaseDomain
-          ? { managedPublicBaseDomain: ctx.managedPublicBaseDomain }
-          : {}),
-      });
       const response = await operations.createCapsulePlan(
         capsuleId,
         compatibilityReportId || runnerProfileId
@@ -508,8 +495,8 @@ async function abandonUnappliedCapsule(input: {
   if (typeof abandon !== "function") {
     throw new OpenTofuControllerError(
       "failed_precondition",
-      `capsule ${input.capsule.id} Resource ownership could not be verified`,
-      { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
+      `capsule ${input.capsule.id} abandonment is unavailable`,
+      { reason: "capsule_abandon_unavailable" },
     );
   }
   const capsule = await abandon.call(

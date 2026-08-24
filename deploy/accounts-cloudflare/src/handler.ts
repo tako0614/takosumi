@@ -50,7 +50,6 @@ export interface CloudflareWorkerEnv {
   // configured; absent in API-only deploys/tests.
   readonly ASSETS?: { fetch(request: Request): Promise<Response> };
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
-  readonly TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN?: string;
   readonly TAKOSUMI_ACCOUNTS_SUBJECT?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENTS?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_ID?: string;
@@ -551,9 +550,6 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
         );
       }
     : undefined;
-  const managedPublicBaseDomain = optionalString(
-    env.TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN,
-  );
   const commonOptions = {
     issuer,
     clients,
@@ -574,7 +570,6 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     ...(interfaceOAuthActivityValidator
       ? { interfaceOAuthActivityValidator }
       : {}),
-    ...(managedPublicBaseDomain ? { managedPublicBaseDomain } : {}),
     privacyOperationsToken: optionalString(
       env.TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN,
     ),

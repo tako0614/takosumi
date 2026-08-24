@@ -64,7 +64,7 @@ test("buildPhaseEnv preserves the baked tofu CLI config pointer", () => {
   }
 });
 
-test("generatedRoot contains only wrapper files and operatorModule is separate", () => {
+test("generatedRoot contains only wrapper files and the legacy recovery module decoder stays separate", () => {
   expect(parseGeneratedRoot({})).toBeUndefined();
   const ok = parseGeneratedRoot({
     generatedRoot: { files: { "main.tf": "terraform {}" } },

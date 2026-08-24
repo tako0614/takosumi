@@ -1,32 +1,15 @@
-import type { NativeResourceRef } from "./resolution.ts";
-import type { FormInterfaceInputDeclaration } from "./service-forms.ts";
 import type { Condition, JsonObject, JsonValue } from "./types.ts";
 import { TAKOSUMI_API_VERSION } from "./capabilities.ts";
 export { TAKOSUMI_INTERFACES_CAPABILITY } from "./capabilities.ts";
 
-export type InterfaceOwnerKind = "Workspace" | "Capsule" | "Resource";
+export type InterfaceOwnerKind = "Workspace" | "Capsule";
 
 /**
  * Immutable declaration/materialization owner. Capsule declarations converge
- * from exactly two authoring sources; compatibility profiles retain their
- * separately scoped canonical http.route ownership.
+ * from service-owned blueprints or portable IaC.
  */
 export type InterfaceMaterializedFrom =
   | { readonly source: "capsule_blueprint"; readonly key: string }
-  | { readonly source: "capsule_resource" }
-  | {
-      readonly source: "compatibility_profile";
-      readonly profile: string;
-      readonly key: string;
-    }
-  | {
-      /** Portable Form descriptor; authorization remains host-owned. */
-      readonly source: "form_descriptor";
-      readonly formRefKey: string;
-      readonly formSchemaDigest: string;
-      readonly descriptorName: string;
-      readonly descriptorVersion: string;
-    }
   | {
       /** Standalone generic declaration owned by portable IaC. */
       readonly source: "portable_iac";
@@ -91,19 +74,9 @@ export interface InterfaceCapsuleOutputInput {
   readonly pointer?: string;
 }
 
-export interface InterfaceResourceOutputInput {
-  readonly source: "resource_output";
-  readonly resourceId: string;
-  /** Omitted selects the complete public Resource output document. */
-  readonly outputName?: string;
-  /** Optional RFC 6901 pointer into the Resource observed public output. */
-  readonly pointer?: string;
-}
-
 export type InterfaceInput =
   | InterfaceLiteralInput
-  | InterfaceCapsuleOutputInput
-  | InterfaceResourceOutputInput;
+  | InterfaceCapsuleOutputInput;
 
 export type InterfaceVisibility = "private" | "workspace" | "public";
 
@@ -141,14 +114,6 @@ export interface InterfaceCapsuleOutputProvenance {
   readonly pointer?: string;
 }
 
-export interface InterfaceResourceOutputProvenance {
-  readonly source: "resource_output";
-  readonly resourceId: string;
-  readonly resourceGeneration: number;
-  readonly outputName?: string;
-  readonly pointer?: string;
-}
-
 export interface InterfaceLiteralProvenance {
   readonly source: "literal";
   readonly specGeneration: number;
@@ -156,7 +121,6 @@ export interface InterfaceLiteralProvenance {
 
 export type InterfaceInputProvenance =
   | InterfaceCapsuleOutputProvenance
-  | InterfaceResourceOutputProvenance
   | InterfaceLiteralProvenance;
 
 export interface InterfaceStatus {
@@ -165,8 +129,8 @@ export interface InterfaceStatus {
   readonly resolvedRevision: number;
   readonly resolvedInputs?: Readonly<Record<string, JsonValue>>;
   /**
-   * Canonical credential-free HTTPS audience resolved by the host for an exact
-   * Form-materialized Interface. It is discovery metadata, not a grant.
+   * Canonical credential-free HTTPS audience resolved by the host. It is
+   * discovery metadata, not a grant.
    */
   readonly resourceUri?: string;
   readonly provenance?: Readonly<Record<string, InterfaceInputProvenance>>;
@@ -181,8 +145,7 @@ export interface Interface {
   readonly status: InterfaceStatus;
 }
 
-export type InterfaceSubjectKind =
-  "Principal" | "ServiceAccount" | "Capsule" | "Resource";
+export type InterfaceSubjectKind = "Principal" | "ServiceAccount" | "Capsule";
 
 export interface InterfaceSubjectRef {
   readonly kind: InterfaceSubjectKind;
@@ -231,20 +194,6 @@ export interface InterfaceBinding {
           readonly key: string;
         }
       | {
-          /** Scoped compatibility control translated into this canonical Binding. */
-          readonly source: "compatibility_profile";
-          readonly profile: string;
-          readonly key: string;
-        }
-      | {
-          /** Binding-only InstallConfig proposal for a portable IaC Interface. */
-          readonly source: "capsule_resource_binding";
-          readonly capsuleId: string;
-          readonly interfaceName: string;
-          readonly interfaceVersion: string;
-          readonly key: string;
-        }
-      | {
           /** Runtime grant for a host Interface required by one Capsule. */
           readonly source: "capsule_required_interface";
           readonly capsuleId: string;
@@ -252,18 +201,7 @@ export interface InterfaceBinding {
           readonly interfaceType: string;
           readonly interfaceVersion: string;
         }
-      | {
-          /**
-           * Host-materialized self-grant for a form-host Resource
-           * whose Form descriptor declares a public runtime surface. The
-           * applying IaC principal authorized it by applying the exact Form;
-           * the subject is the owning Resource itself.
-           */
-          readonly source: "form_host_descriptor";
-          readonly formRefKey: string;
-          readonly descriptorName: string;
-          readonly descriptorVersion: string;
-        };
+      ;
     readonly createdAt: string;
     readonly updatedAt: string;
   };
@@ -280,16 +218,6 @@ export interface InterfaceBinding {
 export interface InterfaceProjectionSnapshot {
   readonly interface: Interface;
   readonly bindings: readonly InterfaceBinding[];
-  /**
-   * Canonical Resource evidence attached by Core for a Resource-owned
-   * Interface. Hosts may cache this evidence, but must re-resolve the current
-   * Resource/Interface before serving runtime traffic.
-   */
-  readonly ownerResource?: {
-    readonly id: string;
-    readonly generation: number;
-    readonly nativeResources: readonly NativeResourceRef[];
-  };
 }
 
 /**
@@ -310,13 +238,9 @@ export interface CreateInterfaceRequest {
   readonly spec: InterfaceSpec;
 }
 
-/** Original portable input vocabulary used only at the host API boundary. */
-export type PortableInterfaceInputDeclaration = FormInterfaceInputDeclaration;
-
 export type CapsuleInterfaceBlueprintInput =
   | InterfaceLiteralInput
-  | Omit<InterfaceCapsuleOutputInput, "capsuleId">
-  | InterfaceResourceOutputInput;
+  | Omit<InterfaceCapsuleOutputInput, "capsuleId">;
 
 interface CapsuleInterfaceBindingProposalBase {
   /** Stable identity within the parent Interface blueprint. */
@@ -346,23 +270,6 @@ export type CapsuleInterfaceBindingProposal =
       readonly subject: CapsuleInterfaceInstallingPrincipalSubject;
       readonly subjectRef?: never;
     });
-
-/**
- * Binding-only proposal for an Interface whose document/spec is declared by
- * portable IaC. InstallConfig may authorize an exact subject after the
- * Resource-owned Interface exists, but it never supplies or rewrites that
- * Interface body.
- */
-export type CapsuleResourceInterfaceBindingProposal =
-  CapsuleInterfaceBindingProposal & {
-    readonly interface: {
-      readonly name: string;
-      readonly version: string;
-      /** Optional exact selector when a Form declares the same Interface twice. */
-      readonly resourceKind?: string;
-      readonly resourceName?: string;
-    };
-  };
 
 /**
  * DB-owned request for a Capsule runtime to consume one host Interface.
@@ -408,36 +315,6 @@ export function capsuleInterfaceBlueprintsNeedInstallingPrincipal(
       (proposal) => proposal.subject?.source === "installing_principal",
     ),
   );
-}
-
-export function capsuleResourceInterfaceBindingsNeedInstallingPrincipal(
-  proposals: readonly CapsuleResourceInterfaceBindingProposal[] | undefined,
-): boolean {
-  return (proposals ?? []).some(
-    (proposal) => proposal.subject?.source === "installing_principal",
-  );
-}
-
-export function resolveCapsuleResourceInterfaceBindingInstallingPrincipal(
-  proposals: readonly CapsuleResourceInterfaceBindingProposal[] | undefined,
-  installingPrincipalId: string,
-): readonly CapsuleResourceInterfaceBindingProposal[] | undefined {
-  if (proposals === undefined) return undefined;
-  const principalId = installingPrincipalId.trim();
-  if (principalId === "") {
-    throw new TypeError("installingPrincipalId must be a non-empty string");
-  }
-  if (!capsuleResourceInterfaceBindingsNeedInstallingPrincipal(proposals)) {
-    return proposals;
-  }
-  return proposals.map((proposal) => {
-    if (proposal.subject?.source !== "installing_principal") return proposal;
-    const { subject: _subject, ...fixedProposal } = proposal;
-    return {
-      ...fixedProposal,
-      subjectRef: { kind: "Principal", id: principalId },
-    } satisfies CapsuleResourceInterfaceBindingProposal;
-  });
 }
 
 /**

@@ -8,7 +8,7 @@
 # the SAME `takosumi.opentofu-run@v1` request envelope the production Durable
 # Object (worker/src/durable/OpenTofuRunnerObject.ts) sends.
 #
-# It uses a self-contained provider-free generated root (no cloud credentials):
+# It uses a self-contained provider-free Git source (no cloud credentials):
 #   - POST /runs/{runId} with a PLAN envelope  -> expect status=succeeded + planDigest
 #   - POST /runs/{runId} with an APPLY envelope referencing the plan's
 #     runner-local artifact -> expect outputs base_domain/public_origin/
@@ -126,6 +126,13 @@ if [ -z "${READY}" ]; then
   fail "runner did not become ready on ${BASE_URL}/healthz"
 fi
 echo "runner is ready: $(curl -fsS "${BASE_URL}/healthz")"
+
+# Restore the pinned proof source exactly where the ordinary Git runner path
+# expects the SourceSnapshot checkout. The invalid URL is never fetched: this
+# harness is proving the post-restore runner boundary, not SourceSync.
+bun run "${PAYLOAD_TS}" source | docker exec -i "${CONTAINER_NAME}" sh -c \
+  "mkdir -p '/tmp/takosumi-runs/${RUN_ID}/source' && cat > '/tmp/takosumi-runs/${RUN_ID}/source/main.tf'" \
+  || fail "could not restore proof Git source into runner workspace"
 
 # --------------------------------------------------------------------------
 # 4) PLAN: POST the plan envelope; assert status=succeeded + planDigest.

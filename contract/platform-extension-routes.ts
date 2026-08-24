@@ -13,10 +13,10 @@
  * `/api/v1/...` roots; currently billing, account subscription, and the
  * authenticated AI data plane are the only such roots. Concrete
  * Takosumi/Accounts authorities are not delegated.
- * The `/.well-known` namespace is handled separately:
- * the root, the two core leaves, and the retired Takoform v1alpha1/v1alpha2/
- * v1alpha3 leaves stay reserved, while an explicitly exact descriptor may
- * claim an unknown sibling without claiming the namespace.
+ * The `/.well-known` namespace is handled separately: the root, the two core
+ * leaves, and the complete retired Takoform subtree stay reserved, while an
+ * explicitly exact descriptor may claim an unknown sibling without claiming
+ * the namespace.
  */
 export const PLATFORM_EXTENSION_RESERVED_PREFIXES = [
   "/api",
@@ -42,9 +42,9 @@ export const PLATFORM_EXTENSION_RESERVED_PREFIXES = [
   // must reach the Accounts handler's JSON 404 rather than be reclaimed.
   "/api/v1/capabilities",
   "/api/v1/interfaces",
-  "/apis/forms.takoform.com/v1alpha1",
-  "/apis/forms.takoform.com/v1alpha2",
-  "/apis/forms.takoform.com/v1alpha3",
+  // No Takoform Host version is owned by this process. Reserve the complete
+  // namespace so an extension cannot recreate a removed API lane.
+  "/apis/forms.takoform.com",
 ] as const;
 
 /** Exact optional extension roots permitted inside the otherwise reserved `/api`. */
@@ -59,21 +59,13 @@ export const PLATFORM_EXTENSION_RESERVED_EXACT_PATHS = [
   "/.well-known",
   "/.well-known/openid-configuration",
   "/.well-known/takosumi",
-  // The retired Takoform Host namespace root itself cannot be reclaimed. It
-  // remains a parent for exact external leaves such as the current Beta path.
+  // The retired Takoform Host namespace root itself cannot be reclaimed.
   "/.well-known/takoform",
-  // Retired candidate Host discovery leaves must not be re-mounted or
-  // advertised by the generic Takosumi extension seam. The current external
-  // Beta identity is intentionally not listed and remains exact-configurable.
-  "/.well-known/takoform/v1alpha1",
-  "/.well-known/takoform/v1alpha2",
-  "/.well-known/takoform/v1alpha3",
 ] as const;
 
 /** External-standard namespaces where only explicit exact leaves may mount. */
 export const PLATFORM_EXTENSION_EXACT_LEAF_PARENT_PREFIXES = [
   "/.well-known",
-  "/.well-known/takoform",
 ] as const;
 
 export type PlatformExtensionMatchMode = "subtree" | "exact";

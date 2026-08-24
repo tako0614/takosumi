@@ -1,7 +1,7 @@
 /**
  * Drift-check orchestration facade (spec §19 `drift_check` / §27 / §34
- * Activity; Phase 8). Both Capsule and first-class Resource subjects use the
- * same read-only Run primitive.
+ * Activity; Phase 8). Capsule subjects use the same read-only Run primitive
+ * as ordinary plans.
  *
  * A thin collaborator pulled out of `OpenTofuController`: it owns the
  * controller-bound drift orchestration that is NOT part of the shared plan/run
@@ -113,8 +113,7 @@ export class DriftService {
   }
 
   /**
-   * Emits the subject-specific `capsule.drift_detected` or
-   * `resource.drift_detected` Activity when a succeeded drift_check observed a
+   * Emits the `capsule.drift_detected` Activity when a succeeded drift_check observed a
    * non-empty change summary. Metadata carries the run id,
    * add/change/destroy counts, provider/type/action aggregates, and public-safe
    * remediation hints only (never resource names, values, or scope identifiers).
@@ -131,17 +130,15 @@ export class DriftService {
     if (add + change + destroy <= 0) return;
     const classification = classifyDriftResourceChanges(changes);
     const capsuleId = planRun.capsuleContext?.capsuleId ?? planRun.capsuleId;
-    const resourceId = planRun.resourceContext?.resourceId;
-    const targetId = resourceId ?? capsuleId ?? planRun.id;
+    const targetId = capsuleId ?? planRun.id;
     await this.#recordActivity({
       workspaceId: planRun.workspaceId,
-      action: resourceId ? "resource.drift_detected" : "capsule.drift_detected",
-      targetType: resourceId ? "resource" : "capsule",
+      action: "capsule.drift_detected",
+      targetType: "capsule",
       targetId,
       runId: planRun.id,
       metadata: {
         ...(capsuleId ? { capsuleId } : {}),
-        ...(resourceId ? { resourceId } : {}),
         add,
         change,
         destroy,

@@ -19,7 +19,6 @@ import type {
   InterfaceStores,
   InterfaceWriteGuard,
 } from "./stores.ts";
-import { interfaceFormLineage } from "./stores.ts";
 import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 
 type InterfaceRow = { readonly record_json: unknown };
@@ -39,9 +38,8 @@ class SqlInterfaceStore implements InterfaceStore {
       `insert into ${this.#table} (
         id, workspace_id, owner_kind, owner_id, name, interface_type,
         phase, generation, resolved_revision, oauth_resource_uri,
-        form_ref_key, form_schema_digest, descriptor_name, descriptor_version,
         record_json, created_at, updated_at
-      ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17)
+      ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13)
       on conflict do nothing`,
       interfaceParameters(record, false),
     );
@@ -134,11 +132,9 @@ class SqlInterfaceStore implements InterfaceStore {
           interface_type=$6, phase=$7, generation=$8, resolved_revision=$9,
           oauth_resource_uri=case
             when oauth_resource_uri=$10 then oauth_resource_uri else null end,
-          form_ref_key=$11, form_schema_digest=$12,
-          descriptor_name=$13, descriptor_version=$14,
-          record_json=$15::jsonb, created_at=$16, updated_at=$17
-         where id=$1 and generation=$18 and resolved_revision=$19
-           and record_json=$20::jsonb`,
+          record_json=$11::jsonb, created_at=$12, updated_at=$13
+         where id=$1 and generation=$14 and resolved_revision=$15
+           and record_json=$16::jsonb`,
         [
           ...p,
           expected.generation,
@@ -287,17 +283,9 @@ class SqlInterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
         ? `and i.owner_id = ${placeholder(input.capsuleId)}`
         : "";
       clauses.push(
-        `(
-          (
-            i.owner_kind = 'Capsule' and i.interface_type = ${type}
-            and i.record_json->'spec'->>'version' = ${version}
-            ${capsuleOwnerClause}
-          )
-          or (
-            i.owner_kind = 'Resource'
-            and i.record_json->'spec'->'document'->>'launcher' = 'true'
-          )
-        )`,
+        `(i.owner_kind = 'Capsule' and i.interface_type = ${type}
+          and i.record_json->'spec'->>'version' = ${version}
+          ${capsuleOwnerClause})`,
       );
     } else {
       if (input.filter.type !== undefined)
@@ -365,7 +353,6 @@ function interfaceParameters(
   record: Interface,
   preserveClaim: boolean,
 ): readonly SqlValue[] {
-  const form = interfaceFormLineage(record);
   return [
     record.metadata.id,
     record.metadata.workspaceId,
@@ -377,10 +364,6 @@ function interfaceParameters(
     record.metadata.generation,
     record.status.resolvedRevision,
     preserveClaim ? (interfaceOAuth2ResourceUri(record) ?? null) : null,
-    form?.formRefKey ?? null,
-    form?.formSchemaDigest ?? null,
-    form?.descriptorName ?? null,
-    form?.descriptorVersion ?? null,
     JSON.stringify(record),
     record.metadata.createdAt,
     record.metadata.updatedAt,

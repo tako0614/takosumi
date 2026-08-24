@@ -127,8 +127,6 @@ valid.
 `requires` is optional and has at most 16 entries. It proposes a host need and
 delivery names, never a value or credential.
 
-- `identity.oidc`: `kind`, a root-relative `callbackPath`, optional unique
-  `scopes` (1–16), and `deliver`.
 - `secret.generated`: `kind`, optional `bytes` (16–64), optional `encoding`
   (`hex` / `base64url`), and `deliver`; at most eight per module.
 - `http.endpoint`: `kind` and `deliver`.
@@ -138,17 +136,18 @@ delivery names, never a value or credential.
 
 `deliver` contains exactly one of `variables` or `bindings`. Slot names are
 closed per requirement kind, and values are exact OpenTofu variable or runtime
-binding names. Requirements cannot claim the same delivery name. OIDC and
-endpoint are each singletons per module. The compiler rejects host-reserved
-bindings, absent/non-string variables, and requirement kinds or OIDC scopes
-outside operator policy.
+binding names. Requirements cannot claim the same delivery name. Endpoint is a
+singleton per module. The compiler rejects host-reserved bindings,
+absent/non-string variables, and requirement kinds outside operator policy.
+Capsule-specific `identity.oidc` materialization is rejected by the current
+Git-owned install flow.
 
 `interface.consume` never declares a provider, product name, Interface ID,
 endpoint, or credential. After Plan, the host reads the DB-owned InstallConfig
 and resolves the exact type/version only when there is exactly one
 Workspace-owned `Resolved` Interface. It then creates an ordinary
-least-privilege `InterfaceBinding` for the Capsule OIDC client's pairwise
-principal. Zero or multiple matches, revoked/conflicting bindings, or
+least-privilege `InterfaceBinding` for the authenticated Principal. Zero or
+multiple matches, revoked/conflicting bindings, or
 permissions/delivery outside operator policy fail closed. Runtime credentials
 are short-lived and are never written to the manifest or an OpenTofu variable.
 

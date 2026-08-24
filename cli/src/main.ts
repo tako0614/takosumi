@@ -9,8 +9,6 @@ import {
   runAccountsTokens,
 } from "./cli-accounts-commands.ts";
 import { runConnections } from "./cli-connections-commands.ts";
-import { runFormPackages } from "./cli-form-package-commands.ts";
-import { runOfferingCatalogs } from "./cli-offering-commands.ts";
 import {
   runLaunchReadinessMigrateFinalModel,
   runLaunchReadinessOidcAccountSecurityEvidence,
@@ -96,12 +94,6 @@ export async function main(
   }
   if (domain === "install-configs") {
     return await runInstallConfigs([command, ...rest].filter(Boolean), io);
-  }
-  if (domain === "form-packages") {
-    return await runFormPackages([command, ...rest].filter(Boolean), io);
-  }
-  if (domain === "offering-catalogs") {
-    return await runOfferingCatalogs([command, ...rest].filter(Boolean), io);
   }
   if (domain === "launch-readiness" && command === "validate") {
     return await runLaunchReadinessValidate(rest, io);

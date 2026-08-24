@@ -681,6 +681,8 @@ test("reference configs contain no retired runtime authority schema", () => {
     "app_deployment",
     ["takos", "provided"].join("_"),
     ".well-known/tcs.json",
+    "managedPublicHostname",
+    "oidc_client",
   ]) {
     expect(serialized).not.toContain(retired);
   }

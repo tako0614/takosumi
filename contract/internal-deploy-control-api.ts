@@ -58,16 +58,16 @@ export interface GitOpenTofuModuleSource {
 export type OpenTofuModuleSource = GitOpenTofuModuleSource;
 
 /**
- * Internal execution identity for an operator-supplied module. This is not a
- * Capsule Source and is accepted only on the Resource Shape run seam.
+ * Persisted identity for the internal pre-v1 source-less destroy drain.
+ * Current PlanRun creation never accepts this shape.
  */
-export interface OperatorOpenTofuModuleSource {
+export interface LegacySourcelessDestroyModuleSource {
   readonly kind: "operator_module";
   readonly digest: string;
 }
 
 export type OpenTofuExecutionSource =
-  OpenTofuModuleSource | OperatorOpenTofuModuleSource;
+  OpenTofuModuleSource | LegacySourcelessDestroyModuleSource;
 
 export type OpenTofuOperation = "create" | "update" | "destroy";
 
@@ -269,11 +269,6 @@ export interface PlanRun {
    */
   readonly refreshOnly?: true;
   /**
-   * A reviewed config-driven Resource import. The saved plan may only contain
-   * one import and no native mutation actions; it still projects as plan/apply.
-   */
-  readonly resourceImport?: true;
-  /**
    * Value-free resource/action projection from the runner's plan JSON. This is
    * persisted for policy, billing, audit, and public review; raw resource
    * values stay only in the encrypted plan JSON artifact.
@@ -348,8 +343,6 @@ export interface PlanRun {
    * material.
    */
   readonly capsuleContext?: PlanRunCapsuleContext;
-  /** First-class Resource Shape subject; mutually exclusive with Capsule context. */
-  readonly resourceContext?: PlanRunResourceContext;
   /**
    * Pinned DependencySnapshot id for a Capsule plan whose
    * consumer Capsule declares Dependencies. Set at plan creation by the
@@ -398,19 +391,6 @@ export interface PlanRunCapsuleContext {
   readonly environment: string;
 }
 
-export interface PlanRunResourceContext {
-  readonly workspaceId: string;
-  readonly resourceId: string;
-  readonly environment: string;
-  /** Explicit Target-selected Provider Connection mapping. */
-  readonly providerBinding: {
-    readonly provider: string;
-    readonly providerSource: string;
-    readonly alias?: string;
-    readonly connectionId?: string;
-  };
-}
-
 export type PublicPlanRun = PlanRun;
 
 export interface PlanRunSummary {
@@ -451,11 +431,6 @@ export interface ApplyRun {
   readonly stateLock: RunnerStateLockEvidence;
   /** Canonical Output ledger row committed by this successful apply. */
   readonly outputId?: string;
-  /**
-   * Resource-owned result. Public outputs and encrypted-state pointers are
-   * folded into the Resource record; no Capsule Output/StateVersion is created.
-   */
-  readonly resourceResult?: ResourceApplyRunResult;
   readonly providerResolutions?: readonly ProviderResolution[];
   readonly runEnvironmentEvidenceDigest?: string;
   readonly redactionProfileId?: string;
@@ -471,15 +446,6 @@ export interface ApplyRun {
    */
   readonly heartbeatAt?: number;
   readonly finishedAt?: number;
-}
-
-export interface ResourceApplyRunResult {
-  readonly resourceId: string;
-  readonly stateGeneration: number;
-  readonly stateRef: string;
-  readonly stateDigest?: string;
-  readonly rawOutputRef?: string;
-  readonly outputs: Readonly<Record<string, JsonValue>>;
 }
 
 export interface RunnerStateLockEvidence {
@@ -558,7 +524,8 @@ export interface ListRunnerProfilesResponse {
 
 export interface CreatePlanRunRequest {
   readonly workspaceId?: string;
-  readonly source: OpenTofuExecutionSource;
+  /** Current Stack creation is Git-only. */
+  readonly source: OpenTofuModuleSource;
   readonly runnerProfileId?: string;
   readonly capsuleId?: string;
   readonly operation?: OpenTofuOperation;
@@ -581,7 +548,7 @@ export interface DispatchPriorState {
   readonly generation: number;
   readonly stateRef: string;
   readonly digest?: string;
-  /** Explicit compatibility marker for a pre-digest Resource execution row. */
+  /** Explicit compatibility marker for a pre-digest execution row. */
   readonly legacyDigestMissing?: true;
   readonly createdByRunId: string;
 }
@@ -589,14 +556,14 @@ export interface DispatchPriorState {
 /**
  * Subject-scoped state location threaded onto the run dispatch payload.
  * The OpenTofu runner DO consumes `request.stateScope` to persist encrypted
- * OpenTofu state under the canonical Capsule or Resource state-store prefix. The
+ * OpenTofu state under the canonical Capsule state-store prefix. The
  * controller owns generation arithmetic: plan carries the current generation
  * (restore base), while apply / destroy_apply carries `base + 1` (persist
  * generation). Current dispatch identifies the state owner with `subject`.
  */
 export interface DispatchStateScope {
   readonly workspaceId: string;
-  /** Canonical state owner for first-class Resource runs. */
+  /** Canonical state owner for a Capsule or retained historical Resource run. */
   readonly subject?:
     | { readonly kind: "capsule"; readonly id: string }
     | { readonly kind: "resource"; readonly id: string };
@@ -605,19 +572,14 @@ export interface DispatchStateScope {
   /** Host-allocated opaque reference used for restore or persistence. */
   readonly stateRef: string;
   /**
-   * Exact prior StateVersion or Resource execution descriptor. R2 pointers and
+   * Exact prior StateVersion descriptor. R2 pointers and
    * prefix listing are caches/inventory only and must never replace this row.
    * Absent only for generation zero or an explicit one-shot state adoption.
    */
   readonly priorState?: DispatchPriorState;
 }
 
-/**
- * Exact, operator-confirmed pointer used once to seed a first-class Resource
- * from state written by the retired backing-Capsule implementation. Dispatch
- * never discovers this descriptor and the runner must reject it when canonical
- * Resource state already exists.
- */
+/** Historical one-shot state adoption descriptor; no current route creates it. */
 export interface DispatchStateAdoption {
   readonly kind: "legacy_backing_capsule_state";
   readonly sourceWorkspaceId: string;

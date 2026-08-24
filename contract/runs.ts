@@ -22,7 +22,7 @@ import type { JsonValue } from "./types.ts";
 export type RunType =
   | "source_sync"
   | "compatibility_check"
-  /** Host-backed immutable artifact staging; it does not mutate Resource state. */
+  /** Immutable artifact staging; it does not mutate execution state. */
   | "artifact"
   | "plan"
   | "apply"
@@ -58,13 +58,7 @@ export type RunSubject =
   | { readonly kind: "resource"; readonly id: string }
   | { readonly kind: "source"; readonly id: string };
 
-/**
- * Exact Resource Deploy API operation represented by a canonical Run.
- *
- * OpenTofu-backed Resources keep their existing plan/apply Run pairs. Direct
- * adapter plugins use one Core-minted Run carrying this token so an opaque
- * backend request id can never become lifecycle authority.
- */
+/** Legacy direct-adapter operation marker retained for historical row reads. */
 export type ResourceOperation =
   | "artifact"
   | "preview"
@@ -72,7 +66,6 @@ export type ResourceOperation =
   | "import"
   | "observe"
   | "refresh"
-  /** Explicit exact-Form identity transition; never a normal apply widening. */
   | "form_transition"
   | "delete";
 
@@ -139,7 +132,7 @@ export interface Run {
   readonly resolvedCommit?: string;
   /** Explicit execution subject for non-Capsule and new generic run flows. */
   readonly subject?: RunSubject;
-  /** Exact Deploy API operation for a Resource-owned Run. */
+  /** Historical direct-adapter operation marker; no new routes create it. */
   readonly resourceOperation?: ResourceOperation;
   /** Required for Capsule-bound rows; absent for Source-scoped rows. */
   readonly capsuleId?: string;

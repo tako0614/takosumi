@@ -172,7 +172,7 @@ test("Takosumi public docs are rebuilt around the current public surface", async
     /OpenTofu control plane|OpenTofu\/Terraform control plane/,
   );
   assert.match(docs, /plain OpenTofu(?:\s*\/\s*Terraform)? (?:module|source)/);
-  assert.match(docs, /compatibility_profiles|compatibilityProfiles/);
+  assert.doesNotMatch(docs, /compatibility_profiles|compatibilityProfiles/);
   assert.match(docs, /ordinary provider|通常の provider|通常の OpenTofu provider/);
   assert.match(docs, /provider control plane|provider graph/);
   assert.match(docs, /second resource ledger|別の resource ledger/);
@@ -234,39 +234,6 @@ test("Form package operations require exact Host Support facts, not retired admi
   assert.match(runbook, /Takosumi hosted service or another external\s+Host/);
   assert.match(runbook, /exact `FormRef` and `packageDigest`/);
   assert.doesNotMatch(runbook, /exact `FormActivation` with principal audience/);
-});
-
-test("public docs explain generic OSS Offering selection without Cloud binding internals", async () => {
-  const paths = [
-    "README.md",
-    "README.en.md",
-    "docs/reference/api.md",
-    "docs/en/reference/api.md",
-    "docs/reference/glossary.md",
-    "docs/en/reference/glossary.md",
-  ] as const;
-  const docs = await Promise.all(
-    paths.map(async (path) => ({
-      path,
-      text: await readText(new URL(path, ROOT)),
-    })),
-  );
-
-  const combined = docs.map(({ text }) => text).join("\n");
-  assert.match(combined, /OfferingSelection/);
-  assert.doesNotMatch(combined, /CommercialOfferingBinding/);
-  for (const { path, text } of docs) {
-    assert.doesNotMatch(
-      text,
-      /ServiceOffering/,
-      `${path} restored ServiceOffering`,
-    );
-  }
-  const api =
-    docs.find((doc) => doc.path === "docs/en/reference/api.md")?.text ?? "";
-  assert.match(api, /POST \/internal\/v1\/offering-catalogs/);
-  assert.match(api, /POST \/internal\/v1\/offering-availability\/query/);
-  assert.match(api, /POST \/internal\/v1\/offering-selections\/resolve/);
 });
 
 test("self-hosted Takos keeps Takosumi control-plane services outside the product worker", async () => {
@@ -465,7 +432,7 @@ test("current docs keep retired Resource HTTP surfaces absent and externalize Fo
   assert.match(combined, /discovery[^\n]*(?:unavailable|remain unavailable|retired)/i);
   assert.match(combined, /writes[^\n]*(?:unavailable|remain unavailable|disabled|retired)/i);
   assert.match(combined, /Takosumi hosted service (?:or another external )?Host/i);
-  assert.match(combined, /ordinary provider/i);
+  assert.match(combined, /ordinary external provider/i);
 
   const config = docs.find(({ path }) => path === "docs/reference/configuration.md")?.text ?? "";
   assert.doesNotMatch(config, /TAKOSUMI_RESOURCE_SHAPES.*\/v1\/resources.*(?:出す|enable|publish)/is);

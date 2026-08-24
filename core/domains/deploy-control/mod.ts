@@ -49,7 +49,6 @@ import type {
   OpenTofuPlanArtifact,
   PlanResourceChange,
   PlanRun,
-  PlanRunResourceContext,
   PlanRunResponse,
   PublicPlanRun,
   PlanRunSummary,
@@ -67,7 +66,6 @@ import type {
   CapsuleAdoptedSourceRevision,
   PublicCapsule,
 } from "takosumi-contract/capsules";
-import type { CapsuleOwnedResourceFence } from "../capsules/mod.ts";
 import type {
   CredentialRecipe,
   CredentialRecipeResponse,
@@ -77,10 +75,6 @@ import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type {
   InstallConfigLifecycleAction,
   OutputAllowlistEntry,
-} from "takosumi-contract/install-configs";
-import type {
-  ManagedPublicHostnameClaimRequest,
-  ManagedPublicHostnameClaimResult,
 } from "takosumi-contract/install-configs";
 import type {
   BillingSettings,
@@ -340,13 +334,12 @@ export function runEnvironmentFailedRun<R extends PlanRun | ApplyRun>(
  */
 export interface RunModuleDispatch {
   readonly generatedRoot?: DispatchGeneratedRoot;
-  /**
-   * Operator-injected Resource Shape implementation module. This is never
-   * accepted by the Capsule plan API and has no built-in/default registry.
-   */
+  /** Internal pre-v1 source-less destroy module; never current Run input. */
   readonly operatorModule?: {
     readonly files: readonly OpenTofuCapsuleSourceFile[];
   };
+  /** Runner-only proof that Core selected the inventory-backed destroy drain. */
+  readonly legacySourcelessDestroyRecovery?: true;
   /**
    * Workspace-local, non-secret Output capture selected for dependency and
    * Interface resolution. This is deliberately broader than the public
@@ -357,18 +350,15 @@ export interface RunModuleDispatch {
   readonly outputAllowlist?: InstallConfig["outputAllowlist"];
   readonly sourceBuild?: InstallConfig["sourceBuild"];
   readonly lifecycleActions?: InstallConfig["lifecycleActions"];
-  /**
-   * One-shot Resource state bootstrap stored beside the generated root. It is
-   * internal runner preparation, never public PlanRun data.
-   */
+  /** Historical one-shot state adoption; no current route creates it. */
   readonly stateAdoption?: DispatchStateAdoption;
-  /** Canonical Resource execution descriptor, retained in internal run inputs. */
+  /** Canonical execution descriptor, retained in internal run inputs. */
   readonly priorState?: DispatchPriorState;
 }
 
 /**
- * Subject-scoped execution fields threaded onto a Run job. Capsule and Resource
- * subjects both carry an encrypted `stateScope`; a Git-backed Capsule may also
+ * Subject-scoped execution fields threaded onto a Run job. Capsule subjects
+ * carry an encrypted `stateScope`; a Git-backed Capsule may also
  * carry its resolved `sourceArchive`. These map 1:1 onto the runner request.
  * Raw internal runs without a durable subject omit them.
  */
@@ -873,17 +863,6 @@ export interface DependencyValueSealer {
   ): Promise<Readonly<Record<string, JsonValue>>>;
 }
 
-/**
- * Host-owned retirement of Capsule-scoped runtime authority that is not part
- * of OpenTofu state. The Run engine supplies only the canonical Capsule id and
- * invokes this immediately before provider destroy. Implementations must be
- * idempotent because a process may lose the acknowledgement after retirement
- * and re-enter the same still-undispatched destroy Run.
- */
-export type CapsuleHostRuntimeRetirement = (input: {
-  readonly capsuleId: string;
-}) => Promise<void>;
-
 export interface OpenTofuControllerDependencies {
   readonly store?: OpenTofuControlStore;
   /**
@@ -990,11 +969,6 @@ export interface OpenTofuControllerDependencies {
    * filtered before either path.
    */
   readonly releaseActivator?: ReleaseActivator;
-  /**
-   * Host-owned Capsule runtime authority retirement. Failure prevents provider
-   * destroy; omission means the host has no out-of-state authority to retire.
-   */
-  readonly capsuleHostRuntimeRetirement?: CapsuleHostRuntimeRetirement;
   readonly observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly metricTags?: Record<string, string>;
   /**
@@ -1011,12 +985,6 @@ export interface OpenTofuControllerDependencies {
   readonly billingEnforcement?: BillingEnforcement;
   /** Seam B plan-quota port. Omitted ⇒ OSS no-op (no plan limits). */
   readonly quotaPolicy?: QuotaPolicy;
-  /**
-   * Optional owner-account limit for short, unscoped names under the
-   * operator-managed public base domain. Omitted means unlimited; Workspace-
-   * scoped managed hostnames never consume this allowance.
-   */
-  readonly managedVanityHostnameSlotsPerOwner?: number;
 }
 
 export interface DeployControlActorContext {
@@ -1049,17 +1017,6 @@ export interface GenericRootDispatchContext {
  */
 export interface PlanRunInternalContext {
   readonly capsuleContext?: PlanRunCapsuleContext;
-  /** First-class Resource run subject; mutually exclusive with Capsule context. */
-  readonly resourceContext?: PlanRunResourceContext;
-  /**
-   * Narrow delete-only bridge for pre-v1 source-less Capsules: retired Resource
-   * Shape generated roots and the former upload projection. The Capsule destroy
-   * path sets this only after proving one of those exact applied-plan identities
-   * and supplies an empty operator module so OpenTofu can destroy the resources
-   * that remain in persisted state. It is not a general source-less Stack
-   * execution mode and cannot create or update resources.
-   */
-  readonly legacySourcelessDestroyRecovery?: true;
   readonly sourceSnapshotId?: string;
   /**
    * Server-reserved exact Plan Run identity for a durable coordinator. Public
@@ -1085,8 +1042,7 @@ export interface PlanRunInternalContext {
   /**
    * Marks this plan as a §19 `drift_check` (Phase 8). Stamped onto the PlanRun
    * so it projects `type: "drift_check"`, never parks `waiting_approval`, and is
-   * rejected by `createApplyRun`. Capsule orchestration and first-class
-   * Resource observation both use this same read-only Run primitive.
+   * rejected by `createApplyRun`.
    */
   readonly driftCheck?: true;
   /**
@@ -1094,8 +1050,6 @@ export interface PlanRunInternalContext {
    * semantics. This is execution evidence, not a new public Run type.
    */
   readonly refreshOnly?: true;
-  /** Reviewed config-driven Resource import; not a separate public Run type. */
-  readonly resourceImport?: true;
   /**
    * Server-side auto-continue (auto-update pipeline): stamped onto the PlanRun
    * so the RunOwner creates the apply run itself when the completed plan
@@ -1451,8 +1405,6 @@ export class OpenTofuController {
       activity: this.#activity,
       dependencyValueSealer: this.#dependencyValueSealer,
       releaseActivator: this.#releaseActivator,
-      capsuleHostRuntimeRetirement:
-        dependencies.capsuleHostRuntimeRetirement,
       observability: this.#observability,
       metricTags: this.#metricTags,
       allowOperatorScopedProviderConnections:
@@ -1472,14 +1424,6 @@ export class OpenTofuController {
       capsules: this.#capsules,
       runSerialized: <T>(key: string, work: () => Promise<T>): Promise<T> =>
         this.#runSerialized(key, work),
-      ...(dependencies.managedVanityHostnameSlotsPerOwner !== undefined
-        ? {
-            managedVanityHostnameSlotsPerOwner: Math.max(
-              0,
-              Math.floor(dependencies.managedVanityHostnameSlotsPerOwner),
-            ),
-          }
-        : {}),
     });
   }
 
@@ -1487,13 +1431,6 @@ export class OpenTofuController {
     observer: ((run: PlanRun | ApplyRun) => Promise<void>) | undefined,
   ): void {
     this.#runEngine.setTerminalObserver(observer);
-  }
-
-  /** Bind the host-owned Capsule Resource fence after domain composition. */
-  setCapsuleOwnedResourceFence(
-    fence: CapsuleOwnedResourceFence | undefined,
-  ): void {
-    this.#runEngine.setCapsuleOwnedResourceFence(fence);
   }
 
   setPlanRunQueuedObserver(
@@ -1611,12 +1548,6 @@ export class OpenTofuController {
     internal: CreateCapsulePlanInternal = {},
   ): Promise<PlanRunResponse> {
     return this.#runEngine.createCapsulePlan(capsuleId, context, internal);
-  }
-
-  claimManagedPublicHostname(
-    input: ManagedPublicHostnameClaimRequest,
-  ): Promise<ManagedPublicHostnameClaimResult> {
-    return this.#runEngine.claimManagedPublicHostname(input);
   }
 
   createCapsuleDestroyPlan(
@@ -2527,7 +2458,12 @@ export function moduleDispatchFromInputs(
   if (!inputs) return {};
   return {
     ...(inputs.generatedRoot ? { generatedRoot: inputs.generatedRoot } : {}),
-    ...(inputs.operatorModule ? { operatorModule: inputs.operatorModule } : {}),
+    ...(inputs.operatorModule
+      ? {
+          operatorModule: inputs.operatorModule,
+          legacySourcelessDestroyRecovery: true as const,
+        }
+      : {}),
     ...(inputs.workspaceOutputAllowlist
       ? { workspaceOutputAllowlist: inputs.workspaceOutputAllowlist }
       : {}),

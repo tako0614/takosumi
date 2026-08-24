@@ -1,4 +1,3 @@
-import { TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES } from "@takosjp/takosumi-accounts-contract";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 import {
@@ -99,11 +98,6 @@ export type RepoOwnedInstallConfigAdoptionResult =
       readonly outputAllowlist: InstallConfig["outputAllowlist"];
       /** Repository sourceBuild is a proposal; an existing base value wins. */
       readonly sourceBuild?: InstallConfig["sourceBuild"];
-      /**
-       * Compiled from the repository's own runtime requirements. A service or
-       * operator declaration on the base config keeps final authority.
-       */
-      readonly hostRuntimeMaterialization?: InstallConfig["hostRuntimeMaterialization"];
       /** Exact repository module compiled into the derived InstallConfig. */
       readonly modulePath: string;
       readonly sourceSnapshotId: string;
@@ -477,7 +471,6 @@ export async function adoptRepoOwnedInstallConfig(
       ? { requireReviewedValues: input.requireReviewedValues }
       : {}),
     policy: {
-      allowedOidcScopes: TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES,
       allowedInterfacePermissions:
         input.baseConfig.policy?.repositoryInstallUx
           ?.allowedInterfacePermissions ?? [],
@@ -562,14 +555,6 @@ export async function adoptRepoOwnedInstallConfig(
       : {}),
     outputAllowlist: outputAllowlist.value,
     ...(sourceBuild ? { sourceBuild } : {}),
-    ...((input.baseConfig.hostRuntimeMaterialization ??
-    compiled.compiled.hostRuntimeMaterialization)
-      ? {
-          hostRuntimeMaterialization:
-            input.baseConfig.hostRuntimeMaterialization ??
-            compiled.compiled.hostRuntimeMaterialization,
-        }
-      : {}),
     sourceSnapshotId: input.sourceSnapshot!.id,
     digest: observation.digest,
     repositoryManifestApiVersion,
@@ -648,9 +633,6 @@ export async function previewRepoOwnedInstallConfig(
       : {}),
     ...(adoption.requiredInterfaces !== undefined
       ? { requiredInterfaces: adoption.requiredInterfaces }
-      : {}),
-    ...(adoption.hostRuntimeMaterialization
-      ? { hostRuntimeMaterialization: adoption.hostRuntimeMaterialization }
       : {}),
     sourceSelector,
     modulePath: selectedPath,

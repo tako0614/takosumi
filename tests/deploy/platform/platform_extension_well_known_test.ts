@@ -1,62 +1,28 @@
 import { expect, test } from "bun:test";
 
 import {
-  matchPlatformExtensionRoute,
   platformExtensionRoutes,
 } from "../../../deploy/platform/platform_extensions.ts";
 
-test("platform descriptors parse the exact Beta well-known leaf and reject subtree claims", () => {
-  const [route] = platformExtensionRoutes({
-    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
-      {
-        basePath: "/.well-known/takoform/v1beta1",
-        matchMode: "exact",
-        handlerKey: "TAKOFORM_DISCOVERY",
-        authMode: "handler",
-      },
-    ]),
-  });
-
-  expect(route).toMatchObject({
-    basePath: "/.well-known/takoform/v1beta1",
-    matchMode: "exact",
-    handlerKey: "TAKOFORM_DISCOVERY",
-  });
-  expect(
-    matchPlatformExtensionRoute(
-      "/.well-known/takoform/v1beta1",
-      [route!],
-    ),
-  ).toBe(route);
-  expect(
-    matchPlatformExtensionRoute(
-      "/.well-known/takoform/v1beta1/extra",
-      [route!],
-    ),
-  ).toBeUndefined();
-
-  expect(() =>
-    platformExtensionRoutes({
-      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
-        {
-          basePath: "/.well-known/takoform/v1beta1",
-          handlerKey: "UNSAFE_SUBTREE",
-        },
-      ]),
-    }),
-  ).toThrow("overlaps a Takosumi core route prefix");
-  expect(() =>
-    platformExtensionRoutes({
-      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
-        {
-          basePath: "/.well-known/takoform/v1beta1",
-          matchMode: "exact",
-          ownsPathSubtree: true,
-          handlerKey: "UNSAFE_OWNERSHIP",
-        },
-      ]),
-    }),
-  ).toThrow("cannot enable ownsPathSubtree");
+test("retired Takoform well-known leaves cannot be configured", () => {
+  for (const basePath of [
+    "/.well-known/takoform/v1alpha1",
+    "/.well-known/takoform/v1alpha2",
+    "/.well-known/takoform/v1alpha3",
+    "/.well-known/takoform/v1beta1",
+  ]) {
+    expect(() =>
+      platformExtensionRoutes({
+        TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+          {
+            basePath,
+            matchMode: "exact",
+            handlerKey: "TAKOFORM_DISCOVERY",
+          },
+        ]),
+      }),
+    ).toThrow("overlaps a Takosumi core route prefix");
+  }
 });
 
 test("retired Takoform Host leaves cannot be configured or advertised", async () => {
@@ -187,7 +153,7 @@ test("core well-known leaves and root remain unclaimable in either match mode", 
   }
 });
 
-test("platform worker dispatches an exact extension leaf beside the portable host", async () => {
+test("platform worker tombstones every Takoform well-known leaf", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const response = await worker.fetch(
     new Request("https://app.takosumi.com/.well-known/takoform/v1beta1"),
@@ -207,10 +173,7 @@ test("platform worker dispatches an exact extension leaf beside the portable hos
     } as never,
   );
 
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({
-    path: "/.well-known/takoform/v1beta1",
-  });
+  expect(response.status).toBe(404);
 });
 
 test("malformed optional extension configuration cannot break product discovery", async () => {

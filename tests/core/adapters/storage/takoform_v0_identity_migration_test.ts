@@ -12,6 +12,8 @@ const D1_FORM_MIGRATION_VERSION = 54;
 const D1_FORM_MIGRATION_NAME = "d1_service_form_takoform_v0_identity";
 const D1_RECOVERY_MIGRATION_VERSION = 55;
 const D1_RECOVERY_MIGRATION_NAME = "d1_resource_operation_recovery_state";
+const D1_HOST_RETIREMENT_VERSION = 66;
+const D1_HOST_RETIREMENT_NAME = "d1_retired_host_schema_drop_empty";
 const PACKAGE_DIGEST = `sha256:${"a".repeat(64)}`;
 const SCHEMA_DIGEST = `sha256:${"b".repeat(64)}`;
 const LEGACY_FORM_REF = {
@@ -352,36 +354,6 @@ test("Postgres Resource operation recovery columns are additive and reversible",
   }
 });
 
-async function restoreD1PreTakoformSchema(db: SqliteFakeD1): Promise<void> {
-  await db
-    .prepare(
-      `delete from schema_migrations
-        where version in (${D1_FORM_MIGRATION_VERSION}, ${D1_RECOVERY_MIGRATION_VERSION})`,
-    )
-    .run();
-  await db.prepare(`drop table service_form_activations`).run();
-  await db.prepare(`drop table service_form_definitions`).run();
-  await db.prepare(`drop table service_form_packages`).run();
-  await db
-    .prepare(
-      `alter table service_form_packages__takoform_v1alpha1
-       rename to service_form_packages`,
-    )
-    .run();
-  await db
-    .prepare(
-      `alter table service_form_definitions__takoform_v1alpha1
-       rename to service_form_definitions`,
-    )
-    .run();
-  await db
-    .prepare(
-      `alter table service_form_activations__takoform_v1alpha1
-       rename to service_form_activations`,
-    )
-    .run();
-}
-
 async function seedD1LegacyEvidence(db: SqliteFakeD1): Promise<void> {
   const now = "2026-07-27T00:00:00.000Z";
   await db
@@ -492,13 +464,12 @@ async function seedD1LegacyEvidence(db: SqliteFakeD1): Promise<void> {
 
 test("D1 takoform v0 migration rejects populated legacy state and preserves registry and pins", async () => {
   const db = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(db);
-  await restoreD1PreTakoformSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 53 });
   await seedD1LegacyEvidence(db);
 
-  await expect(ensureD1OpenTofuLedgerSchema(db)).rejects.toThrow(
-    /TAKOFORM_V0_IDENTITY_MIGRATION_REQUIRED/,
-  );
+  await expect(
+    ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 54 }),
+  ).rejects.toThrow(/TAKOFORM_V0_IDENTITY_MIGRATION_REQUIRED/);
 
   const packageCount = await db
     .prepare(`select count(*) as count from service_form_packages`)
@@ -567,10 +538,10 @@ test("D1 takoform v0 migration rejects populated legacy state and preserves regi
   expect(migration).toBeNull();
 });
 
-test("D1 fresh cutover retains the legacy schema and is ledger-idempotent", async () => {
+test("D1 v55 historical prefix remains replayable before v66 retires the Host schema", async () => {
   const db = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(db);
-  await ensureD1OpenTofuLedgerSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 55 });
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 55 });
 
   const currentColumns = await db
     .prepare(`pragma table_info(service_form_definitions)`)
@@ -615,11 +586,48 @@ test("D1 fresh cutover retains the legacy schema and is ledger-idempotent", asyn
     resourceColumns.results.map((column) => column.name),
     ["pending_operation_json", "last_operation_run_id"],
   );
+
+  await ensureD1OpenTofuLedgerSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db);
+  for (
+    const table of [
+      "resource_shapes",
+      "resolution_locks",
+      "service_form_packages",
+      "service_form_definitions",
+      "service_form_activations",
+      "service_form_packages__takoform_v1alpha1",
+      "service_form_definitions__takoform_v1alpha1",
+      "service_form_activations__takoform_v1alpha1",
+    ] as const
+  ) {
+    expect(
+      await db
+        .prepare(
+          `select name from sqlite_master
+           where type = 'table' and name = ?`,
+        )
+        .bind(table)
+        .first(),
+      table,
+    ).toBeNull();
+  }
+  expect(
+    await db
+      .prepare(
+        `select version, name from schema_migrations
+         where version = ${D1_HOST_RETIREMENT_VERSION}`,
+      )
+      .first(),
+  ).toEqual({
+    version: D1_HOST_RETIREMENT_VERSION,
+    name: D1_HOST_RETIREMENT_NAME,
+  });
 });
 
-test("D1 takoform v0 migration safely records a lost ledger response after proving both registries empty", async () => {
+test("D1 v54 replay safely records a lost ledger response after proving both registries empty", async () => {
   const db = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 54 });
   await db
     .prepare(
       `delete from schema_migrations
@@ -627,7 +635,7 @@ test("D1 takoform v0 migration safely records a lost ledger response after provi
     )
     .run();
 
-  await ensureD1OpenTofuLedgerSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 54 });
 
   const ledger = await db
     .prepare(

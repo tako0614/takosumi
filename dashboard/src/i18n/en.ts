@@ -515,8 +515,6 @@ export const en: Record<keyof typeof ja, string> = {
     "Change the public name, URL, first sign-in value, and service variables. Saved values apply on the next deploy review.",
   "app.config.publicUrl": "Public URL",
   "app.config.subdomain": "Public subdomain",
-  "app.config.oidc": "Automatic sign-in",
-  "app.config.oidcOn": "Enabled",
   "app.config.updatedAt": "Updated",
   "app.config.empty": "There are no editable settings.",
   "app.config.notReady": "Settings haven\u2019t loaded yet. Reload the page.",
@@ -660,9 +658,6 @@ export const en: Record<keyof typeof ja, string> = {
     "The restore point could not be created. Please try again.",
   "run.summary.failedHint":
     "Check the diagnostics and logs below for the cause.",
-  "run.summary.hostnameSlotLimit": "No short URL slots are available.",
-  "run.summary.hostnameSlotLimitHint":
-    "Use a standard URL or release an existing short URL, then run again.",
   "run.summary.connectionVerificationRequired":
     "Connected account check is needed.",
   "run.summary.connectionVerificationHint":
@@ -777,9 +772,6 @@ export const en: Record<keyof typeof ja, string> = {
   "run.diag.severity.info": "Info",
   "run.diagnostics.failed":
     "This did not finish. Open details only when you need troubleshooting information.",
-  "run.diagnostics.hostnameSlotLimitShort": "No short URL slots are available.",
-  "run.diagnostics.hostnameSlotLimitDetail":
-    "Use a standard URL or release an existing short URL, then run again.",
   "run.diagnostics.connectionVerificationRequired":
     "This run stopped while preparing access to a connected account. If the connection is now ready, review the changes again before deploying.",
   "run.diagnostics.connectionVerificationShort":
@@ -860,14 +852,8 @@ export const en: Record<keyof typeof ja, string> = {
     "The service could not be added. Check the details and try again.",
   "new.error.genericWithDetails":
     "The service could not be added. Details: {message}",
-  "new.error.invalidHostname":
-    "This public name is too long or has characters that cannot be used. Try a shorter name.",
   "new.error.connectionRequired":
     "Publishing this service needs a connected cloud account. Set up the connection, then try again.",
-  "new.error.appHostnameUnavailable":
-    "That public URL name is already in use. Choose another name and try again.",
-  "new.error.managedHostnameSlotLimit":
-    "No short URL slots are available. Use a standard URL or release an existing short URL.",
   "new.error.alreadyExistsGeneric":
     "This service is already added. Open the existing service instead of creating another one.",
   "workspaceSettings.title": "Settings",
