@@ -2057,10 +2057,35 @@ function sourceCreateBaselineAttempt(
   };
 }
 
+function isSourceCreateBaselineRetryable(error: unknown): boolean {
+  if (isAbortError(error)) return false;
+  if (!(error instanceof ControlApiError)) {
+    // `fetch` rejects with a transport error when no HTTP response was
+    // observed. The baseline is read-only, so one fresh attempt is safe.
+    return true;
+  }
+  if (
+    error.code === "invalid_source_list_response" ||
+    error.code === "invalid_source_list_pagination"
+  ) {
+    // A malformed authoritative projection is a contract failure, not a
+    // transient transport condition. Repeating it must not make it trusted.
+    return false;
+  }
+  return (
+    error.status === 0 ||
+    error.status === 408 ||
+    error.status === 425 ||
+    error.status === 429 ||
+    error.status >= 500
+  );
+}
+
 /**
- * Reads the complete strict Source baseline, retrying only when the current
- * attempt's own timer aborted an otherwise pending GET. HTTP/invalid response
- * errors and the shared parent/mutation abort are never replayed.
+ * Reads the complete strict Source baseline. One fresh read is allowed after
+ * an attempt-local timeout, a transport failure, or a retryable HTTP response.
+ * Definite 4xx responses, malformed projections, and the shared
+ * parent/mutation abort are never replayed.
  */
 async function listSourcesForCreateBaseline(
   workspaceId: string,
@@ -2098,11 +2123,12 @@ async function listSourcesForCreateBaseline(
       return { sources, cleanup: attemptSignals.cleanup };
     } catch (error) {
       attemptSignals.cleanup();
+      const timedOutAttempt =
+        attemptSignals.timedOut() && isAbortError(error);
       if (
         mutationSignal?.aborted ||
-        !attemptSignals.timedOut() ||
-        !isAbortError(error) ||
-        attempt + 1 >= SOURCE_CREATE_BASELINE_MAX_ATTEMPTS
+        attempt + 1 >= SOURCE_CREATE_BASELINE_MAX_ATTEMPTS ||
+        (!timedOutAttempt && !isSourceCreateBaselineRetryable(error))
       ) {
         throw error;
       }
