@@ -59,8 +59,6 @@ import type { Project } from "takosumi-contract/projects";
 import type {
   InstallConfig,
   Capsule,
-  ManagedPublicHostnameClaimRequest,
-  ManagedPublicHostnameClaimResult,
   OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
@@ -119,13 +117,6 @@ import type {
   CapsuleRequiredInterface,
   Interface,
 } from "takosumi-contract/interfaces";
-import type {
-  ResourceCapsuleOwner,
-  ResourceMetadata,
-  ResourcePhase,
-  ResourceResolutionStatus,
-  ResourceShapeKind,
-} from "takosumi-contract";
 import type { GitInstallPlanStore } from "../../../core/domains/install-plans/store.ts";
 
 interface CapsuleListPageParams extends PageParams {
@@ -147,65 +138,6 @@ export interface MembershipActor {
 }
 
 /**
- * Non-secret Resource row used by the first-paint Workspace Resources view.
- * Desired `spec`, status outputs, and other opaque payloads deliberately stay
- * behind the canonical Resource detail route.
- */
-export interface WorkspaceResourceSummary {
-  readonly id: string;
-  readonly apiVersion: string;
-  readonly kind: ResourceShapeKind;
-  readonly metadata: Pick<
-    ResourceMetadata,
-    "name" | "space" | "project" | "environment" | "labels" | "managedBy"
-  >;
-  readonly status?: {
-    readonly phase: ResourcePhase;
-    readonly observedGeneration: number;
-    readonly resolution?: ResourceResolutionStatus;
-  };
-}
-
-export interface WorkspaceViewPage<T> {
-  readonly items: readonly T[];
-  readonly nextCursor?: string;
-}
-
-export interface WorkspaceResourcesView {
-  readonly view: "resources.v1";
-  readonly workspaceId: string;
-  readonly space: string;
-  /** Opaque versioned envelope for the independently ordered child pages. */
-  readonly nextCursor?: string;
-  readonly resources: WorkspaceViewPage<WorkspaceResourceSummary>;
-  readonly workloads: WorkspaceViewPage<PublicCapsule>;
-  readonly forms: WorkspaceViewPage<
-    import("takosumi-contract").FormAvailability
-  >;
-  readonly hasTargetPool: boolean;
-}
-
-/**
- * Optional read-only application port for bounded screen projections. The
- * account host resolves the presented credential once; this operation owns the
- * exact credential restriction, Workspace/member authorization, and the
- * fixed-count Resource, Capsule, Form, and TargetPool reads. It must never
- * expose secrets or mutate lifecycle state.
- */
-export interface WorkspaceViews {
-  readResources(input: {
-    readonly workspaceId: string;
-    readonly space: string;
-    readonly subject: string;
-    /** Restriction carried by a Workspace-scoped PAT/OAuth credential. */
-    readonly credentialWorkspaceId?: string;
-    readonly requiredAccess: "read" | "write";
-    readonly page: PageParams;
-    readonly signal?: AbortSignal;
-  }): Promise<WorkspaceResourcesView>;
-}
-
-/**
  * Structural subset of the host's `TakosumiOperations` facade the control
  * routes call. `TakosumiOperations` (wired by the host worker/bootstrap)
  * already satisfies this shape, so the platform worker passes its existing
@@ -216,13 +148,6 @@ export interface WorkspaceViews {
 export interface ControlPlaneOperations {
   /** Durable, actor-scoped Git install/revision coordinator ledger. */
   readonly gitInstallPlans: GitInstallPlanStore;
-  /**
-   * Exact OSS hostname-reservation authority used when this host assigns one
-   * of its managed public names before the selected deployment target runs.
-   */
-  claimManagedPublicHostname(
-    input: ManagedPublicHostnameClaimRequest,
-  ): Promise<ManagedPublicHostnameClaimResult>;
   /**
    * Optional narrow Core seam for Interface OAuth active checks and the
    * session-authenticated dashboard launcher projection. Core remains the
@@ -243,7 +168,7 @@ export interface ControlPlaneOperations {
         readonly workspaceId: string;
         readonly type?: string;
         readonly phase: "Resolved";
-        readonly ownerKind: "Capsule" | "Resource";
+        readonly ownerKind: "Capsule";
         readonly ownerId?: string;
       },
       subjectId: string,
@@ -260,17 +185,6 @@ export interface ControlPlaneOperations {
       capsuleId?: string,
     ): Promise<Page<Interface>>;
   };
-  readonly resourceCapsuleOwners?: {
-    get(resourceId: string): Promise<ResourceCapsuleOwner | undefined>;
-    getMany(resourceIds: readonly string[]): Promise<
-      readonly {
-        readonly resourceId: string;
-        readonly owner: ResourceCapsuleOwner;
-      }[]
-    >;
-  };
-  /** Bounded first-paint Workspace read projections (no lifecycle writes). */
-  readonly workspaceViews?: WorkspaceViews;
   // --- Workspaces (§4) ---
   readonly workspaces: {
     /**

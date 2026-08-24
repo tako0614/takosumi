@@ -13,7 +13,7 @@ The present Takosumi OSS contract is [Core Spec](./core-spec.md). In brief:
 - Takosumi ships no first-party Terraform/OpenTofu provider;
 - Takoform is an ordinary external provider and portable Form authority stays
   with Takoform;
-- generic Interface/InterfaceBinding and Offering contracts remain available;
+- generic Interface/InterfaceBinding contracts remain available;
 - Takosumi OSS does not host a Form Registry, FormActivation lifecycle,
   TargetPool, SpacePolicy, or hosted Form instances; and
 - Takosumi hosted service is an external Host owner for hosted Forms, backend lifecycle,

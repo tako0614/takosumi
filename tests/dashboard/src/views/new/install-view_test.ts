@@ -15,13 +15,7 @@ describe("single-screen install surface", () => {
     expect(router).toContain('<Route path="/new" component={InstallView} />');
     expect(router).not.toContain("NewAppView");
     expect(router).not.toContain("CapsuleSourceOptionsInstallView");
-    expect(router).not.toContain("CompositionInstallView");
-    expect(router).not.toContain(
-      '<Route path="/composition/install" component={CompositionInstallView} />',
-    );
-    expect(router).toMatch(
-      /path="\/composition\/install"[\s\S]*?<RedirectWithQuery to="\/new"/,
-    );
+    expect(router).not.toContain('path="/composition/install"');
   });
 
   test("Add starts preparation before compatibility or providers are known", () => {
@@ -226,12 +220,9 @@ describe("single-screen install surface", () => {
   test("retains typed Store setup and immutable chooser evidence", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     for (const token of [
-      "storePublicEndpoint",
-      "storeSupportsOidc",
       "storeInitialSecretField",
       "storeInstallFeatures",
       "storeFeatureSelections",
-      "managedPublicHostname",
       "setupProjectionInvalid",
       "entryEvidence",
       "readSnapshotDocument",
@@ -240,6 +231,9 @@ describe("single-screen install surface", () => {
     ]) {
       expect(view).toContain(token);
     }
+    expect(view).not.toContain("managedPublicHostname");
+    expect(view).not.toContain("storePublicEndpoint");
+    expect(view).not.toContain("storeSupportsOidc");
     expect(view).not.toContain("disabled={field.secret}");
   });
 
@@ -309,7 +303,6 @@ describe("single-screen install surface", () => {
     for (const path of [
       "dashboard/src/views/new/NewAppView.tsx",
       "dashboard/src/views/new/CapsuleSourceOptionsInstallView.tsx",
-      "dashboard/src/views/new/CompositionInstallView.tsx",
       "dashboard/src/components/install/InstallProgress.tsx",
       "dashboard/src/lib/install-steps.ts",
     ]) {

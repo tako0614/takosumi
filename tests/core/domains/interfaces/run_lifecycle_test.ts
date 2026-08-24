@@ -1,9 +1,6 @@
 import { expect, test } from "bun:test";
 
-import type {
-  ApplyRun,
-  PlanRun,
-} from "@takosumi/internal/deploy-control-api";
+import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import {
   applyExpectedGuardFromPlanRun,
@@ -17,6 +14,7 @@ import {
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract/install-configs";
+import { withHistoricalPublicHostReservations } from "../../../helpers/deploy-control/historical_public_host_store.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -267,14 +265,19 @@ test("restore and queued-destroy lifecycles keep Interface delivery fail-closed"
     currentOutputId: "output_lifecycle_1",
     updatedAt: "2026-07-13T00:00:00.000Z",
   });
-  await store.reservePublicHost({
-    hostname: "runtime.example.test",
-    workspaceId: capsule.workspaceId,
-    capsuleId: capsule.id,
-    capsuleName: capsule.name,
-    allocationKind: "scoped",
-    now: "2026-07-13T00:00:00.000Z",
-  });
+  const storeWithHistoricalHost = withHistoricalPublicHostReservations(store, [
+    {
+      hostname: "runtime.example.test",
+      ownerUserId: "owner_lifecycle",
+      workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
+      capsuleName: capsule.name,
+      allocationKind: "scoped",
+      status: "reserved",
+      reservedAt: "2026-07-13T00:00:00.000Z",
+      updatedAt: "2026-07-13T00:00:00.000Z",
+    },
+  ]);
 
   let restoreAttempt = 0;
   let nextPlanSummary:
@@ -352,7 +355,7 @@ output "endpoint" {
   const { operations } = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
-    opentofuControlStore: store,
+    opentofuControlStore: storeWithHistoricalHost,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     opentofuRunner: runner,
     opentofuConnectionVault: fakeProviderVault() as never,

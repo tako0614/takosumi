@@ -36,10 +36,6 @@ import type { OutputSharesService } from "../domains/output-shares/mod.ts";
 import type { RunGroupsService } from "../domains/run-groups/mod.ts";
 import type { ActivityService } from "../domains/activity/mod.ts";
 import type { BackupsService } from "../domains/backups/mod.ts";
-import type { LegacyResourceStateAdoptionService } from "../domains/resource-shape/legacy_state_adoption.ts";
-import type { ResourceFormPinOperations } from "../domains/resource-shape/form_pin_operations.ts";
-import type { ResourceFormPinInventoryReader } from "../domains/resource-shape/form_pin_inventory.ts";
-import type { FormRegistryService } from "../domains/service-forms/mod.ts";
 import type { LegacyOutputInterfaceMigrationService } from "../domains/interfaces/legacy_output_migration.ts";
 import {
   OpenTofuControllerError,
@@ -224,7 +220,6 @@ export const ALLOWED_KEYS: Record<
     "outputAllowlist",
     "interfaceBlueprints",
     "vars",
-    "managedPublicHostname",
   ]),
   capsulePatch: new Set(["status"]),
   installConfigPatch: new Set([
@@ -254,31 +249,6 @@ export const ALLOWED_KEYS: Record<
     "sensitivePolicy",
   ]),
   billingSettingsUpdate: new Set(["billingSettings"]),
-  resourceStateAdoptionConfirm: new Set([
-    "resourceId",
-    "resourceUpdatedAt",
-    "expectedLegacyCapsuleName",
-    "capsuleId",
-    "stateVersionId",
-    "stateGeneration",
-    "stateRef",
-    "stateDigest",
-  ]),
-  resourceFormPinBackfill: new Set([
-    "kind",
-    "activationIds",
-    "cursor",
-    "limit",
-    "dryRun",
-  ]),
-  resourceFormPinRestore: new Set(["entries", "cursor", "limit"]),
-  formPackageInstall: new Set(["artifactRef", "expectedPackageDigest"]),
-  formPackageReverify: new Set([
-    "type",
-    "version",
-    "schemaDigest",
-    "packageDigest",
-  ]),
   outputInterfaceMigrationConfirm: new Set(["candidate", "selection"]),
 };
 
@@ -305,11 +275,6 @@ export type DeployControlRouteName =
   | "dependencyCreate"
   | "outputShareCreate"
   | "billingSettingsUpdate"
-  | "resourceStateAdoptionConfirm"
-  | "resourceFormPinBackfill"
-  | "resourceFormPinRestore"
-  | "formPackageInstall"
-  | "formPackageReverify"
   | "outputInterfaceMigrationConfirm";
 
 export interface DeployControlInternalRouteDependencies {
@@ -403,24 +368,6 @@ export interface DeployControlInternalRouteDependencies {
    * store + crypto seam.
    */
   readonly backupsService?: BackupsService;
-  /**
-   * Operator-only, one-time migration service. Reporting is read-only and
-   * confirmation requires an exact reviewed candidate.
-   */
-  readonly legacyResourceStateAdoptionService?: LegacyResourceStateAdoptionService;
-  /** Operator-only exact FormRef backfill and retained backup replay. */
-  readonly resourceFormPinOperations?: ResourceFormPinOperations;
-  /** Operator-only, fail-closed all-Workspace exact FormRef pin inventory. */
-  readonly resourceFormPinInventory?: ResourceFormPinInventoryReader;
-  /** Operator-only immutable Form Package install and retained-byte reverify. */
-  readonly formRegistryService?: FormRegistryService;
-  /**
-   * Explicit Workspace -> Resource authorization-scope bridge. Matching raw
-   * id strings are never treated as authority.
-   */
-  readonly resolveResourceFormPinScope?: (
-    workspaceId: string,
-  ) => string | undefined | Promise<string | undefined>;
   readonly legacyOutputInterfaceMigrationService?: LegacyOutputInterfaceMigrationService;
 }
 
@@ -939,13 +886,6 @@ function publicControllerError(error: unknown): {
 } {
   const message = controllerErrorMessage(error);
   const details = controllerErrorDetails(error);
-  const reason = isRecord(details) ? details.reason : undefined;
-  if (reason === "app_hostname_unavailable") {
-    return {
-      message: "app_hostname_unavailable: already exists",
-      details: { reason: "app_hostname_unavailable" },
-    };
-  }
   return {
     message,
     ...(details !== undefined ? { details } : {}),

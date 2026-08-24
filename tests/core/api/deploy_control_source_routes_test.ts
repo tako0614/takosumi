@@ -595,7 +595,7 @@ test("source snapshot file read is source-scoped and selects the requested JSON 
         observedJobs.push(job);
         return {
           path: job.path,
-          text: '{"kind":"CapsuleComposition"}',
+          text: '{"kind":"RepositoryMetadata"}',
           digest: `sha256:${"c".repeat(64)}`,
           sizeBytes: 29,
         };
@@ -631,17 +631,17 @@ test("source snapshot file read is source-scoped and selects the requested JSON 
   await store.putSourceSnapshot(snapshot);
 
   const response = await app.request(
-    `/internal/v1/sources/${source.id}/snapshots/${snapshot.id}/file?path=compositions/yurucommu-standalone.json`,
+    `/internal/v1/sources/${source.id}/snapshots/${snapshot.id}/file?path=metadata/install.json`,
     { headers: { authorization: "Bearer scoped-token" } },
   );
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({
     sourceSnapshotId: snapshot.id,
-    path: "compositions/yurucommu-standalone.json",
-    text: '{"kind":"CapsuleComposition"}',
+    path: "metadata/install.json",
+    text: '{"kind":"RepositoryMetadata"}',
   });
   expect(observedJobs).toHaveLength(1);
-  expect(observedJobs[0]?.path).toBe("compositions/yurucommu-standalone.json");
+  expect(observedJobs[0]?.path).toBe("metadata/install.json");
   expect(observedJobs[0]?.sourceSnapshot.id).toBe(snapshot.id);
 });
 

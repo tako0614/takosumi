@@ -24,11 +24,9 @@ import type { JsonValue } from "takosumi-contract";
 import type { Capsule } from "@takosumi/internal/deploy-control-api";
 import type { RootProviderBinding } from "takosumi-rootgen";
 import type { ResolvedCapsuleProviderBinding } from "../connections/mod.ts";
-import { canonicalProviderAddress } from "./provider_policy.ts";
 import { OpenTofuControllerError } from "./errors.ts";
+import { canonicalProviderAddress } from "./provider_policy.ts";
 import { normalizeProviders } from "./validation.ts";
-import { normalizeManagedPublicBaseDomain } from "./managed_public_domains.ts";
-import { isWorkspaceBindableOperatorConnection } from "takosumi-contract/connections";
 
 /**
  * Provider context for a Capsule plan. A generated child-module wrapper is
@@ -50,8 +48,6 @@ export interface CapsulePlanContext {
    * invent module input schema for arbitrary OpenTofu Capsules.
    */
   readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
-  /** Public namespace advertised by the selected deployment target, if any. */
-  readonly managedPublicBaseDomain?: string;
 }
 
 /**
@@ -111,40 +107,12 @@ export class PlanResolutionService {
     );
     const providerBindings = providerBindingsFromResolved(resolved);
     const providerInputDefaults = providerInputDefaultsFromResolved(resolved);
-    const managedPublicBaseDomain =
-      managedPublicBaseDomainFromResolved(resolved);
     return {
       providerBindings,
       requiredProvidersFromBindings: requiredProvidersFromResolved(resolved),
       providerInputDefaults,
-      ...(managedPublicBaseDomain ? { managedPublicBaseDomain } : {}),
     };
   }
-}
-
-function managedPublicBaseDomainFromResolved(
-  resolved: readonly ResolvedCapsuleProviderBinding[],
-): string | undefined {
-  const domains = new Set<string>();
-  for (const entry of resolved) {
-    if (
-      !entry.connection ||
-      !isWorkspaceBindableOperatorConnection(entry.connection)
-    ) {
-      continue;
-    }
-    const domain = normalizeManagedPublicBaseDomain(
-      entry.connection.scopeHints?.managedPublicBaseDomain,
-    );
-    if (domain) domains.add(domain);
-  }
-  if (domains.size > 1) {
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      "managed Provider Connections disagree on the public base domain",
-    );
-  }
-  return domains.values().next().value as string | undefined;
 }
 
 export function providerBindingsFromResolved(

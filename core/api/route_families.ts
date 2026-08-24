@@ -8,9 +8,7 @@ import { DEPLOY_CONTROL_INTERNAL_ENDPOINTS } from "./deploy_control_internal_rou
 import { READINESS_ENDPOINTS } from "./readiness_routes.ts";
 import { METRICS_ENDPOINTS } from "./metrics_routes.ts";
 import { OPENAPI_ENDPOINTS } from "./openapi_endpoint.ts";
-import { PORTABLE_FORM_HOST_ENDPOINTS } from "./form_host_routes.ts";
 import { INTERFACE_ENDPOINTS } from "./interface_routes.ts";
-import { OFFERING_CATALOG_ENDPOINTS } from "./offering_catalog_routes.ts";
 
 /**
  * Single source of truth for the API route inventory mounted by
@@ -119,8 +117,6 @@ export type RouteFamilyId =
   | "readiness"
   | "deployControl-internal"
   | "metrics"
-  | "resource-shape"
-  | "offering-catalogs"
   | "interfaces";
 
 export type RouteFamilyFlag =
@@ -128,8 +124,6 @@ export type RouteFamilyFlag =
   | "readinessRoutesMounted"
   | "deployControlInternalRoutesMounted"
   | "metricsRoutesMounted"
-  | "resourceShapeRoutesMounted"
-  | "offeringCatalogRoutesMounted"
   | "interfaceRoutesMounted";
 
 export type RouteFamilyMountedFlags = Record<RouteFamilyFlag, boolean>;
@@ -208,24 +202,6 @@ export const ROUTE_FAMILIES: readonly RouteFamilyDescriptor[] = [
     defaultMounted: ({ role, hasOptions }) =>
       role === "takosumi-api" && hasOptions,
     endpoints: METRICS_ENDPOINTS,
-  },
-  {
-    id: "resource-shape",
-    flag: "resourceShapeRoutesMounted",
-    openapiTags: ["resource-shape"],
-    defaultMounted: ({ role, hasOptions }) =>
-      role === "takosumi-api" && hasOptions,
-    // The Resource Shape HTTP family is retired. Only the separately defined
-    // portable Takoform protocol remains in this composition boundary.
-    endpoints: PORTABLE_FORM_HOST_ENDPOINTS,
-  },
-  {
-    id: "offering-catalogs",
-    flag: "offeringCatalogRoutesMounted",
-    openapiTags: ["offering-catalogs"],
-    defaultMounted: ({ role, hasOptions }) =>
-      role === "takosumi-api" && hasOptions,
-    endpoints: OFFERING_CATALOG_ENDPOINTS,
   },
   {
     id: "interfaces",

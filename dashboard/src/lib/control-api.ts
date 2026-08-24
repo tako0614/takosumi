@@ -16,7 +16,6 @@
  * types remain assignable to the dashboard view models.
  */
 
-export { shapeKindForPortableType } from "takosumi-contract";
 import type {
   ActivityEvent as ContractActivityEvent,
   BackupRecord as ContractBackupRecord,
@@ -27,7 +26,6 @@ import type {
   InstallConfigVariableDefault as ContractInstallConfigVariableDefault,
   Capsule as ContractCapsule,
   JsonValue as ContractJsonValue,
-  ManagedPublicHostnameAllocation,
   ProviderBinding as ContractProviderBinding,
   ProviderBindings as ContractProviderBindings,
   ProviderBindingSet as ContractProviderBindingSet,
@@ -115,15 +113,6 @@ export class ControlApiError extends Error {
     return this.status === 409 && this.reason === "duplicate_capsule";
   }
 
-  /** True when a requested public app hostname is already reserved. */
-  get isAppHostnameUnavailable(): boolean {
-    return this.status === 409 && this.reason === "app_hostname_unavailable";
-  }
-
-  /** True when the owner has no remaining short managed-hostname slot. */
-  get isManagedPublicHostnameSlotLimitReached(): boolean {
-    return this.reason === "managed_public_hostname_slot_limit_reached";
-  }
 }
 
 export interface ControlApiErrorSummary {
@@ -463,7 +452,6 @@ export interface InstallConfig {
   readonly sourceBuild?: SourceBuildConfig;
   readonly lifecycleActions?: ContractInstallConfig["lifecycleActions"];
   readonly policy: ContractInstallConfig["policy"];
-  readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
   readonly variableMapping: Readonly<Record<string, unknown>>;
   readonly variablePresentation?: ContractInstallConfig["variablePresentation"];
   readonly installExperience?: ContractInstallConfig["installExperience"];
@@ -1371,7 +1359,6 @@ export async function createCapsule(input: {
   readonly vars?: Readonly<Record<string, ContractJsonValue>>;
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly autoUpdate?: boolean;
-  readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
 }): Promise<Capsule> {
   // Read the active baseline before the one-shot create. If the response is
   // lost, this is the only readback that can prove whether the exact Capsule
@@ -1420,9 +1407,6 @@ export async function createCapsule(input: {
             ? { outputAllowlist: input.outputAllowlist }
             : {}),
           ...(input.autoUpdate === true ? { autoUpdate: true } : {}),
-          ...(input.managedPublicHostname
-            ? { managedPublicHostname: input.managedPublicHostname }
-            : {}),
         },
       },
     );

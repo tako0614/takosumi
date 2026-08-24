@@ -55,63 +55,6 @@ describe("canonical Capsule Run credential context", () => {
     });
   });
 
-  test("carries only DB-owned opaque runtime requirements into the trusted Run context", async () => {
-    const base = ledger({
-      capsule: { ...CAPSULE, installConfigId: "install_config_1" },
-    });
-    const result = await resolveCanonicalCapsuleRunCredentialContext(
-      {
-        ...base,
-        getInstallConfig: async (id) =>
-          (id === "install_config_1"
-            ? {
-                id,
-                workspaceId: "workspace_1",
-                hostRuntimeMaterialization: {
-                  contract: "takosumi.host-runtime-materialization/v1",
-                  requirements: [
-                    {
-                      kind: "generated_secret",
-                      binding: "ENCRYPTION_KEY",
-                      secretRef: "secret:repository/encryption-key",
-                      bytes: 32,
-                      encoding: "base64url",
-                    },
-                  ],
-                },
-              }
-            : undefined) as never,
-      },
-      {
-        workspaceId: "workspace_1",
-        capsuleId: "capsule_1",
-        runId: "plan_1",
-        phase: "plan",
-      },
-    );
-
-    expect(result).toMatchObject({
-      ok: true,
-      context: {
-        hostRuntimeMaterialization: {
-          contract: "takosumi.host-runtime-materialization/v1",
-          installConfigId: "install_config_1",
-          workspaceId: "workspace_1",
-          capsuleId: "capsule_1",
-          installingPrincipalId: "principal_installer",
-          requirements: [
-            {
-              kind: "generated_secret",
-              binding: "ENCRYPTION_KEY",
-              secretRef: "secret:repository/encryption-key",
-            },
-          ],
-        },
-      },
-    });
-    expect(JSON.stringify(result)).not.toContain("generated-value");
-  });
-
   test("rejects missing installer, destroyed Capsule, stale Run, and cross-Workspace lookup", async () => {
     for (const [overrides, reason] of [
       [{ capsule: { ...CAPSULE, installingPrincipalId: undefined } }, "capsule_unavailable"],

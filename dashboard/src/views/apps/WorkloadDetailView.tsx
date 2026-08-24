@@ -1793,28 +1793,12 @@ function configSummaryItems(config: InstallConfig | undefined) {
   const publicUrl = urlVariable
     ? stringConfigValue(variables[urlVariable])
     : undefined;
-  const oidcClient = installExperienceOidcClient(config.installExperience);
-  const oidcVariableNames = [
-    oidcClient?.issuerUrlVariable,
-    oidcClient?.accountsUrlVariable,
-    oidcClient?.clientIdVariable,
-    oidcClient?.redirectUriVariable,
-  ].filter((name): name is string => Boolean(name));
-  const oidcReady =
-    oidcVariableNames.length > 0 &&
-    oidcVariableNames.every((name) => stringConfigValue(variables[name]));
   return [
     ...(publicUrl
       ? [{ label: t("app.config.publicUrl"), value: <code>{publicUrl}</code> }]
       : []),
     ...(subdomain
       ? [{ label: t("app.config.subdomain"), value: <code>{subdomain}</code> }]
-      : []),
-    // 自動ログイン comes from the store listing's oidc_client projection, not
-    // from anything the user can set on this screen — so an unset value is
-    // omitted rather than rendered as a dead 未設定 row.
-    ...(oidcReady
-      ? [{ label: t("app.config.oidc"), value: t("app.config.oidcOn") }]
       : []),
     {
       label: t("app.config.updatedAt"),

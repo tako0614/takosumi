@@ -155,7 +155,7 @@ describe("Capsule detail StateVersion surface", () => {
     expect(source).toContain("patchInstallConfig");
     expect(source).toContain('t("app.config.title")');
     expect(source).toContain('t("app.config.publicUrl")');
-    expect(source).toContain('t("app.config.oidc")');
+    expect(source).not.toContain('t("app.config.oidc")');
     expect(source).toContain('t("app.config.advanced")');
     expect(source).toContain('t("app.config.addVariable")');
     // The row model lives in the shared lib; the view consumes it.
@@ -389,8 +389,8 @@ describe("Capsule detail StateVersion surface", () => {
     // The clear/remove button names its variable for screen readers.
     expect(source).toContain('t("app.config.resetAria", { name: row().name })');
     expect(source).toContain('t("app.config.removeAria"');
-    // 自動ログイン is projection-derived and not settable here — an unset value
-    // is omitted instead of rendering a dead 未設定 row.
-    expect(source).not.toContain('t("app.config.oidcOff")');
+    // Legacy projection variables remain hidden from free-form settings, but
+    // the retired automatic Capsule OIDC state is not presented as current UI.
+    expect(source).toContain("installExperienceOidcClient");
   });
 });

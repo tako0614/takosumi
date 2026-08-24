@@ -11,6 +11,7 @@ const ROOT = resolve(new URL("..", import.meta.url).pathname);
 export const GENERALIZATION_SCAN_ROOTS = [
   "accounts",
   "cli",
+  "conformance",
   "contract",
   "core",
   "dashboard/src",
@@ -18,6 +19,7 @@ export const GENERALIZATION_SCAN_ROOTS = [
   "docs/en/reference",
   "docs/operations",
   "docs/reference",
+  "fixtures",
   "lib",
   "opentofu-modules",
   "provider",
@@ -65,41 +67,38 @@ const RETIRED_PATHS = [
   "contract/installations.ts",
   "contract/output-projection.ts",
   "contract/output-sync.ts",
+  "contract/resource-deployment.ts",
+  "contract/resource-shape.ts",
+  "contract/resolution.ts",
   "contract/runtime-agent.ts",
+  "contract/target.ts",
+  "conformance/standard-form-runtime",
+  "core/api/portable_host_idempotency.ts",
   "core/domains/deploy-records",
   "core/domains/deploy-control/service_grant_broker.ts",
   "core/domains/runtime",
   "core/domains/output-projection",
   "core/domains/output-sync",
+  "core/domains/resource-shape",
   "core/domains/network",
   "core/domains/security",
   "core/domains/service-endpoints",
   "core/domains/templates",
   "core/runtime-agent",
   "core/workers/registry_sync_worker.ts",
+  "fixtures/takoform-standard-1.0.1-host-matrix.json",
+  "scripts/generate-formref-migration-replica-fixture.ts",
+  "scripts/run-formref-migration-replica-drill.ts",
+  "scripts/verify-standard-form-runtime-artifacts.ts",
+  "worker/src/d1_portable_host_idempotency.ts",
 ] as const;
 
 if (import.meta.main) {
   const sources = await collectGeneralizationBoundarySources(ROOT);
   const violations: GeneralizationBoundaryViolation[] = [
     ...findGeneralizationBoundaryViolations(sources),
+    ...findRetiredPathViolations(sources),
   ];
-  for (const path of RETIRED_PATHS) {
-    if (
-      !sources.some(
-        (source) => source.path === path || source.path.startsWith(`${path}/`),
-      )
-    ) {
-      continue;
-    }
-    violations.push({
-      ruleId: "retired-path",
-      path,
-      line: 1,
-      message: "retired implementation path must not exist in the current tree",
-      excerpt: path,
-    });
-  }
 
   if (violations.length > 0) {
     console.error("Generalization boundary check failed:");
@@ -115,6 +114,22 @@ if (import.meta.main) {
   console.log(
     `Generalization boundary check passed (${sources.length} current files scanned).`,
   );
+}
+
+export function findRetiredPathViolations(
+  sources: readonly GeneralizationBoundarySource[],
+): readonly GeneralizationBoundaryViolation[] {
+  return RETIRED_PATHS.filter((path) =>
+    sources.some(
+      (source) => source.path === path || source.path.startsWith(`${path}/`),
+    ),
+  ).map((path) => ({
+    ruleId: "retired-path",
+    path,
+    line: 1,
+    message: "retired implementation path must not exist in the current tree",
+    excerpt: path,
+  }));
 }
 
 export async function collectGeneralizationBoundarySources(

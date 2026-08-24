@@ -15,16 +15,11 @@ import type {
   CapsuleStatus,
   PublicCapsule,
 } from "takosumi-contract/capsules";
-import type {
-  InstallConfig,
-  ManagedPublicHostnameAllocation,
-} from "takosumi-contract/install-configs";
+import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { CapsuleInterfaceBlueprint } from "takosumi-contract/interfaces";
 import {
   capsuleInterfaceBlueprintsNeedInstallingPrincipal,
-  capsuleResourceInterfaceBindingsNeedInstallingPrincipal,
   resolveCapsuleInterfaceBlueprintInstallingPrincipal,
-  resolveCapsuleResourceInterfaceBindingInstallingPrincipal,
 } from "takosumi-contract/interfaces";
 import type { JsonValue } from "takosumi-contract";
 import { isAbsolute, normalize } from "node:path";
@@ -87,7 +82,6 @@ interface CreateCapsuleRouteRequest extends CreateCapsuleRequest {
   readonly interfaceBlueprints?: readonly CapsuleInterfaceBlueprint[];
   readonly runnerId?: string;
   readonly vars?: Readonly<Record<string, JsonValue>>;
-  readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
 }
 
 interface CapsulePlanRouteRequest {
@@ -457,7 +451,6 @@ export function mountDeployControlCapsuleRoutes(
           modulePath: rawModulePath,
           vars: rawVars,
           runnerId: rawRunnerId,
-          managedPublicHostname: rawManagedPublicHostname,
           ...request
         } = body as Omit<
           CreateCapsuleRouteRequest,
@@ -466,14 +459,12 @@ export function mountDeployControlCapsuleRoutes(
           | "modulePath"
           | "vars"
           | "runnerId"
-          | "managedPublicHostname"
         > & {
           readonly outputAllowlist?: unknown;
           readonly interfaceBlueprints?: unknown;
           readonly modulePath?: unknown;
           readonly vars?: unknown;
           readonly runnerId?: unknown;
-          readonly managedPublicHostname?: unknown;
         };
         const outputAllowlist =
           rawOutputAllowlist === undefined
@@ -538,18 +529,6 @@ export function mountDeployControlCapsuleRoutes(
         if (runnerProfileId) {
           ensureRunnerProfilePermission(principal, runnerProfileId);
         }
-        const managedPublicHostname = managedPublicHostnameValue(
-          rawManagedPublicHostname,
-        );
-        if (
-          rawManagedPublicHostname !== undefined &&
-          managedPublicHostname === undefined
-        ) {
-          throw new OpenTofuControllerError(
-            "invalid_argument",
-            "managedPublicHostname must be { mode: 'scoped' | 'vanity' }",
-          );
-        }
         const baseInstallConfig = await capsules!.getInstallConfig(
           request.installConfigId,
         );
@@ -558,9 +537,6 @@ export function mountDeployControlCapsuleRoutes(
         const needsInstallingPrincipalScope =
           capsuleInterfaceBlueprintsNeedInstallingPrincipal(
             selectedInterfaceBlueprints,
-          ) ||
-          capsuleResourceInterfaceBindingsNeedInstallingPrincipal(
-            baseInstallConfig.resourceInterfaceBindingProposals,
           );
         const installConfigId =
           (normalizedVars !== undefined &&
@@ -569,7 +545,6 @@ export function mountDeployControlCapsuleRoutes(
           runnerProfileId ||
           outputAllowlist !== undefined ||
           interfaceBlueprints !== undefined ||
-          managedPublicHostname !== undefined ||
           needsInstallingPrincipalScope
             ? (
                 await createScopedInstallConfigForCapsule({
@@ -583,7 +558,6 @@ export function mountDeployControlCapsuleRoutes(
                   interfaceBlueprints: selectedInterfaceBlueprints,
                   installingPrincipalId: principal.actor,
                   runnerProfileId,
-                  managedPublicHostname,
                 })
               ).id
             : request.installConfigId;
@@ -976,7 +950,6 @@ async function createScopedInstallConfigForCapsule(input: {
   readonly interfaceBlueprints?: readonly CapsuleInterfaceBlueprint[];
   readonly installingPrincipalId: string;
   readonly runnerProfileId?: string;
-  readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
 }): Promise<InstallConfig> {
   for (const [key, value] of Object.entries(input.vars)) {
     if (!isJsonValue(value)) {
@@ -1010,9 +983,6 @@ async function createScopedInstallConfigForCapsule(input: {
     ...(input.modulePath ? { modulePath: input.modulePath } : {}),
     variableMapping: { ...baseConfig.variableMapping, ...input.vars },
     ...(input.runnerProfileId ? { runnerId: input.runnerProfileId } : {}),
-    ...(input.managedPublicHostname
-      ? { managedPublicHostname: input.managedPublicHostname }
-      : {}),
     ...(input.interfaceBlueprints
       ? {
           interfaceBlueprints:
@@ -1022,31 +992,11 @@ async function createScopedInstallConfigForCapsule(input: {
             ),
         }
       : {}),
-    ...(baseConfig.resourceInterfaceBindingProposals
-      ? {
-          resourceInterfaceBindingProposals:
-            resolveCapsuleResourceInterfaceBindingInstallingPrincipal(
-              baseConfig.resourceInterfaceBindingProposals,
-              input.installingPrincipalId,
-            ),
-        }
-      : {}),
     outputAllowlist:
       input.outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
     createdAt: now,
     updatedAt: now,
   });
-}
-
-function managedPublicHostnameValue(
-  value: unknown,
-): ManagedPublicHostnameAllocation | undefined {
-  if (value === undefined) return undefined;
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const mode = (value as { readonly mode?: unknown }).mode;
-  return mode === "scoped" || mode === "vanity" ? { mode } : undefined;
 }
 
 function isSelectableInstallConfig(config: InstallConfig): boolean {

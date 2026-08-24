@@ -56,12 +56,10 @@ neither command proves hosted Cloud readiness.
 
 ## Historical publication proof
 
-`service-form:published-package-host-proof` pins the last actually published
-Legacy checkpoint, `forms/admissions/v1.0.7`. It reads nine reviewed kinds from
-the immutable 34-entry package publication ledger and verifies exact retained
-bytes, signatures, transparency evidence, install, replay, and service
-reconstruction. It deliberately does not consume the historical Standard
-admission set.
+The former executable package-publication proof was removed with Takosumi's
+embedded package-verifier and Form Host lanes. Any retained publication ledger
+or immutable package bytes are migration evidence only; they are not loaded,
+verified, installed, or reconstructed by a shipped Takosumi process.
 
 For this retained historical lane, production or hosted availability was
 separate evidence: exact installed package readback, an executable

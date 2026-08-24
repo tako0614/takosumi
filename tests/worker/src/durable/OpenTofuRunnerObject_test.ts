@@ -1701,7 +1701,7 @@ test("OpenTofu runner rejects changed credential authority or immutable mutation
     options,
   ).fetch(
     signedMutationRequest(planRunId, currentToken, {
-      operatorModuleText: "terraform { required_version = \">= 2.0\" }\n",
+      sourceRef: "fedcba9876543210fedcba9876543210fedcba98",
     }),
   );
   assert.equal(changedInputResponse.status, 409);
@@ -1897,7 +1897,7 @@ test("OpenTofu runner adopts completed state only after fresh exact mutation aut
     signedMutationRequest(planRunId, freshToken, {
       action: "destroy",
       stateScope,
-      operatorModuleText: "terraform { required_version = \">= 2.0\" }\n",
+      sourceRef: "fedcba9876543210fedcba9876543210fedcba98",
     }),
   );
   assert.equal(changedInputReplay.status, 409);
@@ -2603,7 +2603,7 @@ function signedMutationRequest(
     readonly action?: "apply" | "destroy";
     readonly heartbeatAt?: number;
     readonly requestedAt?: string;
-    readonly operatorModuleText?: string;
+    readonly sourceRef?: string;
     readonly rawOutputRef?: string;
     readonly stateScope?: Readonly<Record<string, unknown>>;
   } = {},
@@ -2651,7 +2651,9 @@ function signedMutationRequest(
           source: {
             kind: "git",
             url: "https://example.test/repository.git",
-            ref: "0123456789abcdef0123456789abcdef01234567",
+            ref:
+              options.sourceRef ??
+              "0123456789abcdef0123456789abcdef01234567",
             modulePath: ".",
           },
           sourceDigest:
@@ -2677,16 +2679,6 @@ function signedMutationRequest(
           updatedAt: options.heartbeatAt ?? 1,
         },
         planArtifact,
-        operatorModule: {
-          files: [
-            {
-              path: "main.tf",
-              text:
-                options.operatorModuleText ??
-                'terraform { required_version = ">= 1.8" }\n',
-            },
-          ],
-        },
         ...(options.stateScope ? { stateScope: options.stateScope } : {}),
         ...(options.rawOutputRef ? { rawOutputRef: options.rawOutputRef } : {}),
         credentials: {

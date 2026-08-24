@@ -67,12 +67,12 @@ test("missing or throwing delivery handlers fail closed", async () => {
   });
   const iface = await literalInterface(instance);
   const missing = await instance.createBinding(iface.metadata.id, {
-    subjectRef: { kind: "Resource", id: "resource_1" },
+    subjectRef: { kind: "Capsule", id: "capsule_1" },
     permissions: ["read"],
     delivery: { type: "not-installed.v1" },
   });
   const broken = await instance.createBinding(iface.metadata.id, {
-    subjectRef: { kind: "Resource", id: "resource_2" },
+    subjectRef: { kind: "Capsule", id: "capsule_2" },
     permissions: ["read"],
     delivery: { type: "broken.v1" },
   });

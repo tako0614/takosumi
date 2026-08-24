@@ -124,20 +124,6 @@ export async function startTakosumiService(
   };
 }
 
-// The service module used to run boot at the top level and `export default
-// app`. Workers `export default { fetch: ... }` consumers therefore had to
-// import this module, which forced `await loadRuntimeConfigFromEnv(...)`
-// to fire inside the isolate. The service now exposes `startTakosumiService()` and
-// only runs it when the module is executed as the program entrypoint (e.g.
-// `bun run core/index.ts` on long-running servers).
-
-if (import.meta.main) {
-  const started = await startTakosumiService();
-  const port = Number(started.runtime.env.get("PORT") ?? "8788");
-  const server = started.runtime.serveHttp(started.app.fetch, { port });
-  registerServiceShutdownHandlers(started.runtime, server);
-}
-
 /**
  * Capture SIGINT / SIGTERM and drain in-flight requests via the
  * RuntimeAdapter's `serveHttp` handle before exiting. Without this, a
@@ -421,7 +407,7 @@ async function createSharedSqlClient(
 async function tryCreatePostgresClient(
   databaseUrl: string,
 ): Promise<{ client: SqlClient; close: () => Promise<void> } | undefined> {
-  // `npm:pg` ships a binary protocol client that requires `node:net` and
+  // `pg` ships a binary protocol client that requires `node:net` and
   // `node:tls`; loading it on a Cloudflare Worker / V8 isolate produces a
   // hard error at module-resolve time. Gate the dynamic import behind the
   // runtime check so the service module stays importable on Workers and
@@ -430,19 +416,19 @@ async function tryCreatePostgresClient(
   if (runtime.kind !== "node") {
     log.warn("service.boot.postgres_driver_unavailable", {
       message:
-        `npm:pg cannot run on the ${runtime.kind} runtime; use an HTTP-mode ` +
+        `pg cannot run on the ${runtime.kind} runtime; use an HTTP-mode ` +
         "Postgres adapter (Hyperdrive, Neon, etc.) instead.",
     });
     return undefined;
   }
   try {
     // Dynamic specifier prevents bundlers (and Workers' build pipeline) from
-    // statically discovering `npm:pg` when the module is imported but never
-    // called. The exact pin stays the same.
-    const pgSpecifier = "npm:pg@^8.11.0";
+    // statically discovering `pg` when the module is imported but never
+    // called. The package manifest and frozen lock own the exact version.
+    const pgSpecifier = "pg";
     const pgModule = await import(pgSpecifier);
-    const Pool = pgModule.default?.Pool;
-    if (!Pool) throw new Error("npm:pg Pool export missing");
+    const Pool = pgModule.default?.Pool ?? pgModule.Pool;
+    if (!Pool) throw new Error("pg Pool export missing");
     const pool = new Pool({ connectionString: databaseUrl });
 
     const poolQuery = async <Row extends Record<string, unknown>>(
@@ -723,4 +709,18 @@ async function maybeVerifyAuditReplicationChain(
   } finally {
     await client.close().catch(() => {});
   }
+}
+
+// The service module used to run boot at the top level and `export default
+// app`. Workers `export default { fetch: ... }` consumers therefore had to
+// import this module, which forced `await loadRuntimeConfigFromEnv(...)`
+// to fire inside the isolate. The service now exposes `startTakosumiService()`
+// and runs it only after every declaration in this module has initialized.
+// Keeping this at the physical end also makes startup error paths safe: a
+// missing optional driver cannot observe an error class in its TDZ.
+if (import.meta.main) {
+  const started = await startTakosumiService();
+  const port = Number(started.runtime.env.get("PORT") ?? "8788");
+  const server = started.runtime.serveHttp(started.app.fetch, { port });
+  registerServiceShutdownHandlers(started.runtime, server);
 }

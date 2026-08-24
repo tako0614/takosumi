@@ -11,20 +11,11 @@ export * from "./public-session-control.ts";
 export * from "./notification-pushers.ts";
 export * from "./background-events.ts";
 export * from "./cron.ts";
-export * from "./host-runtime-materialization.ts";
 export * from "./install-experience.ts";
-export * from "./resource-shape.ts";
-export * from "./resource-artifacts.ts";
-export * from "./service-forms.ts";
-export * from "./offerings.ts";
-export * from "./form-host-interoperability.ts";
-export * from "./resource-deployment.ts";
 export * from "./plan-scope.ts";
 export * from "./interfaces.ts";
 export * from "./interface-types.ts";
 export * from "./interface-display.ts";
-export * from "./target.ts";
-export * from "./resolution.ts";
 export * from "./sources.ts";
 export * from "./install-plans.ts";
 export * from "./repository-manifest.ts";
@@ -57,12 +48,6 @@ export type {
   InstallConfigInstallExperience,
   InstallConfigInstallProjection,
   InstallConfigRepositoryInstallUxState,
-  InstallConfigHostRuntimeMaterialization,
-  ManagedPublicHostnameAllocation,
-  ManagedPublicHostnameClaimer,
-  ManagedPublicHostnameClaimRequest,
-  ManagedPublicHostnameClaimResult,
-  ManagedPublicHostnameMode,
   OutputAllowlistEntry,
   OutputValueType,
   PolicyConfig,
@@ -166,7 +151,6 @@ export type {
   RunGroupType,
   RunLogsResponse,
   RunPolicyStatus,
-  ResourceOperation,
   RunType,
 } from "./runs.ts";
 export type {

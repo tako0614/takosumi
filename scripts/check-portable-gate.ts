@@ -63,11 +63,6 @@ export const PORTABLE_GATE_PHASES: readonly PortableGatePhase[] = [
     "check:no-first-party-provider",
   ]),
   phase("generated-assets", ["bun", "run", "generated-assets:check"]),
-  phase("service-form-runtime-artifacts", [
-    "bun",
-    "run",
-    "service-form:runtime-artifacts:check",
-  ]),
   phase("authoritative-docs", [
     "bun",
     "run",

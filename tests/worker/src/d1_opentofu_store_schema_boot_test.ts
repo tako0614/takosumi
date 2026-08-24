@@ -96,7 +96,7 @@ test("v61/v62 create an empty Resource identity fence without historical backfil
     .run();
 
   expect((await tableNames(db)).has("resource_identity_fences")).toBe(false);
-  await ensureD1OpenTofuLedgerSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 62 });
 
   expect(await rowsForTable(db, "resource_identity_fences")).toEqual([]);
   expect(
@@ -157,7 +157,7 @@ test("v63 adds indexed personal bootstrap identity without marking existing pers
       .run();
   }
 
-  await ensureD1OpenTofuLedgerSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 63 });
 
   const workspaceIndexes = await indexNames(db, "workspaces");
   expect(workspaceIndexes.has("workspaces_owner_type_created_idx")).toBe(true);
@@ -282,7 +282,7 @@ test("v60 restores populated current and archived Service Form rows with inline 
     )
     .run();
 
-  await ensureD1OpenTofuLedgerSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 60 });
 
   expect(await rowsForTable(db, "service_form_definitions")).toEqual([
     {
@@ -402,7 +402,7 @@ test("v60 restores populated current and archived Service Form rows with inline 
       .run(),
   ).toThrow(/foreign key/i);
 
-  await ensureD1OpenTofuLedgerSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 60 });
   expect(
     await db
       .prepare(
@@ -634,7 +634,7 @@ test("v58 adds Interface authorization indexes without rewriting rows", async ()
     )
     .run();
 
-  await ensureD1OpenTofuLedgerSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 58 });
 
   expect(await indexNames(db, "interfaces")).toContain(
     "interfaces_authorized_page_idx",
@@ -712,7 +712,7 @@ test("predeployed verification is strictly read-only", async () => {
   );
 });
 
-test("predeployed verification accepts only the exact current v65 ledger", async () => {
+test("predeployed verification accepts only the exact current v66 ledger", async () => {
   const predecessor = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(predecessor, {
     throughMigrationVersion: 62,
@@ -730,7 +730,7 @@ test("predeployed verification accepts only the exact current v65 ledger", async
   await ensureD1OpenTofuLedgerSchema(current);
   await verifyD1OpenTofuLedgerSchemaPredeployed(current);
   expect((await tableNames(current)).has("resource_identity_fences")).toBe(
-    true,
+    false,
   );
 
   const tooOld = new SqliteFakeD1();
@@ -753,7 +753,7 @@ test("predeployed verification accepts only the exact current v65 ledger", async
   await extra
     .prepare(
       `insert into schema_migrations (version, name, checksum, applied_at)
-       values (66, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
+       values (67, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
     )
     .bind(`sha256:${"f".repeat(64)}`)
     .run();

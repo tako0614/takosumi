@@ -6,14 +6,10 @@ import { createApiCapabilitiesDescription } from "../../../core/api/capabilities
 import {
   capsuleAndInstallConfigSchemas,
   createTakosumiOpenApiDocument,
-  resourceFormPinSchemas,
   TAKOSUMI_OPENAPI_VERSION,
   workspaceProjectAndCapsuleRequestSchemas,
 } from "../../../core/api/openapi.ts";
 import { DEPLOY_CONTROL_ACTIVITY_ENDPOINTS } from "../../../core/api/deploy_control_activity_routes.ts";
-import { DEPLOY_CONTROL_RESOURCE_FORM_PIN_ENDPOINTS } from "../../../core/api/deploy_control_resource_form_pin_routes.ts";
-import { PORTABLE_FORM_HOST_ENDPOINTS } from "../../../core/api/form_host_routes.ts";
-import { TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH } from "../../../contract/form-host-interoperability.ts";
 import {
   ALWAYS_MOUNTED_ENDPOINTS,
   type ApiEndpoint,
@@ -27,8 +23,6 @@ const ALL_MOUNTED: RouteFamilyMountedFlags = {
   readinessRoutesMounted: true,
   deployControlInternalRoutesMounted: true,
   metricsRoutesMounted: true,
-  resourceShapeRoutesMounted: true,
-  offeringCatalogRoutesMounted: true,
   interfaceRoutesMounted: true,
 };
 
@@ -115,6 +109,15 @@ test("public OpenAPI does not publish internal Resource Run recovery evidence", 
   );
 });
 
+test("public OpenAPI excludes retired managed-host and legacy source-less inputs", () => {
+  const serialized = JSON.stringify(
+    createTakosumiOpenApiDocument(ALL_MOUNTED),
+  );
+  assert.equal(serialized.includes("managedPublicHostname"), false);
+  assert.equal(serialized.includes("managedPublicBaseDomain"), false);
+  assert.equal(serialized.includes("operator_module"), false);
+});
+
 test("legacy Resource Shape response schemas are not part of discovery", () => {
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
   for (const schemaName of [
@@ -126,30 +129,6 @@ test("legacy Resource Shape response schemas are not part of discovery", () => {
     const schema = openapi.components.schemas[schemaName];
     assert.equal(schema, undefined, schemaName);
   }
-});
-
-test("portable Form Definition keeps its exact selector in the OpenAPI inventory", () => {
-  const endpoint = PORTABLE_FORM_HOST_ENDPOINTS.find(
-    (candidate) =>
-      candidate.path === `${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/:kind`,
-  );
-  assert.ok(endpoint);
-  assert.deepEqual(endpoint.openapi.query, [
-    "space",
-    "apiVersion",
-    "kind",
-    "definitionVersion",
-    "schemaDigest",
-    "packageDigest",
-  ]);
-  // Portable host paths remain well-known-contract surfaces rather than
-  // Takosumi-native /openapi.json paths; the descriptor still guards their
-  // exact query contract and edge routing.
-  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
-  assert.equal(
-    openapi.paths[`${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/{kind}`]?.get,
-    undefined,
-  );
 });
 
 test("FormActivation schemas and operator paths are hidden from discovery", () => {
@@ -165,20 +144,6 @@ test("FormActivation schemas and operator paths are hidden from discovery", () =
     openapi.components.schemas.CreateFormActivationRequest,
     undefined,
   );
-});
-
-test("operator Offering routes stay outside the public OpenAPI", () => {
-  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
-  assert.equal(openapi.paths["/internal/v1/offering-catalogs"], undefined);
-  assert.equal(
-    openapi.paths["/internal/v1/offering-availability/query"],
-    undefined,
-  );
-  assert.equal(
-    openapi.paths["/internal/v1/offering-selections/resolve"],
-    undefined,
-  );
-  assert.equal(openapi.paths["/v1/offering-catalogs"], undefined);
 });
 
 test("all-mounted inventories suppress internal seams and still publish process routes", () => {
@@ -443,59 +408,6 @@ test("backup restore is absent from the route inventory and OpenAPI schemas", ()
   assert.equal(openapi.components.schemas.BackupRestoreTarget, undefined);
   assert.equal(openapi.components.schemas.CreateRestoreRequest, undefined);
   assert.equal(openapi.components.schemas.CreateRestoreResponse, undefined);
-});
-
-test("authoritative Form pin inventory has one token-only concrete descriptor", () => {
-  const endpoint = DEPLOY_CONTROL_RESOURCE_FORM_PIN_ENDPOINTS.find(
-    (item) => item.operationId === "captureResourceFormPinInventory",
-  );
-  assert.deepEqual(endpoint, {
-    method: "GET",
-    path: "/internal/v1/migrations/resource-form-pins/inventory",
-    summary:
-      "Captures a complete, authoritative all-Workspace exact FormRef pin inventory.",
-    auth: "deploy-control-token",
-    operationId: "captureResourceFormPinInventory",
-    openapi: { okSchema: "ResourceFormPinInventoryReceipt" },
-    notImplementedMessage: "exact FormRef pin inventory is not wired",
-  });
-});
-
-test("authoritative Form pin inventory schema exposes identity only", () => {
-  const schemas = resourceFormPinSchemas();
-  const receipt = schemas.ResourceFormPinInventoryReceipt as
-    { readonly properties: Record<string, unknown> } | undefined;
-  const row = schemas.ResourceFormPinInventoryRow as
-    | {
-        readonly properties: Record<string, unknown>;
-        readonly additionalProperties: boolean;
-      }
-    | undefined;
-  assert.ok(receipt);
-  assert.ok(row);
-  assert.deepEqual(Object.keys(row.properties), [
-    "workspaceId",
-    "space",
-    "resourceId",
-    "name",
-    "kind",
-    "form",
-  ]);
-  assert.equal(row.additionalProperties, false);
-  for (const sensitive of [
-    "spec",
-    "outputs",
-    "nativeResources",
-    "target",
-    "credentials",
-  ]) {
-    assert.equal(row.properties[sensitive], undefined, sensitive);
-  }
-  assert.deepEqual(receipt.properties.complete, { const: true });
-  assert.deepEqual(receipt.properties.matrixDigest, {
-    type: "string",
-    pattern: "^sha256:[0-9a-f]{64}$",
-  });
 });
 
 test("mountedEndpoints with no families includes process endpoints", () => {

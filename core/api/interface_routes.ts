@@ -459,7 +459,6 @@ const INTERFACE_PHASES = new Set<InterfacePhase>([
 const OWNER_KINDS = new Set<Interface["metadata"]["ownerRef"]["kind"]>([
   "Workspace",
   "Capsule",
-  "Resource",
 ]);
 
 type InterfaceAuthResult =

@@ -120,17 +120,6 @@ function pgUniqueIndexesOf(
   );
 }
 
-function sqliteUniqueConstraintsOf(
-  table: Parameters<typeof getSqliteTableConfig>[0],
-): UniqueConstraintMirror[] {
-  return [...getSqliteTableConfig(table).uniqueConstraints]
-    .map((constraint) => ({
-      name: constraint.getName() ?? "",
-      columns: constraint.columns.map((column) => column.name),
-    }))
-    .sort((left, right) => left.name.localeCompare(right.name));
-}
-
 async function liveD1ColumnsOf(
   db: SqliteFakeD1,
   tableName: string,
@@ -504,15 +493,6 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("created_at"),
   ]);
 
-  expect(getTableName(d1Schema.resourceIdentityFences)).toBe(
-    "resource_identity_fences",
-  );
-  expect(columnsOf(d1Schema.resourceIdentityFences)).toEqual([
-    pk("resource_id"),
-    nn("last_generation"),
-    nn("fence_revision"),
-    nullable("retired_owner_json"),
-  ]);
 });
 
 test("Worker D1 bootstrap mirrors every logical D1 Drizzle table", async () => {
@@ -540,16 +520,9 @@ test("Worker D1 bootstrap mirrors every logical D1 Drizzle index", async () => {
   }
 });
 
-test("D1 Service Form definition parent keys are named inline UNIQUE constraints", async () => {
-  expect(sqliteUniqueConstraintsOf(d1Schema.serviceFormDefinitions)).toEqual([
-    {
-      name: "service_form_definitions_ref_package_unique",
-      columns: ["form_ref_key", "package_digest"],
-    },
-  ]);
-
+test("historical D1 Service Form parent keys remain replayable through v60", async () => {
   const db = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 60 });
   for (const table of [
     "service_form_definitions",
     "service_form_definitions__takoform_v1alpha1",
@@ -605,7 +578,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24,
     25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
     44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-    61, 62, 63, 64, 65,
+    61, 62, 63, 64, 65, 66,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -670,6 +643,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_personal_workspace_bootstrap_identity",
     "d1_capsule_execution_authority_epoch",
     "d1_git_install_plans",
+    "d1_retired_host_schema_drop_empty",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -1627,15 +1601,6 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("created_at"),
   ]);
 
-  expect(getTableName(postgresSchema.resourceIdentityFences)).toBe(
-    "takosumi_resource_identity_fences",
-  );
-  expect(columnsOf(postgresSchema.resourceIdentityFences)).toEqual([
-    pk("resource_id"),
-    nn("last_generation"),
-    nn("fence_revision"),
-    nullable("retired_owner_json"),
-  ]);
 });
 
 type NameNotNull = { name: string; notNull: boolean };

@@ -44,11 +44,7 @@ const EDGE_EXPOSURE_BY_FAMILY: Record<RouteFamilyId, EdgeExposure> = {
   // `/internal/v1/*` by construction; the host reaches it in process.
   "deployControl-internal": "off",
   metrics: "off",
-  // Resource Shape `/v1` is retired. The portable Form host is a separate
-  // external protocol and is not routed by the normal public edge.
-  "resource-shape": "off",
   // Operator-bearer publication/evaluation surface; never session-routed.
-  "offering-catalogs": "off",
   interfaces: "session",
 };
 

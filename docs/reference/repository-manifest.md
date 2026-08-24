@@ -119,8 +119,6 @@ compatibility report が exact variable の存在、型、default の有無を�
 `requires` は任意、最大16件です。値や credential ではなく、host に必要な機能と
 delivery 名だけを提案します。
 
-- `identity.oidc`: `kind`, root-relative `callbackPath`, optional unique
-  `scopes` (1〜16), `deliver`。
 - `secret.generated`: `kind`, optional `bytes` (16〜64), optional
   `encoding` (`hex` / `base64url`), `deliver`。module ごとに最大8件。
 - `http.endpoint`: `kind`, `deliver`。
@@ -130,14 +128,15 @@ delivery 名だけを提案します。
 
 `deliver` は `variables` または `bindings` のちょうど一方を持ちます。slot は kind
 ごとに closed で、値は exact OpenTofu variable name または runtime binding name
-です。別 requirement と同じ delivery 名を共有できません。OIDC と endpoint は
-module ごとに各1件までです。host-reserved binding、存在しない/non-string variable、
-operator が許可しない OIDC scope や requirement kind は compiler が拒否します。
+です。別 requirement と同じ delivery 名を共有できません。endpoint は module ごとに
+1件までです。host-reserved binding、存在しない/non-string variable、operator が
+許可しない requirement kind は compiler が拒否します。Capsule 固有の
+`identity.oidc` materialization は current Git-owned install flow では拒否されます。
 
 `interface.consume` は provider、製品名、Interface ID、endpoint、credential を宣言
 しません。host は Plan 後の DB-owned InstallConfig から exact type/version を読み、同じ
-Workspace にある `Resolved` Interface がちょうど1件の場合だけ、Capsule OIDC client の
-pairwise principal に最小 permissions の通常の `InterfaceBinding` を作ります。0件または
+Workspace にある `Resolved` Interface がちょうど1件の場合だけ、認証済み Principal に
+最小 permissions の通常の `InterfaceBinding` を作ります。0件または
 複数件、revoked/conflicting binding、operator policy 外の permission/delivery は
 fail closed です。runtime credential は短期発行され、manifest や OpenTofu variable へ
 書き込みません。

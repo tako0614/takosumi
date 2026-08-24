@@ -10,7 +10,6 @@
 import type { JsonValue } from "takosumi-contract";
 import type {
   Capsule,
-  OpenTofuExecutionSource,
   OpenTofuOperation,
   PlanRun,
 } from "@takosumi/internal/deploy-control-api";
@@ -296,13 +295,7 @@ export function validateOperation(operation: OpenTofuOperation): void {
   );
 }
 
-export function validateSource(source: OpenTofuExecutionSource): void {
-  if (source.kind === "operator_module") {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "operator_module source is accepted only by the Resource run seam",
-    );
-  }
+export function validateSource(source: unknown): void {
   if (!isRecord(source)) {
     throw new OpenTofuControllerError(
       "invalid_argument",
@@ -312,7 +305,7 @@ export function validateSource(source: OpenTofuExecutionSource): void {
   if (source.kind !== "git") {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "Stack source.kind must be git",
+      "source.kind must be git",
     );
   }
   requireNonEmptyString(source.url, "source.url");

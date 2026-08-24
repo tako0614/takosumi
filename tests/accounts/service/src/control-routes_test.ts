@@ -463,32 +463,6 @@ test("account-plane control errors preserve structured reason details", async ()
   });
 });
 
-test("account-plane hostname errors redact owner details by structured reason", async () => {
-  const error = Object.assign(
-    new Error(
-      "private.example.test is already claimed by Capsule private-cap in Workspace private-ws",
-    ),
-    {
-      code: "failed_precondition",
-      details: { reason: "app_hostname_unavailable" },
-    },
-  );
-
-  const response = controllerErrorResponse(error);
-  const body = await response.json();
-
-  expect(body).toMatchObject({
-    error: {
-      code: "failed_precondition",
-      message: "app_hostname_unavailable: already exists",
-      details: { reason: "app_hostname_unavailable" },
-    },
-  });
-  expect(JSON.stringify(body)).not.toContain("private.example.test");
-  expect(JSON.stringify(body)).not.toContain("private-cap");
-  expect(JSON.stringify(body)).not.toContain("private-ws");
-});
-
 test("no-state Capsule DELETE fails closed without the safe abandon operation", async () => {
   const fixture = operationsFixture();
   let statusPatches = 0;
@@ -517,7 +491,7 @@ test("no-state Capsule DELETE fails closed without the safe abandon operation", 
   expect(await response?.json()).toMatchObject({
     error: {
       code: "failed_precondition",
-      details: { reason: "capsule_owned_resources_pending" },
+      details: { reason: "capsule_abandon_unavailable" },
     },
   });
   expect(statusPatches).toBe(0);
@@ -2232,182 +2206,6 @@ test("Dashboard Workspace projection pushes active latest-first limit into the s
   ]);
 });
 
-test("Resources Workspace view delegates one authority plus projection operation and caps the page", async () => {
-  const fixture = operationsFixture();
-  const viewCalls: unknown[] = [];
-  const operations = {
-    ...fixture.operations,
-    workspaceViews: {
-      readResources: async (input: unknown) => {
-        viewCalls.push(input);
-        return {
-          view: "resources.v1" as const,
-          workspaceId: workspace.id,
-          space: workspace.id,
-          resources: { items: [] },
-          workloads: { items: [] },
-          forms: { items: [] },
-          hasTargetPool: true,
-        };
-      },
-    },
-  } as unknown as ControlPlaneOperations;
-  const cursor = "workspace_view_cursor_v1";
-  const request = new Request(
-    `https://app.example.test/api/v1/workspaces/${workspace.id}/views/resources.v1?limit=500&cursor=${cursor}`,
-  );
-  const response = await handleWorkspaces(
-    {
-      ...context(operations, request),
-      session: { subject: workspace.ownerUserId },
-    },
-    ["workspaces", workspace.id, "views", "resources.v1"],
-    "GET",
-  );
-
-  expect(response?.status).toBe(200);
-  expect(viewCalls).toEqual([
-    {
-      workspaceId: workspace.id,
-      space: workspace.id,
-      subject: workspace.ownerUserId,
-      requiredAccess: "read",
-      page: { limit: 100, cursor },
-      signal: expect.any(AbortSignal),
-    },
-  ]);
-});
-
-test("Resources Workspace view passes credential restriction to the authority operation", async () => {
-  const fixture = operationsFixture();
-  let viewReads = 0;
-  const operations = {
-    ...fixture.operations,
-    workspaceViews: {
-      readResources: async (input: {
-        readonly credentialWorkspaceId?: string;
-      }) => {
-        viewReads += 1;
-        expect(input.credentialWorkspaceId).toBe("ws_restricted");
-        throw Object.assign(new Error("access denied"), {
-          code: "workspace_view_access_denied",
-        });
-      },
-    },
-  } as unknown as ControlPlaneOperations;
-  const request = new Request(
-    `https://app.example.test/api/v1/workspaces/${workspace.id}/views/resources.v1`,
-  );
-  const response = await handleWorkspaces(
-    {
-      ...context(operations, request),
-      session: { subject: "tsub_other", workspaceId: "ws_restricted" },
-    },
-    ["workspaces", workspace.id, "views", "resources.v1"],
-    "GET",
-  );
-
-  expect(response?.status).toBe(403);
-  expect(viewReads).toBe(1);
-});
-
-test("Resources Workspace view fails closed when composition has no reader port", async () => {
-  const fixture = operationsFixture();
-  const request = new Request(
-    `https://app.example.test/api/v1/workspaces/${workspace.id}/views/resources.v1`,
-  );
-  const response = await handleWorkspaces(
-    context(fixture.operations, request),
-    ["workspaces", workspace.id, "views", "resources.v1"],
-    "GET",
-  );
-
-  expect(response?.status).toBe(503);
-});
-
-test("Resources Workspace view fails required projection errors instead of returning empty data", async () => {
-  const fixture = operationsFixture();
-  const operations = {
-    ...fixture.operations,
-    workspaceViews: {
-      readResources: async () => {
-        throw new Error("form read failed");
-      },
-    },
-  } as unknown as ControlPlaneOperations;
-  const request = new Request(
-    `https://app.example.test/api/v1/workspaces/${workspace.id}/views/resources.v1`,
-  );
-  const response = await handleWorkspaces(
-    context(operations, request),
-    ["workspaces", workspace.id, "views", "resources.v1"],
-    "GET",
-  );
-
-  expect(response?.status).toBe(503);
-  expect(await response?.json()).toMatchObject({
-    error: {
-      code: "feature_unavailable",
-      message: "The control plane is temporarily unavailable.",
-    },
-  });
-});
-
-test("Resources Workspace view reports an invalid opaque cursor as a client error", async () => {
-  const fixture = operationsFixture();
-  const operations = {
-    ...fixture.operations,
-    workspaceViews: {
-      readResources: async () => {
-        throw Object.assign(new Error("invalid cursor"), {
-          code: "workspace_view_cursor_invalid",
-        });
-      },
-    },
-  } as unknown as ControlPlaneOperations;
-  const request = new Request(
-    `https://app.example.test/api/v1/workspaces/${workspace.id}/views/resources.v1?cursor=valid_transport_token`,
-  );
-
-  const response = await handleWorkspaces(
-    context(operations, request),
-    ["workspaces", workspace.id, "views", "resources.v1"],
-    "GET",
-  );
-
-  expect(response?.status).toBe(400);
-  expect(await response?.json()).toMatchObject({
-    error: { code: "invalid_request", message: "cursor is malformed" },
-  });
-});
-
-test("Resources Workspace view applies one route-wide deadline", async () => {
-  const fixture = operationsFixture();
-  let signal: AbortSignal | undefined;
-  const operations = {
-    ...fixture.operations,
-    workspaceViews: {
-      readResources: async (input: { readonly signal?: AbortSignal }) => {
-        signal = input.signal;
-        return await new Promise<never>(() => undefined);
-      },
-    },
-  } as unknown as ControlPlaneOperations;
-  const request = new Request(
-    `https://app.example.test/api/v1/workspaces/${workspace.id}/views/resources.v1`,
-  );
-  const startedAt = Date.now();
-  const response = await handleWorkspaces(
-    context(operations, request),
-    ["workspaces", workspace.id, "views", "resources.v1"],
-    "GET",
-  );
-
-  expect(response?.status).toBe(503);
-  expect(signal?.aborted).toBeTrue();
-  expect(Date.now() - startedAt).toBeLessThan(2_000);
-});
-
 test("Dashboard notification projection batches authorized Workspace activity", async () => {
   const fixture = operationsFixture();
   const activityCalls: unknown[] = [];
@@ -2872,6 +2670,39 @@ test("Capsule create forwards optional projectId and otherwise uses the canonica
 
   expect(fixture.capsuleCreates[0].projectId).toBe("prj_explicit");
   expect("projectId" in fixture.capsuleCreates[1]).toBe(false);
+});
+
+test("Capsule create rejects the retired managed-hostname input", async () => {
+  const fixture = operationsFixture();
+  const request = new Request(
+    `https://app.example.test/api/v1/workspaces/${workspace.id}/capsules`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "retired-hostname",
+        environment: "prod",
+        sourceId: "src_git",
+        installConfigId: "cfg_default",
+        managedPublicHostname: { mode: "vanity" },
+      }),
+    },
+  );
+
+  const response = await handleWorkspaces(
+    context(fixture.operations, request),
+    ["workspaces", workspace.id, "capsules"],
+    "POST",
+  );
+
+  expect(response?.status).toBe(400);
+  expect(await response?.json()).toMatchObject({
+    error: {
+      code: "invalid_request",
+      message: "body contains unknown fields: managedPublicHostname",
+    },
+  });
+  expect(fixture.capsuleCreates).toEqual([]);
 });
 
 test("Capsule ProviderBindings accept only the canonical route and payload", async () => {

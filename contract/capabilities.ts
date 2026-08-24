@@ -19,13 +19,9 @@ export interface TakosumiWellKnownDocument {
 
 export interface TakosumiWellKnownFeatures {
   readonly stacks: boolean;
-  readonly resource_shapes: boolean;
   readonly opentofu_runner: boolean;
   readonly oidc: boolean;
   readonly workload_identity: boolean;
-  readonly compat_framework: boolean;
-  /** Installed, versioned compatibility profile tokens. */
-  readonly compatibility_profiles: readonly string[];
   /** Takosumi-managed runtime Interface/InterfaceBinding API availability. */
   readonly interfaces: boolean;
 }
@@ -43,16 +39,6 @@ export interface TakosumiProductCapabilities {
   readonly apiVersion: typeof TAKOSUMI_API_VERSION;
   readonly resources: TakosumiResourceCapabilities;
   readonly adapters: TakosumiAdapterCapabilities;
-  readonly compat: TakosumiCompatCapabilities;
-  /**
-   * Installed compatibility profiles and the authority plane(s) each profile
-   * exposes. A profile is never inferred from a route path or vendor name.
-   *
-   * `control` means the profile translates supported requests into the
-   * canonical Resource Deploy API. `data` means it can consume an authorized,
-   * Ready Resource projection. A profile that does both lists both planes.
-   */
-  readonly compatibilityProfiles: TakosumiCompatibilityProfileCapabilities;
   readonly identity: TakosumiIdentityCapabilities;
   readonly operator: TakosumiOperatorCapabilities;
   /** Versioned Takosumi extensions; these are not OpenTofu standards. */
@@ -60,10 +46,9 @@ export interface TakosumiProductCapabilities {
 }
 
 /**
- * Open capability-token map. Installed Form Packages provide portable typed
- * schemas; operator-defined tokens are advertised only when their host schema
- * and adapter/plugin are installed. No first-party provider is a capability
- * authority.
+ * Open capability-token map for provider-neutral resource types. Operator-
+ * defined tokens are advertised only when the corresponding provider support
+ * is installed; no first-party provider is a capability authority.
  */
 export type TakosumiResourceCapabilities = Readonly<Record<string, boolean>>;
 
@@ -73,41 +58,6 @@ export type TakosumiResourceCapabilities = Readonly<Record<string, boolean>>;
  * a compiled catalog.
  */
 export type TakosumiAdapterCapabilities = Readonly<Record<string, boolean>>;
-
-/**
- * Compatibility-profile capability map.
- *
- * The named fields are the profiles understood by this client build. The map
- * is intentionally open so an operator can advertise a versioned profile such
- * as `compat.redis.v1` or `compat.example.events.v2` without waiting for a
- * Takosumi contract release. Unknown keys are discovery tokens only; they do
- * not make Core implement or validate the corresponding protocol.
- */
-export type TakosumiCompatCapabilities = Readonly<Record<string, boolean>>;
-
-/** Authority plane exposed by one scoped, versioned compatibility profile. */
-export type TakosumiCompatibilityPlane = "control" | "data";
-
-export interface TakosumiCompatibilityProfileCapability {
-  readonly planes: readonly TakosumiCompatibilityPlane[];
-}
-
-/** Profile capability token -> explicit control/data authority declaration. */
-export type TakosumiCompatibilityProfileCapabilities = Readonly<
-  Record<string, TakosumiCompatibilityProfileCapability>
->;
-
-/** Runtime guard for an explicitly scoped and versioned compatibility token. */
-export function isTakosumiCompatibilityProfileToken(
-  value: unknown,
-): value is `compat.${string}` {
-  return (
-    typeof value === "string" &&
-    /^compat\.[A-Za-z0-9][A-Za-z0-9_-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*)*\.v[1-9][0-9]*(?:(?:alpha|beta)[1-9][0-9]*)?$/u.test(
-      value,
-    )
-  );
-}
 
 export interface TakosumiIdentityCapabilities {
   readonly oidc_issuer: boolean;
@@ -162,10 +112,7 @@ export interface CreateTakosumiDiscoveryOptions {
   readonly adapters?: Partial<TakosumiAdapterCapabilities>;
   readonly identity?: Partial<TakosumiIdentityCapabilities>;
   readonly operator?: Partial<TakosumiOperatorCapabilities>;
-  readonly compat?: Partial<TakosumiCompatCapabilities>;
-  readonly compatibilityProfiles?: Partial<TakosumiCompatibilityProfileCapabilities>;
   readonly endpoints?: Readonly<Record<string, string>>;
-  readonly resourceShapesEnabled?: boolean;
   readonly interfacesEnabled?: boolean;
   /** Open, versioned product/extension capability tokens. */
   readonly extensions?: readonly string[];
@@ -188,16 +135,9 @@ export function createTakosumiWellKnownDocument(
     api_versions: [TAKOSUMI_API_VERSION],
     features: {
       stacks: capabilities.resources.Stack,
-      resource_shapes:
-        options.resourceShapesEnabled ??
-        resourceShapeApiEnabled(capabilities.resources),
       opentofu_runner: capabilities.adapters.opentofu,
       oidc: capabilities.identity.oidc_issuer,
       workload_identity: capabilities.identity.workload_identity,
-      compat_framework: capabilities.compat.framework,
-      compatibility_profiles: Object.keys(
-        capabilities.compatibilityProfiles,
-      ).sort(),
       interfaces: options.interfacesEnabled ?? false,
     },
     endpoints: {
@@ -228,16 +168,6 @@ function normalizeMobileOidcClientId(
 export function createTakosumiProductCapabilities(
   options: Partial<CreateTakosumiDiscoveryOptions> = {},
 ): TakosumiProductCapabilities {
-  const compatibilityProfiles = normalizeCompatibilityProfiles(
-    options.compatibilityProfiles,
-  );
-  const compat: TakosumiCompatCapabilities = {
-    framework: true,
-    ...(options.compat ?? {}),
-    ...Object.fromEntries(
-      Object.keys(compatibilityProfiles).map((token) => [token, true]),
-    ),
-  };
   const operator: TakosumiOperatorCapabilities = {
     multi_tenant_workspaces: false,
     workspace_members: false,
@@ -260,8 +190,6 @@ export function createTakosumiProductCapabilities(
       opentofu: true,
       ...(options.adapters ?? {}),
     },
-    compat,
-    compatibilityProfiles,
     identity: {
       oidc_issuer: true,
       external_oidc_login: false,
@@ -278,33 +206,6 @@ export function createTakosumiProductCapabilities(
       ]),
     ]),
   };
-}
-
-function normalizeCompatibilityProfiles(
-  profiles: Partial<TakosumiCompatibilityProfileCapabilities> | undefined,
-): TakosumiCompatibilityProfileCapabilities {
-  const normalized: Record<string, TakosumiCompatibilityProfileCapability> = {};
-  for (const [token, capability] of Object.entries(profiles ?? {})) {
-    if (!capability) continue;
-    if (!isTakosumiCompatibilityProfileToken(token)) {
-      throw new TypeError(
-        `compatibility profile token must be a scoped compat.* version token: ${token}`,
-      );
-    }
-    const planes = [...new Set(capability.planes)].sort();
-    if (
-      planes.length === 0 ||
-      planes.some((plane) => plane !== "control" && plane !== "data")
-    ) {
-      throw new TypeError(
-        `compatibility profile ${token} must declare control or data`,
-      );
-    }
-    normalized[token] = {
-      planes: Object.freeze(planes),
-    };
-  }
-  return Object.freeze(normalized);
 }
 
 function mergeResourceCapabilities(
@@ -329,12 +230,4 @@ function mergeResourceCapabilities(
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/g, "");
-}
-
-function resourceShapeApiEnabled(
-  resources: TakosumiResourceCapabilities,
-): boolean {
-  return Object.entries(resources).some(
-    ([key, enabled]) => key !== "Stack" && enabled,
-  );
 }

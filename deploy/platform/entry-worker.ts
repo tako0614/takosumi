@@ -1,15 +1,9 @@
-import { WorkerEntrypoint } from "cloudflare:workers";
-
 import platformWorker, {
   CoordinationObject,
   LocalSubstrateOpenTofuRunnerProxyObject,
   OpenTofuRunOwnerObject,
   OpenTofuRunnerObject,
-  materializePlatformCapsuleRuntimeBindings,
-  rollbackPlatformCapsuleRuntimeBindings,
-  type PlatformHostRuntimeBindingMaterializationInput,
-  type PlatformHostRuntimeBindingMaterializationResult,
-  type PlatformHostRuntimeMaterializerEnv,
+  type CloudflareWorkerEnv,
   type PlatformExecutionContext,
 } from "./worker.ts";
 import {
@@ -25,27 +19,7 @@ export {
   OpenTofuRunnerObject,
 };
 
-/**
- * Private RPC entrypoint used by a selected host while publishing one exact
- * Capsule runtime. It is intentionally absent from the public Takosumi HTTP
- * router; a Cloudflare Service Binding is the capability to call it.
- */
-export class TakosumiHostRuntimeMaterializerEntrypoint extends WorkerEntrypoint<PlatformHostRuntimeMaterializerEnv> {
-  materializeRuntimeBindings(
-    input: PlatformHostRuntimeBindingMaterializationInput,
-  ): Promise<PlatformHostRuntimeBindingMaterializationResult> {
-    return materializePlatformCapsuleRuntimeBindings(this.env, input);
-  }
-
-  rollbackRuntimeBindings(input: {
-    readonly request: PlatformHostRuntimeBindingMaterializationInput["request"];
-    readonly rollbackReceipt: string;
-  }): Promise<void> {
-    return rollbackPlatformCapsuleRuntimeBindings(this.env, input);
-  }
-}
-
-type VersionedPlatformEnv = PlatformHostRuntimeMaterializerEnv & {
+type VersionedPlatformEnv = CloudflareWorkerEnv & {
   readonly TAKOSUMI_VERSION_METADATA?: PlatformWorkerVersionMetadata;
 };
 

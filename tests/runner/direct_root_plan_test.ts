@@ -6,8 +6,8 @@ import { workspaceForRun } from "../../runner/lib/artifacts.ts";
 import { runPlan } from "../../runner/lib/plan_apply.ts";
 import { generateOpenTofuChildModuleRoot } from "../../lib/rootgen/src/mod.ts";
 
-test("first-class Resource operator modules execute only through an explicit generated root", async () => {
-  const runId = `resource-operator-module-${crypto.randomUUID()}`;
+test("legacy source-less destroy operator modules require the internal drain marker and generated root", async () => {
+  const runId = `legacy-sourceless-destroy-${crypto.randomUUID()}`;
   const workspace = workspaceForRun(runId);
   try {
     const generatedRoot = generateOpenTofuChildModuleRoot({
@@ -17,9 +17,9 @@ test("first-class Resource operator modules execute only through an explicit gen
         message: { from: "message", type: "string" },
       },
     });
-    const result = await runPlan(runId, {
+    const legacyRequest = {
       planRun: {
-        operation: "create",
+        operation: "destroy",
         source: {
           kind: "operator_module",
           digest:
@@ -36,15 +36,38 @@ test("first-class Resource operator modules execute only through an explicit gen
         ],
       },
       requiredProviders: [],
+      runnerProfile: {
+        id: "legacy-recovery",
+        allowedProviders: [],
+        requireProviderBindings: false,
+      },
       outputAllowlist: {
         message: { from: "message" },
       },
+    } as const;
+
+    for (const operation of ["create", "update"] as const) {
+      await expect(
+        runPlan(`${runId}-${operation}`, {
+          ...legacyRequest,
+          planRun: { ...legacyRequest.planRun, operation },
+        }),
+      ).rejects.toThrow(
+        "operator_module is limited to internal legacy source-less destroy recovery",
+      );
+    }
+    await expect(runPlan(`${runId}-unmarked`, legacyRequest)).rejects.toThrow(
+      "operator_module is limited to internal legacy source-less destroy recovery",
+    );
+
+    const result = await runPlan(runId, {
+      ...legacyRequest,
+      legacySourcelessDestroyRecovery: true,
     });
 
     expect(result.status).toBe("succeeded");
-    expect(result.plannedOutputs).toEqual({
-      message: { sensitive: false, value: "resource-module" },
-    });
+    expect(result.planDigest).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(result.plannedOutputs).toBeUndefined();
     expect(generatedRoot.files["main.tf"]).toContain("from = module.app");
     const moduleInfo = JSON.parse(
       await readFile(workspace.moduleInfoPath, "utf8"),
@@ -53,8 +76,9 @@ test("first-class Resource operator modules execute only through an explicit gen
 
     await expect(
       runPlan(`${runId}-missing-root`, {
+        legacySourcelessDestroyRecovery: true,
         planRun: {
-          operation: "create",
+          operation: "destroy",
           source: {
             kind: "operator_module",
             digest: "sha256:module",

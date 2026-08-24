@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   collectGeneralizationBoundarySources,
+  findRetiredPathViolations,
   GENERALIZATION_SCAN_ROOTS,
 } from "../../scripts/check-generalization-boundaries";
 import { findGeneralizationBoundaryViolations } from "../../scripts/lib/generalization-boundaries";
@@ -36,6 +37,33 @@ describe("generalization boundary scanner", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  test("rejects retired current Takoform host surfaces without rejecting replay-only migration bytes", () => {
+    const violations = findRetiredPathViolations([
+      {
+        path: "core/api/portable_host_idempotency.ts",
+        content: "export class PortableHostIdempotency {}",
+      },
+      {
+        path: "core/domains/resource-shape/service.ts",
+        content: "export class ResourceShapeService {}",
+      },
+      {
+        path: "fixtures/takoform-standard-1.0.1-host-matrix.json",
+        content: '{"format":"takosumi.takoform-standard-host-matrix@v1"}',
+      },
+      {
+        path: "worker/src/d1_portable_host_idempotency_schema.ts",
+        content: "export const D1_PORTABLE_HOST_IDEMPOTENCY_SCHEMA_STATEMENTS = [];",
+      },
+    ]);
+
+    expect(violations.map((violation) => violation.path)).toEqual([
+      "core/api/portable_host_idempotency.ts",
+      "core/domains/resource-shape",
+      "fixtures/takoform-standard-1.0.1-host-matrix.json",
+    ]);
   });
 
   test("rejects aliases to removed contract modules", () => {
@@ -284,19 +312,11 @@ describe("generalization boundary scanner", () => {
     ]);
   });
 
-  test("allows explicit provider adapters, Resource Shape Space, and migration history", () => {
+  test("allows explicit provider adapters and immutable migration history", () => {
     const violations = findGeneralizationBoundaryViolations([
       {
         path: "providers/cloudflare/connection.ts",
         content: "export const cloudflareCredentialDriver = {};",
-      },
-      {
-        path: "contract/resource-shape.ts",
-        content: "export interface Space { id: string }",
-      },
-      {
-        path: "cli/src/cli-resource-shape-commands.ts",
-        content: "const resourceSpace = record.spaceId;",
       },
       {
         path: "core/adapters/storage/migrations.ts",
@@ -334,74 +354,6 @@ describe("generalization boundary scanner", () => {
       "output-name-magic",
       "output-name-magic",
     ]);
-  });
-
-  test("allows Resource Shape Space only inside explicit mixed-file regions", () => {
-    const allowed = findGeneralizationBoundaryViolations([
-      {
-        path: "dashboard/src/i18n/en.ts",
-        content: [
-          "// --- Resource Shape",
-          '\"resources.scope.title\": \"Resource Space\",',
-          "// --- account",
-        ].join("\n"),
-      },
-      {
-        path: "dashboard/src/lib/control-api.ts",
-        content: [
-          "// --- Resource Shape API",
-          "interface ResourceTargetPool { readonly spaceId: string }",
-          "// Helpers shared by the control views",
-        ].join("\n"),
-      },
-      {
-        path: "deploy/platform/worker.ts",
-        content: [
-          "async function platformResourceShapeExternalRequest() {",
-          '  return Response.json({ error_description: \"Resource Space mismatch\" });',
-          "}",
-          "function platformInterfaceAccessFailure() {}",
-          "function platformResourceShapeRequestedSpaces(url: URL) {",
-          '  return url.searchParams.get(\"space\");',
-          "}",
-          "function platformResourceShapeActorContext() {}",
-          "export function createPlatformCanonicalResourceReadAuthority() {",
-          '  return url.searchParams.get(\"space\");',
-          "}",
-          "async function resolveReadyCompatibilityEvidence() {}",
-        ].join("\n"),
-      },
-      {
-        path: "core/bootstrap.ts",
-        content: [
-          "// --- Resource Shape host inventory",
-          "const namespace = candidate.spaceId;",
-          "// --- End Resource Shape host inventory",
-        ].join("\n"),
-      },
-    ]);
-
-    expect(allowed).toEqual([]);
-
-    const rejected = findGeneralizationBoundaryViolations([
-      {
-        path: "dashboard/src/lib/control-api.ts",
-        content: "interface LegacyStack { readonly spaceId: string }",
-      },
-      {
-        path: "deploy/platform/worker.ts",
-        content:
-          'const spaceId = url.searchParams.get(\"space\") ?? workspaceId;',
-      },
-      {
-        path: "core/bootstrap.ts",
-        content: "const namespace = candidate.spaceId;",
-      },
-    ]);
-
-    expect(new Set(rejected.map((violation) => violation.ruleId))).toEqual(
-      new Set(["retired-stack-alias", "retired-stack-request-alias"]),
-    );
   });
 
   test("rejects retired artifact object-key layouts outside immutable migrations", () => {
@@ -1381,10 +1333,6 @@ describe("generalization boundary scanner", () => {
         content: "deliveryIsImplemented(delivery, credentialIssuerConfigured);",
       },
       {
-        path: "core/domains/interfaces/output_resolver.ts",
-        content: "if (resource?.spaceId === workspaceId) return resource;",
-      },
-      {
         path: "core/domains/deploy-control/run-engine/run_engine.ts",
         content:
           "return /Durable Object reset because its code was updated/i.test(message);",
@@ -1397,28 +1345,6 @@ describe("generalization boundary scanner", () => {
         path: "dashboard/src/views/new/NewAppView.tsx",
         content:
           'const placeholder = "https://github.com/your-name/service.git";',
-      },
-      {
-        path: "contract/resource-shape.ts",
-        content: "export type ResourceShapeKind = BundledResourceShapeKind;",
-      },
-      {
-        path: "deploy/platform/worker.ts",
-        content:
-          "parseCapabilityList(env.TAKOSUMI_RESOURCE_SHAPES, RESOURCE_CAPABILITY_KEYS);",
-      },
-      {
-        path: "core/domains/resource-shape/planner.ts",
-        content: "const SECRET_VALUE_PATTERN = /github_pat_[A-Za-z0-9_]+/;",
-      },
-      {
-        path: "core/domains/resource-shape/resolver.ts",
-        content: "export const SHAPE_INTERFACE_REQUIREMENTS = {};",
-      },
-      {
-        path: "contract/target.ts",
-        content:
-          "export type TargetPoolImplementation = TargetImplementationDescriptor;",
       },
       {
         path: "core/adapters/operator-config/types.ts",
@@ -1452,19 +1378,13 @@ describe("generalization boundary scanner", () => {
         "closed-store-taxonomy",
         "provider-derived-backup-adapter",
         "fixed-interface-delivery",
-        "resource-space-workspace-inference",
         "runner-substrate-message-in-core",
         "database-url-encryption-inference",
         "fixed-forge-placeholder",
-        "closed-resource-shape-kind",
-        "closed-resource-shape-kind",
-        "closed-resource-capability-taxonomy",
-        "retired-resource-descriptor-alias",
         "closed-operator-config-source",
         "diagnostic-message-inference",
         "silent-legacy-request-normalization",
         "retired-provider-delivery-alias",
-        "provider-token-catalog-in-resource-core",
       ]),
     );
   });

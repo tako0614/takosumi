@@ -76,11 +76,8 @@ import type {
 import type {
   CommitRunStateInput,
   CommitRunStateResult,
-  CommitResourceRunInput,
-  CommitResourceRunResult,
   CommitRestoredStateInput,
   CommitRestoredStateResult,
-  BeginResourceOperationRunResult,
   BeginApplyRunResult,
   CapsuleExecutionAuthority,
   CapsuleExecutionAuthorityInput,
@@ -91,26 +88,17 @@ import type {
   PlanRunInputs,
   PublicHostReservation,
   RecoverableOpenTofuRunListOptions,
-  RecoverableResourceOperationRunListOptions,
-  ResourceOperationRun,
-  ReservePublicHostInput,
-  ReservePublicHostResult,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
   CapsuleListPageParams,
   TransitionRunInput,
   TransitionRunResult,
-  TransitionResourceOperationRunInput,
-  TransitionResourceOperationRunResult,
 } from "./store.ts";
 import {
-  assertResourceOperationRun,
-  assertResourceOperationRunStart,
   boundedActivityWorkspaceIds,
   clampActivityLimit,
   clampRecoverableOpenTofuRunListLimit,
-  clampRecoverableResourceOperationRunListLimit,
   clampRunListLimit,
   capsuleRuntimeSafetyFromRun,
   compareStoredRunRecordsAsc,
@@ -119,9 +107,6 @@ import {
   isApplyRunRecord,
   isPlanRunRecord,
   isRecoverableOpenTofuRunRecord,
-  resourceOperationRunTransitionAllowed,
-  resourceOperationRunNeedsRecovery,
-  sameResourceOperationIdentity,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
@@ -147,7 +132,6 @@ const RUN_KINDS_PLAN = ["plan", "destroy_plan"] as const;
 const RUN_KINDS_APPLY = ["apply", "destroy_apply"] as const;
 const RUN_KIND_SOURCE_SYNC = "source_sync";
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check";
-const RUN_KIND_RESOURCE_OPERATION = "resource_operation";
 
 function compatibilityReportSourceId(value: string | null | undefined): string {
   if (!value?.trim()) {
@@ -785,130 +769,6 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
 
   async getCompatibilityCheckRun(id: string): Promise<Run | undefined> {
     return await this.#getRun<Run>(id, RUN_KIND_COMPATIBILITY_CHECK);
-  }
-
-  async beginResourceOperationRun(
-    run: ResourceOperationRun,
-  ): Promise<BeginResourceOperationRunResult> {
-    assertResourceOperationRunStart(run);
-    const inserted = await this.#db
-      .insert(pgSchema.runs)
-      .values({
-        id: run.id,
-        kind: RUN_KIND_RESOURCE_OPERATION,
-        workspaceId: run.workspaceId,
-        sourceId: null,
-        capsuleId: null,
-        status: run.status,
-        leaseToken: null,
-        heartbeatAt: null,
-        createdAt: String(run.createdAt),
-        runJson: run,
-      })
-      .onConflictDoNothing({ target: pgSchema.runs.id })
-      .returning({ json: pgSchema.runs.runJson });
-    if (inserted[0]) return { status: "created", run };
-    const current = await this.getResourceOperationRun(run.id);
-    if (!current) return { status: "conflict" };
-    return sameResourceOperationIdentity(current, run)
-      ? { status: "existing", run: current }
-      : { status: "conflict", run: current };
-  }
-
-  async getResourceOperationRun(
-    id: string,
-  ): Promise<ResourceOperationRun | undefined> {
-    return await this.#getRun<ResourceOperationRun>(
-      id,
-      RUN_KIND_RESOURCE_OPERATION,
-    );
-  }
-
-  async getResourceFormTransitionRun(input: {
-    readonly workspaceId: string;
-    readonly resourceId: string;
-    readonly operationId: string;
-  }): Promise<ResourceOperationRun | undefined> {
-    const rows = await this.#pgManyJson<ResourceOperationRun>(
-      pgSchema.runs,
-      pgSchema.runs.runJson,
-      {
-        where: and(
-          eq(pgSchema.runs.kind, RUN_KIND_RESOURCE_OPERATION),
-          eq(pgSchema.runs.workspaceId, input.workspaceId),
-          sql`${pgSchema.runs.runJson} ->> 'resourceOperation' = 'form_transition'`,
-          sql`${pgSchema.runs.runJson} -> 'subject' ->> 'id' = ${input.resourceId}`,
-          sql`${pgSchema.runs.runJson} ->> 'resourceOperationKey' = ${input.operationId}`,
-        ),
-        limit: 1,
-      },
-    );
-    return rows[0];
-  }
-
-  async transitionResourceOperationRun(
-    input: TransitionResourceOperationRunInput,
-  ): Promise<TransitionResourceOperationRunResult> {
-    assertResourceOperationRun(input.run);
-    if (
-      input.run.resourceOperationKey !== input.operationKey ||
-      input.run.resourceOperationVersion !== input.expectedVersion + 1
-    ) {
-      throw new TypeError("invalid Resource operation Run transition identity");
-    }
-    const expected = await this.getResourceOperationRun(input.id);
-    if (
-      !expected ||
-      expected.resourceOperationVersion !== input.expectedVersion ||
-      !input.expectFrom.includes(expected.status) ||
-      !resourceOperationRunTransitionAllowed(expected, input.run)
-    ) {
-      return { won: false, ...(expected ? { run: expected } : {}) };
-    }
-    const rows = await this.#db
-      .update(pgSchema.runs)
-      .set({ status: input.run.status, runJson: input.run })
-      .where(
-        and(
-          eq(pgSchema.runs.id, input.id),
-          eq(pgSchema.runs.kind, RUN_KIND_RESOURCE_OPERATION),
-          inArray(pgSchema.runs.status, [...input.expectFrom]),
-          sql`${pgSchema.runs.runJson} ->> 'resourceOperationKey' = ${input.operationKey}`,
-          sql`${pgSchema.runs.runJson} ->> 'resourceOperationVersion' = ${String(input.expectedVersion)}`,
-        ),
-      )
-      .returning({ json: pgSchema.runs.runJson });
-    const won = parseRow(rows[0]) as ResourceOperationRun | undefined;
-    if (won) return { won: true, run: won };
-    const current = await this.getResourceOperationRun(input.id);
-    return { won: false, ...(current ? { run: current } : {}) };
-  }
-
-  async listRecoverableResourceOperationRuns(
-    options: RecoverableResourceOperationRunListOptions = {},
-  ): Promise<readonly ResourceOperationRun[]> {
-    const rows = await this.#pgManyJson<ResourceOperationRun>(
-      pgSchema.runs,
-      pgSchema.runs.runJson,
-      {
-        where: and(
-          eq(pgSchema.runs.kind, RUN_KIND_RESOURCE_OPERATION),
-          options.workspaceId === undefined
-            ? sql`true`
-            : eq(pgSchema.runs.workspaceId, options.workspaceId),
-          or(
-            and(
-              eq(pgSchema.runs.status, "running"),
-              sql`${pgSchema.runs.runJson} ->> 'resourceOperation' NOT IN ('artifact', 'form_transition')`,
-            ),
-            sql`${pgSchema.runs.runJson} -> 'resourceOperationAudit' ->> 'status' = 'pending'`,
-          ),
-        ),
-        orderBy: [asc(pgRunCreatedAtMillisOrder()), asc(pgSchema.runs.id)],
-        limit: clampRecoverableResourceOperationRunListLimit(options.limit),
-      },
-    );
-    return rows.filter(resourceOperationRunNeedsRecovery);
   }
 
   async putBackupRun(run: Run): Promise<Run> {
@@ -1846,153 +1706,6 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return pageFromProbe(rows.map(normalizeCapsuleRecord), limit);
   }
 
-  async reservePublicHost(
-    input: ReservePublicHostInput,
-  ): Promise<ReservePublicHostResult> {
-    const hostname = input.hostname.toLowerCase();
-    const workspace = await this.getWorkspace(input.workspaceId);
-    if (!workspace) {
-      throw new Error("public host reservation workspace was not found");
-    }
-    const ownerUserId = workspace.ownerUserId;
-    const limit =
-      input.allocationKind === "vanity" && input.vanitySlotLimit !== undefined
-        ? Math.max(0, Math.floor(input.vanitySlotLimit))
-        : -1;
-    const reserve = async (
-      client: SqlClient,
-    ): Promise<ReservePublicHostResult> => {
-      const rows = await client.query<Record<string, unknown>>(
-        `with active_capsule as (
-           select id
-           from takosumi_capsules
-           where id = $4
-             and space_id = $3
-             and status <> 'destroyed'
-           for update
-         )
-         insert into takosumi_public_host_reservations (
-           hostname, owner_user_id, workspace_id, installation_id,
-           installation_name, allocation_kind, status,
-           reserved_at, updated_at, released_at
-         )
-         select $1, $2, $3, $4, $5, $6, 'reserved', $7, $7, null
-         from active_capsule
-         where $8 < 0
-            or (
-              select count(*)
-              from takosumi_public_host_reservations
-              where owner_user_id = $2
-                and allocation_kind = 'vanity'
-                and status = 'reserved'
-                and hostname <> $1
-            ) < $8
-         on conflict (hostname) do update
-         set owner_user_id = excluded.owner_user_id,
-             workspace_id = excluded.workspace_id,
-             installation_id = excluded.installation_id,
-             installation_name = excluded.installation_name,
-             allocation_kind = excluded.allocation_kind,
-             status = 'reserved',
-             reserved_at = case
-               when takosumi_public_host_reservations.installation_id = excluded.installation_id
-               then takosumi_public_host_reservations.reserved_at
-               else excluded.reserved_at
-             end,
-             updated_at = excluded.updated_at,
-             released_at = null
-         where takosumi_public_host_reservations.status = 'released'
-            or takosumi_public_host_reservations.installation_id = excluded.installation_id
-         returning hostname, owner_user_id, workspace_id, installation_id,
-                   installation_name, allocation_kind, status,
-                   reserved_at, updated_at, released_at`,
-        [
-          hostname,
-          ownerUserId,
-          input.workspaceId,
-          input.capsuleId,
-          input.capsuleName,
-          input.allocationKind,
-          input.now,
-          limit,
-        ],
-      );
-      const won = rows.rows[0];
-      if (won) {
-        return {
-          reserved: true,
-          reservation: publicHostReservationFromRow(won),
-        };
-      }
-      const existing = await client.query<Record<string, unknown>>(
-        `select hostname, owner_user_id, workspace_id, installation_id,
-                installation_name, allocation_kind, status,
-                reserved_at, updated_at, released_at
-         from takosumi_public_host_reservations
-         where hostname = $1`,
-        [hostname],
-      );
-      const row = existing.rows[0];
-      const reservation = row ? publicHostReservationFromRow(row) : undefined;
-      if (
-        reservation?.status === "reserved" &&
-        reservation.capsuleId !== input.capsuleId
-      ) {
-        return {
-          reserved: false,
-          reservation,
-          reason: "already_reserved",
-        };
-      }
-      const activeCapsule = await client.query<Record<string, unknown>>(
-        `select id
-         from takosumi_capsules
-         where id = $1
-           and space_id = $2
-           and status <> 'destroyed'
-         limit 1`,
-        [input.capsuleId, input.workspaceId],
-      );
-      if (!activeCapsule.rows[0]) {
-        return { reserved: false, reason: "capsule_inactive" };
-      }
-      if (limit >= 0) {
-        const count = await client.query<{ count: string | number }>(
-          `select count(*) as count
-           from takosumi_public_host_reservations
-           where owner_user_id = $1
-             and allocation_kind = 'vanity'
-             and status = 'reserved'
-             and hostname <> $2`,
-          [ownerUserId, hostname],
-        );
-        if (Number(count.rows[0]?.count ?? 0) >= limit) {
-          return {
-            reserved: false,
-            reason: "owner_slot_limit_reached",
-            vanitySlotLimit: limit,
-          };
-        }
-      }
-      if (!reservation) {
-        throw new Error(
-          "public host reservation mutation did not return a reservation",
-        );
-      }
-      return { reserved: false, reservation, reason: "already_reserved" };
-    };
-
-    return await this.#client.transaction(async (transaction) => {
-      if (limit >= 0) {
-        await transaction.query(
-          `select pg_advisory_xact_lock(hashtext($1::text))`,
-          [`takosumi:public-host-vanity:${ownerUserId}`],
-        );
-      }
-      return await reserve(transaction);
-    });
-  }
-
   async getPublicHostReservation(
     hostname: string,
   ): Promise<PublicHostReservation | undefined> {
@@ -2116,34 +1829,6 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       async (transaction: SqlTransaction) => {
         const txDb = this.#drizzleForClient(transaction);
         return await this.#commitRunStateWrites(txDb, input);
-      },
-    );
-  }
-
-  async commitResourceRun(
-    input: CommitResourceRunInput,
-  ): Promise<CommitResourceRunResult> {
-    return await this.#client.transaction(
-      async (transaction: SqlTransaction) => {
-        const db = this.#drizzleForClient(transaction);
-        const committed = await pgUpdateTerminalRunWithLease(
-          db,
-          input.applyRunTerminal.operation === "destroy"
-            ? "destroy_apply"
-            : "apply",
-          RUN_KINDS_APPLY,
-          input.applyRunTerminal,
-          input.applyRunLeaseToken,
-        );
-        if (!committed) return { applyRunLeaseLost: true };
-        await pgUpsertRun(
-          db,
-          input.planRunApplied.operation === "destroy"
-            ? "destroy_plan"
-            : "plan",
-          input.planRunApplied,
-        );
-        return {};
       },
     );
   }

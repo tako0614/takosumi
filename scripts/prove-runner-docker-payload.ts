@@ -1,13 +1,10 @@
 /**
  * Emit provider-free plan/apply envelopes for the real runner image proof.
  *
- * The current generated-root protocol carries an explicit operator-module
- * execution source separately from generatedRoot. The proof module is only an
- * inert transport fixture: all proof values are produced by the ordinary root
- * main.tf, with no provider, resource, data source, or retired moduleFiles.
+ * The proof uses a pinned Git source that the Docker harness restores into the
+ * runner workspace before dispatch. All proof values are produced by the
+ * ordinary root main.tf, with no provider, resource, or data source.
  */
-
-import { createHash } from "node:crypto";
 
 export const RUNNER_PROOF_ENVELOPE_KIND = "takosumi.opentofu-run@v1";
 
@@ -19,7 +16,7 @@ export const RUNNER_PROOF_OUTPUTS = {
     "https://proof.example.com/.well-known/takosumi-services.json",
 } as const;
 
-const PROOF_MAIN_TF = [
+export const RUNNER_PROOF_MAIN_TF = [
   "terraform {",
   '  required_version = ">= 1.9.0"',
   "}",
@@ -49,30 +46,14 @@ const PROOF_MAIN_TF = [
   "",
 ].join("\n");
 
-const PROOF_OPERATOR_MODULE = {
-  files: [
-    {
-      path: "main.tf",
-      text: "# Intentionally empty: the provider-free proof runs in generatedRoot.\n",
-    },
-  ],
-} as const;
-
-const PROOF_OPERATOR_DIGEST = `sha256:${createHash("sha256")
-  .update(JSON.stringify(PROOF_OPERATOR_MODULE))
-  .digest("hex")}`;
-
-function generatedRoot() {
-  return { files: { "main.tf": PROOF_MAIN_TF } };
-}
-
 function planRun(runId: string) {
   return {
     id: runId,
     operation: "create",
     source: {
-      kind: "operator_module",
-      digest: PROOF_OPERATOR_DIGEST,
+      kind: "git",
+      url: "https://proof.invalid/runner.git",
+      commit: "0123456789abcdef0123456789abcdef01234567",
     },
     requiredProviders: [],
   } as const;
@@ -80,8 +61,6 @@ function planRun(runId: string) {
 
 function requestBase(runId: string) {
   return {
-    generatedRoot: generatedRoot(),
-    operatorModule: PROOF_OPERATOR_MODULE,
     planRun: planRun(runId),
     runnerProfile: {
       id: "runner-docker-proof",
@@ -135,9 +114,13 @@ export function buildRunnerProofApplyEnvelope(
 
 function main(): void {
   const [mode, runId, planDigest] = process.argv.slice(2);
+  if (mode === "source") {
+    process.stdout.write(RUNNER_PROOF_MAIN_TF);
+    return;
+  }
   if (!mode || !runId) {
     console.error(
-      "usage: prove-runner-docker-payload.ts <plan|apply> <runId> [planDigest]",
+      "usage: prove-runner-docker-payload.ts <source|plan|apply> [runId] [planDigest]",
     );
     process.exit(2);
   }

@@ -3,7 +3,6 @@ import { resolve } from "node:path";
 import {
   assertConfigTargetsSource,
   assertPublishedVersion,
-  assertRequiredSecretNames,
   bindingNames,
   parsePlatformWorkerReleaseArgs,
   parseServingVersion,
@@ -287,7 +286,7 @@ test("lost acknowledgement recovery selects one post-plan Version and exact bind
   ).toEqual(["ASSETS", "HOSTED"]);
 });
 
-test("platform release requires the host runtime derivation secret by name only", () => {
+test("platform release seals the metadata-only secret-name inventory", () => {
   expect(
     secretNames(
       JSON.stringify([
@@ -302,15 +301,12 @@ test("platform release requires the host runtime derivation secret by name only"
     "OTHER_SECRET",
     "TAKOSUMI_HOST_RUNTIME_SECRET_DERIVATION_KEY",
   ]);
-  expect(() => assertRequiredSecretNames(["OTHER_SECRET"])).toThrow(
-    "platform_worker_release_required_secret_missing",
-  );
   expect(() => secretNames('[{"name":"DUP"},{"name":"DUP"}]')).toThrow(
     "platform_worker_release_secret_list_invalid",
   );
 });
 
-test("ready evidence requires exact bindings and the Named RPC export", () => {
+test("ready evidence requires exact bindings and the fetch handler", () => {
   const version = (
     handlers: readonly string[],
     hostedService = "takosumi-hosted",
@@ -332,10 +328,7 @@ test("ready evidence requires exact bindings and the Named RPC export", () => {
       },
     });
   expect(() =>
-    assertPublishedVersion(
-      version(["fetch", "TakosumiHostRuntimeMaterializerEntrypoint"]),
-      "takosumi-hosted",
-    ),
+    assertPublishedVersion(version(["fetch"]), "takosumi-hosted"),
   ).not.toThrow();
   expect(() =>
     assertPublishedVersion(
@@ -343,9 +336,6 @@ test("ready evidence requires exact bindings and the Named RPC export", () => {
         resources: {
           script: {
             handlers: ["fetch", "scheduled"],
-            named_handlers: [
-              { name: "TakosumiHostRuntimeMaterializerEntrypoint" },
-            ],
           },
           bindings: [
             { name: "ASSETS", type: "assets" },
@@ -367,14 +357,12 @@ test("ready evidence requires exact bindings and the Named RPC export", () => {
     ),
   ).not.toThrow();
   expect(() =>
-    assertPublishedVersion(version(["fetch"]), "takosumi-hosted"),
-  ).toThrow(
-    "platform_worker_release_materializer_entrypoint_missing",
-  );
+    assertPublishedVersion(version(["scheduled"]), "takosumi-hosted"),
+  ).toThrow("platform_worker_release_fetch_handler_missing");
   expect(() =>
     assertPublishedVersion(
       version(
-        ["fetch", "TakosumiHostRuntimeMaterializerEntrypoint"],
+        ["fetch"],
         "unreviewed-hosted-service",
       ),
       "takosumi-hosted",
@@ -385,7 +373,7 @@ test("ready evidence requires exact bindings and the Named RPC export", () => {
       JSON.stringify({
         resources: {
           script: {
-            handlers: ["TakosumiHostRuntimeMaterializerEntrypoint"],
+            handlers: ["fetch"],
           },
           bindings: [{ name: "ASSETS" }],
         },
@@ -398,7 +386,7 @@ test("ready evidence requires exact bindings and the Named RPC export", () => {
       JSON.stringify({
         resources: {
           script: {
-            handlers: ["TakosumiHostRuntimeMaterializerEntrypoint"],
+            handlers: ["fetch"],
           },
         },
       }),

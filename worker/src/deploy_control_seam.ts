@@ -9,22 +9,8 @@ import {
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import type { CloudflareWorkerEnv, RunnerHostComposition } from "./bindings.ts";
 import type { OpenTofuRunnerExecutorRegistry } from "../../core/domains/deploy-control/mod.ts";
-import {
-  LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
-  type ResourceShapeSchemaRegistry,
-} from "../../core/domains/resource-shape/mod.ts";
-import type {
-  InterfaceOAuth2ResourceAuthorizer,
-  ResourceInterfaceWorkspaceResolver,
-} from "../../core/domains/interfaces/mod.ts";
+import type { InterfaceOAuth2ResourceAuthorizer } from "../../core/domains/interfaces/mod.ts";
 import { createWorkerServiceApp } from "./worker_service.ts";
-import { createCloudflareD1OpenTofuControlStore } from "./d1_opentofu_store.ts";
-import {
-  ResourceCapsuleOwnerAuthorityError,
-} from "../../core/api/form_host_routes.ts";
-
-export const TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER =
-  "x-takosumi-internal-resource-capsule-owner";
 
 /**
  * Builds the deploy-control Takosumi service (the `takosumi-api` role) directly,
@@ -47,73 +33,14 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
   readonly runnerProfiles: readonly RunnerProfile[];
   readonly runnerExecutors?: OpenTofuRunnerExecutorRegistry;
   readonly defaultRunnerProfileId?: string;
-  readonly managedVanityHostnameSlotsPerOwner?: number;
-  readonly resourceShapeSchemaRegistry: ResourceShapeSchemaRegistry;
-  readonly resolveResourceInterfaceWorkspace: ResourceInterfaceWorkspaceResolver;
-  readonly resolveResourceCapsuleOwner: NonNullable<
-    NonNullable<
-      Parameters<typeof createWorkerServiceApp>[2]
-    >["resolveResourceCapsuleOwner"]
-  >;
-  readonly hostRuntimeResourceLifecycle?: NonNullable<
-    NonNullable<
-      Parameters<typeof createWorkerServiceApp>[2]
-    >["hostRuntimeResourceLifecycle"]
-  >;
-  readonly resourceFormTransitionHost?: NonNullable<
-    NonNullable<
-      Parameters<typeof createWorkerServiceApp>[2]
-    >["resourceFormTransitionHost"]
-  >;
-  readonly resourceFormTransitionEvidence?: NonNullable<
-    NonNullable<
-      Parameters<typeof createWorkerServiceApp>[2]
-    >["resourceFormTransitionEvidence"]
-  >;
   readonly interfaceOAuth2ResourceAuthorizer?: InterfaceOAuth2ResourceAuthorizer;
   readonly mountInternalLedgerRoutes?: boolean;
 } {
-  if (
-    Boolean(env.TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST) !==
-    Boolean(env.TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE)
-  ) {
-    throw new TypeError(
-      "Resource Form transition host and evidence ports must be composed together",
-    );
-  }
   const hostComposition = runnerHostCompositionFromEnv(env);
-  const managedVanityHostnameSlotsPerOwner = nonNegativeInteger(
-    env.TAKOSUMI_MANAGED_VANITY_HOST_SLOTS_PER_OWNER,
-  );
   const interfaceOAuth2ResourceAuthorizer =
     interfaceOAuth2ResourceAuthorizerFromEnv(env);
   return {
     runnerProfiles: resolveEnabledRunnerProfilesFromEnv(env, hostComposition),
-    // The shipped Takos/Takosumi host explicitly installs the frozen v1alpha1
-    // compatibility schemas. Core and the generic Worker factory remain empty.
-    resourceShapeSchemaRegistry:
-      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
-    resolveResourceInterfaceWorkspace:
-      platformResourceInterfaceWorkspaceResolver(env),
-    resolveResourceCapsuleOwner: platformResourceCapsuleOwnerResolver(env),
-    ...(env.TAKOSUMI_HOST_RUNTIME_RESOURCE_LIFECYCLE
-      ? {
-          hostRuntimeResourceLifecycle:
-            env.TAKOSUMI_HOST_RUNTIME_RESOURCE_LIFECYCLE,
-        }
-      : {}),
-    ...(env.TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST
-      ? {
-          resourceFormTransitionHost:
-            env.TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST,
-        }
-      : {}),
-    ...(env.TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE
-      ? {
-          resourceFormTransitionEvidence:
-            env.TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE,
-        }
-      : {}),
     ...(interfaceOAuth2ResourceAuthorizer
       ? { interfaceOAuth2ResourceAuthorizer }
       : {}),
@@ -130,9 +57,6 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
           defaultRunnerProfileId: env.TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID.trim(),
         }
       : {}),
-    ...(managedVanityHostnameSlotsPerOwner !== undefined
-      ? { managedVanityHostnameSlotsPerOwner }
-      : {}),
   };
 }
 
@@ -147,79 +71,6 @@ function interfaceOAuth2ResourceAuthorizerFromEnv(
     );
   }
   return value;
-}
-
-/**
- * The platform public Resource surface uses a verified Workspace id as its
- * portable namespace selector. Preserve Core's independent namespaces by
- * proving that the
- * candidate id exists in the canonical Workspace ledger before returning the
- * bridge; equal-looking strings alone are never authority.
- */
-export function platformResourceInterfaceWorkspaceResolver(
-  env: CloudflareWorkerEnv,
-): ResourceInterfaceWorkspaceResolver {
-  const workspaces = createCloudflareD1OpenTofuControlStore(
-    env.TAKOSUMI_CONTROL_DB,
-    {
-      schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap",
-    },
-  );
-  return async ({ resourceSpaceId }) => {
-    const workspace = await workspaces.getWorkspace(resourceSpaceId);
-    return workspace?.id === resourceSpaceId ? workspace.id : undefined;
-  };
-}
-
-export function platformResourceCapsuleOwnerResolver(
-  _env: CloudflareWorkerEnv,
-): NonNullable<
-  NonNullable<
-    Parameters<typeof createWorkerServiceApp>[2]
-  >["resolveResourceCapsuleOwner"]
-> {
-  return async ({ actor, request, space }) => {
-    const encoded = request.headers.get(
-      TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER,
-    );
-    if (!encoded) return undefined;
-    let raw: unknown;
-    try {
-      raw = JSON.parse(encoded);
-    } catch {
-      throw new ResourceCapsuleOwnerAuthorityError();
-    }
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      throw new ResourceCapsuleOwnerAuthorityError();
-    }
-    const value = raw as Record<string, unknown>;
-    if (
-      Object.keys(value).length !== 4 ||
-      value.kind !== "Capsule" ||
-      typeof value.id !== "string" ||
-      typeof value.workspaceId !== "string" ||
-      typeof value.installingPrincipalId !== "string" ||
-      value.workspaceId !== space ||
-      actor.workspaceId !== value.workspaceId ||
-      actor.actorAccountId !== value.installingPrincipalId
-    ) {
-      throw new ResourceCapsuleOwnerAuthorityError();
-    }
-    return {
-      kind: "Capsule",
-      id: value.id,
-      workspaceId: value.workspaceId,
-      installingPrincipalId: value.installingPrincipalId,
-    };
-  };
-}
-
-function nonNegativeInteger(value: unknown): number | undefined {
-  if (typeof value !== "string" || !/^\d+$/u.test(value.trim())) {
-    return undefined;
-  }
-  const parsed = Number(value.trim());
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 export function createRunOwnerDeployControlService(

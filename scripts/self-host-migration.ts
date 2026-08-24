@@ -396,7 +396,7 @@ function assertPortableInstallConfig(config: Record<string, unknown>) {
   }
   if (config.managedPublicHostname !== undefined) {
     fail(
-      "managedPublicHostname is target-owned and cannot be replayed implicitly",
+      "legacy managedPublicHostname metadata cannot be replayed into the Git-owned endpoint model",
     );
   }
   const policy = object(config.policy ?? {}, "installConfig.policy");

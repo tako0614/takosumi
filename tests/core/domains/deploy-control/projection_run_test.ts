@@ -172,35 +172,6 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
   expect(run.createdBy).toBe("system");
 });
 
-test("Resource plan/apply project a Resource subject without Capsule identity", () => {
-  const resourceContext = {
-    workspaceId: "workspace_1",
-    resourceId: "tkrn:space_1:EdgeWorker:api",
-    environment: "production",
-    providerBinding: {
-      provider: "cloudflare",
-      providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-    },
-  };
-  const plan = projectPlanRun(
-    planRun({ workspaceId: "workspace_1", resourceContext }),
-    { environment: resourceContext.environment },
-  );
-  const apply = projectApplyRun(applyRun({ workspaceId: "workspace_1" }), {
-    resourceId: resourceContext.resourceId,
-    environment: resourceContext.environment,
-  });
-
-  for (const run of [plan, apply]) {
-    expect(run.subject).toEqual({
-      kind: "resource",
-      id: resourceContext.resourceId,
-    });
-    expect(run.environment).toBe("production");
-    expect(run.capsuleId).toBeUndefined();
-  }
-});
-
 test("projectPlanRun projects non-secret run environment evidence", () => {
   const run = projectPlanRun(
     planRun({

@@ -1932,7 +1932,6 @@ function normalizeScope(
     providerConfig?: ConnectionScopeHints["providerConfig"];
     moduleInputDefaults?: ConnectionScopeHints["moduleInputDefaults"];
     providerSettings?: ConnectionScopeHints["providerSettings"];
-    managedPublicBaseDomain?: string;
   } = {};
   const providerConfig = normalizeNonSecretJsonRecord(
     scope.providerConfig,
@@ -1964,12 +1963,6 @@ function normalizeScope(
     "scopeHints.providerSettings",
   );
   if (providerSettings) out.providerSettings = providerSettings;
-  if (
-    typeof scope.managedPublicBaseDomain === "string" &&
-    scope.managedPublicBaseDomain.length > 0
-  ) {
-    out.managedPublicBaseDomain = scope.managedPublicBaseDomain;
-  }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -2174,9 +2167,7 @@ function sameRunCredentialContext(
     left.runId === right.runId &&
     left.installingPrincipalId === right.installingPrincipalId &&
     left.phase === right.phase &&
-    left.lifecycleIntent === right.lifecycleIntent &&
-    JSON.stringify(left.hostRuntimeMaterialization ?? null) ===
-      JSON.stringify(right.hostRuntimeMaterialization ?? null)
+    left.lifecycleIntent === right.lifecycleIntent
   );
 }
 

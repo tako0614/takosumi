@@ -6,7 +6,6 @@ import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import {
   createInMemoryInterfaceStores,
-  InterfaceService,
 } from "../../../../core/domains/interfaces/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -202,16 +201,12 @@ test("Workspace UI surface projection is bounded, read-only, and fails closed", 
     )?.status,
   ).toBe(200);
 
-  const projectionInterfaces = new InterfaceService({
-    stores: interfaceStores,
-    ownerExists: async () => true,
-  });
-  const resourceLauncher = await projectionInterfaces.create({
+  const capsuleLauncher = await operations.interfaces.create({
     workspaceId: primary.workspace.id,
     name: "portable-yuru-launcher",
-    ownerRef: { kind: "Resource", id: "tkrn:space_1:HttpService:yuru" },
+    ownerRef: { kind: "Capsule", id: primary.capsule.id },
     spec: {
-      type: "yuru.application",
+      type: "interface.ui.surface",
       version: "1",
       document: {
         launcher: true,
@@ -226,50 +221,27 @@ test("Workspace UI surface projection is bounded, read-only, and fails closed", 
       access: { visibility: "workspace" },
     },
   });
-  await projectionInterfaces.createBinding(resourceLauncher.metadata.id, {
+  await operations.interfaces.createBinding(capsuleLauncher.metadata.id, {
     subjectRef: { kind: "Principal", id: SUBJECT },
     permissions: ["ui.open"],
     delivery: { type: "none" },
   });
-  const nonLauncher = await projectionInterfaces.create({
+  const nonLauncher = await operations.interfaces.create({
     workspaceId: primary.workspace.id,
     name: "portable-yuru-mcp",
-    ownerRef: { kind: "Resource", id: "tkrn:space_1:HttpService:yuru" },
+    ownerRef: { kind: "Capsule", id: primary.capsule.id },
     spec: {
-      type: "mcp.server",
+      type: "interface.ui.surface",
       version: "1",
       document: { launcher: false },
       access: { visibility: "workspace" },
     },
   });
-  await projectionInterfaces.createBinding(nonLauncher.metadata.id, {
+  await operations.interfaces.createBinding(nonLauncher.metadata.id, {
     subjectRef: { kind: "Principal", id: SUBJECT },
     permissions: ["ui.open"],
     delivery: { type: "none" },
   });
-  let resourceOwnerBulkReads = 0;
-  const projectionOperations = {
-    ...operations,
-    interfaces: projectionInterfaces,
-    resourceCapsuleOwners: {
-      get: async () => {
-        throw new Error("UI surface list must not perform per-Resource reads");
-      },
-      getMany: async (resourceIds: readonly string[]) => {
-        resourceOwnerBulkReads += 1;
-        return resourceIds.map((resourceId) => ({
-          resourceId,
-          owner: {
-            kind: "Capsule" as const,
-            id: primary.capsule.id,
-            workspaceId: primary.workspace.id,
-            installingPrincipalId: SUBJECT,
-          },
-        }));
-      },
-    },
-  };
-
   const capsuleRequest = new Request(
     `${ORIGIN}/api/v1/workspaces/${primary.workspace.id}/ui-surfaces?capsuleId=${primary.capsule.id}`,
     { headers: { cookie } },
@@ -278,7 +250,7 @@ test("Workspace UI surface projection is bounded, read-only, and fails closed", 
     request: capsuleRequest,
     url: new URL(capsuleRequest.url),
     store: accountStore,
-    operations: projectionOperations,
+    operations,
   });
   expect(capsuleResponse?.status).toBe(200);
   expect(
@@ -288,9 +260,10 @@ test("Workspace UI surface projection is bounded, read-only, and fails closed", 
           readonly metadata: { readonly id: string };
         }[];
       }
-    ).interfaces.map((iface) => iface.metadata.id),
-  ).toEqual([allowed.metadata.id, resourceLauncher.metadata.id]);
-  expect(resourceOwnerBulkReads).toBe(1);
+    ).interfaces.map((iface) => iface.metadata.id).sort(),
+  ).toEqual(
+    [allowed.metadata.id, capsuleLauncher.metadata.id, nonLauncher.metadata.id].sort(),
+  );
 
   const foreignRequest = new Request(
     `${ORIGIN}/api/v1/workspaces/${foreign.workspace.id}/ui-surfaces`,

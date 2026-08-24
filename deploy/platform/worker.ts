@@ -24,18 +24,14 @@ import {
 } from "../accounts-cloudflare/src/handler.ts";
 import {
   D1AccountsStore,
-  derivePairwiseSubject,
   handleAuthenticatedControlRoute,
   resolveD1AccountsSchemaMode,
   runRefreshChainRetention,
-  type AccountsStore,
   type ControlPlaneOperations,
-  type OidcClientRecord,
   type RefreshChainRetentionRunResult,
 } from "@takosjp/takosumi-accounts-service";
 import {
   TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES,
-  normalizeIssuer,
   type TakosumiAccountsPatScope,
 } from "@takosjp/takosumi-accounts-contract";
 import {
@@ -50,11 +46,7 @@ import {
   OpenTofuRunOwnerObject,
   OpenTofuRunnerObject,
 } from "../../worker/src/handler.ts";
-import {
-  cachedDeployControlService,
-  TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER,
-} from "../../worker/src/deploy_control_seam.ts";
-import { retireCapsulePublicOidcIdentity } from "../../worker/src/capsule_public_oidc_retirement.ts";
+import { cachedDeployControlService } from "../../worker/src/deploy_control_seam.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
 import { createCloudflareD1PatWorkspaceMembershipReader } from "./pat-workspace-membership-reader.ts";
 import type {
@@ -67,19 +59,7 @@ import {
   type DriftSweepOperations,
 } from "../../worker/src/scheduled/drift.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
-import {
-  CompatibilityRouteControlService,
-  type CompatibilityRouteRecord,
-  type CompatibilityRouteRetireResult,
-} from "../../core/domains/interfaces/compatibility_route_control.ts";
-import {
-  D1RuntimeCapabilityReader,
-  type RuntimeCapability,
-  type RuntimeCapabilityReadInput,
-  type RuntimeCapabilityReader,
-} from "../../core/domains/interfaces/runtime_capability_reader.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
-import { TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER } from "../../core/api/resource_routes.ts";
 import {
   DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE,
   type ProviderConnection,
@@ -98,35 +78,13 @@ import {
 } from "takosumi-contract/api-surface";
 import type {
   ActorContext,
-  FormActivation,
-  FormOperation,
-  InstalledFormReference,
   Interface,
   InterfaceBinding,
-  HostRuntimeMaterializationRequest,
-  NativeResourceRef,
-  OfferingAvailability,
-  OfferingContextReference,
-  OfferingReference,
-  OfferingSelection,
-  ResourceObject,
-  ResourceShapeKind,
 } from "takosumi-contract";
 import type { ExecutionContext as HonoExecutionContext } from "hono";
 import {
   MCP_SERVER_INVOKE_PERMISSION,
-  formRefOfInstalled,
-  installedFormReferenceKey,
-  isInstalledFormReference,
-  isResourceCapsuleOwner,
-  isResourceShapeKind,
-  TAKOFORM_FORM_HOST_API_PATH,
-  TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
 } from "takosumi-contract";
-import type {
-  ManagedPublicHostnameClaimRequest,
-  ManagedPublicHostnameClaimResult,
-} from "takosumi-contract/install-configs";
 import type {
   WorkspaceMember,
   WorkspaceRole,
@@ -138,7 +96,6 @@ import {
 import type { BillingSettings } from "takosumi-contract/billing";
 import {
   hasLegacyManagedProviderScopeHints,
-  isCapsuleRunCredentialIssuance,
   isWorkspaceBindableOperatorConnection,
 } from "takosumi-contract/connections";
 import { canonicalProviderSource } from "takosumi-contract/provider-env-rules";
@@ -146,7 +103,6 @@ import {
   isRunCredentialToken,
   runCredentialTokenSecret,
   verifyRunCredentialToken,
-  verifyRunCredentialTokenAuthority,
 } from "../../core/shared/run_credential_tokens.ts";
 import {
   resolveCanonicalCapsuleRunCredentialContext,
@@ -165,7 +121,6 @@ import {
   platformExtensionRoutes,
   platformExtensionSelfServicePatScopes,
   resolvePlatformExtensionRequestScopeRoute,
-  type PlatformCompatibilityProfile,
   type PlatformExtensionAuthenticatedContext,
   type PlatformExtensionAuthenticatedHandler,
   type PlatformExtensionRoute,
@@ -174,14 +129,10 @@ import {
 import {
   TAKOSUMI_OPERATOR_CAPABILITY_KEYS,
   type CreateTakosumiDiscoveryOptions,
-  type TakosumiAdapterCapabilities,
-  type TakosumiCompatibilityProfileCapabilities,
   type TakosumiOperatorCapabilities,
-  type TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { Run, RunStatus, RunType } from "takosumi-contract/runs";
-import { createDbOwnedHostRuntimeMaterializationResolver } from "../../core/domains/resource-shape/host_runtime_materialization.ts";
 import { evaluateProductionHardeningGates } from "./production_hardening.ts";
 import {
   OPERATOR_CONTROL_MCP_PATH,
@@ -216,7 +167,6 @@ export {
   readWorkspaceBootstrapRequest,
   type CloudflareD1WorkspaceBootstrapReaderOptions,
   type PlatformWorkspaceBootstrapFacts,
-  type PlatformWorkspaceBootstrapTargetPool,
   type WorkspaceBootstrapReader,
   type WorkspaceBootstrapReadInput,
   type WorkspaceBootstrapReadResult,
@@ -228,33 +178,6 @@ export {
   OpenTofuRunnerObject,
   rejectDisallowedCloudflarePresentedSession,
 };
-export type {
-  RuntimeCapability,
-  RuntimeCapabilityReadInput,
-  RuntimeCapabilityReader,
-};
-
-/** Public host-composition reader for exact runtime capability admission. */
-export function createPlatformRuntimeCapabilityReader(
-  env: CloudflareWorkerEnv,
-): RuntimeCapabilityReader {
-  return new D1RuntimeCapabilityReader(env.TAKOSUMI_CONTROL_DB);
-}
-
-/**
- * Returns the reader wired into the platform service composition. Hosted
- * callers can use this port without making an internal HTTP request.
- */
-export async function platformRuntimeCapabilityReader(
-  env: CloudflareWorkerEnv,
-): Promise<RuntimeCapabilityReader> {
-  const reader = (await takosumiOperationsFor(env)).runtimeCapabilityReader;
-  if (!reader) {
-    throw new Error("runtime capability reader is unavailable");
-  }
-  return reader;
-}
-
 /**
  * Public host-composition port for exact Workspace/Capsule execution authority.
  * This returns the resolver already wired over the cached service's shared
@@ -264,93 +187,6 @@ export async function platformCapsuleExecutionAuthority(
   env: CloudflareWorkerEnv,
 ): Promise<CapsuleExecutionAuthorityResolver> {
   return (await takosumiOperationsFor(env)).capsuleExecutionAuthority;
-}
-
-interface PlatformCapsuleHostRuntimeMaterializationDependencies {
-  readonly operationsForEnv?: (
-    env: PlatformEnv,
-  ) => Promise<Pick<TakosumiOperations, "capsules">>;
-}
-
-/**
- * Read the DB-owned runtime declaration for one exact Capsule installation.
- *
- * This is a host-composition port, not an API route: it uses the cached
- * Takosumi operations facade and the same canonical resolver that Resource
- * lifecycle uses. Only opaque declaration refs cross the boundary; generated
- * values and other secret material never do.
- */
-export async function platformCapsuleHostRuntimeMaterialization(
-  env: CloudflareWorkerEnv,
-  input: {
-    readonly workspaceId: string;
-    readonly capsuleId: string;
-  },
-  dependencies: PlatformCapsuleHostRuntimeMaterializationDependencies = {},
-): Promise<HostRuntimeMaterializationRequest | undefined> {
-  const workspaceId = requiredPlatformIdentity(
-    input.workspaceId,
-    "Capsule Workspace id",
-  );
-  const capsuleId = requiredPlatformIdentity(input.capsuleId, "Capsule id");
-  const operations = await (
-    dependencies.operationsForEnv ?? takosumiOperationsFor
-  )(env);
-
-  let capsule: Capsule;
-  try {
-    capsule = await operations.capsules.getCapsule(capsuleId);
-  } catch (error) {
-    if (
-      error instanceof OpenTofuControllerError &&
-      error.code === "not_found"
-    ) {
-      return undefined;
-    }
-    throw error;
-  }
-  if (
-    capsule.id !== capsuleId ||
-    capsule.workspaceId !== workspaceId ||
-    capsule.status === "destroyed" ||
-    !capsule.installingPrincipalId
-  ) {
-    return undefined;
-  }
-
-  const resolve = createDbOwnedHostRuntimeMaterializationResolver(
-    operations.capsules,
-  );
-  try {
-    return await resolve({
-      owner: {
-        kind: "Capsule",
-        id: capsule.id,
-        workspaceId,
-        installingPrincipalId: capsule.installingPrincipalId,
-      },
-    });
-  } catch (error) {
-    // A concurrent destroy/ownership change, or a missing InstallConfig, is
-    // not a declaration this read may expose. Keep malformed declarations as
-    // errors so the canonical parser remains fail-closed and observable.
-    if (
-      error instanceof OpenTofuControllerError &&
-      error.code === "not_found"
-    ) {
-      return undefined;
-    }
-    if (
-      error instanceof Error &&
-      (error.message ===
-        "host runtime materialization owner does not match the canonical Capsule" ||
-        error.message ===
-          "host runtime materialization requires the Capsule's Workspace-scoped InstallConfig")
-    ) {
-      return undefined;
-    }
-    throw error;
-  }
 }
 
 // In-process deploy-control seam, one cached service per env, shared with the
@@ -683,11 +519,6 @@ async function createPlatformOperatorControlMcpAuthority(
         ...(env.TAKOSUMI_ACCOUNTS_ISSUER
           ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
           : {}),
-        ...(env.TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN
-          ? {
-              managedPublicBaseDomain: env.TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN,
-            }
-          : {}),
       });
       return response ?? Response.json({ error: "not found" }, { status: 404 });
     },
@@ -724,941 +555,6 @@ export async function initializePlatformControlPlane(
   env: object,
 ): Promise<void> {
   await takosumiOperationsFor(env as PlatformEnv);
-}
-
-export type PlatformFormActivationResolution =
-  | { readonly status: "active"; readonly activation: FormActivation }
-  | {
-      readonly status: "unavailable";
-      readonly reason:
-        | "registry_unavailable"
-        | "activation_not_found"
-        | "activation_inactive"
-        | "identity_mismatch"
-        | "definition_not_installed"
-        | "operation_not_supported"
-        | "package_not_installed";
-    };
-
-/**
- * Narrow read-only composition authority for hosted offering layers. It never
- * exposes Form Registry mutation or an HTTP route, and returns an activation
- * only while the caller's exact package identity is still installed and its
- * definition supports the caller's explicitly required lifecycle operation.
- */
-export async function resolvePlatformFormActivation(
-  input: {
-    readonly activationId: string;
-    readonly expectedIdentity: InstalledFormReference;
-    /** Optional lifecycle operation the installed definition must support. */
-    readonly requiredOperation?: FormOperation;
-  },
-  env: object,
-  operationsForEnv: (
-    env: PlatformEnv,
-  ) => Promise<Pick<TakosumiOperations, "forms">> = takosumiOperationsFor,
-): Promise<PlatformFormActivationResolution> {
-  if (!isInstalledFormReference(input.expectedIdentity)) {
-    return { status: "unavailable", reason: "identity_mismatch" };
-  }
-  const forms = (await operationsForEnv(env as PlatformEnv)).forms;
-  if (!forms) {
-    return { status: "unavailable", reason: "registry_unavailable" };
-  }
-  const activation = await forms.getActivation(input.activationId);
-  if (!activation) {
-    return { status: "unavailable", reason: "activation_not_found" };
-  }
-  if (activation.status !== "active") {
-    return { status: "unavailable", reason: "activation_inactive" };
-  }
-  if (
-    installedFormReferenceKey(activation.identity) !==
-    installedFormReferenceKey(input.expectedIdentity)
-  ) {
-    return { status: "unavailable", reason: "identity_mismatch" };
-  }
-  const [definition, formPackage] = await Promise.all([
-    forms.getDefinition(formRefOfInstalled(input.expectedIdentity)),
-    forms.getPackage(input.expectedIdentity.packageDigest),
-  ]);
-  if (
-    !definition ||
-    installedFormReferenceKey(definition.identity) !==
-      installedFormReferenceKey(input.expectedIdentity)
-  ) {
-    return { status: "unavailable", reason: "definition_not_installed" };
-  }
-  if (
-    input.requiredOperation !== undefined &&
-    !definition.operations.includes(input.requiredOperation)
-  ) {
-    return { status: "unavailable", reason: "operation_not_supported" };
-  }
-  if (!formPackage || formPackage.status !== "installed") {
-    return { status: "unavailable", reason: "package_not_installed" };
-  }
-  return { status: "active", activation };
-}
-
-/**
- * Read-only bridge from a composing host into the OSS generic Offering engine.
- * The host supplies an already-authenticated principal context; this function
- * neither accepts edge credentials nor exposes catalog mutation.
- */
-export async function listPlatformOfferingAvailability(
-  input: {
-    readonly catalogId: string;
-    readonly catalogVersion: string;
-    readonly principalId?: string;
-    readonly roles?: readonly string[];
-    readonly workspaceId?: string;
-    readonly contexts?: readonly OfferingContextReference[];
-  },
-  env: object,
-  operationsForEnv: (
-    env: PlatformEnv,
-  ) => Promise<Pick<TakosumiOperations, "offerings">> = takosumiOperationsFor,
-): Promise<readonly OfferingAvailability[]> {
-  const offerings = (await operationsForEnv(env as PlatformEnv)).offerings;
-  return await offerings.listAvailability(input);
-}
-
-/**
- * Resolves one exact catalog/id/version selection through OSS subject
- * readiness. Cloud and other commercial hosts attach private manager,
- * capacity, SKU, price, and payment evidence only to the returned pin.
- */
-export async function resolvePlatformOffering(
-  input: {
-    readonly reference: OfferingReference;
-    readonly principalId?: string;
-    readonly roles?: readonly string[];
-    readonly workspaceId?: string;
-    readonly contexts?: readonly OfferingContextReference[];
-  },
-  env: object,
-  operationsForEnv: (
-    env: PlatformEnv,
-  ) => Promise<Pick<TakosumiOperations, "offerings">> = takosumiOperationsFor,
-): Promise<OfferingSelection> {
-  const offerings = (await operationsForEnv(env as PlatformEnv)).offerings;
-  return await offerings.resolve(input);
-}
-
-/**
- * Composition-root bridge used by hosted operator extensions. It keeps
- * managed-hostname ownership in the OSS controller without exposing an
- * internal HTTP route or allowing an extension to reach into core modules.
- */
-export async function claimPlatformManagedPublicHostname(
-  input: ManagedPublicHostnameClaimRequest,
-  env: object,
-): Promise<ManagedPublicHostnameClaimResult> {
-  return await (
-    await takosumiOperationsFor(env as PlatformEnv)
-  ).claimManagedPublicHostname(input);
-}
-
-export interface PlatformCapsulePublicOidcIdentity {
-  readonly issuerUrl: string;
-  readonly clientId: string;
-  readonly ownerSubject: string;
-  readonly redirectUri: string;
-}
-
-export interface PlatformCapsulePublicOidcMutation {
-  readonly capsuleId: string;
-  readonly clientId: string;
-  readonly expectedUpdatedAt: number;
-  readonly previous?: OidcClientRecord;
-  readonly identity: PlatformCapsulePublicOidcIdentity;
-  readonly changed: boolean;
-}
-
-type PlatformCapsulePublicOidcRollback = Pick<
-  PlatformCapsulePublicOidcMutation,
-  "capsuleId" | "clientId" | "expectedUpdatedAt" | "previous"
->;
-
-export interface PlatformHostRuntimeBindingMaterializationInput {
-  readonly request: HostRuntimeMaterializationRequest;
-  readonly resourceName: string;
-  readonly scriptName: string;
-  readonly publicOrigin: string;
-  readonly bindings: readonly string[];
-}
-
-export interface PlatformHostRuntimeBindingMaterializationResult {
-  readonly values: Readonly<Record<string, string>>;
-  /** Opaque, authenticated receipt returned only for a host mutation. */
-  readonly rollbackReceipt?: string;
-}
-
-export type PlatformHostRuntimeMaterializerEnv = CloudflareWorkerEnv & {
-  /** Separate root key for deterministic Capsule runtime secrets. */
-  readonly TAKOSUMI_HOST_RUNTIME_SECRET_DERIVATION_KEY?: string;
-};
-
-interface PlatformHostRuntimeBindingMaterializationDependencies {
-  readonly resolveRequest?: (
-    env: CloudflareWorkerEnv,
-    input: { readonly workspaceId: string; readonly capsuleId: string },
-  ) => Promise<HostRuntimeMaterializationRequest | undefined>;
-  readonly ensurePublicOidc?: typeof ensurePlatformCapsulePublicOidcIdentity;
-  readonly rollbackPublicOidc?: typeof rollbackPlatformCapsulePublicOidcIdentity;
-  readonly deriveSecret?: (input: {
-    readonly request: HostRuntimeMaterializationRequest;
-    readonly secretRef: string;
-    readonly bytes: number;
-    readonly encoding: "hex" | "base64url";
-  }) => Promise<string>;
-}
-
-interface PlatformCapsulePublicOidcDependencies {
-  readonly operationsForEnv?: (
-    env: PlatformEnv,
-  ) => Promise<Pick<TakosumiOperations, "capsules">>;
-  readonly storeForEnv?: (
-    env: CloudflareWorkerEnv,
-  ) => Promise<
-    Pick<
-      AccountsStore,
-      | "findOidcClient"
-      | "findOidcClientForCapsule"
-      | "saveOidcClient"
-      | "revokeOidcClient"
-    >
-  >;
-  readonly deriveSubject?: typeof derivePairwiseSubject;
-  readonly now?: () => number;
-}
-
-/**
- * Ensures one public PKCE client for a Capsule-owned application runtime.
- *
- * This is a narrow in-process host-composition authority. The caller supplies
- * an exact Capsule owner and HTTPS application origin; the Accounts database,
- * Capsule ledger, and pairwise-subject secret remain inside the OSS host. No
- * private key, session secret, or pairwise-secret material crosses the seam.
- */
-export async function ensurePlatformCapsulePublicOidcIdentity(
-  input: {
-    readonly capsuleId: string;
-    readonly workspaceId: string;
-    readonly installingPrincipalId: string;
-    readonly appOrigin: string;
-    readonly callbackPath: string;
-    readonly scopes: readonly string[];
-  },
-  env: object,
-  dependencies: PlatformCapsulePublicOidcDependencies = {},
-): Promise<PlatformCapsulePublicOidcMutation> {
-  const platformEnv = env as PlatformEnv;
-  const capsuleId = requiredPlatformIdentity(input.capsuleId, "Capsule id");
-  const workspaceId = requiredPlatformIdentity(
-    input.workspaceId,
-    "Capsule Workspace id",
-  );
-  const installingPrincipalId = requiredPlatformIdentity(
-    input.installingPrincipalId,
-    "Capsule installing Principal id",
-  );
-  if (!installingPrincipalId.startsWith("tsub_")) {
-    throw new TypeError(
-      "Capsule installing Principal id must be a Takosumi subject",
-    );
-  }
-  const capsule = await (
-    await (dependencies.operationsForEnv ?? takosumiOperationsFor)(platformEnv)
-  ).capsules.getCapsule(capsuleId);
-  if (
-    capsule.workspaceId !== workspaceId ||
-    capsule.installingPrincipalId !== installingPrincipalId ||
-    capsule.status === "destroyed"
-  ) {
-    throw new Error(
-      "Capsule public OIDC identity does not match the canonical Capsule owner",
-    );
-  }
-
-  const issuerUrl = normalizeIssuer(
-    requiredPlatformIdentity(
-      platformEnv.TAKOSUMI_ACCOUNTS_ISSUER,
-      "Takosumi Accounts issuer",
-    ),
-  );
-  const pairwiseSubjectSecret = requiredPlatformSecret(
-    platformEnv.TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET,
-    "Takosumi Accounts pairwise subject secret",
-  );
-  const appOrigin = exactHttpsOrigin(input.appOrigin);
-  const callbackPath = exactCallbackPath(input.callbackPath);
-  const redirectUri = `${appOrigin}${callbackPath}`;
-  const allowedScopes = exactOidcScopes(input.scopes);
-  const store = await (
-    dependencies.storeForEnv ?? platformCapsuleOidcStoreForEnv
-  )(platformEnv);
-  const previous = await store.findOidcClientForCapsule(capsuleId);
-  const clientId =
-    previous?.clientId ?? (await deterministicCapsuleClientId(capsuleId));
-  const now = (dependencies.now ?? Date.now)();
-  if (!Number.isSafeInteger(now) || now <= 0) {
-    throw new Error("Capsule public OIDC identity clock is invalid");
-  }
-  if (previous && !isRollbackSafePublicOidcClient(previous)) {
-    throw new Error(
-      "Capsule public OIDC identity cannot replace a confidential or foreign client",
-    );
-  }
-  const desired: OidcClientRecord = {
-    clientId,
-    capsuleId,
-    namespacePath: "identity.oidc",
-    issuerUrl,
-    redirectUris: [redirectUri],
-    allowedScopes,
-    subjectMode: "pairwise",
-    tokenEndpointAuthMethod: "none",
-    clientSecretHash: undefined,
-    createdAt: previous?.createdAt ?? now,
-    updatedAt:
-      previous &&
-      oidcClientMatches(previous, {
-        issuerUrl,
-        redirectUri,
-        allowedScopes,
-      })
-        ? previous.updatedAt
-        : now,
-  };
-  const ownerSubject = await (
-    dependencies.deriveSubject ?? derivePairwiseSubject
-  )({
-    secret: pairwiseSubjectSecret,
-    takosumiSubject: installingPrincipalId as `tsub_${string}`,
-    clientId: `${capsule.name}:${capsule.id}:${clientId}`,
-  });
-  const changed = !previous || desired.updatedAt !== previous.updatedAt;
-  if (changed) {
-    await store.saveOidcClient(desired);
-    const retained = await store.findOidcClientForCapsule(capsuleId);
-    if (!retained || !sameOidcClient(retained, desired)) {
-      throw new Error(
-        "Capsule public OIDC client did not retain exact Accounts evidence",
-      );
-    }
-  }
-  return {
-    capsuleId,
-    clientId,
-    expectedUpdatedAt: desired.updatedAt,
-    ...(previous ? { previous } : {}),
-    identity: { issuerUrl, clientId, ownerSubject, redirectUri },
-    changed,
-  };
-}
-
-/**
- * Materializes only the exact bindings declared by one DB-owned Capsule
- * InstallConfig. The caller is a private Worker RPC hop: it supplies the
- * provider-observed public origin, while this authority re-reads the canonical
- * Capsule declaration, registers the public OIDC client, and derives stable
- * secret bytes without persisting or returning them through control-plane
- * state, Output, audit, or an agent-visible response.
- */
-export async function materializePlatformCapsuleRuntimeBindings(
-  env: PlatformHostRuntimeMaterializerEnv,
-  input: PlatformHostRuntimeBindingMaterializationInput,
-  dependencies: PlatformHostRuntimeBindingMaterializationDependencies = {},
-): Promise<PlatformHostRuntimeBindingMaterializationResult> {
-  requiredPlatformIdentity(input.resourceName, "runtime Resource name");
-  requiredPlatformIdentity(input.scriptName, "runtime script name");
-  const publicOrigin = exactHttpsOrigin(input.publicOrigin);
-  const request = input.request;
-  const canonical = await (
-    dependencies.resolveRequest ?? platformCapsuleHostRuntimeMaterialization
-  )(
-    env,
-    { workspaceId: request.workspaceId, capsuleId: request.capsuleId },
-  );
-  if (!canonical || JSON.stringify(canonical) !== JSON.stringify(request)) {
-    throw new Error(
-      "host runtime materialization request does not match the canonical Capsule",
-    );
-  }
-
-  const expected = hostRuntimeValueBindingNames(canonical);
-  if (!sameExactStringSet(input.bindings, expected)) {
-    throw new Error("host runtime materialization bindings do not match");
-  }
-  if (
-    canonical.requirements.filter((requirement) => requirement.kind === "public_oidc")
-      .length > 1
-  ) {
-    throw new Error(
-      "host runtime materialization supports one public OIDC identity per Capsule",
-    );
-  }
-
-  const values: Record<string, string> = {};
-  for (const requirement of canonical.requirements) {
-    if (requirement.kind !== "generated_secret") continue;
-    values[requirement.binding] = await (
-      dependencies.deriveSecret ??
-      ((secretInput) => derivePlatformHostRuntimeSecret(env, secretInput))
-    )({
-      request: canonical,
-      secretRef: requirement.secretRef,
-      bytes: requirement.bytes,
-      encoding: requirement.encoding,
-    });
-  }
-  const oidcRequirement = canonical.requirements.find(
-    (requirement) => requirement.kind === "public_oidc",
-  );
-  const oidcMutation = oidcRequirement
-    ? await (
-      dependencies.ensurePublicOidc ?? ensurePlatformCapsulePublicOidcIdentity
-    )(
-      {
-        capsuleId: canonical.capsuleId,
-        workspaceId: canonical.workspaceId,
-        installingPrincipalId: canonical.installingPrincipalId,
-        appOrigin: publicOrigin,
-        callbackPath: oidcRequirement.callbackPath,
-        scopes: oidcRequirement.scopes,
-      },
-      env,
-    )
-    : undefined;
-  if (oidcRequirement && oidcMutation) {
-    values[oidcRequirement.bindings.issuerUrl.binding] =
-      oidcMutation.identity.issuerUrl;
-    values[oidcRequirement.bindings.clientId.binding] =
-      oidcMutation.identity.clientId;
-    values[oidcRequirement.bindings.ownerSubject.binding] =
-      oidcMutation.identity.ownerSubject;
-    values[oidcRequirement.bindings.redirectUri.binding] =
-      oidcMutation.identity.redirectUri;
-  }
-  if (
-    !sameExactStringSet(Object.keys(values), expected) ||
-    Object.values(values).some(
-      (value) =>
-        value.length < 1 ||
-        value.length > 4_096 ||
-        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value),
-    )
-  ) {
-    throw new Error("host runtime materialization values do not match");
-  }
-  const rollbackReceipt =
-    oidcMutation?.changed === true
-      ? await sealPlatformHostRuntimeRollback(env, oidcMutation)
-      : undefined;
-  return Object.freeze({
-    values: Object.freeze({ ...values }),
-    ...(rollbackReceipt ? { rollbackReceipt } : {}),
-  });
-}
-
-/**
- * Reverses only the exact public OIDC mutation represented by a receipt from
- * `materializePlatformCapsuleRuntimeBindings`. The signed receipt is opaque to
- * the provider and the canonical Capsule declaration is re-read before the
- * compare-and-swap rollback runs.
- */
-export async function rollbackPlatformCapsuleRuntimeBindings(
-  env: PlatformHostRuntimeMaterializerEnv,
-  input: {
-    readonly request: HostRuntimeMaterializationRequest;
-    readonly rollbackReceipt: string;
-  },
-  dependencies: PlatformHostRuntimeBindingMaterializationDependencies = {},
-): Promise<void> {
-  const canonical = await (
-    dependencies.resolveRequest ?? platformCapsuleHostRuntimeMaterialization
-  )(
-    env,
-    {
-      workspaceId: input.request.workspaceId,
-      capsuleId: input.request.capsuleId,
-    },
-  );
-  if (!canonical || JSON.stringify(canonical) !== JSON.stringify(input.request)) {
-    throw new Error(
-      "host runtime rollback request does not match the canonical Capsule",
-    );
-  }
-  const mutation = await openPlatformHostRuntimeRollback(
-    env,
-    input.rollbackReceipt,
-  );
-  if (mutation.capsuleId !== canonical.capsuleId) {
-    throw new Error("host runtime rollback does not belong to the canonical Capsule");
-  }
-  await (
-    dependencies.rollbackPublicOidc ??
-    rollbackPlatformCapsulePublicOidcIdentity
-  )(mutation, env);
-}
-
-async function derivePlatformHostRuntimeSecret(
-  env: PlatformHostRuntimeMaterializerEnv,
-  input: {
-    readonly request: HostRuntimeMaterializationRequest;
-    readonly secretRef: string;
-    readonly bytes: number;
-    readonly encoding: "hex" | "base64url";
-  },
-): Promise<string> {
-  const key = await platformHostRuntimeHmacKey(env, ["sign"]);
-  const context = [
-    "takosumi-host-runtime-generated-secret-v1",
-    input.request.workspaceId,
-    input.request.capsuleId,
-    input.request.installConfigId,
-    input.secretRef,
-    String(input.bytes),
-    input.encoding,
-  ].join("\0");
-  const output = new Uint8Array(input.bytes);
-  let offset = 0;
-  for (let counter = 1; offset < output.byteLength; counter += 1) {
-    const block = new Uint8Array(
-      await crypto.subtle.sign(
-        "HMAC",
-        key,
-        new TextEncoder().encode(`${context}\0${counter}`),
-      ),
-    );
-    const length = Math.min(block.byteLength, output.byteLength - offset);
-    output.set(block.subarray(0, length), offset);
-    offset += length;
-  }
-  if (input.encoding === "hex") {
-    return [...output]
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
-  }
-  return base64UrlBytes(output);
-}
-
-async function sealPlatformHostRuntimeRollback(
-  env: PlatformHostRuntimeMaterializerEnv,
-  mutation: PlatformCapsulePublicOidcMutation,
-): Promise<string> {
-  const payload = new TextEncoder().encode(
-    JSON.stringify({
-      version: 1,
-      capsuleId: mutation.capsuleId,
-      clientId: mutation.clientId,
-      expectedUpdatedAt: mutation.expectedUpdatedAt,
-      previous: mutation.previous ?? null,
-    }),
-  );
-  const payloadPart = base64UrlBytes(payload);
-  const key = await platformHostRuntimeHmacKey(env, ["sign"]);
-  const signature = new Uint8Array(
-    await crypto.subtle.sign(
-      "HMAC",
-      key,
-      new TextEncoder().encode(`takosumi-host-runtime-rollback-v1.${payloadPart}`),
-    ),
-  );
-  return `${payloadPart}.${base64UrlBytes(signature)}`;
-}
-
-async function openPlatformHostRuntimeRollback(
-  env: PlatformHostRuntimeMaterializerEnv,
-  token: string,
-): Promise<PlatformCapsulePublicOidcRollback> {
-  if (token.length < 1 || token.length > 16_384) {
-    throw new Error("host runtime rollback receipt is invalid");
-  }
-  const parts = token.split(".");
-  if (parts.length !== 2 || !parts[0] || !parts[1]) {
-    throw new Error("host runtime rollback receipt is invalid");
-  }
-  const [payloadPart, signaturePart] = parts as [string, string];
-  const key = await platformHostRuntimeHmacKey(env, ["verify"]);
-  const verified = await crypto.subtle
-    .verify(
-      "HMAC",
-      key,
-      base64UrlDecode(signaturePart) as unknown as BufferSource,
-      new TextEncoder().encode(`takosumi-host-runtime-rollback-v1.${payloadPart}`),
-    )
-    .catch(() => false);
-  if (!verified) throw new Error("host runtime rollback receipt is invalid");
-  let value: unknown;
-  try {
-    value = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadPart)));
-  } catch {
-    throw new Error("host runtime rollback receipt is invalid");
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("host runtime rollback receipt is invalid");
-  }
-  const row = value as Record<string, unknown>;
-  if (
-    Object.keys(row).some(
-      (field) =>
-        !["version", "capsuleId", "clientId", "expectedUpdatedAt", "previous"].includes(
-          field,
-        ),
-    ) ||
-    row.version !== 1 ||
-    !Number.isSafeInteger(row.expectedUpdatedAt) ||
-    (row.expectedUpdatedAt as number) <= 0
-  ) {
-    throw new Error("host runtime rollback receipt is invalid");
-  }
-  const capsuleId = requiredPlatformIdentity(row.capsuleId, "rollback Capsule id");
-  const clientId = requiredPlatformIdentity(row.clientId, "rollback OIDC client id");
-  const previous = parseRollbackSafePublicOidcClient(row.previous, capsuleId);
-  return {
-    capsuleId,
-    clientId,
-    expectedUpdatedAt: row.expectedUpdatedAt as number,
-    ...(previous ? { previous } : {}),
-  };
-}
-
-async function platformHostRuntimeHmacKey(
-  env: PlatformHostRuntimeMaterializerEnv,
-  usages: readonly ("sign" | "verify")[],
-): Promise<CryptoKey> {
-  const secret = requiredPlatformSecret(
-    env.TAKOSUMI_HOST_RUNTIME_SECRET_DERIVATION_KEY,
-    "Takosumi host runtime secret derivation key",
-  );
-  return await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    [...usages],
-  );
-}
-
-function base64UrlDecode(value: string): Uint8Array {
-  if (!/^[A-Za-z0-9_-]+$/u.test(value)) {
-    throw new Error("host runtime rollback receipt is invalid");
-  }
-  const padded = `${value.replace(/-/gu, "+").replace(/_/gu, "/")}${"=".repeat(
-    (4 - (value.length % 4)) % 4,
-  )}`;
-  const binary = atob(padded);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-}
-
-function hostRuntimeValueBindingNames(
-  request: HostRuntimeMaterializationRequest,
-): readonly string[] {
-  const names: string[] = [];
-  for (const requirement of request.requirements) {
-    if (requirement.kind === "generated_secret") {
-      names.push(requirement.binding);
-    } else if (requirement.kind === "public_oidc") {
-      names.push(
-        requirement.bindings.issuerUrl.binding,
-        requirement.bindings.clientId.binding,
-        requirement.bindings.ownerSubject.binding,
-        requirement.bindings.redirectUri.binding,
-      );
-    }
-  }
-  if (names.length === 0 || new Set(names).size !== names.length) {
-    throw new Error("host runtime materialization has no exact value bindings");
-  }
-  return Object.freeze(names);
-}
-
-function sameExactStringSet(
-  left: readonly string[],
-  right: readonly string[],
-): boolean {
-  return (
-    left.length === right.length &&
-    new Set(left).size === left.length &&
-    left.every((value) => right.includes(value))
-  );
-}
-
-function base64UrlBytes(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary)
-    .replace(/\+/gu, "-")
-    .replace(/\//gu, "_")
-    .replace(/=+$/u, "");
-}
-
-/**
- * Reverses only the exact OIDC mutation returned by the ensure call. A newer
- * registration wins and is never overwritten by a stale apply failure.
- */
-export async function rollbackPlatformCapsulePublicOidcIdentity(
-  mutation: PlatformCapsulePublicOidcRollback,
-  env: object,
-  dependencies: PlatformCapsulePublicOidcDependencies = {},
-): Promise<void> {
-  const store = await (
-    dependencies.storeForEnv ?? platformCapsuleOidcStoreForEnv
-  )(env as PlatformEnv);
-  const current = await store.findOidcClientForCapsule(mutation.capsuleId);
-  if (
-    !current ||
-    current.clientId !== mutation.clientId ||
-    current.updatedAt !== mutation.expectedUpdatedAt
-  ) {
-    throw new Error(
-      "Capsule public OIDC client changed before rollback; refusing stale restoration",
-    );
-  }
-  if (mutation.previous) {
-    await store.saveOidcClient(mutation.previous);
-    return;
-  }
-  await store.revokeOidcClient(mutation.clientId);
-}
-
-/** Revokes only a Capsule's exact public client after its runtime is gone. */
-export async function revokePlatformCapsulePublicOidcIdentity(
-  input: {
-    readonly capsuleId: string;
-    readonly expectedClientId?: string;
-  },
-  env: object,
-  dependencies: PlatformCapsulePublicOidcDependencies = {},
-): Promise<void> {
-  const store = await (
-    dependencies.storeForEnv ?? platformCapsuleOidcStoreForEnv
-  )(env as PlatformEnv);
-  await retireCapsulePublicOidcIdentity({
-    store,
-    capsuleId: input.capsuleId,
-    ...(input.expectedClientId
-      ? { expectedClientId: input.expectedClientId }
-      : {}),
-  });
-}
-
-async function platformCapsuleOidcStoreForEnv(
-  env: CloudflareWorkerEnv,
-): Promise<D1AccountsStore> {
-  const schemaMode = resolveD1AccountsSchemaMode(
-    env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
-  );
-  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, { schemaMode });
-  if (schemaMode !== "predeployed") await store.initialize();
-  return store;
-}
-
-function requiredPlatformIdentity(value: unknown, label: string): string {
-  if (
-    typeof value !== "string" ||
-    value.length < 1 ||
-    value.length > 512 ||
-    value !== value.trim() ||
-    /[\u0000-\u001f\u007f]/u.test(value)
-  ) {
-    throw new TypeError(`${label} is invalid`);
-  }
-  return value;
-}
-
-function requiredPlatformSecret(value: unknown, label: string): string {
-  const secret = requiredPlatformIdentity(value, label);
-  if (new TextEncoder().encode(secret).byteLength < 32) {
-    throw new TypeError(`${label} must contain at least 32 bytes`);
-  }
-  return secret;
-}
-
-function exactHttpsOrigin(value: string): string {
-  const url = new URL(value);
-  if (
-    url.protocol !== "https:" ||
-    url.username ||
-    url.password ||
-    url.pathname !== "/" ||
-    url.search ||
-    url.hash
-  ) {
-    throw new TypeError(
-      "Capsule public OIDC appOrigin must be an HTTPS origin",
-    );
-  }
-  return url.origin;
-}
-
-function exactCallbackPath(value: string): string {
-  if (
-    !value.startsWith("/") ||
-    value.startsWith("//") ||
-    value.includes("?") ||
-    value.includes("#") ||
-    /[\u0000-\u001f\u007f]/u.test(value)
-  ) {
-    throw new TypeError("Capsule public OIDC callbackPath is invalid");
-  }
-  return value;
-}
-
-function exactOidcScopes(scopes: readonly string[]): readonly string[] {
-  const normalized = [...new Set(scopes.map((scope) => scope.trim()))].sort();
-  if (
-    normalized.length < 1 ||
-    normalized.some(
-      (scope) =>
-        !scope || scope.length > 128 || /[^A-Za-z0-9:._/-]/u.test(scope),
-    )
-  ) {
-    throw new TypeError("Capsule public OIDC scopes are invalid");
-  }
-  return normalized.includes("openid")
-    ? normalized
-    : ["openid", ...normalized].sort();
-}
-
-async function deterministicCapsuleClientId(
-  capsuleId: string,
-): Promise<string> {
-  const digest = new Uint8Array(
-    await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(
-        `takosumi-capsule-public-oidc-client-v1\0${capsuleId}`,
-      ),
-    ),
-  );
-  return `toc_${[...digest]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("")
-    .slice(0, 32)}`;
-}
-
-function oidcClientMatches(
-  client: OidcClientRecord,
-  desired: {
-    readonly issuerUrl: string;
-    readonly redirectUri: string;
-    readonly allowedScopes: readonly string[];
-  },
-): boolean {
-  return (
-    client.namespacePath === "identity.oidc" &&
-    client.issuerUrl === desired.issuerUrl &&
-    client.redirectUris.length === 1 &&
-    client.redirectUris[0] === desired.redirectUri &&
-    client.allowedScopes.length === desired.allowedScopes.length &&
-    client.allowedScopes.every(
-      (scope, index) => scope === desired.allowedScopes[index],
-    ) &&
-    client.subjectMode === "pairwise" &&
-    client.tokenEndpointAuthMethod === "none" &&
-    client.clientSecretHash === undefined
-  );
-}
-
-function isRollbackSafePublicOidcClient(client: OidcClientRecord): boolean {
-  if (
-    client.namespacePath !== "identity.oidc" ||
-    client.subjectMode !== "pairwise" ||
-    client.tokenEndpointAuthMethod !== "none" ||
-    client.clientSecretHash !== undefined ||
-    client.redirectUris.length !== 1 ||
-    client.allowedScopes.length < 1 ||
-    !Number.isSafeInteger(client.createdAt) ||
-    client.createdAt <= 0 ||
-    !Number.isSafeInteger(client.updatedAt) ||
-    client.updatedAt <= 0
-  ) {
-    return false;
-  }
-  try {
-    if (normalizeIssuer(client.issuerUrl) !== client.issuerUrl) return false;
-    const redirect = new URL(client.redirectUris[0]!);
-    if (
-      redirect.protocol !== "https:" ||
-      redirect.username ||
-      redirect.password ||
-      redirect.hash ||
-      redirect.search
-    ) {
-      return false;
-    }
-    const scopes = exactOidcScopes(client.allowedScopes);
-    return (
-      scopes.length === client.allowedScopes.length &&
-      scopes.every((scope, index) => scope === client.allowedScopes[index])
-    );
-  } catch {
-    return false;
-  }
-}
-
-function parseRollbackSafePublicOidcClient(
-  value: unknown,
-  capsuleId: string,
-): OidcClientRecord | undefined {
-  if (value === null) return undefined;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("host runtime rollback receipt is invalid");
-  }
-  const row = value as Record<string, unknown>;
-  const fields = [
-    "clientId",
-    "capsuleId",
-    "namespacePath",
-    "issuerUrl",
-    "redirectUris",
-    "allowedScopes",
-    "subjectMode",
-    "tokenEndpointAuthMethod",
-    "createdAt",
-    "updatedAt",
-  ];
-  if (
-    Object.keys(row).length !== fields.length ||
-    Object.keys(row).some((field) => !fields.includes(field)) ||
-    row.capsuleId !== capsuleId ||
-    !Array.isArray(row.redirectUris) ||
-    !row.redirectUris.every((entry) => typeof entry === "string") ||
-    !Array.isArray(row.allowedScopes) ||
-    !row.allowedScopes.every((entry) => typeof entry === "string")
-  ) {
-    throw new Error("host runtime rollback receipt is invalid");
-  }
-  const client: OidcClientRecord = {
-    clientId: requiredPlatformIdentity(row.clientId, "rollback OIDC client id"),
-    capsuleId,
-    namespacePath: requiredPlatformIdentity(
-      row.namespacePath,
-      "rollback OIDC namespace",
-    ),
-    issuerUrl: requiredPlatformIdentity(row.issuerUrl, "rollback OIDC issuer"),
-    redirectUris: row.redirectUris as string[],
-    allowedScopes: row.allowedScopes as string[],
-    subjectMode: row.subjectMode as "pairwise",
-    tokenEndpointAuthMethod: row.tokenEndpointAuthMethod as "none",
-    createdAt: row.createdAt as number,
-    updatedAt: row.updatedAt as number,
-  };
-  if (!isRollbackSafePublicOidcClient(client)) {
-    throw new Error("host runtime rollback receipt is invalid");
-  }
-  return client;
-}
-
-function sameOidcClient(
-  left: OidcClientRecord,
-  right: OidcClientRecord,
-): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 export interface PlatformInterfaceProjectionRepairResult {
@@ -1806,6 +702,12 @@ export default {
       );
       return response ?? Response.json({ error: "not found" }, { status: 404 });
     }
+    // Takoform Host/Resource Shape is not a Takosumi process surface. Tombstone
+    // the complete namespace before extension auth or SPA fallback, including
+    // requests carrying valid or stale credentials.
+    if (isPlatformTakoformHostPath(url.pathname)) {
+      return Response.json({ error: "not found" }, { status: 404 });
+    }
     if (isPlatformExtensionCatalogPath(url.pathname)) {
       return await handlePlatformExtensionCatalogRequest(request, url, env);
     }
@@ -1838,48 +740,19 @@ export default {
         verifyPlatformExtensionSession,
       );
     }
-    // Keep the portable Takoform v1alpha1 compatibility protocol on its own
-    // exact matcher while reserving the retired host roots and later alpha
-    // lanes. Unknown host paths must not fall through to the Accounts SPA.
-    if (
-      isPlatformTakoformHostPath(url.pathname) &&
-      !isPlatformTakoformV1alpha1CompatibilityRequest(request, url)
-    ) {
-      return Response.json({ error: "not found" }, { status: 404 });
-    }
-    if (isPlatformTakoformV1alpha1CompatibilityRequest(request, url)) {
-      return await handlePlatformTakoformV1alpha1CompatibilityRequest(
-        request,
-        env,
-        context,
-      );
-    }
     // Generic Interface/InterfaceBinding APIs remain a normal session edge
     // surface on the canonical `/api/v1` prefix.
     if (
-      isPlatformInterfaceApiPath(url.pathname) ||
-      isPlatformOfferingApiPath(url.pathname)
+      isPlatformInterfaceApiPath(url.pathname)
     ) {
       return await (
-        handlePlatformResourceShapeApiRequest(
+        handlePlatformInterfaceApiRequest(
           request,
           env,
           verifyPlatformExtensionSession,
           platformExtensionSessionCanAccessWorkspace,
           context,
         )
-      );
-    }
-    // Portable Takoform host routes remain separately composed under `/apis`.
-    // Descriptor validation rejects overlaps too; keeping the dispatch order
-    // explicit prevents a future parser regression from shadowing authority.
-    if (isPlatformResourceShapeApiPath(url.pathname)) {
-      return await handlePlatformResourceShapeApiRequest(
-        request,
-        env,
-        verifyPlatformExtensionSession,
-        platformExtensionSessionCanAccessWorkspace,
-        context,
       );
     }
     if (url.pathname === OPERATOR_CONTROL_MCP_PATH) {
@@ -2037,24 +910,15 @@ function platformDiscoveryOptions(
 ): CreateTakosumiDiscoveryOptions {
   const extensionDiscovery = platformExtensionDiscovery(env);
   const operatorControlMcp = operatorControlMcpEnabled(env);
-  // Resource Shape capability bits are retained for migration/domain custody,
-  // but no retired `/v1` HTTP or CLI surface is advertised.
-  const resources = platformResourceCapabilities(env, false);
-  const resourceShapes = false;
-  const adapters = platformAdapterCapabilities(env, resourceShapes);
-  const operator = platformOperatorCapabilities(env, resourceShapes);
+  const operator = platformOperatorCapabilities(env);
   const mobileOidcClientId = configuredTakosumiMobileOidcClientId(env);
   return {
     origin,
     ...(mobileOidcClientId ? { mobileOidcClientId } : {}),
-    resources,
-    adapters,
     identity: {
       external_oidc_login: accountsExternalLoginConfigured(env),
     },
     operator,
-    compat: extensionDiscovery.compat,
-    compatibilityProfiles: extensionDiscovery.compatibilityProfiles,
     extensions: [
       ...new Set([
         ...extensionDiscovery.extensions,
@@ -2069,51 +933,8 @@ function platformDiscoveryOptions(
           : []),
       ].map(([token, path]) => [token, new URL(path, origin).toString()]),
     ),
-    resourceShapesEnabled: resourceShapes,
-    interfacesEnabled: platformResourceShapeApiEnabled(env),
+    interfacesEnabled: platformInterfaceApiEnabled(env),
   };
-}
-
-const RESOURCE_CAPABILITY_KEYS = [
-  "EdgeWorker",
-  "ObjectBucket",
-  "KVStore",
-  "Queue",
-  "SQLDatabase",
-  "ContainerService",
-] as const;
-
-type MutablePartial<T> = {
-  -readonly [K in keyof T]?: T[K];
-};
-
-function platformResourceCapabilities(
-  env: CloudflareWorkerEnv,
-  apiEnabled: boolean,
-): Partial<TakosumiResourceCapabilities> {
-  const base = Object.fromEntries(
-    RESOURCE_CAPABILITY_KEYS.map((key) => [key, false]),
-  ) as MutablePartial<TakosumiResourceCapabilities>;
-  if (!apiEnabled) return base;
-  // Retired Resource Shape HTTP families are never advertised by the public
-  // platform discovery document. Keep this helper fail-closed for any future
-  // caller instead of deriving capabilities from a deleted route family.
-  return base;
-}
-
-function platformAdapterCapabilities(
-  env: CloudflareWorkerEnv,
-  resourceShapesEnabled: boolean,
-): Partial<TakosumiAdapterCapabilities> {
-  const base: MutablePartial<TakosumiAdapterCapabilities> = {};
-  if (!resourceShapesEnabled) return base;
-  base.opentofu = true;
-  for (const key of parseExtensionCapabilityTokens(
-    env.TAKOSUMI_RESOURCE_ADAPTERS,
-  )) {
-    base[key] = true;
-  }
-  return base;
 }
 
 function parseCapabilityTokens(raw: string): readonly string[] {
@@ -2147,22 +968,12 @@ function parseExtensionCapabilityTokens(value: unknown): readonly string[] {
   return out;
 }
 
-export function platformResourceShapeApiEnabled(
+export function platformInterfaceApiEnabled(
   env: CloudflareWorkerEnv,
 ): boolean {
-  // This is the shared service-binding check used by the generic Interface and
-  // operator Offering seams. It deliberately does not imply that the legacy
-  // Resource Shape surface is publicly enabled.
+  // Interface ingress requires the in-process deploy-control service and its
+  // operator bearer; no retired Resource API is enabled here.
   return Boolean(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN && env.TAKOSUMI_CONTROL_DB);
-}
-
-const PUBLIC_RESOURCE_API_MANAGED_BY = "takosumi.resource-api.v1";
-
-export function isPlatformResourceShapeApiPath(pathname: string): boolean {
-  return (
-    pathname === TAKOFORM_FORM_HOST_API_PATH ||
-    pathname.startsWith(`${TAKOFORM_FORM_HOST_API_PATH}/`)
-  );
 }
 
 /** Generic Interface/InterfaceBinding ingress; kept independent from Flow-B. */
@@ -2179,13 +990,8 @@ function isPlatformLegacyInterfaceApiPath(pathname: string): boolean {
   );
 }
 
-/** Operator-only generic Offering ingress. */
-export function isPlatformOfferingApiPath(pathname: string): boolean {
-  return isPlatformOfferingOperatorApiPath(pathname);
-}
-
 const RETIRED_TAKOFORM_HOST_API_PATHS = [
-  TAKOFORM_FORM_HOST_API_PATH,
+  "/apis/forms.takoform.com/v1alpha1",
   "/apis/forms.takoform.com/v1alpha2",
   "/apis/forms.takoform.com/v1alpha3",
 ] as const;
@@ -2202,234 +1008,8 @@ function isPathOrSubpath(pathname: string, prefix: string): boolean {
 
 function isPlatformTakoformHostPath(pathname: string): boolean {
   return (
-    isPathOrSubpath(pathname, TAKOFORM_FORM_HOST_WELL_KNOWN_PATH) ||
+    isPathOrSubpath(pathname, "/.well-known/takoform") ||
     isRetiredTakoformHostApiPath(pathname)
-  );
-}
-
-const PLATFORM_RESOURCE_FORM_TRANSITION_PATH =
-  /^\/apis\/forms\.takoform\.com\/v1alpha1\/resources\/[^/%]+\/[^/%]+\/form-transitions(?:\/formtx_[0-9a-f]{64})?$/u;
-const PLATFORM_TAKOFORM_V1ALPHA1_RESOURCE_PATH =
-  /^\/apis\/forms\.takoform\.com\/v1alpha1\/resources\/[^/%]+\/[^/%]+$/u;
-const PLATFORM_TAKOFORM_V1ALPHA1_OBSERVE_PATH =
-  /^\/apis\/forms\.takoform\.com\/v1alpha1\/resources\/[^/%]+\/[^/%]+\/observe$/u;
-
-type PlatformTakoformV1alpha1CompatibilityRoute = {
-  readonly kind:
-    | "discovery"
-    | "forms"
-    | "read"
-    | "observe"
-    | "preview"
-    | "apply"
-    | "delete"
-    | "transition";
-  readonly phases: readonly ("plan" | "apply" | "destroy")[];
-};
-
-type PlatformTakoformV1alpha1CredentialVerifier = (
-  env: CloudflareWorkerEnv,
-  token: string,
-  phases: readonly ("plan" | "apply" | "destroy")[],
-) => Promise<PlatformExtensionSessionContext>;
-
-function platformTakoformV1alpha1CompatibilityRoute(
-  request: Request,
-  url = new URL(request.url),
-): PlatformTakoformV1alpha1CompatibilityRoute | undefined {
-  const method = request.method.toUpperCase();
-  const path = url.pathname;
-  if (
-    path === TAKOFORM_FORM_HOST_WELL_KNOWN_PATH &&
-    method === "GET" &&
-    url.search === ""
-  ) {
-    return { kind: "discovery", phases: [] };
-  }
-  if (path === `${TAKOFORM_FORM_HOST_API_PATH}/forms` && method === "GET") {
-    return { kind: "forms", phases: ["apply"] };
-  }
-  if (
-    path === `${TAKOFORM_FORM_HOST_API_PATH}/resources/preview` &&
-    method === "POST"
-  ) {
-    return { kind: "preview", phases: ["apply"] };
-  }
-  if (PLATFORM_RESOURCE_FORM_TRANSITION_PATH.test(path)) {
-    const readback = /\/form-transitions\/formtx_[0-9a-f]{64}$/u.test(path);
-    if ((readback && method === "GET") || (!readback && method === "POST")) {
-      return { kind: "transition", phases: ["apply"] };
-    }
-    return undefined;
-  }
-  if (PLATFORM_TAKOFORM_V1ALPHA1_OBSERVE_PATH.test(path) && method === "POST") {
-    return { kind: "observe", phases: ["plan", "apply", "destroy"] };
-  }
-  if (!PLATFORM_TAKOFORM_V1ALPHA1_RESOURCE_PATH.test(path)) return undefined;
-  if (method === "GET") {
-    return { kind: "read", phases: ["plan", "apply", "destroy"] };
-  }
-  if (method === "PUT") return { kind: "apply", phases: ["apply"] };
-  if (method === "DELETE") return { kind: "delete", phases: ["destroy"] };
-  return undefined;
-}
-
-/** Exact transition matcher retained for provider/host conformance tests. */
-export function isPlatformResourceFormTransitionRequest(
-  request: Request,
-  url = new URL(request.url),
-): boolean {
-  return platformTakoformV1alpha1CompatibilityRoute(request, url)?.kind ===
-    "transition";
-}
-
-/**
- * Complete frozen maintenance lane understood by the v1 provider. Matching a
- * route does not mount it: the platform stays 404 until a host-code descriptor
- * and every transition/credential port are present.
- */
-export function isPlatformTakoformV1alpha1CompatibilityRequest(
-  request: Request,
-  url = new URL(request.url),
-): boolean {
-  return platformTakoformV1alpha1CompatibilityRoute(request, url) !== undefined;
-}
-
-function platformTakoformV1alpha1CompatibilityMounted(
-  env: CloudflareWorkerEnv,
-): boolean {
-  const mount = env.TAKOSUMI_TAKOFORM_V1ALPHA1_COMPATIBILITY_HOST;
-  const host = env.TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST;
-  const evidence = env.TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE;
-  return Boolean(
-    mount &&
-      typeof mount === "object" &&
-      !Array.isArray(mount) &&
-      Object.keys(mount).length === 2 &&
-      mount.apiVersion === "forms.takoform.com/v1alpha1" &&
-      mount.mode === "frozen-maintenance" &&
-      host &&
-      typeof host.dispatch === "function" &&
-      typeof host.readback === "function" &&
-      evidence &&
-      typeof evidence.authorize === "function" &&
-      typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string" &&
-      env.TAKOSUMI_DEPLOY_CONTROL_TOKEN.length > 0 &&
-      hasValidPlatformRunCredentialSecret(env),
-  );
-}
-
-function hasValidPlatformRunCredentialSecret(
-  env: CloudflareWorkerEnv,
-): boolean {
-  try {
-    return runCredentialTokenSecret(env) !== undefined;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Same-origin in-process adapter for the frozen v1 provider. Discovery is
- * public. Every lifecycle request revalidates the current Run/Capsule/binding/
- * recipe authority, strips caller-supplied trust headers, and forwards only
- * host-derived actor/owner context to Core.
- */
-export async function handlePlatformTakoformV1alpha1CompatibilityRequest(
-  request: Request,
-  env: CloudflareWorkerEnv,
-  context?: PlatformExecutionContext,
-  verifyCredential: PlatformTakoformV1alpha1CredentialVerifier =
-    verifyPlatformTakoformV1alpha1RunCredential,
-): Promise<Response> {
-  const route = platformTakoformV1alpha1CompatibilityRoute(request);
-  if (!route || !platformTakoformV1alpha1CompatibilityMounted(env)) {
-    return legacyResourceNotFoundResponse();
-  }
-  const deployControlToken = env.TAKOSUMI_DEPLOY_CONTROL_TOKEN;
-  if (typeof deployControlToken !== "string" || !deployControlToken) {
-    return legacyResourceNotFoundResponse();
-  }
-
-  const headers = new Headers(request.headers);
-  headers.delete(TAKOSUMI_INTERNAL_ACTOR_HEADER);
-  headers.delete(TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER);
-  for (const header of [...headers.keys()]) {
-    if (header.startsWith("x-takosumi-internal-")) headers.delete(header);
-  }
-
-  if (route.kind === "discovery") {
-    headers.delete("authorization");
-  } else {
-    const token = platformExtensionRunCredentialToken(request);
-    if (!token) {
-      return Response.json({ error: "unauthenticated" }, { status: 401 });
-    }
-    const session = await verifyCredential(env, token, route.phases);
-    if (!session.authenticated || session.authKind !== "run-credential") {
-      return Response.json({ error: "unauthenticated" }, { status: 401 });
-    }
-    if (
-      !session.workspaceId ||
-      !session.capsuleId ||
-      !session.installingPrincipalId ||
-      !session.phase ||
-      !route.phases.includes(session.phase)
-    ) {
-      return Response.json({ error: "unauthorized" }, { status: 403 });
-    }
-    const url = new URL(request.url);
-    const spaces = url.searchParams.getAll("space");
-    if (spaces.length > 0 && spaces.some((space) => space !== session.workspaceId)) {
-      return Response.json({ error: "forbidden" }, { status: 403 });
-    }
-    headers.set(
-      TAKOSUMI_INTERNAL_ACTOR_HEADER,
-      encodeActorContext({
-        actorAccountId: session.installingPrincipalId,
-        roles: ["operator"],
-        // The route verifier already proved the recipe's exact audience and
-        // scopes. Do not reinterpret provider-specific tokens as generic Core
-        // `forms:read`/`resources:*` claims or let the caller author them.
-        requestId: crypto.randomUUID(),
-        workspaceId: session.workspaceId,
-        principalKind: "account",
-      }),
-    );
-    headers.set(
-      TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER,
-      JSON.stringify({
-        kind: "Capsule",
-        id: session.capsuleId,
-        workspaceId: session.workspaceId,
-        installingPrincipalId: session.installingPrincipalId,
-      }),
-    );
-  }
-  headers.set("authorization", `Bearer ${deployControlToken}`);
-  const forwarded = new Request(request, { headers });
-  const service = await cachedDeployControlService(env);
-  return await service.app.fetch(
-    forwarded,
-    undefined,
-    honoExecutionContext(context),
-  );
-}
-
-/** Backward-compatible name for direct transition handler callers. */
-export const handlePlatformResourceFormTransitionRequest =
-  handlePlatformTakoformV1alpha1CompatibilityRequest;
-
-function legacyResourceNotFoundResponse(): Response {
-  return Response.json({ error: "not found" }, { status: 404 });
-}
-
-function isPlatformOfferingOperatorApiPath(pathname: string): boolean {
-  return (
-    pathname === "/internal/v1/offering-catalogs" ||
-    pathname.startsWith("/internal/v1/offering-catalogs/") ||
-    pathname === "/internal/v1/offering-availability/query" ||
-    pathname === "/internal/v1/offering-selections/resolve"
   );
 }
 
@@ -2440,14 +1020,14 @@ function isPlatformInterfaceTokenIssueRequest(request: Request): boolean {
   );
 }
 
-export async function handlePlatformResourceShapeApiRequest(
+export async function handlePlatformInterfaceApiRequest(
   request: Request,
   env: CloudflareWorkerEnv,
   sessionVerifier: PlatformExtensionSessionVerifier = verifyPlatformExtensionSession,
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
   context?: PlatformExecutionContext,
 ): Promise<Response> {
-  return await handlePlatformResourceShapeApiRequestInternal(
+  return await handlePlatformInterfaceApiRequestInternal(
     request,
     env,
     sessionVerifier,
@@ -2456,8 +1036,8 @@ export async function handlePlatformResourceShapeApiRequest(
   );
 }
 
-/** Shared Interface/Offering dispatch. Retired Resource `/v1` paths fail closed. */
-async function handlePlatformResourceShapeApiRequestInternal(
+/** Shared Interface dispatch. Retired Resource paths fail closed. */
+async function handlePlatformInterfaceApiRequestInternal(
   request: Request,
   env: CloudflareWorkerEnv,
   sessionVerifier: PlatformExtensionSessionVerifier = verifyPlatformExtensionSession,
@@ -2465,47 +1045,26 @@ async function handlePlatformResourceShapeApiRequestInternal(
   context?: PlatformExecutionContext,
 ): Promise<Response> {
   const pathname = new URL(request.url).pathname;
-  const timings = platformResourceShapeServerTimingBucket(pathname);
+  const timings: ServerTimingBucket = undefined;
   if (isRetiredV1Path(pathname) || isPlatformTakoformHostPath(pathname)) {
-    return appendPlatformResourceServerTiming(
-      legacyResourceNotFoundResponse(),
+    return appendPlatformInterfaceServerTiming(
+      retiredApiNotFoundResponse(),
       timings,
     );
   }
-  const enabled = platformResourceShapeApiEnabled(env);
+  const enabled = platformInterfaceApiEnabled(env);
   if (!enabled) {
-    return appendPlatformResourceServerTiming(
-      legacyResourceNotFoundResponse(),
+    return appendPlatformInterfaceServerTiming(
+      retiredApiNotFoundResponse(),
       timings,
     );
   }
-  const hasDeployControlBearer = platformResourceShapeHasDeployControlBearer(
+  const hasDeployControlBearer = platformControlHasDeployControlBearer(
     request,
     env,
   );
-  // Catalog publication and operator-side audience inspection are not a
-  // customer session surface. Forward the original credential to Core so its
-  // constant-time deploy-control bearer check remains authoritative; never
-  // rewrite an account session into the operator bearer for these routes.
-  if (
-    !hasDeployControlBearer &&
-    isPlatformOfferingApiPath(pathname)
-  ) {
-    const service = await cachedDeployControlService(env);
-    const response = await measureServerTiming(
-      timings,
-      "resource-dispatch",
-      () =>
-        service.app.fetch(
-          request,
-          undefined,
-          honoExecutionContext(context),
-        ),
-    );
-    return appendPlatformResourceServerTiming(response, timings);
-  }
   if (!hasDeployControlBearer) {
-    const authorized = await platformResourceShapeExternalRequest(
+    const authorized = await platformInterfaceExternalRequest(
       request,
       env,
       sessionVerifier,
@@ -2513,14 +1072,14 @@ async function handlePlatformResourceShapeApiRequestInternal(
       timings,
     );
     if (!authorized.ok) {
-      return appendPlatformResourceServerTiming(authorized.response, timings);
+      return appendPlatformInterfaceServerTiming(authorized.response, timings);
     }
     request = authorized.request;
   }
   const service = await cachedDeployControlService(env);
   const response = await measureServerTiming(
     timings,
-    "resource-dispatch",
+    "interface-dispatch",
     () =>
       service.app.fetch(
         request,
@@ -2528,26 +1087,17 @@ async function handlePlatformResourceShapeApiRequestInternal(
         honoExecutionContext(context),
       ),
   );
-  return appendPlatformResourceServerTiming(response, timings);
+  return appendPlatformInterfaceServerTiming(response, timings);
 }
 
-function platformResourceShapeServerTimingBucket(
-  pathname: string,
-): ServerTimingBucket {
-  return pathname.startsWith("/v1/") && isPlatformResourceShapeApiPath(pathname)
-    ? []
-    : undefined;
-}
-
-export function appendPlatformResourceServerTiming(
+export function appendPlatformInterfaceServerTiming(
   response: Response,
   timings: ServerTimingBucket,
 ): Response {
   if (!timings || timings.length === 0) return response;
 
-  // Resource Shape is an HTTP JSON surface today, but keep this wrapper safe
-  // if a future compatibility handler returns a Cloudflare WebSocket response.
-  // Reconstructing a 101 Response would drop its socket and break the upgrade.
+  // Keep this wrapper safe if an extension returns a Cloudflare WebSocket
+  // response. Reconstructing a 101 Response would drop its socket.
   const webSocket = (response as unknown as { readonly webSocket?: unknown })
     .webSocket;
   if (response.status === 101 || webSocket !== undefined) return response;
@@ -2630,7 +1180,7 @@ function platformGetHeadOnlyMethodNotAllowedResponse(): Response {
   );
 }
 
-function platformResourceShapeHasDeployControlBearer(
+function platformControlHasDeployControlBearer(
   request: Request,
   env: CloudflareWorkerEnv,
 ): boolean {
@@ -2644,7 +1194,7 @@ function platformResourceShapeHasDeployControlBearer(
   return Boolean(token && bearer && constantTimeEqualsString(bearer, token));
 }
 
-async function platformResourceShapeExternalRequest(
+async function platformInterfaceExternalRequest(
   request: Request,
   env: CloudflareWorkerEnv,
   sessionVerifier: PlatformExtensionSessionVerifier,
@@ -2675,23 +1225,21 @@ async function platformResourceShapeExternalRequest(
   if (sessionCsrfFailure) {
     return { ok: false, response: sessionCsrfFailure };
   }
-  return await platformResourceShapeAuthorizedRequest(
+  return await platformInterfaceAuthorizedRequest(
     request,
     request,
     env,
     session,
-    undefined,
     workspaceAccess,
     timings,
   );
 }
 
-async function platformResourceShapeAuthorizedRequest(
+async function platformInterfaceAuthorizedRequest(
   request: Request,
   workspaceVerificationRequest: Request,
   env: CloudflareWorkerEnv,
   session: PlatformExtensionSessionContext,
-  trustedManagedBy?: string,
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
   timings?: ServerTimingBucket,
 ): Promise<
@@ -2702,36 +1250,9 @@ async function platformResourceShapeAuthorizedRequest(
   if (sessionRoleFailure) return { ok: false, response: sessionRoleFailure };
 
   const url = new URL(request.url);
-  const interfaceAccessFailure = isPlatformInterfaceApiPath(url.pathname)
-    ? platformInterfaceAccessFailure(request, session)
-    : undefined;
+  const interfaceAccessFailure = platformInterfaceAccessFailure(request, session);
   if (interfaceAccessFailure) {
     return { ok: false, response: interfaceAccessFailure };
-  }
-  if (!isPlatformInterfaceApiPath(url.pathname)) {
-    const resourceAccessFailure = platformResourceShapeAccessFailure(
-      request,
-      session,
-    );
-    if (resourceAccessFailure) {
-      return { ok: false, response: resourceAccessFailure };
-    }
-  }
-
-  // Artifact staging is the one Resource route whose request body is opaque
-  // bytes rather than JSON. Authenticate and bind it to the verified Workspace
-  // before forwarding the untouched stream; the Core/host writer owns the
-  // exact per-kind size and digest fences.
-  if (isPlatformResourceArtifactRequest(request, url)) {
-    return await platformResourceArtifactAuthorizedRequest(
-      request,
-      workspaceVerificationRequest,
-      env,
-      session,
-      trustedManagedBy,
-      workspaceAccess,
-      timings,
-    );
   }
 
   const materialized = await materializeRequestBody(request);
@@ -2739,9 +1260,7 @@ async function platformResourceShapeAuthorizedRequest(
   const body = materialized.bodyText
     ? objectRecord(JSON.parse(materialized.bodyText))
     : {};
-  const effectiveManagedBy =
-    trustedManagedBy ?? platformPublicResourceManagedBy(url, body, session);
-  const requestedWorkspaceId = platformResourceShapeRequestWorkspaceId(
+  const requestedWorkspaceId = platformControlRequestWorkspaceId(
     request,
     url,
     body,
@@ -2771,34 +1290,10 @@ async function platformResourceShapeAuthorizedRequest(
         session,
         workspaceId,
         workspaceAccess,
-        platformResourceWorkspaceAccessMode(request, url),
+        platformInterfaceAccessMode(request, url),
       ),
   );
   if (!verified.ok) return verified;
-
-  // The public/session Resource Shape surface currently uses the verified
-  // Workspace id as its Resource Space id. Core deliberately has no implicit
-  // Space-to-Workspace mapping, so accepting an unrelated `space` here would
-  // turn a valid membership in any Workspace into a cross-Workspace read/write
-  // oracle against the global Resource stores. Direct deploy-control bearer
-  // calls bypass this external-session seam and retain operator authority over
-  // arbitrary Spaces.
-  if (!isPlatformInterfaceApiPath(url.pathname)) {
-    const requestedSpaces = platformResourceShapeRequestedSpaces(url, body);
-    if (requestedSpaces.some((space) => space !== workspaceId)) {
-      return {
-        ok: false,
-        response: Response.json(
-          {
-            error: "forbidden",
-            error_description:
-              "Resource Space must match the verified Workspace",
-          },
-          { status: 403 },
-        ),
-      };
-    }
-  }
 
   return {
     ok: true,
@@ -2810,16 +1305,12 @@ async function platformResourceShapeAuthorizedRequest(
       headers.set(
         TAKOSUMI_INTERNAL_ACTOR_HEADER,
         encodeActorContext(
-          platformResourceShapeActorContext(
+          platformInterfaceActorContext(
             verified.session,
             workspaceId,
             request,
           ),
         ),
-      );
-      headers.set(
-        TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
-        effectiveManagedBy,
       );
       headers.delete(PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER);
       for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
@@ -2829,7 +1320,7 @@ async function platformResourceShapeAuthorizedRequest(
   };
 }
 
-function platformResourceWorkspaceAccessMode(
+function platformInterfaceAccessMode(
   request: Request,
   url: URL,
 ): "read" | "write" {
@@ -2869,220 +1360,6 @@ function platformExtensionSessionCsrfFailure(
   return request.headers.get("origin") === issuerOrigin
     ? undefined
     : Response.json({ error: "csrf_failed" }, { status: 403 });
-}
-
-function isPlatformResourceArtifactRequest(
-  request: Request,
-  url: URL = new URL(request.url),
-): boolean {
-  return (
-    request.method === "POST" &&
-    /^\/v1\/resources\/[^/]+\/[^/]+\/artifacts$/u.test(url.pathname)
-  );
-}
-
-async function platformResourceArtifactAuthorizedRequest(
-  request: Request,
-  workspaceVerificationRequest: Request,
-  env: CloudflareWorkerEnv,
-  session: PlatformExtensionSessionContext,
-  trustedManagedBy: string | undefined,
-  workspaceAccess: PlatformExtensionWorkspaceAccess,
-  timings?: ServerTimingBucket,
-): Promise<
-  | { readonly ok: true; readonly request: Request }
-  | { readonly ok: false; readonly response: Response }
-> {
-  const url = new URL(request.url);
-  const requestedSpaces = platformResourceShapeRequestedSpaces(url, {})
-    .map((space) => safePlatformExtensionContextId(space))
-    .filter((space): space is string => space !== undefined);
-  const requestedSpace =
-    requestedSpaces.length === 1 ? requestedSpaces[0] : undefined;
-  if (!requestedSpace) {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "invalid_request",
-          error_description: "space query is required",
-        },
-        { status: 400 },
-      ),
-    };
-  }
-  const requestedWorkspaceId = platformResourceShapeRequestWorkspaceId(
-    request,
-    url,
-    {},
-  );
-  const workspaceId =
-    requestedWorkspaceId ?? safePlatformExtensionContextId(session.workspaceId);
-  if (!workspaceId) {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "invalid_request",
-          error_description: "workspaceId is required",
-        },
-        { status: 400 },
-      ),
-    };
-  }
-  const verified = await measureServerTiming(
-    timings,
-    "workspace-auth",
-    () =>
-      platformExtensionVerifiedWorkspaceSession(
-        workspaceVerificationRequest,
-        env,
-        session,
-        workspaceId,
-        workspaceAccess,
-        "write",
-      ),
-  );
-  if (!verified.ok) return verified;
-  if (requestedSpace !== workspaceId) {
-    return {
-      ok: false,
-      response: Response.json(
-        {
-          error: "forbidden",
-          error_description: "Resource Space must match the verified Workspace",
-        },
-        { status: 403 },
-      ),
-    };
-  }
-
-  const headers = new Headers(request.headers);
-  headers.delete(TAKOSUMI_INTERNAL_ACTOR_HEADER);
-  headers.set(
-    "authorization",
-    `Bearer ${String(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)}`,
-  );
-  headers.set(
-    TAKOSUMI_INTERNAL_ACTOR_HEADER,
-    encodeActorContext(
-      platformResourceShapeActorContext(verified.session, workspaceId),
-    ),
-  );
-  headers.set(
-    TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
-    trustedManagedBy ?? PUBLIC_RESOURCE_API_MANAGED_BY,
-  );
-  headers.delete(PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER);
-  for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
-    if (header !== "authorization") headers.delete(header);
-  }
-  return {
-    ok: true,
-    request: new Request(request, { headers }),
-  };
-}
-
-function platformPublicResourceManagedBy(
-  url: URL,
-  body: Record<string, unknown>,
-  session: PlatformExtensionSessionContext,
-): string {
-  const requestedManagedBy =
-    safePlatformResourceManagedBy(url.searchParams.get("managedBy")) ??
-    safePlatformResourceManagedBy(
-      valueString(objectRecord(body.metadata).managedBy),
-    );
-  // `opentofu` is the one public first-party authoring surface carried by the
-  // provider contract. A bearer that already has Resource write authority may
-  // deliberately act through that surface; arbitrary compatibility/operator
-  // manager identities remain impossible to select at public ingress.
-  return requestedManagedBy === "opentofu" &&
-    platformResourceShapeSessionMayWrite(session)
-    ? "opentofu"
-    : PUBLIC_RESOURCE_API_MANAGED_BY;
-}
-
-function safePlatformResourceManagedBy(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const normalized = value.trim();
-  return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(normalized)
-    ? normalized
-    : undefined;
-}
-
-function platformResourceShapeAccessFailure(
-  request: Request,
-  session: PlatformExtensionSessionContext,
-): Response | undefined {
-  const readOnly = request.method === "GET" || request.method === "HEAD";
-  if (session.authKind === "session") return undefined;
-  if (session.authKind === "oauth-access-token") {
-    if (platformOAuthAccessTokenAllowsControlRequest(request, session.scopes)) {
-      return undefined;
-    }
-    return Response.json(
-      {
-        error: "insufficient_scope",
-        error_description: "delegated token lacks Capsule access scope",
-      },
-      { status: 403 },
-    );
-  }
-  const scopes = new Set(session.scopes ?? []);
-  if (session.authKind === "personal-access-token") {
-    const allowed = readOnly
-      ? scopes.has("admin") || scopes.has("read") || scopes.has("write")
-      : scopes.has("admin") || scopes.has("write");
-    if (allowed) return undefined;
-    return Response.json(
-      {
-        error: "insufficient_scope",
-        error_description: readOnly
-          ? "personal access token lacks read scope"
-          : "personal access token lacks write scope",
-      },
-      { status: 403 },
-    );
-  }
-  if (session.authKind === "service-token") {
-    const allowed = readOnly
-      ? scopes.has("admin") ||
-        scopes.has("read") ||
-        scopes.has("write") ||
-        scopes.has("capsules:read") ||
-        scopes.has("capsules:write")
-      : scopes.has("admin") ||
-        scopes.has("write") ||
-        scopes.has("capsules:write");
-    if (allowed) return undefined;
-  }
-  return Response.json(
-    {
-      error: "access_denied",
-      error_description: "credential type cannot access Resource control APIs",
-    },
-    { status: 403 },
-  );
-}
-
-function platformResourceShapeSessionMayWrite(
-  session: PlatformExtensionSessionContext,
-): boolean {
-  if (session.authKind === "personal-access-token") {
-    const scopes = new Set(session.scopes ?? []);
-    return scopes.has("admin") || scopes.has("write");
-  }
-  if (
-    session.authKind === "oauth-access-token" ||
-    session.authKind === "service-token"
-  ) {
-    const scopes = new Set(session.scopes ?? []);
-    return (
-      scopes.has("admin") || scopes.has("write") || scopes.has("capsules:write")
-    );
-  }
-  return false;
 }
 
 function platformInterfaceAccessFailure(
@@ -3263,7 +1540,7 @@ function cloneRequestWithBody(
   });
 }
 
-function platformResourceShapeRequestWorkspaceId(
+function platformControlRequestWorkspaceId(
   request: Request,
   url: URL,
   body: Record<string, unknown>,
@@ -3276,39 +1553,10 @@ function platformResourceShapeRequestWorkspaceId(
     safePlatformExtensionContextId(valueString(body.workspaceId));
   if (explicit) return explicit;
 
-  // The portable Form host protocol carries `space`, not a Takosumi-specific
-  // Workspace selector. Accept one unambiguous portable namespace only as a
-  // candidate, then
-  // prove the caller's Workspace access below; the string itself grants
-  // nothing and the Resource-to-Workspace resolver separately proves the
-  // canonical Workspace exists.
-  const requestedSpaces = platformResourceShapeRequestedSpaces(url, body)
-    .map((space) => safePlatformExtensionContextId(space))
-    .filter((space): space is string => space !== undefined);
-  return requestedSpaces.length === 1 ? requestedSpaces[0] : undefined;
+  return undefined;
 }
 
-function platformResourceShapeRequestedSpaces(
-  url: URL,
-  body: Record<string, unknown>,
-): readonly string[] {
-  // Every route-level Space selector supplied by an external caller.
-  const metadata = objectRecord(body.metadata);
-  const candidates = [
-    url.searchParams.get("space"),
-    valueString(body.space),
-    valueString(metadata.space),
-  ];
-  return [
-    ...new Set(
-      candidates
-        .map((value) => value?.trim())
-        .filter((value): value is string => Boolean(value)),
-    ),
-  ];
-}
-
-function platformResourceShapeActorContext(
+function platformInterfaceActorContext(
   session: PlatformExtensionSessionContext,
   workspaceId: string,
   request?: Request,
@@ -3321,7 +1569,7 @@ function platformResourceShapeActorContext(
   return {
     actorAccountId:
       safePlatformExtensionContextId(session.subject) ??
-      `${session.authKind ?? "session"}:resource-shape`,
+      `${session.authKind ?? "session"}:interface`,
     roles: runtimePrincipal
       ? ["runtime-principal"]
       : session.scopes?.includes("admin")
@@ -3340,7 +1588,6 @@ function platformResourceShapeActorContext(
 
 export function platformOperatorCapabilities(
   env: CloudflareWorkerEnv,
-  resourceShapesEnabled = platformResourceShapeApiEnabled(env),
 ): TakosumiOperatorCapabilities {
   const configured = configuredOperatorCapabilities(env);
   const accountsDb = hasD1Binding(env.TAKOSUMI_ACCOUNTS_DB);
@@ -3356,8 +1603,7 @@ export function platformOperatorCapabilities(
     workspace_members: enabled("workspace_members") && accountsDb,
     runner_pools: enabled("runner_pools") && runner,
     operator_connections: enabled("operator_connections") && controlDb,
-    target_catalog:
-      enabled("target_catalog") && controlDb && resourceShapesEnabled,
+    target_catalog: false,
     db_backed_configuration:
       enabled("db_backed_configuration") && accountsDb && controlDb,
     cli_api_operations: enabled("cli_api_operations") && deployControlApi,
@@ -3418,8 +1664,6 @@ function hasDurableObjectBinding(value: unknown): boolean {
 }
 
 function platformExtensionDiscovery(env: CloudflareWorkerEnv): {
-  readonly compat: Readonly<Record<string, boolean>>;
-  readonly compatibilityProfiles: TakosumiCompatibilityProfileCapabilities;
   readonly extensions: readonly string[];
   readonly endpoints: Readonly<Record<string, string>>;
 } {
@@ -3434,11 +1678,6 @@ function platformExtensionDiscovery(env: CloudflareWorkerEnv): {
     // simply omitted until the operator fixes the composition.
     configuredRoutes = [];
   }
-  const compat: Record<string, boolean> = {};
-  const compatibilityProfiles: Record<
-    string,
-    { readonly planes: readonly ("control" | "data")[] }
-  > = {};
   const extensions = new Set<string>();
   const endpoints: Record<string, string> = {};
   for (const route of configuredRoutes) {
@@ -3446,15 +1685,8 @@ function platformExtensionDiscovery(env: CloudflareWorkerEnv): {
       extensions.add(capability);
       endpoints[capability] = route.basePath;
     }
-    for (const profile of route.compatibilityProfiles ?? []) {
-      compat[profile.profile] = true;
-      compatibilityProfiles[profile.profile] = { planes: profile.planes };
-      endpoints[profile.profile] = route.basePath;
-    }
   }
   return {
-    compat,
-    compatibilityProfiles,
     extensions: [...extensions].sort(),
     endpoints,
   };
@@ -3866,7 +2098,6 @@ export interface PlatformExtensionCatalogItem {
   readonly matchMode?: PlatformExtensionRoute["matchMode"];
   readonly configured: boolean;
   readonly capabilities?: readonly string[];
-  readonly compatibilityProfiles?: readonly PlatformCompatibilityProfile[];
   readonly authMode?: "platform" | "handler";
   readonly requiredScopes?: readonly string[];
   readonly selfServicePatScopes?: readonly string[];
@@ -3899,9 +2130,6 @@ export function platformExtensionCatalog(
     ...(route.matchMode ? { matchMode: route.matchMode } : {}),
     configured: platformExtensionRouteConfigured(env, route),
     ...(route.capabilities ? { capabilities: route.capabilities } : {}),
-    ...(route.compatibilityProfiles
-      ? { compatibilityProfiles: route.compatibilityProfiles }
-      : {}),
     ...(route.authMode ? { authMode: route.authMode } : {}),
     ...(route.requiredScopes ? { requiredScopes: route.requiredScopes } : {}),
     ...(route.selfServicePatScopes
@@ -4033,683 +2261,11 @@ export async function handlePlatformExtensionRequest(
 }
 
 /** Handler-owned protocol authentication assertion for handler-auth profiles. */
-export interface PlatformCompatibilityAuthorization {
-  readonly workspaceId: string;
-  readonly subject: string;
-  readonly scopes?: readonly string[];
-}
-
-/**
- * Exact capability already admitted and persisted by a compatibility
- * protocol. This is not a Workspace role or a Principal InterfaceBinding:
- * the caller must present the one Resource, Interface, and permission tuple
- * that its own credential authorizes, and the host revalidates that tuple
- * against current Ready/Resolved canonical state.
- */
-export interface PlatformCompatibilityStoredResourceGrant {
-  readonly workspaceId: string;
-  readonly resourceId: string;
-  readonly interfaceId?: string;
-  readonly permission: string;
-}
-
-/**
- * Canonical http.route Interface control available to scoped compatibility
- * profiles. The fixed service owns Interface/Binding validation and never
- * exposes the generic Interface store or CRUD service to an extension.
- */
-export interface PlatformCompatibilityRouteInterfaceControlPort {
-  ensure(
-    input: {
-      readonly workspaceId: string;
-      readonly resourceName: string;
-      readonly pathPattern: string;
-      readonly expectedEndpoint: string;
-    },
-    authorization?: PlatformCompatibilityAuthorization,
-  ): Promise<CompatibilityRouteRecord>;
-  list(
-    input: {
-      readonly workspaceId: string;
-      readonly resourceName?: string;
-    },
-    authorization?: PlatformCompatibilityAuthorization,
-  ): Promise<readonly CompatibilityRouteRecord[]>;
-  get(
-    input: { readonly workspaceId: string; readonly interfaceId: string },
-    authorization?: PlatformCompatibilityAuthorization,
-  ): Promise<CompatibilityRouteRecord | undefined>;
-  update(
-    input: {
-      readonly workspaceId: string;
-      readonly interfaceId: string;
-      readonly resourceName: string;
-      readonly pathPattern: string;
-      readonly expectedEndpoint: string;
-      readonly expectedEtag?: string;
-    },
-    authorization?: PlatformCompatibilityAuthorization,
-  ): Promise<CompatibilityRouteRecord>;
-  retire(
-    input: {
-      readonly workspaceId: string;
-      readonly interfaceId: string;
-      readonly expectedEtag?: string;
-    },
-    authorization?: PlatformCompatibilityAuthorization,
-  ): Promise<CompatibilityRouteRetireResult | undefined>;
-}
-
-/**
- * Manager-neutral, exact-GET-only canonical Resource reader for operator
- * recovery loops. This is deliberately separate from compatibility profile
- * authority: recovery must protect artifacts for every authoring surface,
- * while compatibility reads are scoped to their declared profile.
- */
-export interface PlatformCanonicalResourceReadAuthority {
-  fetch(
-    request: Request,
-    authorization?: PlatformCompatibilityAuthorization,
-  ): Promise<Response>;
-}
-
-export interface PlatformCanonicalReadyResourceInventoryItem {
-  readonly resourceId: string;
-  readonly resource: ResourceObject;
-  readonly resourceGeneration: number;
-  /** Canonical Resource row CAS revision proven by the coherent read. */
-  readonly resourceRevision: number;
-  /** Canonical backend lifecycle revision proven by the Resource store. */
-  readonly resourceRevisionId: string;
-  readonly nativeResources: readonly NativeResourceRef[];
-}
-
-export interface PlatformCanonicalReadyResourceInventoryPage {
-  readonly items: readonly PlatformCanonicalReadyResourceInventoryItem[];
-  readonly nextCursor?: string;
-}
-
-export interface PlatformCanonicalHostRuntimeResourceRecovery {
-  resolve(input: {
-    readonly resourceId: string;
-    readonly resourceGeneration: number;
-    readonly resourceRevisionId: string;
-  }): Promise<PlatformCanonicalReadyResourceInventoryItem | undefined>;
-  complete(input: {
-    readonly resourceId: string;
-    readonly resourceGeneration: number;
-    readonly resourceRevisionId: string;
-  }): Promise<boolean>;
-}
-
-/**
- * Read-only global Resource inventory for host-operated reconciliation jobs.
- * It is a composition port only: no public HTTP route exposes global
- * enumeration, and every item is a coherent fully observed Ready Resource.
- */
-export interface PlatformCanonicalReadyResourceInventory {
-  /**
-   * Exact coherent Ready lookup for latency-sensitive host data planes. This
-   * is an in-process composition port and is never exposed as global public
-   * inventory.
-   */
-  get(input: {
-    readonly space: string;
-    readonly kind: ResourceShapeKind;
-    readonly name: string;
-  }): Promise<PlatformCanonicalReadyResourceInventoryItem | undefined>;
-  /**
-   * Cheap exact Ready revision fence for previously pinned Resource evidence.
-   * This composition port reads only the canonical Resource and
-   * ResolutionLock rows; it never reconstructs a ResourceObject or opens a
-   * public route.
-   */
-  fence(input: {
-    readonly resourceId: string;
-    readonly resourceGeneration: number;
-    readonly resourceRevisionId: string;
-  }): Promise<boolean>;
-  list(input: {
-    readonly kind: ResourceShapeKind;
-    /** Optional exact Workspace bound for latency-sensitive graph joins. */
-    readonly space?: string;
-    readonly cursor?: string;
-    readonly limit?: number;
-  }): Promise<PlatformCanonicalReadyResourceInventoryPage>;
-}
-
-export interface PlatformCanonicalHostRuntimeResourceEvidence {
-  readonly workspaceId: string;
-  readonly resourceId: string;
-  readonly resource: ResourceObject;
-  readonly resourceGeneration: number;
-  readonly resourceRevisionId: string;
-  readonly nativeType: string;
-  readonly nativeId: string;
-  /**
-   * Exact canonical NativeResource evidence, including its Form provenance.
-   * A consumer that must reproduce the admission's native digest needs these
-   * refs verbatim; the flattened type/id pair is a convenience view of the
-   * single-resource case, not a substitute identity.
-   */
-  readonly nativeResources: readonly NativeResourceRef[];
-}
-
-export interface PlatformCanonicalHostRuntimeAuthorityEvidence {
-  readonly iface: Interface;
-  readonly binding: InterfaceBinding;
-}
-
-export interface PlatformCanonicalHostRuntimeGraphEvidence {
-  readonly consumer: PlatformCanonicalHostRuntimeResourceEvidence;
-  readonly consumerAuthority?: PlatformCanonicalHostRuntimeAuthorityEvidence;
-  readonly connections: Readonly<
-    Record<
-      string,
-      {
-        readonly alias: string;
-        readonly resource: PlatformCanonicalHostRuntimeResourceEvidence;
-        readonly authority?: PlatformCanonicalHostRuntimeAuthorityEvidence;
-      }
-    >
-  >;
-}
-
-/**
- * In-process canonical graph reader for hosted runtime activation. It joins
- * coherent Ready Resources with exact current Interface/Binding rows and
- * never exposes this global authority through HTTP.
- */
-/**
- * Staging-only reason for a graph the reader must answer with `undefined`.
- * The caller can only report that the graph was missing; without naming the
- * exact unmet precondition an operator cannot tell a still-settling install
- * from a structurally broken one.
- */
-function logCanonicalHostRuntimeGraphGap(
-  env: CloudflareWorkerEnv,
-  reason: string,
-  detail: Readonly<Record<string, string | number | boolean>> = {},
-): undefined {
-  if (env.TAKOSUMI_ENVIRONMENT !== "staging") return undefined;
-  console.error("takosumi canonical host runtime graph gap", {
-    reason,
-    ...detail,
-  });
-  return undefined;
-}
-
-export function createPlatformCanonicalHostRuntimeGraphReader(
-  env: CloudflareWorkerEnv,
-): {
-  read(input: {
-    readonly request: HostRuntimeMaterializationRequest;
-    readonly resourceId: string;
-    readonly resourceGeneration: number;
-    readonly resourceRevisionId: string;
-  }): Promise<PlatformCanonicalHostRuntimeGraphEvidence | undefined>;
-} {
-  const inventory = createPlatformCanonicalReadyResourceInventory(env);
-  const recovery = createPlatformCanonicalHostRuntimeResourceRecovery(env);
-  return Object.freeze({
-    async read(input) {
-      const parsed = platformCanonicalResourceId(input.resourceId);
-      if (!parsed || parsed.workspaceId !== input.request.workspaceId) {
-        return logCanonicalHostRuntimeGraphGap(env, "consumer_id_invalid");
-      }
-      let consumer = await canonicalHostRuntimeResource(
-        inventory,
-        input.resourceId,
-      );
-      if (!consumer) {
-        const candidate = await recovery.resolve({
-          resourceId: input.resourceId,
-          resourceGeneration: input.resourceGeneration,
-          resourceRevisionId: input.resourceRevisionId,
-        });
-        if (candidate?.nativeResources.length === 1) {
-          consumer = {
-            workspaceId: parsed.workspaceId,
-            resourceId: input.resourceId,
-            resource: candidate.resource,
-            resourceGeneration: candidate.resourceGeneration,
-            resourceRevisionId: candidate.resourceRevisionId,
-            nativeType: candidate.nativeResources[0]!.type,
-            nativeId: candidate.nativeResources[0]!.id,
-            nativeResources: candidate.nativeResources,
-          };
-        }
-      }
-      if (
-        !consumer ||
-        consumer.resourceGeneration !== input.resourceGeneration ||
-        consumer.resourceRevisionId !== input.resourceRevisionId
-      ) {
-        return logCanonicalHostRuntimeGraphGap(env, "consumer_not_canonical", {
-          hasConsumer: consumer !== undefined,
-          generationMatches: consumer?.resourceGeneration === input.resourceGeneration,
-          revisionMatches: consumer?.resourceRevisionId === input.resourceRevisionId,
-        });
-      }
-      const operations = await takosumiOperationsFor(env);
-      const connectionSpec = objectRecord(consumer.resource.spec).connections;
-      const declared = objectRecord(connectionSpec);
-      const requestedAliases = new Set<string>();
-      for (const requirement of input.request.requirements) {
-        if (requirement.kind === "resource_binding") {
-          requestedAliases.add(requirement.connectionAlias);
-        }
-      }
-      for (const activation of input.request.backgroundActivations ?? []) {
-        if (activation.sourceResourceKind === "Queue") {
-          requestedAliases.add(activation.sourceConnectionAlias);
-        }
-        if (activation.deadLetterConnectionAlias) {
-          requestedAliases.add(activation.deadLetterConnectionAlias);
-        }
-      }
-      const connections: Record<
-        string,
-        PlatformCanonicalHostRuntimeGraphEvidence["connections"][string]
-      > = {};
-      for (const alias of [...requestedAliases].sort()) {
-        const declaration = objectRecord(declared[alias]);
-        const resourceId = canonicalHostRuntimeConnectionResourceId(
-          valueString(declaration.resource)?.trim() ?? "",
-          input.request.workspaceId,
-        );
-        const resource = resourceId
-          ? await canonicalHostRuntimeResource(inventory, resourceId)
-          : undefined;
-        if (!resource) {
-          return logCanonicalHostRuntimeGraphGap(env, "connection_not_canonical", {
-            alias,
-            hasResourceId: resourceId !== undefined,
-          });
-        }
-        const activation = input.request.backgroundActivations?.find(
-          (candidate) =>
-            candidate.sourceResourceKind === "Queue" &&
-            candidate.sourceConnectionAlias === alias,
-        );
-        if (
-          activation &&
-          (resource.resource.kind !== "Queue" ||
-            valueString(declaration.projection) !== "queue.binding.v1" ||
-            !stringArray(declaration.permissions)?.includes("consume"))
-        ) {
-          return logCanonicalHostRuntimeGraphGap(env, "queue_source_invalid", {
-            alias,
-            kind: resource.resource.kind,
-          });
-        }
-        const requirement = input.request.requirements.find(
-          (candidate) =>
-            candidate.kind === "resource_binding" &&
-            candidate.connectionAlias === alias,
-        );
-        const authority =
-          requirement?.kind === "resource_binding"
-            ? await uniqueHostRuntimeResourceBinding({
-                env,
-                operations,
-                workspaceId: input.request.workspaceId,
-                ownerResourceId: resource.resourceId,
-                subjectResourceId: consumer.resourceId,
-                permission: requirement.requiredPermission,
-              })
-            : undefined;
-        if (requirement && !authority) {
-          return logCanonicalHostRuntimeGraphGap(env, "connection_authority_missing", {
-            alias,
-            permission:
-              requirement.kind === "resource_binding"
-                ? requirement.requiredPermission
-                : "",
-          });
-        }
-        connections[alias] = {
-          alias,
-          resource,
-          ...(authority ? { authority } : {}),
-        };
-      }
-      const scheduleRequirements =
-        input.request.backgroundActivations?.filter(
-          (activation) => activation.sourceResourceKind === "Schedule",
-        ) ?? [];
-      for (const requirement of scheduleRequirements) {
-        if (connections[requirement.sourceConnectionAlias]) {
-          return logCanonicalHostRuntimeGraphGap(env, "schedule_alias_conflict", {
-            alias: requirement.sourceConnectionAlias,
-          });
-        }
-        const schedule = await resolveUniqueIncomingHostRuntimeSchedule({
-          inventory,
-          workspaceId: input.request.workspaceId,
-          capsuleId: input.request.capsuleId,
-          installingPrincipalId: input.request.installingPrincipalId,
-          targetResourceId: consumer.resourceId,
-          connectionAlias: requirement.sourceConnectionAlias,
-        });
-        // The consumer becomes Ready before its dependent Schedule. Absence is
-        // therefore an expected empty activation set; the Schedule Ready event
-        // reconciles the same host graph after the incoming edge exists.
-        if (!schedule) continue;
-        connections[requirement.sourceConnectionAlias] = {
-          alias: requirement.sourceConnectionAlias,
-          resource: schedule,
-        };
-      }
-      return structuredClone({
-        consumer,
-        connections,
-      });
-    },
-  });
-}
-
-export async function resolveUniqueIncomingHostRuntimeSchedule(input: {
-  readonly inventory: PlatformCanonicalReadyResourceInventory;
-  readonly workspaceId: string;
-  readonly capsuleId: string;
-  readonly installingPrincipalId: string;
-  readonly targetResourceId: string;
-  readonly connectionAlias: string;
-}): Promise<PlatformCanonicalHostRuntimeResourceEvidence | undefined> {
-  const matches: PlatformCanonicalHostRuntimeResourceEvidence[] = [];
-  let cursor: string | undefined;
-  for (let pageNumber = 0; pageNumber < 16; pageNumber += 1) {
-    const page = await input.inventory.list({
-      kind: "Schedule",
-      space: input.workspaceId,
-      ...(cursor ? { cursor } : {}),
-      limit: 100,
-    });
-    for (const item of page.items) {
-      const parsed = platformCanonicalResourceId(item.resourceId);
-      const evidence =
-        parsed?.workspaceId === input.workspaceId &&
-        item.nativeResources.length === 1
-          ? {
-              workspaceId: parsed.workspaceId,
-              resourceId: item.resourceId,
-              resource: item.resource,
-              resourceGeneration: item.resourceGeneration,
-              resourceRevisionId: item.resourceRevisionId,
-              nativeType: item.nativeResources[0]!.type,
-              nativeId: item.nativeResources[0]!.id,
-              nativeResources: item.nativeResources,
-            }
-          : undefined;
-      const owner = evidence?.resource.metadata.owner;
-      if (
-        !evidence ||
-        evidence.resource.kind !== "Schedule" ||
-        !isResourceCapsuleOwner(owner) ||
-        owner.id !== input.capsuleId ||
-        owner.workspaceId !== input.workspaceId ||
-        owner.installingPrincipalId !== input.installingPrincipalId
-      ) {
-        continue;
-      }
-      const connections = objectRecord(evidence.resource.spec).connections;
-      const declarations = objectRecord(connections);
-      if (Object.keys(declarations).length !== 1) continue;
-      const declaration = objectRecord(declarations[input.connectionAlias]);
-      const permissions = stringArray(declaration.permissions);
-      if (
-        valueString(declaration.resource) !== input.targetResourceId ||
-        valueString(declaration.projection) !== "schedule.trigger.v1" ||
-        permissions?.length !== 1 ||
-        permissions[0] !== "invoke"
-      ) {
-        continue;
-      }
-      matches.push(evidence);
-      if (matches.length > 1) {
-        throw new Error(
-          `host runtime Schedule alias ${input.connectionAlias} is ambiguous`,
-        );
-      }
-    }
-    cursor = page.nextCursor;
-    if (!cursor) return matches[0];
-  }
-  throw new Error(
-    "host runtime Schedule graph exceeds the bounded Workspace inventory",
-  );
-}
-
-function stringArray(value: unknown): readonly string[] | undefined {
-  return Array.isArray(value) &&
-    value.every((entry): entry is string => typeof entry === "string")
-    ? value
-    : undefined;
-}
-
-/**
- * A portable Form may reference a connected Resource by canonical id or by the
- * exact same-Workspace `Kind/name` shorthand. Both spell one identity; nothing
- * else — including a cross-Workspace reference — resolves here.
- */
-function canonicalHostRuntimeConnectionResourceId(
-  value: string,
-  workspaceId: string,
-): string | undefined {
-  if (!value) return undefined;
-  if (value.startsWith(`tkrn:${workspaceId}:`)) return value;
-  const shorthand = /^([A-Za-z][A-Za-z0-9]{0,63})\/([^/]+)$/u.exec(value);
-  return shorthand
-    ? `tkrn:${workspaceId}:${shorthand[1]}:${shorthand[2]}`
-    : undefined;
-}
-
-async function canonicalHostRuntimeResource(
-  inventory: PlatformCanonicalReadyResourceInventory,
-  resourceId: string,
-): Promise<PlatformCanonicalHostRuntimeResourceEvidence | undefined> {
-  const parsed = platformCanonicalResourceId(resourceId);
-  if (!parsed) return undefined;
-  const ready = await inventory.get({
-    space: parsed.workspaceId,
-    kind: parsed.kind,
-    name: parsed.name,
-  });
-  if (
-    !ready ||
-    ready.resourceId !== resourceId ||
-    ready.nativeResources.length !== 1
-  ) {
-    return undefined;
-  }
-  return {
-    workspaceId: parsed.workspaceId,
-    resourceId,
-    resource: ready.resource,
-    resourceGeneration: ready.resourceGeneration,
-    resourceRevisionId: ready.resourceRevisionId,
-    nativeType: ready.nativeResources[0]!.type,
-    nativeId: ready.nativeResources[0]!.id,
-    nativeResources: ready.nativeResources,
-  };
-}
-
-async function uniqueHostRuntimeResourceBinding(input: {
-  readonly env: CloudflareWorkerEnv;
-  readonly operations: TakosumiOperations;
-  readonly workspaceId: string;
-  readonly ownerResourceId: string;
-  readonly subjectResourceId: string;
-  readonly permission?: string;
-}): Promise<PlatformCanonicalHostRuntimeAuthorityEvidence | undefined> {
-  const interfaces = await input.operations.interfaces.listForHost({
-    workspaceId: input.workspaceId,
-    ownerKind: "Resource",
-    ownerId: input.ownerResourceId,
-    phase: "Resolved",
-    limit: 64,
-  });
-  const matches: PlatformCanonicalHostRuntimeAuthorityEvidence[] = [];
-  const rejections: string[] = [];
-  for (const iface of interfaces) {
-    for (const binding of await input.operations.interfaces.listBindings(
-      iface.metadata.id,
-    )) {
-      // Each condition is named rather than folded into one predicate: the
-      // caller can only report that authority was missing, and every one of
-      // these looks identical from outside.
-      const rejection =
-        binding.spec.subjectRef.kind !== "Resource"
-          ? "subject_not_resource"
-          : binding.spec.subjectRef.id !== input.subjectResourceId
-            ? "subject_mismatch"
-            : binding.status.phase !== "Ready"
-              ? `binding_phase:${binding.status.phase}`
-              : binding.status.observedInterfaceRevision !==
-                  iface.status.resolvedRevision
-                ? `revision:${binding.status.observedInterfaceRevision}!=${iface.status.resolvedRevision}`
-                : binding.spec.delivery.type !== "none"
-                  ? "delivery_type_not_none"
-                  : binding.spec.delivery.credentialRef !== undefined
-                    ? "credential_ref_present"
-                    : input.permission !== undefined &&
-                        !binding.spec.permissions.includes(input.permission)
-                      ? "permission_absent"
-                      : undefined;
-      if (rejection) {
-        rejections.push(`${iface.spec.type}:${rejection}`);
-        continue;
-      }
-      matches.push({
-        iface,
-        binding,
-      });
-    }
-  }
-  if (matches.length === 1) return matches[0];
-  logCanonicalHostRuntimeGraphGap(input.env, "authority_not_unique", {
-    ownerResourceId: input.ownerResourceId,
-    interfaceCount: interfaces.length,
-    matchCount: matches.length,
-    rejections: rejections.slice(0, 8).join(","),
-  });
-  return undefined;
-}
-
-function platformCanonicalResourceId(value: string):
-  | {
-      readonly workspaceId: string;
-      readonly kind: ResourceShapeKind;
-      readonly name: string;
-    }
-  | undefined {
-  const match = /^tkrn:([^:]+):([^:]+):(.+)$/u.exec(value);
-  if (!match?.[1] || !match[2] || !match[3] || !isResourceShapeKind(match[2])) {
-    return undefined;
-  }
-  return { workspaceId: match[1], kind: match[2], name: match[3] };
-}
-
-export interface PlatformCompatibilityReadyResourceInput {
-  readonly space: string;
-  readonly kind: ResourceShapeKind;
-  readonly name: string;
-  /** Optional Interface grant to resolve alongside the Resource evidence. */
-  readonly interface?: {
-    /** Resolve one exact Interface by id. Mutually exclusive with `type`. */
-    readonly id?: string;
-    /**
-     * Resolve the only authorized Interface of this type owned by the exact
-     * Resource. Multiple matches fail closed instead of selecting by order.
-     */
-    readonly type?: string;
-    readonly permission: string;
-  };
-}
-
-/** Immutable, read-only evidence returned to a data-plane profile. */
-export interface PlatformCompatibilityReadyResourceEvidence {
-  readonly resource: ResourceObject;
-  /** Desired generation proven Ready by the canonical Resource store. */
-  readonly resourceGeneration: number;
-  /** Canonical backend lifecycle revision proven by the Resource store. */
-  readonly resourceRevisionId: string;
-  readonly nativeResources: readonly NativeResourceRef[];
-  readonly interface?: Interface;
-}
-
-/** The only authority given to a data-plane compatibility profile. */
-export interface PlatformCompatibilityDataReadResolver {
-  resolveReadyResource(
-    input: PlatformCompatibilityReadyResourceInput,
-    authorization?: PlatformCompatibilityAuthorization,
-  ): Promise<PlatformCompatibilityReadyResourceEvidence | undefined>;
-  resolveReadyResourceGrant(
-    input: PlatformCompatibilityReadyResourceInput,
-    grant: PlatformCompatibilityStoredResourceGrant,
-  ): Promise<PlatformCompatibilityReadyResourceEvidence | undefined>;
-}
-
-/**
- * Selects one already-authorized Interface for compatibility data access.
- * This is deliberately exact: a duplicate type on the same Resource is an
- * operator/configuration ambiguity and must not be resolved by list order.
- */
-export function selectUniquePlatformCompatibilityInterface(
-  candidates: readonly Interface[],
-  input: {
-    readonly workspaceId: string;
-    readonly resourceId: string;
-    readonly selector: { readonly id?: string; readonly type?: string };
-  },
-): Interface | undefined {
-  const matches = candidates.filter(
-    (candidate) =>
-      candidate.metadata.workspaceId === input.workspaceId &&
-      candidate.metadata.ownerRef.kind === "Resource" &&
-      candidate.metadata.ownerRef.id === input.resourceId &&
-      candidate.status.phase === "Resolved" &&
-      (input.selector.id === undefined ||
-        candidate.metadata.id === input.selector.id) &&
-      (input.selector.type === undefined ||
-        candidate.spec.type === input.selector.type),
-  );
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
-/**
- * Capability-limited authority passed to compatibility handlers. It contains
- * no env, store, adapter, backend manager, lifecycle registry, or write API.
- */
-export interface PlatformCompatibilityAuthority {
-  readonly profiles: readonly PlatformCompatibilityProfile[];
-  readonly control?: {
-    readonly routeInterfaces: PlatformCompatibilityRouteInterfaceControlPort;
-  };
-  readonly data?: PlatformCompatibilityDataReadResolver;
-}
-
-export interface PlatformCompatibilityHandler {
-  fetchCompatibility(
-    request: Request,
-    authority: PlatformCompatibilityAuthority,
-  ): Response | Promise<Response>;
-}
-
-export type PlatformCompatibilityAuthorityFactory = (input: {
-  readonly request: Request;
-  readonly env: CloudflareWorkerEnv;
-  readonly route: PlatformExtensionRoute;
-  readonly session?: PlatformExtensionSessionContext;
-}) => PlatformCompatibilityAuthority | Promise<PlatformCompatibilityAuthority>;
-
 export async function handlePlatformExtensionRouteRequest(
   request: Request,
   env: CloudflareWorkerEnv,
   route: PlatformExtensionRoute,
   sessionVerifier: PlatformExtensionSessionVerifier = verifyPlatformExtensionSession,
-  authorityFactory: PlatformCompatibilityAuthorityFactory = createPlatformCompatibilityAuthority,
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
 ): Promise<Response> {
   const requestRoute = resolvePlatformExtensionRequestScopeRoute(request, route);
@@ -4734,53 +2290,8 @@ export async function handlePlatformExtensionRouteRequest(
       { status: 400 },
     );
   }
-  if (
-    authDelivery === "context" &&
-    (route.compatibilityProfiles?.length ?? 0) > 0
-  ) {
-    return Response.json(
-      {
-        error: "invalid extension authentication delivery",
-        error_description:
-          "context delivery is not supported for compatibility profiles",
-      },
-      { status: 400 },
-    );
-  }
   const handler = platformExtensionHandler(env, route.handlerKey);
   if (!handler) return Response.json({ error: "not found" }, { status: 404 });
-  if ((route.compatibilityProfiles?.length ?? 0) > 0) {
-    if (typeof handler.fetchCompatibility !== "function") {
-      return Response.json(
-        {
-          error: "compatibility authority unavailable",
-          error_description:
-            "profile handler must implement fetchCompatibility(request, authority)",
-        },
-        { status: 503 },
-      );
-    }
-    if (route.authMode === "handler") {
-      const sanitized = platformExtensionHandlerAuthRequest(request);
-      const authority = await authorityFactory({ request, env, route });
-      return await handler.fetchCompatibility(sanitized, authority);
-    }
-    const authContext = await platformExtensionAuthContext(
-      request,
-      env,
-      route,
-      sessionVerifier,
-      workspaceAccess,
-    );
-    if (!authContext.ok) return authContext.response;
-    const authority = await authorityFactory({
-      request,
-      env,
-      route,
-      session: authContext.session,
-    });
-    return await handler.fetchCompatibility(authContext.request, authority);
-  }
   if (authDelivery === "context") {
     if (typeof handler.fetchAuthenticated !== "function") {
       return Response.json(
@@ -4862,6 +2373,52 @@ function platformExtensionHandlerAuthRequest(request: Request): Request {
   return clonePlatformExtensionRequest(request, headers);
 }
 
+function retiredApiNotFoundResponse(): Response {
+  return Response.json({ error: "not found" }, { status: 404 });
+}
+
+const PLATFORM_EXTENSION_AUTHENTICATED_HEADER =
+  "x-takosumi-platform-authenticated";
+const PLATFORM_EXTENSION_SUBJECT_HEADER = "x-takosumi-platform-subject";
+const PLATFORM_EXTENSION_AUTH_KIND_HEADER = "x-takosumi-platform-auth-kind";
+const PLATFORM_EXTENSION_SCOPES_HEADER = "x-takosumi-platform-scopes";
+const PLATFORM_EXTENSION_CAPSULE_ID_HEADER = "x-takosumi-platform-capsule-id";
+const PLATFORM_EXTENSION_WORKSPACE_ID_HEADER =
+  "x-takosumi-platform-workspace-id";
+const PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER =
+  "x-takosumi-platform-workspace-role";
+const PLATFORM_EXTENSION_AUDIENCE_HEADER = "x-takosumi-platform-audience";
+const PLATFORM_EXTENSION_INTERFACE_ID_HEADER =
+  "x-takosumi-platform-interface-id";
+const PLATFORM_EXTENSION_INTERFACE_BINDING_ID_HEADER =
+  "x-takosumi-platform-interface-binding-id";
+const PLATFORM_EXTENSION_INTERFACE_REVISION_HEADER =
+  "x-takosumi-platform-interface-resolved-revision";
+
+const PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS = [
+  "authorization",
+  "cookie",
+  "proxy-authorization",
+  "x-auth-email",
+  "x-auth-key",
+  "x-auth-user-service-key",
+  "x-takosumi-account-session",
+] as const;
+
+const PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
+  PLATFORM_EXTENSION_AUTHENTICATED_HEADER,
+  PLATFORM_EXTENSION_SUBJECT_HEADER,
+  PLATFORM_EXTENSION_AUTH_KIND_HEADER,
+  PLATFORM_EXTENSION_SCOPES_HEADER,
+  PLATFORM_EXTENSION_CAPSULE_ID_HEADER,
+  PLATFORM_EXTENSION_WORKSPACE_ID_HEADER,
+  PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER,
+  PLATFORM_EXTENSION_AUDIENCE_HEADER,
+  PLATFORM_EXTENSION_INTERFACE_ID_HEADER,
+  PLATFORM_EXTENSION_INTERFACE_BINDING_ID_HEADER,
+  PLATFORM_EXTENSION_INTERFACE_REVISION_HEADER,
+] as const;
+
 function platformExtensionPreflightRequest(request: Request): Request {
   const headers = new Headers(request.headers);
   for (const header of [
@@ -4907,806 +2464,6 @@ export type PlatformExtensionSessionVerifier = (
   env: CloudflareWorkerEnv,
   route?: PlatformExtensionRoute,
 ) => Promise<PlatformExtensionSessionContext>;
-
-export interface PlatformCompatibilityAuthorityDependencies {
-  readonly resolveReadyResource?: typeof resolvePlatformCompatibilityReadyResource;
-  readonly resolveReadyResourceGrant?: typeof resolvePlatformCompatibilityStoredResourceGrant;
-  readonly routeInterfaces?: PlatformCompatibilityRouteInterfaceControlPort;
-}
-
-export async function createPlatformCompatibilityAuthority(
-  input: {
-    readonly request: Request;
-    readonly env: CloudflareWorkerEnv;
-    readonly route: PlatformExtensionRoute;
-    readonly session?: PlatformExtensionSessionContext;
-  },
-  dependencies: PlatformCompatibilityAuthorityDependencies = {},
-): Promise<PlatformCompatibilityAuthority> {
-  const profiles = input.route.compatibilityProfiles ?? [];
-  const exposesControl = profiles.some(({ planes }) =>
-    planes.includes("control"),
-  );
-  const exposesData = profiles.some(({ planes }) => planes.includes("data"));
-  return Object.freeze({
-    profiles: Object.freeze(
-      profiles.map((profile) =>
-        Object.freeze({
-          profile: profile.profile,
-          planes: Object.freeze([...profile.planes]),
-        }),
-      ),
-    ),
-    ...(exposesControl
-      ? {
-          control: Object.freeze({
-            routeInterfaces:
-              dependencies.routeInterfaces ??
-              createPlatformCompatibilityRouteInterfaceControlPort(input),
-          }),
-        }
-      : {}),
-    ...(exposesData
-      ? {
-          data: Object.freeze({
-            resolveReadyResource: (
-              resource: PlatformCompatibilityReadyResourceInput,
-              authorization?: PlatformCompatibilityAuthorization,
-            ) =>
-              resolveReadyCompatibilityEvidence(
-                dependencies.resolveReadyResource ??
-                  resolvePlatformCompatibilityReadyResource,
-                resource,
-                authorization,
-                input,
-              ),
-            resolveReadyResourceGrant: (
-              resource: PlatformCompatibilityReadyResourceInput,
-              grant: PlatformCompatibilityStoredResourceGrant,
-            ) =>
-              resolveReadyCompatibilityGrantEvidence(
-                dependencies.resolveReadyResourceGrant ??
-                  resolvePlatformCompatibilityStoredResourceGrant,
-                resource,
-                grant,
-                input,
-              ),
-          }),
-        }
-      : {}),
-  });
-}
-
-function createPlatformCompatibilityRouteInterfaceControlPort(context: {
-  readonly request: Request;
-  readonly env: CloudflareWorkerEnv;
-  readonly route: PlatformExtensionRoute;
-  readonly session?: PlatformExtensionSessionContext;
-}): PlatformCompatibilityRouteInterfaceControlPort {
-  return Object.freeze({
-    ensure: async (
-      input: Parameters<
-        PlatformCompatibilityRouteInterfaceControlPort["ensure"]
-      >[0],
-      authorization?: PlatformCompatibilityAuthorization,
-    ) => {
-      const scoped = await platformCompatibilityRouteInterfaceScope(
-        input.workspaceId,
-        authorization,
-        context,
-        "write",
-      );
-      return await scoped.service.ensure(scoped.scope, {
-        resourceName: input.resourceName,
-        pathPattern: input.pathPattern,
-        expectedEndpoint: input.expectedEndpoint,
-      });
-    },
-    list: async (
-      input: Parameters<
-        PlatformCompatibilityRouteInterfaceControlPort["list"]
-      >[0],
-      authorization?: PlatformCompatibilityAuthorization,
-    ) => {
-      const scoped = await platformCompatibilityRouteInterfaceScope(
-        input.workspaceId,
-        authorization,
-        context,
-        "read",
-      );
-      return await scoped.service.list(scoped.scope, {
-        ...(input.resourceName ? { resourceName: input.resourceName } : {}),
-      });
-    },
-    get: async (
-      input: Parameters<
-        PlatformCompatibilityRouteInterfaceControlPort["get"]
-      >[0],
-      authorization?: PlatformCompatibilityAuthorization,
-    ) => {
-      const scoped = await platformCompatibilityRouteInterfaceScope(
-        input.workspaceId,
-        authorization,
-        context,
-        "read",
-      );
-      return await scoped.service.get(scoped.scope, input.interfaceId);
-    },
-    update: async (
-      input: Parameters<
-        PlatformCompatibilityRouteInterfaceControlPort["update"]
-      >[0],
-      authorization?: PlatformCompatibilityAuthorization,
-    ) => {
-      const scoped = await platformCompatibilityRouteInterfaceScope(
-        input.workspaceId,
-        authorization,
-        context,
-        "write",
-      );
-      return await scoped.service.update(scoped.scope, {
-        interfaceId: input.interfaceId,
-        resourceName: input.resourceName,
-        pathPattern: input.pathPattern,
-        expectedEndpoint: input.expectedEndpoint,
-        ...(input.expectedEtag ? { expectedEtag: input.expectedEtag } : {}),
-      });
-    },
-    retire: async (
-      input: Parameters<
-        PlatformCompatibilityRouteInterfaceControlPort["retire"]
-      >[0],
-      authorization?: PlatformCompatibilityAuthorization,
-    ) => {
-      const scoped = await platformCompatibilityRouteInterfaceScope(
-        input.workspaceId,
-        authorization,
-        context,
-        "write",
-      );
-      return await scoped.service.retire(scoped.scope, {
-        interfaceId: input.interfaceId,
-        ...(input.expectedEtag ? { expectedEtag: input.expectedEtag } : {}),
-      });
-    },
-  });
-}
-
-async function platformCompatibilityRouteInterfaceScope(
-  requestedWorkspaceId: string,
-  authorization: PlatformCompatibilityAuthorization | undefined,
-  context: {
-    readonly request: Request;
-    readonly env: CloudflareWorkerEnv;
-    readonly route: PlatformExtensionRoute;
-    readonly session?: PlatformExtensionSessionContext;
-  },
-  access: "read" | "write",
-): Promise<{
-  readonly service: CompatibilityRouteControlService;
-  readonly scope: {
-    readonly profile: string;
-    readonly workspaceId: string;
-    readonly actor: ActorContext;
-  };
-}> {
-  const workspaceId = safePlatformExtensionContextId(requestedWorkspaceId);
-  const profile = compatibilityControlManagedBy(context.route);
-  const session = compatibilityAuthoritySession(context.session, authorization);
-  if (!workspaceId || !profile || !session) {
-    throw new TypeError(
-      "compatibility route Interface authority requires one profile and authenticated Workspace context",
-    );
-  }
-  if (
-    platformResourceShapeAccessFailure(
-      new Request(context.request, {
-        method: access === "read" ? "GET" : "POST",
-      }),
-      session,
-    )
-  ) {
-    const error = new Error(
-      `compatibility route ${access} scope is not authorized`,
-    );
-    (error as { code?: string }).code = "forbidden";
-    throw error;
-  }
-  const verified = await platformExtensionVerifiedWorkspaceSession(
-    context.request,
-    context.env,
-    session,
-    workspaceId,
-    undefined,
-    access,
-  );
-  if (!verified.ok) {
-    const error = new Error("compatibility route Workspace is not authorized");
-    (error as { code?: string }).code = "forbidden";
-    throw error;
-  }
-  const operations = await takosumiOperationsFor(context.env);
-  const actor = platformResourceShapeActorContext(
-    verified.session,
-    workspaceId,
-  );
-  if (access === "write") {
-    await assertPlatformCompatibilityRouteWriter(
-      operations,
-      workspaceId,
-      actor.actorAccountId,
-    );
-  }
-  return {
-    service: new CompatibilityRouteControlService(operations.interfaces, {
-      resolveReadyEdgeWorker: async ({ workspaceId, resourceName }) =>
-        (
-          await operations.resourceCompatibility?.resolveReadyResource({
-            space: workspaceId,
-            kind: "EdgeWorker",
-            name: resourceName,
-          })
-        )?.resource,
-    }),
-    scope: {
-      profile,
-      workspaceId,
-      actor,
-    },
-  };
-}
-
-async function assertPlatformCompatibilityRouteWriter(
-  operations: TakosumiOperations,
-  workspaceId: string,
-  actorAccountId: string,
-): Promise<void> {
-  const [workspace, members] = await Promise.all([
-    operations.workspaces.getWorkspace(workspaceId),
-    operations.members.listMembers(workspaceId),
-  ]);
-  if (
-    platformCompatibilityRouteWriterAllowed(
-      workspace.ownerUserId,
-      members,
-      actorAccountId,
-    )
-  ) {
-    return;
-  }
-  const error = new Error(
-    "compatibility route Interface write requires more than viewer access",
-  );
-  (error as { code?: string }).code = "forbidden";
-  throw error;
-}
-
-export function platformCompatibilityRouteWriterAllowed(
-  ownerUserId: string,
-  members: readonly WorkspaceMember[],
-  actorAccountId: string,
-): boolean {
-  if (ownerUserId === actorAccountId) return true;
-  const member = members.find(
-    (candidate) =>
-      candidate.accountId === actorAccountId && candidate.status === "active",
-  );
-  if (!member) return false;
-  return (
-    member.roles.length === 0 || member.roles.some((role) => role !== "viewer")
-  );
-}
-
-export function createPlatformCanonicalResourceReadAuthority(
-  env: CloudflareWorkerEnv,
-): PlatformCanonicalResourceReadAuthority {
-  return Object.freeze({
-    fetch: async (
-      request: Request,
-      authorization?: PlatformCompatibilityAuthorization,
-    ): Promise<Response> => {
-      const url = new URL(request.url);
-      const segments = url.pathname.split("/").filter(Boolean);
-      let resourceKind = "";
-      let resourceName = "";
-      try {
-        resourceKind = decodeURIComponent(segments[2] ?? "");
-        resourceName = decodeURIComponent(segments[3] ?? "");
-      } catch {
-        // Malformed paths are rejected by the exact-read check below.
-      }
-      const workspaceId = safePlatformExtensionContextId(
-        authorization?.workspaceId,
-      );
-      const subject = safePlatformExtensionSubject(authorization?.subject);
-      const requestedSpace = safePlatformExtensionContextId(
-        url.searchParams.get("space"),
-      );
-      const kind = isResourceShapeKind(resourceKind) ? resourceKind : undefined;
-      const exactResourceRead =
-        request.method === "GET" &&
-        segments.length === 4 &&
-        segments[0] === "v1" &&
-        segments[1] === "resources" &&
-        kind !== undefined &&
-        Boolean(safePlatformCompatibilityResourceName(resourceName)) &&
-        [...url.searchParams.keys()].every((key) => key === "space");
-      if (!exactResourceRead || !kind) {
-        return Response.json(
-          {
-            error: "invalid_resource_read",
-            error_description:
-              "canonical Resource recovery authority permits only exact GET reads",
-          },
-          { status: 400 },
-        );
-      }
-      if (
-        !workspaceId ||
-        !subject ||
-        requestedSpace !== workspaceId ||
-        !authorization?.scopes?.includes("admin")
-      ) {
-        return Response.json(
-          {
-            error: "forbidden",
-            error_description:
-              "canonical Resource recovery read requires matching Workspace admin authority",
-          },
-          { status: 403 },
-        );
-      }
-      const operations = await takosumiOperationsFor(env);
-      const evidence = await operations.resourceCompatibility?.resolveReadyResource({
-        space: workspaceId,
-        kind,
-        name: resourceName,
-      });
-      if (!evidence || evidence.resource.status?.phase !== "Ready") {
-        return Response.json({ error: "not found" }, { status: 404 });
-      }
-      return Response.json({
-        id: `tkrn:${workspaceId}:${kind}:${resourceName}`,
-        ...evidence.resource,
-      });
-    },
-  });
-}
-
-export function createPlatformCanonicalReadyResourceInventory(
-  env: CloudflareWorkerEnv,
-): PlatformCanonicalReadyResourceInventory {
-  return Object.freeze({
-    get: async (
-      input: Parameters<PlatformCanonicalReadyResourceInventory["get"]>[0],
-    ): Promise<PlatformCanonicalReadyResourceInventoryItem | undefined> => {
-      const space = safePlatformExtensionContextId(input.space);
-      const name = safePlatformCompatibilityResourceName(input.name);
-      if (!space || !name || !isResourceShapeKind(input.kind)) {
-        throw new TypeError("canonical Resource lookup input is invalid");
-      }
-      const operations = await takosumiOperationsFor(env);
-      const evidence =
-        await operations.resourceCompatibility?.resolveReadyResource({
-          space,
-          kind: input.kind,
-          name,
-        });
-      return evidence
-        ? structuredClone({
-            resourceId: `tkrn:${space}:${input.kind}:${name}`,
-            ...evidence,
-          })
-        : undefined;
-    },
-    fence: async (
-      input: Parameters<PlatformCanonicalReadyResourceInventory["fence"]>[0],
-    ): Promise<boolean> => {
-      if (
-        typeof input.resourceId !== "string" ||
-        !Number.isSafeInteger(input.resourceGeneration) ||
-        input.resourceGeneration < 1 ||
-        typeof input.resourceRevisionId !== "string" ||
-        input.resourceRevisionId.trim() !== input.resourceRevisionId ||
-        input.resourceRevisionId.length === 0 ||
-        input.resourceRevisionId.length > 256 ||
-        /[\u0000-\u001f\u007f]/.test(input.resourceRevisionId)
-      ) {
-        return false;
-      }
-      const parsed = platformCanonicalResourceId(input.resourceId);
-      if (!parsed) return false;
-      const space = safePlatformExtensionContextId(parsed.workspaceId);
-      const name = safePlatformCompatibilityResourceName(parsed.name);
-      if (!space || !name || !isResourceShapeKind(parsed.kind)) return false;
-      const operations = await takosumiOperationsFor(env);
-      const fence = operations.resourceCompatibility?.fenceReadyResource;
-      if (!fence) return false;
-      return await fence({
-        resourceId: input.resourceId,
-        space,
-        kind: parsed.kind,
-        name,
-        resourceGeneration: input.resourceGeneration,
-        resourceRevisionId: input.resourceRevisionId,
-      });
-    },
-    list: async (
-      input: Parameters<PlatformCanonicalReadyResourceInventory["list"]>[0],
-    ): Promise<PlatformCanonicalReadyResourceInventoryPage> => {
-      if (!isResourceShapeKind(input.kind)) {
-        throw new TypeError("canonical Resource inventory kind is invalid");
-      }
-      const space =
-        input.space === undefined
-          ? undefined
-          : safePlatformExtensionContextId(input.space);
-      if (input.space !== undefined && !space) {
-        throw new TypeError("canonical Resource inventory Workspace is invalid");
-      }
-      const operations = await takosumiOperationsFor(env);
-      const inventory = operations.resourceCompatibility;
-      if (!inventory) {
-        throw new Error("canonical Ready Resource inventory is unavailable");
-      }
-      const page = await inventory.listReadyResourcesPage({
-        kind: input.kind,
-        ...(space ? { space } : {}),
-        ...(input.cursor ? { cursor: input.cursor } : {}),
-        ...(input.limit !== undefined ? { limit: input.limit } : {}),
-      });
-      return structuredClone(page);
-    },
-  });
-}
-
-/**
- * Exact in-process recovery for a host-runtime activation that failed after
- * the provider apply committed. Only Core can validate and transition the
- * Degraded Resource; Cloud receives no store or generic mutation authority.
- */
-export function createPlatformCanonicalHostRuntimeResourceRecovery(
-  env: CloudflareWorkerEnv,
-): PlatformCanonicalHostRuntimeResourceRecovery {
-  return Object.freeze({
-    resolve: async (
-      input: Parameters<
-        PlatformCanonicalHostRuntimeResourceRecovery["resolve"]
-      >[0],
-    ) => {
-      const operations = await takosumiOperationsFor(env);
-      const recovery = operations.resourceHostRuntimeRecovery;
-      if (!recovery) return undefined;
-      const evidence = await recovery.resolve(input);
-      return evidence
-        ? structuredClone({ resourceId: input.resourceId, ...evidence })
-        : undefined;
-    },
-    complete: async (
-      input: Parameters<
-        PlatformCanonicalHostRuntimeResourceRecovery["complete"]
-      >[0],
-    ) => {
-      const operations = await takosumiOperationsFor(env);
-      const recovery = operations.resourceHostRuntimeRecovery;
-      return recovery ? await recovery.complete(input) : false;
-    },
-  });
-}
-
-async function resolveReadyCompatibilityEvidence(
-  resolver: typeof resolvePlatformCompatibilityReadyResource,
-  input: PlatformCompatibilityReadyResourceInput,
-  authorization: PlatformCompatibilityAuthorization | undefined,
-  context: {
-    readonly request: Request;
-    readonly env: CloudflareWorkerEnv;
-    readonly route: PlatformExtensionRoute;
-    readonly session?: PlatformExtensionSessionContext;
-  },
-): Promise<PlatformCompatibilityReadyResourceEvidence | undefined> {
-  const evidence = await resolver(input, authorization, context);
-  return evidence?.resource.status?.phase === "Ready" ? evidence : undefined;
-}
-
-async function resolveReadyCompatibilityGrantEvidence(
-  resolver: typeof resolvePlatformCompatibilityStoredResourceGrant,
-  input: PlatformCompatibilityReadyResourceInput,
-  grant: PlatformCompatibilityStoredResourceGrant,
-  context: {
-    readonly request: Request;
-    readonly env: CloudflareWorkerEnv;
-    readonly route: PlatformExtensionRoute;
-    readonly session?: PlatformExtensionSessionContext;
-  },
-): Promise<PlatformCompatibilityReadyResourceEvidence | undefined> {
-  const evidence = await resolver(input, grant, context);
-  return evidence?.resource.status?.phase === "Ready" ? evidence : undefined;
-}
-
-function compatibilityControlManagedBy(
-  route: PlatformExtensionRoute,
-): string | undefined {
-  const profiles = [
-    ...new Set(
-      (route.compatibilityProfiles ?? [])
-        .filter(({ planes }) => planes.includes("control"))
-        .map(({ profile }) => profile.trim())
-        .filter(Boolean),
-    ),
-  ];
-  return profiles.length === 1 ? profiles[0] : undefined;
-}
-
-async function resolvePlatformCompatibilityReadyResource(
-  input: PlatformCompatibilityReadyResourceInput,
-  authorization: PlatformCompatibilityAuthorization | undefined,
-  context: {
-    readonly request: Request;
-    readonly env: CloudflareWorkerEnv;
-    readonly route: PlatformExtensionRoute;
-    readonly session?: PlatformExtensionSessionContext;
-  },
-): Promise<PlatformCompatibilityReadyResourceEvidence | undefined> {
-  const space = safePlatformExtensionContextId(input.space);
-  const name = safePlatformCompatibilityResourceName(input.name);
-  if (!space || !name || !isResourceShapeKind(input.kind)) return undefined;
-  const session = compatibilityAuthoritySession(context.session, authorization);
-  if (!session) return undefined;
-  const verified = await platformExtensionVerifiedWorkspaceSession(
-    context.request,
-    context.env,
-    session,
-    space,
-    undefined,
-    "read",
-  );
-  if (!verified.ok) return undefined;
-
-  const operations = await takosumiOperationsFor(context.env);
-  const evidence = await operations.resourceCompatibility?.resolveReadyResource(
-    {
-      space,
-      kind: input.kind,
-      name,
-    },
-  );
-  if (!evidence || evidence.resource.status?.phase !== "Ready") {
-    return undefined;
-  }
-
-  let resolvedInterface: Interface | undefined;
-  if (input.interface) {
-    const subject = safePlatformExtensionSubject(verified.session.subject);
-    const interfaceId = safePlatformExtensionContextId(input.interface.id);
-    const interfaceType = safePlatformExtensionContextId(input.interface.type);
-    const permission = input.interface.permission.trim();
-    if (
-      !subject ||
-      !permission ||
-      (interfaceId === undefined) === (interfaceType === undefined)
-    ) {
-      return undefined;
-    }
-    try {
-      const resourceId = `tkrn:${space}:${input.kind}:${name}`;
-      const candidates = interfaceId
-        ? [
-            await operations.interfaces.getAuthorizedForPrincipal(
-              interfaceId,
-              subject,
-              permission,
-            ),
-          ]
-        : await operations.interfaces.listAuthorizedForPrincipal(
-            { workspaceId: space, limit: 2 },
-            subject,
-            permission,
-          );
-      const candidate = selectUniquePlatformCompatibilityInterface(candidates, {
-        workspaceId: space,
-        resourceId,
-        selector: {
-          ...(interfaceId ? { id: interfaceId } : {}),
-          ...(interfaceType ? { type: interfaceType } : {}),
-        },
-      });
-      if (!candidate) return undefined;
-      resolvedInterface = candidate;
-    } catch {
-      return undefined;
-    }
-  }
-
-  return structuredClone({
-    ...evidence,
-    ...(resolvedInterface ? { interface: resolvedInterface } : {}),
-  });
-}
-
-async function resolvePlatformCompatibilityStoredResourceGrant(
-  input: PlatformCompatibilityReadyResourceInput,
-  grant: PlatformCompatibilityStoredResourceGrant,
-  context: {
-    readonly request: Request;
-    readonly env: CloudflareWorkerEnv;
-    readonly route: PlatformExtensionRoute;
-    readonly session?: PlatformExtensionSessionContext;
-  },
-): Promise<PlatformCompatibilityReadyResourceEvidence | undefined> {
-  const space = safePlatformExtensionContextId(input.space);
-  const name = safePlatformCompatibilityResourceName(input.name);
-  if (!space || !name || !isResourceShapeKind(input.kind) || !input.interface) {
-    return undefined;
-  }
-  const resourceId = `tkrn:${space}:${input.kind}:${name}`;
-  const grantWorkspaceId = safePlatformExtensionContextId(grant.workspaceId);
-  const grantResourceId = safePlatformExtensionSubject(grant.resourceId);
-  const grantInterfaceId = safePlatformExtensionContextId(grant.interfaceId);
-  const requestedInterfaceId = safePlatformExtensionContextId(
-    input.interface.id,
-  );
-  const requestedInterfaceType = safePlatformExtensionContextId(
-    input.interface.type,
-  );
-  const permission = input.interface.permission.trim();
-  if (
-    grantWorkspaceId !== space ||
-    grantResourceId !== resourceId ||
-    !permission ||
-    grant.permission.trim() !== permission ||
-    (requestedInterfaceId === undefined) ===
-      (requestedInterfaceType === undefined) ||
-    (grant.interfaceId !== undefined &&
-      (!grantInterfaceId || grantInterfaceId !== requestedInterfaceId))
-  ) {
-    return undefined;
-  }
-
-  const session = context.session?.authenticated
-    ? context.session
-    : {
-        authenticated: true as const,
-        authKind: "protocol-credential" as const,
-        workspaceId: space,
-        subject: `stored-resource-grant:${resourceId}`,
-      };
-  const verified = await platformExtensionVerifiedWorkspaceSession(
-    context.request,
-    context.env,
-    session,
-    space,
-    undefined,
-    "read",
-  );
-  if (!verified.ok) return undefined;
-
-  const operations = await takosumiOperationsFor(context.env);
-  const evidence = await operations.resourceCompatibility?.resolveReadyResource(
-    { space, kind: input.kind, name },
-  );
-  if (!evidence || evidence.resource.status?.phase !== "Ready") {
-    return undefined;
-  }
-
-  try {
-    const candidates = requestedInterfaceId
-      ? [await operations.interfaces.get(requestedInterfaceId)]
-      : await operations.interfaces.list({
-          workspaceId: space,
-          ownerKind: "Resource",
-          ownerId: resourceId,
-          type: requestedInterfaceType,
-          limit: 2,
-        });
-    const iface = selectUniquePlatformCompatibilityInterface(candidates, {
-      workspaceId: space,
-      resourceId,
-      selector: {
-        ...(requestedInterfaceId ? { id: requestedInterfaceId } : {}),
-        ...(requestedInterfaceType ? { type: requestedInterfaceType } : {}),
-      },
-    });
-    if (!iface || !interfaceDocumentAllows(iface, permission)) {
-      return undefined;
-    }
-    return structuredClone({ ...evidence, interface: iface });
-  } catch {
-    return undefined;
-  }
-}
-
-function interfaceDocumentAllows(
-  iface: Interface,
-  permission: string,
-): boolean {
-  const document = objectRecord(iface.spec.document);
-  const operations = Array.isArray(document.operations)
-    ? document.operations
-    : [];
-  return operations.some(
-    (operation) =>
-      typeof operation === "string" && operation.trim() === permission,
-  );
-}
-
-function compatibilityAuthoritySession(
-  session: PlatformExtensionSessionContext | undefined,
-  authorization: PlatformCompatibilityAuthorization | undefined,
-): PlatformExtensionSessionContext | undefined {
-  if (session?.authenticated) {
-    // Platform-auth profiles cannot replace their verified identity with a
-    // handler assertion. Workspace membership is checked per port call.
-    return authorization === undefined ? session : undefined;
-  }
-  const workspaceId = safePlatformExtensionContextId(
-    authorization?.workspaceId,
-  );
-  const subject = safePlatformExtensionSubject(authorization?.subject);
-  if (!workspaceId || !subject) return undefined;
-  const scopes = (authorization?.scopes ?? []).filter(
-    (scope) => typeof scope === "string" && scope.trim().length > 0,
-  );
-  return {
-    authenticated: true,
-    authKind: "protocol-credential",
-    workspaceId,
-    subject,
-    ...(scopes.length > 0 ? { scopes } : {}),
-  };
-}
-
-function safePlatformCompatibilityResourceName(
-  value: string,
-): string | undefined {
-  const trimmed = value.trim();
-  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(trimmed)
-    ? trimmed
-    : undefined;
-}
-
-const PLATFORM_EXTENSION_AUTHENTICATED_HEADER =
-  "x-takosumi-platform-authenticated";
-const PLATFORM_EXTENSION_SUBJECT_HEADER = "x-takosumi-platform-subject";
-const PLATFORM_EXTENSION_AUTH_KIND_HEADER = "x-takosumi-platform-auth-kind";
-const PLATFORM_EXTENSION_SCOPES_HEADER = "x-takosumi-platform-scopes";
-const PLATFORM_EXTENSION_CAPSULE_ID_HEADER = "x-takosumi-platform-capsule-id";
-const PLATFORM_EXTENSION_WORKSPACE_ID_HEADER =
-  "x-takosumi-platform-workspace-id";
-const PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER =
-  "x-takosumi-platform-workspace-role";
-const PLATFORM_EXTENSION_AUDIENCE_HEADER = "x-takosumi-platform-audience";
-const PLATFORM_EXTENSION_INTERFACE_ID_HEADER =
-  "x-takosumi-platform-interface-id";
-const PLATFORM_EXTENSION_INTERFACE_BINDING_ID_HEADER =
-  "x-takosumi-platform-interface-binding-id";
-const PLATFORM_EXTENSION_INTERFACE_REVISION_HEADER =
-  "x-takosumi-platform-interface-resolved-revision";
-
-const PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS = [
-  "authorization",
-  "cookie",
-  "proxy-authorization",
-  "x-auth-email",
-  "x-auth-key",
-  "x-auth-user-service-key",
-  "x-takosumi-account-session",
-] as const;
-
-const PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
-  PLATFORM_EXTENSION_AUTHENTICATED_HEADER,
-  PLATFORM_EXTENSION_SUBJECT_HEADER,
-  PLATFORM_EXTENSION_AUTH_KIND_HEADER,
-  PLATFORM_EXTENSION_SCOPES_HEADER,
-  PLATFORM_EXTENSION_CAPSULE_ID_HEADER,
-  PLATFORM_EXTENSION_WORKSPACE_ID_HEADER,
-  PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER,
-  PLATFORM_EXTENSION_AUDIENCE_HEADER,
-  PLATFORM_EXTENSION_INTERFACE_ID_HEADER,
-  PLATFORM_EXTENSION_INTERFACE_BINDING_ID_HEADER,
-  PLATFORM_EXTENSION_INTERFACE_REVISION_HEADER,
-  TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
-] as const;
 
 async function platformExtensionAuthContext(
   request: Request,
@@ -6420,116 +3177,6 @@ export async function verifyPlatformExtensionRunCredentialToken(
   };
 }
 
-/**
- * Authenticates a transition caller against the current Run, Capsule,
- * ProviderBinding, ProviderConnection, and installed recipe-owned issuance.
- * No audience, scope, owner, or provider claim is accepted from the body.
- */
-export async function verifyPlatformResourceFormTransitionRunCredential(
-  env: CloudflareWorkerEnv,
-  token: string,
-  ledger?: PlatformResourceFormTransitionRunCredentialLedger,
-  resolveConnection?: PlatformRunCredentialConnectionResolver,
-): Promise<PlatformExtensionSessionContext> {
-  return await verifyPlatformTakoformV1alpha1RunCredential(
-    env,
-    token,
-    ["apply"],
-    ledger,
-    resolveConnection,
-  );
-}
-
-/**
- * Route-scoped verifier for the complete frozen provider lifecycle. The live
- * recipe remains the sole audience/scope authority; callers cannot select or
- * echo either value. `phases` comes only from the exact platform route table.
- */
-export async function verifyPlatformTakoformV1alpha1RunCredential(
-  env: CloudflareWorkerEnv,
-  token: string,
-  phases: readonly ("plan" | "apply" | "destroy")[],
-  ledger?: PlatformResourceFormTransitionRunCredentialLedger,
-  resolveConnection?: PlatformRunCredentialConnectionResolver,
-): Promise<PlatformExtensionSessionContext> {
-  const durableLedger =
-    ledger ??
-    createCloudflareD1OpenTofuControlStore(env.TAKOSUMI_CONTROL_DB, {
-      schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap",
-    });
-  const secret = runCredentialTokenSecret(env);
-  if (!secret || phases.length === 0) return { authenticated: false };
-  const authenticated = await verifyRunCredentialTokenAuthority(token, {
-    secret,
-  });
-  if (!authenticated.ok) return { authenticated: false };
-  const payload = authenticated.payload;
-  if (!phases.includes(payload.phase) || payload.scopes.includes("admin")) {
-    return { authenticated: false };
-  }
-  const capsule = await durableLedger.getCapsule(payload.capsuleId);
-  if (!capsule) return { authenticated: false };
-  const [canonical, connection, unexpectedBlob, bindings] = await Promise.all([
-    resolveCanonicalCapsuleRunCredentialContext(durableLedger, {
-      workspaceId: payload.workspaceId,
-      capsuleId: payload.capsuleId,
-      runId: payload.runId,
-      phase: payload.phase,
-    }),
-    (resolveConnection ??
-      (ledger
-        ? (id) => durableLedger.getConnection(id)
-        : (id) => resolveComposedProviderConnection(env, id)))(
-      payload.connectionId,
-    ),
-    durableLedger.getSecretBlob(payload.connectionId),
-    durableLedger.getProviderBindingSetByCapsule(
-      payload.capsuleId,
-      capsule.environment,
-    ),
-  ]);
-  const issuance = connection?.credentialRecipe?.runIssuance;
-  const bound = bindings?.bindings.some(
-    (binding) =>
-      binding.connectionId === payload.connectionId &&
-      canonicalProviderSource(binding.provider) === payload.provider,
-  );
-  if (
-    !canonical.ok ||
-    canonical.context.installingPrincipalId !== payload.installingPrincipalId ||
-    payload.sub !== payload.installingPrincipalId ||
-    !connection ||
-    !isWorkspaceBindableOperatorConnection(connection) ||
-    !isCapsuleRunCredentialIssuance(issuance) ||
-    issuance.audience !== payload.aud ||
-    !sameExactScopes(issuance.scopes, payload.scopes) ||
-    canonicalProviderSource(connection.provider) !== payload.provider ||
-    connection.provider !== payload.provider ||
-    connection.providerSource !== payload.provider ||
-    hasLegacyManagedProviderScopeHints(connection.scopeHints) ||
-    unexpectedBlob !== undefined ||
-    bindings?.workspaceId !== payload.workspaceId ||
-    bindings.capsuleId !== payload.capsuleId ||
-    bindings.environment !== capsule.environment ||
-    !bound
-  ) {
-    return { authenticated: false };
-  }
-  return {
-    authenticated: true,
-    authKind: "run-credential",
-    subject: canonical.context.installingPrincipalId,
-    workspaceId: canonical.context.workspaceId,
-    capsuleId: canonical.context.capsuleId,
-    runId: canonical.context.runId,
-    installingPrincipalId: canonical.context.installingPrincipalId,
-    phase: canonical.context.phase,
-    lifecycleIntent: canonical.context.lifecycleIntent,
-    audience: issuance.audience,
-    scopes: [...issuance.scopes],
-  };
-}
-
 function sameExactScopes(
   left: readonly string[] | undefined,
   right: readonly string[] | undefined,
@@ -6546,10 +3193,6 @@ export type PlatformExtensionRunCredentialLedger =
 export type PlatformRunCredentialConnectionResolver = (
   id: string,
 ) => Promise<ProviderConnection | undefined>;
-
-export type PlatformResourceFormTransitionRunCredentialLedger =
-  PlatformExtensionRunCredentialLedger &
-    Pick<OpenTofuControlStore, "getProviderBindingSetByCapsule">;
 
 async function resolveComposedProviderConnection(
   env: CloudflareWorkerEnv,
@@ -6864,10 +3507,6 @@ function safePlatformExtensionHeaderValue(value: string): string {
 interface PlatformExtensionHandler {
   fetch?(request: Request): Response | Promise<Response>;
   fetchAuthenticated?: PlatformExtensionAuthenticatedHandler["fetchAuthenticated"];
-  fetchCompatibility?(
-    request: Request,
-    authority: PlatformCompatibilityAuthority,
-  ): Response | Promise<Response>;
 }
 
 function platformExtensionHandler(
@@ -6880,9 +3519,7 @@ function platformExtensionHandler(
     typeof handler !== "object" ||
     (typeof (handler as { fetch?: unknown }).fetch !== "function" &&
       typeof (handler as { fetchAuthenticated?: unknown })
-        .fetchAuthenticated !== "function" &&
-      typeof (handler as { fetchCompatibility?: unknown })
-        .fetchCompatibility !== "function")
+        .fetchAuthenticated !== "function")
   ) {
     return undefined;
   }
@@ -6897,13 +3534,10 @@ function platformExtensionRouteConfigured(
   if ((route.authDelivery ?? "headers") === "context") {
     return (
       route.authMode !== "handler" &&
-      (route.compatibilityProfiles?.length ?? 0) === 0 &&
       typeof handler?.fetchAuthenticated === "function"
     );
   }
-  return (route.compatibilityProfiles?.length ?? 0) > 0
-    ? typeof handler?.fetchCompatibility === "function"
-    : typeof handler?.fetch === "function";
+  return typeof handler?.fetch === "function";
 }
 
 function handleHardeningGatesRequest(
@@ -7565,69 +4199,6 @@ function runTimestampMs(
   if (Number.isFinite(numeric)) return numeric;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-async function runScheduledResourceOperationRepair(
-  env: CloudflareWorkerEnv,
-): Promise<void> {
-  const service = await cachedDeployControlService(env);
-  const repair = service.operations.resourceOperationRepair;
-  if (!repair) return;
-  const result = await repairDirectResourceRuns(repair, { limit: 100 });
-  await Promise.all(
-    Object.entries(result).map(([outcome, value]) =>
-      recordWorkerMetric({
-        observability: service.context.adapters.observability,
-        env,
-        name: "takosumi_resource_operation_repair_count",
-        kind: "counter",
-        value,
-        tags: { outcome },
-      }),
-    ),
-  );
-}
-
-export interface ScheduledResourceOperationRepairResult {
-  readonly scanned: number;
-  readonly recovered: number;
-  readonly completed: number;
-  readonly auditsRepaired: number;
-  readonly pending: number;
-  readonly failures: number;
-}
-
-/** Bounded, failure-isolated adapter used by the platform cron wiring. */
-export async function repairDirectResourceRuns(
-  repair: {
-    repair(options?: {
-      readonly workspaceId?: string;
-      readonly limit?: number;
-    }): Promise<{
-      readonly scanned: number;
-      readonly recovered: number;
-      readonly completed: number;
-      readonly auditsRepaired: number;
-      readonly pending: number;
-    }>;
-  },
-  options: { readonly limit?: number } = {},
-): Promise<ScheduledResourceOperationRepairResult> {
-  const limit = positiveInteger(options.limit, 100);
-  try {
-    return { ...(await repair.repair({ limit })), failures: 0 };
-  } catch {
-    // A transient Run-ledger outage must not suppress source polling, drift,
-    // or stale-plan handling in the same cron tick.
-    return {
-      scanned: 0,
-      recovered: 0,
-      completed: 0,
-      auditsRepaired: 0,
-      pending: 0,
-      failures: 1,
-    };
-  }
 }
 
 // Cap so a single cron tick never creates an unbounded number of drift checks.

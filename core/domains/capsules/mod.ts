@@ -44,7 +44,6 @@ import {
 import {
   validateCapsuleInterfaceBlueprints,
   validateCapsuleRequiredInterfaces,
-  validateCapsuleResourceInterfaceBindingProposals,
 } from "../interfaces/service.ts";
 import { ProjectsService } from "../projects/mod.ts";
 import {
@@ -53,11 +52,9 @@ import {
 } from "takosumi-contract/redaction";
 import {
   capsuleInterfaceBlueprintsNeedInstallingPrincipal,
-  capsuleResourceInterfaceBindingsNeedInstallingPrincipal,
 } from "takosumi-contract/interfaces";
 import { materializeInstallContextVariables } from "../deploy-control/validation.ts";
 import { parseInstallConfigPatchV1 } from "./install_config_patch.ts";
-import { parseInstallConfigHostRuntimeMaterialization } from "takosumi-contract";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -81,63 +78,18 @@ export interface CreateCapsuleRequest {
   readonly autoUpdate?: boolean;
 }
 
-/** Stable reason returned when a Capsule still owns a Resource Shape. */
-export const CAPSULE_OWNED_RESOURCES_PENDING_REASON =
-  "capsule_owned_resources_pending";
+/** Stable reason returned when an in-flight Capsule lifecycle holds its lease. */
+export const CAPSULE_LIFECYCLE_BUSY_REASON = "capsule_lifecycle_busy";
+
+/** Stable reason returned when durable runtime evidence forbids abandonment. */
+export const CAPSULE_RUNTIME_STATE_PRESENT_REASON =
+  "capsule_runtime_state_present";
 
 /**
- * Narrow host-owned lifecycle fence for Capsule-owned Resources.
- *
- * The Resource Shape store remains owned by its domain. Hosts provide this
- * read-only port after composing both domains; the implementation should
- * paginate the exact Workspace/Capsule owner inventory and fail closed for
- * malformed or Principal-mismatched ownership evidence.
- */
-export interface CapsuleOwnedResourceFenceInput {
-  readonly capsule: Capsule;
-  readonly phase: "abandon" | "destroy_apply";
-}
-
-export type CapsuleOwnedResourceFenceResult =
-  | { readonly status: "clear" }
-  | {
-      readonly status: "pending";
-      /** Optional internal evidence for logs/tests; never required by callers. */
-      readonly resourceId?: string;
-    }
-  | {
-      readonly status: "invalid_ownership";
-      /** Optional internal evidence for logs/tests; never required by callers. */
-      readonly resourceId?: string;
-      readonly reason?: "principal_mismatch" | "corrupt";
-    };
-
-export type CapsuleOwnedResourceFence = (
-  input: CapsuleOwnedResourceFenceInput,
-) => Promise<CapsuleOwnedResourceFenceResult>;
-
-/**
- * Host-owned cross-domain admission fence for Capsule Resource mutations.
- * The callback re-reads the current Capsule while the shared lease is held and
- * only then invokes `work`; Resource Shape therefore need not own Capsule
- * storage or infer lifecycle state from a portable request.
- */
-export type CapsuleOwnedResourceAdmission = <T>(
-  input: {
-    readonly capsule: Pick<
-      Capsule,
-      "id" | "workspaceId" | "installingPrincipalId"
-    >;
-    readonly holderId: string;
-  },
-  work: (capsule: Capsule) => Promise<T>,
-) => Promise<T>;
-
-/**
- * Host-owned admission for abandoning a no-state Capsule. Unlike a Resource
- * claim, abandonment must serialize with both ordinary provider Runs and
- * Capsule-owned Resource claims. The host therefore receives the full current
- * Capsule, including its environment, and owns the ordered lease topology.
+ * Host-owned admission for abandoning a no-state Capsule. Abandonment must
+ * serialize with ordinary provider Runs for the same Capsule/environment. The
+ * host therefore receives the full current Capsule and re-reads it while the
+ * shared lifecycle lease is held.
  */
 export type CapsuleAbandonAdmission = <T>(
   input: {
@@ -154,9 +106,7 @@ export interface CapsulesServiceDependencies {
   /** Workspace-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
   readonly activity?: ActivityRecorder;
   readonly projects?: ProjectsService;
-  /** Optional host-owned Resource lifecycle fence; absent keeps legacy behavior. */
-  readonly capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
-  /** Optional host-owned abandon admission; absent keeps legacy behavior. */
+  /** Optional host-owned lifecycle admission for serialized abandonment. */
   readonly capsuleAbandonAdmission?: CapsuleAbandonAdmission;
 }
 
@@ -166,7 +116,6 @@ export class CapsulesService {
   readonly #now: () => Date;
   readonly #activity: ActivityRecorder;
   readonly #projects: ProjectsService;
-  #capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
   #capsuleAbandonAdmission?: CapsuleAbandonAdmission;
 
   constructor(deps: CapsulesServiceDependencies) {
@@ -176,18 +125,7 @@ export class CapsulesService {
     this.#activity = deps.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#projects =
       deps.projects ?? new ProjectsService({ store: deps.store });
-    this.#capsuleOwnedResourceFence = deps.capsuleOwnedResourceFence;
     this.#capsuleAbandonAdmission = deps.capsuleAbandonAdmission;
-  }
-
-  /**
-   * Late-binds the host-owned Resource inventory fence after both domains have
-   * been composed. Clearing the port restores the historical no-Resource path.
-   */
-  setCapsuleOwnedResourceFence(
-    fence: CapsuleOwnedResourceFence | undefined,
-  ): void {
-    this.#capsuleOwnedResourceFence = fence;
   }
 
   /** Late-binds the host-owned ordered abandon admission after composition. */
@@ -263,16 +201,6 @@ export class CapsulesService {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "install config contains an unresolved installing Principal binding placeholder",
-      );
-    }
-    if (
-      capsuleResourceInterfaceBindingsNeedInstallingPrincipal(
-        config.resourceInterfaceBindingProposals,
-      )
-    ) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "install config contains an unresolved Resource Interface installing Principal binding placeholder",
       );
     }
     // A workspace-scoped InstallConfig may only be used by its owning Workspace;
@@ -426,13 +354,13 @@ export class CapsulesService {
   /**
    * Abandons a Capsule that never reached a successful apply. This is not a
    * destroy operation: no remote resources are claimed to have been torn down.
-   * It only closes the local ledger row and releases any pre-apply host claims
-   * so the user can reinstall or choose the same public name again.
+   * It only closes the local ledger row and its provider bindings. Retired
+   * public-host reservation rows remain untouched until operator inventory can
+   * prove that deleting that historical authority is safe.
    */
   async abandonUnappliedCapsule(id: string, reason: string): Promise<Capsule> {
     const existing = await this.#requireCapsule(id);
     const abandon = async (current: Capsule = existing): Promise<Capsule> => {
-      await this.#assertCapsuleOwnedResourcesClear(current, "abandon");
       const runtimeSafety = await this.#store.getCapsuleRuntimeSafety(current.id);
       if (runtimeSafety) {
         // Any durable runtime evidence proves that provider work reached a
@@ -442,7 +370,7 @@ export class CapsulesService {
         throw new OpenTofuControllerError(
           "failed_precondition",
           `capsule ${current.id} runtime safety does not permit abandonment`,
-          { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
+          { reason: CAPSULE_RUNTIME_STATE_PRESENT_REASON },
         );
       }
       if (
@@ -469,7 +397,6 @@ export class CapsulesService {
         updated.id,
         updated.environment,
       );
-      await this.#store.releasePublicHostsForCapsule(id, now);
       await this.#activity.record({
         workspaceId: updated.workspaceId,
         action: "capsule.abandoned",
@@ -492,56 +419,6 @@ export class CapsulesService {
       : await abandon(existing);
   }
 
-  async #assertCapsuleOwnedResourcesClear(
-    capsule: Capsule,
-    phase: CapsuleOwnedResourceFenceInput["phase"],
-  ): Promise<void> {
-    const fence = this.#capsuleOwnedResourceFence;
-    if (!fence) return;
-
-    let result: CapsuleOwnedResourceFenceResult;
-    try {
-      result = await fence({ capsule, phase });
-    } catch (error) {
-      // An unavailable or malformed host inventory is fail-closed: the
-      // Capsule must remain retryable rather than being terminalized blindly.
-      if (
-        error instanceof OpenTofuControllerError &&
-        error.code === "failed_precondition" &&
-        typeof error.details === "object" &&
-        error.details !== null &&
-        !Array.isArray(error.details) &&
-        (error.details as { readonly reason?: unknown }).reason ===
-          CAPSULE_OWNED_RESOURCES_PENDING_REASON
-      ) {
-        throw error;
-      }
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `capsule ${capsule.id} Resource ownership could not be verified`,
-        { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
-      );
-    }
-    if (result?.status === "clear") return;
-    const status = result?.status;
-    throw new OpenTofuControllerError(
-      "failed_precondition",
-      `capsule ${capsule.id} has Capsule-owned Resources pending destruction`,
-      {
-        reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON,
-        ...(status === "invalid_ownership"
-          ? {
-              ownership: "invalid" as const,
-              ...(result?.reason
-                ? { ownershipReason: result.reason }
-                : {}),
-            }
-          : {}),
-        ...(result?.resourceId ? { resourceId: result.resourceId } : {}),
-      },
-    );
-  }
-
   // --- InstallConfig (§11) --------------------------------------------------
 
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
@@ -556,11 +433,6 @@ export class CapsulesService {
       workspaceId: "workspace-validation",
       capsuleId: "capsule-validation",
     });
-    if (config.hostRuntimeMaterialization !== undefined) {
-      parseInstallConfigHostRuntimeMaterialization(
-        config.hostRuntimeMaterialization,
-      );
-    }
     const configWorkspaceId = config.workspaceId;
     if (configWorkspaceId !== undefined) {
       const workspace = await this.#store.getWorkspace(configWorkspaceId);
@@ -586,20 +458,6 @@ export class CapsulesService {
     }
     validateCapsuleInterfaceBlueprints(config.interfaceBlueprints ?? []);
     validateCapsuleRequiredInterfaces(config.requiredInterfaces ?? []);
-    validateCapsuleResourceInterfaceBindingProposals(
-      config.resourceInterfaceBindingProposals ?? [],
-    );
-    if (
-      config.workspaceId !== undefined &&
-      capsuleResourceInterfaceBindingsNeedInstallingPrincipal(
-        config.resourceInterfaceBindingProposals,
-      )
-    ) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "installing Principal Resource Interface bindings can be stored only after resolving the exact Principal",
-      );
-    }
     return await this.#store.putInstallConfig(config);
   }
 

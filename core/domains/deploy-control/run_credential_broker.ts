@@ -139,7 +139,7 @@ export class RunCredentialBroker {
       return undefined;
     }
     try {
-      if (!planRun.capsuleContext && !planRun.resourceContext) {
+      if (!planRun.capsuleContext) {
         throw new OpenTofuControllerError(
           "failed_precondition",
           "credential_mint_failed: provider connection evidence is required",

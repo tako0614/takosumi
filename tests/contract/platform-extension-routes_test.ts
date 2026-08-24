@@ -13,9 +13,6 @@ test("well-known reservation keeps core and retired leaves unclaimable", () => {
     "/.well-known/openid-configuration",
     "/.well-known/takosumi",
     "/.well-known/takoform",
-    "/.well-known/takoform/v1alpha1",
-    "/.well-known/takoform/v1alpha2",
-    "/.well-known/takoform/v1alpha3",
   ]);
   expect(PLATFORM_EXTENSION_RESERVED_PREFIXES).not.toContain("/.well-known");
 
@@ -25,23 +22,20 @@ test("well-known reservation keeps core and retired leaves unclaimable", () => {
   }
 });
 
-test("exact leaves can mount under well-known without opening its namespace", () => {
-  const takoform = "/.well-known/takoform/v1beta1";
+test("unknown exact leaves can mount under well-known without opening its namespace", () => {
   const sibling = "/.well-known/social-server";
 
-  expect(platformExtensionBasePathIsReserved(takoform, "subtree")).toBe(true);
-  expect(platformExtensionBasePathIsReserved(takoform, "exact")).toBe(false);
   expect(platformExtensionBasePathIsReserved(sibling, "subtree")).toBe(true);
   expect(platformExtensionBasePathIsReserved(sibling, "exact")).toBe(false);
 
-  expect(platformExtensionRouteMatchesPath(takoform, takoform, "exact")).toBe(
-    true,
-  );
   expect(
-    platformExtensionRouteMatchesPath(`${takoform}/extra`, takoform, "exact"),
+    platformExtensionRouteMatchesPath(sibling, sibling, "exact"),
+  ).toBe(true);
+  expect(
+    platformExtensionRouteMatchesPath(`${sibling}/extra`, sibling, "exact"),
   ).toBe(false);
   expect(
-    platformExtensionRouteMatchesPath(`${takoform}/extra`, takoform, "subtree"),
+    platformExtensionRouteMatchesPath(`${sibling}/extra`, sibling, "subtree"),
   ).toBe(true);
 });
 
@@ -165,11 +159,13 @@ test("optional account subscription belongs to /api/v1 while account stays reser
 });
 
 test("retired Takoform Host API prefixes remain core-owned", () => {
+  expect(PLATFORM_EXTENSION_RESERVED_PREFIXES).toContain(
+    "/apis/forms.takoform.com",
+  );
   for (const path of [
     "/apis/forms.takoform.com/v1alpha2",
     "/apis/forms.takoform.com/v1alpha3",
   ]) {
-    expect(PLATFORM_EXTENSION_RESERVED_PREFIXES).toContain(path);
     for (const matchMode of ["subtree", "exact"] as const) {
       expect(platformExtensionBasePathIsReserved(path, matchMode)).toBe(true);
       expect(

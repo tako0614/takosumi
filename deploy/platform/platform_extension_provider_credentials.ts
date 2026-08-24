@@ -2,7 +2,6 @@ import type {
   CredentialRecipeDriverContext,
   CredentialRecipeHostComposition,
 } from "takosumi-contract/credential-recipe-host";
-import type { HostRuntimeMaterializationRequest } from "takosumi-contract";
 import { platformExtensionRoutes } from "./platform_extensions.ts";
 
 const AUTH_MODE = "broker";
@@ -158,12 +157,6 @@ async function mintPlatformExtensionProviderCredential(
         scopes: Object.freeze([...scopes]),
         phase: context.run.phase,
         lifecycleIntent: context.run.lifecycleIntent,
-        ...(context.run.hostRuntimeMaterialization
-          ? {
-              hostRuntimeMaterialization:
-                context.run.hostRuntimeMaterialization,
-            }
-          : {}),
       }),
     );
   } catch {
@@ -269,7 +262,6 @@ interface PlatformExtensionCredentialHandler {
       readonly scopes: readonly string[];
       readonly phase: "plan" | "apply" | "destroy";
       readonly lifecycleIntent: "provision" | "destroy";
-      readonly hostRuntimeMaterialization?: HostRuntimeMaterializationRequest;
     },
   ): Promise<Response>;
 }

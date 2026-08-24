@@ -248,6 +248,7 @@ test("D1 large-Workspace authorization uses both cursor and current-Binding inde
   expect(page.nextCursor).toBeString();
   expect(db.prepareCount).toBe(1);
   expect(db.writeCount).toBe(0);
+  expect(db.authorizedReadSql).not.toContain("owner_kind = 'Resource'");
   const plan = await db.authorizedReadPlan();
   expect(plan).toContain("interfaces_authorized_page_idx");
   expect(plan).toContain("interface_bindings_authorized_current_idx");
@@ -314,6 +315,7 @@ test("Postgres large-Workspace authorization uses both cursor and current-Bindin
     if (!client.authorizedRead) {
       throw new Error("Postgres authorized Interface read was not observed");
     }
+    expect(client.authorizedRead.sql).not.toContain("owner_kind = 'Resource'");
     const explained = await base.query<{ readonly "QUERY PLAN": string }>(
       `explain (costs off) ${client.authorizedRead.sql}`,
       client.authorizedRead.parameters,

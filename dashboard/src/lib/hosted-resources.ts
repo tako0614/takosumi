@@ -36,18 +36,12 @@ export interface PlatformExtensionContribution {
   readonly order?: number;
 }
 
-export interface PlatformExtensionCompatibilityProfile {
-  readonly profile: `compat.${string}`;
-  readonly planes: readonly ("control" | "data")[];
-}
-
 export interface PlatformExtensionCatalogItem {
   readonly id?: string;
   readonly basePath: `/${string}`;
   readonly matchMode?: "subtree" | "exact";
   readonly configured: boolean;
   readonly capabilities?: readonly string[];
-  readonly compatibilityProfiles?: readonly PlatformExtensionCompatibilityProfile[];
   readonly authMode?: "platform" | "handler";
   readonly requiredScopes?: readonly string[];
   readonly selfServicePatScopes?: readonly string[];
@@ -330,7 +324,6 @@ function parsePlatformExtensionCatalogItem(
       "id",
       "matchMode",
       "capabilities",
-      "compatibilityProfiles",
       "authMode",
       "requiredScopes",
       "selfServicePatScopes",
@@ -348,9 +341,6 @@ function parsePlatformExtensionCatalogItem(
     ["subtree", "exact"],
   );
   const capabilities = optionalCatalogStringArray(record.capabilities);
-  const compatibilityProfiles = optionalCompatibilityProfiles(
-    record.compatibilityProfiles,
-  );
   const authMode = optionalCatalogEnum(record.authMode, ["platform", "handler"]);
   const requiredScopes = optionalCatalogStringArray(record.requiredScopes);
   const selfServicePatScopes = optionalCatalogStringArray(
@@ -378,7 +368,6 @@ function parsePlatformExtensionCatalogItem(
     ...(matchMode !== undefined ? { matchMode } : {}),
     configured: record.configured,
     ...(capabilities !== undefined ? { capabilities } : {}),
-    ...(compatibilityProfiles !== undefined ? { compatibilityProfiles } : {}),
     ...(authMode !== undefined ? { authMode } : {}),
     ...(requiredScopes !== undefined ? { requiredScopes } : {}),
     ...(selfServicePatScopes !== undefined ? { selfServicePatScopes } : {}),
@@ -398,36 +387,6 @@ function parsePlatformExtensionCatalogSummary(
   const missing = catalogCount(record.missing);
   if (configured > total || missing > total) throw invalidCatalog();
   return { total, configured, missing };
-}
-
-function optionalCompatibilityProfiles(
-  value: unknown,
-): readonly PlatformExtensionCompatibilityProfile[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.length === 0) throw invalidCatalog();
-  const profiles = value.map((entry) => {
-    const record = catalogObject(entry);
-    catalogExactKeys(record, ["profile", "planes"]);
-    const profile = catalogString(record.profile);
-    if (!/^compat\.[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(profile)) {
-      throw invalidCatalog();
-    }
-    if (!Array.isArray(record.planes) || record.planes.length === 0) {
-      throw invalidCatalog();
-    }
-    const planes = record.planes.map((plane) => {
-      if (plane !== "control" && plane !== "data") throw invalidCatalog();
-      return plane;
-    });
-    if (new Set(planes).size !== planes.length) throw invalidCatalog();
-    return { profile: profile as `compat.${string}`, planes };
-  });
-  if (
-    new Set(profiles.map((profile) => profile.profile)).size !== profiles.length
-  ) {
-    throw invalidCatalog();
-  }
-  return profiles;
 }
 
 function optionalRequestScopeRules(

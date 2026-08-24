@@ -1,8 +1,8 @@
 # Takosumi hosted service pricing
 
 The Takosumi hosted service uses tax-exclusive USD prepaid credits. There is no monthly
-subscription. Every account uses the same Takosumi Offering catalog; Resource
-counts are common safety ceilings, not tier features.
+subscription. Every account follows the same hosted-service PriceCatalog;
+Resource counts are common safety ceilings, not tier features.
 
 ## Credit billing
 

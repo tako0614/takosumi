@@ -2,9 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createRunCredentialToken } from "../../../core/shared/run_credential_tokens.ts";
 import {
   verifyPlatformExtensionRunCredentialToken,
-  verifyPlatformResourceFormTransitionRunCredential,
   type PlatformExtensionRunCredentialLedger,
-  type PlatformResourceFormTransitionRunCredentialLedger,
   type PlatformExtensionRoute,
 } from "../../../deploy/platform/worker.ts";
 
@@ -334,81 +332,6 @@ describe("platform extension Run credential", () => {
   });
 });
 
-describe("platform Resource Form transition Run credential", () => {
-  test("derives exact audience/scopes and Capsule ownership from current ledgers", async () => {
-    const issued = await createRunCredentialToken({
-      ...TOKEN_INPUT,
-      subject: TOKEN_INPUT.installingPrincipalId,
-    });
-    const session = await verifyPlatformResourceFormTransitionRunCredential(
-      { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET } as never,
-      issued.token,
-      transitionLedger(),
-    );
-    expect(session).toMatchObject({
-      authenticated: true,
-      authKind: "run-credential",
-      subject: TOKEN_INPUT.installingPrincipalId,
-      workspaceId: TOKEN_INPUT.workspaceId,
-      capsuleId: TOKEN_INPUT.capsuleId,
-      runId: TOKEN_INPUT.runId,
-      phase: "apply",
-      audience: RUN_ISSUANCE.audience,
-      scopes: RUN_ISSUANCE.scopes,
-    });
-  });
-
-  test("accepts a release-owned transition connection from live host composition without a durable row", async () => {
-    const issued = await createRunCredentialToken({
-      ...TOKEN_INPUT,
-      subject: TOKEN_INPUT.installingPrincipalId,
-    });
-    const durable = transitionLedger({ connection: null });
-    const liveConnection = await ledger().getConnection(
-      TOKEN_INPUT.connectionId,
-    );
-
-    const session = await verifyPlatformResourceFormTransitionRunCredential(
-      { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET } as never,
-      issued.token,
-      durable,
-      async (id) =>
-        id === TOKEN_INPUT.connectionId ? liveConnection : undefined,
-    );
-
-    expect(session).toMatchObject({
-      authenticated: true,
-      authKind: "run-credential",
-      runId: TOKEN_INPUT.runId,
-    });
-  });
-
-  test("rejects caller claims not bound to the live ProviderBinding/recipe", async () => {
-    const env = {
-      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET,
-    } as never;
-    const issued = await createRunCredentialToken({
-      ...TOKEN_INPUT,
-      subject: TOKEN_INPUT.installingPrincipalId,
-    });
-    for (const current of [
-      transitionLedger({ bindingConnectionId: "connection_other" }),
-      transitionLedger({ bindingProvider: "registry.example/other/provider" }),
-      transitionLedger({ bindingWorkspaceId: "workspace_other" }),
-      transitionLedger({ bindingEnvironment: "staging" }),
-      transitionLedger({ connection: { status: "revoked" } }),
-    ]) {
-      expect(
-        await verifyPlatformResourceFormTransitionRunCredential(
-          env,
-          issued.token,
-          current,
-        ),
-      ).toEqual({ authenticated: false });
-    }
-  });
-});
-
 function ledger(
   overrides: {
     readonly capsule?: Record<string, unknown>;
@@ -473,36 +396,4 @@ function ledger(
     getSecretBlob: async (id) =>
       (id === TOKEN_INPUT.connectionId ? overrides.blob : undefined) as never,
   };
-}
-
-function transitionLedger(
-  overrides: Parameters<typeof ledger>[0] & {
-    readonly bindingConnectionId?: string;
-    readonly bindingProvider?: string;
-    readonly bindingWorkspaceId?: string;
-    readonly bindingEnvironment?: string;
-  } = {},
-): PlatformResourceFormTransitionRunCredentialLedger {
-  const base = ledger({
-    ...overrides,
-    capsule: { environment: "production", ...overrides.capsule },
-  });
-  return {
-    ...base,
-    getProviderBindingSetByCapsule: async () => ({
-      id: "bindings_1",
-      workspaceId: overrides.bindingWorkspaceId ?? TOKEN_INPUT.workspaceId,
-      capsuleId: TOKEN_INPUT.capsuleId,
-      environment: overrides.bindingEnvironment ?? "production",
-      bindings: [
-        {
-          provider: overrides.bindingProvider ?? TOKEN_INPUT.provider,
-          connectionId:
-            overrides.bindingConnectionId ?? TOKEN_INPUT.connectionId,
-        },
-      ],
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    }),
-  } as PlatformResourceFormTransitionRunCredentialLedger;
 }

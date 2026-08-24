@@ -204,56 +204,6 @@ describe("Yurucommu managed Store cutover contract", () => {
     expect(managed.outputAllowlist).toEqual({});
     expect(managed.lifecycleActions).toBeUndefined();
     expect(managed.policy.lifecycleActions).toBeUndefined();
-    expect(managed.hostRuntimeMaterialization?.contract).toBe(
-      "takosumi.host-runtime-materialization/v1",
-    );
-    expect(
-      managed.hostRuntimeMaterialization?.requirements.find(
-        (requirement) => requirement.kind === "public_oidc",
-      ),
-    ).toMatchObject({
-      id: "takosumi-accounts",
-      callbackPath: "/api/auth/callback/takos",
-      scopes: ["email", "openid", "profile"],
-    });
-    expect(
-      managed.hostRuntimeMaterialization?.requirements.find(
-        (requirement) => requirement.binding === "ENCRYPTION_KEY",
-      ),
-    ).toMatchObject({
-      kind: "generated_secret",
-      secretRef: "secret:yurucommu/encryption-key",
-    });
-    expect(
-      managed.hostRuntimeMaterialization?.requirements.find(
-        (requirement) => requirement.binding === "DB",
-      ),
-    ).toMatchObject({
-      kind: "resource_binding",
-      connectionAlias: "DB",
-      requiredPermission: "takosumi.resource.bind",
-    });
-    expect(
-      managed.hostRuntimeMaterialization?.backgroundActivations?.[0],
-    ).toMatchObject({
-      id: "delivery",
-      sourceConnectionAlias: "DELIVERY_QUEUE",
-      deadLetterConnectionAlias: "DELIVERY_DLQ",
-      entrypoint: "yurucommu.delivery",
-    });
-    expect(
-      managed.hostRuntimeMaterialization?.backgroundActivations?.[1],
-    ).toEqual({
-      id: "retention",
-      sourceResourceKind: "Schedule",
-      sourceConnectionAlias: "WORKER",
-      entrypoint: "yurucommu.retention",
-      retry: {
-        maxAttempts: 1,
-        retryDelaySeconds: 0,
-        onExhausted: "fail",
-      },
-    });
     expect(managed.resourceInterfaceBindingProposals).toBeUndefined();
     expect(
       REFERENCE_APP_INSTALL_CONFIGS.find(

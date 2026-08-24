@@ -153,6 +153,19 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
     string,
   ];
   try {
+    const sourceDir = join(tempDir, "source");
+    const archivePath = join(tempDir, "source.tar.zst");
+    await mkdir(sourceDir, { recursive: true });
+    await writeFile(
+      join(sourceDir, "main.tf"),
+      'output "message" {\n  value = "durable-local-state"\n}\n',
+    );
+    createArchive(sourceDir, archivePath);
+    const archiveBytes = new Uint8Array(await readFile(archivePath));
+    const sourceArchive = {
+      ref: "sources/snap_local/source.tar.zst",
+      digest: `sha256:${createHash("sha256").update(archiveBytes).digest("hex")}`,
+    };
     const stateArtifactDir = join(tempDir, "state-artifacts");
     const durableStateStore = createFileOpenTofuStateArtifactStore(
       stateArtifactDir,
@@ -176,11 +189,9 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
     const runner = createLocalOpenTofuRunner({
       archiveStore: {
         write: async () => {
-          throw new Error("source archive is not used by operator modules");
+          throw new Error("write should not be called");
         },
-        read: async () => {
-          throw new Error("source archive is not used by operator modules");
-        },
+        read: async () => archiveBytes,
       },
       stateStore,
     });
@@ -192,21 +203,13 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
         message: { from: "message", type: "string" },
       },
     });
-    const operatorModule = {
-      files: [
-        {
-          path: "main.tf",
-          text: 'output "message" {\n  value = "durable-local-state"\n}\n',
-        },
-      ],
-    };
     const createPlanRun = localPlanRun(createPlanId, "create");
     const createPlan = await runner.plan({
       planRun: createPlanRun,
       runnerProfile: profile,
       variables: {},
       generatedRoot,
-      operatorModule,
+      sourceArchive,
       outputAllowlist: { message: { from: "message" } },
       stateScope: stateScope(0, "artifact:local-state:0"),
     });
@@ -219,7 +222,7 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
       planArtifact: createPlan.planArtifact,
       runnerProfile: profile,
       generatedRoot,
-      operatorModule,
+      sourceArchive,
       outputAllowlist: { message: { from: "message" } },
       stateScope: stateScope(1, generationOneRef),
       rawOutputRef,
@@ -300,7 +303,7 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
         planArtifact: createPlan.planArtifact,
         runnerProfile: profile,
         generatedRoot,
-        operatorModule,
+        sourceArchive,
         outputAllowlist: { message: { from: "message" } },
         stateScope: stateScope(1, generationOneRef),
         rawOutputRef,
@@ -322,7 +325,7 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
       runnerProfile: profile,
       variables: {},
       generatedRoot,
-      operatorModule,
+      sourceArchive,
       outputAllowlist: { message: { from: "message" } },
       priorState,
       stateScope: stateScope(1, generationOneRef, priorState),
@@ -339,7 +342,7 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
       planArtifact: destroyPlan.planArtifact,
       runnerProfile: profile,
       generatedRoot,
-      operatorModule,
+      sourceArchive,
       priorState,
       stateScope: stateScope(2, generationTwoRef, priorState),
     });
@@ -353,7 +356,7 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
         planArtifact: destroyPlan.planArtifact,
         runnerProfile: profile,
         generatedRoot,
-        operatorModule,
+        sourceArchive,
         priorState,
         stateScope: stateScope(2, generationTwoRef, priorState),
       }),
@@ -370,7 +373,7 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
         planArtifact: destroyPlan.planArtifact,
         runnerProfile: profile,
         generatedRoot,
-        operatorModule,
+        sourceArchive,
         priorState,
         stateScope: stateScope(2, generationTwoRef, priorState),
       }),
@@ -386,8 +389,9 @@ function localPlanRun(id: string, operation: "create" | "destroy") {
     id,
     workspaceId: "workspace_local",
     source: {
-      kind: "operator_module" as const,
-      digest: `sha256:${"a".repeat(64)}`,
+      kind: "git" as const,
+      url: "https://example.test/local-runner.git",
+      commit: "0123456789abcdef0123456789abcdef01234567",
     },
     sourceDigest: `sha256:${"a".repeat(64)}`,
     operation,

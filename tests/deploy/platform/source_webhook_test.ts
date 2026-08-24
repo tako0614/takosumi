@@ -2,13 +2,8 @@ import { expect, test } from "bun:test";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 import {
   CloudflareD1OpenTofuControlStore,
-  ensureD1OpenTofuLedgerSchema,
 } from "../../../worker/src/d1_opentofu_store.ts";
 
-import {
-  TAKOFORM_FORM_HOST_API_PATH,
-  TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
-} from "../../../contract/form-host-interoperability.ts";
 import { TAKOSUMI_API_VERSION } from "../../../contract/capabilities.ts";
 import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
@@ -26,9 +21,9 @@ import {
   handlePlatformExtensionCatalogRequest,
   handlePlatformExtensionContributionsRequest,
   handlePlatformExtensionRouteRequest,
+  handlePlatformInterfaceApiRequest,
   handlePlatformMetricsDashboardRequest,
   handlePlatformMetricsRequest,
-  handlePlatformResourceShapeApiRequest,
   handlePlatformRunOwnerRequest,
   handleSourceWebhookRequest,
   isOperatorBillingPath,
@@ -36,8 +31,6 @@ import {
   isPlatformExtensionCatalogPath,
   isPlatformExtensionContributionsPath,
   isPlatformInterfaceApiPath,
-  isPlatformOfferingApiPath,
-  isPlatformResourceShapeApiPath,
   matchPlatformExtensionRoute,
   platformExtensionCatalog,
   platformExtensionContributionCatalog,
@@ -48,14 +41,12 @@ import {
   platformExtensionVerifiedWorkspaceSession,
   resolvePlatformExtensionRequestScopeRoute,
   verifyPlatformExtensionSession,
-  platformResourceShapeApiEnabled,
   isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
   oidcMetricRoute,
   autoPlanStaleCapsulesEnabled,
   pollAutoSyncSources,
   planStaleCapsuleUpdates,
-  repairDirectResourceRuns,
   repairStaleOpenTofuRuns,
   scheduledSourcePollEnabledForCron,
   scheduledSourcePollBatch,
@@ -63,28 +54,11 @@ import {
   summarizePrometheusMetrics,
   verifyPlatformExtensionBearerToken,
   withPlatformAssetCacheHeaders,
-  createPlatformCanonicalHostRuntimeGraphReader,
-  createPlatformCanonicalReadyResourceInventory,
-  createPlatformCanonicalResourceReadAuthority,
-  selectUniquePlatformCompatibilityInterface,
   type OperatorBillingOperations,
   type SourcePollOperations,
   type SourceWebhookOperations,
 } from "../../../deploy/platform/worker.ts";
-import { platformResourceInterfaceWorkspaceResolver } from "../../../worker/src/deploy_control_seam.ts";
 import { createRunCredentialToken } from "../../../core/shared/run_credential_tokens.ts";
-import {
-  createInMemoryResourceShapeStores,
-  MapResourceShapeSchemaRegistry,
-  StubResourceShapeAdapter,
-  type ResourceShapeStores,
-} from "../../../core/domains/resource-shape/mod.ts";
-import { createD1ResourceShapeStores } from "../../../core/domains/resource-shape/d1_stores.ts";
-import { createTakosumiService } from "../../../core/bootstrap.ts";
-import type {
-  ResolutionLockRecord,
-  ResourceShapeRecord,
-} from "../../../core/domains/resource-shape/records.ts";
 
 test("platform internal edge ingress is explicit and disabled by default", () => {
   expect(platformInternalEdgeIngressEnabled({} as never)).toBe(false);
@@ -234,45 +208,6 @@ test("platform destroy recovery exposes one exact operator-only Core action", as
   ]);
 });
 
-test("compatibility data authority selects one exact Resource-owned Interface", () => {
-  const resourceId = "tkrn:workspace_1:ObjectBucket:assets";
-  const candidate = (id: string, type = "storage.object") =>
-    ({
-      kind: "Interface",
-      metadata: {
-        id,
-        workspaceId: "workspace_1",
-        ownerRef: { kind: "Resource", id: resourceId },
-      },
-      spec: { type, version: "v1" },
-      status: { phase: "Resolved" },
-    }) as never;
-  const selector = {
-    workspaceId: "workspace_1",
-    resourceId,
-    selector: { type: "storage.object" },
-  };
-
-  expect(
-    selectUniquePlatformCompatibilityInterface(
-      [candidate("if_storage")],
-      selector,
-    )?.metadata.id,
-  ).toBe("if_storage");
-  expect(
-    selectUniquePlatformCompatibilityInterface(
-      [candidate("if_a"), candidate("if_b")],
-      selector,
-    ),
-  ).toBeUndefined();
-  expect(
-    selectUniquePlatformCompatibilityInterface(
-      [candidate("if_other", "storage.other")],
-      selector,
-    ),
-  ).toBeUndefined();
-});
-
 test("platform Operator capabilities require both explicit config and live bindings", () => {
   const empty = platformOperatorCapabilities({} as never, true);
   expect(Object.values(empty).every((enabled) => !enabled)).toBe(true);
@@ -293,7 +228,7 @@ test("platform Operator capabilities require both explicit config and live bindi
     workspace_members: true,
     runner_pools: true,
     operator_connections: true,
-    target_catalog: true,
+    target_catalog: false,
     db_backed_configuration: true,
     cli_api_operations: true,
     usage_showback: true,
@@ -737,47 +672,6 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
     workspacesScanned: 1,
     runsScanned: 9,
     rescheduled: 4,
-  });
-});
-
-test("scheduled direct Resource Run repair is bounded and failure-isolated", async () => {
-  const calls: unknown[] = [];
-  const repaired = await repairDirectResourceRuns(
-    {
-      repair: (options) => {
-        calls.push(options);
-        return Promise.resolve({
-          scanned: 4,
-          recovered: 1,
-          completed: 2,
-          auditsRepaired: 3,
-          pending: 1,
-        });
-      },
-    },
-    { limit: 17 },
-  );
-  expect(calls).toEqual([{ limit: 17 }]);
-  expect(repaired).toEqual({
-    scanned: 4,
-    recovered: 1,
-    completed: 2,
-    auditsRepaired: 3,
-    pending: 1,
-    failures: 0,
-  });
-
-  expect(
-    await repairDirectResourceRuns({
-      repair: () => Promise.reject(new Error("ledger unavailable")),
-    }),
-  ).toEqual({
-    scanned: 0,
-    recovered: 0,
-    completed: 0,
-    auditsRepaired: 0,
-    pending: 0,
-    failures: 1,
   });
 });
 
@@ -1346,30 +1240,22 @@ test("platformExtensionRoutes merges duplicate capability descriptors", () => {
     platformExtensionRoutes({
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
-          basePath: "/compat/example/v1",
-          handlerKey: "TEST_COMPAT_EXTENSION",
-          compatibilityProfiles: [
-            { profile: "compat.object-store.v1", planes: ["data"] },
-          ],
+          basePath: "/extensions/example/v1",
+          handlerKey: "TEST_EXTENSION",
+          capabilities: ["example.storage.v1"],
         },
         {
-          basePath: "/compat/example/v1",
-          handlerKey: "TEST_COMPAT_EXTENSION",
-          compatibilityProfiles: [
-            { profile: "compat.kv.v1", planes: ["data"] },
-          ],
+          basePath: "/extensions/example/v1",
+          handlerKey: "TEST_EXTENSION",
+          capabilities: ["example.kv.v1"],
         },
       ]),
     }),
   ).toEqual([
     {
-      basePath: "/compat/example/v1",
-      handlerKey: "TEST_COMPAT_EXTENSION",
-      capabilities: ["compat.object-store.v1", "compat.kv.v1"],
-      compatibilityProfiles: [
-        { profile: "compat.object-store.v1", planes: ["data"] },
-        { profile: "compat.kv.v1", planes: ["data"] },
-      ],
+      basePath: "/extensions/example/v1",
+      handlerKey: "TEST_EXTENSION",
+      capabilities: ["example.storage.v1", "example.kv.v1"],
     },
   ]);
 });
@@ -1397,7 +1283,7 @@ test("platformExtensionRoutes rejects malformed descriptors", () => {
   ).toThrow("capabilities");
   for (const basePath of [
     "/v1/form-availability",
-    TAKOFORM_FORM_HOST_API_PATH,
+    "/apis/forms.takoform.com/v1alpha1",
   ]) {
     expect(() =>
       platformExtensionRoutes({
@@ -1421,17 +1307,6 @@ test("the seam claims no extension path when TAKOSUMI_PLATFORM_EXTENSIONS is uns
     } as never,
   );
   expect(result).toBeUndefined();
-});
-
-test("unmatched compatibility profiles fail closed before the accounts SPA", async () => {
-  const worker = (await import("../../../deploy/platform/worker.ts")).default;
-  const response = await worker.fetch(
-    new Request("https://operator.example.test/compat/uninstalled/v1"),
-    {} as never,
-  );
-
-  expect(response.status).toBe(404);
-  expect(await response.json()).toEqual({ error: "not found" });
 });
 
 test("platform worker exposes product discovery before accounts handler", async () => {
@@ -1459,7 +1334,7 @@ test("platform worker exposes product discovery before accounts handler", async 
   const capabilitiesBody = await capabilities.json();
   expect(capabilitiesBody.apiVersion).toBe(TAKOSUMI_API_VERSION);
   expect(capabilitiesBody.resources.Stack).toBe(true);
-  expect(capabilitiesBody.compat.framework).toBe(true);
+  expect(capabilitiesBody).not.toHaveProperty("compat");
   expect(capabilitiesBody.resources.ObjectBucket).toBe(false);
   expect(Object.keys(capabilitiesBody.resources).sort()).toEqual([
     "ContainerService",
@@ -1475,7 +1350,6 @@ test("platform worker exposes product discovery before accounts handler", async 
     "VectorIndex",
   ]);
   expect(capabilitiesBody.adapters.cloudflare).toBeUndefined();
-  expect(capabilitiesBody.compat["compat.example.v1"]).toBeUndefined();
   expect(capabilitiesBody.operator.usage_showback).toBe(false);
   expect(capabilitiesBody).not.toHaveProperty("commercial");
 });
@@ -1547,7 +1421,7 @@ test("platform discovery publishes commercial functions only as explicit extensi
   expect(body).not.toHaveProperty("commercial");
 });
 
-test("platform worker product discovery exposes Cloud endpoint capabilities without claiming Resource Shape API", async () => {
+test("platform worker product discovery exposes only configured extension capabilities", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
 
   const capabilities = await worker.fetch(
@@ -1562,21 +1436,9 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
           capabilities: ["ai.gateway"],
         },
         {
-          basePath: "/compat/example/v1",
+          basePath: "/extensions/provider/v1",
           handlerKey: "TEST_PROVIDER_EXTENSION",
-          compatibilityProfiles: [
-            {
-              profile: "compat.example.v1",
-              planes: ["control"],
-            },
-          ],
-        },
-        {
-          basePath: "/compat/s3/v1",
-          handlerKey: "TEST_STORAGE_EXTENSION",
-          compatibilityProfiles: [
-            { profile: "compat.s3.v1", planes: ["data"] },
-          ],
+          capabilities: ["provider.gateway.v1"],
         },
         {
           basePath: "/cloud/usage",
@@ -1586,10 +1448,7 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
       ]),
       TEST_AI_EXTENSION: { fetch: async () => Response.json({}) },
       TEST_PROVIDER_EXTENSION: {
-        fetchCompatibility: async () => Response.json({}),
-      },
-      TEST_STORAGE_EXTENSION: {
-        fetchCompatibility: async () => Response.json({}),
+        fetch: async () => Response.json({}),
       },
       TEST_USAGE_EXTENSION: { fetch: async () => Response.json({}) },
     } as never,
@@ -1622,112 +1481,35 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
   ]);
   expect(body.adapters.cloudflare).toBeUndefined();
   expect(body.adapters.takosumi_native).toBeUndefined();
-  expect(body.compat["compat.example.v1"]).toBe(true);
-  expect(body.compat["compat.s3.v1"]).toBe(true);
+  expect(body.extensions).toEqual([
+    "ai.gateway",
+    "cloud.usage",
+    "provider.gateway.v1",
+  ]);
+  expect(body).not.toHaveProperty("compat");
   const discovery = await worker.fetch(
     new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),
     {
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
-          basePath: "/compat/s3/v1",
-          handlerKey: "TEST_STORAGE_EXTENSION",
-          compatibilityProfiles: [
-            { profile: "compat.s3.v1", planes: ["data"] },
-          ],
+          basePath: "/extensions/provider/v1",
+          handlerKey: "TEST_PROVIDER_EXTENSION",
+          capabilities: ["provider.gateway.v1"],
         },
       ]),
-      TEST_STORAGE_EXTENSION: {
-        fetchCompatibility: async () => Response.json({}),
+      TEST_PROVIDER_EXTENSION: {
+        fetch: async () => Response.json({}),
       },
     } as never,
   );
   expect(discovery.status).toBe(200);
   const discoveryBody = await discovery.json();
-  expect(discoveryBody.features.resource_shapes).toBe(false);
-  expect(discoveryBody.features.compatibility_profiles).toEqual([
-    "compat.s3.v1",
-  ]);
-  expect(discoveryBody.endpoints.extensions["compat.s3.v1"]).toBe(
-    "https://app.takosumi.com/compat/s3/v1",
+  expect(discoveryBody.features).not.toHaveProperty("resource_shapes");
+  expect(discoveryBody.features).not.toHaveProperty("compat_framework");
+  expect(discoveryBody.features).not.toHaveProperty("compatibility_profiles");
+  expect(discoveryBody.endpoints.extensions["provider.gateway.v1"]).toBe(
+    "https://app.takosumi.com/extensions/provider/v1",
   );
-});
-
-test("platform Resource Shape drain stays unadvertised despite deploy-control bindings", async () => {
-  const worker = (await import("../../../deploy/platform/worker.ts")).default;
-  const schemaRegistry = new MapResourceShapeSchemaRegistry({
-    CustomService: () => ({
-      ok: true,
-      value: { spec: {}, interfaces: [], connections: {} },
-    }),
-  });
-  const env = {
-    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
-    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-    TAKOSUMI_DEV_MODE: "1",
-    TAKOSUMI_RESOURCE_SHAPES:
-      "EdgeWorker,ObjectBucket,KVStore,Queue,SQLDatabase,CustomService",
-    TAKOSUMI_RESOURCE_SHAPE_SCHEMA_REGISTRY: schemaRegistry,
-    TAKOSUMI_RESOURCE_ADAPTERS:
-      "cloudflare,operator.edge-runtime,operator.container-runtime",
-  } as never;
-
-  expect(platformResourceShapeApiEnabled({} as never)).toBe(false);
-  expect(platformResourceShapeApiEnabled(env)).toBe(true);
-
-  const capabilities = await worker.fetch(
-    new Request(
-      `https://app.takosumi.com${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
-    ),
-    env,
-  );
-
-  expect(capabilities.status).toBe(200);
-  const body = await capabilities.json();
-  expect(body.resources.EdgeWorker).toBe(false);
-  expect(body.resources.ObjectBucket).toBe(false);
-  expect(body.resources.KVStore).toBe(false);
-  expect(body.resources.Queue).toBe(false);
-  expect(body.resources.SQLDatabase).toBe(false);
-  expect(body.resources.ContainerService).toBe(false);
-  expect(body.resources.VectorIndex).toBe(false);
-  expect(body.resources.DurableWorkflow).toBe(false);
-  expect(body.resources.StatefulActorNamespace).toBe(false);
-  expect(body.resources.Schedule).toBe(false);
-  expect(body.resources.CustomService).toBeUndefined();
-  expect(body.adapters.cloudflare).toBeUndefined();
-  expect(body.adapters.takosumi_native).toBeUndefined();
-  expect(body.adapters["operator.edge-runtime"]).toBeUndefined();
-  expect(body.adapters["operator.container-runtime"]).toBeUndefined();
-
-  const disabledShape = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/resources/ContainerService/api", {
-      method: "PUT",
-      headers: {
-        "content-type": "application/json",
-        authorization: "Bearer resource-token",
-      },
-      body: JSON.stringify({
-        metadata: { space: "space_1" },
-        spec: {
-          name: "api",
-          image: "ghcr.io/example/api:1.0.0",
-        },
-      }),
-    }),
-    env,
-  );
-  expect(disabledShape.status).toBe(404);
-
-  const discovery = await worker.fetch(
-    new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),
-    env,
-  );
-  expect(discovery.status).toBe(200);
-  const discoveryBody = await discovery.json();
-  expect(discoveryBody.features.resource_shapes).toBe(false);
-  // Takoform is a canonical Form host, not a compatibility profile.
-  expect(discoveryBody.features.compatibility_profiles).toEqual([]);
-  expect(discoveryBody.endpoints.extensions).toBeUndefined();
 });
 
 test("platform keeps retired Takoform paths ahead of the SPA fallback", async () => {
@@ -1754,12 +1536,12 @@ test("platform keeps retired Takoform paths ahead of the SPA fallback", async ()
   );
   expect(platformDiscoveryResponse.status).toBe(200);
   const platformDiscovery = await platformDiscoveryResponse.json();
-  expect(platformDiscovery.features.compatibility_profiles).toEqual([]);
+  expect(platformDiscovery.features).not.toHaveProperty("resource_shapes");
+  expect(platformDiscovery.features).not.toHaveProperty("compat_framework");
+  expect(platformDiscovery.features).not.toHaveProperty("compatibility_profiles");
 
   const hostDiscoveryResponse = await worker.fetch(
-    new Request(
-      `https://app.takosumi.com${TAKOFORM_FORM_HOST_WELL_KNOWN_PATH}`,
-    ),
+    new Request("https://app.takosumi.com/.well-known/takoform"),
     env,
   );
   expect(hostDiscoveryResponse.status).toBe(404);
@@ -1812,1104 +1594,6 @@ test("platform keeps the retired Hosted API subtree behind an unconditional tomb
   expect(assetRequests).toEqual([]);
 });
 
-test("platform Resource Shape API does not advertise shapes without an operator list", async () => {
-  const worker = (await import("../../../deploy/platform/worker.ts")).default;
-  const env = {
-    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
-    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-  } as never;
-
-  const capabilities = await worker.fetch(
-    new Request(
-      `https://app.takosumi.com${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
-    ),
-    env,
-  );
-
-  expect(capabilities.status).toBe(200);
-  const body = await capabilities.json();
-  expect(body.resources.EdgeWorker).toBe(false);
-  expect(body.resources.ObjectBucket).toBe(false);
-  expect(body.adapters.opentofu).toBe(true);
-  expect(body.adapters.cloudflare).toBeUndefined();
-
-  const discovery = await worker.fetch(
-    new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),
-    env,
-  );
-  expect(discovery.status).toBe(200);
-  expect((await discovery.json()).features.resource_shapes).toBe(false);
-});
-
-test("platform Resource Shape classifier only recognizes the portable host", async () => {
-  expect(isPlatformResourceShapeApiPath("/v1/resources")).toBe(false);
-  expect(isPlatformResourceShapeApiPath("/v1/form-availability")).toBe(false);
-  expect(isPlatformResourceShapeApiPath("/v1/offering-catalogs")).toBe(false);
-  expect(
-    isPlatformResourceShapeApiPath("/v1/offering-catalogs/public/versions/v1"),
-  ).toBe(false);
-  expect(
-    isPlatformResourceShapeApiPath("/v1/offering-availability/query"),
-  ).toBe(false);
-  expect(
-    isPlatformResourceShapeApiPath("/v1/offering-selections/resolve"),
-  ).toBe(false);
-  expect(isPlatformOfferingApiPath("/v1/offering-catalogs")).toBe(false);
-  expect(
-    isPlatformOfferingApiPath("/internal/v1/offering-catalogs"),
-  ).toBe(true);
-  expect(
-    isPlatformOfferingApiPath("/internal/v1/offering-selections/resolve"),
-  ).toBe(true);
-  expect(isPlatformResourceShapeApiPath(TAKOFORM_FORM_HOST_API_PATH)).toBe(
-    true,
-  );
-  expect(
-    isPlatformResourceShapeApiPath(
-      `${TAKOFORM_FORM_HOST_API_PATH}/interfaces/mcp.server`,
-    ),
-  ).toBe(true);
-  expect(isPlatformResourceShapeApiPath("/api/v1/interfaces")).toBe(false);
-  expect(isPlatformInterfaceApiPath("/api/v1/interfaces")).toBe(true);
-  expect(isPlatformInterfaceApiPath("/api/v1/interfaces/if_1/bindings")).toBe(
-    true,
-  );
-  expect(isPlatformInterfaceApiPath("/v1/interfaces")).toBe(false);
-  expect(isPlatformResourceShapeApiPath("/v1/target-pools/default")).toBe(false);
-  expect(isPlatformResourceShapeApiPath("/v1/space-policies/default")).toBe(
-    false,
-  );
-  expect(isPlatformResourceShapeApiPath("/v1/form-availability")).toBe(false);
-  expect(isPlatformResourceShapeApiPath("/takoform/v0/forms")).toBe(false);
-  expect(isPlatformResourceShapeApiPath("/v1/form-activations")).toBe(false);
-  expect(isPlatformResourceShapeApiPath("/api/v1/workspaces")).toBe(false);
-  const disabled = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/target-pools/default"),
-    {} as never,
-  );
-  expect(disabled.status).toBe(404);
-
-  const env = {
-    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
-    TAKOSUMI_ENVIRONMENT: "test",
-    TAKOSUMI_DEV_MODE: "1",
-    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-  } as never;
-  const unauthenticated = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/target-pools/default", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        space: "space_1",
-        spec: {
-          targets: [
-            {
-              name: "cf-main",
-              type: "cloudflare",
-              ref: "account_test",
-              priority: 100,
-            },
-          ],
-        },
-      }),
-    }),
-    env,
-  );
-  expect(unauthenticated.status).toBe(404);
-
-  const authorized = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/target-pools/default", {
-      method: "PUT",
-      headers: {
-        "content-type": "application/json",
-        authorization: "Bearer resource-token",
-      },
-      body: JSON.stringify({
-        space: "space_1",
-        spec: {
-          targets: [
-            {
-              name: "cf-main",
-              type: "cloudflare",
-              ref: "account_test",
-              priority: 100,
-            },
-          ],
-        },
-      }),
-    }),
-    env,
-  );
-  expect(authorized.status).toBe(404);
-
-  const sessionMustNotBecomeOfferingOperator =
-    await handlePlatformResourceShapeApiRequest(
-      new Request("https://app.takosumi.com/internal/v1/offering-catalogs"),
-      env,
-      async () => ({
-        authenticated: true,
-        authKind: "session",
-        subject: "customer-account",
-      }),
-    );
-  expect(sessionMustNotBecomeOfferingOperator.status).toBe(401);
-
-  const operatorCatalogs = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/internal/v1/offering-catalogs", {
-      headers: { authorization: "Bearer resource-token" },
-    }),
-    env,
-  );
-  expect(operatorCatalogs.status).toBe(200);
-  expect(await operatorCatalogs.json()).toEqual({ catalogs: [] });
-});
-
-test("retired Resource Shape paths stay unconditional 404 even with bearer", async () => {
-  const env = {
-    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
-    TAKOSUMI_ENVIRONMENT: "test",
-    TAKOSUMI_DEV_MODE: "1",
-    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-  } as never;
-  for (const path of [
-    "/v1/resources",
-    "/v1/resources/ObjectBucket/assets",
-    "/v1/target-pools/default",
-    "/v1/space-policies/default",
-    "/v1/form-activations",
-    "/v1/form-availability",
-  ]) {
-    const response = await handlePlatformResourceShapeApiRequest(
-      new Request(`https://app.takosumi.com${path}`, {
-        headers: { authorization: "Bearer resource-token" },
-      }),
-      env,
-    );
-    expect(response.status).toBe(404);
-  }
-});
-
-test("platform scheduled handler has no direct Resource operation repair hook", async () => {
-  const source = await Bun.file(
-    new URL("../../../deploy/platform/worker.ts", import.meta.url),
-  ).text();
-  const start = source.indexOf("async scheduled(");
-  const end = source.indexOf(
-    "export interface ScheduledAccountsRefreshChainRetentionResult",
-    start,
-  );
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  const scheduled = source.slice(start, end);
-  expect(scheduled).not.toMatch(/runScheduledResourceOperationRepair\(env\)/u);
-  expect(scheduled).not.toMatch(/repairDirectResourceRuns\(/u);
-});
-
-test("platform derives durable Takoform replay authority from control D1", async () => {
-  const db = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(db);
-  const workspaceId = "workspace_takoform";
-  await new CloudflareD1OpenTofuControlStore(db).putWorkspace({
-    id: workspaceId,
-    handle: "takoform",
-    displayName: "Takoform Workspace",
-    type: "personal",
-    ownerUserId: "user_takoform",
-    createdAt: "2026-07-19T00:00:00.000Z",
-    updatedAt: "2026-07-19T00:00:00.000Z",
-  });
-  const env = {
-    TAKOSUMI_CONTROL_DB: db,
-    TAKOSUMI_ENVIRONMENT: "test",
-    TAKOSUMI_DEV_MODE: "1",
-    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-  } as never;
-
-  const resolveWorkspace = platformResourceInterfaceWorkspaceResolver(env);
-  expect(
-    await resolveWorkspace({
-      resourceSpaceId: workspaceId,
-      resourceId: `tkrn:${workspaceId}:ObjectBucket:assets`,
-    }),
-  ).toBe(workspaceId);
-  expect(
-    await resolveWorkspace({
-      resourceSpaceId: "workspace_missing",
-      resourceId: "tkrn:workspace_missing:ObjectBucket:assets",
-    }),
-  ).toBeUndefined();
-
-  const worker = (await import("../../../deploy/platform/worker.ts")).default;
-  const discovery = await worker.fetch(
-    new Request(
-      `https://app.takosumi.com${TAKOFORM_FORM_HOST_WELL_KNOWN_PATH}`,
-      { headers: { authorization: "Bearer must-not-be-forwarded" } },
-    ),
-    env,
-  );
-  expect(discovery.status).toBe(404);
-
-});
-
-test("platform legacy Resource Shape mutations are retired before token policy", async () => {
-  const env = {
-    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
-    TAKOSUMI_ENVIRONMENT: "test",
-    TAKOSUMI_DEV_MODE: "1",
-    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-    TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker,ObjectBucket",
-    TAKOSUMI_RESOURCE_ADAPTERS: "cloudflare",
-  } as never;
-
-  const response = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/target-pools/default", {
-      method: "PUT",
-      headers: {
-        "content-type": "application/json",
-        authorization: "Bearer takpat_cloud",
-      },
-      body: JSON.stringify({
-        space: "space_cloud",
-        spec: {
-          targets: [
-            {
-              name: "cf-main",
-              type: "cloudflare",
-              ref: "account_test",
-              priority: 100,
-            },
-          ],
-        },
-      }),
-    }),
-    env,
-    async () => ({
-      authenticated: true,
-      authKind: "personal-access-token",
-      subject: "tsub_cloud",
-      workspaceId: "space_cloud",
-      workspaceRole: "admin",
-      scopes: ["admin"],
-    }),
-  );
-
-  expect(response.status).toBe(404);
-});
-
-test("platform legacy Resource Shape requests fail closed before Workspace auth", async () => {
-  const env = {
-    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
-    TAKOSUMI_ENVIRONMENT: "test",
-    TAKOSUMI_DEV_MODE: "1",
-    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-    TAKOSUMI_RESOURCE_SHAPES: "ObjectBucket",
-  } as never;
-  const verify = async () => ({
-    authenticated: true as const,
-    authKind: "personal-access-token" as const,
-    subject: "tsub_member",
-    workspaceId: "space_allowed",
-    workspaceRole: "admin" as const,
-    scopes: ["admin"],
-  });
-
-  const bodyMismatch = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/target-pools/default", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        workspaceId: "space_allowed",
-        space: "space_victim",
-        spec: { targets: [] },
-      }),
-    }),
-    env,
-    verify,
-  );
-  expect(bodyMismatch.status).toBe(404);
-
-  const queryMismatch = await handlePlatformResourceShapeApiRequest(
-    new Request(
-      "https://app.takosumi.com/v1/resources?workspaceId=space_allowed&space=space_victim",
-    ),
-    env,
-    verify,
-  );
-  expect(queryMismatch.status).toBe(404);
-
-  const conflictingSelectors = await handlePlatformResourceShapeApiRequest(
-    new Request(
-      "https://app.takosumi.com/v1/resources/ObjectBucket/private-assets",
-      {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          workspaceId: "space_allowed",
-          space: "space_allowed",
-          metadata: { space: "space_victim" },
-          spec: { name: "private-assets" },
-        }),
-      },
-    ),
-    env,
-    verify,
-  );
-  expect(conflictingSelectors.status).toBe(404);
-});
-
-test("platform retired Resource ingress never reaches managedBy policy", async () => {
-  const response = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/resources/preview", {
-      method: "POST",
-      headers: {
-        authorization: "Bearer takpat_write",
-        "content-type": "application/json",
-        "x-takosumi-resource-managed-by": "compat.example.v1",
-      },
-      body: JSON.stringify({
-        workspaceId: "workspace_a",
-        kind: "ObjectBucket",
-        metadata: {
-          name: "assets",
-          space: "workspace_a",
-          managedBy: "compat.example.v1",
-        },
-        spec: { name: "assets" },
-      }),
-    }),
-    {
-      TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
-      TAKOSUMI_ENVIRONMENT: "test",
-      TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-      TAKOSUMI_RESOURCE_SHAPES: "ObjectBucket",
-    } as never,
-    async () => ({
-      authenticated: true,
-      authKind: "personal-access-token",
-      subject: "account_a",
-      workspaceId: "workspace_a",
-      workspaceRole: "member",
-      scopes: ["write"],
-    }),
-  );
-
-  expect(response.status).toBe(404);
-});
-
-test("platform retired Resource ingress does not expose the provider authoring surface", async () => {
-  const env = {
-    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
-    TAKOSUMI_ENVIRONMENT: "test",
-    TAKOSUMI_DEV_MODE: "1",
-    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-    TAKOSUMI_RESOURCE_SHAPES: "ObjectBucket",
-    TAKOSUMI_RESOURCE_ADAPTERS: "cloudflare",
-  } as never;
-  const verify = async () => ({
-    authenticated: true as const,
-    authKind: "personal-access-token" as const,
-    subject: "provider-user",
-    workspaceId: "workspace_provider",
-    workspaceRole: "member" as const,
-    scopes: ["write"],
-  });
-  const pool = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/target-pools/default", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        workspaceId: "workspace_provider",
-        space: "workspace_provider",
-        spec: {
-          targets: [
-            {
-              name: "cf-main",
-              type: "cloudflare",
-              ref: "account_test",
-              priority: 100,
-            },
-          ],
-        },
-      }),
-    }),
-    env,
-    verify,
-  );
-  expect(pool.status).toBe(404);
-
-  const preview = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/resources/preview", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        workspaceId: "workspace_provider",
-        kind: "ObjectBucket",
-        metadata: {
-          name: "assets",
-          space: "workspace_provider",
-          managedBy: "opentofu",
-        },
-        spec: { name: "assets", interfaces: ["s3_api"] },
-      }),
-    }),
-    env,
-    verify,
-  );
-  expect(preview.status).toBe(404);
-
-  const missingDelete = await handlePlatformResourceShapeApiRequest(
-    new Request(
-      "https://app.takosumi.com/v1/resources/ObjectBucket/missing?space=workspace_provider&managedBy=opentofu",
-      { method: "DELETE" },
-    ),
-    env,
-    verify,
-  );
-  expect(missingDelete.status).toBe(404);
-});
-
-test("platform retired Resource ingress precedes personal token scope checks", async () => {
-  const response = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/target-pools/default", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        workspaceId: "workspace_read_only",
-        space: "workspace_read_only",
-        spec: { targets: [] },
-      }),
-    }),
-    {
-      TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
-      TAKOSUMI_ENVIRONMENT: "test",
-      TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-    } as never,
-    async () => ({
-      authenticated: true,
-      authKind: "personal-access-token",
-      subject: "read-only-user",
-      workspaceId: "workspace_read_only",
-      scopes: ["read"],
-    }),
-  );
-  expect(response.status).toBe(404);
-});
-
-test("canonical operator recovery reads retained resources across old managers", async () => {
-  const database = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(database);
-  const stores = createD1ResourceShapeStores(database);
-  const space = "workspace_manager_scope";
-  const record = (
-    name: string,
-    managedBy: string,
-    createdAt: string,
-  ): ResourceShapeRecord => ({
-    id: `tkrn:${space}:EdgeWorker:${name}`,
-    spaceId: space,
-    kind: "EdgeWorker",
-    name,
-    managedBy,
-    spec: {
-      name,
-      source: {
-        artifactRef: `cloud-edge-worker-artifact:v3:sha256:${name.padEnd(64, "a").slice(0, 64)}`,
-        artifactSha256: `sha256:${name.padEnd(64, "a").slice(0, 64)}`,
-      },
-    },
-    phase: "Ready",
-    generation: 1,
-    revision: 1,
-    observedGeneration: 1,
-    lastOperationRunId: `run_resource_${name}`,
-    createdAt: createdAt as ResourceShapeRecord["createdAt"],
-    updatedAt: createdAt as ResourceShapeRecord["updatedAt"],
-  });
-  const lock = (resource: ResourceShapeRecord): ResolutionLockRecord => ({
-    resourceId: resource.id,
-    selectedImplementation: "cloudflare_workers",
-    target: "cloudflare-main",
-    locked: true,
-    reason: ["retained migration evidence"],
-    nativeResources: [
-      {
-        type: "cloudflare_workers_script",
-        id: `backend-${resource.spaceId}-${resource.name}`,
-      },
-    ],
-    lockedAt: resource.createdAt,
-    updatedAt: resource.updatedAt,
-  });
-  for (const resource of [
-    record(
-      "public-api",
-      "takosumi.resource-api.v1",
-      "2026-07-15T00:00:00.000Z",
-    ),
-    record("compat-api", "compat.example.v1", "2026-07-15T00:00:01.000Z"),
-  ]) {
-    await stores.resources.upsert(resource);
-    await stores.locks.put(lock(resource));
-  }
-  const env = {
-    TAKOSUMI_CONTROL_DB: database,
-    TAKOSUMI_ENVIRONMENT: "test",
-    TAKOSUMI_DEV_MODE: "1",
-    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-    TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
-  } as never;
-  // Canonical internal recovery reads use typed compatibility operations; the
-  // retired public `/v1` route is not part of this authority.
-  const recovery = createPlatformCanonicalResourceReadAuthority(env);
-  for (const name of ["public-api", "compat-api"]) {
-    const response = await recovery.fetch(
-      new Request(
-        `https://artifact-recovery.invalid/v1/resources/EdgeWorker/${name}?space=${space}`,
-      ),
-      {
-        workspaceId: space,
-        subject: "takosumi-cloud:artifact-recovery",
-        scopes: ["admin"],
-      },
-    );
-    expect(response.status).toBe(200);
-    expect((await response.json()).metadata.name).toBe(name);
-  }
-  expect(
-    (
-      await recovery.fetch(
-        new Request(
-          `https://artifact-recovery.invalid/v1/resources/EdgeWorker/public-api?space=other-space`,
-        ),
-        {
-          workspaceId: space,
-          subject: "takosumi-cloud:artifact-recovery",
-          scopes: ["admin"],
-        },
-      )
-    ).status,
-  ).toBe(403);
-});
-
-test("canonical Ready Resource inventory is bounded, global, and lock-coherent", async () => {
-  const database = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(database);
-  const stores = createD1ResourceShapeStores(database);
-  const resource = (
-    space: string,
-    name: string,
-    createdAt: string,
-  ): ResourceShapeRecord => ({
-    id: `tkrn:${space}:EdgeWorker:${name}`,
-    spaceId: space,
-    kind: "EdgeWorker",
-    name,
-    managedBy: "takosumi.resource-api.v1",
-    spec: { source: { artifactRef: `artifact:${name}` } },
-    phase: "Ready",
-    generation: 2,
-    revision: 1,
-    observedGeneration: 2,
-    lastOperationRunId: `run_resource_${space}_${name}`,
-    createdAt: createdAt as ResourceShapeRecord["createdAt"],
-    updatedAt: createdAt as ResourceShapeRecord["updatedAt"],
-  });
-  const lock = (record: ResourceShapeRecord): ResolutionLockRecord => ({
-    resourceId: record.id,
-    selectedImplementation: "cloudflare_workers",
-    target: "cloudflare-main",
-    locked: true,
-    reason: ["operator managed EdgeWorker"],
-    nativeResources: [
-      {
-        type: "cloudflare_workers_script",
-        id: `backend-${record.spaceId}-${record.name}`,
-      },
-    ],
-    lockedAt: record.createdAt,
-    updatedAt: record.updatedAt,
-  });
-  const records = [
-    resource("workspace_inventory_b", "site", "2026-07-15T00:00:00.000Z"),
-    resource("workspace_inventory_a", "api", "2026-07-15T00:00:00.000Z"),
-  ];
-  for (const record of records) {
-    await stores.resources.upsert(record);
-    await stores.locks.put(lock(record));
-  }
-  const env = {
-    TAKOSUMI_CONTROL_DB: database,
-    TAKOSUMI_ENVIRONMENT: "test",
-    TAKOSUMI_DEV_MODE: "1",
-    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-    TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
-  } as never;
-  const inventory = createPlatformCanonicalReadyResourceInventory(env);
-
-  await expect(
-    inventory.get({
-      space: "workspace_inventory_a",
-      kind: "EdgeWorker",
-      name: "api",
-    }),
-  ).resolves.toMatchObject({
-    resourceId: "tkrn:workspace_inventory_a:EdgeWorker:api",
-    resourceGeneration: 2,
-    resourceRevision: 1,
-    resourceRevisionId: "run_resource_workspace_inventory_a_api",
-    resource: {
-      kind: "EdgeWorker",
-      metadata: { space: "workspace_inventory_a", name: "api" },
-      status: { phase: "Ready", observedGeneration: 2 },
-    },
-  });
-  await expect(
-    inventory.get({
-      space: "workspace_inventory_a",
-      kind: "EdgeWorker",
-      name: "missing",
-    }),
-  ).resolves.toBeUndefined();
-
-  const first = await inventory.list({ kind: "EdgeWorker", limit: 1 });
-  expect(first.items).toHaveLength(1);
-  expect(first.nextCursor).toBeString();
-  const second = await inventory.list({
-    kind: "EdgeWorker",
-    limit: 1,
-    cursor: first.nextCursor,
-  });
-  expect(second.items).toHaveLength(1);
-  expect(second.nextCursor).toBeUndefined();
-  expect([...first.items, ...second.items]).toMatchObject(
-    records
-      .sort(
-        (left, right) =>
-          left.createdAt.localeCompare(right.createdAt) ||
-          left.id.localeCompare(right.id),
-      )
-      .map((record) => ({
-        resourceId: record.id,
-        resourceGeneration: 2,
-        resourceRevision: 1,
-        resourceRevisionId: record.lastOperationRunId,
-        resource: {
-          kind: "EdgeWorker",
-          metadata: { space: record.spaceId, name: record.name },
-          status: { phase: "Ready", observedGeneration: 2 },
-        },
-        nativeResources: lock(record).nativeResources,
-      })),
-  );
-
-  const incoherent = resource(
-    "workspace_inventory_c",
-    "missing-lock",
-    "2026-07-15T00:00:01.000Z",
-  );
-  await stores.resources.upsert(incoherent);
-  await expect(
-    inventory.list({ kind: "EdgeWorker", limit: 100 }),
-  ).rejects.toThrow(
-    `canonical Ready Resource inventory conflict for ${incoherent.id}`,
-  );
-});
-
-test("host runtime graph admits only the exact fenced EdgeWorker recovery identity", async () => {
-  const database = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(database);
-  const stores = createD1ResourceShapeStores(database);
-  const record: ResourceShapeRecord = {
-    id: "tkrn:workspace_host_recovery:EdgeWorker:api",
-    spaceId: "workspace_host_recovery",
-    kind: "EdgeWorker",
-    name: "api",
-    managedBy: "takosumi.resource-api.v1",
-    spec: { source: { artifactRef: "artifact:api" }, connections: {} },
-    phase: "Degraded",
-    generation: 2,
-    observedGeneration: 2,
-    lastOperationRunId: "run_resource_host_recovery",
-    conditions: [
-      {
-        type: "Ready",
-        status: "false",
-        reason: "HostRuntimeNotReady",
-        observedGeneration: 2,
-        lastTransitionAt: "2026-08-05T00:00:00.000Z",
-      },
-    ],
-    createdAt: "2026-08-05T00:00:00.000Z",
-    updatedAt: "2026-08-05T00:00:01.000Z",
-  };
-  await stores.resources.upsert(record);
-  await stores.locks.put({
-    resourceId: record.id,
-    selectedImplementation: "cloudflare_workers",
-    target: "cloudflare-main",
-    locked: true,
-    reason: ["host runtime recovery"],
-    nativeResources: [
-      { type: "cloudflare_workers_script", id: "backend-recovery-api" },
-    ],
-    lockedAt: record.createdAt,
-    updatedAt: record.updatedAt,
-  });
-  const env = {
-    TAKOSUMI_CONTROL_DB: database,
-    TAKOSUMI_ENVIRONMENT: "test",
-    TAKOSUMI_DEV_MODE: "1",
-    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-    TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
-  } as never;
-  const graph = createPlatformCanonicalHostRuntimeGraphReader(env);
-  const request = {
-    workspaceId: record.spaceId,
-    requirements: [],
-    backgroundActivations: [],
-  } as never;
-
-  await expect(
-    graph.read({
-      request,
-      resourceId: record.id,
-      resourceGeneration: record.generation,
-      resourceRevisionId: record.lastOperationRunId!,
-    }),
-  ).resolves.toMatchObject({
-    consumer: {
-      resourceId: record.id,
-      resourceGeneration: 2,
-      resourceRevisionId: record.lastOperationRunId,
-      nativeType: "cloudflare_workers_script",
-      nativeId: "backend-recovery-api",
-      resource: { status: { phase: "Degraded" } },
-    },
-    connections: {},
-  });
-  await expect(
-    graph.read({
-      request,
-      resourceId: record.id,
-      resourceGeneration: record.generation,
-      resourceRevisionId: "run_resource_replaced",
-    }),
-  ).resolves.toBeUndefined();
-});
-
-test("canonical Ready exact and paged inventory fail closed when ResolutionLock changes during projection", async () => {
-  const stores = createInMemoryResourceShapeStores();
-  const record: ResourceShapeRecord = {
-    id: "tkrn:workspace_lock_race:EdgeWorker:api",
-    spaceId: "workspace_lock_race",
-    kind: "EdgeWorker",
-    name: "api",
-    managedBy: "takosumi.resource-api.v1",
-    spec: {},
-    phase: "Ready",
-    generation: 1,
-    observedGeneration: 1,
-    lastOperationRunId: "run_resource_lock_race_revision",
-    createdAt: "2026-07-15T00:00:00.000Z",
-    updatedAt: "2026-07-15T00:00:00.000Z",
-  };
-  const stableLock: ResolutionLockRecord = {
-    resourceId: record.id,
-    selectedImplementation: "cloudflare_workers",
-    target: "cloudflare-main",
-    locked: true,
-    reason: ["initial"],
-    nativeResources: [
-      { type: "cloudflare_workers_script", id: "backend-initial" },
-    ],
-    lockedAt: record.createdAt,
-    updatedAt: record.updatedAt,
-  };
-  await stores.resources.upsert(record);
-  await stores.locks.put(stableLock);
-  const originalLocks = stores.locks;
-  let reads = 0;
-  const racingStores: ResourceShapeStores = {
-    ...stores,
-    locks: {
-      put: (lock) => originalLocks.put(lock),
-      async get(resourceId) {
-        const lock = await originalLocks.get(resourceId);
-        reads += 1;
-        return reads === 3 && lock
-          ? {
-              ...lock,
-              updatedAt: "2026-07-15T00:00:01.000Z",
-              nativeResources: [
-                {
-                  type: "cloudflare_workers_script",
-                  id: "backend-raced",
-                },
-              ],
-            }
-          : lock;
-      },
-      getMany: (resourceIds) => originalLocks.getMany(resourceIds),
-      delete: (resourceId) => originalLocks.delete(resourceId),
-    },
-  };
-  const { operations } = await createTakosumiService({
-    role: "takosumi-api",
-    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
-    resourceShapeStores: racingStores,
-    resourceShapeAdapter: new StubResourceShapeAdapter(),
-  });
-  await expect(
-    operations.resourceCompatibility?.resolveReadyResource({
-      space: record.spaceId,
-      kind: record.kind,
-      name: record.name,
-    }),
-  ).rejects.toThrow(
-    `canonical Ready Resource inventory conflict for ${record.id}`,
-  );
-  expect(reads).toBe(3);
-  reads = 0;
-  await expect(
-    operations.resourceCompatibility?.listReadyResourcesPage({
-      kind: "EdgeWorker",
-      limit: 1,
-    }),
-  ).rejects.toThrow(
-    `canonical Ready Resource inventory conflict for ${record.id}`,
-  );
-  expect(reads).toBe(3);
-});
-
-test("canonical Ready inventory requires and fences the direct-plugin Resource revision", async () => {
-  const base = createInMemoryResourceShapeStores();
-  const record: ResourceShapeRecord = {
-    id: "tkrn:workspace_revision_race:EdgeWorker:api",
-    spaceId: "workspace_revision_race",
-    kind: "EdgeWorker",
-    name: "api",
-    managedBy: "takosumi.resource-api.v1",
-    spec: {},
-    phase: "Ready",
-    generation: 1,
-    observedGeneration: 1,
-    createdAt: "2026-07-15T00:00:00.000Z",
-    updatedAt: "2026-07-15T00:00:00.000Z",
-  };
-  const lock: ResolutionLockRecord = {
-    resourceId: record.id,
-    selectedImplementation: "cloudflare_workers",
-    target: "cloudflare-main",
-    implementationSnapshot: {
-      shape: "EdgeWorker",
-      implementation: "cloudflare_workers",
-      plugin: "cloudflare-workers-plugin",
-      interfaces: { worker_fetch: "native" },
-    },
-    locked: true,
-    reason: ["direct plugin"],
-    nativeResources: [{ type: "cloudflare_workers_script", id: "backend-api" }],
-    lockedAt: record.createdAt,
-    updatedAt: record.updatedAt,
-  };
-  await base.resources.upsert(record);
-  await base.locks.put(lock);
-
-  const missingRevision = await createTakosumiService({
-    role: "takosumi-api",
-    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
-    resourceShapeStores: base,
-    resourceShapeAdapter: new StubResourceShapeAdapter(),
-  });
-  await expect(
-    missingRevision.operations.resourceCompatibility?.resolveReadyResource({
-      space: record.spaceId,
-      kind: record.kind,
-      name: record.name,
-    }),
-  ).rejects.toThrow(
-    `canonical Ready Resource inventory conflict for ${record.id}`,
-  );
-
-  const canonical = {
-    ...record,
-    lastOperationRunId: "run_resource_revision_before",
-  };
-  await base.resources.upsert(canonical);
-  const originalResources = base.resources;
-  let reads = 0;
-  const racingStores: ResourceShapeStores = {
-    ...base,
-    resources: new Proxy(originalResources, {
-      get(target, property, receiver) {
-        if (property === "get") {
-          return async (resourceId: ResourceShapeRecord["id"]) => {
-            const current = await originalResources.get(resourceId);
-            reads += 1;
-            return reads === 3 && current
-              ? {
-                  ...current,
-                  lastOperationRunId: "run_resource_revision_after",
-                }
-              : current;
-          };
-        }
-        const value = Reflect.get(target, property, receiver) as unknown;
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    }),
-  };
-  const racing = await createTakosumiService({
-    role: "takosumi-api",
-    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
-    resourceShapeStores: racingStores,
-    resourceShapeAdapter: new StubResourceShapeAdapter(),
-  });
-  await expect(
-    racing.operations.resourceCompatibility?.resolveReadyResource({
-      space: canonical.spaceId,
-      kind: canonical.kind,
-      name: canonical.name,
-    }),
-  ).rejects.toThrow(
-    `canonical Ready Resource inventory conflict for ${canonical.id}`,
-  );
-  expect(reads).toBe(3);
-
-  reads = 0;
-  await expect(
-    racing.operations.resourceCompatibility?.listReadyResourcesPage({
-      kind: canonical.kind,
-      limit: 1,
-    }),
-  ).rejects.toThrow(
-    `canonical Ready Resource inventory conflict for ${canonical.id}`,
-  );
-  expect(reads).toBe(3);
-});
-
-test("canonical Ready revision fence performs one Resource and one ResolutionLock read", async () => {
-  const base = createInMemoryResourceShapeStores();
-  const record: ResourceShapeRecord = {
-    id: "tkrn:workspace_revision_fence:EdgeWorker:api",
-    spaceId: "workspace_revision_fence",
-    kind: "EdgeWorker",
-    name: "api",
-    managedBy: "takosumi.resource-api.v1",
-    spec: {},
-    phase: "Ready",
-    generation: 2,
-    observedGeneration: 2,
-    lastOperationRunId: "run_resource_revision_fence",
-    createdAt: "2026-07-15T00:00:00.000Z",
-    updatedAt: "2026-07-15T00:00:00.000Z",
-  };
-  const lock: ResolutionLockRecord = {
-    resourceId: record.id,
-    selectedImplementation: "cloudflare_workers",
-    target: "cloudflare-main",
-    locked: true,
-    reason: ["revision fence"],
-    nativeResources: [
-      { type: "cloudflare_workers_script", id: "backend-api" },
-    ],
-    lockedAt: record.createdAt,
-    updatedAt: record.updatedAt,
-  };
-  await base.resources.upsert(record);
-  await base.locks.put(lock);
-
-  const counts = { resources: 0, locks: 0 };
-  const originalResources = base.resources;
-  const originalLocks = base.locks;
-  const countedStores: ResourceShapeStores = {
-    ...base,
-    resources: new Proxy(originalResources, {
-      get(target, property, receiver) {
-        if (property === "get") {
-          return async (resourceId: ResourceShapeRecord["id"]) => {
-            counts.resources += 1;
-            return await originalResources.get(resourceId);
-          };
-        }
-        const value = Reflect.get(target, property, receiver) as unknown;
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    }),
-    locks: new Proxy(originalLocks, {
-      get(target, property, receiver) {
-        if (property === "get") {
-          return async (resourceId: ResourceShapeRecord["id"]) => {
-            counts.locks += 1;
-            return await originalLocks.get(resourceId);
-          };
-        }
-        const value = Reflect.get(target, property, receiver) as unknown;
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    }),
-  };
-  const { operations } = await createTakosumiService({
-    role: "takosumi-api",
-    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
-    resourceShapeStores: countedStores,
-    resourceShapeAdapter: new StubResourceShapeAdapter(),
-  });
-  const fenceInput = {
-    resourceId: record.id,
-    space: record.spaceId,
-    kind: record.kind,
-    name: record.name,
-    resourceGeneration: record.generation,
-    resourceRevisionId: record.lastOperationRunId!,
-  };
-
-  await expect(
-    operations.resourceCompatibility?.fenceReadyResource(fenceInput),
-  ).resolves.toBe(true);
-  expect(counts).toEqual({ resources: 1, locks: 1 });
-
-  const expectOneReadFence = async (
-    input: typeof fenceInput,
-    expected: boolean,
-  ) => {
-    counts.resources = 0;
-    counts.locks = 0;
-    await expect(
-      operations.resourceCompatibility?.fenceReadyResource(input),
-    ).resolves.toBe(expected);
-    expect(counts).toEqual({ resources: 1, locks: 1 });
-  };
-
-  await expectOneReadFence(
-    { ...fenceInput, resourceGeneration: fenceInput.resourceGeneration + 1 },
-    false,
-  );
-  await expectOneReadFence(
-    { ...fenceInput, resourceRevisionId: "run_resource_revision_drift" },
-    false,
-  );
-
-  await base.resources.upsert({ ...record, observedGeneration: 1 });
-  await expectOneReadFence(fenceInput, false);
-  await base.resources.upsert(record);
-  await base.locks.put({ ...lock, locked: false });
-  await expectOneReadFence(fenceInput, false);
-  await base.locks.put(lock);
-
-  counts.resources = 0;
-  counts.locks = 0;
-  await expect(
-    operations.resourceCompatibility?.fenceReadyResource({
-      ...fenceInput,
-      resourceId: "tkrn:workspace_other:EdgeWorker:api",
-    }),
-  ).resolves.toBe(false);
-  expect(counts).toEqual({ resources: 0, locks: 0 });
-});
-
 test("a configured platform extension rejects an unverified bearer", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const forwarded: { url: string; authorization: string | null }[] = [];
@@ -2950,7 +1634,7 @@ test("a configured platform extension 404s when its handler is absent", async ()
   expect(await response.json()).toEqual({ error: "not found" });
 });
 
-test("handler-auth platform extensions preserve signed protocol auth and strip spoofed context", async () => {
+test("handler-auth platform extensions preserve protocol auth and strip spoofed context", async () => {
   const forwarded: {
     readonly authorization: string | null;
     readonly cookie: string | null;
@@ -2959,7 +1643,7 @@ test("handler-auth platform extensions preserve signed protocol auth and strip s
     readonly billingSpace: string | null;
   }[] = [];
   const response = await handlePlatformExtensionRouteRequest(
-    new Request("https://app.takosumi.com/compat/s3/v1/assets/object.txt", {
+    new Request("https://app.takosumi.com/extensions/storage/v1/assets/object.txt", {
       method: "PUT",
       headers: {
         authorization:
@@ -2972,7 +1656,7 @@ test("handler-auth platform extensions preserve signed protocol auth and strip s
     }),
     {
       TEST_STORAGE_EXTENSION: {
-        fetchCompatibility: async (request: Request) => {
+        fetch: async (request: Request) => {
           forwarded.push({
             authorization: request.headers.get("authorization"),
             cookie: request.headers.get("cookie"),
@@ -2989,10 +1673,9 @@ test("handler-auth platform extensions preserve signed protocol auth and strip s
       },
     } as never,
     {
-      basePath: "/compat/s3/v1",
+      basePath: "/extensions/storage/v1",
       handlerKey: "TEST_STORAGE_EXTENSION",
       authMode: "handler",
-      compatibilityProfiles: [{ profile: "compat.s3.v1", planes: ["data"] }],
     },
     async () => {
       throw new Error("handler-auth routes must not use platform session auth");
@@ -3138,7 +1821,6 @@ test("platform extension route verifies query Workspace context before dispatch"
       authKind: "session",
       subject: "tsub_cloud",
     }),
-    undefined,
     async (_request, _env, workspaceId) => {
       checked.push(workspaceId);
       return workspaceId === "space_cloud";
@@ -3757,7 +2439,7 @@ test("platform Interface API enforces delegated OAuth Capsule scopes", async () 
       { headers: { authorization: "Bearer takat_runtime" } },
     );
 
-  const denied = await handlePlatformResourceShapeApiRequest(
+  const denied = await handlePlatformInterfaceApiRequest(
     request(),
     env,
     async () => ({
@@ -3771,7 +2453,7 @@ test("platform Interface API enforces delegated OAuth Capsule scopes", async () 
   expect(denied.status).toBe(403);
   expect((await denied.json()).error).toBe("insufficient_scope");
 
-  const allowed = await handlePlatformResourceShapeApiRequest(
+  const allowed = await handlePlatformInterfaceApiRequest(
     request(),
     env,
     async () => ({
@@ -3786,7 +2468,7 @@ test("platform Interface API enforces delegated OAuth Capsule scopes", async () 
   expect(allowed.status).toBe(200);
   expect(await allowed.json()).toEqual({ interfaces: [] });
 
-  const mutationDenied = await handlePlatformResourceShapeApiRequest(
+  const mutationDenied = await handlePlatformInterfaceApiRequest(
     new Request("https://app.takosumi.com/api/v1/interfaces", {
       method: "POST",
       headers: {
@@ -3808,7 +2490,7 @@ test("platform Interface API enforces delegated OAuth Capsule scopes", async () 
   expect((await mutationDenied.json()).error).toBe("insufficient_scope");
 
   const tokenIssueReachedRuntimeBoundary =
-    await handlePlatformResourceShapeApiRequest(
+    await handlePlatformInterfaceApiRequest(
       new Request("https://app.takosumi.com/api/v1/interfaces/if_missing/token", {
         method: "POST",
         headers: {
@@ -3840,7 +2522,7 @@ test("platform Interface token issuance treats an exact Workspace PAT as a runti
     TAKOSUMI_DEV_MODE: "1",
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
   } as never;
-  const response = await handlePlatformResourceShapeApiRequest(
+  const response = await handlePlatformInterfaceApiRequest(
     new Request("https://app.takosumi.com/api/v1/interfaces/if_missing/token", {
       method: "POST",
       headers: {
@@ -3871,7 +2553,7 @@ test("platform Interface ingress rejects oversized control bodies before JSON pa
     TAKOSUMI_DEV_MODE: "1",
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
   } as never;
-  const response = await handlePlatformResourceShapeApiRequest(
+  const response = await handlePlatformInterfaceApiRequest(
     new Request("https://app.takosumi.com/api/v1/interfaces", {
       method: "POST",
       headers: {
@@ -3920,7 +2602,7 @@ test("platform legacy Resource artifact ingress is retired before body parsing",
       },
     },
   } as never;
-  const response = await handlePlatformResourceShapeApiRequest(
+  const response = await handlePlatformInterfaceApiRequest(
     new Request(
       "https://app.takosumi.com/v1/resources/EdgeWorker/takos/artifacts?space=workspace_artifact",
       {
@@ -3985,7 +2667,7 @@ test("platform Interface API binds delegated OAuth requests to their Workspace",
     },
   });
 
-  const crossCreate = await handlePlatformResourceShapeApiRequest(
+  const crossCreate = await handlePlatformInterfaceApiRequest(
     new Request("https://app.takosumi.com/api/v1/interfaces", {
       method: "POST",
       headers: {
@@ -4013,7 +2695,7 @@ test("platform Interface API binds delegated OAuth requests to their Workspace",
     updatedAt: "2026-07-13T00:00:00.000Z",
   });
 
-  const seeded = await handlePlatformResourceShapeApiRequest(
+  const seeded = await handlePlatformInterfaceApiRequest(
     new Request("https://app.takosumi.com/api/v1/interfaces", {
       method: "POST",
       headers: {
@@ -4027,7 +2709,7 @@ test("platform Interface API binds delegated OAuth requests to their Workspace",
   expect(seeded.status).toBe(201);
   const seededId = (await seeded.json()).metadata.id as string;
 
-  const crossRead = await handlePlatformResourceShapeApiRequest(
+  const crossRead = await handlePlatformInterfaceApiRequest(
     new Request(
       `https://app.takosumi.com/api/v1/interfaces/${seededId}?permission=mcp.invoke`,
       {
@@ -4074,7 +2756,7 @@ test("platform Interface ingress separates control and runtime credentials", asy
       path: "/api/v1/interfaces/if_auth/bindings/binding_auth",
     },
   ]) {
-    const readOnlyPatWrite = await handlePlatformResourceShapeApiRequest(
+    const readOnlyPatWrite = await handlePlatformInterfaceApiRequest(
       new Request(`https://app.takosumi.com${mutation.path}`, {
         method: mutation.method,
         headers: {
@@ -4092,7 +2774,7 @@ test("platform Interface ingress separates control and runtime credentials", asy
     expect((await readOnlyPatWrite.json()).error).toBe("insufficient_scope");
   }
 
-  const readOnlyPatRead = await handlePlatformResourceShapeApiRequest(
+  const readOnlyPatRead = await handlePlatformInterfaceApiRequest(
     new Request(url, {
       headers: { authorization: "Bearer takpat_read" },
     }),
@@ -4103,7 +2785,7 @@ test("platform Interface ingress separates control and runtime credentials", asy
   expect(await readOnlyPatRead.json()).toEqual({ interfaces: [] });
 
   for (const method of ["GET", "POST"]) {
-    const serviceToken = await handlePlatformResourceShapeApiRequest(
+    const serviceToken = await handlePlatformInterfaceApiRequest(
       new Request(url, {
         method,
         headers: {
@@ -4140,7 +2822,7 @@ test("platform Interface ingress rejects generic Run credentials without an exte
     phase: "apply",
     scopes: ["admin", "write"],
   });
-  const response = await handlePlatformResourceShapeApiRequest(
+  const response = await handlePlatformInterfaceApiRequest(
     new Request("https://app.takosumi.com/api/v1/interfaces", {
       method: "POST",
       headers: {

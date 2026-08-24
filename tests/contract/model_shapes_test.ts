@@ -38,21 +38,10 @@ import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "../../contract/security.ts";
-import type { TargetPool } from "../../contract/target.ts";
-import type { ObjectBucketSpec } from "../../contract/resource-shape.ts";
 import {
   formatCapsuleFullName,
   type Workspace,
 } from "../../contract/workspaces.ts";
-
-test("ObjectBucket portable storage class shape", () => {
-  const bucket: ObjectBucketSpec = {
-    name: "assets",
-    storageClass: "infrequent_access",
-    interfaces: ["s3_api"],
-  };
-  expect(bucket.storageClass).toBe("infrequent_access");
-});
 
 test("Workspace shape", () => {
   const space: Workspace = {
@@ -305,40 +294,6 @@ test("Provider resolution exposes OSS ProviderConnection delivery without Gatewa
     "penv_cf_secret",
   );
   expect(publicResolution.connectionId).toBe("conn_cf_main");
-});
-
-test("TargetPool can carry operator-declared implementation capabilities", () => {
-  const pool: TargetPool = {
-    apiVersion: "takosumi.dev/v1alpha1",
-    kind: "TargetPool",
-    metadata: { name: "default", space: "prod" },
-    spec: {
-      targets: [
-        {
-          name: "containers-main",
-          type: "kubernetes",
-          ref: "cluster-prod",
-          priority: 90,
-          implementations: [
-            {
-              shape: "ContainerService",
-              implementation: "custom_container_runtime",
-              nativeResourceType: "custom.container_service",
-              interfaces: {
-                oci_container: "native",
-                public_http: "shim",
-                "custom.mesh": "native",
-              },
-            },
-          ],
-        },
-      ],
-    },
-  };
-
-  const implementation = pool.spec.targets[0]?.implementations?.[0];
-  expect(implementation?.shape).toBe("ContainerService");
-  expect(implementation?.interfaces["custom.mesh"]).toBe("native");
 });
 
 test("ProviderConnection expiry shape", () => {

@@ -5,7 +5,10 @@ import type {
   D1PreparedStatement,
   D1Result,
 } from "../../worker/src/bindings.ts";
-import { ensureD1OpenTofuLedgerSchema } from "../../worker/src/d1_opentofu_store.ts";
+import {
+  D1_RETIRED_HOST_TABLES,
+  ensureD1OpenTofuLedgerSchema,
+} from "../../worker/src/d1_opentofu_store.ts";
 import {
   acquireControlD1MaintenanceFence,
   adoptControlD1LegacyCloneAsCandidate,
@@ -44,7 +47,7 @@ export const CONTROL_D1_SCHEMA_MANIFEST_VERSION = 2 as const;
  * only these known retired names and otherwise checks the OSS-owned schema as
  * a required subset.
  */
-export const CONTROL_D1_RETIRED_TABLES = [
+const CONTROL_D1_PRE_HOST_RETIREMENT_TABLES = [
   "spaces",
   "installations",
   "state_snapshots",
@@ -58,6 +61,11 @@ export const CONTROL_D1_RETIRED_TABLES = [
   "credit_balances",
   "billing_auto_recharge_attempts",
   "credit_reservations",
+] as const;
+
+export const CONTROL_D1_RETIRED_TABLES = [
+  ...CONTROL_D1_PRE_HOST_RETIREMENT_TABLES,
+  ...D1_RETIRED_HOST_TABLES,
 ] as const;
 
 export interface ControlD1MigrationLedgerRow {
@@ -130,7 +138,7 @@ export interface ControlD1SchemaPlan {
   readonly tables: readonly ControlD1TableDescriptor[];
   readonly attachedSchemaObjects: readonly ControlD1AttachedSchemaObjectDescriptor[];
   readonly migrations: readonly ControlD1MigrationLedgerRow[];
-  readonly retiredTables: typeof CONTROL_D1_RETIRED_TABLES;
+  readonly retiredTables: readonly string[];
 }
 
 export interface ControlD1SchemaVerification {
@@ -212,8 +220,6 @@ export interface ControlD1CandidateReleaseResult {
 /** Tables whose logical content must remain byte-logically stable at transfer. */
 export const CONTROL_D1_TRANSFER_PROTECTED_TABLES = [
   "capsule_compatibility_reports",
-  "resolution_locks",
-  "resource_shapes",
   "runs",
   "state_versions",
   "workspaces",
@@ -363,13 +369,17 @@ export async function buildControlD1SchemaPlan(
       new Set(tables.map((table) => table.name)),
     );
     const migrations = await readControlD1MigrationLedger(database);
+    const retiredTables =
+      (migrations.at(-1)?.version ?? 0) >= 66
+        ? CONTROL_D1_RETIRED_TABLES
+        : CONTROL_D1_PRE_HOST_RETIREMENT_TABLES;
     const schemaDigest = await digest({ tables, attachedSchemaObjects });
     const ledgerDigest = await digest(migrations);
     const manifestDigest = await digest({
       manifestVersion: CONTROL_D1_SCHEMA_MANIFEST_VERSION,
       schemaDigest,
       ledgerDigest,
-      retiredTables: CONTROL_D1_RETIRED_TABLES,
+      retiredTables,
     });
     return {
       kind: "takosumi.control-d1-schema-plan@v1",
@@ -380,7 +390,7 @@ export async function buildControlD1SchemaPlan(
       tables,
       attachedSchemaObjects,
       migrations,
-      retiredTables: CONTROL_D1_RETIRED_TABLES,
+      retiredTables,
     };
   } finally {
     database.close();

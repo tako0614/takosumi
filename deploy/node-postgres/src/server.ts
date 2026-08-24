@@ -136,9 +136,6 @@ export interface ComposedServerOverrides {
   readonly defaultRunnerProfileId?: Parameters<
     typeof buildComposedApp
   >[0]["defaultRunnerProfileId"];
-  readonly managedVanityHostnameSlotsPerOwner?: Parameters<
-    typeof buildComposedApp
-  >[0]["managedVanityHostnameSlotsPerOwner"];
 }
 
 /**
@@ -152,12 +149,6 @@ export async function buildComposedServer(
 ): Promise<void> {
   const env = readEnv();
   const config = parseEnv(env);
-  const envManagedVanityHostnameSlotsPerOwner = nonNegativeInteger(
-    env.TAKOSUMI_MANAGED_VANITY_HOST_SLOTS_PER_OWNER,
-  );
-  const managedVanityHostnameSlotsPerOwner =
-    overrides.managedVanityHostnameSlotsPerOwner ??
-    envManagedVanityHostnameSlotsPerOwner;
   const pool = createPostgresPool(config);
   const queryClient = wrapPool(pool);
   const store = new PostgresAccountsStore(queryClient);
@@ -194,11 +185,6 @@ export async function buildComposedServer(
       : {}),
     ...(overrides.defaultRunnerProfileId
       ? { defaultRunnerProfileId: overrides.defaultRunnerProfileId }
-      : {}),
-    ...(managedVanityHostnameSlotsPerOwner !== undefined
-      ? {
-          managedVanityHostnameSlotsPerOwner,
-        }
       : {}),
     sqlClient: overrides.sqlClient ?? wrapServiceSqlClient(pool),
   });
@@ -241,9 +227,6 @@ async function buildAccountsHandler(
   const commonOptions = {
     issuer: config.issuer,
     store,
-    ...(config.managedPublicBaseDomain
-      ? { managedPublicBaseDomain: config.managedPublicBaseDomain }
-      : {}),
     ...(config.clients ? { clients: config.clients } : {}),
     ...(config.loginEmailAllowlist
       ? { loginEmailAllowlist: config.loginEmailAllowlist }
@@ -517,12 +500,6 @@ function readEnv(): Record<string, string | undefined> {
   ).process;
   if (proc?.env) return proc.env;
   return {};
-}
-
-function nonNegativeInteger(value: string | undefined): number | undefined {
-  if (!value || !/^\d+$/u.test(value.trim())) return undefined;
-  const parsed = Number(value.trim());
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 function resolvePoolCtor(): PgPoolConstructor {

@@ -27,15 +27,11 @@ import {
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
-import type {
-  PlanRun,
-  PlanRunSummary,
-} from "@takosumi/internal/deploy-control-api";
+import type { PlanRunSummary } from "@takosumi/internal/deploy-control-api";
 import type {
   ActivityRecorder,
   RecordActivityInput,
 } from "../../../../core/domains/activity/mod.ts";
-import { DriftService } from "../../../../core/domains/deploy-control/drift_service.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
@@ -249,52 +245,6 @@ test("drift check emits capsule.drift_detected with generic type/action aggregat
   expect(metadataJson).not.toContain("zone_must_not_leak");
   expect(metadataJson).not.toContain("aws_account_must_not_leak");
   expect(metadataJson).not.toContain("us-east-1");
-});
-
-test("first-class Resource drift emits resource.drift_detected against the Resource subject", async () => {
-  const events: RecordActivityInput[] = [];
-  const drift = new DriftService({
-    createPlanRun: () => {
-      throw new Error("not used");
-    },
-    recordActivity: (event) => {
-      events.push(event);
-      return Promise.resolve();
-    },
-  });
-  const planRun = {
-    id: "plan_resource_drift_1",
-    workspaceId: "ws_test001",
-    summary: { add: 0, change: 1, destroy: 0 },
-    resourceContext: {
-      workspaceId: "ws_test001",
-      resourceId: "tkrn:ws_test001:ObjectBucket:assets",
-      environment: "production",
-      providerBinding: {
-        provider: "cloudflare",
-        providerSource: FIXTURE_CLOUDFLARE_PROVIDER,
-      },
-    },
-  } as PlanRun;
-
-  await drift.recordDriftDetected(planRun, [
-    {
-      address: "cloudflare_r2_bucket.assets",
-      type: "cloudflare_r2_bucket",
-      actions: ["update"],
-    },
-  ]);
-
-  expect(events).toHaveLength(1);
-  expect(events[0]).toMatchObject({
-    action: "resource.drift_detected",
-    targetType: "resource",
-    targetId: "tkrn:ws_test001:ObjectBucket:assets",
-    metadata: {
-      resourceId: "tkrn:ws_test001:ObjectBucket:assets",
-      change: 1,
-    },
-  });
 });
 
 test("drift check emits NOTHING on an empty plan and does not change the Capsule status", async () => {

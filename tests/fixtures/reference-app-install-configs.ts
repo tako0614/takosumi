@@ -38,7 +38,6 @@ import {
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
 } from "takosumi-contract/repository-manifest";
 import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract/install-configs";
-import { TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES } from "@takosjp/takosumi-accounts-contract";
 
 const REFERENCE_CONFIG_TIMESTAMP = "2026-07-14T00:00:00.000Z";
 const MANAGED_APP_BASE_DOMAIN = "app.takos.jp";
@@ -313,20 +312,6 @@ function publicInstallExperience(input: {
   readonly urlVariable: "app_url" | "public_url";
   /** `null` for modules that expose no Worker route pattern variable. */
   readonly routePatternVariable?: string | null;
-  readonly oidc?: {
-    readonly issuerVariable: string;
-    readonly clientIdVariable: string;
-    readonly accountsUrlVariable?: string;
-    readonly redirectUriVariable?: string;
-    readonly callbackPath: string;
-    /**
-     * Cap for the registered Capsule client. Identity-only apps take the
-     * default; an app that keeps calling the control plane for the signed-in
-     * account must declare the delegation scopes it sends, because authorize
-     * rejects anything outside this list with `invalid_scope`.
-     */
-    readonly scopes?: readonly string[];
-  };
 }) {
   return {
     projections: [
@@ -345,25 +330,6 @@ function publicInstallExperience(input: {
         },
         baseDomain: MANAGED_APP_BASE_DOMAIN,
       },
-      ...(input.oidc
-        ? [
-            {
-              kind: "oidc_client" as const,
-              variables: {
-                issuerUrl: input.oidc.issuerVariable,
-                clientId: input.oidc.clientIdVariable,
-                ...(input.oidc.accountsUrlVariable
-                  ? { accountsUrl: input.oidc.accountsUrlVariable }
-                  : {}),
-                ...(input.oidc.redirectUriVariable
-                  ? { redirectUri: input.oidc.redirectUriVariable }
-                  : {}),
-              },
-              callbackPath: input.oidc.callbackPath,
-              scopes: input.oidc.scopes ?? ["openid", "profile", "email"],
-            },
-          ]
-        : []),
     ],
   };
 }
@@ -445,11 +411,6 @@ const officeConfig = {
   installExperience: publicInstallExperience({
     subdomainVariable: "project_name",
     urlVariable: "app_url",
-    oidc: {
-      issuerVariable: "takosumi_accounts_issuer_url",
-      clientIdVariable: "takosumi_accounts_client_id",
-      callbackPath: "/api/auth/callback",
-    },
   }),
   outputAllowlist: {
     launch_url: urlOutput("launch_url"),
@@ -574,11 +535,6 @@ function yuruConfig(input: {
     installExperience: publicInstallExperience({
       subdomainVariable: "project_name",
       urlVariable: "app_url",
-      oidc: {
-        issuerVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        callbackPath: "/api/auth/callback/takos",
-      },
     }),
     outputAllowlist:
       input.app === "yurucommu" ? {} : { launch_url: urlOutput("launch_url") },
@@ -635,9 +591,8 @@ const yurucommuManagedSource = source("yurucommu");
  *
  * App vocabulary is compiled from the exact repository snapshot's
  * `.well-known/takosumi.json`. This service-owned row carries only host
- * authority which repository metadata cannot grant: managed hostname policy
- * and the host runtime/resource materialization needed by the managed
- * deployment. The repository's v2.3 manifest owns its default module,
+ * authority which repository metadata cannot grant. The repository's v2.3
+ * manifest owns its default module,
  * credential-free source build, launcher declaration, and `launch_url`
  * projection.
  */
@@ -648,78 +603,6 @@ const yurucommuManagedConfig = {
   modulePath: "deploy/takoform",
   variableMapping: {},
   outputAllowlist: {},
-  managedPublicHostname: { mode: "scoped" },
-  hostRuntimeMaterialization: {
-    contract: "takosumi.host-runtime-materialization/v1",
-    requirements: [
-      {
-        kind: "generated_secret",
-        binding: "ENCRYPTION_KEY",
-        secretRef: "secret:yurucommu/encryption-key",
-        bytes: 32,
-        encoding: "base64url",
-      },
-      {
-        kind: "public_oidc",
-        id: "takosumi-accounts",
-        callbackPath: "/api/auth/callback/takos",
-        // Yurucommu v2.1.3 (yurucommu-core/api 3.4.3) requests the
-        // identity email claim during its Accounts callback.
-        scopes: ["email", "openid", "profile"],
-        bindings: {
-          issuerUrl: {
-            binding: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
-            capabilityRef: "capability:yurucommu/accounts-issuer",
-          },
-          clientId: {
-            binding: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
-            capabilityRef: "capability:yurucommu/accounts-client-id",
-          },
-          ownerSubject: {
-            binding: "TAKOSUMI_ACCOUNTS_OWNER_SUB",
-            capabilityRef: "capability:yurucommu/accounts-owner-subject",
-          },
-          redirectUri: {
-            binding: "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
-            capabilityRef: "capability:yurucommu/accounts-redirect-uri",
-          },
-        },
-      },
-      ...["DB", "MEDIA", "KV", "DELIVERY_QUEUE", "DELIVERY_DLQ"].map(
-        (connectionAlias) => ({
-          kind: "resource_binding" as const,
-          binding: connectionAlias,
-          connectionAlias,
-          requiredPermission: "takosumi.resource.bind",
-        }),
-      ),
-    ],
-    backgroundActivations: [
-      {
-        id: "delivery",
-        sourceResourceKind: "Queue",
-        sourceConnectionAlias: "DELIVERY_QUEUE",
-        deadLetterConnectionAlias: "DELIVERY_DLQ",
-        entrypoint: "yurucommu.delivery",
-        retry: {
-          maxAttempts: 3,
-          retryDelaySeconds: 30,
-          onExhausted: "dead_letter",
-        },
-      },
-      {
-        id: "retention",
-        sourceResourceKind: "Schedule",
-        sourceConnectionAlias: "WORKER",
-        entrypoint: "yurucommu.retention",
-        retry: {
-          maxAttempts: 1,
-          retryDelaySeconds: 0,
-          onExhausted: "fail",
-        },
-      },
-    ],
-  },
   policy: {
     repositoryInstallUx: repositoryInstallUxPolicy(
       TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
@@ -767,11 +650,6 @@ const storageConfig = {
   installExperience: publicInstallExperience({
     subdomainVariable: "public_subdomain",
     urlVariable: "public_url",
-    oidc: {
-      issuerVariable: "takosumi_accounts_issuer_url",
-      clientIdVariable: "takosumi_accounts_client_id",
-      callbackPath: "/api/auth/callback/takos",
-    },
   }),
   outputAllowlist: {
     launch_url: urlOutput("launch_url"),
@@ -880,11 +758,6 @@ const gitConfig = {
   installExperience: publicInstallExperience({
     subdomainVariable: "public_subdomain",
     urlVariable: "public_url",
-    oidc: {
-      issuerVariable: "takosumi_accounts_issuer_url",
-      clientIdVariable: "takosumi_accounts_client_id",
-      callbackPath: "/api/auth/callback",
-    },
   }),
   outputAllowlist: {
     launch_url: urlOutput("launch_url"),
@@ -969,21 +842,16 @@ const gitConfig = {
 /**
  * The Takos distribution worker. Its ordinary Cloudflare OpenTofu module is a
  * Store-selectable BYOC service, using the same source/config matching and
- * Output-backed launcher flow as every other Capsule. The OIDC client Takos
- * signs in with is created by the Capsule install experience, and only a
- * Capsule-bound client receives the `takosumi` workspace claims Takos requires.
- *
- * Unlike the identity-only apps, Takos keeps calling the control plane for the
- * signed-in account after the browser flow, so its client must be capped at the
- * full delegation scope set it sends
- * (`takos/src/worker/server/routes/auth/accounts-delegation.ts`).
+ * Output-backed launcher flow as every other Capsule. Identity client
+ * registration is application/operator-owned and is not synthesized by the
+ * Capsule install experience.
  */
 const takosConfig = {
   id: "cfg-reference-takos-main",
   name: "takos-main",
-  // Source synchronization archives the repository root so the lifecycle
-  // materializer can access package.json, bun.lock, and the Wrangler output;
-  // OpenTofu still evaluates the nested distribution module below.
+  // Source synchronization archives the repository root so the ordinary
+  // source-build step can access package.json, bun.lock, and the Wrangler
+  // output; OpenTofu still evaluates the nested distribution module below.
   sourceSelector: source("takos"),
   modulePath: "deploy/opentofu",
   sourceBuild: {
@@ -1032,14 +900,6 @@ const takosConfig = {
     urlVariable: "public_url",
     // The Takos module composes Worker routes from `public_url`.
     routePatternVariable: null,
-    oidc: {
-      issuerVariable: "takosumi_accounts_issuer_url",
-      clientIdVariable: "takosumi_accounts_client_id",
-      accountsUrlVariable: "takosumi_accounts_url",
-      redirectUriVariable: "takosumi_accounts_redirect_uri",
-      callbackPath: "/auth/oidc/callback",
-      scopes: [...TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES],
-    },
   }),
   outputAllowlist: {},
   lifecycleActions: [

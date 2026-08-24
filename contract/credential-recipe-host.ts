@@ -7,7 +7,6 @@ import type { CredentialRecipe } from "./credential-recipes.ts";
 import { canonicalProviderSource, sameProviderSource } from "./provider-env-rules.ts";
 import type { ProviderCredentialMintEvidence } from "./security.ts";
 import type { MintedFile } from "./sources.ts";
-import type { HostRuntimeMaterializationRequest } from "./host-runtime-materialization.ts";
 
 export type CredentialDriverFetch = (
   input: string,
@@ -23,12 +22,6 @@ export interface CredentialRecipeDriverRunContext {
   readonly phase: "plan" | "apply" | "destroy";
   /** Canonical lifecycle intent re-read from the Run ledger. */
   readonly lifecycleIntent: "provision" | "destroy";
-  /**
-   * DB-owned opaque runtime requirements for this exact Capsule. Trusted host
-   * drivers may seal this envelope, but must never resolve values into runner
-   * env, state, Output, or evidence.
-   */
-  readonly hostRuntimeMaterialization?: HostRuntimeMaterializationRequest;
 }
 
 /** The only token property a trusted recipe driver may select. */

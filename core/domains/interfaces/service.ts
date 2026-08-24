@@ -6,7 +6,6 @@ import type {
   CapsuleInterfaceBlueprint,
   CapsuleInterfaceBlueprintInput,
   CapsuleRequiredInterface,
-  CapsuleResourceInterfaceBindingProposal,
   Interface,
   InterfaceBinding,
   InterfaceInput,
@@ -23,7 +22,6 @@ import type {
 import {
   isValidInterfaceName,
   isValidInterfacePermissionToken,
-  isResourceShapeKind,
 } from "takosumi-contract";
 import { TAKOSUMI_API_VERSION } from "takosumi-contract/capabilities";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
@@ -42,8 +40,6 @@ import {
   canonicalInterfaceOAuth2ResourceUri,
   interfaceOAuth2ResourceUri,
 } from "./oauth_resource.ts";
-import { parseResourceShapeId } from "../resource-shape/records.ts";
-import type { RuntimeCapabilityReader } from "./runtime_capability_reader.ts";
 
 const INTERFACE_OAUTH2_MAX_TTL_MS = 60_000;
 
@@ -86,12 +82,6 @@ export interface InterfaceInputResolver {
     readonly specGeneration: number;
     readonly inputs: Readonly<Record<string, InterfaceInput>>;
   }): Promise<InterfaceResolutionResult>;
-}
-
-export interface ResourceInterfaceLifecycleSnapshot {
-  readonly resourceId: string;
-  readonly phase: "ready" | "not_ready" | "unknown" | "terminating" | "retired";
-  readonly message?: string;
 }
 
 export interface InterfaceProjectionRepairResult {
@@ -204,8 +194,6 @@ export interface InterfaceServiceOptions {
    * Without it, an arbitrary literal or Output URL is never token authority.
    */
   readonly oauth2ResourceAuthorizer?: InterfaceOAuth2ResourceAuthorizer;
-  /** Exact Resource-owned OAuth2 capability reader for token evidence checks. */
-  readonly runtimeCapabilityReader?: RuntimeCapabilityReader;
   /**
    * Additional host delivery types. `none` and standards-based `oauth2` are
    * core. The exact v1alpha1 token `workload_token` is reserved by Core as a
@@ -246,30 +234,11 @@ export interface InterfaceServiceOptions {
 
 export type InterfaceServiceMaterialization =
   | { readonly capsuleBlueprintKey: string }
-  | { readonly capsuleResource: true }
-  | {
-      readonly compatibilityProfile: string;
-      readonly compatibilityKey: string;
-    }
-  | {
-      readonly formRefKey: string;
-      readonly formSchemaDigest: string;
-      readonly descriptorName: string;
-      readonly descriptorVersion: string;
-    }
   | {
       readonly portableIac: true;
       readonly descriptorName: string;
       readonly descriptorVersion: string;
     };
-
-export interface FormDescriptorResourceUriObservation {
-  readonly formRefKey: string;
-  readonly formSchemaDigest: string;
-  readonly descriptorName: string;
-  readonly descriptorVersion: string;
-  readonly resourceUri?: string;
-}
 
 export type InterfaceBindingServiceMaterialization =
   | {
@@ -277,25 +246,10 @@ export type InterfaceBindingServiceMaterialization =
       readonly bindingBlueprintKey: string;
     }
   | {
-      readonly compatibilityProfile: string;
-      readonly compatibilityKey: string;
-    }
-  | {
-      readonly capsuleId: string;
-      readonly resourceInterfaceName: string;
-      readonly resourceInterfaceVersion: string;
-      readonly resourceBindingKey: string;
-    }
-  | {
       readonly requiredInterfaceCapsuleId: string;
       readonly requiredInterfaceKey: string;
       readonly requiredInterfaceType: string;
       readonly requiredInterfaceVersion: string;
-    }
-  | {
-      readonly formHostFormRefKey: string;
-      readonly formHostDescriptorName: string;
-      readonly formHostDescriptorVersion: string;
     };
 
 export class InterfaceService {
@@ -306,7 +260,6 @@ export class InterfaceService {
   readonly #activity: ActivityRecorder;
   readonly #credentialIssuer?: InterfaceCredentialIssuer;
   readonly #oauth2ResourceAuthorizer?: InterfaceOAuth2ResourceAuthorizer;
-  readonly #runtimeCapabilityReader?: RuntimeCapabilityReader;
   readonly #bindingDeliveryHandlers: ReadonlyMap<
     string,
     InterfaceBindingDeliveryHandler
@@ -328,7 +281,6 @@ export class InterfaceService {
     this.#activity = options.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#credentialIssuer = options.credentialIssuer;
     this.#oauth2ResourceAuthorizer = options.oauth2ResourceAuthorizer;
-    this.#runtimeCapabilityReader = options.runtimeCapabilityReader;
     this.#bindingDeliveryHandlers = createBindingDeliveryHandlerRegistry({
       credentialIssuerConfigured: options.credentialIssuer !== undefined,
       oauth2ResourceAuthorizer: options.oauth2ResourceAuthorizer,
@@ -430,27 +382,6 @@ export class InterfaceService {
           record.metadata.materializedFrom?.source === "capsule_blueprint" &&
           record.metadata.materializedFrom.key === key,
       );
-      // Exclusive declaration ownership: a retained historical
-      // capsule_resource Interface owns its name and spec. A matching blueprint
-      // contributes only service-side binding proposals and never adopts or
-      // rewrites that record.
-      if (!existing) {
-        const resourceOwned = history.find(
-          (record) =>
-            record.metadata.materializedFrom?.source === "capsule_resource" &&
-            record.metadata.name === name &&
-            record.status.phase !== "Retired",
-        );
-        if (resourceOwned) {
-          records.push(resourceOwned);
-          await this.#ensureCapsuleBlueprintBindings(
-            resourceOwned,
-            key,
-            blueprint.bindings ?? [],
-          );
-          continue;
-        }
-      }
       let materialized: Interface;
       if (existing) {
         // Once accepted, the Interface is authoritative and independent from
@@ -548,109 +479,6 @@ export class InterfaceService {
         // Accept only an actually persisted exact-subject record.
         const refreshed = await this.#stores.bindings.listByInterface(
           iface.metadata.id,
-        );
-        const accepted = refreshed.find(
-          (binding) =>
-            binding.spec.subjectRef.kind === subjectRef.kind &&
-            binding.spec.subjectRef.id === subjectRef.id,
-        );
-        if (!accepted) throw error;
-        history.push(accepted);
-      }
-    }
-  }
-
-  /**
-   * Apply binding-only InstallConfig proposals to an Interface whose body is
-   * owned by portable IaC. The exact installer is durable Capsule provenance;
-   * no current actor or caller-supplied subject is accepted here.
-   */
-  async ensureResourceInterfaceBindings(input: {
-    readonly iface: Interface;
-    readonly capsuleId: string;
-    readonly installingPrincipalId: string;
-    readonly proposals: readonly CapsuleResourceInterfaceBindingProposal[];
-  }): Promise<void> {
-    if (input.iface.metadata.ownerRef.kind !== "Resource") {
-      throw new InterfaceServiceError(
-        "failed_precondition",
-        "Resource Interface binding proposals require a Resource-owned Interface",
-      );
-    }
-    const capsuleId = requireText(input.capsuleId, "capsuleId");
-    const installingPrincipalId = requireText(
-      input.installingPrincipalId,
-      "installingPrincipalId",
-    );
-    const history = [
-      ...(await this.#stores.bindings.listByInterface(input.iface.metadata.id)),
-    ];
-    for (const proposal of input.proposals) {
-      const key = requireText(proposal.key, "Resource Interface binding key");
-      if (
-        !("subjectRef" in proposal) ||
-        proposal.subjectRef?.kind !== "Principal" ||
-        proposal.subjectRef.id !== installingPrincipalId
-      ) {
-        throw new InterfaceServiceError(
-          "failed_precondition",
-          "Resource Interface binding proposal must resolve to the exact installing Principal",
-        );
-      }
-      const interfaceName = requireText(
-        proposal.interface.name,
-        "Resource Interface binding interface.name",
-      );
-      const interfaceVersion = requireText(
-        proposal.interface.version,
-        "Resource Interface binding interface.version",
-      );
-      const subjectRef = proposal.subjectRef;
-      if (
-        history.some(
-          (binding) =>
-            (binding.metadata.materializedFrom?.source ===
-              "capsule_resource_binding" &&
-              binding.metadata.materializedFrom.capsuleId === capsuleId &&
-              binding.metadata.materializedFrom.interfaceName ===
-                interfaceName &&
-              binding.metadata.materializedFrom.interfaceVersion ===
-                interfaceVersion &&
-              binding.metadata.materializedFrom.key === key) ||
-            // Revocation is a durable deny. Never silently recreate a manual
-            // or previously materialized exact-subject grant.
-            (binding.spec.subjectRef.kind === subjectRef.kind &&
-              binding.spec.subjectRef.id === subjectRef.id),
-        )
-      ) {
-        continue;
-      }
-      try {
-        const created = await this.createBinding(
-          input.iface.metadata.id,
-          {
-            subjectRef,
-            permissions: proposal.permissions,
-            delivery: proposal.delivery,
-          },
-          undefined,
-          {
-            capsuleId,
-            resourceInterfaceName: interfaceName,
-            resourceInterfaceVersion: interfaceVersion,
-            resourceBindingKey: key,
-          },
-        );
-        history.push(created);
-      } catch (error) {
-        if (
-          !(error instanceof InterfaceServiceError) ||
-          error.code !== "already_exists"
-        ) {
-          throw error;
-        }
-        const refreshed = await this.#stores.bindings.listByInterface(
-          input.iface.metadata.id,
         );
         const accepted = refreshed.find(
           (binding) =>
@@ -807,89 +635,6 @@ export class InterfaceService {
         );
         if (!accepted) throw error;
       }
-    }
-  }
-
-  /**
-   * Materializes the self-grant that lets a form-host-managed Resource serve
-   * its Form-declared public runtime surface. Applying the exact Form is the
-   * authorization act; the grant subject is the owning Resource itself, so no
-   * caller identity is invented after the fact. A revoked or manual grant for
-   * the same subject is a durable answer and is never silently recreated.
-   */
-  async ensureFormHostDescriptorBinding(input: {
-    readonly iface: Interface;
-    readonly resourceId: string;
-    readonly formRefKey: string;
-    readonly descriptorName: string;
-    readonly descriptorVersion: string;
-    readonly permission: string;
-    /**
-     * Consumer Resource receiving the grant. It defaults to the Interface's
-     * own Resource (a self-grant); a Resource binding instead grants the exact
-     * consumer declared by the applying Form.
-     */
-    readonly subjectResourceId?: string;
-  }): Promise<void> {
-    if (
-      input.iface.metadata.ownerRef.kind !== "Resource" ||
-      input.iface.metadata.ownerRef.id !== input.resourceId
-    ) {
-      throw new InterfaceServiceError(
-        "failed_precondition",
-        "form-host descriptor binding requires the descriptor Interface of the exact Resource",
-      );
-    }
-    const subjectRef = {
-      kind: "Resource" as const,
-      id: requireText(
-        input.subjectResourceId ?? input.resourceId,
-        "subjectResourceId",
-      ),
-    };
-    const history = await this.#stores.bindings.listByInterface(
-      input.iface.metadata.id,
-    );
-    if (
-      history.some(
-        (binding) =>
-          binding.spec.subjectRef.kind === subjectRef.kind &&
-          binding.spec.subjectRef.id === subjectRef.id,
-      )
-    ) {
-      return;
-    }
-    try {
-      await this.createBinding(
-        input.iface.metadata.id,
-        {
-          subjectRef,
-          permissions: [requireText(input.permission, "permission")],
-          delivery: { type: "none" },
-        },
-        undefined,
-        {
-          formHostFormRefKey: input.formRefKey,
-          formHostDescriptorName: input.descriptorName,
-          formHostDescriptorVersion: input.descriptorVersion,
-        },
-      );
-    } catch (error) {
-      if (
-        !(error instanceof InterfaceServiceError) ||
-        error.code !== "already_exists"
-      ) {
-        throw error;
-      }
-      const refreshed = await this.#stores.bindings.listByInterface(
-        input.iface.metadata.id,
-      );
-      const accepted = refreshed.some(
-        (binding) =>
-          binding.spec.subjectRef.kind === subjectRef.kind &&
-          binding.spec.subjectRef.id === subjectRef.id,
-      );
-      if (!accepted) throw error;
     }
   }
 
@@ -1340,43 +1085,6 @@ export class InterfaceService {
       const resource = canonicalInterfaceOAuth2ResourceUri(input.resource);
       if (!resource || resource !== input.resource) return false;
 
-      // Resource-owned OAuth2 evidence uses the generic exact four-row reader.
-      // The initial Interface read only supplies the Resource Shape kind; the
-      // reader then re-reads the current Interface/Binding and proves the
-      // durable audience claim without a reconcile or write.
-      if (this.#runtimeCapabilityReader) {
-        const current = await this.#stores.interfaces.get(interfaceId);
-        const owner = current?.metadata.ownerRef;
-        if (owner?.kind === "Resource") {
-          const parsedResource = parseResourceShapeId(owner.id);
-          if (!parsedResource || input.capsuleId !== undefined) return false;
-          const capability = await this.#runtimeCapabilityReader.read({
-            workspaceId,
-            resourceId: owner.id,
-            resourceKind: parsedResource.kind,
-            interfaceId,
-            interfaceBindingId: bindingId,
-            bindingSubject: { kind: "Principal", id: subjectId },
-            requiredPermission: input.permission.trim(),
-            interfaceResolvedRevision: input.interfaceResolvedRevision,
-            audience: resource,
-          });
-          if (
-            !capability ||
-            !this.#oauth2ResourceAuthorizer ||
-            !(await oauth2ResourceAuthorized(this.#oauth2ResourceAuthorizer, {
-              workspaceId,
-              interfaceId,
-              ownerRef: capability.iface.metadata.ownerRef,
-              resource,
-            }))
-          ) {
-            return false;
-          }
-          return true;
-        }
-      }
-
       const iface = await this.reconcile(interfaceId, {
         allowSafetyRecovery: true,
       });
@@ -1443,15 +1151,12 @@ export class InterfaceService {
     const declarationSource = current.metadata.materializedFrom?.source;
     if (
       actor !== undefined &&
-      (declarationSource === "form_descriptor" ||
-        (declarationSource === "portable_iac" &&
-          materializationAuthority !== "portable_iac"))
+      declarationSource === "portable_iac" &&
+      materializationAuthority !== "portable_iac"
     ) {
       throw new InterfaceServiceError(
         "failed_precondition",
-        declarationSource === "form_descriptor"
-          ? "Form descriptor Interface desired state is owned by its exact Form"
-          : "portable IaC Interface desired state is owned by its exact declaration",
+        "portable IaC Interface desired state is owned by its exact declaration",
       );
     }
     if (current.status.phase === "Retired") {
@@ -1551,33 +1256,13 @@ export class InterfaceService {
     return await this.#reconcile(id, options);
   }
 
-  /**
-   * Publishes the host-observed portable resource URI only for the exact
-   * immutable Form descriptor lineage that owns this Interface.
-   */
-  async reconcileFormDescriptorResourceUri(
-    id: string,
-    observation: FormDescriptorResourceUriObservation,
-  ): Promise<Interface> {
-    return await this.#reconcile(id, {
-      formDescriptorResourceUri: observation,
-    });
-  }
-
   async #reconcile(
     id: string,
-    options: {
-      readonly allowSafetyRecovery?: boolean;
-      readonly formDescriptorResourceUri?: FormDescriptorResourceUriObservation;
-    } = {},
+    options: { readonly allowSafetyRecovery?: boolean } = {},
   ): Promise<Interface> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const current = await this.get(id);
       if (current.status.phase === "Retired") return current;
-      const observedResourceUri = formDescriptorResourceUriForReconcile(
-        current,
-        options.formDescriptorResourceUri,
-      );
       if (
         !options.allowSafetyRecovery &&
         (current.status.phase === "Unknown" ||
@@ -1681,13 +1366,14 @@ export class InterfaceService {
         }
       }
       const now = this.#now();
+      const observedResourceUri =
+        resolution.ok && current.spec.access.resourceUriInput
+          ? canonicalInterfaceOAuth2ResourceUri(
+              resolution.resolvedInputs[current.spec.access.resourceUriInput],
+            )
+          : undefined;
       const nextStatus = resolution.ok
-        ? await resolvedStatus(
-            current,
-            resolution,
-            now,
-            observedResourceUri,
-          )
+        ? await resolvedStatus(current, resolution, now, observedResourceUri)
         : unresolvedStatus(current, resolution, now);
       if (await statusSemanticallyEqual(current.status, nextStatus)) {
         await this.#refreshBindings(current.metadata.id);
@@ -1821,28 +1507,6 @@ export class InterfaceService {
     }
   }
 
-  async reconcileResource(
-    workspaceId: string,
-    resourceId: string,
-  ): Promise<readonly Interface[]> {
-    const interfaces = await this.list({ workspaceId, includeRetired: false });
-    const affected = interfaces.filter(
-      (item) =>
-        (item.metadata.ownerRef.kind === "Resource" &&
-          item.metadata.ownerRef.id === resourceId) ||
-        Object.values(item.spec.inputs ?? {}).some(
-          (input) =>
-            input.source === "resource_output" &&
-            input.resourceId === resourceId,
-        ),
-    );
-    return await Promise.all(
-      affected.map((item) =>
-        this.reconcile(item.metadata.id, { allowSafetyRecovery: true }),
-      ),
-    );
-  }
-
   /**
    * Status-plane self-report: merge workload/probe conditions without
    * changing desired spec, lifecycle phase, resolved inputs, provenance, or
@@ -1886,68 +1550,6 @@ export class InterfaceService {
     return record;
   }
 
-  /**
-   * Replays Resource lifecycle state from its durable ledger for one Workspace.
-   * This is the crash-repair path for a best-effort observer failure; callers
-   * provide a Workspace-bounded snapshot instead of triggering a global scan.
-   */
-  async repairResourceLifecycles(
-    workspaceId: string,
-    snapshots: readonly ResourceInterfaceLifecycleSnapshot[],
-  ): Promise<void> {
-    const byResourceId = new Map(
-      snapshots.map((snapshot) => [snapshot.resourceId, snapshot]),
-    );
-    if (byResourceId.size === 0) return;
-
-    const interfaces = await this.list({ workspaceId, includeRetired: false });
-    for (const current of interfaces) {
-      const ownerSnapshot =
-        current.metadata.ownerRef.kind === "Resource"
-          ? byResourceId.get(current.metadata.ownerRef.id)
-          : undefined;
-      const referencedSnapshots = Object.values(current.spec.inputs ?? {})
-        .filter(
-          (
-            input,
-          ): input is Extract<
-            InterfaceInput,
-            { readonly source: "resource_output" }
-          > => input.source === "resource_output",
-        )
-        .map((input) => byResourceId.get(input.resourceId))
-        .filter(
-          (snapshot): snapshot is ResourceInterfaceLifecycleSnapshot =>
-            snapshot !== undefined,
-        );
-      if (!ownerSnapshot && referencedSnapshots.length === 0) continue;
-
-      if (ownerSnapshot?.phase === "retired") {
-        await this.#retireForLifecycleRepair(current.metadata.id);
-        continue;
-      }
-      if (ownerSnapshot?.phase === "terminating") {
-        await this.#markTerminating(current.metadata.id);
-        continue;
-      }
-      const unknown = [ownerSnapshot, ...referencedSnapshots].find(
-        (snapshot) => snapshot?.phase === "unknown",
-      );
-      if (unknown) {
-        await this.#markUnknown(
-          current.metadata.id,
-          unknown.message ?? "Resource lifecycle requires recovery",
-          "ResourceFailed",
-        );
-        continue;
-      }
-
-      // Ready recovers a missed success observer. not_ready, terminating, and
-      // retired references are resolved fail-closed by the durable resolver.
-      await this.reconcile(current.metadata.id, { allowSafetyRecovery: true });
-    }
-  }
-
   async markCapsuleUnknown(
     workspaceId: string,
     capsuleId: string,
@@ -1986,26 +1588,6 @@ export class InterfaceService {
     }
   }
 
-  async markResourceUnknown(
-    workspaceId: string,
-    resourceId: string,
-    message: string,
-  ): Promise<void> {
-    const interfaces = await this.list({ workspaceId, includeRetired: false });
-    for (const current of interfaces.filter(
-      (item) =>
-        (item.metadata.ownerRef.kind === "Resource" &&
-          item.metadata.ownerRef.id === resourceId) ||
-        Object.values(item.spec.inputs ?? {}).some(
-          (input) =>
-            input.source === "resource_output" &&
-            input.resourceId === resourceId,
-        ),
-    )) {
-      await this.#markUnknown(current.metadata.id, message, "ResourceFailed");
-    }
-  }
-
   async retire(
     id: string,
     expectedGeneration: number,
@@ -2017,15 +1599,12 @@ export class InterfaceService {
     const declarationSource = current.metadata.materializedFrom?.source;
     if (
       actor !== undefined &&
-      (declarationSource === "form_descriptor" ||
-        (declarationSource === "portable_iac" &&
-          materializationAuthority !== "portable_iac"))
+      declarationSource === "portable_iac" &&
+      materializationAuthority !== "portable_iac"
     ) {
       throw new InterfaceServiceError(
         "failed_precondition",
-        declarationSource === "form_descriptor"
-          ? "Form descriptor Interface lifecycle is owned by its exact Form"
-          : "portable IaC Interface lifecycle is owned by its exact declaration",
+        "portable IaC Interface lifecycle is owned by its exact declaration",
       );
     }
     if (current.status.phase === "Retired") return current;
@@ -2125,43 +1704,6 @@ export class InterfaceService {
     }
   }
 
-  async markResourceTerminating(
-    workspaceId: string,
-    resourceId: string,
-  ): Promise<void> {
-    const interfaces = await this.list({
-      workspaceId,
-      ownerKind: "Resource",
-      ownerId: resourceId,
-      includeRetired: false,
-    });
-    for (const current of interfaces) {
-      await this.#markTerminating(current.metadata.id);
-    }
-
-    // A delete claim makes resource_output unavailable. Re-resolve explicit
-    // dependants so they fail closed without retiring an Interface owned by a
-    // different object.
-    const references = await this.list({ workspaceId, includeRetired: false });
-    for (const item of references) {
-      if (
-        item.metadata.ownerRef.kind === "Resource" &&
-        item.metadata.ownerRef.id === resourceId
-      ) {
-        continue;
-      }
-      if (
-        Object.values(item.spec.inputs ?? {}).some(
-          (input) =>
-            input.source === "resource_output" &&
-            input.resourceId === resourceId,
-        )
-      ) {
-        await this.reconcile(item.metadata.id);
-      }
-    }
-  }
-
   async retireCapsule(workspaceId: string, capsuleId: string): Promise<void> {
     const interfaces = await this.list({
       workspaceId,
@@ -2195,44 +1737,6 @@ export class InterfaceService {
         )
       )
         await this.reconcile(item.metadata.id);
-    }
-  }
-
-  async retireResource(workspaceId: string, resourceId: string): Promise<void> {
-    const interfaces = await this.list({
-      workspaceId,
-      ownerKind: "Resource",
-      ownerId: resourceId,
-      includeRetired: false,
-    });
-    for (const item of interfaces) {
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        const current = await this.get(item.metadata.id);
-        if (current.status.phase === "Retired") break;
-        try {
-          await this.retire(current.metadata.id, current.metadata.generation);
-          break;
-        } catch (error) {
-          if (
-            !(error instanceof InterfaceServiceError) ||
-            error.code !== "conflict" ||
-            attempt === 7
-          )
-            throw error;
-        }
-      }
-    }
-    const references = await this.list({ workspaceId, includeRetired: false });
-    for (const item of references) {
-      if (
-        Object.values(item.spec.inputs ?? {}).some(
-          (input) =>
-            input.source === "resource_output" &&
-            input.resourceId === resourceId,
-        )
-      ) {
-        await this.reconcile(item.metadata.id);
-      }
     }
   }
 
@@ -2830,50 +2334,6 @@ function unresolvedStatus(
   };
 }
 
-function formDescriptorResourceUriForReconcile(
-  current: Interface,
-  observation: FormDescriptorResourceUriObservation | undefined,
-): string | undefined {
-  const source = current.metadata.materializedFrom;
-  if (observation !== undefined) {
-    if (
-      current.metadata.ownerRef.kind !== "Resource" ||
-      source?.source !== "form_descriptor" ||
-      source.formRefKey !== observation.formRefKey ||
-      source.formSchemaDigest !== observation.formSchemaDigest ||
-      source.descriptorName !== observation.descriptorName ||
-      source.descriptorVersion !== observation.descriptorVersion ||
-      current.spec.type !== observation.descriptorName ||
-      current.spec.version !== observation.descriptorVersion
-    ) {
-      throw new InterfaceServiceError(
-        "failed_precondition",
-        "resource URI observation does not match the exact Form descriptor Interface",
-      );
-    }
-    if (observation.resourceUri === undefined) return undefined;
-    const canonical = canonicalInterfaceOAuth2ResourceUri(
-      observation.resourceUri,
-    );
-    if (!canonical) {
-      throw new InterfaceServiceError(
-        "invalid_argument",
-        "Form descriptor resource URI must be a credential-free absolute HTTPS URI",
-      );
-    }
-    return canonical;
-  }
-  if (
-    current.status.phase !== "Resolved" ||
-    current.status.observedGeneration !== current.metadata.generation ||
-    current.metadata.ownerRef.kind !== "Resource" ||
-    source?.source !== "form_descriptor"
-  ) {
-    return undefined;
-  }
-  return canonicalInterfaceOAuth2ResourceUri(current.status.resourceUri);
-}
-
 function guard(record: Interface): InterfaceWriteGuard {
   return {
     generation: record.metadata.generation,
@@ -3062,92 +2522,6 @@ export function validateCapsuleInterfaceBlueprints(
   }
 }
 
-export function validateCapsuleResourceInterfaceBindingProposals(
-  proposals: readonly CapsuleResourceInterfaceBindingProposal[],
-): void {
-  if (!Array.isArray(proposals)) {
-    throw new InterfaceServiceError(
-      "invalid_argument",
-      "resourceInterfaceBindingProposals must be an array",
-    );
-  }
-  if (proposals.length > 64) {
-    throw new InterfaceServiceError(
-      "invalid_argument",
-      "resourceInterfaceBindingProposals exceeds 64 entries",
-    );
-  }
-  const identities = new Set<string>();
-  for (const proposal of proposals) {
-    const raw = requireRecord(proposal, "Resource Interface binding proposal");
-    assertOnlyKeys(
-      raw,
-      ["key", "interface", "subjectRef", "subject", "permissions", "delivery"],
-      "Resource Interface binding proposal",
-    );
-    const selector = requireRecord(
-      raw.interface,
-      "Resource Interface binding proposal interface",
-    );
-    assertOnlyKeys(
-      selector,
-      ["name", "version", "resourceKind", "resourceName"],
-      "Resource Interface binding proposal interface",
-    );
-    const name = validateInterfaceName(
-      selector.name,
-      "Resource Interface binding interface.name",
-    );
-    const version = requireText(
-      selector.version,
-      "Resource Interface binding interface.version",
-    );
-    validateToken(version, "Resource Interface binding interface.version");
-    const resourceKind =
-      selector.resourceKind === undefined
-        ? undefined
-        : requireText(
-            selector.resourceKind,
-            "Resource Interface binding interface.resourceKind",
-          );
-    if (resourceKind !== undefined && !isResourceShapeKind(resourceKind)) {
-      throw new InterfaceServiceError(
-        "invalid_argument",
-        "Resource Interface binding interface.resourceKind is invalid",
-      );
-    }
-    const resourceName =
-      selector.resourceName === undefined
-        ? undefined
-        : requireText(
-            selector.resourceName,
-            "Resource Interface binding interface.resourceName",
-          );
-    if ((resourceKind === undefined) !== (resourceName === undefined)) {
-      throw new InterfaceServiceError(
-        "invalid_argument",
-        "Resource Interface binding resourceKind and resourceName must be provided together",
-      );
-    }
-    const { interface: _interface, ...bindingProposal } = proposal;
-    validateCapsuleInterfaceBindingProposals([bindingProposal]);
-    const identity = [
-      name,
-      version,
-      resourceKind ?? "",
-      resourceName ?? "",
-      proposal.key,
-    ].join("\u0000");
-    if (identities.has(identity)) {
-      throw new InterfaceServiceError(
-        "invalid_argument",
-        "duplicate Resource Interface binding proposal identity",
-      );
-    }
-    identities.add(identity);
-  }
-}
-
 export function validateCapsuleRequiredInterfaces(
   requirements: readonly CapsuleRequiredInterface[],
 ): void {
@@ -3313,27 +2687,10 @@ function materializeCapsuleBlueprintInputs(
       };
       continue;
     }
-    if (raw.source !== "resource_output") {
-      throw new InterfaceServiceError(
-        "invalid_argument",
-        `unsupported Interface blueprint input source for ${name}`,
-      );
-    }
-    assertOnlyKeys(
-      raw,
-      ["source", "resourceId", "outputName", "pointer"],
-      `blueprint input ${name}`,
+    throw new InterfaceServiceError(
+      "invalid_argument",
+      `unsupported Interface blueprint input source for ${name}`,
     );
-    materialized[name] = {
-      source: "resource_output",
-      resourceId: requireText(raw.resourceId, `${name}.resourceId`),
-      ...(raw.outputName !== undefined
-        ? { outputName: requireText(raw.outputName, `${name}.outputName`) }
-        : {}),
-      ...(raw.pointer !== undefined
-        ? { pointer: validatePointer(raw.pointer, name) }
-        : {}),
-    };
   }
   return materialized;
 }
@@ -3448,24 +2805,6 @@ function normalizeInputs(
       };
       continue;
     }
-    if (raw.source === "resource_output") {
-      assertOnlyKeys(
-        raw,
-        ["source", "resourceId", "outputName", "pointer"],
-        `spec.inputs.${name}`,
-      );
-      normalized[name] = {
-        source: "resource_output",
-        resourceId: requireText(raw.resourceId, `${name}.resourceId`),
-        ...(raw.outputName !== undefined
-          ? { outputName: requireText(raw.outputName, `${name}.outputName`) }
-          : {}),
-        ...(raw.pointer !== undefined
-          ? { pointer: validatePointer(raw.pointer, name) }
-          : {}),
-      };
-      continue;
-    }
     throw new InterfaceServiceError(
       "invalid_argument",
       `unsupported Interface input source for ${name}`,
@@ -3486,7 +2825,7 @@ function validateBindingRequest(request: CreateInterfaceBindingRequest): void {
   assertOnlyKeys(subjectRef, ["kind", "id"], "subjectRef");
   assertOnlyKeys(delivery, ["type", "credentialRef", "options"], "delivery");
   if (
-    !["Principal", "ServiceAccount", "Capsule", "Resource"].includes(
+    !["Principal", "ServiceAccount", "Capsule"].includes(
       String(subjectRef.kind),
     )
   ) {
@@ -3644,7 +2983,7 @@ function resolvedOAuth2Resource(iface: Interface): string | undefined {
 function normalizedOwner(owner: unknown): Interface["metadata"]["ownerRef"] {
   const raw = requireRecord(owner, "ownerRef");
   assertOnlyKeys(raw, ["kind", "id"], "ownerRef");
-  if (!["Workspace", "Capsule", "Resource"].includes(String(raw.kind))) {
+  if (!["Workspace", "Capsule"].includes(String(raw.kind))) {
     throw new InterfaceServiceError(
       "invalid_argument",
       "ownerRef.kind is not supported",
@@ -3684,27 +3023,6 @@ function interfaceMaterialization(
       ),
     };
   }
-  if ("capsuleResource" in materialization) {
-    return { source: "capsule_resource" };
-  }
-  if ("formRefKey" in materialization) {
-    return {
-      source: "form_descriptor",
-      formRefKey: requireText(materialization.formRefKey, "formRefKey"),
-      formSchemaDigest: requireText(
-        materialization.formSchemaDigest,
-        "formSchemaDigest",
-      ),
-      descriptorName: requireText(
-        materialization.descriptorName,
-        "descriptorName",
-      ),
-      descriptorVersion: requireText(
-        materialization.descriptorVersion,
-        "descriptorVersion",
-      ),
-    };
-  }
   if ("portableIac" in materialization) {
     return {
       source: "portable_iac",
@@ -3718,14 +3036,10 @@ function interfaceMaterialization(
       ),
     };
   }
-  return {
-    source: "compatibility_profile",
-    profile: requireText(
-      materialization.compatibilityProfile,
-      "compatibilityProfile",
-    ),
-    key: requireText(materialization.compatibilityKey, "compatibilityKey"),
-  };
+  throw new InterfaceServiceError(
+    "invalid_argument",
+    "unsupported Interface materialization",
+  );
 }
 
 function interfaceBindingMaterialization(
@@ -3765,49 +3079,10 @@ function interfaceBindingMaterialization(
       ),
     };
   }
-  if ("resourceBindingKey" in materialization) {
-    return {
-      source: "capsule_resource_binding",
-      capsuleId: requireText(materialization.capsuleId, "capsuleId"),
-      interfaceName: requireText(
-        materialization.resourceInterfaceName,
-        "resourceInterfaceName",
-      ),
-      interfaceVersion: requireText(
-        materialization.resourceInterfaceVersion,
-        "resourceInterfaceVersion",
-      ),
-      key: requireText(
-        materialization.resourceBindingKey,
-        "resourceBindingKey",
-      ),
-    };
-  }
-  if ("formHostFormRefKey" in materialization) {
-    return {
-      source: "form_host_descriptor",
-      formRefKey: requireText(
-        materialization.formHostFormRefKey,
-        "formHostFormRefKey",
-      ),
-      descriptorName: requireText(
-        materialization.formHostDescriptorName,
-        "formHostDescriptorName",
-      ),
-      descriptorVersion: requireText(
-        materialization.formHostDescriptorVersion,
-        "formHostDescriptorVersion",
-      ),
-    };
-  }
-  return {
-    source: "compatibility_profile",
-    profile: requireText(
-      materialization.compatibilityProfile,
-      "compatibilityProfile",
-    ),
-    key: requireText(materialization.compatibilityKey, "compatibilityKey"),
-  };
+  throw new InterfaceServiceError(
+    "invalid_argument",
+    "unsupported InterfaceBinding materialization",
+  );
 }
 
 function normalizeTokens(values: unknown, field: string): readonly string[] {

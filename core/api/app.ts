@@ -33,17 +33,9 @@ import {
   type RegisterMetricsRoutesOptions,
 } from "./metrics_routes.ts";
 import {
-  type RegisterResourceShapeRoutesOptions,
-  registerResourceShapeRoutes,
-} from "./resource_routes.ts";
-import {
   type RegisterInterfaceRoutesOptions,
   registerInterfaceRoutes,
 } from "./interface_routes.ts";
-import {
-  type RegisterOfferingCatalogRoutesOptions,
-  registerOfferingCatalogRoutes,
-} from "./offering_catalog_routes.ts";
 import {
   registerRequestCorrelation,
   type RegisterRequestCorrelationOptions,
@@ -67,12 +59,6 @@ export interface CreateApiAppOptions {
   readonly deployControlInternalRouteOptions?: DeployControlInternalRouteDependencies;
   readonly registerMetricsRoutes?: boolean;
   readonly metricsRouteOptions?: RegisterMetricsRoutesOptions;
-  /** When set, composes the retained portable Takoform host protocol. */
-  readonly registerResourceShapeRoutes?: boolean;
-  readonly resourceShapeRouteOptions?: RegisterResourceShapeRoutesOptions;
-  /** Operator-only immutable generic noncommercial Offering catalog API. */
-  readonly registerOfferingCatalogRoutes?: boolean;
-  readonly offeringCatalogRouteOptions?: RegisterOfferingCatalogRoutesOptions;
   /** Takosumi-managed runtime declaration API shared by both authoring flows. */
   readonly registerInterfaceRoutes?: boolean;
   readonly interfaceRouteOptions?: RegisterInterfaceRoutesOptions;
@@ -104,8 +90,6 @@ export async function createApiApp(
   const deployControlInternalRoutesMounted =
     mounted.deployControlInternalRoutesMounted;
   const metricsRoutesMounted = mounted.metricsRoutesMounted;
-  const resourceShapeRoutesMounted = mounted.resourceShapeRoutesMounted;
-  const offeringCatalogRoutesMounted = mounted.offeringCatalogRoutesMounted;
   const interfaceRoutesMounted = mounted.interfaceRoutesMounted;
 
   app.get("/capabilities", (c) => {
@@ -121,8 +105,6 @@ export async function createApiApp(
           origin: new URL(c.req.url).origin,
           mounted,
           resourceCapabilities: options.resourceCapabilities,
-          enabledResourceShapeKinds:
-            options.resourceShapeRouteOptions?.enabledResourceShapeKinds,
           adapterCapabilities: options.adapterCapabilities,
           operatorCapabilities: options.operatorCapabilities,
         }),
@@ -137,8 +119,6 @@ export async function createApiApp(
           origin: new URL(c.req.url).origin,
           mounted,
           resourceCapabilities: options.resourceCapabilities,
-          enabledResourceShapeKinds:
-            options.resourceShapeRouteOptions?.enabledResourceShapeKinds,
           adapterCapabilities: options.adapterCapabilities,
           operatorCapabilities: options.operatorCapabilities,
         }),
@@ -161,26 +141,6 @@ export async function createApiApp(
       );
     }
     registerMetricsRoutes(app, options.metricsRouteOptions);
-  }
-
-  if (resourceShapeRoutesMounted) {
-    if (!options.resourceShapeRouteOptions) {
-      throw new Error(
-        "registerResourceShapeRoutes was requested but " +
-          "resourceShapeRouteOptions (with service) was not supplied",
-      );
-    }
-    registerResourceShapeRoutes(app, options.resourceShapeRouteOptions);
-  }
-
-  if (offeringCatalogRoutesMounted) {
-    if (!options.offeringCatalogRouteOptions) {
-      throw new Error(
-        "registerOfferingCatalogRoutes was requested but " +
-          "offeringCatalogRouteOptions was not supplied",
-      );
-    }
-    registerOfferingCatalogRoutes(app, options.offeringCatalogRouteOptions);
   }
 
   if (interfaceRoutesMounted) {
@@ -275,14 +235,6 @@ function routeFamilyMountInputs(
       override: options.registerMetricsRoutes,
       hasOptions: options.metricsRouteOptions !== undefined,
     },
-    resourceShapeRoutesMounted: {
-      override: options.registerResourceShapeRoutes,
-      hasOptions: options.resourceShapeRouteOptions !== undefined,
-    },
-    offeringCatalogRoutesMounted: {
-      override: options.registerOfferingCatalogRoutes,
-      hasOptions: options.offeringCatalogRouteOptions !== undefined,
-    },
     interfaceRoutesMounted: {
       override: options.registerInterfaceRoutes,
       hasOptions: options.interfaceRouteOptions !== undefined,
@@ -313,24 +265,16 @@ function createProductDiscoveryOptions(input: {
   readonly origin: string;
   readonly mounted: RouteFamilyMountedFlags;
   readonly resourceCapabilities?: Partial<TakosumiResourceCapabilities>;
-  readonly enabledResourceShapeKinds?: readonly string[];
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
   readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
 }): CreateTakosumiDiscoveryOptions {
-  const resourceShapes = input.mounted.resourceShapeRoutesMounted;
   const stacks = input.mounted.deployControlInternalRoutesMounted;
   const resources: Partial<TakosumiResourceCapabilities> = {
     Stack: stacks,
-    ...Object.fromEntries(
-      (input.enabledResourceShapeKinds ?? []).map((kind) => [
-        kind,
-        resourceShapes,
-      ]),
-    ),
     ...(input.resourceCapabilities ?? {}),
   };
   const adapters: Partial<TakosumiAdapterCapabilities> = {
-    opentofu: stacks || resourceShapes,
+    opentofu: stacks,
     ...(input.adapterCapabilities ?? {}),
   };
   return {
@@ -340,20 +284,8 @@ function createProductDiscoveryOptions(input: {
     ...(input.operatorCapabilities
       ? { operator: input.operatorCapabilities }
       : {}),
-    resourceShapesEnabled:
-      input.resourceCapabilities === undefined
-        ? resourceShapes
-        : resourceShapeCapabilitiesEnabled(resources),
     interfacesEnabled: input.mounted.interfaceRoutesMounted,
   };
-}
-
-function resourceShapeCapabilitiesEnabled(
-  resources: Partial<TakosumiResourceCapabilities>,
-): boolean {
-  return Object.entries(resources).some(
-    ([token, enabled]) => token !== "Stack" && enabled === true,
-  );
 }
 
 function bearerTokenFromAuthorization(header: string): string | undefined {

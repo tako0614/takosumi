@@ -56,15 +56,6 @@ database_id = "replace-with-deploy-d1-database-id"
 binding = "R2_ARTIFACTS"
 bucket_name = "takos-artifacts"
 
-# Optional immutable signed Takoform Form Package store. Operators that enable
-# it also set TAKOSUMI_FORM_PACKAGE_TRUST_POLICY to non-secret JSON containing
-# an artifact prefix, a digest-pinned Sigstore TrustedRoot key, and explicit
-# publisher identities. It is intentionally commented in the neutral template:
-# zero-form hosts have no package binding or implicit trust root.
-# [[r2_buckets]]
-# binding = "R2_FORM_PACKAGES"
-# bucket_name = "takosumi-form-packages"
-
 # Source archive snapshots (immutable per-snapshot tar.zst). Written by the
 # runner DO during a source_sync run, keyed
 # workspaces/{workspaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst.
@@ -207,7 +198,6 @@ TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 #   TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS   optional public-only JWKS for signing-key rotation overlap
 #   TAKOSUMI_SECRET_STORE_PASSPHRASE               sealed SecretBlob/vault passphrase
 #   TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET pairwise OIDC subject secret
-#   TAKOSUMI_HOST_RUNTIME_SECRET_DERIVATION_KEY     deterministic Capsule runtime secret root
 #   TAKOSUMI_ACCOUNT_SESSION_HASH_SALT             account session hash-at-rest salt
 #   TAKOSUMI_ACCOUNTS_SUBJECT_SECRET               upstream OAuth subject mapping secret
 #   TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN     operator token for privacy request completion

@@ -173,7 +173,6 @@ interface ControlRouteContext {
     ControlPlaneOperations | undefined
   >;
   readonly issuer?: string;
-  readonly managedPublicBaseDomain?: string;
 }
 
 type ControlOperationsResolution = ControlPlaneOperations | undefined;
@@ -436,9 +435,6 @@ async function dispatchAuthenticatedControlRoute(
           operations,
           store: context.store,
           ...(context.issuer ? { issuer: context.issuer } : {}),
-          ...(context.managedPublicBaseDomain
-            ? { managedPublicBaseDomain: context.managedPublicBaseDomain }
-            : {}),
           session: context.session,
         }),
     );
@@ -571,7 +567,6 @@ interface DispatchInput {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
   readonly issuer?: string;
-  readonly managedPublicBaseDomain?: string;
   readonly session: ControlSession;
 }
 
@@ -591,9 +586,6 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       operations: input.operations,
       store: input.store,
       ...(input.issuer ? { issuer: input.issuer } : {}),
-      ...(input.managedPublicBaseDomain
-        ? { managedPublicBaseDomain: input.managedPublicBaseDomain }
-        : {}),
       session: input.session,
     };
     const response = await handler(ctx, segments, method);

@@ -431,7 +431,6 @@ test("d1 atomic commits reject a batchless binding before database access", asyn
   const operations: readonly {
     readonly name:
       | "commitRunState"
-      | "commitResourceRun"
       | "commitRestoredState";
     readonly invoke: (
       store: CloudflareD1OpenTofuControlStore,
@@ -440,11 +439,6 @@ test("d1 atomic commits reject a batchless binding before database access", asyn
     {
       name: "commitRunState",
       invoke: async (store) => await store.commitRunState(undefined as never),
-    },
-    {
-      name: "commitResourceRun",
-      invoke: async (store) =>
-        await store.commitResourceRun(undefined as never),
     },
     {
       name: "commitRestoredState",

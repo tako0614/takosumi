@@ -18,8 +18,6 @@ const COMMAND_TIMEOUT_MS = 180_000;
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const COMMIT = /^[0-9a-f]{40}$/u;
 const VERSION = /^[0-9a-f]{8}-[0-9a-f-]{27,}$/u;
-const REQUIRED_SECRET = "TAKOSUMI_HOST_RUNTIME_SECRET_DERIVATION_KEY";
-const MATERIALIZER_ENTRYPOINT = "TakosumiHostRuntimeMaterializerEntrypoint";
 const REQUIRED_BINDINGS = [
   "ASSETS",
   "TAKOSUMI_ACCOUNTS_DB",
@@ -169,7 +167,6 @@ async function plan(
     environment,
   );
   const secrets = await readSecretNames(options.config);
-  assertRequiredSecretNames(secrets);
 
   await requiredCommand(
     ["bun", "run", "build"],
@@ -499,12 +496,6 @@ export function secretNames(stdout: string): readonly string[] {
   return names.sort((left, right) => left.localeCompare(right));
 }
 
-export function assertRequiredSecretNames(names: readonly string[]): void {
-  if (!names.includes(REQUIRED_SECRET)) {
-    throw new Error("platform_worker_release_required_secret_missing");
-  }
-}
-
 export function assertPublishedVersion(
   stdout: string,
   expectedHostedService: string,
@@ -558,8 +549,8 @@ export function assertPublishedVersion(
     ...(value.resources.script.handlers as readonly string[]),
     ...namedHandlers,
   ]);
-  if (!handlers.has(MATERIALIZER_ENTRYPOINT)) {
-    throw new Error("platform_worker_release_materializer_entrypoint_missing");
+  if (!handlers.has("fetch")) {
+    throw new Error("platform_worker_release_fetch_handler_missing");
   }
 }
 
@@ -581,7 +572,6 @@ async function assertSecretNamesUnchanged(
   expectedDigest: string,
 ): Promise<void> {
   const names = await readSecretNames(config);
-  assertRequiredSecretNames(names);
   if (digest(new TextEncoder().encode(JSON.stringify(names))) !== expectedDigest) {
     throw new Error("platform_worker_release_secret_list_drift");
   }

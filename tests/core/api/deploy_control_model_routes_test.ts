@@ -364,7 +364,7 @@ test("model e2e: a service-side installer binding is fixed to the authenticated 
   });
 });
 
-test("model e2e: create Capsule stores the managed vanity-hostname choice in its scoped config", async () => {
+test("model e2e: create Capsule rejects retired managed-hostname input", async () => {
   const { app, operations } = await service();
   const workspaceId = await createWorkspace(app, "vanity-host");
   const sourceId = await createSource(app, workspaceId);
@@ -385,15 +385,13 @@ test("model e2e: create Capsule stores the managed vanity-hostname choice in its
     },
   );
 
-  expect(createRes.status).toBe(201);
-  const capsule = (await createRes.json()).capsule as {
-    installConfigId: string;
-  };
-  expect(capsule.installConfigId).not.toBe(installConfigId);
-  const config = await operations.capsules.getInstallConfig(
-    capsule.installConfigId,
-  );
-  expect(config.managedPublicHostname).toEqual({ mode: "vanity" });
+  expect(createRes.status).toBe(400);
+  expect(await createRes.json()).toMatchObject({
+    error: {
+      code: "invalid_argument",
+      message: "unknown_field: managedPublicHostname",
+    },
+  });
 });
 
 test("model e2e: create Capsule expands dotted vars into object inputs", async () => {

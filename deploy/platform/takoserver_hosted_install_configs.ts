@@ -31,7 +31,6 @@ function base(
     modulePath: "deploy/takoform-current",
     variableMapping: {},
     outputAllowlist: {},
-    managedPublicHostname: { mode: "scoped" },
     policy: {
       allowedProviders: [TAKOSERVER_TAKOFORM_PROVIDER_SOURCE],
       providerCredentials: {

@@ -30,9 +30,7 @@ export function publicInstallConfigRecord(
   const {
     runnerId: _runnerId,
     internal: _internal,
-    resourceInterfaceBindingProposals: _resourceBindings,
     requiredInterfaces: _requiredInterfaces,
-    hostRuntimeMaterialization: _hostRuntimeMaterialization,
     ...publicRecord
   } = config;
   const store = config.store;

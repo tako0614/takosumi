@@ -120,33 +120,17 @@ export class RunVerificationService {
     planRun: PlanRun,
     generation: number,
     stateAdoption?: DispatchStateAdoption,
-    resourcePriorState?: DispatchPriorState,
+    priorStateDescriptor?: DispatchPriorState,
   ): Promise<RunExecutionDispatch> {
     const priorState = await this.#canonicalPriorState(
       planRun,
       stateAdoption,
-      resourcePriorState,
+      priorStateDescriptor,
     );
-    if (planRun.resourceContext) {
-      const subject = {
-        kind: "resource" as const,
-        id: planRun.resourceContext.resourceId,
-      };
-      return {
-        stateScope: await this.#stateScope({
-          workspaceId: planRun.resourceContext.workspaceId,
-          subject,
-          environment: planRun.resourceContext.environment,
-          generation,
-          ...(priorState ? { priorState } : {}),
-        }),
-        ...(stateAdoption ? { stateAdoption } : {}),
-      };
-    }
     if (stateAdoption) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "state adoption is valid only for a first-class Resource run",
+        "state adoption is valid only for a Capsule run",
       );
     }
     const ctx = planRun.capsuleContext;
@@ -347,42 +331,26 @@ export class RunVerificationService {
   async #canonicalPriorState(
     planRun: PlanRun,
     stateAdoption: DispatchStateAdoption | undefined,
-    resourcePriorState: DispatchPriorState | undefined,
+    priorState: DispatchPriorState | undefined,
   ): Promise<DispatchPriorState | undefined> {
     const generation = planRun.baseStateGeneration ?? 0;
     if (stateAdoption) {
-      if (resourcePriorState) {
+      if (priorState) {
         throw new OpenTofuControllerError(
           "failed_precondition",
-          "state adoption cannot replace a canonical Resource prior state",
+          "state adoption cannot replace a canonical prior state",
         );
       }
       return undefined;
     }
     if (generation === 0) {
-      if (resourcePriorState) {
+      if (priorState) {
         throw new OpenTofuControllerError(
           "failed_precondition",
-          "generation-zero Resource dispatch cannot carry prior state",
+          "generation-zero dispatch cannot carry prior state",
         );
       }
       return undefined;
-    }
-    if (planRun.resourceContext) {
-      if (!resourcePriorState || resourcePriorState.generation !== generation) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `resource_prior_state_unavailable: Resource ${planRun.resourceContext.resourceId} generation ${generation} has no exact canonical execution descriptor`,
-          { reason: "resource_prior_state_unavailable" },
-        );
-      }
-      return resourcePriorState;
-    }
-    if (resourcePriorState) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "Capsule dispatch cannot accept a Resource prior state descriptor",
-      );
     }
     const ctx = planRun.capsuleContext;
     if (!ctx || !planRun.capsuleCurrentStateVersionId) {
@@ -411,12 +379,26 @@ export class RunVerificationService {
         { reason: "canonical_prior_state_unavailable" },
       );
     }
-    return {
+    const canonical = {
       generation: state.generation,
       stateRef: state.stateRef,
       digest: state.digest,
       createdByRunId: state.createdByRunId,
     };
+    if (
+      priorState &&
+      (priorState.generation !== canonical.generation ||
+        priorState.stateRef !== canonical.stateRef ||
+        priorState.digest !== canonical.digest ||
+        priorState.createdByRunId !== canonical.createdByRunId)
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `canonical_prior_state_unavailable: supplied descriptor does not match StateVersion ${planRun.capsuleCurrentStateVersionId}`,
+        { reason: "canonical_prior_state_unavailable" },
+      );
+    }
+    return canonical;
   }
 
   async #reverifyRemoteStateVersionPin(
