@@ -28,7 +28,7 @@ function base(
     id,
     name,
     sourceSelector: SOURCE,
-    modulePath: "deploy/takoform-current",
+    modulePath: "deploy/takoform",
     variableMapping: {},
     outputAllowlist: {},
     policy: {
