@@ -56,7 +56,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.sourceRegistrationUnconfirmed":
     "Service deploy did not start. Source registration could not be confirmed. Retry Add only to reconcile this exact attempt; do not start a new Source.",
   "installStore.sourceBaselineUnavailable":
-    "Service deploy did not start. The Source baseline could not be read, so registration could not begin. Try again after the Source list is available.",
+    "Service deploy did not start. The Source list was temporarily unavailable, so registration did not begin. Wait briefly, then try Add again.",
   "installStore.compatibilityFailed":
     "This service cannot be added to the current environment.",
   "installStore.providerTitle": "A connection is needed",

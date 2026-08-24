@@ -1982,7 +1982,11 @@ const SOURCE_CREATE_DEFAULT_REF = "HEAD";
 const SOURCE_CREATE_DEFAULT_PATH = ".";
 const SOURCE_CREATE_PAGE_LIMIT = 100;
 const SOURCE_CREATE_MAX_PAGES = 100;
-const SOURCE_CREATE_BASELINE_MAX_ATTEMPTS = 2;
+const SOURCE_CREATE_BASELINE_MAX_ATTEMPTS = 3;
+// A hanging baseline is more expensive than an immediate transport/5xx
+// failure. Keep the former capped at the existing two 15-second windows while
+// allowing one additional fast read-only retry for short control-plane blips.
+const SOURCE_CREATE_BASELINE_MAX_TIMEOUT_ATTEMPTS = 2;
 const SOURCE_CREATE_BASELINE_ATTEMPT_TIMEOUT_MS = 15_000;
 /**
  * A Source create is the first mutation in the install preparation flow. Keep
@@ -2082,15 +2086,17 @@ function isSourceCreateBaselineRetryable(error: unknown): boolean {
 }
 
 /**
- * Reads the complete strict Source baseline. One fresh read is allowed after
- * an attempt-local timeout, a transport failure, or a retryable HTTP response.
- * Definite 4xx responses, malformed projections, and the shared
- * parent/mutation abort are never replayed.
+ * Reads the complete strict Source baseline. Up to two fresh reads are allowed
+ * after transport failures or retryable HTTP responses. Attempt-local timeouts
+ * remain capped at two total attempts so resilience does not consume the
+ * mutation/readback budget. Definite 4xx responses, malformed projections,
+ * and the shared parent/mutation abort are never replayed.
  */
 async function listSourcesForCreateBaseline(
   workspaceId: string,
   mutationSignal: AbortSignal | undefined,
 ): Promise<SourceCreateBaselineResult> {
+  let timedOutAttempts = 0;
   for (
     let attempt = 0;
     attempt < SOURCE_CREATE_BASELINE_MAX_ATTEMPTS;
@@ -2106,8 +2112,12 @@ async function listSourcesForCreateBaseline(
       });
       if (attemptSignals.timedOut()) {
         attemptSignals.cleanup();
+        timedOutAttempts += 1;
         if (mutationSignal?.aborted) throwIfAborted(mutationSignal);
-        if (attempt + 1 >= SOURCE_CREATE_BASELINE_MAX_ATTEMPTS) {
+        if (
+          timedOutAttempts >= SOURCE_CREATE_BASELINE_MAX_TIMEOUT_ATTEMPTS ||
+          attempt + 1 >= SOURCE_CREATE_BASELINE_MAX_ATTEMPTS
+        ) {
           throw new ControlApiError(
             0,
             "request_timeout",
@@ -2125,9 +2135,12 @@ async function listSourcesForCreateBaseline(
       attemptSignals.cleanup();
       const timedOutAttempt =
         attemptSignals.timedOut() && isAbortError(error);
+      if (timedOutAttempt) timedOutAttempts += 1;
       if (
         mutationSignal?.aborted ||
         attempt + 1 >= SOURCE_CREATE_BASELINE_MAX_ATTEMPTS ||
+        (timedOutAttempt &&
+          timedOutAttempts >= SOURCE_CREATE_BASELINE_MAX_TIMEOUT_ATTEMPTS) ||
         (!timedOutAttempt && !isSourceCreateBaselineRetryable(error))
       ) {
         throw error;

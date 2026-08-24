@@ -26,7 +26,7 @@ test("Takosumi Hosted offers one explicit Takoserver or Takoform choice", () => 
       url: "https://github.com/tako0614/yurucommu.git",
       path: ".",
     });
-    expect(config.modulePath).toBe("deploy/takoform-current");
+    expect(config.modulePath).toBe("deploy/takoform");
     expect(config.policy.allowedProviders).toEqual([
       TAKOSERVER_TAKOFORM_PROVIDER_SOURCE,
     ]);

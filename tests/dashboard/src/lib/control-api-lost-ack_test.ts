@@ -791,7 +791,7 @@ describe("createSource acknowledgement recovery", () => {
     expect(reads).toBe(1);
   });
 
-  test("does not dispatch POST when both authoritative baseline reads fail", async () => {
+  test("does not dispatch POST when all authoritative baseline reads fail", async () => {
     let posts = 0;
     let reads = 0;
     globalThis.fetch = (async (
@@ -810,7 +810,7 @@ describe("createSource acknowledgement recovery", () => {
       isIndeterminate: false,
     });
     expect(posts).toBe(0);
-    expect(reads).toBe(2);
+    expect(reads).toBe(3);
   });
 
   test("retries one transient baseline failure before posting", async () => {
@@ -839,6 +839,35 @@ describe("createSource acknowledgement recovery", () => {
       createSource({ ...sourceInput, deadlineAt: Date.now() + 60_000 }),
     ).resolves.toMatchObject({ source: candidate });
     expect(reads).toBe(2);
+    expect(posts).toBe(1);
+  });
+
+  test("tolerates two transient baseline failures before posting exactly once", async () => {
+    const candidate = sourceRecord();
+    let posts = 0;
+    let reads = 0;
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      if ((init?.method ?? "GET") === "POST") {
+        posts += 1;
+        return json({ source: candidate, hookSecret: "hook_secret_once" }, 201);
+      }
+      reads += 1;
+      if (reads <= 2) {
+        return json(
+          { error: { code: "temporarily_unavailable", message: "retry" } },
+          503,
+        );
+      }
+      return json({ sources: [] });
+    }) as typeof fetch;
+
+    await expect(
+      createSource({ ...sourceInput, deadlineAt: Date.now() + 60_000 }),
+    ).resolves.toMatchObject({ source: candidate });
+    expect(reads).toBe(3);
     expect(posts).toBe(1);
   });
 
