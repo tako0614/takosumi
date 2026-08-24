@@ -23,30 +23,32 @@ const SECTIONS: ReadonlyArray<{
     label: "Durable Objects",
     names: REQUIRED_PLATFORM_BINDINGS.durableObjects,
   },
-  { label: "Queues", names: REQUIRED_PLATFORM_BINDINGS.queues },
   { label: "Static assets", names: REQUIRED_PLATFORM_BINDINGS.assets },
 ];
 
-function main(): void {
-  console.log(
-    "Platform worker required bindings (deploy/platform/wrangler.toml):\n",
-  );
+export function renderPlatformBindingsChecklist(): string {
+  const lines = [
+    "Platform worker required bindings (deploy/platform/wrangler.toml):",
+    "",
+  ];
   for (const section of SECTIONS) {
-    console.log(`  ${section.label}:`);
+    lines.push(`  ${section.label}:`);
     for (const name of section.names) {
-      console.log(`    - ${name}`);
+      lines.push(`    - ${name}`);
     }
   }
-  console.log(
-    "\nThis is a checklist only. Provision the underlying resources with your\n" +
-      "operator wrangler/Cloudflare credentials and wire the realized ids in the\n" +
-      "operator-private config. After deploy, GET /readyz on the worker fails\n" +
-      "with the named missing required bindings until every one is present.\n" +
-      "Optional extension handlers are NOT part of OSS/operator readiness.\n" +
-      "TAKOSUMI_PLATFORM_EXTENSIONS names logical handler keys that an operator\n" +
-      "composition resolves in-process; do not add separate [[services]]\n" +
-      "bindings unless the operator deliberately uses a remote service.",
+  lines.push(
+    "",
+    "This is a checklist only. Provision the underlying resources with your",
+    "operator wrangler/Cloudflare credentials and wire the realized ids in the",
+    "operator-private config. After deploy, GET /readyz on the worker fails",
+    "with the named missing required bindings until every one is present.",
+    "Optional extension handlers are NOT part of OSS/operator readiness.",
+    "TAKOSUMI_PLATFORM_EXTENSIONS names logical handler keys that an operator",
+    "composition resolves in-process; do not add separate [[services]]",
+    "bindings unless the operator deliberately uses a remote service.",
   );
+  return `${lines.join("\n")}\n`;
 }
 
-main();
+if (import.meta.main) process.stdout.write(renderPlatformBindingsChecklist());
