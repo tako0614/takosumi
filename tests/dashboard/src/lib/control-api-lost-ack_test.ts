@@ -791,7 +791,7 @@ describe("createSource acknowledgement recovery", () => {
     expect(reads).toBe(1);
   });
 
-  test("does not dispatch POST when the authoritative baseline fails", async () => {
+  test("does not dispatch POST when both authoritative baseline reads fail", async () => {
     let posts = 0;
     let reads = 0;
     globalThis.fetch = (async (
@@ -810,7 +810,61 @@ describe("createSource acknowledgement recovery", () => {
       isIndeterminate: false,
     });
     expect(posts).toBe(0);
+    expect(reads).toBe(2);
+  });
+
+  test("retries one transient baseline failure before posting", async () => {
+    const candidate = sourceRecord();
+    let posts = 0;
+    let reads = 0;
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      if ((init?.method ?? "GET") === "POST") {
+        posts += 1;
+        return json({ source: candidate, hookSecret: "hook_secret_once" }, 201);
+      }
+      reads += 1;
+      if (reads === 1) {
+        return json(
+          { error: { code: "temporarily_unavailable", message: "retry" } },
+          503,
+        );
+      }
+      return json({ sources: [] });
+    }) as typeof fetch;
+
+    await expect(
+      createSource({ ...sourceInput, deadlineAt: Date.now() + 60_000 }),
+    ).resolves.toMatchObject({ source: candidate });
+    expect(reads).toBe(2);
+    expect(posts).toBe(1);
+  });
+
+  test("does not retry an unauthorized baseline read", async () => {
+    let posts = 0;
+    let reads = 0;
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      if ((init?.method ?? "GET") === "POST") posts += 1;
+      else reads += 1;
+      return json(
+        { error: { code: "unauthorized", message: "session expired" } },
+        401,
+      );
+    }) as typeof fetch;
+
+    await expect(
+      createSource({ ...sourceInput, deadlineAt: Date.now() + 60_000 }),
+    ).rejects.toMatchObject({
+      code: "source_create_baseline_unavailable",
+      isIndeterminate: false,
+    });
     expect(reads).toBe(1);
+    expect(posts).toBe(0);
   });
 
   test("does not dispatch POST when baseline pagination is incomplete", async () => {
