@@ -3,7 +3,7 @@
  *
  * A provider deployment can succeed even when a binding's underlying resource
  * is missing, so this script prints the required resource set (D1 / R2 /
- * Durable Objects / queue / ASSETS) as a checklist. It is a DRY-RUN reference
+ * Durable Objects / ASSETS) as a checklist. It is a DRY-RUN reference
  * — it does not create anything (resource creation requires operator
  * credentials and the realized config in the operator-private repo). Pair it
  * with the worker's `/readyz` self-check, which fails loudly at runtime when a
