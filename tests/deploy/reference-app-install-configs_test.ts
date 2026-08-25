@@ -432,14 +432,12 @@ test("Takos archives the repository root and pins lifecycle execution policy", (
   });
 });
 
-test("managed Yurucommu requires short-lived Takoform provider credentials", () => {
+test("Yurucommu module profile requires Takoform provider source without lifecycle semantics", () => {
   const managed = REFERENCE_APP_INSTALL_CONFIGS.find(
     (config) => config.name === "yurucommu-managed",
   );
   expect(managed?.policy?.providerCredentials).toEqual({
     requiredProviders: ["registry.terraform.io/tako0614/takoform"],
-    requireTemporary: true,
-    requireTtlEnforced: true,
   });
   expect(managed?.lifecycleActions).toBeUndefined();
   expect(managed?.policy?.lifecycleActions).toBeUndefined();

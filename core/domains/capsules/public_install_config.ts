@@ -32,6 +32,8 @@ export function publicInstallConfigRecord(
     internal: _internal,
     requiredInterfaces: _requiredInterfaces,
     runtimeBindingMaterialization: _runtimeBindingMaterialization,
+    accountsOidcModuleVariableMaterialization:
+      _accountsOidcModuleVariableMaterialization,
     ...publicRecord
   } = config;
   const store = config.store;
@@ -63,6 +65,29 @@ function publicPolicyConfig(
           : {}),
         ...(providerCredentials.forbiddenConnectionIds
           ? { forbiddenConnectionIds: [...providerCredentials.forbiddenConnectionIds] }
+          : {}),
+        ...(providerCredentials.allowedConnectionScopes
+          ? {
+              allowedConnectionScopes: [
+                ...providerCredentials.allowedConnectionScopes,
+              ],
+            }
+          : {}),
+        ...(providerCredentials.allowedCredentialRecipes
+          ? {
+              allowedCredentialRecipes:
+                providerCredentials.allowedCredentialRecipes.map((recipe) => ({
+                  id: recipe.id,
+                  authMode: recipe.authMode,
+                })),
+            }
+          : {}),
+        ...(providerCredentials.requiredCredentialCapabilities
+          ? {
+              requiredCredentialCapabilities: [
+                ...providerCredentials.requiredCredentialCapabilities,
+              ],
+            }
           : {}),
         ...(providerCredentials.requireTemporary === true
           ? { requireTemporary: true }

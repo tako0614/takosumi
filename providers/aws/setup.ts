@@ -19,9 +19,6 @@ export const buildAwsAssumeRoleConnection: GuidedConnectionRequestBuilder = (
   }
   const values = {
     ...input.values,
-    ...(input.values.AWS_ROLE_ARN === undefined
-      ? { AWS_ROLE_ARN: roleArn }
-      : {}),
     ...(settings.region &&
     input.values.AWS_REGION === undefined &&
     input.values.AWS_DEFAULT_REGION === undefined

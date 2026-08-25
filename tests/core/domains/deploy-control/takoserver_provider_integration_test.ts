@@ -116,8 +116,8 @@ const installConfig: InstallConfig = {
       en: "Use an independent Takoserver through the Takoform provider.",
     },
     deploymentProfile: {
-      key: "takoserver",
-      label: { ja: "Takoserver", en: "Takoserver" },
+      key: "takoform-v2",
+      label: { ja: "Takoform", en: "Takoform" },
       description: {
         ja: "SourceSnapshot の module を Takoserver に接続します。",
         en: "Connect the SourceSnapshot module to Takoserver.",
@@ -353,12 +353,12 @@ async function seedTakoserverRunModel(
   return { seeded, vault, connection };
 }
 
-test("Takoserver SourceSnapshot profile uses the exact provider binding and runner-only env", async () => {
+test("Takoform profile using Takoserver Host connection uses the exact provider binding and runner-only env", async () => {
   const profile = resolveRepoOwnedDeploymentProfile({
     source,
     sourceSnapshot: snapshot,
     candidates: [installConfig],
-    deploymentProfileKey: "takoserver",
+    deploymentProfileKey: "takoform-v2",
   });
   expect(profile).toEqual({
     ok: true,
@@ -479,7 +479,7 @@ test("Takoserver SourceSnapshot profile uses the exact provider binding and runn
   expect(JSON.stringify(persisted)).not.toContain(TAKOSERVER_TOKEN);
 });
 
-test("Takoserver credentials remain dispatch-only through the Capsule apply ledger", async () => {
+test("Takoform profile using Takoserver Host credentials remain dispatch-only through the Capsule apply ledger", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const { seeded, vault, connection } = await seedTakoserverRunModel(store, {
     capsuleId: "cap_takoserver_apply",

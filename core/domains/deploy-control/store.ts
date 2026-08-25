@@ -126,6 +126,11 @@ export function normalizeStoredCapsuleCompatibilityReport(
 export interface PlanRunInputs {
   readonly planRunId: string;
   readonly variables: Readonly<Record<string, JsonValue>>;
+  /**
+   * Private Plan-time fence for host-materialized, non-secret module values.
+   * Apply re-runs the materializer with this exact digest before dispatch.
+   */
+  readonly moduleVariableMaterializationDigest?: string;
   /** Optional child-module wrapper generated from DB/provider configuration. */
   readonly generatedRoot?: DispatchGeneratedRoot;
   /** Operator module wrapper; never sourced from Capsule input. */

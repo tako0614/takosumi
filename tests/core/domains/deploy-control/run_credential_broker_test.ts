@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import type { PlanRun } from "../../../../contract/internal-deploy-control-api.ts";
 import type { ProviderConnection } from "../../../../contract/connections.ts";
+import type { Workspace } from "../../../../contract/workspaces.ts";
 import { RunCredentialBroker } from "../../../../core/domains/deploy-control/run_credential_broker.ts";
 import type { ResolvedCapsuleProviderBinding } from "../../../../core/domains/connections/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
@@ -9,6 +10,7 @@ import {
   type CapsuleProviderBindingMintEntry,
   type ConnectionVault,
 } from "../../../../core/adapters/vault/mod.ts";
+import { mergePolicyConfigs } from "../../../../core/domains/deploy-control/provider_policy.ts";
 
 const NOW = "2026-06-06T00:00:00.000Z";
 
@@ -171,6 +173,268 @@ test("a credential-free provider set mints nothing at all", async () => {
   expect(mintedEntries).toEqual([]);
   expect(credentials?.env).toEqual({});
   expect(credentials?.manifest.bindings).toEqual([]);
+});
+
+test("broker rejects a wrong recipe before vault mint even when binding bypasses UI", async () => {
+  const wrongRecipe = {
+    ...CLOUDFLARE,
+    connection: {
+      ...CLOUDFLARE.connection,
+      credentialRecipe: { id: "cloudflare", authMode: "oauth" },
+    },
+  };
+  let mintCalled = false;
+  const store = new InMemoryOpenTofuControlStore();
+  const vault = {
+    mintForCapsuleProviderBindings: () => {
+      mintCalled = true;
+      return Promise.resolve(
+        new PhaseMintBundle(
+          { env: { CLOUDFLARE_API_TOKEN: "should-not-mint" } },
+          [],
+          [],
+        ),
+      );
+    },
+  } as unknown as ConnectionVault;
+  const broker = new RunCredentialBroker({
+    store,
+    newId: (prefix) => `${prefix}_policy`,
+    now: () => Date.parse(NOW),
+    vault,
+    resolveRunProviderBindings: async () => [wrongRecipe],
+    policyForPlanRun: async () => ({
+      providerCredentials: {
+        allowedConnectionScopes: ["workspace"],
+        allowedCredentialRecipes: [
+          { id: "cloudflare", authMode: "api_token" },
+        ],
+      },
+    }),
+  });
+
+  await expect(
+    broker.mintRunCredentials(
+      planRun([CLOUDFLARE.provider]),
+      "plan",
+      "run_wrong_recipe",
+    ),
+  ).rejects.toThrow(/credential_policy_failed.*cloudflare:oauth/);
+  expect(mintCalled).toBe(false);
+});
+
+test("broker rejects a connection without required credential capabilities", async () => {
+  let mintCalled = false;
+  const store = new InMemoryOpenTofuControlStore();
+  const vault = {
+    mintForCapsuleProviderBindings: () => {
+      mintCalled = true;
+      return Promise.resolve(
+        new PhaseMintBundle(
+          { env: { CLOUDFLARE_API_TOKEN: "should-not-mint" } },
+          [],
+          [],
+        ),
+      );
+    },
+  } as unknown as ConnectionVault;
+  const broker = new RunCredentialBroker({
+    store,
+    newId: (prefix) => `${prefix}_verifier_policy`,
+    now: () => Date.parse(NOW),
+    vault,
+    resolveRunProviderBindings: async () => [
+      {
+        ...CLOUDFLARE,
+        connection: {
+          ...CLOUDFLARE.connection,
+          credentialRecipe: { id: "cloudflare", authMode: "api_token" },
+        },
+      },
+    ],
+    policyForPlanRun: async () => ({
+      providerCredentials: {
+        requiredCredentialCapabilities: [
+          "cloudflare.account-workers-subdomain.v1",
+        ],
+      },
+    }),
+  });
+
+  await expect(
+    broker.mintRunCredentials(
+      planRun([CLOUDFLARE.provider]),
+      "plan",
+      "run_legacy_verifier",
+    ),
+  ).rejects.toThrow(
+    /credential_policy_failed.*credential capabilities missing cloudflare\.account-workers-subdomain\.v1/,
+  );
+  expect(mintCalled).toBe(false);
+});
+
+test("broker re-reads Workspace policy after vault mint before returning credentials", async () => {
+  const resolved = {
+    ...CLOUDFLARE,
+    connection: {
+      ...CLOUDFLARE.connection,
+      credentialRecipe: { id: "cloudflare", authMode: "api_token" },
+    },
+  };
+  const store = new InMemoryOpenTofuControlStore();
+  const workspace: Workspace = {
+    id: "workspace_1",
+    handle: "workspace-one",
+    displayName: "Workspace One",
+    type: "personal",
+    ownerUserId: "account_1",
+    policy: {
+      providerCredentials: {
+        allowedConnectionScopes: ["workspace"],
+        allowedCredentialRecipes: [
+          { id: "cloudflare", authMode: "api_token" },
+        ],
+      },
+    },
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+  await store.putWorkspace(workspace);
+  const installPolicy = {
+    providerCredentials: {
+      requiredProviders: [CLOUDFLARE.provider],
+    },
+  };
+  let mintCalled = false;
+  const vault = {
+    mintForCapsuleProviderBindings: async () => {
+      mintCalled = true;
+      await store.putWorkspace({
+        ...workspace,
+        policy: {
+          providerCredentials: {
+            allowedConnectionScopes: ["operator"],
+            allowedCredentialRecipes: [
+              { id: "cloudflare", authMode: "api_token" },
+            ],
+          },
+        },
+      });
+      return new PhaseMintBundle(
+        { env: { CLOUDFLARE_API_TOKEN: "minted-but-now-prohibited" } },
+        [],
+        [{
+          provider: resolved.provider,
+          connectionId: resolved.connection.id,
+          temporary: true,
+          ttlEnforced: true,
+        }],
+      );
+    },
+  } as unknown as ConnectionVault;
+  const broker = new RunCredentialBroker({
+    store,
+    newId: (prefix) => `${prefix}_workspace_policy`,
+    now: () => Date.parse(NOW),
+    vault,
+    resolveRunProviderBindings: async () => [resolved],
+    policyForPlanRun: async () => {
+      const current = await store.getWorkspace("workspace_1");
+      return mergePolicyConfigs(current?.policy, installPolicy);
+    },
+  });
+
+  await expect(
+    broker.mintRunCredentials(
+      planRun([CLOUDFLARE.provider]),
+      "plan",
+      "run_workspace_policy_race",
+    ),
+  ).rejects.toThrow(/credential_policy_failed.*scope workspace/);
+  expect(mintCalled).toBe(true);
+  expect(
+    await store.listCredentialMintEventsForRun("run_workspace_policy_race"),
+  ).toEqual([]);
+});
+
+test("broker re-reads required capabilities after vault mint", async () => {
+  const requiredCapability = "cloudflare.account-workers-subdomain.v1";
+  const resolved = {
+    ...CLOUDFLARE,
+    connection: {
+      ...CLOUDFLARE.connection,
+      credentialRecipe: { id: "cloudflare", authMode: "api_token" },
+      credentialVerification: {
+        kind: "takosumi.credential-verification@v1" as const,
+        verifierId: "unrelated-verifier@v1",
+        capabilities: [requiredCapability],
+      },
+    },
+  };
+  const store = new InMemoryOpenTofuControlStore();
+  const workspace: Workspace = {
+    id: "workspace_1",
+    handle: "workspace-one",
+    displayName: "Workspace One",
+    type: "personal",
+    ownerUserId: "account_1",
+    policy: {
+      providerCredentials: {
+        allowedConnectionScopes: ["workspace"],
+        requiredCredentialCapabilities: [requiredCapability],
+      },
+    },
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+  await store.putWorkspace(workspace);
+  let mintCalled = false;
+  const vault = {
+    mintForCapsuleProviderBindings: async () => {
+      mintCalled = true;
+      await store.putWorkspace({
+        ...workspace,
+        policy: {
+          providerCredentials: {
+            allowedConnectionScopes: ["workspace"],
+            requiredCredentialCapabilities: ["other.capability"],
+          },
+        },
+      });
+      return new PhaseMintBundle(
+        { env: { CLOUDFLARE_API_TOKEN: "minted-but-now-unverified" } },
+        [],
+        [{
+          provider: resolved.provider,
+          connectionId: resolved.connection.id,
+          temporary: true,
+          ttlEnforced: true,
+        }],
+      );
+    },
+  } as unknown as ConnectionVault;
+  const broker = new RunCredentialBroker({
+    store,
+    newId: (prefix) => `${prefix}_verifier_race`,
+    now: () => Date.parse(NOW),
+    vault,
+    resolveRunProviderBindings: async () => [resolved],
+    policyForPlanRun: async () => {
+      const current = await store.getWorkspace("workspace_1");
+      return current?.policy;
+    },
+  });
+
+  await expect(
+    broker.mintRunCredentials(
+      planRun([CLOUDFLARE.provider]),
+      "plan",
+      "run_verifier_race",
+    ),
+  ).rejects.toThrow(/credential_policy_failed.*credential capabilities missing/);
+  expect(mintCalled).toBe(true);
+  expect(await store.listCredentialMintEventsForRun("run_verifier_race"))
+    .toEqual([]);
 });
 
 test("broker rejects secret-bearing evidence before mint-event persistence", async () => {

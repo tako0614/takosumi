@@ -999,28 +999,30 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
-  test("supported resources use the managed Takosumi hosted service destination before Plan", async ({
+  test("supported resources show every compatible Host/account before Plan", async ({
     page,
   }) => {
     test.skip(
       mode !== "portable",
-      "the managed ProviderConnection fixture is portable-only",
+      "the compatible ProviderConnection fixture is portable-only",
     );
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
-    const managedV02 = {
+    const accountA = {
       ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
-      id: "pc_takosumi_cloud_v02",
+      id: "pc_cloudflare_account_a_v02",
       providerSource: "registry.opentofu.org/cloudflare/cloudflare-v02",
+      displayName: "Cloudflare account A",
     };
-    const directV02 = {
+    const accountB = {
       ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!,
-      id: "pc_cloudflare_direct_v02",
+      id: "pc_cloudflare_account_b_v02",
       providerSource: "registry.opentofu.org/cloudflare/cloudflare-v02",
+      displayName: "Cloudflare account B",
     };
     const state = await stubProviderDestinationFixture(
       page,
-      [managedV02, directV02],
+      [accountA, accountB],
       [
         {
           source: "cloudflare/cloudflare-v02",
@@ -1040,8 +1042,18 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.getByRole("button", { name: /追加|Add/u }).click();
 
     await expect(
-      page.getByRole("heading", { name: /接続が必要|A connection is needed/u }),
-    ).toHaveCount(0);
+      page.getByRole("heading", {
+        name: /Host \/ accountを選択|Choose a Host \/ account/u,
+      }),
+    ).toBeVisible();
+    const destinationControl = page.getByLabel(/Host \/ account/u);
+    await expect(destinationControl).toHaveValue("");
+    await expect(destinationControl.locator("option")).toContainText([
+      "Cloudflare account A",
+      "Cloudflare account B",
+    ]);
+    await destinationControl.selectOption("pc_cloudflare_account_b_v02");
+    await page.getByRole("button", { name: /続ける|Continue/u }).click();
 
     await expect
       .poll(() => state.bindingBody?.bindings)
@@ -1049,25 +1061,12 @@ test.describe("Takosumi dashboard browser surface", () => {
         {
           provider: "cloudflare/cloudflare-v02",
           moduleLocalName: "cloudflare-v02",
-          connectionId: "pc_takosumi_cloud_v02",
+          connectionId: "pc_cloudflare_account_b_v02",
         },
       ]);
-    const destination = page.locator(
-      '[data-install-provider-destination="auto-selected"]',
-    );
-    await expect(destination).toBeVisible();
-    await expect(destination).toContainText("Runs on Takosumi hosted service");
-    await expect(destination).toHaveAttribute(
-      "data-provider-connection-id",
-      "pc_takosumi_cloud_v02",
-    );
-    const destinationControl = page.getByLabel(/実行先|Runs on/u);
-    await expect(destinationControl).toHaveCount(1);
-    await expect(destinationControl).toHaveValue("pc_takosumi_cloud_v02");
-    await expect(destinationControl.locator("option:checked")).toHaveText(
-      "Takosumi hosted service",
-    );
-    await expect(destinationControl).toBeDisabled();
+    await expect(
+      page.locator('[data-install-provider-destination="auto-selected"]'),
+    ).toHaveCount(0);
     await expect
       .poll(() => state.mutations.indexOf("PUT /api/v1/capsules/cap_provider_destination_e2e/provider-bindings"))
       .toBeGreaterThanOrEqual(0);
@@ -1108,7 +1107,9 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.getByRole("button", { name: /追加|Add/u }).click();
 
     await expect(
-      page.getByRole("heading", { name: /接続が必要|A connection is needed/u }),
+      page.getByRole("heading", {
+        name: /互換性のあるHost \/ accountが必要|A compatible Host \/ account is needed/u,
+      }),
     ).toBeVisible();
     await expect(
       page.getByRole("link", {
@@ -1136,10 +1137,11 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
-    const managedV02 = {
+    const cloudflareHost = {
       ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
-      id: "pc_takosumi_cloud_v02_mixed",
+      id: "pc_cloudflare_host_v02_mixed",
       providerSource: "registry.opentofu.org/cloudflare/cloudflare-v02",
+      displayName: "Cloudflare host",
     };
     const awsPrimary = {
       ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!,
@@ -1155,7 +1157,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     };
     const state = await stubProviderDestinationFixture(
       page,
-      [managedV02, awsPrimary, awsSecondary],
+      [cloudflareHost, awsPrimary, awsSecondary],
       [
         {
           source: "cloudflare/cloudflare-v02",
@@ -1182,12 +1184,12 @@ test.describe("Takosumi dashboard browser surface", () => {
 
     await expect(
       page.getByRole("heading", {
-        name: /実行先を選択|Choose where this runs/u,
+        name: /Host \/ accountを選択|Choose a Host \/ account/u,
       }),
     ).toBeVisible();
     const destinations = page.locator(".iv-connection-list select");
     await expect(destinations).toHaveCount(2);
-    await expect(destinations.nth(0)).toHaveValue("pc_takosumi_cloud_v02_mixed");
+    await expect(destinations.nth(0)).toHaveValue("pc_cloudflare_host_v02_mixed");
     await destinations.nth(1).selectOption("pc_aws_primary_mixed");
     await page.getByRole("button", { name: /続ける|Continue/u }).click();
 
@@ -1203,7 +1205,7 @@ test.describe("Takosumi dashboard browser surface", () => {
         {
           provider: "cloudflare/cloudflare-v02",
           moduleLocalName: "cloudflare-v02",
-          connectionId: "pc_takosumi_cloud_v02_mixed",
+          connectionId: "pc_cloudflare_host_v02_mixed",
         },
         {
           provider: "hashicorp/aws",
@@ -1221,14 +1223,23 @@ test.describe("Takosumi dashboard browser surface", () => {
   }) => {
     test.skip(
       mode !== "portable",
-      "the ambiguous managed destination fixture is portable-only",
+      "the ambiguous destination fixture is portable-only",
     );
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
-    const managed = PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!;
+    const connectionA = {
+      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
+      id: "pc_cloudflare_connection_a",
+      displayName: "Cloudflare connection A",
+    };
+    const connectionB = {
+      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!,
+      id: "pc_cloudflare_connection_b",
+      displayName: "Cloudflare connection B",
+    };
     const state = await stubProviderDestinationFixture(page, [
-      managed,
-      { ...managed, id: "pc_takosumi_cloud_secondary" },
+      connectionA,
+      connectionB,
     ]);
     const query = new URLSearchParams({
       git: "https://github.com/example/cloudflare-service.git",
@@ -1241,7 +1252,7 @@ test.describe("Takosumi dashboard browser surface", () => {
 
     await expect(
       page.getByRole("heading", {
-        name: /実行先を選択|Choose where this runs/u,
+        name: /Host \/ accountを選択|Choose a Host \/ account/u,
       }),
     ).toBeVisible();
     await expect(
@@ -1249,7 +1260,12 @@ test.describe("Takosumi dashboard browser surface", () => {
         name: /新しい接続を追加|Add a new connection/u,
       }),
     ).toHaveCount(0);
-    await expect(page.getByLabel(/実行先|Runs on/u)).toBeVisible();
+    const destination = page.getByLabel(/Host \/ account/u);
+    await expect(destination).toBeVisible();
+    await expect(destination.locator("option")).toContainText([
+      "Cloudflare connection A",
+      "Cloudflare connection B",
+    ]);
     await expect(
       page.locator('[data-install-provider-destination="auto-selected"]'),
     ).toHaveCount(0);
@@ -1269,9 +1285,9 @@ test.describe("Takosumi dashboard browser surface", () => {
     const traffic = monitorDashboardTraffic(page, mode);
     const unrelatedV01 = {
       ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
-      id: "pc_takosumi_cloud_v01",
+      id: "pc_cloudflare_connection_v01",
       providerSource: "registry.opentofu.org/cloudflare/cloudflare-v01",
-      displayName: "Takosumi hosted service",
+      displayName: "Cloudflare v01 connection",
     };
     const state = await stubProviderDestinationFixture(
       page,
@@ -1295,7 +1311,9 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.getByRole("button", { name: /追加|Add/u }).click();
 
     await expect(
-      page.getByRole("heading", { name: /接続が必要|A connection is needed/u }),
+      page.getByRole("heading", {
+        name: /互換性のあるHost \/ accountが必要|A compatible Host \/ account is needed/u,
+      }),
     ).toBeVisible();
     await expect(
       page.locator('[data-install-provider-destination="auto-selected"]'),
@@ -1347,7 +1365,9 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.getByRole("button", { name: /追加|Add/u }).click();
 
     await expect(
-      page.getByRole("heading", { name: /接続が必要|A connection is needed/u }),
+      page.getByRole("heading", {
+        name: /互換性のあるHost \/ accountが必要|A compatible Host \/ account is needed/u,
+      }),
     ).toBeVisible();
     await expect(
       page.getByRole("link", {
@@ -1370,9 +1390,13 @@ test.describe("Takosumi dashboard browser surface", () => {
       "the deterministic install API fixture is portable-only",
     );
     const now = "2026-08-04T00:00:00.000Z";
+    const resolvedCommit = "0123456789abcdef0123456789abcdef01234567";
     const seenMutations: string[] = [];
     const prematureConfigReads: string[] = [];
     const profileDiscoveryRequests: string[] = [];
+    const stableRefResolutionBodies: unknown[] = [];
+    const sourcePostBodies: unknown[] = [];
+    const syncBodies: unknown[] = [];
     const sourceState: SourceCreateFixtureState = {
       sourceListReads: [],
       sourcePosts: [],
@@ -1413,6 +1437,16 @@ test.describe("Takosumi dashboard browser surface", () => {
       ) {
         sourceState.sourceListReads.push(`${path}${url.search}`);
         return route.fulfill({ json: { sources: [] } });
+      }
+      if (
+        path ===
+          "/api/v1/workspaces/ws_alpha/source-ref-resolutions/stable-semver" &&
+        request.method() === "POST"
+      ) {
+        stableRefResolutionBodies.push(request.postDataJSON());
+        return route.fulfill({
+          json: { tag: "v1.0.0", commit: resolvedCommit },
+        });
       }
       if (
         path === "/api/v1/capsule-configs" &&
@@ -1469,18 +1503,18 @@ test.describe("Takosumi dashboard browser surface", () => {
           json: {
             installConfigs: [
               profileConfig({
-                id: "cfg_store_managed_e2e",
-                key: "managed-v1",
-                label: "Takosumi hosted",
-                modulePath: "deploy/managed",
+                id: "cfg_store_takoform_e2e",
+                key: "takoform-v2",
+                label: "Takoform",
+                modulePath: "deploy/takoform",
                 order: 20,
                 recommended: true,
               }),
               profileConfig({
-                id: "cfg_store_byoc_e2e",
-                key: "byoc-v1",
-                label: "Bring your own cloud",
-                modulePath: "deploy/byoc",
+                id: "cfg_store_cloudflare_e2e",
+                key: "cloudflare-v1",
+                label: "Cloudflare",
+                modulePath: "deploy/cloudflare",
                 order: 10,
                 recommended: false,
               }),
@@ -1504,6 +1538,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           readonly autoSync?: boolean;
         };
         sourceState.sourcePosts.push(path);
+        sourcePostBodies.push(body);
         return route.fulfill({
           json: {
             source: {
@@ -1523,6 +1558,7 @@ test.describe("Takosumi dashboard browser surface", () => {
         });
       }
       if (path === "/api/v1/sources/src_install_e2e/sync") {
+        syncBodies.push(request.postDataJSON());
         return route.fulfill({ json: { run: { id: "run_sync_e2e" } } });
       }
       if (path === "/api/v1/runs/run_sync_e2e") {
@@ -1535,6 +1571,7 @@ test.describe("Takosumi dashboard browser surface", () => {
               type: "source_sync",
               status: "succeeded",
               sourceSnapshotId: "snap_install_e2e",
+              ref: resolvedCommit,
               createdBy: "portable-e2e",
               createdAt: now,
             },
@@ -1551,8 +1588,8 @@ test.describe("Takosumi dashboard browser surface", () => {
                 workspaceId: "ws_alpha",
                 sourceId: "src_install_e2e",
                 url: "https://github.com/example/service.git",
-                ref: "v1.0.0",
-                resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
+                ref: resolvedCommit,
+                resolvedCommit,
                 path: ".",
                 archiveRef: "fixture",
                 archiveDigest: `sha256:${"0".repeat(64)}`,
@@ -1575,27 +1612,27 @@ test.describe("Takosumi dashboard browser surface", () => {
             status: "ready",
             profiles: [
               {
-                key: "managed-v1",
+                key: "takoform-v2",
                 label: {
-                  ja: "Takosumi hosted",
-                  en: "Takosumi hosted",
+                  ja: "Takoform",
+                  en: "Takoform",
                 },
                 description: {
-                  ja: "Takosumi hosted fixture",
-                  en: "Takosumi hosted fixture",
+                  ja: "Takoform fixture",
+                  en: "Takoform fixture",
                 },
                 order: 20,
                 recommended: true,
               },
               {
-                key: "byoc-v1",
+                key: "cloudflare-v1",
                 label: {
-                  ja: "Bring your own cloud",
-                  en: "Bring your own cloud",
+                  ja: "Cloudflare",
+                  en: "Cloudflare",
                 },
                 description: {
-                  ja: "Bring your own cloud fixture",
-                  en: "Bring your own cloud fixture",
+                  ja: "Cloudflare fixture",
+                  en: "Cloudflare fixture",
                 },
                 order: 10,
                 recommended: false,
@@ -1694,7 +1731,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.goto(`/new?${handoff}`, { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle");
     const hostingOption = page.getByRole("combobox", {
-      name: /デプロイ方法|Hosting option/u,
+      name: /プロバイダー|Provider/u,
     });
     await expect(hostingOption).toHaveCount(0);
     expect(prematureConfigReads).toEqual([]);
@@ -1708,13 +1745,13 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     await expect(hostingOption).toHaveValue("");
     await expect(hostingOption).toContainText(
-      /Takosumi hosted.*おすすめ|Takosumi hosted.*Recommended/u,
+      /Takoform.*おすすめ|Takoform.*Recommended/u,
     );
-    await hostingOption.selectOption("managed-v1");
-    await expect(hostingOption).toHaveValue("managed-v1");
-    await expect(page.getByText("Takosumi hosted fixture", { exact: true })).toBeVisible();
+    await hostingOption.selectOption("takoform-v2");
+    await expect(hostingOption).toHaveValue("takoform-v2");
+    await expect(page.getByText("Takoform fixture", { exact: true })).toBeVisible();
     const hostingOptionConfirmation = page.getByRole("checkbox", {
-      name: /このデプロイ方法で追加することを確認しました|I confirm this hosting option/u,
+      name: /このプロバイダー \/ モジュールで追加することを確認しました|I confirm this Provider \/ module/u,
     });
     await expect(hostingOptionConfirmation).toBeVisible();
     await expect(hostingOptionConfirmation).not.toBeChecked();
@@ -1731,6 +1768,17 @@ test.describe("Takosumi dashboard browser surface", () => {
       )
       .toBe(true);
     expectSingleSourceCreate(sourceState);
+    expect(stableRefResolutionBodies).toEqual([
+      { url: "https://github.com/example/service" },
+    ]);
+    expect(sourcePostBodies).toEqual([
+      expect.objectContaining({
+        defaultRef: resolvedCommit,
+        defaultPath: ".",
+        autoSync: true,
+      }),
+    ]);
+    expect(syncBodies).toEqual([{ expectedRef: resolvedCommit }]);
   });
 
   test("direct Git installs discover and submit the snapshot-bound deployment profile", async ({
@@ -1749,21 +1797,21 @@ test.describe("Takosumi dashboard browser surface", () => {
       {
         deploymentProfiles: [
           {
-            key: "takosumi-cloud",
-            label: { ja: "Takosumi hosted service", en: "Takosumi hosted service" },
+            key: "takoform-v2",
+            label: { ja: "Takoform", en: "Takoform" },
             description: {
-              ja: "Run on Takosumi hosted service",
-              en: "Run on Takosumi hosted service",
+              ja: "Run on a Takoform Host",
+              en: "Run on a Takoform Host",
             },
             order: 10,
             recommended: true,
           },
           {
-            key: "byoc",
-            label: { ja: "Bring your own cloud", en: "Bring your own cloud" },
+            key: "cloudflare-v1",
+            label: { ja: "Cloudflare", en: "Cloudflare" },
             description: {
-              ja: "Run in your own cloud",
-              en: "Run in your own cloud",
+              ja: "Run with a connected Cloudflare account",
+              en: "Run with a connected Cloudflare account",
             },
             order: 20,
             recommended: false,
@@ -1779,7 +1827,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
     const hostingOption = page.getByRole("combobox", {
-      name: /デプロイ方法|Hosting option/u,
+      name: /プロバイダー|Provider/u,
     });
     await expect(hostingOption).toHaveCount(0);
 
@@ -1792,13 +1840,13 @@ test.describe("Takosumi dashboard browser surface", () => {
     expect(state.compatibilityBodies).toHaveLength(0);
     await expect(hostingOption).toHaveValue("");
 
-    await hostingOption.selectOption("takosumi-cloud");
-    await expect(hostingOption).toHaveValue("takosumi-cloud");
+    await hostingOption.selectOption("takoform-v2");
+    await expect(hostingOption).toHaveValue("takoform-v2");
     await expect(
-      page.getByText("Run on Takosumi hosted service", { exact: true }),
+      page.getByText("Run on a Takoform Host", { exact: true }),
     ).toBeVisible();
     const confirmation = page.getByRole("checkbox", {
-      name: /このデプロイ方法で追加することを確認しました|I confirm this hosting option/u,
+      name: /このプロバイダー \/ モジュールで追加することを確認しました|I confirm this Provider \/ module/u,
     });
     await confirmation.check();
     await page.getByRole("button", { name: /追加|Add/u }).click();
@@ -1807,7 +1855,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       .toBe(1);
     expect(state.compatibilityBodies[0]).toMatchObject({
       compileInstallUx: true,
-      deploymentProfileKey: "takosumi-cloud",
+      deploymentProfileKey: "takoform-v2",
       sourceSnapshotId: "snap_provider_destination_e2e",
     });
     expect(state.sourcePosts).toEqual(["/api/v1/sources"]);

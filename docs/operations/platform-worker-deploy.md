@@ -93,9 +93,10 @@ bun run docs:build
 
 The dashboard build resolves the Store tab's default store from
 `VITE_TAKOSUMI_TCS_STORE_URL`. Unset or empty means no default store for OSS
-and self-hosted builds. An operator may set its own TCS server explicitly; the
-official Takosumi build is likewise responsible for explicitly injecting
-`https://store.takosumi.com`. Users can still add store servers themselves.
+and self-hosted builds. An operator may set its own TCS server explicitly. The
+official owner release path injects `https://store.takosumi.com` for production
+and the isolated `https://store-staging.takosumi.com` for staging. Users can
+still add store servers themselves.
 
 Before deploying code that requires a newer control-ledger D1 shape, run the
 [Control D1 schema predeploy](control-d1-schema-predeploy.md) gate against the

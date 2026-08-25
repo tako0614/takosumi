@@ -49,7 +49,10 @@ import {
   PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
   structuredErrorReason,
 } from "./errors.ts";
-import { evaluateProviderCredentialMintPolicy } from "./provider_policy.ts";
+import {
+  evaluateProviderConnectionCredentialPolicy,
+  evaluateProviderCredentialMintPolicy,
+} from "./provider_policy.ts";
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import {
   resolvedProviderBindingsDigest,
@@ -193,6 +196,17 @@ export class RunCredentialBroker {
           sameProviderSource(required, entry.provider),
         ),
       );
+      const policy = await this.#policyForPlanRun(planRun);
+      const connectionPolicyReasons = mintable.flatMap((entry) =>
+        evaluateProviderConnectionCredentialPolicy(entry.connection, policy),
+      );
+      if (connectionPolicyReasons.length > 0) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `credential_policy_failed: ${connectionPolicyReasons[0]}`,
+          { reason: CREDENTIAL_POLICY_FAILED_REASON },
+        );
+      }
       const providerEntries = providerMintEntriesFromResolved(mintable);
       const credentialEvidenceProviders = providerEntries.map(
         (entry) => entry.provider,
@@ -220,6 +234,8 @@ export class RunCredentialBroker {
           bundle.providerCredentialEvidence,
           providerEntries.length,
           credentialEvidenceProviders,
+          policy,
+          mintable.map((entry) => entry.connection),
         );
         return {
           env: { ...bundle.env },
@@ -250,18 +266,25 @@ export class RunCredentialBroker {
         mintable,
         recipeResponse,
       );
+      // Vault mint is an external persistence/issuance boundary. Re-read the
+      // layered Workspace + InstallConfig policy after it returns so a policy
+      // change during issuance cannot turn into credentials handed to the
+      // runner under the stale pre-mint snapshot.
+      const postMintPolicy = await this.#policyForPlanRun(planRun);
+      await this.#assertProviderCredentialPolicy(
+        planRun,
+        evidence,
+        providerEntries.length,
+        credentialEvidenceProviders,
+        postMintPolicy,
+        mintable.map((entry) => entry.connection),
+      );
       await this.#recordProviderCredentialMintEvents(
         planRun,
         mintable,
         phase,
         auditRunId,
         evidence,
-      );
-      await this.#assertProviderCredentialPolicy(
-        planRun,
-        evidence,
-        providerEntries.length,
-        credentialEvidenceProviders,
       );
       const env = { ...bundle.env, ...recipeResponse.env };
       const manifest = credentialManifest(mintable, recipeResponse.files);
@@ -285,13 +308,22 @@ export class RunCredentialBroker {
     evidence: readonly ProviderCredentialMintEvidence[],
     expectedCredentialEvidenceCount = 0,
     credentialEvidenceProviders: readonly string[] = [],
+    policy: PolicyConfig | undefined = undefined,
+    resolvedConnections: readonly Pick<
+      ResolvedCapsuleProviderBinding["connection"],
+      "id" | "scope" | "credentialRecipe" | "credentialVerification"
+    >[] = [],
   ): Promise<void> {
-    const policy = await this.#policyForPlanRun(planRun);
+    const effectivePolicy =
+      policy === undefined
+        ? await this.#policyForPlanRun(planRun)
+        : policy;
     const result = evaluateProviderCredentialMintPolicy(
       evidence,
-      policy,
+      effectivePolicy,
       credentialEvidenceProviders,
       expectedCredentialEvidenceCount,
+      resolvedConnections,
     );
     if (result.reasons.length === 0) return;
     throw new OpenTofuControllerError(

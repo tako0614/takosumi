@@ -292,11 +292,51 @@ describe("single-screen install surface", () => {
     expect(view).toContain("setAutoSelectedProviderRows(new Set<string>());");
   });
 
+  test("makes the provider/module then Host/account boundary explicit", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain('t("installStore.deploymentProfileTitle")');
+    expect(view).toContain('t("installStore.destinationContext")');
+    expect(view).toContain('t("installStore.destinationProfile")');
+    expect(view).toContain('t("installStore.providerModule")');
+    expect(view).toContain("providerModuleLabel(row)");
+    expect(view).toContain("providerConnectionDisplayName(connection)");
+    expect(view).toContain('data-testid="install-provider-module-context"');
+    expect(view).toContain("data-provider-profile-key={profile().key}");
+  });
+
+  test("only auto-selects exactly one eligible Host/account", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const helper = read("dashboard/src/lib/provider-connections.ts");
+    expect(view).toContain("preferredProviderConnection(");
+    expect(helper).toContain("return candidates.length === 1 ? candidates[0] : undefined;");
+    expect(helper).not.toContain("const managed = candidates.filter");
+  });
+
+  test("keeps provider selection fail-closed until Workspace policy is merged", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("WorkspacePolicyState");
+    expect(view).toContain("mergeProviderConnectionPolicies");
+    expect(view).toContain(
+      'if (workspacePolicyState().status !== "ready") return [];',
+    );
+    expect(view).toContain(
+      'if (workspacePolicyState().status !== "ready") return false;',
+    );
+    expect(view).toContain("const matches = candidatesFor(row.provider, config.policy);");
+    expect(view).toContain(
+      "!candidatesFor(row.provider, config.policy).some(",
+    );
+  });
+
   test("keeps TCS handoffs in the same install surface", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain("parseInitialTcsHandoff(location.search)");
     expect(view).toContain("await fetchTcsListing(tcs.base, tcs.listingId)");
     expect(view).toContain("chooseListing(selected)");
+    expect(view).toContain(
+      "resolveAbsentRefToStableSemver: listing() !== null",
+    );
+    expect(view).toContain("setGitRef(prepared.snapshot.resolvedCommit)");
   });
 
   test("legacy install screens and cross-route progress state are deleted", () => {

@@ -92,6 +92,8 @@ const CF_PATH = "/internal/v1/connections/setups/cloudflare-api-token";
 const HTTPS_PATH = "/internal/v1/connections/setups/git-https-token";
 const SSH_PATH = "/internal/v1/connections/setups/git-ssh-key";
 const AWS_PATH = "/internal/v1/connections/setups/aws-assume-role";
+const CLOUDFLARE_ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
+const CLOUDFLARE_WORKERS_SUBDOMAIN = "takosumi-prod";
 const GCP_IMPERSONATION_PATH =
   "/internal/v1/connections/setups/google-impersonation";
 const GCP_SERVICE_ACCOUNT_JSON_PATH =
@@ -137,7 +139,7 @@ test("POST /internal/v1/connections/setups/cloudflare-api-token requires a beare
   expect((await response.json()).error.code).toBe("unauthenticated");
 });
 
-test("POST /internal/v1/connections/setups/cloudflare-api-token rejects an unknown body field (400)", async () => {
+test("POST /internal/v1/connections/setups/cloudflare-api-token rejects request-supplied verification capabilities (400)", async () => {
   const app = await makeApp();
   const response = await app.request(CF_PATH, {
     method: "POST",
@@ -145,7 +147,11 @@ test("POST /internal/v1/connections/setups/cloudflare-api-token rejects an unkno
     body: JSON.stringify({
       workspaceId: WORKSPACE_ID,
       values: { CLOUDFLARE_API_TOKEN: "cf" },
-      sneaky: "field",
+      credentialVerification: {
+        kind: "takosumi.credential-verification@v1",
+        verifierId: "attacker/request@v1",
+        capabilities: ["attacker.request-owned.v1"],
+      },
     }),
   });
   expect(response.status).toBe(400);
@@ -948,20 +954,38 @@ test("operator-scoped Connection reads are operator-gated", async () => {
 });
 
 test("POST /internal/v1/connections/{id}/test verifies via injected fetch (200 verified)", async () => {
-  const fakeFetch = (): Promise<Response> =>
-    Promise.resolve(
-      new Response(
-        JSON.stringify({ success: true, result: { status: "active" } }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+  const calls: string[] = [];
+  const fakeFetch = (input: string, init?: RequestInit): Promise<Response> => {
+    calls.push(`${init?.method ?? "GET"} ${input}`);
+    const payload = input.endsWith("/user/tokens/verify")
+      ? { success: true, result: { status: "active" } }
+      : input.endsWith(`/accounts/${CLOUDFLARE_ACCOUNT_ID}`)
+        ? { success: true, result: { id: CLOUDFLARE_ACCOUNT_ID } }
+        : input.endsWith(
+              `/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/subdomain`,
+            )
+          ? {
+              success: true,
+              result: { subdomain: CLOUDFLARE_WORKERS_SUBDOMAIN },
+            }
+          : { success: false, errors: [{ code: 1000 }] };
+    return Promise.resolve(
+      new Response(JSON.stringify(payload), {
+        status: payload.success ? 200 : 404,
+        headers: { "content-type": "application/json" },
+      }),
     );
+  };
   const app = await makeApp({ fetch: fakeFetch as never });
   const created = await app.request(CF_PATH, {
     method: "POST",
     headers: HEADERS,
     body: JSON.stringify({
       workspaceId: WORKSPACE_ID,
-      values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
+      values: {
+        CLOUDFLARE_API_TOKEN: "cf-secret-token",
+        CLOUDFLARE_ACCOUNT_ID,
+      },
     }),
   });
   const { connection } = await created.json();
@@ -975,6 +999,37 @@ test("POST /internal/v1/connections/{id}/test verifies via injected fetch (200 v
   );
   expect(tested.status).toBe(200);
   expect((await tested.json()).status).toBe("verified");
+  expect(calls).toEqual([
+    "GET https://api.cloudflare.com/client/v4/user/tokens/verify",
+    `GET https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}`,
+    `GET https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/subdomain`,
+  ]);
+
+  const read = await app.request(
+    `/internal/v1/connections/${connection.id}`,
+    { headers: HEADERS },
+  );
+  expect(read.status).toBe(200);
+  const readPayload = await read.json();
+  expect(readPayload.connection).toMatchObject({
+    status: "verified",
+    credentialVerification: {
+      kind: "takosumi.credential-verification@v1",
+      verifierId: "cloudflare/account-workers-subdomain@v1",
+      capabilities: ["cloudflare.account-workers-subdomain.v1"],
+    },
+    scopeHints: {
+      providerSettings: {
+        accountId: CLOUDFLARE_ACCOUNT_ID,
+        workersSubdomain: CLOUDFLARE_WORKERS_SUBDOMAIN,
+      },
+      moduleInputDefaults: {
+        cloudflare_account_id: CLOUDFLARE_ACCOUNT_ID,
+        cloudflare_workers_subdomain: CLOUDFLARE_WORKERS_SUBDOMAIN,
+      },
+    },
+  });
+  expect(JSON.stringify(readPayload)).not.toContain("cf-secret-token");
 });
 
 test("POST /internal/v1/connections/{id}/test verifies aws assume-role via STS (200 verified)", async () => {
@@ -1035,6 +1090,23 @@ test("POST /internal/v1/connections/{id}/test verifies aws assume-role via STS (
     "RoleArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Ftakosumi-prod",
   );
   expect(called?.auth).toContain("AWS4-HMAC-SHA256");
+
+  const read = await app.request(
+    `/internal/v1/connections/${connection.id}`,
+    { headers: HEADERS },
+  );
+  expect(read.status).toBe(200);
+  const readPayload = await read.json();
+  expect(readPayload.connection).toMatchObject({
+    status: "verified",
+    scopeHints: {
+      providerSettings: {
+        roleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
+      },
+    },
+  });
+  expect(readPayload.connection.envNames).not.toContain("AWS_ROLE_ARN");
+  expect(JSON.stringify(readPayload)).not.toContain("source_secret");
 });
 
 test("POST /internal/v1/connections/{id}/revoke revokes and returns 204", async () => {

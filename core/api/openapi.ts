@@ -571,6 +571,35 @@ function policySchemas(): Record<string, Record<string, unknown>> {
               type: "array",
               items: { type: "string" },
             },
+            allowedConnectionScopes: {
+              type: "array",
+              uniqueItems: true,
+              items: { enum: ["operator", "workspace"] },
+            },
+            allowedCredentialRecipes: {
+              type: "array",
+              uniqueItems: true,
+              items: {
+                type: "object",
+                required: ["id", "authMode"],
+                properties: {
+                  id: { type: "string", minLength: 1 },
+                  authMode: { type: "string", minLength: 1 },
+                },
+                additionalProperties: false,
+              },
+            },
+            requiredCredentialCapabilities: {
+              type: "array",
+              maxItems: 64,
+              uniqueItems: true,
+              items: {
+                type: "string",
+                minLength: 1,
+                maxLength: 128,
+                pattern: "^[a-z0-9][a-z0-9._-]{0,127}$",
+              },
+            },
             requireTemporary: { type: "boolean" },
             requireTtlEnforced: { type: "boolean" },
           },
@@ -2561,6 +2590,34 @@ function providerConnectionAndRecipeSchemas(): Record<
         },
         materialization: ref("ProviderConnectionMaterialization"),
         scopeHints: ref("ConnectionScope"),
+        credentialVerification: {
+          type: "object",
+          required: ["kind", "verifierId"],
+          properties: {
+            kind: { const: "takosumi.credential-verification@v1" },
+            capabilities: {
+              type: "array",
+              minItems: 1,
+              maxItems: 64,
+              uniqueItems: true,
+              description:
+                "Sorted host-attested verification capabilities. verifierId is provenance only and must not be used as eligibility identity.",
+              items: {
+                type: "string",
+                minLength: 1,
+                maxLength: 128,
+                pattern: "^[a-z0-9][a-z0-9._-]{0,127}$",
+              },
+            },
+            verifierId: {
+              type: "string",
+              minLength: 1,
+              maxLength: 128,
+              pattern: "^[a-z0-9][a-z0-9._/@-]{0,127}$",
+            },
+          },
+          additionalProperties: false,
+        },
         envNames: { type: "array", items: { type: "string" } },
         fileEnvNames: { type: "array", items: { type: "string" } },
         expiresAt: { type: "string", format: "date-time" },

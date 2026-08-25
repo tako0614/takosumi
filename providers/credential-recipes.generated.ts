@@ -380,7 +380,7 @@ export const REFERENCE_CREDENTIAL_RECIPES: readonly CredentialRecipe[] = [
               "ja": "アカウント ID"
             },
             "placeholder": "0123abcd...",
-            "required": false
+            "required": true
           },
           "CLOUDFLARE_ZONE_ID": {
             "label": {

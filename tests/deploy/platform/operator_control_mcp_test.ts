@@ -180,7 +180,7 @@ test("Git install-plan tools forward only the bounded public API contract and pr
           path: ".",
         },
         capsule: { name: "yurucommu", environment: "production" },
-        options: { deploymentProfileKey: "takoserver" },
+        options: { deploymentProfileKey: "takoform-v2" },
       },
     }),
     env(),
@@ -205,7 +205,7 @@ test("Git install-plan tools forward only the bounded public API contract and pr
       path: ".",
     },
     capsule: { name: "yurucommu", environment: "production" },
-    options: { deploymentProfileKey: "takoserver" },
+    options: { deploymentProfileKey: "takoform-v2" },
   });
 
   const reconciled = await handlePlatformOperatorControlMcpRequest(

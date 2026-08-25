@@ -34,6 +34,12 @@ import { normalizeProviders } from "./validation.ts";
  * be represented in HCL.
  */
 export interface CapsulePlanContext {
+  /**
+   * Canonical ProviderBinding records resolved for this Plan. Private host
+   * materializers consume the same resolution that drives generated provider
+   * blocks; they never re-resolve through a provider-facing API.
+   */
+  readonly resolvedProviderBindings: readonly ResolvedCapsuleProviderBinding[];
   /** Provider mapping derived from the resolved Provider Bindings. */
   readonly providerBindings: readonly RootProviderBinding[];
   /**
@@ -108,6 +114,7 @@ export class PlanResolutionService {
     const providerBindings = providerBindingsFromResolved(resolved);
     const providerInputDefaults = providerInputDefaultsFromResolved(resolved);
     return {
+      resolvedProviderBindings: resolved,
       providerBindings,
       requiredProvidersFromBindings: requiredProvidersFromResolved(resolved),
       providerInputDefaults,

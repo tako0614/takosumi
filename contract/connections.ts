@@ -203,6 +203,21 @@ export interface ConnectionScopeHints {
   readonly managedProviderProfile?: string;
 }
 
+/**
+ * Host-owned credential verification attestation. Provider drivers may declare
+ * a bounded verifier id in their trusted host composition, but a driver result
+ * or request cannot write this field directly.
+ */
+export interface ProviderConnectionCredentialVerification {
+  readonly kind: "takosumi.credential-verification@v1";
+  /**
+   * Canonical host-attested abilities proved by this verification. The array is
+   * bounded, sorted, and unique; verifierId remains provenance only.
+   */
+  readonly capabilities?: readonly string[];
+  readonly verifierId: string;
+}
+
 /** Detects decoder-only fields so every new write can reject them explicitly. */
 export function hasLegacyManagedProviderScopeHints(
   value: ConnectionScopeHints | undefined,
@@ -281,6 +296,7 @@ export interface ProviderConnection {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly verifiedAt?: string;
+  readonly credentialVerification?: ProviderConnectionCredentialVerification;
   readonly expiresAt?: string;
 }
 

@@ -17,6 +17,7 @@ import type {
 import type { ScopeBoundaryPolicy } from "./plan-scope.ts";
 import type { RepositoryManifestInterfaceApiVersion } from "./repository-manifest.ts";
 import type { JsonValue } from "./types.ts";
+import type { ConnectionScopeKind } from "./connections.ts";
 
 export type { Capsule, PublicCapsule, CapsuleStatus } from "./capsules.ts";
 export type {
@@ -194,6 +195,24 @@ export interface PolicyConfig {
     readonly allowedConnectionIds?: readonly string[];
     /** Destinations excluded by this profile (for example managed vs BYOC). */
     readonly forbiddenConnectionIds?: readonly string[];
+    /** Exact connection ownership scopes accepted by this profile. */
+    readonly allowedConnectionScopes?: readonly ConnectionScopeKind[];
+    /**
+     * Exact installed CredentialRecipe id/auth-mode pairs accepted by this
+     * profile. A present list is closed: missing or mismatched recipe metadata
+     * is rejected at binding and credential-mint time.
+     */
+    readonly allowedCredentialRecipes?: readonly {
+      readonly id: string;
+      readonly authMode: string;
+    }[];
+    /**
+     * Host-attested credential abilities required by this profile. Workspace
+     * and InstallConfig layers compose by sorted union; a connection must
+     * advertise every capability in the host-owned verification attestation.
+     * `verifierId` remains provenance and never establishes eligibility.
+     */
+    readonly requiredCredentialCapabilities?: readonly string[];
     /**
      * Require provider credential mint evidence to show provider-specific
      * temporary credentials. Static provider secrets are an explicit supported
@@ -630,6 +649,31 @@ export interface InstallConfigRuntimeBindingMaterialization {
 }
 
 /**
+ * Private host declaration for materializing a Capsule-bound Takosumi Accounts
+ * public OIDC client into ordinary OpenTofu module variables.
+ *
+ * The declaration contains variable names only. The host derives the issuer,
+ * public client id, pairwise owner subject, and workers.dev redirect from the
+ * current Capsule, InstallConfig, and verified Workspace ProviderBinding. Raw
+ * credentials and generated runtime secrets never cross this port.
+ */
+export interface InstallConfigAccountsOidcModuleVariableMaterialization {
+  readonly contract: "takosumi.accounts-oidc-module-variables/v1";
+  /** Optional Worker name; an empty value falls back to projectNameVariable. */
+  readonly workerNameVariable: string;
+  /** Required project/resource name used when workerNameVariable is empty. */
+  readonly projectNameVariable: string;
+  /** Additional non-secret public scalar inputs passed to the host materializer. */
+  readonly additionalInputVariables?: readonly string[];
+  /** Input names that Core rejects when a non-empty value is requested. */
+  readonly forbiddenNonEmptyInputVariables?: readonly string[];
+  readonly issuerUrlVariable: string;
+  readonly clientIdVariable: string;
+  readonly ownerSubjectVariable: string;
+  readonly allowUnpinnedOwnerClaimVariable: string;
+}
+
+/**
  * Service-side install configuration. Workspace-neutral rows are operator
  * catalog presentation only; their Git pointer is metadata, never an execution
  * shortcut or bundled-module authority.
@@ -698,6 +742,8 @@ export interface InstallConfig {
   readonly requiredInterfaces?: readonly CapsuleRequiredInterface[];
   /** Private host authority; never repository or public API configuration. */
   readonly runtimeBindingMaterialization?: InstallConfigRuntimeBindingMaterialization;
+  /** Private host authority for non-secret Accounts OIDC module variables. */
+  readonly accountsOidcModuleVariableMaterialization?: InstallConfigAccountsOidcModuleVariableMaterialization;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -709,6 +755,7 @@ export type PublicInstallConfig = Omit<
   | "internal"
   | "requiredInterfaces"
   | "runtimeBindingMaterialization"
+  | "accountsOidcModuleVariableMaterialization"
 >;
 
 /**

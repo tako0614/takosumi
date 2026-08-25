@@ -609,8 +609,6 @@ const yurucommuManagedConfig = {
     ),
     providerCredentials: {
       requiredProviders: ["registry.terraform.io/tako0614/takoform"],
-      requireTemporary: true,
-      requireTtlEnforced: true,
     },
   },
   store: store({

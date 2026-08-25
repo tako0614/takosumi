@@ -6,6 +6,7 @@ import {
   bindingNames,
   parsePlatformWorkerReleaseArgs,
   parseServingVersion,
+  platformDashboardBuildEnvironment,
   platformTargetForEnvironment,
   selectRecoveredVersion,
   secretNames,
@@ -24,6 +25,17 @@ test("platform release owns isolated staging and production targets", () => {
     workerName: "takosumi",
     hostedService: "takosumi-hosted",
   });
+});
+
+test("official platform builds pin the matching Takosumi Store by environment", () => {
+  expect(
+    platformDashboardBuildEnvironment("staging")
+      .VITE_TAKOSUMI_TCS_STORE_URL,
+  ).toBe("https://store-staging.takosumi.com");
+  expect(
+    platformDashboardBuildEnvironment("production")
+      .VITE_TAKOSUMI_TCS_STORE_URL,
+  ).toBe("https://store.takosumi.com");
 });
 
 test("production config must bind the isolated production Hosted service", () => {

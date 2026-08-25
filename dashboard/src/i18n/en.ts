@@ -22,19 +22,19 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.select": "Choose this",
   "installStore.configureHint":
     "Confirm the name and add. Repository analysis happens next.",
-  "installStore.deploymentProfileTitle": "Hosting option",
+  "installStore.deploymentProfileTitle": "Provider / module",
   "installStore.deploymentProfileHint":
-    "Choose where this service runs, then confirm the selection.",
-  "installStore.deploymentProfileChoose": "Choose a hosting option",
+    "Choose the provider and module for this service. Select a compatible Host / account next.",
+  "installStore.deploymentProfileChoose": "Choose a Provider / module",
   "installStore.deploymentProfileRecommended": "Recommended",
   "installStore.deploymentProfileConfirm":
-    "I confirm this hosting option",
+    "I confirm this Provider / module",
   "installStore.deploymentProfileRequired":
-    "Choose and confirm a hosting option before adding the service.",
+    "Choose and confirm a Provider / module before adding the service.",
   "installStore.deploymentProfileLoading":
-    "Loading available hosting options.",
+    "Loading available Providers / modules.",
   "installStore.deploymentProfileUnavailable":
-    "Takosumi could not safely determine this service's hosting options.",
+    "Takosumi could not safely determine this service's Providers / modules.",
   "installStore.name": "Service name",
   "installStore.sourceDetails": "Source details",
   "installStore.sourceUrl": "Git URL",
@@ -59,15 +59,18 @@ export const en: Record<keyof typeof ja, string> = {
     "Service deploy did not start. The Source list was temporarily unavailable, so registration did not begin. Wait briefly, then try Add again.",
   "installStore.compatibilityFailed":
     "This service cannot be added to the current environment.",
-  "installStore.providerTitle": "A connection is needed",
-  "installStore.destinationTitle": "Choose where this runs",
+  "installStore.providerTitle": "A compatible Host / account is needed",
+  "installStore.destinationTitle": "Choose a Host / account",
   "installStore.destinationHint":
-    "More than one supported destination is available. Choose the destination for this service.",
+    "More than one compatible Host / account is available for the selected Provider / module. Choose one for this service.",
   "installStore.providerHint":
-    "Choose only the connections required by this service.",
-  "installStore.chooseConnection": "Choose a connection",
-  "installStore.destination": "Runs on",
-  "installStore.destinationSummary": "Runs on {destination}",
+    "Choose only the Host / accounts required by the selected Provider / module.",
+  "installStore.chooseConnection": "Choose a Host / account",
+  "installStore.destination": "Host / account",
+  "installStore.destinationSummary": "Host / account: {destination}",
+  "installStore.destinationContext": "Selected Provider / module",
+  "installStore.destinationProfile": "Profile",
+  "installStore.providerModule": "Provider / module",
   "installStore.connect": "Add a new connection",
   "installStore.continue": "Continue",
   "installStore.setupTitle": "Set up the service",

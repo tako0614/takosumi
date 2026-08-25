@@ -324,15 +324,7 @@ export interface ScopeBoundaryPolicy {
   readonly rules: readonly ScopeBoundaryRule[];
 }
 
-export interface PolicyConfig {
-  readonly allowedProviders?: readonly string[];
-  readonly allowedResourceTypes?: readonly string[];
-  readonly destructiveChanges?: {
-    readonly requireExplicitConfirmation: boolean;
-  };
-  readonly scopeBoundary?: ScopeBoundaryPolicy;
-  readonly quota?: Readonly<Record<string, number>>;
-}
+export type PolicyConfig = ContractInstallConfig["policy"];
 
 export interface Workspace {
   readonly id: string;
@@ -2928,6 +2920,12 @@ export async function prepareCapsuleSourceSnapshot(input: {
   readonly sourceId?: string;
   readonly gitUrl: string;
   readonly ref: string;
+  /**
+   * Resolve an omitted ref through the authenticated Workspace stable-tag
+   * endpoint before creating/syncing the Source. Ordinary Git installs leave
+   * this unset so an omitted ref retains Git's `HEAD` default.
+   */
+  readonly resolveAbsentRefToStableSemver?: boolean;
   readonly name: string;
   readonly authConnectionId?: string;
   readonly signal?: AbortSignal;
@@ -2939,6 +2937,19 @@ export async function prepareCapsuleSourceSnapshot(input: {
   ) => void;
   readonly onSourceSnapshot?: (snapshot: SourceSnapshot) => void;
 }): Promise<PreparedCapsuleSourceSnapshot> {
+  const requestedRef = input.ref.trim();
+  const resolved =
+    input.resolveAbsentRefToStableSemver === true && requestedRef === ""
+      ? await resolveStableSourceTag(input.workspaceId, input.gitUrl)
+      : undefined;
+  if (resolved && !isImmutableSourceRevision(resolved.commit)) {
+    throw new ControlApiError(
+      502,
+      "invalid_stable_source_tag_response",
+      "Stable source tag resolution did not return an immutable commit.",
+    );
+  }
+  const exactRef = resolved?.commit ?? input.ref;
   const sourceId =
     input.sourceId ??
     (
@@ -2946,7 +2957,7 @@ export async function prepareCapsuleSourceSnapshot(input: {
         workspaceId: input.workspaceId,
         name: input.name,
         url: input.gitUrl,
-        defaultRef: input.ref,
+        defaultRef: exactRef,
         defaultPath: ".",
         autoSync: true,
         signal: input.signal,
@@ -2962,7 +2973,10 @@ export async function prepareCapsuleSourceSnapshot(input: {
       })
     ).source.id;
   input.onSourceCreated?.(sourceId);
-  const syncEnvelope = await syncSource(sourceId, { signal: input.signal });
+  const syncEnvelope = await syncSource(sourceId, {
+    signal: input.signal,
+    ...(resolved ? { expectedRef: resolved.commit } : {}),
+  });
   const sourceSyncRunId = extractRunId(syncEnvelope);
   if (!sourceSyncRunId) {
     throw new ControlApiError(
@@ -2975,8 +2989,20 @@ export async function prepareCapsuleSourceSnapshot(input: {
   const snapshot = await waitForLatestSourceSnapshot(sourceId, {
     runId: sourceSyncRunId,
     signal: input.signal,
+    ...(resolved ? { expectedRef: resolved.commit } : {}),
     onProgress: input.onSourceSyncProgress,
   });
+  // A stable tag may move between resolution and source sync. Never expose or
+  // compile bytes that came from a different commit than the one resolved
+  // through the authenticated Workspace endpoint.
+  if (
+    resolved &&
+    snapshot.resolvedCommit.toLowerCase() !== resolved.commit.toLowerCase()
+  ) {
+    throw sourceRevisionMismatch(
+      "Source sync returned a Snapshot for a different stable-tag commit.",
+    );
+  }
   input.onSourceSnapshot?.(snapshot);
   return { sourceId, sourceSnapshotId: snapshot.id, snapshot };
 }

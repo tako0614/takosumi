@@ -35,6 +35,10 @@ import {
   buildCloudflareApiTokenConnection,
   cloudflareOAuthDescriptorFromEnv,
 } from "./cloudflare/setup.ts";
+import {
+  CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY,
+  CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID,
+} from "./cloudflare/credentials.ts";
 import { cloudflareProviderSettings } from "./cloudflare/settings.ts";
 import { buildAwsAssumeRoleConnection } from "./aws/setup.ts";
 import {
@@ -223,6 +227,17 @@ export function connectionOAuthDescriptorsFromEnv(
 
 const cloudflareDriver: CredentialRecipeRuntimeDriver = {
   evidenceIssuer: "cloudflare_api_token_vending",
+  verifierId: CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID,
+  verificationCapabilities: [
+    CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY,
+  ],
+  verifiedScopeHintKeys: {
+    providerSettings: ["accountId", "workersSubdomain"],
+    moduleInputDefaults: [
+      "cloudflare_account_id",
+      "cloudflare_workers_subdomain",
+    ],
+  },
   async verify({ connection, values, fetch }) {
     const token = values.CLOUDFLARE_API_TOKEN ?? values.CF_API_TOKEN;
     if (!token)

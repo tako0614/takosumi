@@ -387,11 +387,13 @@ pre-run actions and ship only with matching implementation and discovery.
 Operator/hosted service may add Enterprise SSO, SCIM, and commercial audit export through
 that generic seam.
 
-Takosumi does not auto-register an Accounts OIDC client from a Capsule or
-InstallConfig. Operators/compositions register OIDC clients explicitly.
-Already-registered Capsule clients continue through the migration drain, but
-each use revalidates the current Capsule, InstallConfig, Workspace membership,
-and scopes; invalid terminal bindings are revoked best-effort. Accounts tokens
+Takosumi does not infer or register an Accounts OIDC client from Git metadata,
+provider output, or an arbitrary provider call. A Host may explicitly opt a
+DB-owned InstallConfig into private OIDC materialization; Plan derives and pins
+only its non-secret values, and the exact client may be registered idempotently
+only during final Apply revalidation. Already-registered Capsule clients
+revalidate the current Capsule, InstallConfig, Workspace membership, and scopes
+on every use; invalid terminal bindings are revoked best-effort. Accounts tokens
 and Interface invocations continue to validate both scope and Workspace.
 Consumers must encrypt token material in their secret store and never place it
 in OpenTofu state or Outputs.

@@ -46,6 +46,15 @@ function installConfig(): InstallConfig {
         { binding: "INTERNAL_SECRET", bytes: 32, encoding: "hex" },
       ],
     },
+    accountsOidcModuleVariableMaterialization: {
+      contract: "takosumi.accounts-oidc-module-variables/v1",
+      workerNameVariable: "worker_name",
+      projectNameVariable: "project_name",
+      issuerUrlVariable: "takosumi_accounts_issuer_url",
+      clientIdVariable: "takosumi_accounts_client_id",
+      ownerSubjectVariable: "oidc_owner_sub",
+      allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
+    },
     createdAt: NOW,
     updatedAt: NOW,
   };
@@ -87,6 +96,8 @@ test("public InstallConfig projection never returns secret install variables", (
   expect(serialized).not.toContain("per_install_overrides");
   expect(serialized).not.toContain("runtime-binding-profile");
   expect(serialized).not.toContain("INTERNAL_SECRET");
+  expect(serialized).not.toContain("accounts-oidc-module-variables");
+  expect(serialized).not.toContain("oidc_owner_sub");
 });
 
 test("public InstallConfig policy projection keeps only safe policy fields", () => {
@@ -96,6 +107,13 @@ test("public InstallConfig policy projection keeps only safe policy fields", () 
       allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
       providerCredentials: {
         requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+        allowedConnectionScopes: ["workspace"],
+        allowedCredentialRecipes: [
+          { id: "cloudflare", authMode: "api_token" },
+        ],
+        requiredCredentialCapabilities: [
+          "cloudflare.account-workers-subdomain.v1",
+        ],
         requireTemporary: true,
         requireTtlEnforced: true,
         clientSecret: "provider-secret",
@@ -112,6 +130,13 @@ test("public InstallConfig policy projection keeps only safe policy fields", () 
     allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     providerCredentials: {
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+      allowedConnectionScopes: ["workspace"],
+      allowedCredentialRecipes: [
+        { id: "cloudflare", authMode: "api_token" },
+      ],
+      requiredCredentialCapabilities: [
+        "cloudflare.account-workers-subdomain.v1",
+      ],
       requireTemporary: true,
       requireTtlEnforced: true,
     },

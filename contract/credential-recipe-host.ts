@@ -1,4 +1,8 @@
-import type { ProviderBinding, ProviderConnection } from "./connections.ts";
+import type {
+  ConnectionScopeHints,
+  ProviderBinding,
+  ProviderConnection,
+} from "./connections.ts";
 import {
   canonicalRunCredentialSettings,
   isCapsuleRunCredentialIssuance,
@@ -70,13 +74,48 @@ export interface CredentialRecipeDriverMintResult {
   readonly evidence: ProviderCredentialMintEvidence;
 }
 
+/**
+ * Non-secret scope metadata learned from a successful trusted verification.
+ * Core treats these keys as opaque JSON and re-validates their bounded shape
+ * before persisting them on the Provider Connection.
+ */
+export type CredentialRecipeVerifiedScopeHints = Pick<
+  ConnectionScopeHints,
+  "moduleInputDefaults" | "providerSettings"
+>;
+
+/**
+ * Trusted ownership declaration for metadata returned by a verifier. A driver
+ * may only return keys it declares here; Vault uses the same closed declaration
+ * to clear verifier-owned keys when a later re-test fails.
+ */
+export interface CredentialRecipeVerifiedScopeHintKeys {
+  readonly moduleInputDefaults?: readonly string[];
+  readonly providerSettings?: readonly string[];
+}
+
+export interface CredentialRecipeDriverVerifyResult {
+  readonly ok: boolean;
+  readonly detail?: string;
+  /** Persisted only when `ok` is true and Core accepts the bounded shape. */
+  readonly verifiedScopeHints?: CredentialRecipeVerifiedScopeHints;
+}
+
 export interface CredentialRecipeRuntimeDriver {
   /** Host-pinned bounded label persisted in provider credential evidence. */
   readonly evidenceIssuer: string;
-  verify?(input: CredentialRecipeDriverContext): Promise<{
-    readonly ok: boolean;
-    readonly detail?: string;
-  }>;
+  /** Optional host-composed verifier identity for successful verification. */
+  readonly verifierId?: string;
+  /**
+   * Host-owned capability claims persisted only after this verifier succeeds.
+   * Runtime verification results cannot add or widen these claims.
+   */
+  readonly verificationCapabilities?: readonly string[];
+  /** Closed key ownership for verifier-produced non-secret scope hints. */
+  readonly verifiedScopeHintKeys?: CredentialRecipeVerifiedScopeHintKeys;
+  verify?(
+    input: CredentialRecipeDriverContext,
+  ): Promise<CredentialRecipeDriverVerifyResult>;
   mint?(
     input: CredentialRecipeDriverContext,
   ): Promise<CredentialRecipeDriverMintResult>;
@@ -189,6 +228,11 @@ export function resolveCredentialRecipeHostComposition(
     if (!isBoundedControlFreeText(driver.evidenceIssuer)) {
       throw new TypeError(
         `Credential Recipe driver ${key} requires a bounded control-free evidenceIssuer`,
+      );
+    }
+    if (!hasValidCredentialVerificationDescriptor(driver)) {
+      throw new TypeError(
+        `Credential Recipe driver ${key} has an invalid credential verification descriptor`,
       );
     }
   }
@@ -414,6 +458,38 @@ function isBoundedToken(value: unknown): value is string {
   return (
     typeof value === "string" &&
     /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value)
+  );
+}
+
+function hasValidCredentialVerificationDescriptor(
+  driver: CredentialRecipeRuntimeDriver,
+): boolean {
+  const verifierId = driver.verifierId;
+  const capabilities = driver.verificationCapabilities;
+  const declaresVerificationAuthority =
+    verifierId !== undefined ||
+    capabilities !== undefined ||
+    driver.verifiedScopeHintKeys !== undefined;
+  if (declaresVerificationAuthority && typeof driver.verify !== "function") {
+    return false;
+  }
+  if (
+    verifierId !== undefined &&
+    !/^[a-z0-9][a-z0-9._/@-]{0,127}$/u.test(verifierId)
+  ) {
+    return false;
+  }
+  if (capabilities === undefined) return true;
+  return (
+    verifierId !== undefined &&
+    Array.isArray(capabilities) &&
+    capabilities.length > 0 &&
+    capabilities.length <= 64 &&
+    capabilities.every(
+      (capability) =>
+        typeof capability === "string" &&
+        /^[a-z0-9][a-z0-9._-]{0,127}$/u.test(capability),
+    )
   );
 }
 

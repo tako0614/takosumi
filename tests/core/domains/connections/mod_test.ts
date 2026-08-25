@@ -219,6 +219,85 @@ test("operator mode resolves a verified workspace-bindable run-issued connection
   ]);
 });
 
+test("Capsule binding resolution enforces InstallConfig connection scope and recipe policy", async () => {
+  const { store, model } = await setup();
+  const workspaceConnection = connection({
+    id: "conn_workspace_wrong_recipe",
+    workspaceId: model.workspace.id,
+    credentialRecipe: { id: "cloudflare", authMode: "oauth" },
+  });
+  await store.putConnection(workspaceConnection);
+  await store.putInstallConfig({
+    ...model.installConfig,
+    policy: {
+      providerCredentials: {
+        allowedConnectionScopes: ["workspace"],
+        allowedCredentialRecipes: [
+          { id: "cloudflare", authMode: "api_token" },
+        ],
+      },
+    },
+  });
+  await store.putProviderBindingSet({
+    id: "dp_policy_wrong_recipe",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [{ provider: CLOUDFLARE, connectionId: workspaceConnection.id }],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+  const service = new ConnectionsService({ store });
+  await expect(service.resolveProviderBindings(model.capsule)).rejects.toThrow(
+    /credential recipe cloudflare:oauth/,
+  );
+
+  const operatorConnection = connection({
+    id: "conn_operator_api_token",
+    credentialRecipe: { id: "cloudflare", authMode: "api_token" },
+  });
+  const operatorRunIssuedConnection = {
+    ...operatorConnection,
+    materialization: "run-issued" as const,
+    credentialRecipe: {
+      id: "cloudflare",
+      authMode: "api_token",
+      runIssuance: {
+        context: "capsule-run.v1" as const,
+        operatorConnection: "workspace-bindable" as const,
+        storedMaterial: "none" as const,
+        audience: "cloudflare.v1",
+        scopes: ["cloudflare:deploy"],
+      },
+    },
+  };
+  const operatorStore = new InMemoryOpenTofuControlStore();
+  const operatorModel = await seedCapsuleModel(operatorStore);
+  await operatorStore.putInstallConfig({
+    ...operatorModel.installConfig,
+    policy: {
+      providerCredentials: { allowedConnectionScopes: ["workspace"] },
+    },
+  });
+  await operatorStore.putConnection(operatorRunIssuedConnection);
+  await operatorStore.putProviderBindingSet({
+    id: "dp_policy_operator",
+    workspaceId: operatorModel.workspace.id,
+    capsuleId: operatorModel.capsule.id,
+    environment: operatorModel.capsule.environment,
+    bindings: [{ provider: CLOUDFLARE, connectionId: operatorConnection.id }],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+  const operatorService = new ConnectionsService({
+    store: operatorStore,
+    allowOperatorScopedProviderConnections: true,
+  });
+  await expect(
+    operatorService.resolveProviderBindings(operatorModel.capsule),
+  ).rejects.toThrow(/scope operator/);
+});
+
 test("release-owned run settings replace a stale stored binding before the Run digest", async () => {
   const { store, model } = await setup();
   const fixed = connection({
@@ -487,6 +566,90 @@ test("binding digest ignores verification progress but pins run-issuance authori
   expect(await resolvedProviderBindingsDigest(providerConfigChanged)).not.toBe(
     verifiedDigest,
   );
+});
+
+test("binding digest pins materialization and verified scope metadata", async () => {
+  const base = [
+    {
+      provider: CLOUDFLARE,
+      connection: connection({
+        id: "conn_digest_scope_hints",
+        materialization: "secret",
+        scopeHints: {
+          providerSettings: {
+            accountId: "acct_digest",
+            workersSubdomain: "team-workers",
+          },
+          moduleInputDefaults: {
+            cloudflare_account_id: "acct_digest",
+            cloudflare_workers_subdomain: "team-workers",
+          },
+        },
+      }),
+      materialization: "secret" as const,
+    },
+  ];
+  const digest = await resolvedProviderBindingsDigest(base);
+
+  expect(
+    await resolvedProviderBindingsDigest(
+      base.map((entry) => ({
+        ...entry,
+        connection: {
+          ...entry.connection,
+          materialization: "oauth" as const,
+        },
+      })),
+    ),
+  ).not.toBe(digest);
+  expect(
+    await resolvedProviderBindingsDigest(
+      base.map((entry) => ({
+        ...entry,
+        connection: {
+          ...entry.connection,
+          scopeHints: {
+            ...entry.connection.scopeHints,
+            providerSettings: {
+              accountId: "acct_changed",
+              workersSubdomain: "team-workers",
+            },
+          },
+        },
+      })),
+    ),
+  ).not.toBe(digest);
+  expect(
+    await resolvedProviderBindingsDigest(
+      base.map((entry) => ({
+        ...entry,
+        connection: {
+          ...entry.connection,
+          scopeHints: {
+            ...entry.connection.scopeHints,
+            moduleInputDefaults: {
+              cloudflare_account_id: "acct_digest",
+              cloudflare_workers_subdomain: "other-workers",
+            },
+          },
+        },
+      })),
+    ),
+  ).not.toBe(digest);
+  expect(
+    await resolvedProviderBindingsDigest(
+      base.map((entry) => ({
+        ...entry,
+        connection: {
+          ...entry.connection,
+          credentialVerification: {
+            kind: "takosumi.credential-verification@v1" as const,
+            verifierId: "cloudflare/account-workers-subdomain@v1",
+          },
+        },
+      })),
+    ),
+  ).not.toBe(digest);
 });
 
 test("provider connection listing ignores durable operator rows in favor of release-owned projections", async () => {

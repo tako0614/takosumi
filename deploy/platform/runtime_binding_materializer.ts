@@ -1,11 +1,7 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import { derivePairwiseSubject } from "../../accounts/service/src/subject.ts";
 import { D1AccountsStore } from "../../accounts/service/src/d1-store.ts";
 import { oidcAllowedScopes } from "../../accounts/service/src/oidc-live-grant.ts";
-import type {
-  AccountsStore,
-  OidcClientRecord,
-} from "../../accounts/service/src/store.ts";
+import type { AccountsStore } from "../../accounts/service/src/store.ts";
 import type { Capsule } from "../../contract/capsules.ts";
 import type {
   InstallConfig,
@@ -19,6 +15,10 @@ import type {
 import { resolveCanonicalCapsuleRunCredentialContext } from "../../core/domains/deploy-control/run_credential_context.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
 import type { D1Database as ControlD1Database } from "../../worker/src/bindings.ts";
+import {
+  derivePublicOidcClientId,
+  registerCapsulePublicOidcClient,
+} from "./accounts_oidc_client_registration.ts";
 
 const AUTHORITY_CONTRACT = "takosumi.runtime-bindings/v1";
 const PROFILE_CONTRACT = "takosumi.runtime-binding-profile/v1";
@@ -209,51 +209,30 @@ export function createTakosumiRuntimeBindingMaterializer(input: {
             updatedAt: now.toISOString(),
           });
         }
-        const clientId = `tko_${await derivedBase64Url(derivationKey, [
+        const clientId = await derivePublicOidcClientId(derivationKey, [
           "takosumi-runtime-oidc-client-v1",
           authority.workspaceId,
           authority.capsuleId,
           config.id,
-        ])}`;
-        const redirectUri = new URL(callbackPath, `${publicOrigin}/`).href;
-        const existingForCapsule = await input.accounts.findOidcClientForCapsule(
-          capsule.id,
-        );
-        if (
-          existingForCapsule &&
-          existingForCapsule.clientId !== clientId
-        ) {
-          invalid("Capsule is already bound to another OIDC client");
-        }
-        const existing = await input.accounts.findOidcClient(clientId);
-        if (existing && existing.capsuleId !== capsule.id) {
-          invalid("OIDC client is already bound to another Capsule");
-        }
-        const ownerSubject = await derivePairwiseSubject({
-          secret: pairwiseSubjectSecret,
-          takosumiSubject: canonical.context
+        ]);
+        const registered = await registerCapsulePublicOidcClient({
+          accounts: input.accounts,
+          capsule,
+          installingPrincipalId: canonical.context
             .installingPrincipalId as TakosumiSubject,
-          clientId: `${capsule.name}:${capsule.id}:${clientId}`,
-        });
-        const now = clock().getTime();
-        if (!Number.isSafeInteger(now) || now <= 0) invalid("clock is invalid");
-        const registration: OidcClientRecord = {
+          issuer,
+          publicOrigin,
+          callbackPath,
+          scopes,
           clientId,
-          capsuleId: capsule.id,
-          namespacePath: "identity.oidc",
-          issuerUrl: issuer,
-          redirectUris: [redirectUri],
-          allowedScopes: scopes,
-          subjectMode: "pairwise",
-          tokenEndpointAuthMethod: "none",
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-        };
-        await input.accounts.saveOidcClient(registration);
+          pairwiseSubjectSecret,
+          clock,
+        });
         values[profile.oidcClient.issuerBinding] = issuer;
-        values[profile.oidcClient.clientIdBinding] = clientId;
-        values[profile.oidcClient.ownerSubjectBinding] = ownerSubject;
-        values[profile.oidcClient.redirectUriBinding] = redirectUri;
+        values[profile.oidcClient.clientIdBinding] = registered.clientId;
+        values[profile.oidcClient.ownerSubjectBinding] =
+          registered.ownerSubject;
+        values[profile.oidcClient.redirectUriBinding] = registered.redirectUri;
       }
 
       if (!sameStrings(Object.keys(values).sort(), declared)) {
@@ -415,16 +394,6 @@ function boundedSecret(value: string, label: string): string {
 async function derivedHexSecret(secret: string, parts: readonly string[]): Promise<string> {
   const bytes = await hmac(secret, parts);
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-async function derivedBase64Url(secret: string, parts: readonly string[]): Promise<string> {
-  const bytes = await hmac(secret, parts);
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary)
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/u, "");
 }
 
 async function hmac(secret: string, parts: readonly string[]): Promise<Uint8Array> {

@@ -10,6 +10,10 @@
 
 import type { PolicyConfig } from "@takosumi/internal/deploy-control-api";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import type {
+  ConnectionScopeKind,
+  ProviderConnection,
+} from "takosumi-contract/connections";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import { normalizeScopeBoundaryPolicy } from "takosumi-contract";
 import { canonicalProviderSource } from "takosumi-contract/provider-env-rules";
@@ -20,6 +24,12 @@ import {
   type ProviderAllowlistResult,
 } from "takosumi-policy";
 import type { ProviderInstallationEvidence } from "./mod.ts";
+
+type AllowedCredentialRecipe = {
+  readonly id: string;
+  readonly authMode: string;
+};
+type AllowedCredentialRecipes = readonly AllowedCredentialRecipe[];
 
 /**
  * Canonicalizes a provider rule to a fully-qualified OpenTofu registry address.
@@ -303,16 +313,106 @@ function mergeProviderCredentialPolicy(
       ...(local?.forbiddenConnectionIds ?? []),
     ]),
   ).sort();
+  const allowedConnectionScopes = intersectOptionalLists(
+    ceiling?.allowedConnectionScopes,
+    local?.allowedConnectionScopes,
+  ) as readonly ConnectionScopeKind[] | undefined;
+  const allowedCredentialRecipes = intersectOptionalCredentialRecipes(
+    ceiling?.allowedCredentialRecipes,
+    local?.allowedCredentialRecipes,
+  );
+  const requiredCredentialCapabilities = unionRequiredCapabilities(
+    ceiling?.requiredCredentialCapabilities,
+    local?.requiredCredentialCapabilities,
+  );
   return {
     ...(requiredProviders.length > 0 ? { requiredProviders } : {}),
     ...(allowedConnectionIds !== undefined ? { allowedConnectionIds } : {}),
     ...(forbiddenConnectionIds.length > 0 ? { forbiddenConnectionIds } : {}),
+    ...(allowedConnectionScopes !== undefined
+      ? { allowedConnectionScopes }
+      : {}),
+    ...(allowedCredentialRecipes !== undefined
+      ? { allowedCredentialRecipes }
+      : {}),
+    ...(requiredCredentialCapabilities !== undefined
+      ? { requiredCredentialCapabilities }
+      : {}),
     requireTemporary:
       ceiling?.requireTemporary === true || local?.requireTemporary === true,
     requireTtlEnforced:
       ceiling?.requireTtlEnforced === true ||
       local?.requireTtlEnforced === true,
   };
+}
+
+/**
+ * Evaluates the non-secret identity of a Provider Connection against the
+ * composed InstallConfig/Workspace credential policy. A present allowlist is
+ * closed: missing metadata is a rejection, never an implicit wildcard.
+ */
+export function evaluateProviderConnectionCredentialPolicy(
+  connection: Pick<
+    ProviderConnection,
+    "id" | "scope" | "credentialRecipe" | "credentialVerification"
+  >,
+  policy: PolicyConfig | undefined,
+): readonly string[] {
+  const credentialPolicy = policy?.providerCredentials;
+  if (!credentialPolicy) return [];
+  const reasons: string[] = [];
+  if (
+    credentialPolicy.allowedConnectionIds !== undefined &&
+    !credentialPolicy.allowedConnectionIds.includes(connection.id)
+  ) {
+    reasons.push(
+      `provider credential policy rejects connection ${connection.id} (not in allowed connection ids)`,
+    );
+  }
+  if (credentialPolicy.forbiddenConnectionIds?.includes(connection.id)) {
+    reasons.push(
+      `provider credential policy rejects connection ${connection.id} (forbidden connection id)`,
+    );
+  }
+  if (
+    credentialPolicy.allowedConnectionScopes !== undefined &&
+    !credentialPolicy.allowedConnectionScopes.includes(connection.scope)
+  ) {
+    reasons.push(
+      `provider credential policy rejects connection ${connection.id} scope ${connection.scope}`,
+    );
+  }
+  if (credentialPolicy.allowedCredentialRecipes !== undefined) {
+    const recipe = connection.credentialRecipe;
+    const allowed = credentialPolicy.allowedCredentialRecipes.some(
+      (candidate) =>
+        candidate.id === recipe?.id && candidate.authMode === recipe?.authMode,
+    );
+    if (!allowed) {
+      const actual = recipe
+        ? `${recipe.id}:${recipe.authMode}`
+        : "missing";
+      reasons.push(
+        `provider credential policy rejects connection ${connection.id} credential recipe ${actual}`,
+      );
+    }
+  }
+  if (credentialPolicy.requiredCredentialCapabilities !== undefined) {
+    const verification = connection.credentialVerification;
+    const capabilities =
+      verification?.kind === "takosumi.credential-verification@v1"
+        ? new Set(verification.capabilities ?? [])
+        : new Set<string>();
+    const missing = credentialPolicy.requiredCredentialCapabilities.filter(
+      (capability) => !capabilities.has(capability),
+    );
+    if (missing.length > 0) {
+      reasons.push(
+        `provider credential policy rejects connection ${connection.id} credential capabilities missing ${missing.join(", ")}`,
+      );
+    }
+  }
+  return reasons;
 }
 
 export interface ProviderLockfilePolicyResult {
@@ -337,10 +437,19 @@ export function evaluateProviderCredentialMintPolicy(
   policy: PolicyConfig | undefined,
   requiredProviders: readonly string[] = [],
   expectedCredentialEvidenceCount = 0,
+  resolvedConnections: readonly Pick<
+    ProviderConnection,
+    "id" | "scope" | "credentialRecipe" | "credentialVerification"
+  >[] = [],
 ): ProviderCredentialMintPolicyResult {
   const credentialPolicy = policy?.providerCredentials;
   if (!credentialPolicy) return { reasons: [] };
   const reasons: string[] = [];
+  for (const connection of resolvedConnections) {
+    reasons.push(
+      ...evaluateProviderConnectionCredentialPolicy(connection, policy),
+    );
+  }
   if (credentialPolicy.allowedConnectionIds !== undefined) {
     const allowed = new Set(credentialPolicy.allowedConnectionIds);
     const disallowed = evidence
@@ -533,6 +642,41 @@ function intersectOptionalLists(
   if (local === undefined) return ceiling;
   const allowed = new Set(ceiling);
   return local.filter((entry) => allowed.has(entry)).sort();
+}
+
+function unionRequiredCapabilities(
+  ceiling: readonly string[] | undefined,
+  local: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (ceiling === undefined && local === undefined) return undefined;
+  return Array.from(
+    new Set([...(ceiling ?? []), ...(local ?? [])]),
+  ).sort();
+}
+
+function intersectOptionalCredentialRecipes(
+  ceiling: AllowedCredentialRecipes | undefined,
+  local: AllowedCredentialRecipes | undefined,
+): AllowedCredentialRecipes | undefined {
+  if (ceiling === undefined) return local;
+  if (local === undefined) return ceiling;
+  const allowed = new Set(ceiling.map(credentialRecipeKey));
+  return local
+    .filter((entry) => allowed.has(credentialRecipeKey(entry)))
+    .sort(compareCredentialRecipes);
+}
+
+function credentialRecipeKey(recipe: { id: string; authMode: string }): string {
+  return `${recipe.id}\u0000${recipe.authMode}`;
+}
+
+function compareCredentialRecipes(
+  left: { id: string; authMode: string },
+  right: { id: string; authMode: string },
+): number {
+  return (
+    left.id.localeCompare(right.id) || left.authMode.localeCompare(right.authMode)
+  );
 }
 
 function mergeScopeBoundary(

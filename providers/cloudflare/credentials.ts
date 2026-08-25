@@ -25,6 +25,18 @@ const CLOUDFLARE_API_TOKENS_URL =
 const CLOUDFLARE_API_TOKEN_VERIFY_URL =
   "https://api.cloudflare.com/client/v4/user/tokens/verify";
 const CLOUDFLARE_ACCOUNTS_URL = "https://api.cloudflare.com/client/v4/accounts";
+export const CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID =
+  "cloudflare/account-workers-subdomain@v1" as const;
+/**
+ * Provider-neutral ability proved by the Cloudflare account + Workers
+ * subdomain verifier. Consumers authorize this capability; verifierId remains
+ * implementation provenance and is never an eligibility identity.
+ */
+export const CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY =
+  "cloudflare.account-workers-subdomain.v1" as const;
+const CLOUDFLARE_ACCOUNT_ID_PATTERN = /^[a-f0-9]{32}$/u;
+const CLOUDFLARE_WORKERS_SUBDOMAIN_PATTERN =
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
 
 /**
  * Injected fetch seam so the driver is unit-testable without real network.
@@ -72,14 +84,26 @@ export interface MintCloudflareApiTokenInput {
 export interface VerifyCloudflareTokenInput {
   /** The decrypted CF API token to verify. */
   readonly token: string;
-  /** Optional account id used to verify Wrangler OAuth bearer access. */
+  /** Account id used to verify account and Workers access. */
   readonly accountId?: string;
   readonly fetch: CloudflareFetch;
+}
+
+export interface CloudflareVerifiedScopeHints {
+  readonly providerSettings: {
+    readonly accountId: string;
+    readonly workersSubdomain: string;
+  };
+  readonly moduleInputDefaults: {
+    readonly cloudflare_account_id: string;
+    readonly cloudflare_workers_subdomain: string;
+  };
 }
 
 export interface CloudflareVerifyResult {
   readonly ok: boolean;
   readonly detail?: string;
+  readonly verifiedScopeHints?: CloudflareVerifiedScopeHints;
 }
 
 /** Output of {@link mintCloudflareProviderValues}: env map + mint evidence. */
@@ -234,7 +258,23 @@ export async function mintCloudflareApiToken(
 export async function verifyCloudflareToken(
   input: VerifyCloudflareTokenInput,
 ): Promise<CloudflareVerifyResult> {
-  let response: Response;
+  const accountId = input.accountId?.trim();
+  if (!accountId || !CLOUDFLARE_ACCOUNT_ID_PATTERN.test(accountId)) {
+    return {
+      ok: false,
+      detail: "cloudflare token verification requires a lowercase 32-hex account id",
+    };
+  }
+
+  let tokenVerifyState:
+    | { readonly kind: "active" }
+    | { readonly kind: "inactive"; readonly detail: string }
+    | { readonly kind: "fallback"; readonly detail: string }
+    | { readonly kind: "invalid"; readonly detail: string } = {
+    kind: "invalid",
+    detail: "token verify request did not complete",
+  };
+  let response: Response | undefined;
   try {
     response = await input.fetch(CLOUDFLARE_API_TOKEN_VERIFY_URL, {
       method: "GET",
@@ -244,40 +284,93 @@ export async function verifyCloudflareToken(
       },
     });
   } catch (error) {
-    return {
-      ok: false,
+    tokenVerifyState = {
+      kind: "invalid",
       detail: `token verify request failed: ${errorMessage(error)}`,
     };
   }
-  if (!response.ok) {
-    const accountId = input.accountId;
-    if (accountId) {
-      const accountProbe = await verifyCloudflareAccountAccess({
-        token: input.token,
-        accountId,
-        fetch: input.fetch,
-      });
-      if (accountProbe.ok) return { ok: true };
-      return {
-        ok: false,
-        detail: `token verify returned http ${response.status}; ${accountProbe.detail}`,
+  if (response !== undefined) {
+    if (!response.ok) {
+      // Wrangler OAuth bearer tokens do not answer the API-token verify route;
+      // account + Workers access below is the explicit fallback authority.
+      tokenVerifyState = {
+        kind: "fallback",
+        detail: `token verify returned http ${response.status}`,
       };
+    } else {
+      let body: unknown;
+      let parsed = false;
+      try {
+        body = await response.json();
+        parsed = true;
+      } catch {
+        tokenVerifyState = {
+          kind: "invalid",
+          detail: "token verify returned non-JSON body",
+        };
+      }
+      if (parsed) {
+        if (isCloudflareVerifyOk(body)) {
+          tokenVerifyState = { kind: "active" };
+        } else if (isRecord(body) && body.success === true) {
+          tokenVerifyState = {
+            kind: "inactive",
+            detail: "token verify reported the token is not active",
+          };
+        } else {
+          tokenVerifyState = {
+            kind: "invalid",
+            detail: "token verify response did not confirm an active token",
+          };
+        }
+      }
     }
+  }
+
+  const accountProbe = await verifyCloudflareAccountAccess({
+    token: input.token,
+    accountId,
+    fetch: input.fetch,
+  });
+  const workersSubdomainProbe = await verifyCloudflareWorkersSubdomain({
+    token: input.token,
+    accountId,
+    fetch: input.fetch,
+  });
+  const tokenFailureDetail =
+    tokenVerifyState.kind === "inactive" || tokenVerifyState.kind === "invalid"
+      ? tokenVerifyState.detail
+      : undefined;
+  const failures = [
+    ...(tokenFailureDetail ? [tokenFailureDetail] : []),
+    ...(accountProbe.ok ? [] : [accountProbe.detail]),
+    ...(workersSubdomainProbe.ok ? [] : [workersSubdomainProbe.detail]),
+  ].filter((detail): detail is string => detail !== undefined);
+  if (!workersSubdomainProbe.ok) {
     return {
       ok: false,
-      detail: `token verify returned http ${response.status}`,
+      detail: failures.join("; ") || workersSubdomainProbe.detail,
     };
   }
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    return { ok: false, detail: "token verify returned non-JSON body" };
+  if (failures.length > 0) {
+    return { ok: false, detail: failures.join("; ") };
   }
-  if (isCloudflareVerifyOk(body)) return { ok: true };
+
+  // A non-2xx token verify is the supported Wrangler OAuth fallback; the
+  // account and Workers probes above still prove the bearer has the exact
+  // account access required by the provider.
   return {
-    ok: false,
-    detail: "token verify reported the token is not active",
+    ok: true,
+    verifiedScopeHints: {
+      providerSettings: {
+        accountId,
+        workersSubdomain: workersSubdomainProbe.subdomain,
+      },
+      moduleInputDefaults: {
+        cloudflare_account_id: accountId,
+        cloudflare_workers_subdomain: workersSubdomainProbe.subdomain,
+      },
+    },
   };
 }
 
@@ -317,11 +410,76 @@ async function verifyCloudflareAccountAccess(
       detail: "cloudflare account probe returned non-JSON body",
     };
   }
-  if (isCloudflareApiSuccess(body)) return { ok: true };
+  if (
+    isRecord(body) &&
+    body.success === true &&
+    isRecord(body.result) &&
+    body.result.id === input.accountId
+  ) {
+    return { ok: true };
+  }
   return {
     ok: false,
-    detail: "cloudflare account probe did not confirm account access",
+    detail: "cloudflare account probe did not confirm the requested account access",
   };
+}
+
+async function verifyCloudflareWorkersSubdomain(
+  input: VerifyCloudflareTokenInput & { readonly accountId: string },
+): Promise<
+  | { readonly ok: true; readonly subdomain: string }
+  | { readonly ok: false; readonly detail: string }
+> {
+  let response: Response;
+  try {
+    response = await input.fetch(
+      `${CLOUDFLARE_ACCOUNTS_URL}/${encodeURIComponent(input.accountId)}/workers/subdomain`,
+      {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${input.token}`,
+          "content-type": "application/json",
+        },
+      },
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      detail: `cloudflare Workers subdomain probe failed: ${errorMessage(error)}`,
+    };
+  }
+  if (!response.ok) {
+    return {
+      ok: false,
+      detail: `cloudflare Workers subdomain probe returned http ${response.status}`,
+    };
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return {
+      ok: false,
+      detail: "cloudflare Workers subdomain probe returned non-JSON body",
+    };
+  }
+  if (!isRecord(body) || body.success !== true || !isRecord(body.result)) {
+    return {
+      ok: false,
+      detail: "cloudflare Workers subdomain probe did not confirm account access",
+    };
+  }
+  const subdomain = body.result.subdomain;
+  if (
+    typeof subdomain !== "string" ||
+    !CLOUDFLARE_WORKERS_SUBDOMAIN_PATTERN.test(subdomain)
+  ) {
+    return {
+      ok: false,
+      detail: "cloudflare Workers subdomain probe returned an invalid subdomain",
+    };
+  }
+  return { ok: true, subdomain };
 }
 
 // --- provider-owned internal helpers ---
@@ -375,10 +533,6 @@ function isCloudflareVerifyOk(body: unknown): boolean {
   const result = record.result;
   if (result === null || typeof result !== "object") return false;
   return (result as { status?: unknown }).status === "active";
-}
-
-function isCloudflareApiSuccess(body: unknown): boolean {
-  return isRecord(body) && body.success === true;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

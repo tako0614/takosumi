@@ -27,19 +27,19 @@ export const ja = {
   "installStore.select": "これを選ぶ",
   "installStore.configureHint":
     "名前を確認したら追加できます。リポジトリ解析はその後に行います。",
-  "installStore.deploymentProfileTitle": "デプロイ方法",
+  "installStore.deploymentProfileTitle": "プロバイダー / モジュール",
   "installStore.deploymentProfileHint":
-    "このサービスをどこで動かすか選び、内容を確認してください。",
-  "installStore.deploymentProfileChoose": "デプロイ方法を選択",
+    "このサービスで使うプロバイダーとモジュールを選びます。次に互換性のあるホスト / アカウントを選択します。",
+  "installStore.deploymentProfileChoose": "プロバイダー / モジュールを選択",
   "installStore.deploymentProfileRecommended": "おすすめ",
   "installStore.deploymentProfileConfirm":
-    "このデプロイ方法で追加することを確認しました",
+    "このプロバイダー / モジュールで追加することを確認しました",
   "installStore.deploymentProfileRequired":
-    "デプロイ方法を選び、確認してから追加してください。",
+    "プロバイダー / モジュールを選び、確認してから追加してください。",
   "installStore.deploymentProfileLoading":
-    "利用できるデプロイ方法を読み込んでいます。",
+    "利用できるプロバイダー / モジュールを読み込んでいます。",
   "installStore.deploymentProfileUnavailable":
-    "このサービスのデプロイ方法を安全に特定できませんでした。",
+    "このサービスで利用できるプロバイダー / モジュールを安全に特定できませんでした。",
   "installStore.name": "サービス名",
   "installStore.sourceDetails": "取得元の詳細",
   "installStore.sourceUrl": "Git URL",
@@ -64,14 +64,18 @@ export const ja = {
     "サービスのデプロイは開始されていません。一時的に Source の一覧を確認できなかったため、登録を開始しませんでした。少し待ってから「追加」を再実行してください。",
   "installStore.compatibilityFailed":
     "このサービスは現在の環境に追加できません。",
-  "installStore.providerTitle": "接続が必要です",
-  "installStore.destinationTitle": "実行先を選択",
+  "installStore.providerTitle": "互換性のあるホスト / アカウントが必要です",
+  "installStore.destinationTitle": "ホスト / アカウントを選択",
   "installStore.destinationHint":
-    "利用できる実行先が複数あります。このサービスで使う実行先を選んでください。",
-  "installStore.providerHint": "このサービスに必要な接続だけを選びます。",
-  "installStore.chooseConnection": "接続を選択",
-  "installStore.destination": "実行先",
-  "installStore.destinationSummary": "実行先: {destination}",
+    "選択したプロバイダー / モジュールで利用できるホスト / アカウントが複数あります。使用するホスト / アカウントを選んでください。",
+  "installStore.providerHint":
+    "選択したプロバイダー / モジュールに必要なホスト / アカウントだけを選びます。",
+  "installStore.chooseConnection": "ホスト / アカウントを選択",
+  "installStore.destination": "ホスト / アカウント",
+  "installStore.destinationSummary": "ホスト / アカウント: {destination}",
+  "installStore.destinationContext": "選択したプロバイダー / モジュール",
+  "installStore.destinationProfile": "プロファイル",
+  "installStore.providerModule": "プロバイダー / モジュール",
   "installStore.connect": "新しい接続を追加",
   "installStore.continue": "続ける",
   "installStore.setupTitle": "サービスを設定",

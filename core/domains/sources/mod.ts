@@ -30,7 +30,6 @@ import type {
 } from "takosumi-contract/capsules";
 import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
 import type { PolicyConfig } from "takosumi-contract/install-configs";
-import { normalizeScopeBoundaryPolicy } from "takosumi-contract";
 import { timingSafeEqualHex } from "takosumi-contract/internal/crypto";
 import {
   MAX_PAGE_LIMIT,
@@ -56,7 +55,7 @@ import {
   type CapsuleSourceFile,
 } from "./capsule_compatibility.ts";
 import { evaluateSourceUrl } from "./url-policy.ts";
-import { canonicalProviderAddress } from "../deploy-control/provider_policy.ts";
+import { mergePolicyConfigs } from "../deploy-control/provider_policy.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
 
@@ -1336,86 +1335,4 @@ function defaultHookSecret(): string {
   let hex = "";
   for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
   return `whk_${hex}`;
-}
-
-function mergePolicyConfigs(
-  spacePolicy: PolicyConfig | undefined,
-  installPolicy: PolicyConfig | undefined,
-): PolicyConfig | undefined {
-  if (!spacePolicy && !installPolicy) return undefined;
-  return {
-    allowedProviders: intersectOptionalLists(
-      spacePolicy?.allowedProviders,
-      installPolicy?.allowedProviders,
-    ),
-    allowedResourceTypes: intersectOptionalLists(
-      spacePolicy?.allowedResourceTypes,
-      installPolicy?.allowedResourceTypes,
-    ),
-    allowedDataSourceTypes: intersectOptionalLists(
-      spacePolicy?.allowedDataSourceTypes,
-      installPolicy?.allowedDataSourceTypes,
-    ),
-    allowedProvisionerTypes: intersectOptionalLists(
-      spacePolicy?.allowedProvisionerTypes,
-      installPolicy?.allowedProvisionerTypes,
-    ),
-    destructiveChanges:
-      installPolicy?.destructiveChanges ?? spacePolicy?.destructiveChanges,
-    providerLockfile:
-      installPolicy?.providerLockfile ?? spacePolicy?.providerLockfile,
-    providerInstallation:
-      installPolicy?.providerInstallation ?? spacePolicy?.providerInstallation,
-    providerCredentials: mergeProviderCredentialPolicy(
-      spacePolicy?.providerCredentials,
-      installPolicy?.providerCredentials,
-    ),
-    scopeBoundary: normalizeScopeBoundaryPolicy(
-      installPolicy?.scopeBoundary ?? spacePolicy?.scopeBoundary,
-    ),
-    quota: { ...(spacePolicy?.quota ?? {}), ...(installPolicy?.quota ?? {}) },
-  };
-}
-
-function mergeProviderCredentialPolicy(
-  ceiling: PolicyConfig["providerCredentials"] | undefined,
-  local: PolicyConfig["providerCredentials"] | undefined,
-): PolicyConfig["providerCredentials"] | undefined {
-  if (!ceiling && !local) return undefined;
-  const requiredProviders = Array.from(
-    new Set([
-      ...(ceiling?.requiredProviders ?? []),
-      ...(local?.requiredProviders ?? []),
-    ]),
-  ).sort();
-  const allowedConnectionIds = intersectOptionalLists(
-    ceiling?.allowedConnectionIds,
-    local?.allowedConnectionIds,
-  );
-  const forbiddenConnectionIds = Array.from(
-    new Set([
-      ...(ceiling?.forbiddenConnectionIds ?? []),
-      ...(local?.forbiddenConnectionIds ?? []),
-    ]),
-  ).sort();
-  return {
-    ...(requiredProviders.length > 0 ? { requiredProviders } : {}),
-    ...(allowedConnectionIds !== undefined ? { allowedConnectionIds } : {}),
-    ...(forbiddenConnectionIds.length > 0 ? { forbiddenConnectionIds } : {}),
-    requireTemporary:
-      ceiling?.requireTemporary === true || local?.requireTemporary === true,
-    requireTtlEnforced:
-      ceiling?.requireTtlEnforced === true ||
-      local?.requireTtlEnforced === true,
-  };
-}
-
-function intersectOptionalLists(
-  ceiling: readonly string[] | undefined,
-  local: readonly string[] | undefined,
-): readonly string[] | undefined {
-  if (ceiling === undefined) return local;
-  if (local === undefined) return ceiling;
-  const allowed = new Set(ceiling);
-  return local.filter((entry) => allowed.has(entry)).sort();
 }

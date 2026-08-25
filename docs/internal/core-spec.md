@@ -101,13 +101,26 @@ infrastructure and must be removed after operator inventory reaches zero.
 Public hostname, DNS, and application endpoint ownership stays inside the Git
 module and its provider. Takosumi does not synthesize or reserve Capsule
 hostnames, and `public_endpoint` is an ordinary applied-Output projection.
-Takosumi also does not auto-register Accounts OIDC clients for a Capsule.
-Generic Accounts OIDC and Interface/InterfaceBinding authorization remain;
-already-registered Capsule clients are drain-only and continue to receive
-current-state validation and best-effort revocation when a terminal binding is
-observed. Current Capsule lifecycle code does not release historical public-host
-reservation rows or perform bulk OIDC-client cleanup; physical retirement waits
-for operator inventory.
+Takosumi does not infer or auto-register an Accounts OIDC client from Git
+metadata, provider output, or a provider-boundary call. A Host may explicitly
+opt a DB-owned InstallConfig into the private Accounts OIDC module-variable
+materializer. That port derives only its four declared non-secret values during
+read-only Plan, pins their authority digest in the private Plan sidecar, and may
+idempotently register the exact client only during the final Apply revalidation
+after re-reading the current Capsule, InstallConfig, and verified ProviderBinding.
+Destroy Plan and destroy admission remain read-only. Only after provider
+destroy and the atomic Capsule `destroyed` transition have committed may Core
+ask the Host to idempotently delete that exact DB-owned client, with the current
+Capsule, InstallConfig, reviewed variables, ProviderBinding metadata, and pinned
+digest revalidated again. This deletion is best-effort because Accounts live
+grant validation already denies a terminal Capsule and retries physical
+revocation; a cleanup outage cannot make a successful infrastructure destroy
+retryable or recreate the client. The port never carries provider credentials,
+passwords, generated encryption keys, or the runtime-binding entrypoint.
+Generic Accounts OIDC and Interface/InterfaceBinding authorization remain.
+Current Capsule lifecycle code does not release historical public-host
+reservation rows or perform unrelated bulk OIDC-client cleanup; physical
+retirement of those historical rows waits for operator inventory.
 
 Apply and Destroy are at-most-once provider dispatches. Before either request
 can reach the runner container, the runner Durable Object durably records the

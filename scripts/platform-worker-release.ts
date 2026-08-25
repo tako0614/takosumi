@@ -52,8 +52,27 @@ const TARGETS = {
   }
 >;
 
+const DASHBOARD_STORE_ORIGINS = {
+  staging: "https://store-staging.takosumi.com",
+  production: "https://store.takosumi.com",
+} as const satisfies Record<PlatformEnvironment, string>;
+
 export function platformTargetForEnvironment(environment: PlatformEnvironment) {
   return TARGETS[environment];
+}
+
+/**
+ * Official hosted builds pin one environment-matched discovery Store. The OSS
+ * dashboard build remains neutral when it is invoked outside this owner
+ * release path, and users may still add other TCS servers at runtime.
+ */
+export function platformDashboardBuildEnvironment(
+  environment: PlatformEnvironment,
+): Record<string, string> {
+  return {
+    ...childEnvironment(),
+    VITE_TAKOSUMI_TCS_STORE_URL: DASHBOARD_STORE_ORIGINS[environment],
+  };
 }
 
 interface PlatformReleasePlan {
@@ -176,6 +195,7 @@ async function plan(
     ["bun", "run", "build"],
     undefined,
     resolve(ROOT, "dashboard"),
+    platformDashboardBuildEnvironment(environment),
   );
   const dashboardIndex = readFileSync(
     resolve(ROOT, "dashboard/dist/index.html"),
@@ -1025,13 +1045,14 @@ async function requiredCommand(
   argv: readonly string[],
   stdin?: Uint8Array,
   cwd = ROOT,
+  environment = childEnvironment(),
 ): Promise<CommandResult> {
   const child = Bun.spawn([...argv], {
     cwd,
     stdin: stdin === undefined ? "ignore" : "pipe",
     stdout: "pipe",
     stderr: "pipe",
-    env: childEnvironment(),
+    env: environment,
   });
   if (stdin !== undefined) {
     if (!child.stdin)

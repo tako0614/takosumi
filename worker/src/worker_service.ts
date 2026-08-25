@@ -70,6 +70,7 @@ import {
 import {
   platformExtensionProviderCredentialComposition,
 } from "../../deploy/platform/platform_extension_provider_credentials.ts";
+import { createTakosumiAccountsOidcModuleVariableMaterializer } from "../../deploy/platform/accounts_oidc_module_variable_materializer.ts";
 
 export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
@@ -177,6 +178,26 @@ export async function createWorkerServiceApp(
         schemaMode: accountsD1SchemaMode,
       })
     : undefined;
+  const accountsIssuer = env.TAKOSUMI_ACCOUNTS_ISSUER;
+  const pairwiseSubjectSecret =
+    env.TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET;
+  const moduleVariableMaterializer =
+    accountsStore &&
+      typeof accountsIssuer === "string" &&
+      accountsIssuer.length > 0 &&
+      typeof pairwiseSubjectSecret === "string" &&
+      pairwiseSubjectSecret.length > 0
+      ? createTakosumiAccountsOidcModuleVariableMaterializer({
+          control: {
+            getCapsule: (id) => opentofuControlStore.getCapsule(id),
+            getInstallConfig: (id) =>
+              opentofuControlStore.getInstallConfig(id),
+          },
+          accounts: accountsStore,
+          issuer: accountsIssuer,
+          pairwiseSubjectSecret,
+        })
+      : undefined;
   const interfaceCredentialIssuer = accountsStore
     ? interfaceCredentialIssuerFromAccountsStore(accountsStore)
     : undefined;
@@ -250,6 +271,7 @@ export async function createWorkerServiceApp(
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.buildConnectionSetupRequest,
     ...(connectionOAuthHelpers ? { connectionOAuthHelpers } : {}),
     opentofuControlStore,
+    ...(moduleVariableMaterializer ? { moduleVariableMaterializer } : {}),
     gitInstallPlanStore: new D1GitInstallPlanStore(
       env.TAKOSUMI_CONTROL_DB,
     ),

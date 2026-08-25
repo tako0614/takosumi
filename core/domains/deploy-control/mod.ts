@@ -193,6 +193,10 @@ import {
 } from "../connections/mod.ts";
 import { SourceManagement } from "./source_management.ts";
 import { SourceLifecycleService } from "./source_lifecycle.ts";
+import type {
+  CapsuleModuleVariableMaterialization,
+  CapsuleModuleVariableMaterializer,
+} from "./module_variable_materializer.ts";
 import { ConnectionManagement } from "./connection_management.ts";
 import { CapsuleQuery } from "./capsule_query.ts";
 import { RunQueryService } from "./run_query.ts";
@@ -908,6 +912,11 @@ export interface OpenTofuControllerDependencies {
    * `not_implemented`.
    */
   readonly sourcesService?: SourcesService;
+  /**
+   * Private host seam for deterministic, non-secret Capsule module values.
+   * It is not a provider extension and receives no credential bundle.
+   */
+  readonly moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
   /** Host authority for allocating opaque durable artifact references. */
   readonly artifactReferenceAllocator?: ArtifactReferenceAllocator;
   /**
@@ -996,6 +1005,7 @@ export interface GenericRootPlanContext {
   readonly outputAllowlist: InstallConfig["outputAllowlist"];
   readonly sourceBuild?: InstallConfig["sourceBuild"];
   readonly lifecycleActions?: InstallConfig["lifecycleActions"];
+  readonly moduleVariableMaterialization?: CapsuleModuleVariableMaterialization;
 }
 
 export interface GenericRootDispatchContext {
@@ -1007,6 +1017,7 @@ export interface GenericRootDispatchContext {
   readonly lifecycleActions?: InstallConfig["lifecycleActions"];
   readonly stateAdoption?: DispatchStateAdoption;
   readonly priorState?: DispatchPriorState;
+  readonly moduleVariableMaterializationDigest?: string;
 }
 
 /**
@@ -1420,6 +1431,12 @@ export class OpenTofuController {
       dependencies: this.#dependencies,
       verification: this.#verification,
       planResolution: this.#planResolution,
+      ...(dependencies.moduleVariableMaterializer
+        ? {
+            moduleVariableMaterializer:
+              dependencies.moduleVariableMaterializer,
+          }
+        : {}),
       sourceLifecycle: this.#sourceLifecycle,
       capsules: this.#capsules,
       runSerialized: <T>(key: string, work: () => Promise<T>): Promise<T> =>

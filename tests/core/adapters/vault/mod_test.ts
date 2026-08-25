@@ -12,9 +12,16 @@ import {
   REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
   credentialRecipeDriverKey,
 } from "../../../../providers/registry.ts";
+import {
+  CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY,
+  CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID,
+} from "../../../../providers/cloudflare/credentials.ts";
 import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
+
+const CLOUDFLARE_ACCOUNT_TEST_ID = "0123456789abcdef0123456789abcdef";
+const CLOUDFLARE_ACCOUNT_OAUTH_ID = "fedcba9876543210fedcba9876543210";
 
 function makeCrypto(): PartitionedSecretBoundaryCrypto {
   // Real AES-GCM via WebCrypto (the production multi-cloud crypto), driven by a
@@ -752,6 +759,25 @@ test("test() verifies a cloudflare token via injected fetch and persists verifie
   const fakeFetch = (input: string, init?: RequestInit): Promise<Response> => {
     const headers = new Headers(init?.headers);
     calledWith = { url: input, auth: headers.get("authorization") };
+    if (input.endsWith("/workers/subdomain")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ success: true, result: { subdomain: "team-workers" } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    }
+    if (input.endsWith(`/accounts/${CLOUDFLARE_ACCOUNT_TEST_ID}`)) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            success: true,
+            result: { id: CLOUDFLARE_ACCOUNT_TEST_ID },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    }
     return Promise.resolve(
       new Response(
         JSON.stringify({ success: true, result: { status: "active" } }),
@@ -764,19 +790,37 @@ test("test() verifies a cloudflare token via injected fetch and persists verifie
     workspaceId: "space_1",
     provider: "registry.opentofu.org/cloudflare/cloudflare",
     authMethod: "static_secret",
-    values: { CLOUDFLARE_API_TOKEN: "cf-secret-token" },
+    values: {
+      CLOUDFLARE_API_TOKEN: "cf-secret-token",
+      CLOUDFLARE_ACCOUNT_ID: CLOUDFLARE_ACCOUNT_TEST_ID,
+    },
   });
 
   const result = await vault.test(connection.id);
   expect(result.status).toBe("verified");
   expect(calledWith?.url).toBe(
-    "https://api.cloudflare.com/client/v4/user/tokens/verify",
+    `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_TEST_ID}/workers/subdomain`,
   );
   expect(calledWith?.auth).toBe("Bearer cf-secret-token");
 
   const persisted = await store.getConnection(connection.id);
   expect(persisted?.status).toBe("verified");
   expect(persisted?.verifiedAt).toBeDefined();
+  expect(persisted?.credentialVerification).toEqual({
+    kind: "takosumi.credential-verification@v1",
+    verifierId: CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID,
+    capabilities: [CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY],
+  });
+  expect(persisted?.scopeHints).toEqual({
+    providerSettings: {
+      accountId: CLOUDFLARE_ACCOUNT_TEST_ID,
+      workersSubdomain: "team-workers",
+    },
+    moduleInputDefaults: {
+      cloudflare_account_id: CLOUDFLARE_ACCOUNT_TEST_ID,
+      cloudflare_workers_subdomain: "team-workers",
+    },
+  });
 });
 
 test("test() accepts a cloudflare oauth bearer when account access probe succeeds", async () => {
@@ -795,12 +839,26 @@ test("test() accepts a cloudflare oauth bearer when account access probe succeed
         ),
       );
     }
-    if (input.endsWith("/accounts/acct_oauth")) {
+    if (input.endsWith(`/accounts/${CLOUDFLARE_ACCOUNT_OAUTH_ID}`)) {
       return Promise.resolve(
-        new Response(JSON.stringify({ success: true, result: {} }), {
+        new Response(
+          JSON.stringify({
+            success: true,
+            result: { id: CLOUDFLARE_ACCOUNT_OAUTH_ID },
+          }),
+          {
           status: 200,
           headers: { "content-type": "application/json" },
-        }),
+          },
+        ),
+      );
+    }
+    if (input.endsWith(`/accounts/${CLOUDFLARE_ACCOUNT_OAUTH_ID}/workers/subdomain`)) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ success: true, result: { subdomain: "oauth-workers" } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
       );
     }
     return Promise.resolve(new Response("not found", { status: 404 }));
@@ -812,7 +870,7 @@ test("test() accepts a cloudflare oauth bearer when account access probe succeed
     authMethod: "static_secret",
     values: {
       CLOUDFLARE_API_TOKEN: "wrangler-oauth-bearer",
-      CLOUDFLARE_ACCOUNT_ID: "acct_oauth",
+      CLOUDFLARE_ACCOUNT_ID: CLOUDFLARE_ACCOUNT_OAUTH_ID,
     },
   });
 
@@ -824,7 +882,12 @@ test("test() accepts a cloudflare oauth bearer when account access probe succeed
       auth: "Bearer wrangler-oauth-bearer",
     },
     {
-      url: "https://api.cloudflare.com/client/v4/accounts/acct_oauth",
+      url: `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_OAUTH_ID}`,
+      auth: "Bearer wrangler-oauth-bearer",
+    },
+    {
+      url: `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_OAUTH_ID}` +
+        "/workers/subdomain",
       auth: "Bearer wrangler-oauth-bearer",
     },
   ]);
@@ -832,6 +895,76 @@ test("test() accepts a cloudflare oauth bearer when account access probe succeed
   const persisted = await store.getConnection(connection.id);
   expect(persisted?.status).toBe("verified");
   expect(persisted?.verifiedAt).toBeDefined();
+  expect(persisted?.credentialVerification).toEqual({
+    kind: "takosumi.credential-verification@v1",
+    verifierId: CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID,
+    capabilities: [CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY],
+  });
+  expect(persisted?.scopeHints?.providerSettings).toEqual({
+    accountId: CLOUDFLARE_ACCOUNT_OAUTH_ID,
+    workersSubdomain: "oauth-workers",
+  });
+});
+
+test("Cloudflare failed re-test clears verifier-owned hints but preserves configured hints", async () => {
+  let shouldVerify = true;
+  const fakeFetch = (input: string, init?: RequestInit): Promise<Response> => {
+    if (!shouldVerify) {
+      return Promise.resolve(new Response("denied", { status: 403 }));
+    }
+    if (input.endsWith("/workers/subdomain")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ success: true, result: { subdomain: "team-workers" } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    }
+    if (input.endsWith(`/accounts/${CLOUDFLARE_ACCOUNT_TEST_ID}`)) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            success: true,
+            result: { id: CLOUDFLARE_ACCOUNT_TEST_ID },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    }
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({ success: true, result: { status: "active" } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+  };
+  const { store, vault } = makeVault({ fetch: fakeFetch as never });
+  const connection = await vault.register({
+    workspaceId: "space_1",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    authMethod: "static_secret",
+    scopeHints: { providerSettings: { region: "us-east-1" } },
+    values: {
+      CLOUDFLARE_API_TOKEN: "cf-secret-token",
+      CLOUDFLARE_ACCOUNT_ID: CLOUDFLARE_ACCOUNT_TEST_ID,
+    },
+  });
+
+  await expect(vault.test(connection.id)).resolves.toEqual({
+    status: "verified",
+  });
+  shouldVerify = false;
+  await expect(vault.test(connection.id)).resolves.toMatchObject({
+    status: "pending",
+  });
+
+  const persisted = await store.getConnection(connection.id);
+  expect(persisted?.status).toBe("pending");
+  expect(persisted?.verifiedAt).toBeUndefined();
+  expect(persisted?.credentialVerification).toBeUndefined();
+  expect(persisted?.scopeHints).toEqual({
+    providerSettings: { region: "us-east-1" },
+  });
 });
 
 test("test() reaches verified for a declared-env recipe connection", async () => {
@@ -1222,6 +1355,66 @@ test("test() verifies an aws assume-role connection via STS and persists verifie
   const persisted = await store.getConnection(connection.id);
   expect(persisted?.status).toBe("verified");
   expect(persisted?.verifiedAt).toBeDefined();
+});
+
+test("AWS assume-role failed re-test preserves roleArn and can retry", async () => {
+  let shouldVerify = true;
+  const fakeFetch = (): Promise<Response> =>
+    Promise.resolve(
+      shouldVerify
+        ? new Response(stsSuccessXml(), {
+            status: 200,
+            headers: { "content-type": "text/xml" },
+          })
+        : new Response(
+            "<ErrorResponse><Error><Code>AccessDenied</Code></Error></ErrorResponse>",
+            { status: 403, headers: { "content-type": "text/xml" } },
+          ),
+    );
+  const { store, vault } = makeVault({ fetch: fakeFetch as never });
+  const connection = await vault.register({
+    workspaceId: "space_1",
+    provider: "registry.opentofu.org/hashicorp/aws",
+    authMethod: "static_secret",
+    scopeHints: {
+      providerSettings: {
+        roleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
+        externalId: "space_1",
+        region: "us-west-2",
+      },
+    },
+    values: {
+      AWS_ACCESS_KEY_ID: "AKIA_source",
+      AWS_SECRET_ACCESS_KEY: "source_secret",
+    },
+  });
+
+  await expect(vault.test(connection.id)).resolves.toEqual({
+    status: "verified",
+  });
+  shouldVerify = false;
+  await expect(vault.test(connection.id)).resolves.toMatchObject({
+    status: "pending",
+  });
+  expect((await store.getConnection(connection.id))?.scopeHints).toEqual({
+    providerSettings: {
+      roleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
+      externalId: "space_1",
+      region: "us-west-2",
+    },
+  });
+
+  shouldVerify = true;
+  await expect(vault.test(connection.id)).resolves.toEqual({
+    status: "verified",
+  });
+  expect((await store.getConnection(connection.id))?.scopeHints).toEqual({
+    providerSettings: {
+      roleArn: "arn:aws:iam::123456789012:role/takosumi-prod",
+      externalId: "space_1",
+      region: "us-west-2",
+    },
+  });
 });
 
 test("test() keeps aws assume-role pending when STS rejects the role", async () => {

@@ -412,10 +412,12 @@ Credential Recipe の明示的な pre-run action として設計します。公�
 discovery が揃ってからです。
 Operator / hosted service はその汎用 seam に Enterprise SSO、SCIM、商用 audit export を追加できます。
 
-Takosumi は Capsule または InstallConfig から Accounts OIDC client を自動登録しません。
-OIDC client は operator/composition が明示的に登録します。既に登録済みの
-Capsule client は移行中も current Capsule / InstallConfig / Workspace membership / scope
-を利用時に再検証し、無効な terminal binding は best-effort で revoke します。
+Takosumi は Git metadata、provider output、または任意の provider 呼び出しから
+Accounts OIDC client を推測して登録しません。Host が DB 所有の InstallConfig で
+private OIDC materialization を明示した場合だけ、Plan では非 secret 値を導出して
+authority digest に固定し、最終 Apply の再検証時に exact client を冪等登録できます。
+既に登録済みの Capsule client は current Capsule / InstallConfig / Workspace membership /
+scope を利用時に再検証し、無効な terminal binding は best-effort で revoke します。
 Accounts が発行する Workspace-scoped token と Interface 呼び出しは、引き続き scope と
 Workspace の両方を検証します。token の実体は利用側の secret store に暗号化して保存し、
 OpenTofu state や Output には保存しません。

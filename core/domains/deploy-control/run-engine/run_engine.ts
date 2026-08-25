@@ -58,7 +58,11 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
-import { redactString } from "takosumi-contract/redaction";
+import {
+  containsSecretLikeString,
+  isSecretKey,
+  redactString,
+} from "takosumi-contract/redaction";
 import { downstreamClosure } from "takosumi-graph";
 import {
   evaluateActionPolicy,
@@ -162,6 +166,10 @@ import type { ResolvedDependencies } from "../dependency_resolution.ts";
 import type { DependencyResolutionService } from "../dependency_resolution.ts";
 import type { RunVerificationService } from "../run_verification.ts";
 import type { SourceLifecycleService } from "../source_lifecycle.ts";
+import type {
+  CapsuleModuleVariableMaterialization,
+  CapsuleModuleVariableMaterializer,
+} from "../module_variable_materializer.ts";
 // Shared helpers, constants, and run-engine types stay in the controller module
 // (`../mod.ts`) so the domain's public entry point and external importers are
 // unchanged; this engine imports the ones its moved bodies reference. The
@@ -853,6 +861,7 @@ export interface RunEngineDependencies {
   readonly dependencies: DependencyResolutionService;
   readonly verification: RunVerificationService;
   readonly planResolution: PlanResolutionService;
+  readonly moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
   readonly sourceLifecycle: SourceLifecycleService;
   readonly capsules: CapsuleQuery;
   readonly runSerialized: RunSerialized;
@@ -886,6 +895,7 @@ export class RunEngine {
   readonly #dependencies: DependencyResolutionService;
   readonly #verification: RunVerificationService;
   readonly #planResolution: PlanResolutionService;
+  readonly #moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
   readonly #sourceLifecycle: SourceLifecycleService;
   readonly #capsules: CapsuleQuery;
   readonly #runSerialized: RunSerialized;
@@ -930,6 +940,7 @@ export class RunEngine {
     this.#dependencies = deps.dependencies;
     this.#verification = deps.verification;
     this.#planResolution = deps.planResolution;
+    this.#moduleVariableMaterializer = deps.moduleVariableMaterializer;
     this.#sourceLifecycle = deps.sourceLifecycle;
     this.#capsules = deps.capsules;
     this.#runSerialized = deps.runSerialized;
@@ -1175,13 +1186,86 @@ export class RunEngine {
       : undefined;
     const now = this.#now();
     const variables = normalizeVariables(request.variables);
+    const declaredProviders = normalizeProviders(
+      request.requiredProviders ?? [],
+    );
+    const currentInstallConfig = await this.#store.getInstallConfig(
+      capsule.installConfigId,
+    );
+    if (!currentInstallConfig) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `install_config_not_found: ${capsule.installConfigId}`,
+        { reason: "install_config_not_found" },
+      );
+    }
+    const materializationDigest =
+      internal.genericRootDispatch?.moduleVariableMaterializationDigest;
+    const currentMaterialization =
+      currentInstallConfig.accountsOidcModuleVariableMaterialization;
+    if (Boolean(materializationDigest) !== Boolean(currentMaterialization)) {
+      throw moduleVariableMaterializationError(
+        "declaration changed before the Plan variable digest",
+      );
+    }
+    if (currentMaterialization) {
+      if (
+        !materializationDigest ||
+        !MODULE_VARIABLE_MATERIALIZATION_DIGEST.test(materializationDigest) ||
+        !this.#moduleVariableMaterializer
+      ) {
+        throw moduleVariableMaterializationError(
+          "Capsule Plan did not carry its private materialization digest",
+        );
+      }
+      const materializerVariables = moduleVariableMaterializerInputVariables(
+        currentInstallConfig,
+        variables,
+      );
+      const compatibilityReport = internal.compatibilityReportId
+        ? await this.#store.getCapsuleCompatibilityReport(
+            internal.compatibilityReportId,
+          )
+        : undefined;
+      const resolvedProviderBindings =
+        await this.#resolveCapsuleProviderBindingsForRun(
+          capsule,
+          providerBindingResolutionProviders(
+            declaredProviders,
+            profile,
+            credentialRequiredProvidersFromCompatibilityReport(
+              compatibilityReport,
+            ),
+          ),
+        );
+      let rematerialized: CapsuleModuleVariableMaterialization | undefined;
+      try {
+        rematerialized = await this.#moduleVariableMaterializer.materialize({
+          phase: "plan",
+          expectedDigest: materializationDigest,
+          capsule,
+          installConfig: currentInstallConfig,
+          resolvedProviderBindings,
+          variables: materializerVariables,
+        });
+      } catch (error) {
+        throw moduleVariableMaterializationError(errorMessage(error));
+      }
+      const current = requireValidModuleVariableMaterialization(
+        currentInstallConfig,
+        rematerialized,
+      );
+      if (current.digest !== materializationDigest) {
+        throw moduleVariableMaterializationError(
+          "digest changed before the Plan variable digest",
+        );
+      }
+      assertPinnedModuleVariableValues(variables, current);
+    }
     // Provider identity never selects an execution profile; callers may
     // explicitly select an operator-defined capability profile when
     // private-network or host access is required.
     const capsulePlan = capsule ? internal.capsulePlan : undefined;
-    const declaredProviders = normalizeProviders(
-      request.requiredProviders ?? [],
-    );
     const allowNoProviders =
       (declaredProviders.length === 0 && requestCapsuleId !== undefined) ||
       (declaredProviders.length === 0 &&
@@ -1332,6 +1416,8 @@ export class RunEngine {
     const sourceBuild = genericRootDispatch?.sourceBuild;
     const stateAdoption = genericRootDispatch?.stateAdoption;
     const priorState = genericRootDispatch?.priorState;
+    const moduleVariableMaterializationDigest =
+      genericRootDispatch?.moduleVariableMaterializationDigest;
     const lifecycleActions =
       internal.lifecycleActions ?? genericRootDispatch?.lifecycleActions;
     if (
@@ -1343,6 +1429,7 @@ export class RunEngine {
       sourceBuild !== undefined ||
       stateAdoption !== undefined ||
       priorState !== undefined ||
+      moduleVariableMaterializationDigest !== undefined ||
       lifecycleActions !== undefined
     ) {
       // A sensitive dependency-injected value flows into `variables` and may
@@ -1363,6 +1450,9 @@ export class RunEngine {
           ...(sourceBuild ? { sourceBuild } : {}),
           ...(stateAdoption ? { stateAdoption } : {}),
           ...(priorState ? { priorState } : {}),
+          ...(moduleVariableMaterializationDigest
+            ? { moduleVariableMaterializationDigest }
+            : {}),
           ...(lifecycleActions ? { lifecycleActions } : {}),
         },
         sealSidecar,
@@ -2400,7 +2490,13 @@ export class RunEngine {
         capsuleId: input.capsule.id,
       },
     );
-    const variables = normalizeVariables(
+    if (input.installConfig.accountsOidcModuleVariableMaterialization) {
+      assertNoForbiddenModuleVariableInputs(
+        input.installConfig,
+        explicitVariables,
+      );
+    }
+    const baseVariables = normalizeVariables(
       mergeJsonVariableDefaults(
         capsulePlan.providerInputDefaults,
         requestedGenericCapsuleVariables(
@@ -2410,6 +2506,17 @@ export class RunEngine {
         ),
       ),
     );
+    const moduleVariableMaterialization =
+      await this.#materializeModuleVariablesForPlan({
+        capsule: input.capsule,
+        installConfig: input.installConfig,
+        resolvedProviderBindings: capsulePlan.resolvedProviderBindings,
+        variables: baseVariables,
+      });
+    const variables = normalizeVariables({
+      ...baseVariables,
+      ...(moduleVariableMaterialization?.variables ?? {}),
+    });
     return {
       capsulePlan,
       request: {
@@ -2427,8 +2534,124 @@ export class RunEngine {
         ...(input.installConfig.sourceBuild
           ? { sourceBuild: input.installConfig.sourceBuild }
           : {}),
+        ...(moduleVariableMaterialization
+          ? { moduleVariableMaterialization }
+          : {}),
       },
     };
+  }
+
+  async #materializeModuleVariablesForPlan(input: {
+    readonly capsule: Capsule;
+    readonly installConfig: InstallConfig;
+    readonly resolvedProviderBindings: readonly ResolvedCapsuleProviderBinding[];
+    readonly variables: Readonly<Record<string, JsonValue>>;
+  }): Promise<CapsuleModuleVariableMaterialization | undefined> {
+    if (!input.installConfig.accountsOidcModuleVariableMaterialization) {
+      return undefined;
+    }
+    if (!this.#moduleVariableMaterializer) {
+      throw moduleVariableMaterializationError(
+        "host materializer is unavailable",
+      );
+    }
+    const materializerVariables = moduleVariableMaterializerInputVariables(
+      input.installConfig,
+      input.variables,
+    );
+    let result: CapsuleModuleVariableMaterialization | undefined;
+    try {
+      result = await this.#moduleVariableMaterializer.materialize({
+        phase: "plan",
+        capsule: input.capsule,
+        installConfig: input.installConfig,
+        resolvedProviderBindings: input.resolvedProviderBindings,
+        variables: materializerVariables,
+      });
+    } catch (error) {
+      throw moduleVariableMaterializationError(errorMessage(error));
+    }
+    return requireValidModuleVariableMaterialization(
+      input.installConfig,
+      result,
+    );
+  }
+
+  async #revalidateModuleVariableMaterialization(
+    planRun: PlanRun,
+    inputs: PlanRunInputs | undefined,
+    phase: "apply_check" | "apply",
+  ): Promise<void> {
+    const expectedDigest = inputs?.moduleVariableMaterializationDigest;
+    if (!planRun.capsuleContext || !planRun.capsuleId) {
+      if (expectedDigest) {
+        throw moduleVariableMaterializationError(
+          "a non-Capsule Plan cannot carry a materialization digest",
+        );
+      }
+      return;
+    }
+    const capsule = await this.#requireCapsule(planRun.capsuleId);
+    const installConfig = await this.#store.getInstallConfig(
+      capsule.installConfigId,
+    );
+    if (!installConfig) {
+      throw moduleVariableMaterializationError(
+        `InstallConfig ${capsule.installConfigId} is missing`,
+      );
+    }
+    const declared =
+      installConfig.accountsOidcModuleVariableMaterialization !== undefined;
+    if (!expectedDigest && !declared) return;
+    if (!expectedDigest) {
+      throw moduleVariableMaterializationError(
+        "the declaration appeared after Plan and has no pinned digest",
+      );
+    }
+    if (!inputs) {
+      throw moduleVariableMaterializationError(
+        "the Plan input sidecar is missing",
+      );
+    }
+    if (!this.#moduleVariableMaterializer) {
+      throw moduleVariableMaterializationError(
+        "host materializer is unavailable",
+      );
+    }
+    const resolvedProviderBindings =
+      (await this.#resolveRunProviderBindings(planRun)) ?? [];
+    const materializerVariables = moduleVariableMaterializerInputVariables(
+      installConfig,
+      inputs.variables,
+    );
+    const plannedVariables = moduleVariableMaterializerPlannedVariables(
+      installConfig,
+      inputs.variables,
+    );
+    let result: CapsuleModuleVariableMaterialization | undefined;
+    try {
+      result = await this.#moduleVariableMaterializer.materialize({
+        phase,
+        expectedDigest,
+        plannedVariables,
+        capsule,
+        installConfig,
+        resolvedProviderBindings,
+        variables: materializerVariables,
+      });
+    } catch (error) {
+      throw moduleVariableMaterializationError(errorMessage(error));
+    }
+    const current = requireValidModuleVariableMaterialization(
+      installConfig,
+      result,
+    );
+    if (current.digest !== expectedDigest) {
+      throw moduleVariableMaterializationError(
+        "digest changed since Plan",
+      );
+    }
+    assertPinnedModuleVariableValues(inputs.variables, current);
   }
 
   async #genericRootDispatchForRequest(
@@ -2436,6 +2659,12 @@ export class RunEngine {
     context: GenericRootPlanContext,
     compatibilityReport: CapsuleCompatibilityReport | undefined,
   ): Promise<GenericRootDispatchContext> {
+    if (context.moduleVariableMaterialization) {
+      assertPinnedModuleVariableValues(
+        request.variables,
+        context.moduleVariableMaterialization,
+      );
+    }
     const requiredProviders = normalizeProviders(
       request.requiredProviders ?? [],
     );
@@ -2497,6 +2726,12 @@ export class RunEngine {
       ...(context.sourceBuild ? { sourceBuild: context.sourceBuild } : {}),
       ...(context.lifecycleActions
         ? { lifecycleActions: context.lifecycleActions }
+        : {}),
+      ...(context.moduleVariableMaterialization
+        ? {
+            moduleVariableMaterializationDigest:
+              context.moduleVariableMaterialization.digest,
+          }
         : {}),
     };
   }
@@ -2876,6 +3111,12 @@ export class RunEngine {
     // sourceSnapshotId is unchanged + still resolvable, mirroring the
     // digest/generation guards. Runs without a recorded snapshot are unaffected.
     await this.#verification.revalidateSourceSnapshot(planRun);
+    const planInputs = await this.#getPlanRunInputs(planRun.id);
+    await this.#revalidateModuleVariableMaterialization(
+      planRun,
+      planInputs,
+      "apply_check",
+    );
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
     const now = this.#now();
     const approval = redactRunApproval(request.approval);
@@ -3578,7 +3819,14 @@ export class RunEngine {
     // while a single blocking runner fetch is in flight.
     const runWork = (handle?: LeaseHandle) =>
       this.#runSerialized(key, () =>
-        this.#executeApply(applyRun, planRun, profile, dispatch, handle),
+        this.#executeApply(
+          applyRun,
+          planRun,
+          profile,
+          dispatch,
+          inputs,
+          handle,
+        ),
       );
     if (this.#capsuleCoordination && planRun.capsuleId) {
       const environment =
@@ -3743,6 +3991,12 @@ export class RunEngine {
       ...(inputs.priorState
         ? { priorState: inputs.priorState as unknown as JsonValue }
         : {}),
+      ...(inputs.moduleVariableMaterializationDigest
+        ? {
+            moduleVariableMaterializationDigest:
+              inputs.moduleVariableMaterializationDigest,
+          }
+        : {}),
     };
     const sealed = await this.#dependencyValueSealer.seal(payload);
     // Cleartext sealable fields are dropped; only `planRunId` + `sealed` persist.
@@ -3796,6 +4050,8 @@ export class RunEngine {
       PlanRunInputs["stateAdoption"] | undefined;
     const priorState = payload.priorState as unknown as
       PlanRunInputs["priorState"] | undefined;
+    const moduleVariableMaterializationDigest =
+      payload.moduleVariableMaterializationDigest as string | undefined;
     return {
       planRunId,
       variables,
@@ -3807,6 +4063,9 @@ export class RunEngine {
       ...(lifecycleActions ? { lifecycleActions } : {}),
       ...(stateAdoption ? { stateAdoption } : {}),
       ...(priorState ? { priorState } : {}),
+      ...(moduleVariableMaterializationDigest
+        ? { moduleVariableMaterializationDigest }
+        : {}),
     };
   }
 
@@ -6037,6 +6296,7 @@ export class RunEngine {
     planRun: PlanRun,
     profile: RunnerProfile,
     dispatch: RunModuleDispatch,
+    inputs: PlanRunInputs | undefined,
     lease?: LeaseHandle,
   ): Promise<ApplyRunResponse> {
     const startedAt = this.#now();
@@ -6056,6 +6316,11 @@ export class RunEngine {
       const plannedCapsule = await this.#assertApplyPreconditions(
         planRun,
         dispatch,
+      );
+      await this.#revalidateModuleVariableMaterialization(
+        planRun,
+        inputs,
+        planRun.operation === "destroy" ? "apply_check" : "apply",
       );
       // The Plan pins lifecycle action content, but runner execution authority
       // is revocable operator state. Re-check it immediately before any
@@ -6089,6 +6354,7 @@ export class RunEngine {
           plannedCapsule,
           runEnvironment.credentials,
           dispatch,
+          inputs,
           leaseToken,
           lease,
         );
@@ -7801,6 +8067,7 @@ export class RunEngine {
     plannedCapsule: Capsule | undefined,
     credentials: RunCredentials | undefined,
     dispatch: RunModuleDispatch,
+    inputs: PlanRunInputs | undefined,
     leaseToken: string,
     lease?: LeaseHandle,
   ): Promise<ApplyRunResponse> {
@@ -8080,6 +8347,11 @@ export class RunEngine {
         return { applyRun: (await this.getApplyRun(running.id)).applyRun };
       }
       ledgerCommitted = true;
+      await this.#retireModuleVariableMaterializationAfterDestroy({
+        planRun,
+        applyRun: completed,
+        inputs,
+      });
       await this.#notifyTerminal(completed);
       const patched = committed.capsule;
       const finalized = await this.#tryFinalizeApplyBilling(planRun, completed);
@@ -8261,6 +8533,72 @@ export class RunEngine {
     }
   }
 
+  async #retireModuleVariableMaterializationAfterDestroy(input: {
+    readonly planRun: PlanRun;
+    readonly applyRun: ApplyRun;
+    readonly inputs: PlanRunInputs | undefined;
+  }): Promise<void> {
+    const expectedDigest =
+      input.inputs?.moduleVariableMaterializationDigest;
+    if (!expectedDigest) return;
+    const retire = this.#moduleVariableMaterializer?.retire;
+    if (!retire) {
+      log.warn("deploy_control.module_variable_retirement_deferred", {
+        planRunId: input.planRun.id,
+        applyRunId: input.applyRun.id,
+        capsuleId: input.planRun.capsuleId,
+        reason: "retirement_port_unavailable",
+      });
+      return;
+    }
+    try {
+      if (
+        !input.planRun.capsuleId ||
+        !MODULE_VARIABLE_MATERIALIZATION_DIGEST.test(expectedDigest) ||
+        !input.inputs
+      ) {
+        throw new TypeError("retirement authority is invalid");
+      }
+      const capsule = await this.#requireCapsule(input.planRun.capsuleId);
+      if (capsule.status !== "destroyed") {
+        throw new TypeError("Capsule is not terminal");
+      }
+      const installConfig = await this.#store.getInstallConfig(
+        capsule.installConfigId,
+      );
+      if (!installConfig) {
+        throw new TypeError("InstallConfig is missing");
+      }
+      const resolvedProviderBindings =
+        (await this.#resolveRunProviderBindings(input.planRun)) ?? [];
+      await retire.call(this.#moduleVariableMaterializer, {
+        expectedDigest,
+        plannedVariables: moduleVariableMaterializerPlannedVariables(
+          installConfig,
+          input.inputs.variables,
+        ),
+        capsule,
+        installConfig,
+        resolvedProviderBindings,
+        variables: moduleVariableMaterializerInputVariables(
+          installConfig,
+          input.inputs.variables,
+        ),
+      });
+    } catch {
+      // Accounts live-grant checks already deny a destroyed Capsule and retry
+      // physical deletion best-effort. The provider teardown + atomic Capsule
+      // terminal commit are authoritative, so a cleanup outage must never
+      // rewrite that success as a retryable destroy or recreate the client.
+      log.warn("deploy_control.module_variable_retirement_deferred", {
+        planRunId: input.planRun.id,
+        applyRunId: input.applyRun.id,
+        capsuleId: input.planRun.capsuleId,
+        reason: "best_effort_cleanup_failed",
+      });
+    }
+  }
+
   async #requireRunnerProfile(id: string): Promise<RunnerProfile> {
     requireNonEmptyString(id, "runnerProfileId");
     const configuredProfile = this.#runnerProfilesById.get(id);
@@ -8301,6 +8639,224 @@ export class RunEngine {
     validatePlannedCapsuleCurrent({ planRun, capsule: capsule });
     return capsule;
   }
+}
+
+const MODULE_VARIABLE_MATERIALIZATION_DIGEST = /^sha256:[0-9a-f]{64}$/u;
+const OPENTOFU_MODULE_VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+const MAX_MODULE_VARIABLE_DECLARATION_NAMES = 32;
+
+function moduleVariableMaterializerInputVariables(
+  installConfig: InstallConfig,
+  variables: Readonly<Record<string, JsonValue>>,
+): Readonly<Record<string, JsonValue>> {
+  const { sourceNames, additionalInputNames } =
+    requireValidModuleVariableProfile(installConfig);
+  assertNoForbiddenModuleVariableInputs(installConfig, variables);
+  const selected: Record<string, JsonValue> = {};
+  const allowedNames = new Set([...sourceNames, ...additionalInputNames]);
+  for (const name of allowedNames) {
+    const value = variables[name];
+    if (value === undefined) continue;
+    if (
+      value !== null &&
+      !isPublicModuleVariableScalar(value)
+    ) {
+      throw moduleVariableMaterializationError(
+        `materializer input ${name} is not safe public scalar metadata`,
+      );
+    }
+    selected[name] = value;
+  }
+  return selected;
+}
+
+function assertNoForbiddenModuleVariableInputs(
+  installConfig: InstallConfig,
+  variables: Readonly<Record<string, unknown>>,
+): void {
+  const { forbiddenInputNames } = requireValidModuleVariableProfile(
+    installConfig,
+  );
+  for (const name of forbiddenInputNames) {
+    const value = variables[name];
+    if (value !== undefined && value !== null && value !== "") {
+      throw moduleVariableMaterializationError(
+        `unsealed module secret input ${name} must be disabled or omitted`,
+      );
+    }
+  }
+}
+
+function moduleVariableMaterializerPlannedVariables(
+  installConfig: InstallConfig,
+  variables: Readonly<Record<string, JsonValue>>,
+): Readonly<Record<string, JsonValue>> {
+  const { targetNames } = requireValidModuleVariableProfile(installConfig);
+  const selected: Record<string, JsonValue> = {};
+  for (const name of targetNames) {
+    const value = variables[name];
+    if (value === undefined) {
+      throw moduleVariableMaterializationError(
+        `reviewed Plan is missing materialized variable ${name}`,
+      );
+    }
+    selected[name] = value;
+  }
+  return selected;
+}
+
+function requireValidModuleVariableProfile(installConfig: InstallConfig): {
+  readonly profile: NonNullable<
+    InstallConfig["accountsOidcModuleVariableMaterialization"]
+  >;
+  readonly sourceNames: readonly string[];
+  readonly targetNames: readonly string[];
+  readonly additionalInputNames: readonly string[];
+  readonly forbiddenInputNames: readonly string[];
+} {
+  const profile = installConfig.accountsOidcModuleVariableMaterialization;
+  if (!profile) {
+    throw moduleVariableMaterializationError("declaration is missing");
+  }
+  const sourceNames = [
+    profile.workerNameVariable,
+    profile.projectNameVariable,
+  ];
+  const targetNames = [
+    profile.issuerUrlVariable,
+    profile.clientIdVariable,
+    profile.ownerSubjectVariable,
+    profile.allowUnpinnedOwnerClaimVariable,
+  ];
+  const additionalInputNames = boundedModuleVariableNameList(
+    profile.additionalInputVariables,
+  );
+  const forbiddenInputNames = boundedModuleVariableNameList(
+    profile.forbiddenNonEmptyInputVariables,
+  );
+  const publicNames = [...sourceNames, ...targetNames, ...additionalInputNames];
+  const allNames = [...publicNames, ...forbiddenInputNames];
+  if (
+    allNames.some(
+      (name) =>
+        typeof name !== "string" || !OPENTOFU_MODULE_VARIABLE_NAME.test(name),
+    ) ||
+    publicNames.some(
+      (name) =>
+        typeof name !== "string" ||
+        isSecretKey(name) ||
+        name.toUpperCase() === "ENCRYPTION_KEY",
+    ) ||
+    new Set(allNames).size !== allNames.length
+  ) {
+    throw moduleVariableMaterializationError(
+      "declaration contains an invalid, duplicate, or secret-shaped variable name",
+    );
+  }
+  return {
+    profile,
+    sourceNames,
+    targetNames,
+    additionalInputNames,
+    forbiddenInputNames,
+  };
+}
+
+function boundedModuleVariableNameList(
+  value: readonly string[] | undefined,
+): readonly string[] {
+  if (value === undefined) return [];
+  if (
+    !Array.isArray(value) ||
+    value.length > MAX_MODULE_VARIABLE_DECLARATION_NAMES ||
+    value.some((name) => typeof name !== "string")
+  ) {
+    throw moduleVariableMaterializationError(
+      "declaration contains too many or malformed variable names",
+    );
+  }
+  return value;
+}
+
+function isPublicModuleVariableScalar(value: JsonValue): boolean {
+  if (typeof value === "string") return !containsSecretLikeString(value);
+  if (typeof value === "number") return Number.isFinite(value);
+  return typeof value === "boolean";
+}
+
+function requireValidModuleVariableMaterialization(
+  installConfig: InstallConfig,
+  result: CapsuleModuleVariableMaterialization | undefined,
+): CapsuleModuleVariableMaterialization {
+  const { profile, targetNames } =
+    requireValidModuleVariableProfile(installConfig);
+  if (!result) {
+    throw moduleVariableMaterializationError(
+      "declared materialization did not return values",
+    );
+  }
+  if (!MODULE_VARIABLE_MATERIALIZATION_DIGEST.test(result.digest)) {
+    throw moduleVariableMaterializationError("digest is invalid");
+  }
+  const actualNames = Object.keys(result.variables).sort();
+  const expectedNames = [...targetNames].sort();
+  if (
+    actualNames.length !== expectedNames.length ||
+    actualNames.some((name, index) => name !== expectedNames[index])
+  ) {
+    throw moduleVariableMaterializationError(
+      "host returned variables outside the exact declared target set",
+    );
+  }
+  const issuer = result.variables[profile.issuerUrlVariable];
+  const clientId = result.variables[profile.clientIdVariable];
+  const ownerSubject = result.variables[profile.ownerSubjectVariable];
+  const allowUnpinnedOwnerClaim =
+    result.variables[profile.allowUnpinnedOwnerClaimVariable];
+  if (
+    !isBoundedNonSecretString(issuer) ||
+    !isBoundedNonSecretString(clientId) ||
+    !isBoundedNonSecretString(ownerSubject) ||
+    allowUnpinnedOwnerClaim !== false
+  ) {
+    throw moduleVariableMaterializationError(
+      "host returned an invalid or secret-shaped public OIDC value",
+    );
+  }
+  return result;
+}
+
+function isBoundedNonSecretString(value: JsonValue | undefined): boolean {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    new TextEncoder().encode(value).byteLength <= 4_096 &&
+    !containsSecretLikeString(value)
+  );
+}
+
+function assertPinnedModuleVariableValues(
+  variables: Readonly<Record<string, JsonValue>> | undefined,
+  materialization: CapsuleModuleVariableMaterialization,
+): void {
+  const actual = variables ?? {};
+  for (const [name, value] of Object.entries(materialization.variables)) {
+    if (actual[name] !== value) {
+      throw moduleVariableMaterializationError(
+        `dependency injection changed materialized variable ${name}`,
+      );
+    }
+  }
+}
+
+function moduleVariableMaterializationError(
+  detail: string,
+): OpenTofuControllerError {
+  return new OpenTofuControllerError(
+    "failed_precondition",
+    `module_variable_materialization_failed: ${redactString(detail)}`,
+    { reason: "module_variable_materialization_failed" },
+  );
 }
 
 async function assertApplyRunCreationAuthority(

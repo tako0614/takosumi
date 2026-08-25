@@ -7,39 +7,35 @@ import {
 import * as hostedWorker from "../../../deploy/platform/takoserver_hosted_worker.ts";
 import { composeTakoserverHostedWorkerEnv } from "../../../deploy/platform/takoserver_hosted_worker.ts";
 import { OPERATOR_CONTROL_MCP_INSTALL_CONFIG } from "../../../deploy/operator-control-mcp.ts";
+import { CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY } from "../../../providers/cloudflare/credentials.ts";
 
-test("Takosumi Hosted offers one explicit Takoserver or Takoform choice", () => {
+test("Takosumi Hosted exposes runnable Takoform and Cloudflare provider profiles", () => {
   expect(TAKOSERVER_HOSTED_INSTALL_CONFIGS).toHaveLength(2);
-  const [managed, byoc] = TAKOSERVER_HOSTED_INSTALL_CONFIGS;
-  expect(managed?.store?.deploymentProfile).toMatchObject({
-    key: "takoserver-v1",
-    label: { ja: "Takoserver", en: "Takoserver" },
+  const [takoform, cloudflare] = TAKOSERVER_HOSTED_INSTALL_CONFIGS;
+  expect(takoform?.id).toBe("cfg-hosted-yurucommu-takoform-v2");
+  expect(takoform?.name).toBe("yurucommu-takoform-v2");
+  expect(takoform?.store?.deploymentProfile).toMatchObject({
+    key: "takoform-v2",
+    label: { ja: "Takoform", en: "Takoform" },
+    description: {
+      ja: "自分で接続したTakoform Hostへ配置します。",
+      en: "Deploy to a Takoform Host you connected.",
+    },
     recommended: true,
   });
-  expect(byoc?.store?.deploymentProfile).toMatchObject({
-    key: "takoform-v1",
-    label: { ja: "Takoform", en: "Takoform" },
-    recommended: false,
+  expect(takoform?.store?.deploymentProfile).not.toHaveProperty("management");
+  expect(takoform?.sourceSelector).toEqual({
+    url: "https://github.com/tako0614/yurucommu.git",
+    path: ".",
   });
-  for (const config of TAKOSERVER_HOSTED_INSTALL_CONFIGS) {
-    expect(config.sourceSelector).toEqual({
-      url: "https://github.com/tako0614/yurucommu.git",
-      path: ".",
-    });
-    expect(config.modulePath).toBe("deploy/takoform");
-    expect(config.policy.allowedProviders).toEqual([
-      TAKOSERVER_TAKOFORM_PROVIDER_SOURCE,
-    ]);
-    expect(config.policy.providerCredentials?.requiredProviders).toEqual([
-      TAKOSERVER_TAKOFORM_PROVIDER_SOURCE,
-    ]);
-  }
-  expect(managed?.policy.providerCredentials).toMatchObject({
-    allowedConnectionIds: [TAKOSERVER_TAKOFORM_CONNECTION_ID],
-    requireTemporary: true,
-    requireTtlEnforced: true,
+  expect(takoform?.modulePath).toBe("deploy/takoform");
+  expect(takoform?.policy.allowedProviders).toEqual([
+    TAKOSERVER_TAKOFORM_PROVIDER_SOURCE,
+  ]);
+  expect(takoform?.policy.providerCredentials).toEqual({
+    requiredProviders: [TAKOSERVER_TAKOFORM_PROVIDER_SOURCE],
   });
-  expect(managed?.runtimeBindingMaterialization).toEqual({
+  expect(takoform?.runtimeBindingMaterialization).toEqual({
     contract: "takosumi.runtime-binding-profile/v1",
     generatedSecrets: [
       { binding: "ENCRYPTION_KEY", bytes: 32, encoding: "hex" },
@@ -53,10 +49,75 @@ test("Takosumi Hosted offers one explicit Takoserver or Takoform choice", () => 
       scopes: ["openid", "profile", "email"],
     },
   });
-  expect(byoc?.runtimeBindingMaterialization).toBeUndefined();
-  expect(byoc?.policy.providerCredentials).toMatchObject({
-    forbiddenConnectionIds: [TAKOSERVER_TAKOFORM_CONNECTION_ID],
+
+  expect(cloudflare?.store?.deploymentProfile).toEqual({
+    key: "cloudflare-v1",
+    label: { ja: "Cloudflare", en: "Cloudflare" },
+    description: {
+      ja: "Cloudflareで配置します。接続済みのCloudflareアカウントを使用します。",
+      en: "Deploy with Cloudflare using a connected Cloudflare account.",
+    },
+    order: 20,
+    recommended: false,
+    management: {
+      kind: "external_console",
+      href: "https://dash.cloudflare.com",
+      label: { ja: "Cloudflareダッシュボード", en: "Cloudflare dashboard" },
+    },
   });
+  expect(cloudflare?.sourceSelector).toEqual({
+    url: "https://github.com/tako0614/yurucommu.git",
+    path: ".",
+  });
+  expect(cloudflare?.modulePath).toBe(".");
+  expect(cloudflare?.variableMapping).toEqual({
+    enable_cloudflare_resources: true,
+    enable_cloudflare_worker_script: true,
+    enable_workers_dev_subdomain: true,
+    app_url: "",
+    cloudflare_account_id: null,
+    cloudflare_workers_subdomain: null,
+  });
+  expect(cloudflare?.policy.allowedProviders).toEqual([
+    "registry.opentofu.org/cloudflare/cloudflare",
+    "registry.opentofu.org/hashicorp/http",
+    "registry.opentofu.org/hashicorp/random",
+  ]);
+  expect(cloudflare?.policy.providerCredentials).toEqual({
+    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+    requiredCredentialCapabilities: [
+      CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY,
+    ],
+  });
+  expect(cloudflare?.installExperience).toEqual({
+    projections: [
+      {
+        kind: "oidc_client",
+        variables: {},
+        callbackPath: "/api/auth/callback/takos",
+        scopes: ["openid", "profile", "email"],
+      },
+    ],
+  });
+  expect(cloudflare?.accountsOidcModuleVariableMaterialization).toEqual({
+    contract: "takosumi.accounts-oidc-module-variables/v1",
+    workerNameVariable: "worker_name",
+    projectNameVariable: "project_name",
+    additionalInputVariables: [
+      "cloudflare_account_id",
+      "cloudflare_workers_subdomain",
+    ],
+    forbiddenNonEmptyInputVariables: [
+      "auth_password_hash",
+      "notification_push_gateway_token",
+    ],
+    issuerUrlVariable: "takosumi_accounts_issuer_url",
+    clientIdVariable: "takosumi_accounts_client_id",
+    ownerSubjectVariable: "oidc_owner_sub",
+    allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
+  });
+  expect(cloudflare?.runtimeBindingMaterialization).toBeUndefined();
+  expect(cloudflare?.variablePresentation).toBeUndefined();
 });
 
 test("Takoserver Hosted wrapper preserves every Worker Durable Object export", () => {

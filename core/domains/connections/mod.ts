@@ -10,6 +10,7 @@
  */
 import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
 import type { Capsule } from "takosumi-contract/capsules";
+import type { PolicyConfig } from "takosumi-contract/install-configs";
 import { randomUUID } from "node:crypto";
 import type {
   ProviderBinding,
@@ -28,6 +29,10 @@ import {
   PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
 } from "../deploy-control/errors.ts";
 import type { OpenTofuControlStore } from "../deploy-control/store.ts";
+import {
+  evaluateProviderConnectionCredentialPolicy,
+  mergePolicyConfigs,
+} from "../deploy-control/provider_policy.ts";
 
 /** One Provider Connection binding's resolution outcome. */
 export interface ResolvedCapsuleProviderBinding {
@@ -183,6 +188,10 @@ export async function resolvedProviderBindingsDigest(
       connectionId: entry.connection.id,
       envNames: [...entry.connection.envNames].sort(),
       providerConfig: entry.connection.scopeHints?.providerConfig ?? null,
+      moduleInputDefaults:
+        entry.connection.scopeHints?.moduleInputDefaults ?? null,
+      providerSettings: entry.connection.scopeHints?.providerSettings ?? null,
+      credentialVerification: entry.connection.credentialVerification ?? null,
       runCredentialSettings: entry.runCredentialSettings ?? null,
     }))
     .sort((a, b) => {
@@ -301,8 +310,9 @@ export class ConnectionsService {
       set?.bindings ?? [],
       "capsule provider binding set bindings",
     );
+    const policy = await this.#policyForCapsule(capsule);
     return await Promise.all(
-      bindings.map((binding) => this.#resolveBinding(capsule, binding)),
+      bindings.map((binding) => this.#resolveBinding(capsule, binding, policy)),
     );
   }
 
@@ -356,6 +366,7 @@ export class ConnectionsService {
         connectionId: input.connectionId,
         ...(input.alias ? { alias: input.alias } : {}),
       },
+      undefined,
     );
     if (resolved.connection.scope === "operator") {
       throw new OpenTofuControllerError(
@@ -370,6 +381,7 @@ export class ConnectionsService {
   async #resolveBinding(
     capsule: Pick<Capsule, "workspaceId">,
     binding: ProviderBinding,
+    policy: PolicyConfig | undefined,
   ): Promise<ResolvedCapsuleProviderBinding> {
     const connection =
       this.#operatorProviderConnections.get(binding.connectionId) ??
@@ -417,6 +429,17 @@ export class ConnectionsService {
         { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
       );
     }
+    const policyReasons = evaluateProviderConnectionCredentialPolicy(
+      connection,
+      policy,
+    );
+    if (policyReasons.length > 0) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        policyReasons[0]!,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+      );
+    }
     if (!connectionUsableForProviderBinding(connection)) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -458,6 +481,16 @@ export class ConnectionsService {
       connection,
       materialization: connection.materialization,
     };
+  }
+
+  async #policyForCapsule(
+    capsule: Pick<Capsule, "workspaceId" | "installConfigId">,
+  ): Promise<PolicyConfig | undefined> {
+    const [workspace, installConfig] = await Promise.all([
+      this.#store.getWorkspace(capsule.workspaceId),
+      this.#store.getInstallConfig(capsule.installConfigId),
+    ]);
+    return mergePolicyConfigs(workspace?.policy, installConfig?.policy);
   }
 }
 

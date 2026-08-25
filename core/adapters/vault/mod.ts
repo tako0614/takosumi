@@ -40,7 +40,12 @@ import {
   isWorkspaceBindableOperatorConnection,
   sameCapsuleRunCredentialIssuance,
 } from "takosumi-contract/connections";
-import type { CredentialRecipe } from "takosumi-contract";
+import type {
+  ProviderConnectionCredentialVerification,
+  CredentialRecipe,
+  CredentialRecipeMaterialSource,
+  CredentialRecipeVerifiedScopeHintKeys,
+} from "takosumi-contract";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import {
   credentialRecipeDriverKey,
@@ -75,6 +80,13 @@ import type { SecretPartition } from "../secret-store/types.ts";
 import { resolveCanonicalCapsuleRunCredentialContext } from "../../domains/deploy-control/run_credential_context.ts";
 
 const CREDENTIAL_BUNDLE_MARKER = "[credential-bundle]";
+const CREDENTIAL_VERIFICATION_KIND =
+  "takosumi.credential-verification@v1" as const;
+const CREDENTIAL_VERIFIER_ID_PATTERN =
+  /^[a-z0-9][a-z0-9._/@-]{0,127}$/u;
+const CREDENTIAL_VERIFICATION_CAPABILITY_PATTERN =
+  /^[a-z0-9][a-z0-9._-]{0,127}$/u;
+const MAX_CREDENTIAL_VERIFICATION_CAPABILITIES = 64;
 /**
  * AAD workspaceId label for operator-scoped connections (spec §8): they have no
  * owning Workspace, so their sealed blobs bind to this fixed partition label.
@@ -634,6 +646,15 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       input.scopeHints,
       connectionScope,
       this.#allowedProviderConfigUrls,
+      sensitiveMaterialValuesForRecipe(
+        credentialRecipe,
+        {
+          env: values,
+          files: declaredEnvRegistration?.files ?? [],
+        },
+        this.#credentialRecipeResolver,
+        { includeUnknownEnvAsSensitive: false },
+      ),
     );
     const now = this.#now();
     const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
@@ -724,6 +745,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       input.scopeHints,
       connectionScope,
       this.#allowedProviderConfigUrls,
+      Object.values(values),
     );
     const sourceDriver = sourceCredentialDriverForKind(
       kind,
@@ -809,17 +831,23 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
     const material = await this.#providerMaterialForConnection(connection);
     const values = material.env;
-    let verified: { readonly ok: boolean; readonly detail?: string };
+    const sensitiveValues = sensitiveMaterialValues(
+      connection,
+      material,
+      this.#credentialRecipeResolver,
+    );
+    let verified: SafeCredentialDriverVerificationResult;
     if (isSourceGitKind(connection.kind)) {
       const driver = sourceCredentialDriverForConnection(
         connection,
         this.#sourceCredentialDrivers,
       );
       if (!driver) {
-        return {
-          status: "pending",
-          detail: `no verification driver is configured for connection kind ${connection.kind ?? "(unknown)"} (provider ${connection.provider})`,
-        };
+        return await this.#verificationFailed(
+          connection,
+          `no verification driver is configured for connection kind ${connection.kind ?? "(unknown)"} (provider ${connection.provider})`,
+          sensitiveValues,
+        );
       }
       try {
         verified = safeCredentialDriverVerificationResult(
@@ -829,19 +857,33 @@ export class StaticSecretConnectionVault implements ConnectionVault {
             fetch: this.#fetch,
             now: this.#now,
           }),
-          Object.values(values),
+          sensitiveValues,
         );
       } catch (error) {
-        throw wrapDriverError(error);
+        const wrapped = wrapDriverError(error);
+        await this.#verificationFailed(connection, wrapped.message, sensitiveValues);
+        throw wrapped;
       }
     } else {
       const driver = this.#credentialDriver(connection);
       if (!driver?.verify) {
+        if (driverDeclaresVerificationAuthority(driver)) {
+          const error = invalidCredentialVerificationDescriptor(
+            "verification authority requires a verify method",
+          );
+          await this.#verificationFailed(
+            connection,
+            error.message,
+            sensitiveValues,
+          );
+          throw error;
+        }
         if (connection.credentialRecipe?.preRunAction && !driver?.mint) {
-          return {
-            status: "pending",
-            detail: `no mint driver is installed for pre-run credential recipe ${recipeLabel(connection)}`,
-          };
+          return await this.#verificationFailed(
+            connection,
+            `no mint driver is installed for pre-run credential recipe ${recipeLabel(connection)}`,
+            sensitiveValues,
+          );
         }
         verified = verifyStaticCredentialMaterial(connection, material);
       } else {
@@ -856,30 +898,103 @@ export class StaticSecretConnectionVault implements ConnectionVault {
               staticEvidence: () =>
                 staticCredentialEvidence(connection, this.#now()),
             }),
-            [
-              ...Object.values(values),
-              ...material.files.map((file) => file.content),
-            ],
+            sensitiveValues,
           );
         } catch (error) {
-          throw wrapDriverError(error);
+          const wrapped = wrapDriverError(error);
+          await this.#verificationFailed(connection, wrapped.message, sensitiveValues);
+          throw wrapped;
         }
       }
     }
     if (!verified.ok) {
-      return { status: "pending", detail: verified.detail };
+      return await this.#verificationFailed(
+        connection,
+        verified.detail,
+        sensitiveValues,
+      );
+    }
+    const verificationDriver = isSourceGitKind(connection.kind)
+      ? undefined
+      : this.#credentialDriver(connection);
+    let credentialVerification: ProviderConnectionCredentialVerification | undefined;
+    let verifiedScopeHintKeys: VerifiedScopeHintKeyOwnership | undefined;
+    try {
+      credentialVerification = credentialVerificationForDriver(
+        verificationDriver,
+      );
+      verifiedScopeHintKeys = verifiedScopeHintOwnershipForDriver(
+        verificationDriver,
+        verified.verifiedScopeHints,
+      );
+    } catch (error) {
+      await this.#verificationFailed(
+        connection,
+        "credential verification driver descriptor is invalid",
+        sensitiveValues,
+      );
+      throw error;
+    }
+    let mergedScopeHints: ConnectionScopeHints | undefined;
+    try {
+      const verifiedScopeHints = normalizeVerifiedScopeHints(
+        verified.verifiedScopeHints,
+        sensitiveValues,
+        verifiedScopeHintKeys,
+      );
+      mergedScopeHints = mergeVerifiedScopeHints(
+        connection.scopeHints,
+        verifiedScopeHints,
+      );
+    } catch (error) {
+      await this.#verificationFailed(
+        connection,
+        "credential verification produced invalid non-secret metadata",
+        sensitiveValues,
+      );
+      throw error;
+    }
+    let persistedScopeHints: ConnectionScopeHints | undefined;
+    try {
+      persistedScopeHints = normalizeScope(
+        mergedScopeHints,
+        connection.scope,
+        this.#allowedProviderConfigUrls,
+        sensitiveValues,
+      );
+    } catch (error) {
+      await this.#verificationFailed(
+        connection,
+        "credential verification produced invalid non-secret metadata",
+        sensitiveValues,
+      );
+      throw error;
     }
     const verifiedAtIso = this.#now().toISOString();
+    const {
+      credentialVerification: _previousCredentialVerification,
+      verifiedAt: _previousVerifiedAt,
+      scopeHints: _previousScopeHints,
+      ...connectionWithoutVerification
+    } = connection;
     const verifiedConnection: ProviderConnection = {
-      ...connection,
+      ...connectionWithoutVerification,
       status: "verified",
       verifiedAt: verifiedAtIso,
       updatedAt: verifiedAtIso,
+      ...(persistedScopeHints ? { scopeHints: persistedScopeHints } : {}),
+      ...(credentialVerification ? { credentialVerification } : {}),
     };
     if (this.#operatorProviderConnections.has(connection.id)) {
       return { status: "verified" };
     }
-    await this.#store.putConnection(verifiedConnection);
+    const replaced = await this.#store.replaceConnectionIfUnchanged(
+      connection,
+      verifiedConnection,
+    );
+    if (!replaced) {
+      throw connectionVerificationRaceError();
+    }
     return { status: "verified" };
   }
 
@@ -1320,6 +1435,66 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       updatedAt: nowIso,
     };
     await this.#store.putConnection(expiredConnection);
+  }
+
+  async #verificationFailed(
+    connection: ProviderConnection,
+    detail: string | undefined,
+    sensitiveValues: readonly string[] = [],
+  ): Promise<TestConnectionResult> {
+    if (this.#operatorProviderConnections.has(connection.id)) {
+      return {
+        status: "pending",
+        ...(detail ? { detail } : {}),
+      };
+    }
+    const verificationDriver = isSourceGitKind(connection.kind)
+      ? undefined
+      : this.#credentialDriver(connection);
+    const ownedScopeHintKeys =
+      connection.credentialVerification?.verifierId !== undefined &&
+      connection.credentialVerification.verifierId === verificationDriver?.verifierId
+        ? verifiedScopeHintOwnershipForDriver(verificationDriver)
+        : undefined;
+    const retainedScopeHints = removeVerifiedScopeHintKeys(
+      connection.scopeHints,
+      ownedScopeHintKeys,
+    );
+    let normalizedScopeHints: ConnectionScopeHints | undefined;
+    try {
+      normalizedScopeHints = normalizeScope(
+        retainedScopeHints,
+        connection.scope,
+        this.#allowedProviderConfigUrls,
+        sensitiveValues,
+      );
+    } catch {
+      normalizedScopeHints = undefined;
+    }
+    const {
+      credentialVerification: _credentialVerification,
+      verifiedAt: _verifiedAt,
+      scopeHints: _scopeHints,
+      ...connectionWithoutVerification
+    } = connection;
+    const pendingConnection: ProviderConnection = {
+      ...connectionWithoutVerification,
+      status: "pending",
+      updatedAt: this.#now().toISOString(),
+      ...(normalizedScopeHints ? { scopeHints: normalizedScopeHints } : {}),
+    };
+    if (
+      !(await this.#store.replaceConnectionIfUnchanged(
+        connection,
+        pendingConnection,
+      ))
+    ) {
+      throw connectionVerificationRaceError();
+    }
+    return {
+      status: "pending",
+      ...(detail ? { detail } : {}),
+    };
   }
 
   async #openProviderSecretMaterial(
@@ -1802,17 +1977,259 @@ function credentialEvidenceContainsSensitiveValue(
   );
 }
 
+interface SafeCredentialDriverVerificationResult {
+  readonly ok: boolean;
+  readonly detail?: string;
+  readonly verifiedScopeHints?: unknown;
+}
+
+function credentialVerificationForDriver(
+  driver: CredentialRecipeRuntimeDriver | undefined,
+): ProviderConnectionCredentialVerification | undefined {
+  const verifierId = driver?.verifierId;
+  const capabilities = credentialVerificationCapabilities(
+    driver?.verificationCapabilities,
+  );
+  if (verifierId === undefined) {
+    if (capabilities !== undefined) {
+      throw invalidCredentialVerificationDescriptor(
+        "verification capabilities require a bounded verifier id",
+      );
+    }
+    return undefined;
+  }
+  if (!CREDENTIAL_VERIFIER_ID_PATTERN.test(verifierId)) {
+    throw invalidCredentialVerificationDescriptor(
+      "verifier id is invalid",
+    );
+  }
+  return {
+    kind: CREDENTIAL_VERIFICATION_KIND,
+    verifierId,
+    ...(capabilities ? { capabilities } : {}),
+  };
+}
+
+function credentialVerificationCapabilities(
+  value: unknown,
+): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > MAX_CREDENTIAL_VERIFICATION_CAPABILITIES
+  ) {
+    throw invalidCredentialVerificationDescriptor(
+      `verificationCapabilities must contain between 1 and ${MAX_CREDENTIAL_VERIFICATION_CAPABILITIES} entries`,
+    );
+  }
+  const capabilities = value as unknown[];
+  if (
+    capabilities.some(
+      (capability) =>
+        typeof capability !== "string" ||
+        !CREDENTIAL_VERIFICATION_CAPABILITY_PATTERN.test(capability),
+    )
+  ) {
+    throw invalidCredentialVerificationDescriptor(
+      "verificationCapabilities contains an invalid capability token",
+    );
+  }
+  return Object.freeze([...new Set(capabilities as string[])].sort());
+}
+
+function driverDeclaresVerificationAuthority(
+  driver: CredentialRecipeRuntimeDriver | undefined,
+): boolean {
+  return Boolean(
+    driver &&
+      (driver.verifierId !== undefined ||
+        driver.verificationCapabilities !== undefined ||
+        driver.verifiedScopeHintKeys !== undefined),
+  );
+}
+
+function invalidCredentialVerificationDescriptor(
+  detail: string,
+): ConnectionVaultError {
+  return new ConnectionVaultError(
+    "failed_precondition",
+    `credential recipe driver has an invalid verification descriptor: ${detail}`,
+    undefined,
+    "credential_service_unavailable",
+  );
+}
+
+interface VerifiedScopeHintKeyOwnership {
+  readonly moduleInputDefaults?: ReadonlySet<string>;
+  readonly providerSettings?: ReadonlySet<string>;
+}
+
+const VERIFIED_SCOPE_HINT_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+const MAX_VERIFIED_SCOPE_HINT_KEYS = 64;
+
+function verifiedScopeHintOwnershipForDriver(
+  driver: CredentialRecipeRuntimeDriver | undefined,
+  returnedHints?: unknown,
+): VerifiedScopeHintKeyOwnership | undefined {
+  const descriptor = driver?.verifiedScopeHintKeys;
+  if (returnedHints !== undefined && driver?.verifierId === undefined) {
+    throw invalidVerifiedScopeHintOwnership(
+      "verified scope hints require a bounded verifier id",
+    );
+  }
+  if (descriptor === undefined) {
+    if (returnedHints !== undefined) {
+      throw invalidVerifiedScopeHintOwnership(
+        "verified scope hints require a trusted ownership declaration",
+      );
+    }
+    return undefined;
+  }
+  if (driver?.verifierId === undefined) {
+    throw invalidVerifiedScopeHintOwnership(
+      "verified scope hint ownership requires a bounded verifier id",
+    );
+  }
+  if (!isRecord(descriptor)) {
+    throw invalidVerifiedScopeHintOwnership(
+      "verified scope hint ownership must be an object",
+    );
+  }
+  const unknownKeys = Object.keys(descriptor).filter(
+    (key) => key !== "moduleInputDefaults" && key !== "providerSettings",
+  );
+  if (unknownKeys.length > 0) {
+    throw invalidVerifiedScopeHintOwnership(
+      `verified scope hint ownership contains unknown fields: ${unknownKeys.join(", ")}`,
+    );
+  }
+  const moduleInputDefaults = normalizeVerifiedScopeHintKeySet(
+    descriptor.moduleInputDefaults,
+    "verifiedScopeHintKeys.moduleInputDefaults",
+  );
+  const providerSettings = normalizeVerifiedScopeHintKeySet(
+    descriptor.providerSettings,
+    "verifiedScopeHintKeys.providerSettings",
+  );
+  if (!moduleInputDefaults && !providerSettings) {
+    throw invalidVerifiedScopeHintOwnership(
+      "verified scope hint ownership must declare at least one key",
+    );
+  }
+  return {
+    ...(moduleInputDefaults ? { moduleInputDefaults } : {}),
+    ...(providerSettings ? { providerSettings } : {}),
+  };
+}
+
+function normalizeVerifiedScopeHintKeySet(
+  value: unknown,
+  fieldName: string,
+): ReadonlySet<string> | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_VERIFIED_SCOPE_HINT_KEYS) {
+    throw invalidVerifiedScopeHintOwnership(
+      `${fieldName} must be an array of at most ${MAX_VERIFIED_SCOPE_HINT_KEYS} keys`,
+    );
+  }
+  const keys = new Set<string>();
+  for (const key of value) {
+    if (
+      typeof key !== "string" ||
+      !VERIFIED_SCOPE_HINT_KEY_PATTERN.test(key) ||
+      SECRET_CONFIG_KEYS.has(key.toLowerCase())
+    ) {
+      throw invalidVerifiedScopeHintOwnership(
+        `${fieldName} contains an invalid metadata key`,
+      );
+    }
+    keys.add(key);
+  }
+  return keys.size > 0 ? keys : undefined;
+}
+
+function invalidVerifiedScopeHintOwnership(detail: string): ConnectionVaultError {
+  return new ConnectionVaultError(
+    "failed_precondition",
+    `credential recipe driver has invalid verified scope hint ownership: ${detail}`,
+    undefined,
+    "credential_service_unavailable",
+  );
+}
+
+function removeVerifiedScopeHintKeys(
+  scope: ConnectionScopeHints | undefined,
+  ownership: VerifiedScopeHintKeyOwnership | undefined,
+): ConnectionScopeHints | undefined {
+  if (!scope || !ownership) return scope;
+  const out: {
+    providerConfig?: ConnectionScopeHints["providerConfig"];
+    moduleInputDefaults?: ConnectionScopeHints["moduleInputDefaults"];
+    providerSettings?: ConnectionScopeHints["providerSettings"];
+  } = {
+    ...(scope.providerConfig ? { providerConfig: scope.providerConfig } : {}),
+    ...(scope.moduleInputDefaults
+      ? { moduleInputDefaults: scope.moduleInputDefaults }
+      : {}),
+    ...(scope.providerSettings
+      ? { providerSettings: scope.providerSettings }
+      : {}),
+  };
+  if (ownership.moduleInputDefaults && out.moduleInputDefaults) {
+    const retained = Object.fromEntries(
+      Object.entries(out.moduleInputDefaults).filter(
+        ([key]) => !ownership.moduleInputDefaults!.has(key),
+      ),
+    );
+    if (Object.keys(retained).length > 0) {
+      out.moduleInputDefaults = retained;
+    } else {
+      delete out.moduleInputDefaults;
+    }
+  }
+  if (ownership.providerSettings && out.providerSettings) {
+    const retained = Object.fromEntries(
+      Object.entries(out.providerSettings).filter(
+        ([key]) => !ownership.providerSettings!.has(key),
+      ),
+    );
+    if (Object.keys(retained).length > 0) {
+      out.providerSettings = retained;
+    } else {
+      delete out.providerSettings;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function connectionVerificationRaceError(): ConnectionVaultError {
+  return new ConnectionVaultError(
+    "failed_precondition",
+    "connection changed while credential verification was in progress; retry verification",
+    undefined,
+    "credential_service_unavailable",
+  );
+}
+
 function safeCredentialDriverVerificationResult(
   value: unknown,
   sensitiveValues: readonly string[],
-): { readonly ok: boolean; readonly detail?: string } {
+): SafeCredentialDriverVerificationResult {
   if (!isRecord(value) || typeof value.ok !== "boolean") {
     throw new ConnectionVaultError(
       "failed_precondition",
       "credential driver returned an invalid verification result",
     );
   }
-  if (value.detail === undefined) return { ok: value.ok };
+  if (value.detail === undefined) {
+    return {
+      ok: value.ok,
+      ...(value.verifiedScopeHints !== undefined
+        ? { verifiedScopeHints: value.verifiedScopeHints }
+        : {}),
+    };
+  }
   if (
     !isSafeCredentialEvidenceText(value.detail) ||
     credentialEvidenceContainsSensitiveValue(
@@ -1822,7 +2239,13 @@ function safeCredentialDriverVerificationResult(
   ) {
     return { ok: false, detail: "credential driver verification failed" };
   }
-  return { ok: value.ok, detail: value.detail };
+  return {
+    ok: value.ok,
+    detail: value.detail,
+    ...(value.verifiedScopeHints !== undefined
+      ? { verifiedScopeHints: value.verifiedScopeHints }
+      : {}),
+  };
 }
 
 /**
@@ -1926,6 +2349,7 @@ function normalizeScope(
   scope: ConnectionScopeHints | undefined,
   connectionScope: ProviderConnection["scope"],
   allowedProviderConfigUrls: ReadonlySet<string>,
+  sensitiveValues: readonly string[] = [],
 ): ConnectionScopeHints | undefined {
   if (!scope) return undefined;
   const out: {
@@ -1936,6 +2360,7 @@ function normalizeScope(
   const providerConfig = normalizeNonSecretJsonRecord(
     scope.providerConfig,
     "scopeHints.providerConfig",
+    sensitiveValues,
   );
   if (providerConfig) {
     // This object is rendered into the provider block. A Workspace caller may
@@ -1956,14 +2381,201 @@ function normalizeScope(
   const moduleInputDefaults = normalizeNonSecretJsonRecord(
     scope.moduleInputDefaults,
     "scopeHints.moduleInputDefaults",
+    sensitiveValues,
   );
   if (moduleInputDefaults) out.moduleInputDefaults = moduleInputDefaults;
   const providerSettings = normalizeNonSecretJsonRecord(
     scope.providerSettings,
     "scopeHints.providerSettings",
+    sensitiveValues,
   );
   if (providerSettings) out.providerSettings = providerSettings;
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function sensitiveMaterialValues(
+  connection: ProviderConnection,
+  material: ProviderSecretMaterial,
+  recipeResolver: (id: string) => CredentialRecipe | undefined,
+): readonly string[] {
+  return sensitiveMaterialValuesForRecipe(
+    connection.credentialRecipe,
+    material,
+    recipeResolver,
+  );
+}
+
+function sensitiveMaterialValuesForRecipe(
+  recipeRef: ProviderConnection["credentialRecipe"],
+  material: ProviderSecretMaterial,
+  recipeResolver: (id: string) => CredentialRecipe | undefined,
+  options: { readonly includeUnknownEnvAsSensitive?: boolean } = {},
+): string[] {
+  const allValues = [
+    ...Object.values(material.env),
+    ...material.files.map((file) => file.content),
+  ];
+  if (!recipeRef) return allValues;
+  const recipe = recipeResolver(recipeRef.id);
+  const mode = recipe?.authModes[recipeRef.authMode];
+  if (!mode) return allValues;
+
+  const envDeclarations = mode.env;
+  const sensitiveEnvNames = new Set(
+    Object.entries(envDeclarations ?? {})
+      .filter(([name, declaration]) =>
+        name !== "*" && sensitiveMaterialSource(declaration.from),
+      )
+      .map(([name]) => name),
+  );
+  const knownEnvNames = new Set(
+    Object.keys(envDeclarations ?? {}).filter((name) => name !== "*"),
+  );
+  const wildcardIsSensitive =
+    envDeclarations?.["*"] !== undefined &&
+    sensitiveMaterialSource(envDeclarations["*"].from);
+  const wildcardIsDeclared = envDeclarations?.["*"] !== undefined;
+  const includeUnknownEnvAsSensitive =
+    options.includeUnknownEnvAsSensitive ?? true;
+  const sensitiveValues = Object.entries(material.env).flatMap(
+    ([name, value]) =>
+      (wildcardIsSensitive ||
+        sensitiveEnvNames.has(name) ||
+        (includeUnknownEnvAsSensitive &&
+          !wildcardIsDeclared &&
+          !knownEnvNames.has(name)))
+        ? [value]
+        : [],
+  );
+
+  const fileDeclarations = mode.files;
+  for (const file of material.files) {
+    if (!fileDeclarations) {
+      sensitiveValues.push(file.content);
+      continue;
+    }
+    const declaration =
+      fileDeclarations[file.path] ??
+      (file.envName === undefined
+        ? undefined
+        : Object.values(fileDeclarations).find(
+            (candidate) => candidate.envName === file.envName,
+          ));
+    if (!declaration || sensitiveMaterialSource(declaration.from)) {
+      sensitiveValues.push(file.content);
+    }
+  }
+  return sensitiveValues;
+}
+
+function sensitiveMaterialSource(
+  source: CredentialRecipeMaterialSource,
+): boolean {
+  return source !== "value" && source !== "literal";
+}
+
+/**
+ * Verified scope hints are a narrow trusted-driver extension. They may only
+ * add the two non-secret maps Core already persists; all other keys are
+ * rejected before the verified connection row is constructed.
+ */
+function normalizeVerifiedScopeHints(
+  value: unknown,
+  sensitiveValues: readonly string[],
+  ownership: VerifiedScopeHintKeyOwnership | undefined,
+): Pick<ConnectionScopeHints, "moduleInputDefaults" | "providerSettings"> | undefined {
+  if (value === undefined) return undefined;
+  if (!ownership) {
+    throw invalidVerifiedScopeHintOwnership(
+      "verified scope hints require a trusted ownership declaration",
+    );
+  }
+  if (!isRecord(value)) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      "verifiedScopeHints must be a JSON object when provided",
+    );
+  }
+  const unknownKeys = Object.keys(value).filter(
+    (key) => key !== "moduleInputDefaults" && key !== "providerSettings",
+  );
+  if (unknownKeys.length > 0) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      `verifiedScopeHints contains unknown fields: ${unknownKeys.join(", ")}`,
+    );
+  }
+  const moduleInputDefaults = normalizeNonSecretJsonRecord(
+    value.moduleInputDefaults,
+    "verifiedScopeHints.moduleInputDefaults",
+    sensitiveValues,
+  );
+  const providerSettings = normalizeNonSecretJsonRecord(
+    value.providerSettings,
+    "verifiedScopeHints.providerSettings",
+    sensitiveValues,
+  );
+  assertVerifiedScopeHintKeysOwned(
+    moduleInputDefaults,
+    ownership.moduleInputDefaults,
+    "verifiedScopeHints.moduleInputDefaults",
+  );
+  assertVerifiedScopeHintKeysOwned(
+    providerSettings,
+    ownership.providerSettings,
+    "verifiedScopeHints.providerSettings",
+  );
+  if (!moduleInputDefaults && !providerSettings) return undefined;
+  return {
+    ...(moduleInputDefaults ? { moduleInputDefaults } : {}),
+    ...(providerSettings ? { providerSettings } : {}),
+  };
+}
+
+function assertVerifiedScopeHintKeysOwned(
+  value: Readonly<Record<string, unknown>> | undefined,
+  ownership: ReadonlySet<string> | undefined,
+  fieldName: string,
+): void {
+  if (!value) return;
+  if (!ownership) {
+    throw invalidVerifiedScopeHintOwnership(
+      `${fieldName} has no trusted ownership declaration`,
+    );
+  }
+  const unowned = Object.keys(value).filter((key) => !ownership.has(key));
+  if (unowned.length > 0) {
+    throw invalidVerifiedScopeHintOwnership(
+      `${fieldName} contains undeclared keys: ${unowned.join(", ")}`,
+    );
+  }
+}
+
+function mergeVerifiedScopeHints(
+  existing: ConnectionScopeHints | undefined,
+  verified: Pick<
+    ConnectionScopeHints,
+    "moduleInputDefaults" | "providerSettings"
+  > | undefined,
+): ConnectionScopeHints | undefined {
+  if (!verified) return existing;
+  const moduleInputDefaults = verified.moduleInputDefaults
+    ? {
+        ...(existing?.moduleInputDefaults ?? {}),
+        ...verified.moduleInputDefaults,
+      }
+    : existing?.moduleInputDefaults;
+  const providerSettings = verified.providerSettings
+    ? {
+        ...(existing?.providerSettings ?? {}),
+        ...verified.providerSettings,
+      }
+    : existing?.providerSettings;
+  return {
+    ...(existing ?? {}),
+    ...(moduleInputDefaults ? { moduleInputDefaults } : {}),
+    ...(providerSettings ? { providerSettings } : {}),
+  };
 }
 
 const SECRET_CONFIG_KEYS = new Set([
@@ -1994,9 +2606,15 @@ const SECRET_CONFIG_KEYS = new Set([
   "token",
 ]);
 
+const MAX_NON_SECRET_SCOPE_HINTS_BYTES = 4_096;
+const MAX_NON_SECRET_SCOPE_HINTS_DEPTH = 6;
+const MAX_NON_SECRET_SCOPE_HINTS_ENTRIES = 64;
+const MAX_NON_SECRET_SCOPE_HINT_STRING = 1_024;
+
 function normalizeNonSecretJsonRecord(
   value: unknown,
   fieldName: string,
+  sensitiveValues: readonly string[] = [],
 ): Readonly<Record<string, import("takosumi-contract").JsonValue>> | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) {
@@ -2005,56 +2623,140 @@ function normalizeNonSecretJsonRecord(
       `${fieldName} must be a JSON object when provided`,
     );
   }
+  const state = { entries: 0 };
   const out: Record<string, import("takosumi-contract").JsonValue> = {};
   for (const [key, item] of Object.entries(value)) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || !isJsonValue(item)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) {
       throw new ConnectionVaultError(
         "invalid_argument",
-        `${fieldName}.${key} must be a valid identifier with a JSON value`,
+        `${fieldName}.${key} must be a valid identifier`,
       );
     }
-    assertNonSecretJsonValue(item, `${fieldName}.${key}`, key);
-    out[key] = item;
+    out[key] = normalizeNonSecretJsonValue(
+      item,
+      `${fieldName}.${key}`,
+      key,
+      0,
+      state,
+      sensitiveValues,
+    );
+  }
+  const encoded = JSON.stringify(out);
+  if (
+    new TextEncoder().encode(encoded).byteLength >
+    MAX_NON_SECRET_SCOPE_HINTS_BYTES
+  ) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      `${fieldName} exceeds ${MAX_NON_SECRET_SCOPE_HINTS_BYTES} bytes`,
+    );
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function assertNonSecretJsonValue(
-  value: import("takosumi-contract").JsonValue,
+function normalizeNonSecretJsonValue(
+  value: unknown,
   path: string,
   key: string,
-): void {
+  depth: number,
+  state: { entries: number },
+  sensitiveValues: readonly string[],
+): import("takosumi-contract").JsonValue {
+  if (depth > MAX_NON_SECRET_SCOPE_HINTS_DEPTH) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      `${path} exceeds the maximum nesting depth`,
+    );
+  }
+  state.entries += 1;
+  if (state.entries > MAX_NON_SECRET_SCOPE_HINTS_ENTRIES) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      `${path} has too many entries`,
+    );
+  }
   if (SECRET_CONFIG_KEYS.has(key.toLowerCase())) {
     throw new ConnectionVaultError(
       "invalid_argument",
       `${path} is credential-shaped; store secret material in Provider ProviderConnection values/files and inject it through a Credential Recipe`,
     );
   }
-  if (Array.isArray(value)) {
-    for (const [index, item] of value.entries()) {
-      assertNonSecretJsonValue(item, `${path}[${index}]`, String(index));
-    }
-    return;
-  }
-  if (value === null || typeof value !== "object") return;
-  for (const [childKey, childValue] of Object.entries(value)) {
-    assertNonSecretJsonValue(childValue, `${path}.${childKey}`, childKey);
-  }
-}
-
-function isJsonValue(
-  value: unknown,
-): value is import("takosumi-contract").JsonValue {
   if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean"
+    typeof value === "string" &&
+    sensitiveValues.some(
+      (sensitive) => sensitive.length > 0 && value.includes(sensitive),
+    )
   ) {
-    return true;
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      `${path} contains opened credential material`,
+    );
   }
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  return isRecord(value) && Object.values(value).every(isJsonValue);
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    if (value.length > MAX_NON_SECRET_SCOPE_HINT_STRING) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        `${path} exceeds ${MAX_NON_SECRET_SCOPE_HINT_STRING} characters`,
+      );
+    }
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        `${path} must be a finite JSON number`,
+      );
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > MAX_NON_SECRET_SCOPE_HINTS_ENTRIES) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        `${path} has too many entries`,
+      );
+    }
+    return value.map((item, index) =>
+      normalizeNonSecretJsonValue(
+        item,
+        `${path}[${index}]`,
+        String(index),
+        depth + 1,
+        state,
+        sensitiveValues,
+      ),
+    );
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value);
+    if (entries.length > MAX_NON_SECRET_SCOPE_HINTS_ENTRIES) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        `${path} has too many entries`,
+      );
+    }
+    const normalized: Record<
+      string,
+      import("takosumi-contract").JsonValue
+    > = {};
+    for (const [childKey, childValue] of entries) {
+      normalized[childKey] = normalizeNonSecretJsonValue(
+        childValue,
+        `${path}.${childKey}`,
+        childKey,
+        depth + 1,
+        state,
+        sensitiveValues,
+      );
+    }
+    return normalized;
+  }
+  throw new ConnectionVaultError(
+    "invalid_argument",
+    `${path} must be a JSON value`,
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

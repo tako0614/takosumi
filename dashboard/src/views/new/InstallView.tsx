@@ -53,6 +53,7 @@ import {
   resolveStableSourceTag,
   type CapsuleCompatibilityResult,
   type InstallConfig,
+  type PolicyConfig,
   type ProviderBindings,
   type ProviderConnection,
   type SourceCreateReconciliationToken,
@@ -90,6 +91,7 @@ import {
   isProviderConnectionCandidate,
   providerConnectionAllowedByInstallPolicy,
   providerConnectionMatchesProviderSource,
+  mergeProviderConnectionPolicies,
   preferredProviderConnection,
   providerConnectionDisplayName,
 } from "../../lib/provider-connections.ts";
@@ -174,6 +176,10 @@ interface EntryEvidence {
   readonly digest: string;
   readonly sizeBytes?: number;
 }
+
+type WorkspacePolicyState =
+  | { readonly status: "unavailable" }
+  | { readonly status: "ready"; readonly policy?: PolicyConfig };
 
 function canonicalProviderSource(provider: string): string {
   const normalized = provider.toLowerCase().trim();
@@ -260,6 +266,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   );
   const [workspaceId, setWorkspaceId] = createSignal(currentWorkspaceId());
   const [workspaceHandle, setWorkspaceHandle] = createSignal<string>();
+  const [workspacePolicyState, setWorkspacePolicyState] =
+    createSignal<WorkspacePolicyState>({ status: "unavailable" });
   const [sourceId, setSourceId] = createSignal<string>();
   const [sourceSnapshotId, setSourceSnapshotId] = createSignal<string>();
   const [sourceCreateReconciliationToken, setSourceCreateReconciliationToken] =
@@ -348,26 +356,43 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           connection.kind === "source_git_ssh_key"),
     );
 
-  const candidatesFor = (provider: string) =>
-    providerConnections().filter((connection) => {
+  const effectiveProviderPolicy = (
+    installPolicy: PolicyConfig | undefined = installConfig()?.policy,
+  ): PolicyConfig | undefined => {
+    const state = workspacePolicyState();
+    return state.status === "ready"
+      ? mergeProviderConnectionPolicies(state.policy, installPolicy)
+      : undefined;
+  };
+
+  const candidatesFor = (
+    provider: string,
+    installPolicy: PolicyConfig | undefined = installConfig()?.policy,
+  ) => {
+    if (workspacePolicyState().status !== "ready") return [];
+    const policy = effectiveProviderPolicy(installPolicy);
+    return providerConnections().filter((connection) => {
       if (
         !isProviderConnectionCandidate(connection) ||
         !sameProviderSource(provider, connection.providerSource)
       ) {
         return false;
       }
-      return providerConnectionAllowedByInstallPolicy(
-        connection,
-        installConfig()?.policy,
-      );
+      return providerConnectionAllowedByInstallPolicy(connection, policy);
     });
+  };
 
-  const providerRowsReady = () =>
-    providerRows().every((row) =>
+  const providerRowsReady = () => {
+    if (workspacePolicyState().status !== "ready") return false;
+    return providerRows().every((row) =>
       candidatesFor(row.provider).some(
         (connection) => connection.id === row.connectionId,
       ),
     );
+  };
+
+  const providerModuleLabel = (row: ProviderConnectionRow): string =>
+    providerDisplayName(row.provider) + " / " + row.moduleLocalName;
 
   const providerRowKey = (row: ProviderConnectionRow): string =>
     `${row.provider}|${row.moduleLocalName}|${row.childAlias}`;
@@ -385,11 +410,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     const destinations = new Map<string, ProviderConnection>();
     for (const row of rows) {
       if (!selectedRows.has(providerRowKey(row))) return undefined;
-      const connection = providerConnections().find(
-        (candidate) =>
-          candidate.id === row.connectionId &&
-          isProviderConnectionCandidate(candidate) &&
-          sameProviderSource(row.provider, candidate.providerSource),
+      const connection = candidatesFor(row.provider).find(
+        (candidate) => candidate.id === row.connectionId,
       );
       if (connection) destinations.set(connection.id, connection);
     }
@@ -552,6 +574,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   };
 
   const ensureWorkspace = async (): Promise<string> => {
+    setWorkspacePolicyState({ status: "unavailable" });
     const workspaces = await listWorkspacesCached();
     const existing = selectAvailableWorkspaceId(
       currentWorkspaceId(),
@@ -563,6 +586,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       observedWorkspaceId = existing;
       setCurrentWorkspaceId(existing);
       setWorkspaceHandle(workspace?.handle);
+      setWorkspacePolicyState({
+        status: "ready",
+        ...(workspace?.policy ? { policy: workspace.policy } : {}),
+      });
       return existing;
     }
     const workspace = await createWorkspace({
@@ -574,6 +601,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     observedWorkspaceId = workspace.id;
     setCurrentWorkspaceId(workspace.id);
     setWorkspaceHandle(workspace.handle);
+    setWorkspacePolicyState({
+      status: "ready",
+      ...(workspace.policy ? { policy: workspace.policy } : {}),
+    });
     window.dispatchEvent(new Event("takosumi:workspaces-changed"));
     return workspace.id;
   };
@@ -683,6 +714,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     observedWorkspaceId = selected;
     setWorkspaceId(selected);
     setWorkspaceHandle(undefined);
+    setWorkspacePolicyState({ status: "unavailable" });
     setSourceConnections([]);
     setProviderConnections([]);
     resetPreparedSource();
@@ -788,6 +820,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           sourceId: preparedSourceId,
           gitUrl: gitUrl().trim(),
           ref: gitRef().trim(),
+          resolveAbsentRefToStableSemver: listing() !== null,
           name: name().trim(),
           ...(sourceAuthConnectionId()
             ? { authConnectionId: sourceAuthConnectionId() }
@@ -814,6 +847,13 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         }
         preparedSourceId = prepared.sourceId;
         preparedSourceSnapshotId = prepared.sourceSnapshotId;
+        if (listing() && !gitRef().trim()) {
+          // TCS listings omit the operator ref. The source boundary resolves
+          // that omission to a stable SemVer commit before Source creation;
+          // retain the immutable evidence for all later compatibility/plan
+          // requests in this install attempt.
+          setGitRef(prepared.snapshot.resolvedCommit);
+        }
         setSourceId(prepared.sourceId);
         setSourceSnapshotId(prepared.sourceSnapshotId);
 
@@ -943,12 +983,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       );
       const selectedRows = new Set<string>();
       const rows = rowsFromCompatibility(result).map((row) => {
-        const matches = providers.filter(
-          (connection) =>
-            isProviderConnectionCandidate(connection) &&
-            sameProviderSource(row.provider, connection.providerSource),
+        const matches = candidatesFor(row.provider, config.policy);
+        const preferred = preferredProviderConnection(
+          matches,
+          effectiveProviderPolicy(config.policy),
         );
-        const preferred = preferredProviderConnection(matches);
         if (!preferred) return row;
         selectedRows.add(providerRowKey(row));
         return { ...row, connectionId: preferred.id };
@@ -958,11 +997,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       if (
         rows.some(
           (row) =>
-            !providers.some(
-              (connection) =>
-                isProviderConnectionCandidate(connection) &&
-                sameProviderSource(row.provider, connection.providerSource) &&
-                connection.id === row.connectionId,
+            !candidatesFor(row.provider, config.policy).some(
+              (connection) => connection.id === row.connectionId,
             ),
         )
       ) {
@@ -1050,10 +1086,14 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       setError(validation);
       return;
     }
+    if (workspacePolicyState().status !== "ready") {
+      setPhase("connections");
+      return;
+    }
     if (
       rows.some(
         (row) =>
-          !candidatesFor(row.provider).some(
+          !candidatesFor(row.provider, config.policy).some(
             (connection) => connection.id === row.connectionId,
           ),
       )
@@ -1776,36 +1816,66 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                 : t("installStore.destinationHint")}
             </p>
           </div>
+          <Show when={selectedDeploymentProfile()}>
+            {(profile) => (
+              <aside
+                class="iv-destination-context"
+                data-testid="install-provider-module-context"
+                data-provider-profile-key={profile().key}
+                role="note"
+              >
+                <strong>{t("installStore.destinationContext")}</strong>
+                <p>
+                  {localizedStoreText(profile().label, profile().key)[locale()]}
+                </p>
+                <p>
+                  {t("installStore.destinationProfile")} {" "}
+                  <code>{profile().key}</code>
+                </p>
+              </aside>
+            )}
+          </Show>
           <div class="iv-connection-list">
             <For each={providerRows()}>
               {(row) => {
                 const choices = () => candidatesFor(row.provider);
                 return (
-                  <FormField
-                    label={t("installStore.destination")}
-                    required
+                  <article
+                    class="iv-connection-choice"
+                    data-provider-source={row.provider}
+                    data-module-local-name={row.moduleLocalName}
                   >
-                    <Select
-                      value={row.connectionId}
-                      onChange={(event) =>
-                        updateProviderRow(row, event.currentTarget.value)
-                      }
+                    <div class="iv-connection-provider">
+                      <span>{t("installStore.providerModule")}</span>
+                      <strong>{providerModuleLabel(row)}</strong>
+                      <code>{row.provider}</code>
+                    </div>
+                    <FormField
+                      label={t("installStore.destination")}
+                      required
                     >
-                      <option value="">
-                        {t("installStore.chooseConnection")}
-                      </option>
-                      <For each={choices()}>
-                        {(connection) => (
-                          <option
-                            value={connection.id}
-                            selected={connection.id === row.connectionId}
-                          >
-                            {providerConnectionDisplayName(connection)}
-                          </option>
-                        )}
-                      </For>
-                    </Select>
-                  </FormField>
+                      <Select
+                        value={row.connectionId}
+                        onChange={(event) =>
+                          updateProviderRow(row, event.currentTarget.value)
+                        }
+                      >
+                        <option value="">
+                          {t("installStore.chooseConnection")}
+                        </option>
+                        <For each={choices()}>
+                          {(connection) => (
+                            <option
+                              value={connection.id}
+                              selected={connection.id === row.connectionId}
+                            >
+                              {providerConnectionDisplayName(connection)}
+                            </option>
+                          )}
+                        </For>
+                      </Select>
+                    </FormField>
+                  </article>
                 );
               }}
             </For>
