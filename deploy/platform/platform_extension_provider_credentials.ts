@@ -22,8 +22,8 @@ export function platformExtensionProviderCredentialComposition(env: {
   );
   if (routes.length === 0) return undefined;
   const origin = exactHttpsOrigin(env.TAKOSUMI_ACCOUNTS_ISSUER);
-  const credentialRecipes: CredentialRecipeHostComposition["credentialRecipes"] = routes.map(
-    (route) => {
+  const credentialRecipes: CredentialRecipeHostComposition["credentialRecipes"] =
+    routes.map((route) => {
       const broker = route.providerCredentialBroker!;
       const issuance = route.runCredential!;
       return Object.freeze({
@@ -49,8 +49,7 @@ export function platformExtensionProviderCredentialComposition(env: {
           }),
         }),
       });
-    },
-  );
+    });
   const credentialRecipeDrivers: Record<
     string,
     CredentialRecipeHostComposition["credentialRecipeDrivers"][string]
@@ -114,7 +113,8 @@ async function mintPlatformExtensionProviderCredential(
     logCredentialExchangeFailure("context_unavailable");
     throw new Error("provider credential exchange requires a canonical Run");
   }
-  const runCredentialSettings = context.runCredentialSettings ?? Object.freeze({});
+  const runCredentialSettings =
+    context.runCredentialSettings ?? Object.freeze({});
   if (!handler) {
     logCredentialExchangeFailure("handler_unavailable");
     throw new Error("provider credential exchange requires a bound handler");
@@ -122,7 +122,9 @@ async function mintPlatformExtensionProviderCredential(
   // Keep the platform credential wider than the downstream 300-second
   // provider token so small cross-service clock/latency differences cannot
   // make a valid response appear to outlive its caller authority.
-  let issued: Awaited<ReturnType<NonNullable<typeof context.issueRunCredential>>>;
+  let issued: Awaited<
+    ReturnType<NonNullable<typeof context.issueRunCredential>>
+  >;
   try {
     issued = await context.issueRunCredential({ ttlSeconds: 600 });
   } catch {
@@ -131,58 +133,93 @@ async function mintPlatformExtensionProviderCredential(
   }
   const url = new URL(`${basePath}${exchangePath}`, origin);
   url.searchParams.set("workspaceId", context.run.workspaceId);
-  let response: Response;
+  const exchangeRequest = Object.freeze({
+    kind: "takosumi.provider-run-credential-request@v1" as const,
+    providerSource,
+    settings: runCredentialSettings,
+  });
+  const exchangeContext = Object.freeze({
+    authKind: "run-credential" as const,
+    subject: context.run.installingPrincipalId,
+    workspaceId: context.run.workspaceId,
+    capsuleId: context.run.capsuleId,
+    runId: context.run.runId,
+    installingPrincipalId: context.run.installingPrincipalId,
+    audience,
+    scopes: Object.freeze([...scopes]),
+    phase: context.run.phase,
+    lifecycleIntent: context.run.lifecycleIntent,
+  });
+  let responseStatus: number;
+  let responseBytes: Uint8Array;
   try {
-    response = await handler.fetchAuthenticated(
-      new Request(url.href, {
-        method: "POST",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          kind: "takosumi.provider-run-credential-request@v1",
-          providerSource,
-          settings: runCredentialSettings,
+    if (handler.exchangeProviderCredential) {
+      const exchanged = await handler.exchangeProviderCredential(
+        Object.freeze({
+          url: url.href,
+          request: exchangeRequest,
+          context: exchangeContext,
         }),
-      }),
-      Object.freeze({
-        authKind: "run-credential" as const,
-        subject: context.run.installingPrincipalId,
-        workspaceId: context.run.workspaceId,
-        capsuleId: context.run.capsuleId,
-        runId: context.run.runId,
-        installingPrincipalId: context.run.installingPrincipalId,
-        audience,
-        scopes: Object.freeze([...scopes]),
-        phase: context.run.phase,
-        lifecycleIntent: context.run.lifecycleIntent,
-      }),
-    );
+      );
+      if (
+        !isRecord(exchanged) ||
+        !exactKeys(exchanged, ["body", "status"]) ||
+        !Number.isSafeInteger(exchanged.status) ||
+        (exchanged.status as number) < 100 ||
+        (exchanged.status as number) > 599 ||
+        typeof exchanged.body !== "string"
+      ) {
+        throw new Error("provider credential RPC returned an invalid envelope");
+      }
+      responseStatus = exchanged.status as number;
+      responseBytes = new TextEncoder().encode(exchanged.body);
+    } else if (handler.fetchAuthenticated) {
+      const response = await handler.fetchAuthenticated(
+        new Request(url.href, {
+          method: "POST",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(exchangeRequest),
+        }),
+        exchangeContext,
+      );
+      responseStatus = response.status;
+      const declaredLength = Number(
+        response.headers.get("content-length") ?? "NaN",
+      );
+      if (
+        Number.isFinite(declaredLength) &&
+        declaredLength > MAX_RESPONSE_BYTES
+      ) {
+        throw new Error("provider credential exchange response is too large");
+      }
+      responseBytes = new Uint8Array(await response.arrayBuffer());
+    } else {
+      throw new Error("provider credential exchange handler is unavailable");
+    }
   } catch {
     logCredentialExchangeFailure("handler_rpc_failed");
     throw new Error("provider credential exchange handler failed");
   }
-  if (!response.ok) {
+  if (responseStatus < 200 || responseStatus > 299) {
     // The vault intentionally collapses provider-driver failures into the
     // public `credential_service_unavailable` diagnostic. Preserve only the
     // non-secret HTTP boundary here so an operator can distinguish platform
     // authentication, extension validation, and upstream availability
     // failures without logging the bearer, response body, Workspace, or Run.
-    logCredentialExchangeFailure("handler_response_failed", response.status);
+    logCredentialExchangeFailure("handler_response_failed", responseStatus);
     throw new Error("provider credential exchange failed");
   }
-  const declaredLength = Number(response.headers.get("content-length") ?? "NaN");
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
-    throw new Error("provider credential exchange response is too large");
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > MAX_RESPONSE_BYTES) {
+  if (responseBytes.byteLength > MAX_RESPONSE_BYTES) {
     throw new Error("provider credential exchange response is too large");
   }
   let value: unknown;
   try {
-    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+    value = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(responseBytes),
+    ) as unknown;
   } catch {
     throw new Error("provider credential exchange response is malformed");
   }
@@ -249,7 +286,23 @@ function logCredentialExchangeFailure(stage: string, status?: number): void {
 }
 
 interface PlatformExtensionCredentialHandler {
-  fetchAuthenticated(
+  exchangeProviderCredential?(input: {
+    readonly url: string;
+    readonly request: Readonly<Record<string, unknown>>;
+    readonly context: {
+      readonly authKind: "run-credential";
+      readonly subject: string;
+      readonly workspaceId: string;
+      readonly capsuleId: string;
+      readonly runId: string;
+      readonly installingPrincipalId: string;
+      readonly audience: string;
+      readonly scopes: readonly string[];
+      readonly phase: "plan" | "apply" | "destroy";
+      readonly lifecycleIntent: "provision" | "destroy";
+    };
+  }): Promise<{ readonly status: number; readonly body: string }>;
+  fetchAuthenticated?(
     request: Request,
     context: {
       readonly authKind: "run-credential";
@@ -272,17 +325,21 @@ function platformExtensionCredentialHandler(
 ): PlatformExtensionCredentialHandler | undefined {
   const value = (env as Record<string, unknown>)[handlerKey];
   return value &&
-      typeof value === "object" &&
-      !Array.isArray(value) &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (typeof (value as { exchangeProviderCredential?: unknown })
+      .exchangeProviderCredential === "function" ||
       typeof (value as { fetchAuthenticated?: unknown }).fetchAuthenticated ===
-        "function"
+        "function")
     ? (value as PlatformExtensionCredentialHandler)
     : undefined;
 }
 
 function exactHttpsOrigin(value: unknown): string {
   if (typeof value !== "string") {
-    throw new TypeError("TAKOSUMI_ACCOUNTS_ISSUER is required for provider credential brokers");
+    throw new TypeError(
+      "TAKOSUMI_ACCOUNTS_ISSUER is required for provider credential brokers",
+    );
   }
   const url = new URL(value);
   if (
@@ -293,7 +350,9 @@ function exactHttpsOrigin(value: unknown): string {
     url.search !== "" ||
     url.hash !== ""
   ) {
-    throw new TypeError("TAKOSUMI_ACCOUNTS_ISSUER must be an exact HTTPS origin");
+    throw new TypeError(
+      "TAKOSUMI_ACCOUNTS_ISSUER must be an exact HTTPS origin",
+    );
   }
   return url.origin;
 }
@@ -302,6 +361,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+function exactKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  return (
+    JSON.stringify(Object.keys(value).sort()) ===
+    JSON.stringify([...keys].sort())
+  );
 }
