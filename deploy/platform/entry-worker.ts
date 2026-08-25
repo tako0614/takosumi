@@ -28,16 +28,26 @@ export {
 export class TakosumiRuntimeBindingMaterializerEntrypoint extends WorkerEntrypoint<
   VersionedPlatformEnv & RuntimeBindingMaterializerCloudflareEnv
 > {
-  materializeRuntimeBindings(input: {
+  async materializeRuntimeBindings(input: {
     readonly request: unknown;
     readonly resourceName: string;
     readonly scriptName: string;
     readonly publicOrigin: string;
     readonly bindings: readonly string[];
   }) {
-    return createCloudflareTakosumiRuntimeBindingMaterializer(
-      this.env,
-    ).materializeRuntimeBindings(input);
+    try {
+      return await createCloudflareTakosumiRuntimeBindingMaterializer(
+        this.env,
+      ).materializeRuntimeBindings(input);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "takosumi.runtime_binding_materialization_failed",
+          reason: runtimeBindingFailureReason(error),
+        }),
+      );
+      throw error;
+    }
   }
 
   rollbackRuntimeBindings(input: {
@@ -48,6 +58,43 @@ export class TakosumiRuntimeBindingMaterializerEntrypoint extends WorkerEntrypoi
       this.env,
     ).rollbackRuntimeBindings(input);
   }
+}
+
+const RUNTIME_BINDING_FAILURE_REASONS = new Set([
+  "Capsule is already bound to another OIDC client",
+  "HTTPS origin is invalid",
+  "OIDC binding profile is invalid",
+  "OIDC callback path is invalid",
+  "OIDC client is already bound to another Capsule",
+  "clock is invalid",
+  "generated secret profile is invalid",
+  "runtime binding Capsule is not current",
+  "runtime binding InstallConfig is not current",
+  "runtime binding authority contract is invalid",
+  "runtime binding authority is invalid",
+  "runtime binding authority is not current",
+  "runtime binding name is invalid",
+  "runtime binding phase is invalid",
+  "runtime binding profile is invalid",
+  "runtime binding profile is missing",
+  "runtime binding request differs from the DB-owned profile",
+  "runtime binding set contains duplicates",
+  "runtime binding set is invalid",
+  "runtime materialization did not produce the exact binding set",
+  "runtime materialization object is not closed",
+]);
+
+function runtimeBindingFailureReason(error: unknown): string {
+  if (
+    error instanceof TypeError &&
+    (RUNTIME_BINDING_FAILURE_REASONS.has(error.message) ||
+      /^(?:resourceName|scriptName|pairwiseSubjectSecret|derivationKey) is invalid$/u.test(
+        error.message,
+      ))
+  ) {
+    return error.message;
+  }
+  return "dependency_unavailable";
 }
 
 type VersionedPlatformEnv = CloudflareWorkerEnv & {
