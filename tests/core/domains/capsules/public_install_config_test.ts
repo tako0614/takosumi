@@ -40,6 +40,12 @@ function installConfig(): InstallConfig {
     policy: {},
     runnerId: "runner_operator",
     internal: { reason: "per_install_overrides" },
+    runtimeBindingMaterialization: {
+      contract: "takosumi.runtime-binding-profile/v1",
+      generatedSecrets: [
+        { binding: "INTERNAL_SECRET", bytes: 32, encoding: "hex" },
+      ],
+    },
     createdAt: NOW,
     updatedAt: NOW,
   };
@@ -79,6 +85,8 @@ test("public InstallConfig projection never returns secret install variables", (
   // The projection still strips the operator-only fields it always did.
   expect(serialized).not.toContain("runner_operator");
   expect(serialized).not.toContain("per_install_overrides");
+  expect(serialized).not.toContain("runtime-binding-profile");
+  expect(serialized).not.toContain("INTERNAL_SECRET");
 });
 
 test("public InstallConfig policy projection keeps only safe policy fields", () => {

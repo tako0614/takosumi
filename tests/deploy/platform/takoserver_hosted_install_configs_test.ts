@@ -39,6 +39,21 @@ test("Takosumi Hosted offers one explicit Takoserver or Takoform choice", () => 
     requireTemporary: true,
     requireTtlEnforced: true,
   });
+  expect(managed?.runtimeBindingMaterialization).toEqual({
+    contract: "takosumi.runtime-binding-profile/v1",
+    generatedSecrets: [
+      { binding: "ENCRYPTION_KEY", bytes: 32, encoding: "hex" },
+    ],
+    oidcClient: {
+      issuerBinding: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+      clientIdBinding: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+      ownerSubjectBinding: "TAKOSUMI_ACCOUNTS_OWNER_SUB",
+      redirectUriBinding: "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
+      callbackPath: "/api/auth/callback/takos",
+      scopes: ["openid", "profile", "email"],
+    },
+  });
+  expect(byoc?.runtimeBindingMaterialization).toBeUndefined();
   expect(byoc?.policy.providerCredentials).toMatchObject({
     forbiddenConnectionIds: [TAKOSERVER_TAKOFORM_CONNECTION_ID],
   });

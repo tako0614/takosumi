@@ -599,6 +599,36 @@ export interface InstallConfigStoreMetadata {
   readonly iconUrl?: string;
 }
 
+export interface RuntimeGeneratedSecretBinding {
+  readonly binding: string;
+  readonly bytes: 32;
+  readonly encoding: "hex";
+}
+
+export interface RuntimeOidcClientBindings {
+  readonly issuerBinding: string;
+  readonly clientIdBinding: string;
+  readonly ownerSubjectBinding: string;
+  readonly redirectUriBinding: string;
+  readonly callbackPath: string;
+  readonly scopes?: readonly string[];
+}
+
+/**
+ * Operator-owned, value-free runtime binding declaration.
+ *
+ * The Git module may declare that a Worker Version needs sensitive binding
+ * names, but it cannot mint their values.  This profile lets the private host
+ * materializer derive only an exact, DB-owned set after re-reading the current
+ * Capsule, Run, InstallConfig, and installing Principal.  No generated value
+ * is persisted in OpenTofu state or returned through a public InstallConfig.
+ */
+export interface InstallConfigRuntimeBindingMaterialization {
+  readonly contract: "takosumi.runtime-binding-profile/v1";
+  readonly generatedSecrets?: readonly RuntimeGeneratedSecretBinding[];
+  readonly oidcClient?: RuntimeOidcClientBindings;
+}
+
 /**
  * Service-side install configuration. Workspace-neutral rows are operator
  * catalog presentation only; their Git pointer is metadata, never an execution
@@ -666,6 +696,8 @@ export interface InstallConfig {
    * this record carries no Interface id or credential.
    */
   readonly requiredInterfaces?: readonly CapsuleRequiredInterface[];
+  /** Private host authority; never repository or public API configuration. */
+  readonly runtimeBindingMaterialization?: InstallConfigRuntimeBindingMaterialization;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -676,6 +708,7 @@ export type PublicInstallConfig = Omit<
   | "runnerId"
   | "internal"
   | "requiredInterfaces"
+  | "runtimeBindingMaterialization"
 >;
 
 /**

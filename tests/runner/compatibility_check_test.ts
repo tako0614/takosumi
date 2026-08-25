@@ -51,6 +51,8 @@ test("compatibility_check returns restored OpenTofu source files only", async ()
   const runId = `compat_test_${crypto.randomUUID().replace(/-/g, "")}`;
   const root = join(RUN_ROOT, runId);
   const sourceRoot = join(root, "source");
+  const fakeBin = await mkdtemp(join(tmpdir(), "takosumi-compat-root-bin-"));
+  const previousPath = Bun.env.PATH;
   try {
     await mkdir(join(sourceRoot, "nested"), { recursive: true });
     await writeFile(join(sourceRoot, "main.tf"), "terraform {}\n");
@@ -62,6 +64,18 @@ test("compatibility_check returns restored OpenTofu source files only", async ()
       join(sourceRoot, "README.md"),
       "not part of compatibility scan\n",
     );
+    const tofuPath = join(fakeBin, "tofu");
+    await writeFile(
+      tofuPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+test "$1" = init
+test -f main.tf
+exit 0
+`,
+    );
+    await chmod(tofuPath, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
 
     const response = await handleRunnerRequest(
       new Request(`https://runner/runs/${runId}`, {
@@ -89,7 +103,9 @@ test("compatibility_check returns restored OpenTofu source files only", async ()
       { path: "nested/outputs.tf", text: 'output "x" { value = 1 }\n' },
     ]);
   } finally {
+    Bun.env.PATH = previousPath;
     await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
   }
 });
 
