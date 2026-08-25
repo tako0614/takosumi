@@ -14,7 +14,11 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 const ROOT = resolve(import.meta.dir, "..");
 const WRANGLER = resolve(ROOT, "node_modules/.bin/wrangler");
 const MAX_OUTPUT = 64 * 1024 * 1024;
-const COMMAND_TIMEOUT_MS = 180_000;
+// Dashboard bundling can legitimately exceed three minutes on the production
+// operator host while the portable suite and Wrangler share the same filesystem.
+// Keep the release bounded, but do not turn a slow, otherwise successful build
+// into an opaque pre-mutation refusal.
+const COMMAND_TIMEOUT_MS = 600_000;
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const COMMIT = /^[0-9a-f]{40}$/u;
 const VERSION = /^[0-9a-f]{8}-[0-9a-f-]{27,}$/u;
@@ -462,12 +466,17 @@ export function selectRecoveredVersion(
 
 export function bindingNames(stdout: string): readonly string[] {
   const value = JSON.parse(stdout) as unknown;
-  if (!record(value) || !record(value.resources) || !Array.isArray(value.resources.bindings)) {
+  if (
+    !record(value) ||
+    !record(value.resources) ||
+    !Array.isArray(value.resources.bindings)
+  ) {
     throw new Error("platform_worker_release_version_invalid");
   }
   const names = new Set<string>();
   for (const binding of value.resources.bindings) {
-    if (!record(binding)) throw new Error("platform_worker_release_version_invalid");
+    if (!record(binding))
+      throw new Error("platform_worker_release_version_invalid");
     for (const key of ["name", "binding"] as const) {
       const candidate = binding[key];
       if (typeof candidate === "string") names.add(candidate);
@@ -507,7 +516,9 @@ export function assertPublishedVersion(
     !record(value.resources.script) ||
     !Array.isArray(value.resources.script.handlers) ||
     !Array.isArray(value.resources.bindings) ||
-    value.resources.script.handlers.some((handler) => typeof handler !== "string")
+    value.resources.script.handlers.some(
+      (handler) => typeof handler !== "string",
+    )
   ) {
     throw new Error("platform_worker_release_version_invalid");
   }
@@ -529,8 +540,7 @@ export function assertPublishedVersion(
       matches.length !== 1 ||
       !record(matches[0]) ||
       matches[0].type !== expectedType ||
-      (required === "HOSTED" &&
-        matches[0].service !== expectedHostedService)
+      (required === "HOSTED" && matches[0].service !== expectedHostedService)
     ) {
       throw new Error("platform_worker_release_binding_invalid");
     }
@@ -572,12 +582,17 @@ async function assertSecretNamesUnchanged(
   expectedDigest: string,
 ): Promise<void> {
   const names = await readSecretNames(config);
-  if (digest(new TextEncoder().encode(JSON.stringify(names))) !== expectedDigest) {
+  if (
+    digest(new TextEncoder().encode(JSON.stringify(names))) !== expectedDigest
+  ) {
     throw new Error("platform_worker_release_secret_list_drift");
   }
 }
 
-async function verifyPublishedVersion(config: string, versionId: string): Promise<void> {
+async function verifyPublishedVersion(
+  config: string,
+  versionId: string,
+): Promise<void> {
   const version = await requiredCommand([
     WRANGLER,
     "versions",
