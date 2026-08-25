@@ -6,6 +6,7 @@ import {
   OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
   operatorControlMcpEnabled,
 } from "../operator-control-mcp.ts";
+import { composeTakosInstallConfig } from "./takos_install_config.ts";
 import { TAKOSERVER_HOSTED_INSTALL_CONFIGS } from "./takoserver_hosted_install_configs.ts";
 
 export {
@@ -39,12 +40,16 @@ export function composeTakoserverHostedWorkerEnv(
         variableMapping: { takosumi_origin: operatorOrigin },
       }
     : OPERATOR_CONTROL_MCP_INSTALL_CONFIG;
+  const takosInstallConfig = composeTakosInstallConfig(env);
   const installConfigs = operatorControlMcpEnabled(env)
     ? [
         ...TAKOSERVER_HOSTED_INSTALL_CONFIGS,
+        ...(takosInstallConfig ? [takosInstallConfig] : []),
         operatorInstallConfig,
       ]
-    : TAKOSERVER_HOSTED_INSTALL_CONFIGS;
+    : takosInstallConfig
+      ? [...TAKOSERVER_HOSTED_INSTALL_CONFIGS, takosInstallConfig]
+      : TAKOSERVER_HOSTED_INSTALL_CONFIGS;
   Object.defineProperty(value, "TAKOSUMI_INSTALL_CONFIG_COMPOSITION", {
     configurable: false,
     enumerable: true,
