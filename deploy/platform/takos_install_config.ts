@@ -102,6 +102,9 @@ function createTakosInstallConfig(
       outputs: ["node_modules/wrangler/bin/wrangler.js"],
     },
     variableMapping: {},
+    installContextVariableMapping: {
+      "env.TAKOSUMI_WORKSPACE_ID": "workspace_id",
+    },
     outputAllowlist: {},
     lifecycleActions: [
       {

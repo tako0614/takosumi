@@ -1036,13 +1036,18 @@ async function issueTokenResponse(input: {
   const account = input.takosumiSubject
     ? await input.store.findAccount(input.takosumiSubject)
     : undefined;
-  const takosumiClaims = input.capsuleId
-    ? {
-        capsule_id: input.capsuleId,
-        ...(input.workspaceId ? { workspace_id: input.workspaceId } : {}),
-        ...(input.role ? { role: input.role } : {}),
-      }
-    : undefined;
+  // The live-grant validator is the authority for both Capsule and
+  // Workspace-bound composition tokens. A Workspace-only grant deliberately
+  // has no capsule_id, but still needs the verified Workspace and current role
+  // projected into the ID token.
+  const takosumiClaims =
+    input.capsuleId !== undefined || input.workspaceId !== undefined
+      ? {
+          ...(input.capsuleId ? { capsule_id: input.capsuleId } : {}),
+          ...(input.workspaceId ? { workspace_id: input.workspaceId } : {}),
+          ...(input.role ? { role: input.role } : {}),
+        }
+      : undefined;
   // email_verified reflects the upstream identity provider's assertion,
   // carried onto the account record by `resolveUpstreamAccount`. When the
   // value is genuinely unknown (provider omitted it, or the store has not
@@ -1215,9 +1220,14 @@ async function handleUserInfoUncached(input: {
     });
     if (!liveGrant.ok) return bearerChallenge("invalid_token");
 
-    if (liveGrant.capsuleId) {
+    // The live-grant validator has already proved this Workspace binding and
+    // current membership. Composition clients may be Workspace-bound without
+    // belonging to a Capsule, so do not gate the claims on capsuleId.
+    if (liveGrant.capsuleId || liveGrant.workspaceId) {
       body.takosumi = {
-        capsule_id: liveGrant.capsuleId,
+        ...(liveGrant.capsuleId
+          ? { capsule_id: liveGrant.capsuleId }
+          : {}),
         ...(liveGrant.workspaceId
           ? { workspace_id: liveGrant.workspaceId }
           : {}),

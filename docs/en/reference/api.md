@@ -404,6 +404,14 @@ Duplicate, empty, control-character, oversized, or unauthorized values are
 rejected. The resulting access token records only the verified Workspace and
 role.
 
+A static composition OIDC client may likewise request a Workspace-bound token by
+supplying `workspace_id`. For this Capsule-free client, the ID token and UserInfo
+responses emit `takosumi.workspace_id` and the current `takosumi.role`, and omit
+`capsule_id`. UserInfo emits exactly one `workspace_memberships` entry:
+`[workspace_id]`. Capsule-owned clients continue to include their verified
+`capsule_id` in `takosumi`. If membership is revoked or suspended, UserInfo and
+refresh are rejected fail-closed.
+
 ## Error Shape
 
 Failures return structured errors.

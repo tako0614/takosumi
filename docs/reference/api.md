@@ -427,6 +427,14 @@ Workspace も照合します。重複値、空値、制御文字、過長値、�
 Workspace は拒否され、発行された access token には検証済み Workspace と role だけが
 記録されます。
 
+静的な composition OIDC client も、`workspace_id` を指定して検証済みの
+Workspace-bound token を要求できます。Capsule に紐付かないこの client の ID token と
+UserInfo は `takosumi.workspace_id` と現在の `takosumi.role` を返し、
+`capsule_id` は返しません。UserInfo の `workspace_memberships` は検証済みの
+Workspace だけを含む `[workspace_id]` です。Capsule-owned client では、従来どおり
+検証済みの `capsule_id` も `takosumi` に含まれます。membership が失効または停止した
+場合、UserInfo と refresh は fail-closed で拒否されます。
+
 ## エラーの形式
 
 失敗した response は structured error を返します。

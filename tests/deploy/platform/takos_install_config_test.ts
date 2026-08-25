@@ -42,6 +42,9 @@ test("valid Takos release descriptor composes the exact Cloudflare profile", () 
       outputs: ["node_modules/wrangler/bin/wrangler.js"],
     },
     variableMapping: {},
+    installContextVariableMapping: {
+      "env.TAKOSUMI_WORKSPACE_ID": "workspace_id",
+    },
     outputAllowlist: {},
     createdAt: "2026-08-25T00:00:00.000Z",
     updatedAt: "2026-08-25T00:00:00.000Z",

@@ -324,6 +324,143 @@ test("composition OIDC client may request one live Workspace-bound Principal tok
   expect(await denied.json()).toMatchObject({ error: "access_denied" });
 });
 
+test("Workspace-bound composition tokens project Workspace claims without a Capsule", async () => {
+  const { store, state, operations } = liveGrantFixture();
+  const compositionClientId = "takosumi-platform-workspace-claims";
+  const compositionRedirectUri =
+    "https://app.example.test/platform/workspace-callback";
+  const compositionSecret = "composition-workspace-claims-secret";
+  const verifier = "composition-workspace-claims-verifier";
+  const clients = new Map([
+    [
+      compositionClientId,
+      {
+        clientId: compositionClientId,
+        redirectUris: [compositionRedirectUri],
+        clientSecret: compositionSecret,
+        tokenEndpointAuthMethod: "client_secret_post" as const,
+        allowedScopes: ["openid", "profile", "offline_access"],
+      },
+    ],
+  ]);
+  let idTokenClaims: Record<string, unknown> | undefined;
+  const claimFlow = {
+    ...flow,
+    issueIdToken: async (claims: Record<string, unknown>) => {
+      idTokenClaims = claims;
+      return "workspace-claims-id-token";
+    },
+  };
+  const url = new URL(`${issuer}/oauth/authorize`);
+  url.search = new URLSearchParams({
+    response_type: "code",
+    client_id: compositionClientId,
+    redirect_uri: compositionRedirectUri,
+    scope: "openid profile offline_access",
+    workspace_id: workspaceId,
+    code_challenge: await pkceChallenge(verifier),
+    code_challenge_method: "S256",
+  }).toString();
+
+  const authorization = await handleAuthorize({
+    request: new Request(url, {
+      headers: { "x-takosumi-account-session": "sess_live_grant" },
+    }),
+    url,
+    flow: claimFlow,
+    clients,
+    store,
+    operations,
+  });
+  expect(authorization.status).toBe(302);
+  const code = new URL(authorization.headers.get("location")!).searchParams.get(
+    "code",
+  );
+  expect(code).toBeTruthy();
+
+  const tokenResponse = await handleToken({
+    issuer,
+    request: new Request(`${issuer}/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: code!,
+        redirect_uri: compositionRedirectUri,
+        client_id: compositionClientId,
+        client_secret: compositionSecret,
+        code_verifier: verifier,
+      }),
+    }),
+    store,
+    flow: claimFlow,
+    clients,
+    operations,
+  });
+  expect(tokenResponse.status).toBe(200);
+  const token = (await tokenResponse.json()) as {
+    access_token: string;
+    refresh_token: string;
+  };
+
+  expect(idTokenClaims).toMatchObject({
+    takosumi: { workspace_id: workspaceId, role: "member" },
+  });
+  expect((idTokenClaims?.takosumi as Record<string, unknown>).capsule_id).toBe(
+    undefined,
+  );
+
+  const userInfo = await handleUserInfo({
+    request: new Request(`${issuer}/oauth/userinfo`, {
+      headers: { authorization: `Bearer ${token.access_token}` },
+    }),
+    store,
+    clients,
+    operations,
+  });
+  expect(userInfo.status).toBe(200);
+  const userInfoBody = (await userInfo.json()) as Record<string, unknown>;
+  expect(userInfoBody).toMatchObject({
+    takosumi: { workspace_id: workspaceId, role: "member" },
+    workspace_memberships: [workspaceId],
+  });
+  expect(
+    (userInfoBody.takosumi as Record<string, unknown>).capsule_id,
+  ).toBeUndefined();
+  expect(userInfoBody.workspace_memberships).toEqual([workspaceId]);
+
+  state.memberStatus = "suspended";
+  const staleUserInfo = await handleUserInfo({
+    request: new Request(`${issuer}/oauth/userinfo`, {
+      headers: { authorization: `Bearer ${token.access_token}` },
+    }),
+    store,
+    clients,
+    operations,
+  });
+  expect(staleUserInfo.status).toBe(401);
+
+  const refreshed = await handleToken({
+    issuer,
+    request: new Request(`${issuer}/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: token.refresh_token,
+        client_id: compositionClientId,
+        client_secret: compositionSecret,
+      }),
+    }),
+    store,
+    flow: claimFlow,
+    clients,
+    operations,
+  });
+  expect(refreshed.status).toBe(400);
+  expect(await refreshed.json()).toEqual({ error: "invalid_grant" });
+});
+
 test("authorization-code denial logs only its closed diagnostic stage", async () => {
   const { store, operations } = liveGrantFixture();
   const warn = spyOn(console, "warn").mockImplementation(() => {});
