@@ -1,7 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import {
-  platformExtensionProviderCredentialComposition,
-} from "../../../deploy/platform/platform_extension_provider_credentials.ts";
+import { platformExtensionProviderCredentialComposition } from "../../../deploy/platform/platform_extension_provider_credentials.ts";
 
 const ROUTES = JSON.stringify([
   {
@@ -32,17 +30,20 @@ test("a configured extension contributes one exact run-issued provider broker", 
     TAKOSUMI_PLATFORM_EXTENSIONS: ROUTES,
     TAKOSUMI_ACCOUNTS_ISSUER: "https://app-staging.takosumi.com",
     HOSTED: {
-      fetchAuthenticated: async (input: Request, context: unknown) => {
-        calls.push({ input, context });
-        return Response.json({
-          kind: "takosumi.provider-run-credential@v1",
-          env: {
-            TAKOFORM_ENDPOINT: "https://api.takoserver.com",
-            TAKOFORM_SPACE: "tenant:tsh_opaque",
-            TAKOFORM_TOKEN: "tfr_runner_only",
-          },
-          expiresAt: "2026-08-18T00:05:00.000Z",
-        });
+      exchangeProviderCredential: async (input: unknown) => {
+        calls.push(input);
+        return {
+          status: 200,
+          body: JSON.stringify({
+            kind: "takosumi.provider-run-credential@v1",
+            env: {
+              TAKOFORM_ENDPOINT: "https://api.takoserver.com",
+              TAKOFORM_SPACE: "tenant:tsh_opaque",
+              TAKOFORM_TOKEN: "tfr_runner_only",
+            },
+            expiresAt: "2026-08-18T00:05:00.000Z",
+          }),
+        };
       },
     },
   });
@@ -64,7 +65,8 @@ test("a configured extension contributes one exact run-issued provider broker", 
     terraformSource: ["registry.terraform.io/tako0614/takoform"],
     envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
   });
-  const driver = composition?.credentialRecipeDrivers["takosumi-hosted-takoform-run/broker"];
+  const driver =
+    composition?.credentialRecipeDrivers["takosumi-hosted-takoform-run/broker"];
   expect(driver).toBeDefined();
 
   const minted = await driver!.mint!({
@@ -134,12 +136,15 @@ test("a configured extension contributes one exact run-issued provider broker", 
     secretValueStored: false,
   });
   expect(calls).toHaveLength(1);
-  const call = calls[0] as { input: Request; context: Record<string, unknown> };
-  expect(call.input.url).toBe(
+  const call = calls[0] as {
+    url: string;
+    request: Record<string, unknown>;
+    context: Record<string, unknown>;
+  };
+  expect(call.url).toBe(
     "https://app-staging.takosumi.com/extensions/hosted/marketplace/provider-credentials/takoform?workspaceId=ws_1",
   );
-  expect(call.input.headers.get("authorization")).toBeNull();
-  expect(await call.input.json()).toEqual({
+  expect(call.request).toEqual({
     kind: "takosumi.provider-run-credential-request@v1",
     providerSource: "registry.terraform.io/tako0614/takoform",
     settings: { requiredAvailableMinor: 2300 },
@@ -164,15 +169,11 @@ test("broker failures log only a stable status boundary", async () => {
     TAKOSUMI_ACCOUNTS_ISSUER: "https://app-staging.takosumi.com",
     HOSTED: {
       fetchAuthenticated: async () =>
-        Response.json(
-          { error: "raw_response_secret_marker" },
-          { status: 401 },
-        ),
+        Response.json({ error: "raw_response_secret_marker" }, { status: 401 }),
     },
   });
-  const driver = composition?.credentialRecipeDrivers[
-    "takosumi-hosted-takoform-run/broker"
-  ];
+  const driver =
+    composition?.credentialRecipeDrivers["takosumi-hosted-takoform-run/broker"];
   const warn = spyOn(console, "warn").mockImplementation(() => {});
   try {
     await expect(
@@ -218,7 +219,9 @@ test("broker failures log only a stable status boundary", async () => {
           ttlSeconds: 600,
         }),
         fetch: async () => {
-          throw new Error("credential broker must not use an external self-fetch");
+          throw new Error(
+            "credential broker must not use an external self-fetch",
+          );
         },
         now: () => new Date("2026-08-18T00:00:00.000Z"),
         staticEvidence: () => ({
