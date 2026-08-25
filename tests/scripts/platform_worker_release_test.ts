@@ -81,7 +81,7 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
       ...(includeBroker
         ? {
             runCredential: {
-              audience: "takosumi-hosted.takoserver.takoform.v1",
+              audience: "takosumi-hosted.takoform.v1",
               requiredScopes: ["takoform.run"],
             },
             providerCredentialBroker: {
