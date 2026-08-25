@@ -1,7 +1,7 @@
 import {
   UI_SURFACE_OPEN_PERMISSION,
-  type InstallConfig,
 } from "takosumi-contract";
+import type { InstallConfig } from "../../contract/install-configs.ts";
 import { TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 } from "takosumi-contract/repository-manifest";
 
 export const TAKOSERVER_TAKOFORM_CONNECTION_ID =
@@ -84,10 +84,42 @@ const managed = base(
   { allowedConnectionIds: [TAKOSERVER_TAKOFORM_CONNECTION_ID] },
 );
 
+const managedRuntime = Object.freeze({
+  installExperience: {
+    projections: [
+      {
+        kind: "oidc_client" as const,
+        variables: {},
+        callbackPath: "/api/auth/callback/takos",
+        scopes: ["openid", "profile", "email"],
+      },
+    ],
+  },
+  runtimeBindingMaterialization: {
+    contract: "takosumi.runtime-binding-profile/v1" as const,
+    generatedSecrets: [
+      {
+        binding: "ENCRYPTION_KEY",
+        bytes: 32 as const,
+        encoding: "hex" as const,
+      },
+    ],
+    oidcClient: {
+      issuerBinding: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+      clientIdBinding: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+      ownerSubjectBinding: "TAKOSUMI_ACCOUNTS_OWNER_SUB",
+      redirectUriBinding: "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
+      callbackPath: "/api/auth/callback/takos",
+      scopes: ["openid", "profile", "email"],
+    },
+  },
+});
+
 export const TAKOSERVER_HOSTED_INSTALL_CONFIGS: readonly InstallConfig[] =
   Object.freeze([
     Object.freeze({
       ...managed,
+      ...managedRuntime,
       policy: {
         ...managed.policy,
         providerCredentials: {

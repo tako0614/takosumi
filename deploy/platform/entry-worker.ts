@@ -11,6 +11,11 @@ import {
   withPlatformWorkerVersion,
 } from "./version_metadata_response.ts";
 import { composeTakoserverHostedWorkerEnv } from "./takoserver_hosted_worker.ts";
+import { WorkerEntrypoint } from "cloudflare:workers";
+import {
+  createCloudflareTakosumiRuntimeBindingMaterializer,
+  type RuntimeBindingMaterializerCloudflareEnv,
+} from "./runtime_binding_materializer.ts";
 
 export {
   CoordinationObject,
@@ -18,6 +23,32 @@ export {
   OpenTofuRunOwnerObject,
   OpenTofuRunnerObject,
 };
+
+/** Private RPC target used only by Takoserver's service binding. */
+export class TakosumiRuntimeBindingMaterializerEntrypoint extends WorkerEntrypoint<
+  VersionedPlatformEnv & RuntimeBindingMaterializerCloudflareEnv
+> {
+  materializeRuntimeBindings(input: {
+    readonly request: unknown;
+    readonly resourceName: string;
+    readonly scriptName: string;
+    readonly publicOrigin: string;
+    readonly bindings: readonly string[];
+  }) {
+    return createCloudflareTakosumiRuntimeBindingMaterializer(
+      this.env,
+    ).materializeRuntimeBindings(input);
+  }
+
+  rollbackRuntimeBindings(input: {
+    readonly request: unknown;
+    readonly rollbackReceipt: string;
+  }) {
+    return createCloudflareTakosumiRuntimeBindingMaterializer(
+      this.env,
+    ).rollbackRuntimeBindings(input);
+  }
+}
 
 type VersionedPlatformEnv = CloudflareWorkerEnv & {
   readonly TAKOSUMI_VERSION_METADATA?: PlatformWorkerVersionMetadata;
