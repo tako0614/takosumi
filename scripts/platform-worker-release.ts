@@ -895,7 +895,7 @@ function matchesHostedRunCredential(value: unknown): boolean {
   return (
     JSON.stringify(Object.keys(value).sort()) ===
       JSON.stringify(["audience", "requiredScopes"]) &&
-    value.audience === "takosumi-hosted.takoserver.takoform.v1" &&
+    value.audience === "takosumi-hosted.takoform.v1" &&
     Array.isArray(value.requiredScopes) &&
     value.requiredScopes.length === 1 &&
     value.requiredScopes[0] === "takoform.run"

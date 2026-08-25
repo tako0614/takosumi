@@ -2784,7 +2784,7 @@ test("Capsule ProviderBindings project current release-owned run policy", async 
           context: "capsule-run.v1",
           operatorConnection: "workspace-bindable",
           storedMaterial: "none",
-          audience: "takosumi-hosted.takoserver.takoform.v1",
+          audience: "takosumi-hosted.takoform.v1",
           scopes: ["takoform.run"],
         },
       },

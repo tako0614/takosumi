@@ -157,7 +157,7 @@ test("Takoserver Hosted connection descriptor is accepted and publicly discovera
           requiredScopes: [],
           capabilities: ["takosumi.account.subscription.v1"],
           runCredential: {
-            audience: "takosumi-hosted.takoserver.takoform.v1",
+            audience: "takosumi-hosted.takoform.v1",
             requiredScopes: ["takoform.run"],
           },
           providerCredentialBroker: {
