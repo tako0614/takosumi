@@ -72,16 +72,41 @@ reconcile step.
    re-adoption endpoint never runs provider infrastructure and never consumes
    or rewrites an existing Plan.
 
-The rebind is fenced by exact current and target InstallConfig JSON/digests and
-Capsule status, state generation, current StateVersion, and execution authority
-epoch. Unsafe or ambiguous Runs and unconsumed Plans return 409. A same-key,
-same-request retry replays the canonical target; a stale guard, changed target,
-or changed request under the same key returns 409. Successful rebind increments
-the epoch and emits only value-free idempotency/activity evidence. Missing legacy
-Plan epoch is accepted only at epoch 1; after a rebind it fails closed.
-The new epoch is part of the Accounts OIDC activation digest, so an old or
-orphaned Apply cannot authorize the newly adopted configuration; only a later
-final Apply can save the exact current digest.
+Normally, re-adoption is allowed only when `runtimeSafety` is `safe` or absent
+(there is no decisive candidate). Unsafe or ambiguous Apply/Destroy/Restore
+Runs, in-flight work, and an unconsumed Plan return 409; consumed or terminal
+history does not block the operation.
+
+The sole exception is a receipt-fenced committed `post_apply` recovery while
+`runtimeSafety=unknown`. It requires the decisive failed `create`/`update`
+ApplyRun to have exactly one ordered `apply.completed` → `apply.failed` receipt,
+with `providerDispatched=true`, `providerApplySucceeded=true`, and terminal
+`post_apply` lifecycle failure. The exact current `StateVersion` and `Output`
+rows must match Capsule pointers, generation, workspace/capsule ownership,
+environment, and failed-Apply provenance. The GET-issued guard and derived
+target's private receipt are opaque, value-free evidence; receipt values never
+appear in the public response.
+
+The same CAS re-reads the latest decisive Run, exact StateVersion/Output rows,
+whole current/target InstallConfig JSON, whole Capsule JSON, and execution
+authority epoch. It requires no blocking queued/running Run or Apply and no
+current unconsumed Plan. Missing or drifted receipt/Run/StateVersion/Output/
+config/Capsule/epoch, provider uncertainty or persisted
+`providerApplySucceeded=false` partial state, destroy/restore, a newer safety
+candidate, in-flight Apply, or current unconsumed Plan returns 409. A successful
+rebind changes only `installConfigId`, `updatedAt`, and epoch + 1;
+`status=error`, state/output pointers, generation, and `runtimeSafety=unknown`
+remain unchanged. The endpoint does not dispatch provider work. A fresh
+reviewed Plan and Apply is required, and only its successful Apply may restore
+the Capsule to `active` / `safe`.
+
+A same-key, same-request retry replays the canonical target; a stale guard,
+changed target, or changed request under the same key returns 409. Successful
+rebind emits only value-free idempotency/activity evidence. Missing legacy Plan
+epoch is accepted only at epoch 1; after a rebind it fails closed. The new epoch
+is part of the Accounts OIDC activation digest, so an old or orphaned Apply
+cannot authorize the newly adopted configuration; only a later final Apply can
+save the exact current digest.
 
 For the hosted Accounts profile, provider runtime-binding is read-only derivation
 with no registration authority; the direct DB-owned module-variable materializer

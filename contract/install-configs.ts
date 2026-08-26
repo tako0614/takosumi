@@ -742,6 +742,23 @@ export type InstallConfigAccountsOidcModuleVariableMaterialization =
   | InstallConfigAccountsOidcBrowserModuleVariableMaterialization;
 
 /**
+ * Value-free proof that one exact failed create/update Apply committed the
+ * Capsule's current StateVersion and Output before a terminal post_apply
+ * lifecycle failure. Every digest covers the complete canonical ledger row;
+ * the final evidence digest is domain-separated from ordinary row digests.
+ */
+export interface InstallConfigCommittedPostApplyRecoveryProof {
+  readonly failedApplyRunId: string;
+  readonly failedApplyRunDigest: string;
+  readonly stateVersionId: string;
+  readonly stateVersionDigest: string;
+  readonly outputId: string;
+  readonly outputDigest: string;
+  readonly stateGeneration: number;
+  readonly evidenceDigest: string;
+}
+
+/**
  * Service-side install configuration. Workspace-neutral rows are operator
  * catalog presentation only; their Git pointer is metadata, never an execution
  * shortcut or bundled-module authority.
@@ -785,6 +802,13 @@ export interface InstallConfig {
       readonly previousStateVersionId?: string;
       readonly previousExecutionAuthorityEpoch: number;
       readonly authorityGuard: string;
+      /**
+       * Present only when the GET-issued authority snapshot proved the exact
+       * committed post_apply recovery exception. Never contains state/output
+       * values; stores re-read and digest the named full rows during rebind.
+       */
+      readonly committedPostApplyRecovery?:
+        InstallConfigCommittedPostApplyRecoveryProof;
       /** Digest sealing the exact derived target before this seal field. */
       readonly derivedTargetDigest: string;
       readonly baseInstallConfigId: string;

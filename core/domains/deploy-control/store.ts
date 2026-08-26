@@ -44,6 +44,7 @@ import type {
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type {
+  InstallConfigCommittedPostApplyRecoveryProof,
   InstallConfigLifecycleAction,
   OutputAllowlistEntry,
   SourceBuildConfig,
@@ -86,7 +87,16 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 import { log } from "../../shared/log.ts";
-import { stableJsonDigest } from "../../adapters/source/digest.ts";
+import {
+  stableJsonDigest,
+  stableStringify,
+} from "../../adapters/source/digest.ts";
+import {
+  committedPostApplyRecoveryProofMatches,
+  exactCommittedPostApplyRecoveryRowsMatch,
+  exactRecoveryProofsEqual,
+  type CommittedPostApplyRecoveryRows,
+} from "./committed_post_apply_recovery.ts";
 
 export interface CapsuleListPageParams extends PageParams {
   readonly includeDestroyed?: boolean;
@@ -330,6 +340,9 @@ export interface CapsuleInstallConfigRebindInput {
     readonly currentStateVersionId: string | undefined;
     readonly status: Capsule["status"];
     readonly executionAuthorityEpoch: number;
+    /** Exact value-free exception for one committed post_apply failure. */
+    readonly committedPostApplyRecovery?:
+      InstallConfigCommittedPostApplyRecoveryProof;
   };
   readonly updatedAt: string;
 }
@@ -1363,13 +1376,19 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
-  #capsuleRuntimeSafety(capsuleId: string): CapsuleRuntimeSafety | undefined {
+  #capsuleRuntimeSafetyCandidate(
+    capsuleId: string,
+  ): ApplyRun | Run | undefined {
     const rows = Array.from(this.#runs.values()).filter(
       (run): run is ApplyRun | Run =>
         (isApplyRunRecord(run) || isPublicRunRecord(run)) &&
         runtimeSafetyCandidate(run, capsuleId),
     );
-    const latest = rows.sort(compareRuntimeSafetyCandidatesDesc)[0];
+    return rows.sort(compareRuntimeSafetyCandidatesDesc)[0];
+  }
+
+  #capsuleRuntimeSafety(capsuleId: string): CapsuleRuntimeSafety | undefined {
+    const latest = this.#capsuleRuntimeSafetyCandidate(capsuleId);
     return latest ? capsuleRuntimeSafetyFromRun(latest) : undefined;
   }
 
@@ -1940,9 +1959,38 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const observedConfig = this.#installConfigs.get(
       observedCapsule.installConfigId,
     );
-    const [observedConfigDigest, observedTargetDigest] = await Promise.all([
+    const recoveryProof = input.expected.committedPostApplyRecovery;
+    const observedSafetyCandidate = this.#capsuleRuntimeSafetyCandidate(
+      input.capsuleId,
+    );
+    const observedRecoveryRows = recoveryProof &&
+        observedSafetyCandidate &&
+        isApplyRunRecord(observedSafetyCandidate) &&
+        observedSafetyCandidate.id === recoveryProof.failedApplyRunId
+      ? memoryCommittedPostApplyRecoveryRows(
+          this.#stateVersions,
+          this.#outputs,
+          observedSafetyCandidate,
+          recoveryProof,
+        )
+      : undefined;
+    const observedRecoveryRowsJson = observedRecoveryRows
+      ? stableStringify(observedRecoveryRows)
+      : undefined;
+    const [
+      observedConfigDigest,
+      observedTargetDigest,
+      observedRecoveryMatches,
+    ] = await Promise.all([
       observedConfig ? stableJsonDigest(observedConfig) : undefined,
       observedTarget ? stableJsonDigest(observedTarget) : undefined,
+      recoveryProof && observedRecoveryRows
+        ? committedPostApplyRecoveryProofMatches(
+            recoveryProof,
+            observedCapsule,
+            observedRecoveryRows,
+          )
+        : false,
     ]);
 
     // stableJsonDigest is asynchronous. Re-read the authority row after that
@@ -1954,7 +2002,11 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (
       !observedTarget ||
       target !== observedTarget ||
-      observedTargetDigest !== input.expected.targetInstallConfigDigest
+      observedTargetDigest !== input.expected.targetInstallConfigDigest ||
+      !exactRecoveryProofsEqual(
+        target.internal?.reAdoption?.committedPostApplyRecovery,
+        recoveryProof,
+      )
     ) {
       return { status: "conflict", capsule };
     }
@@ -1978,12 +2030,43 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     ) {
       return { status: "conflict", capsule };
     }
-    const runtimeSafety = this.#capsuleRuntimeSafety(capsule.id);
+    const currentSafetyCandidate = this.#capsuleRuntimeSafetyCandidate(
+      capsule.id,
+    );
+    const runtimeSafety = currentSafetyCandidate
+      ? capsuleRuntimeSafetyFromRun(currentSafetyCandidate)
+      : undefined;
+    const currentRecoveryRows = recoveryProof &&
+        currentSafetyCandidate &&
+        isApplyRunRecord(currentSafetyCandidate) &&
+        currentSafetyCandidate.id === recoveryProof.failedApplyRunId
+      ? memoryCommittedPostApplyRecoveryRows(
+          this.#stateVersions,
+          this.#outputs,
+          currentSafetyCandidate,
+          recoveryProof,
+        )
+      : undefined;
+    const committedRecoveryStillMatches = Boolean(
+      recoveryProof &&
+        observedRecoveryMatches &&
+        observedSafetyCandidate === currentSafetyCandidate &&
+        observedRecoveryRowsJson !== undefined &&
+        currentRecoveryRows &&
+        stableStringify(currentRecoveryRows) === observedRecoveryRowsJson &&
+        exactCommittedPostApplyRecoveryRowsMatch(capsule, currentRecoveryRows),
+    );
+    const runtimeSafetyPermitsRebind = recoveryProof === undefined
+      ? runtimeSafety === undefined || runtimeSafety.phase === "safe"
+      : runtimeSafety?.phase === "unknown" &&
+        runtimeSafety.runType === "apply" &&
+        runtimeSafety.runId === recoveryProof.failedApplyRunId &&
+        committedRecoveryStillMatches;
     if (
       Array.from(this.#runs.values()).some((run) =>
         runBlocksCapsuleInstallConfigRebind(run, capsule.id, epoch),
       ) ||
-      (runtimeSafety !== undefined && runtimeSafety.phase !== "safe")
+      !runtimeSafetyPermitsRebind
     ) {
       return { status: "busy", capsule };
     }
@@ -3018,6 +3101,19 @@ export function compareStoredRunRecordsAsc(
     storedRunRecordTimestamp(a) - storedRunRecordTimestamp(b) ||
     a.id.localeCompare(b.id)
   );
+}
+
+function memoryCommittedPostApplyRecoveryRows(
+  stateVersions: ReadonlyMap<string, StateVersion>,
+  outputs: ReadonlyMap<string, Output>,
+  failedApplyRun: ApplyRun,
+  proof: InstallConfigCommittedPostApplyRecoveryProof,
+): CommittedPostApplyRecoveryRows | undefined {
+  const stateVersion = stateVersions.get(proof.stateVersionId);
+  const output = outputs.get(proof.outputId);
+  return stateVersion && output
+    ? { failedApplyRun, stateVersion, output }
+    : undefined;
 }
 
 export function isRecoverableOpenTofuRunRecord(

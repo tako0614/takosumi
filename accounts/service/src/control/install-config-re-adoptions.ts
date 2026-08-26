@@ -2,6 +2,7 @@ import type { JsonValue } from "takosumi-contract";
 import type {
   Capsule,
   InstallConfig,
+  InstallConfigCommittedPostApplyRecoveryProof,
   PublicCapsule,
 } from "takosumi-contract/install-configs";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
@@ -54,6 +55,8 @@ interface ReAdoptionReceipt {
   readonly previousStateVersionId?: string;
   readonly previousExecutionAuthorityEpoch: number;
   readonly authorityGuard: string;
+  readonly committedPostApplyRecovery?:
+    InstallConfigCommittedPostApplyRecoveryProof;
   readonly derivedTargetDigest: string;
   readonly baseInstallConfigId: string;
   readonly sourceSnapshotId: string;
@@ -65,6 +68,8 @@ interface ReAdoptionAuthoritySnapshot {
   readonly installConfig: InstallConfig;
   readonly installConfigDigest: string;
   readonly executionAuthorityEpoch: number;
+  readonly committedPostApplyRecovery?:
+    InstallConfigCommittedPostApplyRecoveryProof;
   readonly authorityGuard: string;
 }
 
@@ -75,6 +80,8 @@ interface ReAdoptionCasExpected {
   readonly currentStateVersionId: string | undefined;
   readonly status: Capsule["status"];
   readonly executionAuthorityEpoch: number;
+  readonly committedPostApplyRecovery?:
+    InstallConfigCommittedPostApplyRecoveryProof;
 }
 
 /** Opaque value-free guard issued only after the Capsule route authorizes access. */
@@ -168,6 +175,12 @@ export async function handleCapsuleInstallConfigReAdoption(
         currentStateVersionId: replay.previousStateVersionId,
         status: replay.previousCapsuleStatus,
         executionAuthorityEpoch: replay.previousExecutionAuthorityEpoch,
+        ...(replay.committedPostApplyRecovery
+          ? {
+            committedPostApplyRecovery:
+              replay.committedPostApplyRecovery,
+          }
+          : {}),
       },
     });
   }
@@ -326,6 +339,11 @@ export async function handleCapsuleInstallConfigReAdoption(
       : {}),
     previousExecutionAuthorityEpoch: authority.executionAuthorityEpoch,
     authorityGuard: authority.authorityGuard,
+    ...(authority.committedPostApplyRecovery
+      ? {
+        committedPostApplyRecovery: authority.committedPostApplyRecovery,
+      }
+      : {}),
     baseInstallConfigId: baseConfig.id,
     sourceSnapshotId: sourceSnapshot.id,
     ...(request.deploymentProfileKey
@@ -405,6 +423,11 @@ export async function handleCapsuleInstallConfigReAdoption(
       currentStateVersionId: current.currentStateVersionId,
       status: current.status,
       executionAuthorityEpoch: authority.executionAuthorityEpoch,
+      ...(authority.committedPostApplyRecovery
+        ? {
+          committedPostApplyRecovery: authority.committedPostApplyRecovery,
+        }
+        : {}),
     },
   });
 }
@@ -548,9 +571,15 @@ async function reAdoptionAuthoritySnapshot(
   const installConfig = await operations.capsules.getInstallConfig(
     capsule.installConfigId,
   );
-  const [installConfigDigest, executionAuthorityEpoch] = await Promise.all([
+  const [
+    installConfigDigest,
+    executionAuthorityEpoch,
+    committedPostApplyRecovery,
+  ] = await Promise.all([
     stableJsonDigest(installConfig),
     operations.capsules.getCapsuleExecutionAuthorityEpoch(capsule.id),
+    operations.capsules.getInstallConfigReAdoptionRecoveryProof?.(capsule.id) ??
+      Promise.resolve(undefined),
   ]);
   const authorityGuard = await stableJsonDigest({
     contract: "takosumi.capsule-install-config-re-adoption-guard/v1",
@@ -562,12 +591,16 @@ async function reAdoptionAuthoritySnapshot(
     currentStateGeneration: capsule.currentStateGeneration,
     currentStateVersionId: capsule.currentStateVersionId ?? null,
     executionAuthorityEpoch,
+    committedPostApplyRecovery: committedPostApplyRecovery ?? null,
   });
   return {
     capsule,
     installConfig,
     installConfigDigest,
     executionAuthorityEpoch,
+    ...(committedPostApplyRecovery
+      ? { committedPostApplyRecovery }
+      : {}),
     authorityGuard,
   };
 }

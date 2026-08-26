@@ -65,6 +65,7 @@ import type {
 } from "takosumi-contract/workspaces";
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
+import type { InstallConfigCommittedPostApplyRecoveryProof } from "takosumi-contract/install-configs";
 import type {
   Dependency,
   DependencySnapshot,
@@ -139,6 +140,11 @@ import {
   usageEventFromRow,
 } from "../../core/domains/deploy-control/store_row_mappers.ts";
 import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
+import {
+  committedPostApplyRecoveryProofMatches,
+  exactRecoveryProofsEqual,
+  type CommittedPostApplyRecoveryRows,
+} from "../../core/domains/deploy-control/committed_post_apply_recovery.ts";
 import * as schema from "../../core/adapters/storage/drizzle/schema/d1.ts";
 import type { D1Database, D1PreparedStatement, D1Result } from "./bindings.ts";
 import {
@@ -352,6 +358,100 @@ function d1CapsuleRuntimeSafetySafeOrAbsent(capsuleId: string): SQL {
       ${schema.runs.id} DESC
     LIMIT 1
   ), 1) = 1`;
+}
+
+async function d1CommittedPostApplyRecoveryRows(
+  db: DrizzleD1Database<typeof schema>,
+  failedApplyRun: ApplyRun,
+  proof: InstallConfigCommittedPostApplyRecoveryProof,
+): Promise<CommittedPostApplyRecoveryRows | undefined> {
+  const [stateVersionRow, outputRow] = await Promise.all([
+    db
+      .select()
+      .from(schema.stateVersions)
+      .where(eq(schema.stateVersions.id, proof.stateVersionId))
+      .limit(1)
+      .get(),
+    db
+      .select({ json: schema.outputs.recordJson })
+      .from(schema.outputs)
+      .where(eq(schema.outputs.id, proof.outputId))
+      .limit(1)
+      .get(),
+  ]);
+  const stateVersion = stateVersionRow
+    ? stateVersionFromDrizzleRow(stateVersionRow)
+    : undefined;
+  const output = outputRow
+    ? (jsonRecordFromD1Value(outputRow.json) as unknown as Output)
+    : undefined;
+  return stateVersion && output
+    ? { failedApplyRun, stateVersion, output }
+    : undefined;
+}
+
+/**
+ * Same-statement D1 recovery fence. StateVersion has no JSON mirror, so every
+ * physical field in its canonical domain row is compared explicitly.
+ */
+function d1CapsuleCommittedPostApplyRecoveryFence(
+  db: DrizzleD1Database<typeof schema>,
+  capsuleId: string,
+  rows: CommittedPostApplyRecoveryRows,
+): SQL {
+  const failedRunFence = db
+    .select({ id: schema.runs.id })
+    .from(schema.runs)
+    .where(
+      and(
+        eq(schema.runs.id, rows.failedApplyRun.id),
+        eq(schema.runs.runJson, rows.failedApplyRun),
+      ),
+    );
+  const stateVersionFence = db
+    .select({ id: schema.stateVersions.id })
+    .from(schema.stateVersions)
+    .where(
+      and(
+        eq(schema.stateVersions.id, rows.stateVersion.id),
+        eq(schema.stateVersions.workspaceId, rows.stateVersion.workspaceId),
+        eq(schema.stateVersions.capsuleId, rows.stateVersion.capsuleId),
+        eq(schema.stateVersions.environment, rows.stateVersion.environment),
+        eq(schema.stateVersions.generation, rows.stateVersion.generation),
+        eq(schema.stateVersions.stateRef, rows.stateVersion.stateRef),
+        eq(schema.stateVersions.digest, rows.stateVersion.digest),
+        eq(
+          schema.stateVersions.createdByRunId,
+          rows.stateVersion.createdByRunId,
+        ),
+        eq(schema.stateVersions.createdAt, rows.stateVersion.createdAt),
+      ),
+    );
+  const outputFence = db
+    .select({ id: schema.outputs.id })
+    .from(schema.outputs)
+    .where(
+      and(
+        eq(schema.outputs.id, rows.output.id),
+        eq(schema.outputs.recordJson, rows.output),
+      ),
+    );
+  return and(
+    sql`(
+      SELECT ${schema.runs.id}
+      FROM ${schema.runs}
+      WHERE ${d1RuntimeSafetyCandidateWhere(capsuleId)}
+      ORDER BY
+        ${d1RunRuntimeSafetyInFlightOrder()} DESC,
+        ${d1RunRuntimeSafetyEffectAtMillisOrder()} DESC,
+        ${d1RunRuntimeSafetyRiskOrder()} DESC,
+        ${schema.runs.id} DESC
+      LIMIT 1
+    ) = ${rows.failedApplyRun.id}`,
+    exists(failedRunFence),
+    exists(stateVersionFence),
+    exists(outputFence),
+  )!;
 }
 
 /**
@@ -2308,10 +2408,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const targetConfig = await this.getInstallConfig(
       input.targetInstallConfigId,
     );
+    const recoveryProof = input.expected.committedPostApplyRecovery;
     if (
       !targetConfig ||
       (await stableJsonDigest(targetConfig)) !==
-        input.expected.targetInstallConfigDigest
+        input.expected.targetInstallConfigDigest ||
+      !exactRecoveryProofsEqual(
+        targetConfig.internal?.reAdoption?.committedPostApplyRecovery,
+        recoveryProof,
+      )
     ) {
       return { status: "conflict", capsule };
     }
@@ -2334,7 +2439,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       return { status: "conflict", capsule };
     }
     const safetyRow = await this.#orm
-      .select({ json: schema.runs.runJson })
+      .select({ id: schema.runs.id, json: schema.runs.runJson })
       .from(schema.runs)
       .where(d1RuntimeSafetyCandidateWhere(input.capsuleId))
       .orderBy(
@@ -2345,10 +2450,38 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       )
       .limit(1)
       .get();
-    const runtimeSafety = safetyRow
-      ? capsuleRuntimeSafetyFromRun(safetyRow.json as ApplyRun | Run)
+    const safetyCandidate = safetyRow
+      ? (jsonRecordFromD1Value(safetyRow.json) as unknown as ApplyRun | Run)
       : undefined;
-    if (runtimeSafety !== undefined && runtimeSafety.phase !== "safe") {
+    const runtimeSafety = safetyCandidate
+      ? capsuleRuntimeSafetyFromRun(safetyCandidate)
+      : undefined;
+    const recoveryRows = recoveryProof &&
+        safetyCandidate &&
+        isApplyRunRecord(safetyCandidate) &&
+        safetyCandidate.id === recoveryProof.failedApplyRunId
+      ? await d1CommittedPostApplyRecoveryRows(
+          this.#orm,
+          safetyCandidate,
+          recoveryProof,
+        )
+      : undefined;
+    const committedRecoveryMatches = Boolean(
+      recoveryProof &&
+        recoveryRows &&
+        (await committedPostApplyRecoveryProofMatches(
+          recoveryProof,
+          capsule,
+          recoveryRows,
+        )),
+    );
+    const runtimeSafetyPermitsRebind = recoveryProof === undefined
+      ? runtimeSafety === undefined || runtimeSafety.phase === "safe"
+      : runtimeSafety?.phase === "unknown" &&
+        runtimeSafety.runType === "apply" &&
+        runtimeSafety.runId === recoveryProof.failedApplyRunId &&
+        committedRecoveryMatches;
+    if (!runtimeSafetyPermitsRebind) {
       return { status: "busy", capsule };
     }
     const blocking = this.#orm
@@ -2381,6 +2514,13 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       installConfigId: input.targetInstallConfigId,
       updatedAt: input.updatedAt,
     });
+    const runtimeSafetyFence = recoveryRows
+      ? d1CapsuleCommittedPostApplyRecoveryFence(
+          this.#orm,
+          input.capsuleId,
+          recoveryRows,
+        )
+      : d1CapsuleRuntimeSafetySafeOrAbsent(input.capsuleId);
     const result = await this.#orm
       .update(schema.capsules)
       .set({
@@ -2417,7 +2557,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           ),
           exists(currentConfigFence),
           exists(targetConfigFence),
-          d1CapsuleRuntimeSafetySafeOrAbsent(input.capsuleId),
+          runtimeSafetyFence,
           notExists(blocking),
         ),
       )
@@ -2440,7 +2580,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .limit(1)
       .get();
     const currentSafetyRow = await this.#orm
-      .select({ json: schema.runs.runJson })
+      .select({ id: schema.runs.id, json: schema.runs.runJson })
       .from(schema.runs)
       .where(d1RuntimeSafetyCandidateWhere(input.capsuleId))
       .orderBy(
@@ -2451,12 +2591,37 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       )
       .limit(1)
       .get();
-    const currentSafety = currentSafetyRow
-      ? capsuleRuntimeSafetyFromRun(currentSafetyRow.json as ApplyRun | Run)
+    const currentSafetyCandidate = currentSafetyRow
+      ? (jsonRecordFromD1Value(currentSafetyRow.json) as unknown as
+          ApplyRun | Run)
       : undefined;
+    const currentSafety = currentSafetyCandidate
+      ? capsuleRuntimeSafetyFromRun(currentSafetyCandidate)
+      : undefined;
+    const currentRecoveryRows = recoveryProof &&
+        currentSafetyCandidate &&
+        isApplyRunRecord(currentSafetyCandidate) &&
+        currentSafetyCandidate.id === recoveryProof.failedApplyRunId
+      ? await d1CommittedPostApplyRecoveryRows(
+          this.#orm,
+          currentSafetyCandidate,
+          recoveryProof,
+        )
+      : undefined;
+    const currentRecoveryMatches = Boolean(
+      recoveryProof &&
+        currentRecoveryRows &&
+        (await committedPostApplyRecoveryProofMatches(
+          recoveryProof,
+          current,
+          currentRecoveryRows,
+        )),
+    );
     return {
       status: busy ||
-          (currentSafety !== undefined && currentSafety.phase !== "safe")
+          (recoveryProof === undefined
+            ? currentSafety !== undefined && currentSafety.phase !== "safe"
+            : !currentRecoveryMatches)
         ? "busy"
         : "conflict",
       capsule: current,

@@ -89,6 +89,7 @@ import {
   type RuntimeSecretFileMaterializer,
 } from "../../../../core/domains/deploy-control/runtime_secret_file_materializer.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import { deriveCommittedPostApplyRecoveryProof } from "../../../../core/domains/deploy-control/committed_post_apply_recovery.ts";
 import type {
   CloudflareWorkerEnv,
   R2Bucket,
@@ -7112,9 +7113,11 @@ test("a fresh reviewed plan/apply recovers a Capsule after post-apply lifecycle 
     ]),
   });
   let attempts = 0;
+  const activations: ReleaseActivationInput[] = [];
   const controller = controllerWith(store, runner, {
     releaseActivator: {
-      activate: () => {
+      activate: (input) => {
+        activations.push(input);
         attempts += 1;
         return Promise.resolve(
           attempts === 1
@@ -7135,6 +7138,106 @@ test("a fresh reviewed plan/apply recovers a Capsule after post-apply lifecycle 
   expect(first.capsule?.status).toBe("error");
   expect(first.capsule?.currentStateGeneration).toBe(1);
 
+  const failedCapsule = await store.getCapsule("cap_fixture1");
+  if (
+    !failedCapsule ||
+    !first.applyRun.stateVersionId ||
+    !first.applyRun.outputId
+  ) {
+    throw new Error("post-apply recovery fixture did not commit state/output");
+  }
+  const previousConfig = await store.getInstallConfig(
+    failedCapsule.installConfigId,
+  );
+  const stateVersion = await store.getStateVersion(
+    first.applyRun.stateVersionId,
+  );
+  const output = await store.getOutput(first.applyRun.outputId);
+  if (!previousConfig || !stateVersion || !output) {
+    throw new Error("post-apply recovery authority rows are missing");
+  }
+  const recoveryProof = await deriveCommittedPostApplyRecoveryProof(
+    failedCapsule,
+    { failedApplyRun: first.applyRun, stateVersion, output },
+  );
+  if (!recoveryProof) {
+    throw new Error("post-apply recovery fixture did not produce exact proof");
+  }
+
+  const targetLifecycle = lifecycleInstallConfig([
+    {
+      id: "publish-v0126",
+      phase: "post_apply",
+      executor: "operator",
+      command: ["bun", "run", "release:v0126"],
+    },
+  ]);
+  const targetConfig: InstallConfig = {
+    ...previousConfig,
+    ...targetLifecycle,
+    id: "cfg_post_apply_recovery_target",
+    name: "post-apply-recovery-target",
+    internal: {
+      reason: "per_install_overrides",
+      sourceSnapshotId: "snap_fixture",
+      reAdoption: {
+        capsuleId: failedCapsule.id,
+        actorSubject: "subject_post_apply_recovery",
+        reason: "Re-adopt reviewed v0.12.6 lifecycle authority",
+        idempotencyKeyHash: `sha256:${"a".repeat(64)}`,
+        requestDigest: `sha256:${"b".repeat(64)}`,
+        previousInstallConfigId: previousConfig.id,
+        previousInstallConfigDigest: await stableJsonDigest(previousConfig),
+        previousCapsuleStatus: failedCapsule.status,
+        previousStateGeneration: failedCapsule.currentStateGeneration,
+        previousStateVersionId: failedCapsule.currentStateVersionId,
+        previousExecutionAuthorityEpoch: 1,
+        authorityGuard: `sha256:${"c".repeat(64)}`,
+        committedPostApplyRecovery: recoveryProof,
+        derivedTargetDigest: `sha256:${"d".repeat(64)}`,
+        baseInstallConfigId: previousConfig.id,
+        sourceSnapshotId: "snap_fixture",
+      },
+    },
+    createdAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z",
+  };
+  await store.putInstallConfig(targetConfig);
+
+  const rebound = await store.rebindCapsuleInstallConfig({
+    capsuleId: failedCapsule.id,
+    targetInstallConfigId: targetConfig.id,
+    expected: {
+      installConfigId: previousConfig.id,
+      installConfigDigest: await stableJsonDigest(previousConfig),
+      targetInstallConfigDigest: await stableJsonDigest(targetConfig),
+      currentStateGeneration: failedCapsule.currentStateGeneration,
+      currentStateVersionId: failedCapsule.currentStateVersionId,
+      status: failedCapsule.status,
+      executionAuthorityEpoch: 1,
+      committedPostApplyRecovery: recoveryProof,
+    },
+    updatedAt: "2026-08-26T00:00:01.000Z",
+  });
+  expect(rebound).toMatchObject({
+    status: "updated",
+    capsule: {
+      installConfigId: targetConfig.id,
+      status: "error",
+      currentStateVersionId: stateVersion.id,
+      currentOutputId: output.id,
+      currentStateGeneration: stateVersion.generation,
+    },
+  });
+  expect(
+    await store.getCapsuleExecutionAuthorityEpoch(failedCapsule.id),
+  ).toBe(2);
+  expect(await store.getCapsuleRuntimeSafety(failedCapsule.id)).toEqual({
+    phase: "unknown",
+    runId: first.applyRun.id,
+    runType: "apply",
+  });
+
   const replay = await controller.createApplyRun({
     planRunId: firstPlan.id,
     expected: applyExpectedGuardFromPlanRun(firstPlan),
@@ -7143,9 +7246,40 @@ test("a fresh reviewed plan/apply recovers a Capsule after post-apply lifecycle 
   expect(replay.applyRun.status).toBe("failed");
   expect(runner.applyJobs).toHaveLength(1);
 
+  // A stale Plan that survived outside the rebind transaction cannot cross the
+  // incremented execution-authority epoch, even though its saved artifact is
+  // otherwise internally consistent.
+  const stalePlan: PlanRun = {
+    ...firstPlan,
+    id: "plan_pre_re_adoption_stale",
+    operation: "update",
+    capsuleCurrentStateVersionId: stateVersion.id,
+    capsuleExecutionAuthorityEpoch: 1,
+    baseStateGeneration: stateVersion.generation,
+    auditEvents: firstPlan.auditEvents.map((event, index) => ({
+      ...event,
+      id: `audit_pre_re_adoption_stale_${index}`,
+    })),
+  };
+  await store.putPlanRun(stalePlan);
+  await expect(
+    controller.createApplyRun({
+      planRunId: stalePlan.id,
+      expected: applyExpectedGuardFromPlanRun(stalePlan),
+    }),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "capsule_execution_authority_changed" },
+  });
+  expect(runner.applyJobs).toHaveLength(1);
+
   const { planRun: recoveryPlan } =
     await controller.createCapsulePlan("cap_fixture1");
   expect(recoveryPlan.baseStateGeneration).toBe(1);
+  expect(recoveryPlan.capsuleExecutionAuthorityEpoch).toBe(2);
+  expect((await store.getPlanRunInputs(recoveryPlan.id))?.lifecycleActions).toEqual(
+    targetConfig.lifecycleActions,
+  );
   const recovered = await controller.createApplyRun({
     planRunId: recoveryPlan.id,
     expected: applyExpectedGuardFromPlanRun(recoveryPlan),
@@ -7157,6 +7291,16 @@ test("a fresh reviewed plan/apply recovers a Capsule after post-apply lifecycle 
   expect(recovered.applyRun.id).not.toBe(first.applyRun.id);
   expect(runner.applyJobs).toHaveLength(2);
   expect(attempts).toBe(2);
+  expect(
+    activations.map((activation) =>
+      activation.commands.map((command) => command.id)
+    ),
+  ).toEqual([["publish"], ["publish-v0126"]]);
+  expect(await store.getCapsuleRuntimeSafety(failedCapsule.id)).toEqual({
+    phase: "safe",
+    runId: recovered.applyRun.id,
+    runType: "apply",
+  });
 });
 
 test("post-apply lifecycle failure captures provider usage and billing", async () => {

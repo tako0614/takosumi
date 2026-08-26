@@ -147,15 +147,42 @@ performs one authority-fenced Capsule rebind. The memory, PostgreSQL, and D1
 stores compare the exact current and target InstallConfig records (including
 their canonical JSON/digests) together with Capsule status,
 `currentStateGeneration`, `currentStateVersionId`, and
-`executionAuthorityEpoch` before the pointer and epoch update. Unsafe or
-ambiguous Apply/Destroy/Restore Runs and an unconsumed Plan for the Capsule
-block the rebind; consumed or terminal history does not. A successful rebind
-increments `executionAuthorityEpoch`. That epoch is part of the Accounts OIDC
-activation authority, so an old or orphaned Apply activation cannot authorize
-the newly adopted configuration; only a final Apply that revalidates the
-current configuration can save its current activation digest. A missing legacy
-Plan epoch is accepted only when the current Capsule epoch is still 1; after an
-authority change it fails closed.
+`executionAuthorityEpoch` before the pointer and epoch update. Normally,
+re-adoption is allowed only when `runtimeSafety` is `safe` or absent (there is
+no decisive candidate). Unsafe or ambiguous Apply/Destroy/Restore Runs,
+in-flight work, and an unconsumed Plan for the Capsule block the rebind;
+consumed or terminal history does not.
+
+The sole exception is a receipt-fenced committed `post_apply` recovery while
+`runtimeSafety=unknown`. It requires the decisive failed `create`/`update`
+ApplyRun to have exactly one ordered `apply.completed` → `apply.failed` receipt,
+with `providerDispatched=true`, `providerApplySucceeded=true`, and terminal
+`post_apply` lifecycle failure on the failed receipt. The completed receipt must
+identify the exact current `StateVersion` and `Output`; those rows must match
+the current Capsule pointers, generation, workspace/capsule ownership,
+environment, and failed-Apply provenance. The GET-issued guard and immutable
+target's private receipt hold only opaque, value-free evidence; receipt values
+are never returned in public Capsule, InstallConfig, or response projections.
+
+In that exception, the same CAS re-reads the latest decisive Run, exact
+StateVersion/Output rows, whole current/target InstallConfig JSON, whole
+Capsule JSON, and execution authority epoch, and requires no blocking
+queued/running Run or Apply and no current unconsumed Plan. Missing or drifted
+receipt/Run/StateVersion/Output/config/Capsule/epoch, provider uncertainty or
+persisted `providerApplySucceeded=false` partial state, destroy/restore, a
+newer safety candidate, in-flight Apply, or current unconsumed Plan returns
+409. A successful rebind changes only `installConfigId`, `updatedAt`, and epoch
++ 1; `status=error`, state/output pointers, generation, and
+`runtimeSafety=unknown` remain unchanged. The rebind does not dispatch
+provider work. A fresh reviewed Plan and Apply is required, and only its
+successful Apply may restore the Capsule to `active` / `safe`.
+
+A successful rebind increments `executionAuthorityEpoch`. That epoch is part
+of the Accounts OIDC activation authority, so an old or orphaned Apply
+activation cannot authorize the newly adopted configuration; only a final
+Apply that revalidates the current configuration can save its current
+activation digest. A missing legacy Plan epoch is accepted only when the
+current Capsule epoch is still 1; after an authority change it fails closed.
 
 The `Idempotency-Key` and request digest make retries value-free and replayable.
 The same request returns the canonical target and does not append another

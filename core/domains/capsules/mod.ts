@@ -17,6 +17,7 @@ import type { Capsule, CapsuleStatus } from "takosumi-contract/capsules";
 import type {
   ProviderBindingSet,
   InstallConfig,
+  InstallConfigCommittedPostApplyRecoveryProof,
   InstallConfigLifecycleAction,
   InstallConfigPatchV1,
 } from "takosumi-contract/install-configs";
@@ -58,6 +59,7 @@ import {
 import { materializeInstallContextVariables } from "../deploy-control/validation.ts";
 import { parseInstallConfigPatchV1 } from "./install_config_patch.ts";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
+import { deriveCommittedPostApplyRecoveryProof } from "../deploy-control/committed_post_apply_recovery.ts";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -617,6 +619,37 @@ export class CapsulesService {
       );
     }
     return epoch;
+  }
+
+  /**
+   * Derives the value-free receipt for the latest decisive failed Apply only.
+   * Raw Run/StateVersion/Output rows stay inside Core; stores re-read them again
+   * during the final pointer/epoch CAS.
+   */
+  async getInstallConfigReAdoptionRecoveryProof(
+    capsuleId: string,
+  ): Promise<InstallConfigCommittedPostApplyRecoveryProof | undefined> {
+    const capsule = await this.#requireCapsule(capsuleId);
+    const runtimeSafety = await this.#store.getCapsuleRuntimeSafety(capsule.id);
+    if (
+      runtimeSafety?.phase !== "unknown" ||
+      runtimeSafety.runType !== "apply" ||
+      capsule.currentStateVersionId === undefined ||
+      capsule.currentOutputId === undefined
+    ) {
+      return undefined;
+    }
+    const [failedApplyRun, stateVersion, output] = await Promise.all([
+      this.#store.getApplyRun(runtimeSafety.runId),
+      this.#store.getStateVersion(capsule.currentStateVersionId),
+      this.#store.getOutput(capsule.currentOutputId),
+    ]);
+    if (!failedApplyRun || !stateVersion || !output) return undefined;
+    return await deriveCommittedPostApplyRecoveryProof(capsule, {
+      failedApplyRun,
+      stateVersion,
+      output,
+    });
   }
 
   /**

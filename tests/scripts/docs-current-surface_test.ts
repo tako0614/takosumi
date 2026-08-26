@@ -391,6 +391,17 @@ test("core conformance records receipt-fenced post_apply recovery without making
   const conformance = await readText(
     new URL("docs/internal/core-conformance.md", ROOT),
   );
+  const coreSpec = (await readText(new URL("docs/internal/core-spec.md", ROOT))).replace(
+    /\s+/g,
+    " ",
+  );
+  const installConfigPatches = (
+    await readText(new URL("docs/operations/install-config-patches.md", ROOT))
+  ).replace(/\s+/g, " ");
+  const api = (await readText(new URL("docs/reference/api.md", ROOT))).replace(
+    /\s+/g,
+    " ",
+  );
   const rows = conformance
     .split("\n")
     .filter((line) => line.startsWith("| Failed post_apply recovery "));
@@ -425,7 +436,20 @@ test("core conformance records receipt-fenced post_apply recovery without making
   assert.match(row, /terminal `post_apply` lifecycle failure/);
   assert.match(
     row,
-    /State\/output\/audit drift, destroy\/restore, consumed Plan or replay, and config rebind remain refused/,
+    /receipt-fenced InstallConfig re-adoption that changes only the pointer\/timestamp\/epoch/,
+  );
+  assert.match(
+    row,
+    /preserving error status, state, output, generation, and unknown runtime safety/,
+  );
+  assert.match(
+    row,
+    /Missing or drifted receipt\/Run\/StateVersion\/Output/,
+  );
+  assert.match(row, /`providerApplySucceeded=false` persisted partial state/);
+  assert.match(
+    row,
+    /destroy\/restore, a newer safety candidate, queued\/running Apply, or a current unconsumed Plan fail closed/,
   );
   assert.match(row, /recovery does not make `runtimeSafety` `safe`/);
   assert.doesNotMatch(
@@ -443,8 +467,99 @@ test("core conformance records receipt-fenced post_apply recovery without making
     "tests/deploy/platform/run_credential_extension_test.ts",
     "tests/core/adapters/vault/run_issuance_test.ts",
     "tests/core/domains/deploy-control/capsule_run_test.ts",
+    "tests/core/domains/deploy-control/install_config_rebind_test.ts",
+    "tests/accounts/service/src/control-routes_real-operations_e2e_test.ts",
+    "memory/PostgreSQL/D1 exact receipt success",
+    "private guard/receipt recovery",
   ]) {
     assert.ok(row.includes(evidence), `missing post_apply recovery evidence: ${evidence}`);
+  }
+
+  assert.match(
+    api,
+    /GET の `authorityGuard`.*?failed ApplyRun.*?StateVersion.*?Output.*?full-row digest.*?domain-separated evidence digest/,
+  );
+  assert.match(api, /public Capsule \/ InstallConfig \/ response には出ません/);
+  assert.match(
+    api,
+    /latest decisive candidate.*?exact Run \/ StateVersion \/ Output row.*?whole current\/target InstallConfig JSON.*?whole Capsule JSON/,
+  );
+  assert.match(
+    api,
+    /成功が変更するのは `installConfigId`、`updatedAt`、epoch \+ 1 だけ/,
+  );
+  assert.match(
+    api,
+    /`status=error`、state\/output pointer、generation、`runtimeSafety=unknown` は維持/,
+  );
+  assert.match(
+    api,
+    /old Plan は新しい epoch で拒否され.*?fresh Plan.*?successful Apply だけが Capsule を `active` \/ `safe`/,
+  );
+
+  for (const [label, doc] of [
+    ["core spec", coreSpec],
+    ["install-config patch runbook", installConfigPatches],
+  ] as const) {
+    assert.match(
+      doc,
+      /normally.*?runtimeSafety.*?(?:safe|absent).*?(?:unsafe|ambiguous).*?(?:block|fail closed)/i,
+      `${label} must preserve the normal safe/absent fail-closed rule`,
+    );
+    assert.match(
+      doc,
+      /sole.*?receipt.?fenced.*?runtimeSafety.*?unknown|runtimeSafety.*?unknown.*?sole.*?receipt.?fenced/i,
+      `${label} must describe the sole unknown-safety receipt-fenced exception`,
+    );
+    assert.match(
+      doc,
+      /failed (?:create|`create`)\s*\/?(?:update|`update`).*?Apply.*?exactly one ordered.*?apply\.completed.*?(?:→|->).*?apply\.failed/i,
+      `${label} must require one ordered completed/failed Apply receipt`,
+    );
+    assert.match(
+      doc,
+      /providerDispatched=true.*?providerApplySucceeded=true.*?terminal.*?post_apply/i,
+      `${label} must require provider success and terminal post_apply failure`,
+    );
+    assert.match(
+      doc,
+      /exact.*?(?:current )?StateVersion.*?Output.*?(?:generation|provenance)/i,
+      `${label} must fence the exact current StateVersion/Output generation and provenance`,
+    );
+    assert.match(
+      doc,
+      /same.*?(?:CAS|atomic).*?(?:latest|decisive).*?Run.*?StateVersion.*?Output.*?(?:current\/target|current and target).*?InstallConfig.*?Capsule.*?(?:epoch|execution authority)/i,
+      `${label} must require the same-CAS latest-row/config/Capsule/epoch fence`,
+    );
+    assert.match(
+      doc,
+      /changes only.*?(?:InstallConfig )?(?:pointer|installConfigId).*?(?:updatedAt|timestamp).*?(?:epoch)/i,
+      `${label} must state pointer-only rebind changes`,
+    );
+    for (const preserved of [
+      /status\s*=?\s*`?error`?/i,
+      /runtimeSafety\s*=?\s*`?unknown`?/i,
+      /state\/output pointers?/i,
+      /generation/i,
+      /remain(?:s)? unchanged|preserv(?:e|es|ing)/i,
+    ]) {
+      assert.match(doc, preserved, `${label} must preserve ${preserved}`);
+    }
+    assert.match(
+      doc,
+      /fresh.*?(?:reviewed )?Plan.*?Apply.*?(?:only|just).*?(?:success|successful).*?(?:active|safe)/i,
+      `${label} must require a fresh reviewed Plan/Apply for active/safe recovery`,
+    );
+    assert.match(
+      doc,
+      /(?:missing|drifted).*?(?:partial|provider).*?(?:destroy|restore).*?(?:newer|in.?flight|queued|running).*?(?:unconsumed|current).*?Plan.*?409/i,
+      `${label} must list the fail-closed 409 negative matrix`,
+    );
+    assert.match(
+      doc,
+      /(?:opaque|value.?free).*?(?:evidence|receipt).*?(?:public|response).*?(?:not|never|absent)/i,
+      `${label} must keep recovery evidence value-free at the public boundary`,
+    );
   }
 });
 

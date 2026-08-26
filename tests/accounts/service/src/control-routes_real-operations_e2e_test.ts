@@ -46,6 +46,12 @@ import {
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import type {
+  Output,
+} from "takosumi-contract/outputs";
+import type {
+  StateVersion,
+} from "takosumi-contract/state-versions";
+import type {
   ApplyRun,
   PlanRun,
 } from "@takosumi/internal/deploy-control-api";
@@ -2677,6 +2683,7 @@ output "launch_url" { value = var.public_url }
     foreignCookie,
     deployStore,
     operations,
+    runner,
     seeded,
     baseInstallConfig,
   };
@@ -2712,6 +2719,306 @@ function reAdoptionBody(
     expected: { authorityGuard },
   };
 }
+
+async function seedRouteCommittedPostApplyRecovery(
+  fixture: Awaited<ReturnType<typeof reAdoptionRouteFixture>>,
+  suffix: string,
+) {
+  const capsule = await fixture.operations.capsules.getCapsule(
+    fixture.seeded.capsule.id,
+  );
+  const failedApplyRunId = `apply_failed_post_apply_route_${suffix}`;
+  const planRunId = `plan_failed_post_apply_route_${suffix}`;
+  const stateVersionId = `state_failed_post_apply_route_${suffix}`;
+  const outputId = `output_failed_post_apply_route_${suffix}`;
+  const stateGeneration = 3;
+  const current = {
+    ...capsule,
+    status: "error" as const,
+    currentStateVersionId: stateVersionId,
+    currentOutputId: outputId,
+    currentStateGeneration: stateGeneration,
+  };
+  const stateVersion: StateVersion = {
+    id: stateVersionId,
+    workspaceId: current.workspaceId,
+    capsuleId: current.id,
+    environment: current.environment,
+    generation: stateGeneration,
+    stateRef: `private/state/ref/${suffix}`,
+    digest: `sha256:${"a".repeat(64)}`,
+    createdByRunId: failedApplyRunId,
+    createdAt: "2026-08-26T00:00:00.000Z",
+  };
+  const output: Output = {
+    id: outputId,
+    workspaceId: current.workspaceId,
+    capsuleId: current.id,
+    stateGeneration,
+    rawArtifactRef: `private/output/ref/${suffix}`,
+    publicOutputs: {},
+    workspaceOutputs: {},
+    outputDigest: `sha256:${"b".repeat(64)}`,
+    createdAt: "2026-08-26T00:00:00.000Z",
+  };
+  const planRun: PlanRun = {
+    id: planRunId,
+    workspaceId: current.workspaceId,
+    capsuleId: current.id,
+    capsuleContext: {
+      workspaceId: current.workspaceId,
+      capsuleId: current.id,
+      environment: current.environment,
+    },
+    capsuleCurrentStateVersionId: null,
+    capsuleExecutionAuthorityEpoch: 1,
+    source: {
+      kind: "git",
+      url: fixture.seeded.source.url,
+      commit: fixture.seeded.snapshot.resolvedCommit,
+    },
+    sourceSnapshotId: fixture.seeded.snapshot.id,
+    sourceDigest: `sha256:${"1".repeat(64)}`,
+    operation: "update",
+    runnerProfileId: "opentofu-default",
+    variablesDigest: `sha256:${"2".repeat(64)}`,
+    requiredProviders: [],
+    status: "succeeded",
+    policy: { status: "passed", reasons: [], checkedAt: 1 },
+    policyDecisionDigest: `sha256:${"3".repeat(64)}`,
+    planDigest: `sha256:${"4".repeat(64)}`,
+    planArtifact: {
+      kind: "runner-local",
+      ref: `runner-local://plan/${planRunId}`,
+      digest: `sha256:${"4".repeat(64)}`,
+    },
+    baseStateGeneration: stateGeneration - 1,
+    appliedApplyRunId: failedApplyRunId,
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 2,
+  };
+  const failedApply: ApplyRun = {
+    id: failedApplyRunId,
+    planRunId,
+    workspaceId: current.workspaceId,
+    capsuleId: current.id,
+    operation: "update",
+    runnerProfileId: "opentofu-default",
+    status: "failed",
+    expected: applyExpectedGuardFromPlanRun(planRun),
+    stateBackend: { kind: "managed", ref: "state" } as never,
+    stateLock: { status: "recorded", backendRef: "state" },
+    stateVersionId,
+    outputId,
+    auditEvents: [
+      {
+        id: `audit_completed_route_${suffix}`,
+        type: "apply.completed",
+        at: 2,
+        data: { stateVersionId, outputId },
+      },
+      {
+        id: `audit_failed_route_${suffix}`,
+        type: "apply.failed",
+        at: 2,
+        data: {
+          providerDispatched: true,
+          providerApplySucceeded: true,
+          lifecycleActionPhase: "post_apply",
+          lifecycleActionStatus: "failed",
+        },
+      },
+    ],
+    createdAt: 1,
+    updatedAt: 2,
+    startedAt: 1,
+    finishedAt: 2,
+  };
+  await fixture.deployStore.putCapsule(current);
+  await fixture.deployStore.putStateVersion(stateVersion);
+  await fixture.deployStore.putOutput(output);
+  await fixture.deployStore.putPlanRun(planRun);
+  await fixture.deployStore.putApplyRun(failedApply);
+  return { current, stateVersion, output, planRun, failedApply };
+}
+
+test("re-adoption uses a sealed exact post-apply receipt without promoting runtime state", async () => {
+  const fixture = await reAdoptionRouteFixture("post-apply-recovery");
+  const recovery = await seedRouteCommittedPostApplyRecovery(
+    fixture,
+    "post-apply-recovery",
+  );
+  const capsulePath = `/api/v1/capsules/${recovery.current.id}`;
+  const capsuleGet = await controlJson<{
+    readonly installConfigReAdoption: { readonly authorityGuard: string };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "GET",
+      path: capsulePath,
+    },
+    200,
+  );
+  const publicGetJson = JSON.stringify(capsuleGet);
+  expect(publicGetJson).not.toContain(recovery.failedApply.id);
+  expect(publicGetJson).not.toContain(recovery.stateVersion.stateRef);
+  expect(publicGetJson).not.toContain(recovery.output.rawArtifactRef);
+
+  const body = reAdoptionBody(
+    fixture,
+    capsuleGet.installConfigReAdoption.authorityGuard,
+  );
+  const path = `${capsulePath}/install-config-re-adoptions`;
+  const adopted = await controlJson<{
+    readonly capsule: {
+      readonly installConfigId: string;
+      readonly status: string;
+      readonly currentStateVersionId?: string;
+      readonly currentStateGeneration: number;
+    };
+    readonly installConfigReAdoption: {
+      readonly replayed: boolean;
+      readonly targetInstallConfigId: string;
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-post-apply-recovery-v1" },
+      body,
+    },
+    200,
+  );
+  expect(adopted.capsule).toMatchObject({
+    status: "error",
+    currentStateVersionId: recovery.stateVersion.id,
+    currentStateGeneration: recovery.stateVersion.generation,
+  });
+  expect(fixture.runner.planJobs).toHaveLength(0);
+  expect(fixture.runner.applyJobs).toHaveLength(0);
+  expect(
+    await fixture.deployStore.getCapsuleRuntimeSafety(recovery.current.id),
+  ).toEqual({
+    phase: "unknown",
+    runId: recovery.failedApply.id,
+    runType: "apply",
+  });
+  expect(
+    await fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(
+      recovery.current.id,
+    ),
+  ).toBe(2);
+
+  const reboundCapsule = await fixture.operations.capsules.getCapsule(
+    recovery.current.id,
+  );
+  expect({
+    ...reboundCapsule,
+    installConfigId: recovery.current.installConfigId,
+    updatedAt: recovery.current.updatedAt,
+  }).toEqual(recovery.current);
+
+  const target = await fixture.operations.capsules.getInstallConfig(
+    adopted.installConfigReAdoption.targetInstallConfigId,
+  );
+  // Lost-ack replay is sealed by the immutable target receipt. Once the pointer
+  // moved, later row drift cannot cause another authority transition.
+  await fixture.deployStore.putOutput({
+    ...recovery.output,
+    outputDigest: `sha256:${"9".repeat(64)}`,
+  });
+  const replay = await controlJson<typeof adopted>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-post-apply-recovery-v1" },
+      body,
+    },
+    200,
+  );
+  expect(replay.installConfigReAdoption).toMatchObject({
+    replayed: true,
+    targetInstallConfigId:
+      adopted.installConfigReAdoption.targetInstallConfigId,
+  });
+  expect(
+    await fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(
+      recovery.current.id,
+    ),
+  ).toBe(2);
+
+  expect(target.internal?.reAdoption?.committedPostApplyRecovery).toMatchObject({
+    failedApplyRunId: recovery.failedApply.id,
+    stateVersionId: recovery.stateVersion.id,
+    outputId: recovery.output.id,
+    stateGeneration: recovery.stateVersion.generation,
+    evidenceDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+  });
+  const publicTarget = await controlJson<unknown>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "GET",
+      path:
+        `/api/v1/capsule-configs/${adopted.installConfigReAdoption.targetInstallConfigId}`,
+    },
+    200,
+  );
+  const publicTargetJson = JSON.stringify(publicTarget);
+  expect(publicTargetJson).not.toContain("committedPostApplyRecovery");
+  expect(publicTargetJson).not.toContain(recovery.failedApply.id);
+  expect(publicTargetJson).not.toContain(recovery.stateVersion.stateRef);
+  expect(publicTargetJson).not.toContain(recovery.output.rawArtifactRef);
+});
+
+test("re-adoption guard becomes stale when an exact recovery row drifts", async () => {
+  const fixture = await reAdoptionRouteFixture("post-apply-stale-guard");
+  const recovery = await seedRouteCommittedPostApplyRecovery(
+    fixture,
+    "post-apply-stale-guard",
+  );
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  await fixture.deployStore.putOutput({
+    ...recovery.output,
+    outputDigest: `sha256:${"9".repeat(64)}`,
+  });
+  await controlJson(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path:
+        `/api/v1/capsules/${recovery.current.id}/install-config-re-adoptions`,
+      headers: { "idempotency-key": "re-adopt-post-apply-stale-v1" },
+      body: reAdoptionBody(fixture, authorityGuard),
+    },
+    409,
+  );
+  expect(
+    (await fixture.operations.capsules.getCapsule(recovery.current.id))
+      .installConfigId,
+  ).toBe(recovery.current.installConfigId);
+  expect(
+    await fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(
+      recovery.current.id,
+    ),
+  ).toBe(1);
+  expect(
+    (await fixture.deployStore.listInstallConfigs(recovery.current.workspaceId))
+      .filter((config) => config.internal?.reAdoption).length,
+  ).toBe(0);
+});
 
 test("re-adoption uses only the public guard, preserves Takos origin, and does not use the OIDC clock as config authority", async () => {
   const fixture = await reAdoptionRouteFixture("route");

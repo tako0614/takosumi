@@ -58,6 +58,7 @@ import type {
 import type { Project } from "takosumi-contract/projects";
 import type {
   InstallConfig,
+  InstallConfigCommittedPostApplyRecoveryProof,
   Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
@@ -322,6 +323,9 @@ export interface ControlPlaneOperations {
     setCapsuleAutoUpdate(id: string, enabled: boolean): Promise<Capsule>;
     abandonUnappliedCapsule(id: string, reason: string): Promise<Capsule>;
     getCapsuleExecutionAuthorityEpoch(capsuleId: string): Promise<number>;
+    getInstallConfigReAdoptionRecoveryProof?(
+      capsuleId: string,
+    ): Promise<InstallConfigCommittedPostApplyRecoveryProof | undefined>;
     rebindInstallConfig(request: {
       readonly capsuleId: string;
       readonly targetInstallConfigId: string;
@@ -332,6 +336,8 @@ export interface ControlPlaneOperations {
         readonly currentStateVersionId: string | undefined;
         readonly status: Capsule["status"];
         readonly executionAuthorityEpoch: number;
+        readonly committedPostApplyRecovery?:
+          InstallConfigCommittedPostApplyRecoveryProof;
       };
       readonly actorSubject: string;
       readonly reason: string;

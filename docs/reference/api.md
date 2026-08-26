@@ -328,6 +328,26 @@ record digest/JSON、および Capsule status、`currentStateGeneration`、
 成功時だけ epoch が増え、value-free activity と idempotency receipt が残ります。
 legacy Plan に epoch がない場合は epoch 1 のときだけ許容され、authority replacement
 後は fail closed です。
+
+通常は `runtimeSafety` が `safe` または decisive Run がない場合だけ rebind できます。
+ただし provider Apply が成功して current `StateVersion` / `Output` を commit した後に
+terminal `post_apply` lifecycle action だけが失敗した Capsule には、狭い recovery 例外が
+あります。GET の `authorityGuard` は decisive failed ApplyRun、StateVersion、Output の
+各 id と full-row digest、generation、domain-separated evidence digest から成る value-free
+proof を内部で束ねます。同じ proof は immutable derived target の private receipt に seal
+されますが、public Capsule / InstallConfig / response には出ません。
+
+この例外でも各 store は同じ pointer/epoch CAS の中で、latest decisive candidate がその
+exact failed create/update Apply であること、exact Run / StateVersion / Output row、whole
+current/target InstallConfig JSON、whole Capsule JSON、queued/running Apply がないこと、current
+unconsumed Plan がないことを再検証します。receipt/row drift、provider 成否の不確実性、
+`providerApplySucceeded=false` の persisted partial state、destroy/restore、新しい safety
+candidate はすべて 409 です。成功が変更するのは `installConfigId`、`updatedAt`、epoch + 1
+だけで、`status=error`、state/output pointer、generation、`runtimeSafety=unknown` は維持され、
+Plan や provider を dispatch しません。old Plan は新しい epoch で拒否され、target
+InstallConfig を読む fresh Plan とその successful Apply だけが Capsule を `active` / `safe`
+へ戻します。
+
 この epoch は Capsule OIDC activation authority にも含まれるため、再採用前の old/orphan
 Apply が新しい InstallConfig を認可することはありません。
 

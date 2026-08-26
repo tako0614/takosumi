@@ -3,8 +3,14 @@ import type {
   ApplyRun,
   PlanRun,
 } from "@takosumi/internal/deploy-control-api";
-import type { Capsule, InstallConfig } from "takosumi-contract/install-configs";
+import type {
+  Capsule,
+  InstallConfig,
+  InstallConfigCommittedPostApplyRecoveryProof,
+} from "takosumi-contract/install-configs";
+import type { Output } from "takosumi-contract/outputs";
 import type { Run } from "takosumi-contract/runs";
+import type { StateVersion } from "takosumi-contract/state-versions";
 
 import {
   stableJsonDigest,
@@ -373,6 +379,205 @@ function applyRun(input: {
   };
 }
 
+async function seedCommittedPostApplyRecovery(
+  store: OpenTofuControlStore,
+  seeded: Awaited<ReturnType<typeof seedRebind>>,
+  suffix: string,
+): Promise<{
+  readonly capsule: Capsule;
+  readonly proof: InstallConfigCommittedPostApplyRecoveryProof;
+  readonly target: InstallConfig;
+  readonly failedApply: ApplyRun;
+  readonly stateVersion: StateVersion;
+  readonly output: Output;
+}> {
+  const failedApplyRunId = `apply_failed_post_apply_${suffix}`;
+  const stateVersionId = `state_failed_post_apply_${suffix}`;
+  const outputId = `output_failed_post_apply_${suffix}`;
+  const stateGeneration = 3;
+  const current = {
+    ...seeded.capsule,
+    status: "error" as const,
+    currentStateVersionId: stateVersionId,
+    currentOutputId: outputId,
+    currentStateGeneration: stateGeneration,
+  };
+  await store.putCapsule(current);
+  const stateVersion: StateVersion = {
+    id: stateVersionId,
+    workspaceId: current.workspaceId,
+    capsuleId: current.id,
+    environment: current.environment,
+    generation: stateGeneration,
+    stateRef: `state/ref/${suffix}`,
+    digest: `sha256:${"a".repeat(64)}`,
+    createdByRunId: failedApplyRunId,
+    createdAt: NOW,
+  };
+  const output: Output = {
+    id: outputId,
+    workspaceId: current.workspaceId,
+    capsuleId: current.id,
+    stateGeneration,
+    rawArtifactRef: `output/ref/${suffix}`,
+    publicOutputs: {},
+    workspaceOutputs: {},
+    outputDigest: `sha256:${"b".repeat(64)}`,
+    createdAt: NOW,
+  };
+  const failedApply: ApplyRun = {
+    ...applyRun({
+      id: failedApplyRunId,
+      capsuleId: current.id,
+      status: "failed",
+      providerDispatched: true,
+      started: true,
+    }),
+    stateVersionId,
+    outputId,
+    auditEvents: [
+      {
+        id: `audit_apply_completed_${suffix}`,
+        type: "apply.completed",
+        at: 2,
+        data: { stateVersionId, outputId },
+      },
+      {
+        id: `audit_apply_failed_${suffix}`,
+        type: "apply.failed",
+        at: 2,
+        data: {
+          providerDispatched: true,
+          providerApplySucceeded: true,
+          lifecycleActionPhase: "post_apply",
+          lifecycleActionStatus: "failed",
+        },
+      },
+    ],
+  };
+  await store.putStateVersion(stateVersion);
+  await store.putOutput(output);
+  await store.putApplyRun(failedApply);
+  const proofCore = {
+    failedApplyRunId,
+    failedApplyRunDigest: await stableJsonDigest(failedApply),
+    stateVersionId,
+    stateVersionDigest: await stableJsonDigest(stateVersion),
+    outputId,
+    outputDigest: await stableJsonDigest(output),
+    stateGeneration,
+  };
+  const proof = {
+      ...proofCore,
+      evidenceDigest: await stableJsonDigest({
+        contract:
+          "takosumi.capsule-install-config-committed-post-apply-recovery/v1",
+        ...proofCore,
+      }),
+    };
+  const target: InstallConfig = {
+    ...seeded.target,
+    internal: {
+      reason: "per_install_overrides",
+      sourceSnapshotId: `snapshot_${suffix}`,
+      reAdoption: {
+        capsuleId: current.id,
+        actorSubject: "subject_test",
+        reason: "Recover exact committed post-apply state",
+        idempotencyKeyHash: `sha256:${"c".repeat(64)}`,
+        requestDigest: `sha256:${"d".repeat(64)}`,
+        previousInstallConfigId: seeded.previous.id,
+        previousInstallConfigDigest: await stableJsonDigest(seeded.previous),
+        previousCapsuleStatus: current.status,
+        previousStateGeneration: current.currentStateGeneration,
+        previousStateVersionId: current.currentStateVersionId,
+        previousExecutionAuthorityEpoch: 1,
+        authorityGuard: `sha256:${"e".repeat(64)}`,
+        committedPostApplyRecovery: proof,
+        derivedTargetDigest: `sha256:${"f".repeat(64)}`,
+        baseInstallConfigId: seeded.previous.id,
+        sourceSnapshotId: `snapshot_${suffix}`,
+      },
+    },
+  };
+  await store.putInstallConfig(target);
+  return {
+    capsule: current,
+    proof,
+    target,
+    failedApply,
+    stateVersion,
+    output,
+  };
+}
+
+async function recoveryRebindInput(
+  seeded: Awaited<ReturnType<typeof seedRebind>>,
+  recovery: Awaited<ReturnType<typeof seedCommittedPostApplyRecovery>>,
+): Promise<CapsuleInstallConfigRebindInput> {
+  const input = await rebindInput({
+    ...seeded,
+    capsule: recovery.capsule,
+    target: recovery.target,
+  });
+  return {
+    ...input,
+    expected: {
+      ...input.expected,
+      committedPostApplyRecovery: recovery.proof,
+    },
+  };
+}
+
+async function recoveryProofWith(
+  proof: InstallConfigCommittedPostApplyRecoveryProof,
+  overrides: Partial<
+    Omit<InstallConfigCommittedPostApplyRecoveryProof, "evidenceDigest">
+  >,
+): Promise<InstallConfigCommittedPostApplyRecoveryProof> {
+  const proofCore = {
+    failedApplyRunId:
+      overrides.failedApplyRunId ?? proof.failedApplyRunId,
+    failedApplyRunDigest:
+      overrides.failedApplyRunDigest ?? proof.failedApplyRunDigest,
+    stateVersionId: overrides.stateVersionId ?? proof.stateVersionId,
+    stateVersionDigest:
+      overrides.stateVersionDigest ?? proof.stateVersionDigest,
+    outputId: overrides.outputId ?? proof.outputId,
+    outputDigest: overrides.outputDigest ?? proof.outputDigest,
+    stateGeneration: overrides.stateGeneration ?? proof.stateGeneration,
+  };
+  return {
+    ...proofCore,
+    evidenceDigest: await stableJsonDigest({
+      contract:
+        "takosumi.capsule-install-config-committed-post-apply-recovery/v1",
+      ...proofCore,
+    }),
+  };
+}
+
+async function replaceRecoveryProof(
+  store: OpenTofuControlStore,
+  recovery: Awaited<ReturnType<typeof seedCommittedPostApplyRecovery>>,
+  proof: InstallConfigCommittedPostApplyRecoveryProof,
+): Promise<Awaited<ReturnType<typeof seedCommittedPostApplyRecovery>>> {
+  const receipt = recovery.target.internal?.reAdoption;
+  if (!receipt) throw new Error("recovery target receipt is missing");
+  const target: InstallConfig = {
+    ...recovery.target,
+    internal: {
+      ...recovery.target.internal!,
+      reAdoption: {
+        ...receipt,
+        committedPostApplyRecovery: proof,
+      },
+    },
+  };
+  await store.putInstallConfig(target);
+  return { ...recovery, proof, target };
+}
+
 function restoreRun(input: {
   readonly id: string;
   readonly capsuleId: string;
@@ -683,6 +888,463 @@ test("runtime-safety authority rejects every ambiguous external-effect phase wit
         `${label}:safe_restore`,
       ).toBe("updated");
     }
+  }
+});
+
+test("receipt-fenced committed post-apply recovery permits exact rebind across every store", async () => {
+  const statuses: string[] = [];
+  for (const [label, store] of await stores()) {
+    const seeded = await seedRebind(store, `post_apply_recovery_${label}`);
+    const recovery = await seedCommittedPostApplyRecovery(
+      store,
+      seeded,
+      label,
+    );
+    const result = await store.rebindCapsuleInstallConfig(
+      await recoveryRebindInput(seeded, recovery),
+    );
+
+    statuses.push(`${label}:${result.status}`);
+    expect(result.status === "updated" && result.capsule, label).toMatchObject({
+      installConfigId: recovery.target.id,
+      status: "error",
+      currentStateGeneration: recovery.capsule.currentStateGeneration,
+      currentStateVersionId: recovery.capsule.currentStateVersionId,
+      currentOutputId: recovery.capsule.currentOutputId,
+    });
+    expect(await store.getCapsuleExecutionAuthorityEpoch(recovery.capsule.id))
+      .toBe(2);
+  }
+  expect(statuses).toEqual([
+    "memory:updated",
+    "postgres:updated",
+    "d1:updated",
+  ]);
+});
+
+test("receipt-fenced recovery fails closed on missing, drifted, or provider-uncertain evidence", async () => {
+  for (const [label, store] of await stores()) {
+    const seed = async (caseName: string) => {
+      const seeded = await seedRebind(store, `${caseName}_${label}`);
+      const recovery = await seedCommittedPostApplyRecovery(
+        store,
+        seeded,
+        `${caseName}_${label}`,
+      );
+      return { seeded, recovery };
+    };
+
+    {
+      const { seeded, recovery } = await seed("missing_proof");
+      const input = await rebindInput({
+        ...seeded,
+        capsule: recovery.capsule,
+        target: seeded.next,
+      });
+      expect(
+        (await store.rebindCapsuleInstallConfig(input)).status,
+        `${label}:missing-proof`,
+      ).toBe("busy");
+    }
+
+    {
+      const { seeded, recovery } = await seed("run_drift");
+      await store.putApplyRun({
+        ...recovery.failedApply,
+        diagnostics: [{ severity: "warning", message: "row drift" }],
+      });
+      expect(
+        (
+          await store.rebindCapsuleInstallConfig(
+            await recoveryRebindInput(seeded, recovery),
+          )
+        ).status,
+        `${label}:run-drift`,
+      ).toBe("busy");
+    }
+
+    {
+      const { seeded, recovery } = await seed("state_drift");
+      await store.putStateVersion({
+        ...recovery.stateVersion,
+        stateRef: `${recovery.stateVersion.stateRef}/drifted`,
+      });
+      expect(
+        (
+          await store.rebindCapsuleInstallConfig(
+            await recoveryRebindInput(seeded, recovery),
+          )
+        ).status,
+        `${label}:state-drift`,
+      ).toBe("busy");
+    }
+
+    {
+      const { seeded, recovery } = await seed("output_drift");
+      await store.putOutput({
+        ...recovery.output,
+        outputDigest: `sha256:${"9".repeat(64)}`,
+      });
+      expect(
+        (
+          await store.rebindCapsuleInstallConfig(
+            await recoveryRebindInput(seeded, recovery),
+          )
+        ).status,
+        `${label}:output-drift`,
+      ).toBe("busy");
+    }
+
+    {
+      const { seeded, recovery: original } = await seed("missing_row");
+      const proof = await recoveryProofWith(original.proof, {
+        stateVersionId: `state_missing_${label}`,
+      });
+      const recovery = await replaceRecoveryProof(store, original, proof);
+      expect(
+        (
+          await store.rebindCapsuleInstallConfig(
+            await recoveryRebindInput(seeded, recovery),
+          )
+        ).status,
+        `${label}:missing-row`,
+      ).toBe("busy");
+    }
+
+    {
+      const { seeded, recovery: original } = await seed("provider_partial");
+      const partial: ApplyRun = {
+        ...original.failedApply,
+        auditEvents: [
+          {
+            id: `audit_provider_partial_${label}`,
+            type: "apply.failed",
+            at: 2,
+            data: {
+              providerDispatched: true,
+              providerApplySucceeded: false,
+              statePersistence: "persisted",
+              stateVersionId: original.stateVersion.id,
+            },
+          },
+        ],
+      };
+      await store.putApplyRun(partial);
+      const proof = await recoveryProofWith(original.proof, {
+        failedApplyRunDigest: await stableJsonDigest(partial),
+      });
+      const recovery = await replaceRecoveryProof(store, original, proof);
+      expect(
+        (
+          await store.rebindCapsuleInstallConfig(
+            await recoveryRebindInput(seeded, recovery),
+          )
+        ).status,
+        `${label}:provider-partial`,
+      ).toBe("busy");
+    }
+
+    {
+      const { seeded, recovery: original } = await seed(
+        "provider_uncertain",
+      );
+      const uncertain: ApplyRun = {
+        ...original.failedApply,
+        auditEvents: original.failedApply.auditEvents.map((event) =>
+          event.type === "apply.failed"
+            ? {
+              ...event,
+              data: {
+                providerDispatched: true,
+                lifecycleActionPhase: "post_apply",
+                lifecycleActionStatus: "failed",
+              },
+            }
+            : event
+        ),
+      };
+      await store.putApplyRun(uncertain);
+      const proof = await recoveryProofWith(original.proof, {
+        failedApplyRunDigest: await stableJsonDigest(uncertain),
+      });
+      const recovery = await replaceRecoveryProof(store, original, proof);
+      expect(
+        (
+          await store.rebindCapsuleInstallConfig(
+            await recoveryRebindInput(seeded, recovery),
+          )
+        ).status,
+        `${label}:provider-uncertain`,
+      ).toBe("busy");
+    }
+
+    {
+      const { seeded, recovery } = await seed("receipt_mismatch");
+      const receipt = recovery.target.internal?.reAdoption;
+      if (!receipt) throw new Error("recovery target receipt is missing");
+      const {
+        committedPostApplyRecovery: _committedPostApplyRecovery,
+        ...receiptWithoutRecovery
+      } = receipt;
+      const target = {
+        ...recovery.target,
+        internal: {
+          ...recovery.target.internal!,
+          reAdoption: receiptWithoutRecovery,
+        },
+      } satisfies InstallConfig;
+      await store.putInstallConfig(target);
+      const input = await recoveryRebindInput(seeded, recovery);
+      expect(
+        (
+          await store.rebindCapsuleInstallConfig({
+            ...input,
+            expected: {
+              ...input.expected,
+              targetInstallConfigDigest: await stableJsonDigest(target),
+            },
+          })
+        ).status,
+        `${label}:receipt-mismatch`,
+      ).toBe("conflict");
+    }
+  }
+});
+
+test("receipt-fenced recovery is subordinate to latest safety and blocking Run authority", async () => {
+  for (const [label, store] of await stores()) {
+    const seed = async (caseName: string) => {
+      const seeded = await seedRebind(store, `${caseName}_${label}`);
+      const recovery = await seedCommittedPostApplyRecovery(
+        store,
+        seeded,
+        `${caseName}_${label}`,
+      );
+      return { seeded, recovery };
+    };
+
+    {
+      const { seeded, recovery } = await seed("newer_safe_apply");
+      await store.putApplyRun({
+        ...applyRun({
+          id: `apply_newer_safe_${label}`,
+          capsuleId: recovery.capsule.id,
+          status: "succeeded",
+          started: true,
+        }),
+        createdAt: 3,
+        updatedAt: 4,
+        finishedAt: 4,
+      });
+      expect(
+        (
+          await store.rebindCapsuleInstallConfig(
+            await recoveryRebindInput(seeded, recovery),
+          )
+        ).status,
+        `${label}:newer-safe-apply`,
+      ).toBe("busy");
+    }
+
+    {
+      const { seeded, recovery } = await seed("destroy_in_flight");
+      await store.putApplyRun({
+        ...applyRun({
+          id: `destroy_running_${label}`,
+          capsuleId: recovery.capsule.id,
+          operation: "destroy",
+          status: "running",
+          started: true,
+        }),
+        createdAt: 3,
+        updatedAt: 4,
+      });
+      expect(
+        (
+          await store.rebindCapsuleInstallConfig(
+            await recoveryRebindInput(seeded, recovery),
+          )
+        ).status,
+        `${label}:destroy-in-flight`,
+      ).toBe("busy");
+    }
+
+    {
+      const { seeded, recovery } = await seed("restore_in_flight");
+      await store.putBackupRun({
+        ...restoreRun({
+          id: `restore_running_${label}`,
+          capsuleId: recovery.capsule.id,
+          status: "running",
+        }),
+        startedAt: LATER,
+      });
+      expect(
+        (
+          await store.rebindCapsuleInstallConfig(
+            await recoveryRebindInput(seeded, recovery),
+          )
+        ).status,
+        `${label}:restore-in-flight`,
+      ).toBe("busy");
+    }
+
+    {
+      const { seeded, recovery } = await seed("unconsumed_plan");
+      await store.putPlanRun(
+        planRun({
+          id: `plan_blocking_recovery_${label}`,
+          capsuleId: recovery.capsule.id,
+          epoch: 1,
+        }),
+      );
+      expect(
+        (
+          await store.rebindCapsuleInstallConfig(
+            await recoveryRebindInput(seeded, recovery),
+          )
+        ).status,
+        `${label}:unconsumed-plan`,
+      ).toBe("busy");
+    }
+
+    {
+      const { seeded, recovery } = await seed("queued_apply");
+      await store.putApplyRun(
+        applyRun({
+          id: `apply_blocking_recovery_${label}`,
+          capsuleId: recovery.capsule.id,
+          status: "queued",
+        }),
+      );
+      expect(
+        (
+          await store.rebindCapsuleInstallConfig(
+            await recoveryRebindInput(seeded, recovery),
+          )
+        ).status,
+        `${label}:queued-apply`,
+      ).toBe("busy");
+    }
+
+    {
+      const { seeded, recovery } = await seed("running_apply");
+      await store.putApplyRun(
+        applyRun({
+          id: `apply_running_recovery_${label}`,
+          capsuleId: recovery.capsule.id,
+          status: "running",
+          started: true,
+        }),
+      );
+      expect(
+        (
+          await store.rebindCapsuleInstallConfig(
+            await recoveryRebindInput(seeded, recovery),
+          )
+        ).status,
+        `${label}:running-apply`,
+      ).toBe("busy");
+    }
+  }
+});
+
+test("receipt rows are revalidated inside the pointer and epoch CAS", async () => {
+  {
+    const store = new InMemoryOpenTofuControlStore();
+    const seeded = await seedRebind(store, "recovery_race_memory");
+    const recovery = await seedCommittedPostApplyRecovery(
+      store,
+      seeded,
+      "recovery_race_memory",
+    );
+    const pending = store.rebindCapsuleInstallConfig(
+      await recoveryRebindInput(seeded, recovery),
+    );
+    await store.putOutput({
+      ...recovery.output,
+      outputDigest: `sha256:${"8".repeat(64)}`,
+    });
+    expect((await pending).status).toBe("busy");
+    expect((await store.getCapsule(recovery.capsule.id))?.installConfigId).toBe(
+      seeded.previous.id,
+    );
+    expect(await store.getCapsuleExecutionAuthorityEpoch(recovery.capsule.id))
+      .toBe(1);
+  }
+
+  {
+    const pg = await PGliteSqlClient.create();
+    pgClients.push(pg);
+    const interleaving = postgresRebindInterleaver(pg);
+    const store = new SqlOpenTofuControlStore({ client: interleaving.client });
+    const seeded = await seedRebind(store, "recovery_race_pg");
+    const recovery = await seedCommittedPostApplyRecovery(
+      store,
+      seeded,
+      "recovery_race_pg",
+    );
+    interleaving.beforeNextRebindWrite(async (transaction) => {
+      await new SqlOpenTofuControlStore({ client: transaction }).putOutput({
+        ...recovery.output,
+        outputDigest: `sha256:${"8".repeat(64)}`,
+      });
+    });
+    expect(
+      (
+        await store.rebindCapsuleInstallConfig(
+          await recoveryRebindInput(seeded, recovery),
+        )
+      ).status,
+    ).toBe("busy");
+    expect(interleaving.rebindWrites).toHaveLength(1);
+    const where = sqlWhere(interleaving.rebindWrites[0]!.sql);
+    expect(where).toContain("takosumi_runs");
+    expect(where).toContain("takosumi_state_versions");
+    expect(where).toContain("takosumi_outputs");
+    expect((await store.getCapsule(recovery.capsule.id))?.installConfigId).toBe(
+      seeded.previous.id,
+    );
+    expect(await store.getCapsuleExecutionAuthorityEpoch(recovery.capsule.id))
+      .toBe(1);
+  }
+
+  {
+    const d1 = new SqliteFakeD1();
+    const interleaving = new D1RebindInterleaver(d1);
+    const store = new CloudflareD1OpenTofuControlStore(interleaving);
+    const seeded = await seedRebind(store, "recovery_race_d1");
+    const recovery = await seedCommittedPostApplyRecovery(
+      store,
+      seeded,
+      "recovery_race_d1",
+    );
+    interleaving.beforeNextRebindWrite(async () => {
+      await new CloudflareD1OpenTofuControlStore(d1).putOutput({
+        ...recovery.output,
+        outputDigest: `sha256:${"8".repeat(64)}`,
+      });
+    });
+    expect(
+      (
+        await store.rebindCapsuleInstallConfig(
+          await recoveryRebindInput(seeded, recovery),
+        )
+      ).status,
+    ).toBe("busy");
+    expect(interleaving.rebindWrites).toHaveLength(1);
+    const where = sqlWhere(interleaving.rebindWrites[0]!.sql);
+    expect(where).toContain("runs");
+    expect(where).toContain("state_versions");
+    expect(where).toContain("outputs");
+    expect(interleaving.rebindWrites[0]!.parameters.length).toBeLessThanOrEqual(
+      100,
+    );
+    expect((await store.getCapsule(recovery.capsule.id))?.installConfigId).toBe(
+      seeded.previous.id,
+    );
+    expect(await store.getCapsuleExecutionAuthorityEpoch(recovery.capsule.id))
+      .toBe(1);
   }
 });
 

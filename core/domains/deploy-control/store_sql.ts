@@ -53,6 +53,7 @@ import type {
 } from "takosumi-contract/workspaces";
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
+import type { InstallConfigCommittedPostApplyRecoveryProof } from "takosumi-contract/install-configs";
 import type {
   Dependency,
   DependencySnapshot,
@@ -129,6 +130,11 @@ import {
 } from "./store_row_mappers.ts";
 import type { SqlTransaction } from "../../adapters/storage/sql.ts";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
+import {
+  committedPostApplyRecoveryProofMatches,
+  exactRecoveryProofsEqual,
+  type CommittedPostApplyRecoveryRows,
+} from "./committed_post_apply_recovery.ts";
 
 /** Discriminator stored in the single `runs` table (§27). */
 // §27 runs.type values. Destroy runs persist their own discriminator
@@ -303,6 +309,84 @@ function pgCapsuleRuntimeSafetySafeOrAbsent(capsuleId: string): SQL {
       ${pgSchema.runs.id} DESC
     LIMIT 1
   ), TRUE)`;
+}
+
+async function pgCommittedPostApplyRecoveryRows(
+  db: PgRemoteDatabase<typeof pgSchema>,
+  failedApplyRun: ApplyRun,
+  proof: InstallConfigCommittedPostApplyRecoveryProof,
+): Promise<CommittedPostApplyRecoveryRows | undefined> {
+  const [stateRows, outputRows] = await Promise.all([
+    db
+      .select({ json: pgSchema.stateVersions.snapshotJson })
+      .from(pgSchema.stateVersions)
+      .where(eq(pgSchema.stateVersions.id, proof.stateVersionId))
+      .limit(1),
+    db
+      .select({ json: pgSchema.outputs.snapshotJson })
+      .from(pgSchema.outputs)
+      .where(eq(pgSchema.outputs.id, proof.outputId))
+      .limit(1),
+  ]);
+  const stateVersion = parseRow(stateRows[0]) as StateVersion | undefined;
+  const output = parseRow(outputRows[0]) as Output | undefined;
+  return stateVersion && output
+    ? { failedApplyRun, stateVersion, output }
+    : undefined;
+}
+
+/**
+ * Same-statement recovery fence: latest decisive candidate plus the complete
+ * Run/StateVersion/Output JSON rows used to derive the value-free receipt.
+ */
+function pgCapsuleCommittedPostApplyRecoveryFence(
+  db: PgRemoteDatabase<typeof pgSchema>,
+  capsuleId: string,
+  rows: CommittedPostApplyRecoveryRows,
+): SQL {
+  const failedRunFence = db
+    .select({ id: pgSchema.runs.id })
+    .from(pgSchema.runs)
+    .where(
+      and(
+        eq(pgSchema.runs.id, rows.failedApplyRun.id),
+        eq(pgSchema.runs.runJson, rows.failedApplyRun),
+      ),
+    );
+  const stateVersionFence = db
+    .select({ id: pgSchema.stateVersions.id })
+    .from(pgSchema.stateVersions)
+    .where(
+      and(
+        eq(pgSchema.stateVersions.id, rows.stateVersion.id),
+        eq(pgSchema.stateVersions.snapshotJson, rows.stateVersion),
+      ),
+    );
+  const outputFence = db
+    .select({ id: pgSchema.outputs.id })
+    .from(pgSchema.outputs)
+    .where(
+      and(
+        eq(pgSchema.outputs.id, rows.output.id),
+        eq(pgSchema.outputs.snapshotJson, rows.output),
+      ),
+    );
+  return and(
+    sql`(
+      SELECT ${pgSchema.runs.id}
+      FROM ${pgSchema.runs}
+      WHERE ${pgRuntimeSafetyCandidateWhere(capsuleId)}
+      ORDER BY
+        ${pgRunRuntimeSafetyInFlightOrder()} DESC,
+        ${pgRunRuntimeSafetyEffectAtMillisOrder()} DESC,
+        ${pgRunRuntimeSafetyRiskOrder()} DESC,
+        ${pgSchema.runs.id} DESC
+      LIMIT 1
+    ) = ${rows.failedApplyRun.id}`,
+    exists(failedRunFence),
+    exists(stateVersionFence),
+    exists(outputFence),
+  )!;
 }
 
 /** PostgreSQL counterpart of the ordered D1 authority snapshot statement. */
@@ -1876,10 +1960,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         ]),
       );
       const targetConfig = configsById.get(input.targetInstallConfigId);
+      const recoveryProof = input.expected.committedPostApplyRecovery;
       if (
         !targetConfig ||
         (await stableJsonDigest(targetConfig)) !==
-          input.expected.targetInstallConfigDigest
+          input.expected.targetInstallConfigDigest ||
+        !exactRecoveryProofsEqual(
+          targetConfig.internal?.reAdoption?.committedPostApplyRecovery,
+          recoveryProof,
+        )
       ) {
         return { status: "conflict" as const, capsule };
       }
@@ -1904,7 +1993,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         return { status: "conflict" as const, capsule };
       }
       const safetyRows = await db
-        .select({ json: pgSchema.runs.runJson })
+        .select({ id: pgSchema.runs.id, json: pgSchema.runs.runJson })
         .from(pgSchema.runs)
         .where(pgRuntimeSafetyCandidateWhere(input.capsuleId))
         .orderBy(
@@ -1914,12 +2003,38 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           desc(pgSchema.runs.id),
         )
         .limit(1);
-      const runtimeSafety = safetyRows[0]
-        ? capsuleRuntimeSafetyFromRun(
-            parseRow(safetyRows[0]) as ApplyRun | Run,
+      const safetyCandidate = safetyRows[0]
+        ? (parseRow(safetyRows[0]) as ApplyRun | Run)
+        : undefined;
+      const runtimeSafety = safetyCandidate
+        ? capsuleRuntimeSafetyFromRun(safetyCandidate)
+        : undefined;
+      const recoveryRows = recoveryProof &&
+          safetyCandidate &&
+          isApplyRunRecord(safetyCandidate) &&
+          safetyCandidate.id === recoveryProof.failedApplyRunId
+        ? await pgCommittedPostApplyRecoveryRows(
+            db,
+            safetyCandidate,
+            recoveryProof,
           )
         : undefined;
-      if (runtimeSafety !== undefined && runtimeSafety.phase !== "safe") {
+      const committedRecoveryMatches = Boolean(
+        recoveryProof &&
+          recoveryRows &&
+          (await committedPostApplyRecoveryProofMatches(
+            recoveryProof,
+            capsule,
+            recoveryRows,
+          )),
+      );
+      const runtimeSafetyPermitsRebind = recoveryProof === undefined
+        ? runtimeSafety === undefined || runtimeSafety.phase === "safe"
+        : runtimeSafety?.phase === "unknown" &&
+          runtimeSafety.runType === "apply" &&
+          runtimeSafety.runId === recoveryProof.failedApplyRunId &&
+          committedRecoveryMatches;
+      if (!runtimeSafetyPermitsRebind) {
         return { status: "busy" as const, capsule };
       }
       const blocking = db
@@ -1955,6 +2070,13 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         installConfigId: input.targetInstallConfigId,
         updatedAt: input.updatedAt,
       });
+      const runtimeSafetyFence = recoveryRows
+        ? pgCapsuleCommittedPostApplyRecoveryFence(
+            db,
+            input.capsuleId,
+            recoveryRows,
+          )
+        : pgCapsuleRuntimeSafetySafeOrAbsent(input.capsuleId);
       const rows = await db
         .update(pgSchema.capsules)
         .set({
@@ -1991,7 +2113,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             // this exact JSON fence part of the same authority transition.
             exists(currentConfigFence),
             exists(targetConfigFence),
-            pgCapsuleRuntimeSafetySafeOrAbsent(input.capsuleId),
+            runtimeSafetyFence,
             notExists(blocking),
           ),
         )
@@ -2023,7 +2145,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         ))
         .limit(1);
       const currentSafetyRows = await db
-        .select({ json: pgSchema.runs.runJson })
+        .select({ id: pgSchema.runs.id, json: pgSchema.runs.runJson })
         .from(pgSchema.runs)
         .where(pgRuntimeSafetyCandidateWhere(input.capsuleId))
         .orderBy(
@@ -2033,14 +2155,36 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           desc(pgSchema.runs.id),
         )
         .limit(1);
-      const currentSafety = currentSafetyRows[0]
-        ? capsuleRuntimeSafetyFromRun(
-            parseRow(currentSafetyRows[0]) as ApplyRun | Run,
+      const currentSafetyCandidate = currentSafetyRows[0]
+        ? (parseRow(currentSafetyRows[0]) as ApplyRun | Run)
+        : undefined;
+      const currentSafety = currentSafetyCandidate
+        ? capsuleRuntimeSafetyFromRun(currentSafetyCandidate)
+        : undefined;
+      const currentRecoveryRows = recoveryProof &&
+          currentSafetyCandidate &&
+          isApplyRunRecord(currentSafetyCandidate) &&
+          currentSafetyCandidate.id === recoveryProof.failedApplyRunId
+        ? await pgCommittedPostApplyRecoveryRows(
+            db,
+            currentSafetyCandidate,
+            recoveryProof,
           )
         : undefined;
+      const currentRecoveryMatches = Boolean(
+        recoveryProof &&
+          currentRecoveryRows &&
+          (await committedPostApplyRecoveryProofMatches(
+            recoveryProof,
+            current,
+            currentRecoveryRows,
+          )),
+      );
       return {
         status: busyRows.length > 0 ||
-            (currentSafety !== undefined && currentSafety.phase !== "safe")
+            (recoveryProof === undefined
+              ? currentSafety !== undefined && currentSafety.phase !== "safe"
+              : !currentRecoveryMatches)
           ? ("busy" as const)
           : ("conflict" as const),
         capsule: current,

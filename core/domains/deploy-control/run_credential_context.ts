@@ -1,4 +1,7 @@
+import type { Capsule } from "takosumi-contract/capsules";
+
 import type { OpenTofuControlStore } from "./store.ts";
+import { exactCommittedPostApplyRecoveryRowsMatch } from "./committed_post_apply_recovery.ts";
 
 export type CapsuleRunCredentialPhase = "plan" | "apply" | "destroy";
 export type CapsuleRunCredentialLifecycleIntent = "provision" | "destroy";
@@ -122,23 +125,31 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
   }
 
   const runtimeSafety = await store.getCapsuleRuntimeSafety(capsuleId);
-  const persistedPartialApplyRecoveryMatches =
+  const persistedProviderPartialApplyRecoveryMatches =
     input.phase !== "destroy" &&
     planOperation !== "destroy" &&
     runtimeSafety?.phase === "unknown" &&
     runtimeSafety.runType === "apply" &&
     capsule.currentStateVersionId !== undefined &&
     plannedCapsuleStateVersionId === capsule.currentStateVersionId &&
-    (await persistedPartialApplyMatches(
+    (await persistedProviderPartialApplyMatches(
       store,
       runtimeSafety.runId,
       workspaceId,
       capsuleId,
       capsule.currentStateVersionId,
-      capsule.currentOutputId,
-      capsule.status,
-      capsule.environment,
-      capsule.currentStateGeneration,
+    ));
+  const committedPostApplyRecoveryMatches =
+    input.phase !== "destroy" &&
+    planOperation !== "destroy" &&
+    runtimeSafety?.phase === "unknown" &&
+    runtimeSafety.runType === "apply" &&
+    capsule.currentStateVersionId !== undefined &&
+    plannedCapsuleStateVersionId === capsule.currentStateVersionId &&
+    (await committedPostApplyRecoveryRowsMatch(
+      store,
+      runtimeSafety.runId,
+      capsule,
     ));
   const currentApplyExecutionMatches =
     input.phase === "apply" &&
@@ -158,7 +169,8 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
         : runtimeSafety === undefined ||
           runtimeSafety.phase === "safe" ||
           currentApplyExecutionMatches ||
-          persistedPartialApplyRecoveryMatches;
+          persistedProviderPartialApplyRecoveryMatches ||
+          committedPostApplyRecoveryMatches;
   if (!runtimeSafetyMatches) {
     return { ok: false, reason: "runtime_safety_mismatch" };
   }
@@ -177,23 +189,16 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
 }
 
 /**
- * A provider-dispatched ordinary apply can fail after partial state persistence
- * or after its provider-applied StateVersion/Output were durably committed but
- * post-apply lifecycle failed. A fresh reviewed plan/apply is the only normal
- * convergence path. Bind that recovery to the decisive failed ApplyRun and its
- * exact receipt; runtime safety itself remains unknown, and every other
- * unknown/restore/destroy or stale-state condition remains fail-closed.
+ * A provider-dispatched ordinary apply can fail after partial state persistence.
+ * This exception stays separate from committed provider success followed by a
+ * lifecycle failure: it must never authorize InstallConfig re-adoption.
  */
-async function persistedPartialApplyMatches(
+async function persistedProviderPartialApplyMatches(
   store: CapsuleRunCredentialLedger,
   failedApplyRunId: string,
   workspaceId: string,
   capsuleId: string,
   currentStateVersionId: string,
-  currentOutputId: string | undefined,
-  capsuleStatus: string,
-  capsuleEnvironment: string,
-  currentStateGeneration: number,
 ): Promise<boolean> {
   const failed = await store.getApplyRun(failedApplyRunId);
   if (
@@ -214,69 +219,34 @@ async function persistedPartialApplyMatches(
       event.data.statePersistence === "persisted" &&
       event.data.stateVersionId === currentStateVersionId,
   );
-  if (persistedProviderFailureReceipt) return true;
-
-  if (
-    capsuleStatus !== "error" ||
-    failed.outputId === undefined ||
-    currentOutputId === undefined ||
-    failed.outputId !== currentOutputId
-  ) {
-    return false;
-  }
-
-  const completedReceipts = failed.auditEvents
-    .map((event, index) => ({ event, index }))
-    .filter(({ event }) => event.type === "apply.completed");
-  const failedReceipts = failed.auditEvents
-    .map((event, index) => ({ event, index }))
-    .filter(({ event }) => event.type === "apply.failed");
-  if (completedReceipts.length !== 1 || failedReceipts.length !== 1) {
-    return false;
-  }
-  const completedReceipt = completedReceipts[0]!;
-  const failedReceipt = failedReceipts[0]!;
-  // Audit events are append-only, while both terminal receipts may share the
-  // same commit clock. Array order is therefore the canonical happens-before.
-  if (
-    completedReceipt.index >= failedReceipt.index ||
-    completedReceipt.event.data?.stateVersionId !== currentStateVersionId ||
-    completedReceipt.event.data.outputId !== currentOutputId ||
-    failedReceipt.event.data?.providerDispatched !== true ||
-    failedReceipt.event.data.providerApplySucceeded !== true ||
-    failedReceipt.event.data.lifecycleActionPhase !== "post_apply" ||
-    !terminalLifecycleFailureStatus(
-      failedReceipt.event.data.lifecycleActionStatus,
-    )
-  ) {
-    return false;
-  }
-
-  const [stateVersion, output] = await Promise.all([
-    store.getStateVersion(currentStateVersionId),
-    store.getOutput(currentOutputId),
-  ]);
-  return (
-    stateVersion?.id === currentStateVersionId &&
-    stateVersion.workspaceId === workspaceId &&
-    stateVersion.capsuleId === capsuleId &&
-    stateVersion.environment === capsuleEnvironment &&
-    stateVersion.generation === currentStateGeneration &&
-    stateVersion.createdByRunId === failed.id &&
-    output?.id === currentOutputId &&
-    output.workspaceId === workspaceId &&
-    output.capsuleId === capsuleId &&
-    output.stateGeneration === stateVersion.generation &&
-    output.stateGeneration === currentStateGeneration
-  );
+  return persistedProviderFailureReceipt;
 }
 
-function terminalLifecycleFailureStatus(value: unknown): boolean {
-  return (
-    value === "failed" ||
-    value === "skipped" ||
-    value === "unavailable" ||
-    value === "error"
+async function committedPostApplyRecoveryRowsMatch(
+  store: CapsuleRunCredentialLedger,
+  failedApplyRunId: string,
+  capsule: Capsule,
+): Promise<boolean> {
+  if (
+    capsule.currentStateVersionId === undefined ||
+    capsule.currentOutputId === undefined
+  ) {
+    return false;
+  }
+  const [failedApplyRun, stateVersion, output] = await Promise.all([
+    store.getApplyRun(failedApplyRunId),
+    store.getStateVersion(capsule.currentStateVersionId),
+    store.getOutput(capsule.currentOutputId),
+  ]);
+  return Boolean(
+    failedApplyRun &&
+      stateVersion &&
+      output &&
+      exactCommittedPostApplyRecoveryRowsMatch(capsule, {
+        failedApplyRun,
+        stateVersion,
+        output,
+      }),
   );
 }
 
