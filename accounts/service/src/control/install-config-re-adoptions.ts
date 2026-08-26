@@ -4,6 +4,7 @@ import type {
   InstallConfig,
   PublicCapsule,
 } from "takosumi-contract/install-configs";
+import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
 
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { containsSecretLikeString } from "../../../../contract/redaction.ts";
@@ -266,6 +267,14 @@ export async function handleCapsuleInstallConfigReAdoption(
       "The current InstallConfig variable mapping is not re-adoptable.",
     );
   }
+  const reviewedUserVariables = reAdoptionReviewedUserVariables({
+    document:
+      sourceSnapshot.repositoryManifest?.status === "present"
+        ? sourceSnapshot.repositoryManifest.document
+        : undefined,
+    modulePath,
+    values: reviewedVariables,
+  });
   const adoption = await adoptRepoOwnedInstallConfig({
     operations: ctx.operations,
     source,
@@ -274,7 +283,7 @@ export async function handleCapsuleInstallConfigReAdoption(
     modulePath,
     capsuleName: current.name,
     workspaceId: current.workspaceId,
-    reviewedVariables,
+    reviewedVariables: reviewedUserVariables,
     reviewedInterfaceBlueprints: currentConfig.interfaceBlueprints,
     reviewedOutputAllowlist: currentConfig.outputAllowlist,
     installingPrincipalId:
@@ -638,6 +647,42 @@ function jsonRecord(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Re-adoption removes only values explicitly declared as non-user-owned in the
+ * pinned repository module. Capsule/workspace names, module defaults, and
+ * host-materialized values are compiled again from current authority.
+ * Undeclared values stay in the request so the compiler can reject them. This
+ * projection is intentionally limited to this re-adoption route; ordinary
+ * install flows still pass their complete request to the compiler.
+ */
+function reAdoptionReviewedUserVariables(input: {
+  readonly document: RepositoryManifestDocument | undefined;
+  readonly modulePath: string;
+  readonly values: Readonly<Record<string, JsonValue>>;
+}): Readonly<Record<string, JsonValue>> {
+  const modulePath = input.modulePath === "" ? "." : input.modulePath;
+  const modules = input.document?.install.modules;
+  if (!modules || !Object.prototype.hasOwnProperty.call(modules, modulePath)) {
+    return input.values;
+  }
+  const module = modules[modulePath];
+  if (!module) return input.values;
+  const inputOwnershipByName = new Map(
+    module.inputs.map(
+      (declaration) => [declaration.name, declaration.source.kind] as const,
+    ),
+  );
+  return Object.fromEntries(
+    Object.entries(input.values).filter(([name]) => {
+      const inputOwnership = inputOwnershipByName.get(name);
+      // Preserve undeclared values so the compiler can reject them. Only a
+      // manifest declaration that explicitly assigns a non-user source is
+      // re-derived during re-adoption.
+      return inputOwnership === undefined || inputOwnership === "user";
+    }),
+  );
 }
 
 function exactString(value: unknown): string | undefined {

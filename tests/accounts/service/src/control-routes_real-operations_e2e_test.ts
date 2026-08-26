@@ -10,7 +10,10 @@ import {
 } from "../../../../accounts/service/src/control-routes.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
-import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
+import type {
+  RepositoryInstallUxInput,
+  RepositoryManifestDocument,
+} from "takosumi-contract/repository-manifest";
 import type {
   InstallConfig,
   SourceBuildConfig,
@@ -2450,7 +2453,11 @@ const TAKOS_SCOPES = [
 
 async function reAdoptionRouteFixture(
   suffix: string,
-  options: { readonly legacyProfile?: boolean } = {},
+  options: {
+    readonly legacyProfile?: boolean;
+    readonly currentVariableMapping?: Readonly<Record<string, unknown>>;
+    readonly repositoryInputs?: readonly RepositoryInstallUxInput[];
+  } = {},
 ) {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
@@ -2461,13 +2468,33 @@ async function reAdoptionRouteFixture(
     ...baseRunner,
     readCapsuleSourceFiles: (job) => {
       baseRunner.capsuleSourceFileJobs.push(job);
+      const repositoryInputs = options.repositoryInputs ?? [
+        {
+          name: "public_url",
+          source: { kind: "user" },
+          type: "string",
+          required: true,
+          label: { ja: "公開URL", en: "Public URL" },
+        },
+      ];
+      const variableBlocks = repositoryInputs
+        .map((input) => {
+          const type =
+            input.type === "boolean"
+              ? "bool"
+              : input.type === "number"
+                ? "number"
+                : input.type === "json"
+                  ? "any"
+                  : "string";
+          return `variable "${input.name}" {\n  type = ${type}\n}`;
+        })
+        .join("\n\n");
       return Promise.resolve([
         {
           path: "main.tf",
           text: `
-variable "public_url" {
-  type = string
-}
+${variableBlocks}
 
 terraform {
   required_providers {
@@ -2605,7 +2632,10 @@ output "launch_url" { value = var.public_url }
         reason: "per_install_overrides",
         sourceSnapshotId: snapshotId,
       },
-      variableMapping: { public_url: TAKOS_PUBLIC_ORIGIN },
+      variableMapping: {
+        public_url: TAKOS_PUBLIC_ORIGIN,
+        ...options.currentVariableMapping,
+      },
       installExperience: baseInstallConfig.installExperience,
     },
   });
@@ -2626,7 +2656,7 @@ output "launch_url" { value = var.public_url }
           defaultModule: ".",
           modules: {
             ".": {
-              inputs: [
+              inputs: options.repositoryInputs ?? [
                 {
                   name: "public_url",
                   source: { kind: "user" },
@@ -2881,6 +2911,193 @@ test("re-adoption uses only the public guard, preserves Takos origin, and does n
     400,
   );
 
+});
+
+test("re-adoption re-derives Capsule-owned variables while preserving reviewed user inputs", async () => {
+  const fixture = await reAdoptionRouteFixture("reviewed-values", {
+    currentVariableMapping: {
+      project_name: "stale-project-name",
+      public_url: "https://reviewed.example.test",
+      cloudflare: {
+        account_id: "reviewed-account",
+        workers_subdomain: "reviewed-workers",
+      },
+      takosumi_accounts_url: "https://accounts.example.test",
+      takosumi_accounts_issuer_url: "https://accounts.example.test",
+      takosumi_accounts_client_id: "reviewed-client",
+      takosumi_accounts_redirect_uri:
+        "https://reviewed.example.test/auth/oidc/callback",
+    },
+    repositoryInputs: [
+      {
+        name: "project_name",
+        source: { kind: "capsule_name" },
+        type: "string",
+        label: { ja: "サービス名", en: "Service name" },
+      },
+      {
+        name: "public_url",
+        source: { kind: "user" },
+        type: "string",
+        required: true,
+        label: { ja: "公開URL", en: "Public URL" },
+      },
+      {
+        name: "cloudflare",
+        source: { kind: "user" },
+        type: "json",
+        required: true,
+        label: { ja: "Cloudflare", en: "Cloudflare" },
+      },
+      {
+        name: "takosumi_accounts_url",
+        source: { kind: "user" },
+        type: "string",
+        required: true,
+        label: { ja: "Accounts URL", en: "Accounts URL" },
+      },
+      {
+        name: "takosumi_accounts_issuer_url",
+        source: { kind: "user" },
+        type: "string",
+        required: true,
+        label: { ja: "Accounts issuer", en: "Accounts issuer" },
+      },
+      {
+        name: "takosumi_accounts_client_id",
+        source: { kind: "user" },
+        type: "string",
+        required: true,
+        label: { ja: "Accounts client", en: "Accounts client" },
+      },
+      {
+        name: "takosumi_accounts_redirect_uri",
+        source: { kind: "user" },
+        type: "string",
+        required: true,
+        label: { ja: "Accounts redirect", en: "Accounts redirect" },
+      },
+    ],
+  });
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const path =
+    `/api/v1/capsules/${fixture.seeded.capsule.id}/install-config-re-adoptions`;
+  const body = reAdoptionBody(fixture, authorityGuard);
+  const adopted = await controlJson<{
+    readonly capsule: { readonly installConfigId: string };
+    readonly installConfigReAdoption: {
+      readonly replayed: boolean;
+      readonly targetInstallConfigId: string;
+      readonly targetInstallConfigDigest: string;
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-reviewed-values-v1" },
+      body,
+    },
+    200,
+  );
+  expect(adopted.installConfigReAdoption.replayed).toBe(false);
+
+  const target = await fixture.operations.capsules.getInstallConfig(
+    adopted.installConfigReAdoption.targetInstallConfigId,
+  );
+  expect(target.variableMapping).toEqual({
+    project_name: "takos-reviewed-values",
+    public_url: "https://reviewed.example.test",
+    cloudflare: {
+      account_id: "reviewed-account",
+      workers_subdomain: "reviewed-workers",
+    },
+    takosumi_accounts_url: "https://accounts.example.test",
+    takosumi_accounts_issuer_url: "https://accounts.example.test",
+    takosumi_accounts_client_id: "reviewed-client",
+    takosumi_accounts_redirect_uri:
+      "https://reviewed.example.test/auth/oidc/callback",
+  });
+  expect(adopted.capsule.installConfigId).toBe(target.id);
+  const targetBeforeReplay = { ...target };
+
+  const replay = await controlJson<typeof adopted>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-reviewed-values-v1" },
+      body,
+    },
+    200,
+  );
+  expect(replay.installConfigReAdoption).toMatchObject({
+    replayed: true,
+    targetInstallConfigId: target.id,
+    targetInstallConfigDigest:
+      adopted.installConfigReAdoption.targetInstallConfigDigest,
+  });
+  expect(
+    await fixture.operations.capsules.getInstallConfig(target.id),
+  ).toEqual(targetBeforeReplay);
+});
+
+test("re-adoption keeps undeclared reviewed values fail-closed", async () => {
+  const fixture = await reAdoptionRouteFixture("unknown-reviewed", {
+    currentVariableMapping: {
+      project_name: "stale-project-name",
+      public_url: "https://reviewed.example.test",
+      undeclared_value: "must-not-be-adopted",
+    },
+    repositoryInputs: [
+      {
+        name: "project_name",
+        source: { kind: "capsule_name" },
+        type: "string",
+        label: { ja: "サービス名", en: "Service name" },
+      },
+      {
+        name: "public_url",
+        source: { kind: "user" },
+        type: "string",
+        required: true,
+        label: { ja: "公開URL", en: "Public URL" },
+      },
+    ],
+  });
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const path =
+    `/api/v1/capsules/${fixture.seeded.capsule.id}/install-config-re-adoptions`;
+  const rejected = await controlJson<{
+    readonly error: { readonly code: string; readonly message: string };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-unknown-reviewed-v1" },
+      body: reAdoptionBody(fixture, authorityGuard),
+    },
+    409,
+  );
+  expect(rejected.error).toMatchObject({
+    code: "failed_precondition",
+    message:
+      'The reviewed value "undeclared_value" is not a declared user input.',
+  });
+  expect(
+    (
+      await fixture.deployStore.listInstallConfigs(
+        fixture.seeded.capsule.workspaceId,
+      )
+    ).some((config) => config.internal?.reAdoption !== undefined),
+  ).toBe(false);
 });
 
 test("re-adoption rejects present invalid deployment profile keys before durable mutation", async () => {
