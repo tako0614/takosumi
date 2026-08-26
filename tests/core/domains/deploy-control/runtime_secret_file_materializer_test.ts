@@ -1,3 +1,4 @@
+// takos-secret-scan: synthetic — this in-memory test generates an ephemeral key and asserts only its PEM framing.
 import { expect, test } from "bun:test";
 import { PlaceholderSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
@@ -113,9 +114,7 @@ test("runtime secret file is stable, sealed, opaque, and exact across retries an
   expect(values.PLATFORM_PRIVATE_KEY).toStartWith(
     "-----BEGIN PRIVATE KEY-----",
   );
-  expect(values.PLATFORM_PUBLIC_KEY).toStartWith(
-    "-----BEGIN PUBLIC KEY-----",
-  );
+  expect(values.PLATFORM_PUBLIC_KEY).toStartWith("-----BEGIN PUBLIC KEY-----");
 
   const sealed = await store.getSecretBlob(
     `runtime_secret_file_${request.capsuleId}`,
@@ -201,9 +200,7 @@ test("runtime secret file refuses plan/destroy exposure and profile drift withou
       },
     },
   });
-  await expect(materializer.materialize(request)).rejects.toThrow(
-    "profile",
-  );
+  await expect(materializer.materialize(request)).rejects.toThrow("profile");
   await expect(
     materializer.materialize({
       ...request,
@@ -212,9 +209,7 @@ test("runtime secret file refuses plan/destroy exposure and profile drift withou
   ).rejects.toThrow("authority");
   expect(
     await store.getSecretBlob(`runtime_secret_file_${request.capsuleId}`),
-  ).toEqual(
-    sealedBeforeDrift,
-  );
+  ).toEqual(sealedBeforeDrift);
 });
 
 test("runtime secret bundle retires only after the exact Capsule is destroyed", async () => {
