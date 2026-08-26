@@ -616,6 +616,7 @@ function operationsFixture() {
         createdAt: workspace.createdAt,
         updatedAt: workspace.updatedAt,
       }),
+      getCapsuleExecutionAuthorityEpoch: async () => 1,
       createCapsule: async (input: Record<string, unknown>) => {
         capsuleCreates.push(input);
         return {

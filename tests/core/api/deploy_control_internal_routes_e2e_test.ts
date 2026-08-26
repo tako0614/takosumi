@@ -306,6 +306,7 @@ async function seedCapsuleViaRoutes(
   options: {
     readonly environment?: string;
     readonly releaseActivator?: ReleaseActivator;
+    readonly runtimeSecretFile?: boolean;
   } = {},
 ): Promise<{
   app: { request: (path: string, init?: RequestInit) => Promise<Response> };
@@ -324,6 +325,14 @@ async function seedCapsuleViaRoutes(
     opentofuControlStore: store,
     opentofuRunner: runner,
     opentofuConnectionVault: fakeProviderVault() as never,
+    ...(options.runtimeSecretFile
+      ? {
+          secretCrypto: new PartitionedSecretBoundaryCrypto({
+            globalPassphrase:
+              "runtime-secret-bootstrap-e2e-passphrase-0123456789",
+          }),
+        }
+      : {}),
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     ...(options.releaseActivator
       ? { releaseActivator: options.releaseActivator }
@@ -389,6 +398,46 @@ async function seedCapsuleViaRoutes(
           },
         }
       : { policy: {} }),
+    ...(options.runtimeSecretFile
+      ? {
+          runtimeBindingMaterialization: {
+            contract: "takosumi.runtime-binding-profile/v1",
+            runtimeSecretFile: {
+              contract: "takosumi.runtime-secret-file/v1",
+              envName: "TAKOS_RUNTIME_SECRETS_FILE",
+              fileName: "takos-runtime-secrets.json",
+              mode: 0o600,
+              values: [
+                {
+                  kind: "rsa-key-pair",
+                  privateName: "PLATFORM_PRIVATE_KEY",
+                  publicName: "PLATFORM_PUBLIC_KEY",
+                  modulusLength: 2048,
+                  hash: "SHA-256",
+                },
+                {
+                  kind: "random",
+                  name: "ENCRYPTION_KEY",
+                  bytes: 32,
+                  encoding: "base64",
+                },
+                {
+                  kind: "random",
+                  name: "TAKOS_AGENT_START_TOKEN",
+                  bytes: 32,
+                  encoding: "hex",
+                },
+                {
+                  kind: "random",
+                  name: "TAKOS_INTERNAL_API_SECRET",
+                  bytes: 32,
+                  encoding: "hex",
+                },
+              ],
+            },
+          },
+        }
+      : {}),
     createdAt: nowIso,
     updatedAt: nowIso,
   };
@@ -598,6 +647,7 @@ test("bootstrap wires host release activator into apply lifecycle", async () => 
   const { app, capsuleId, store, workspaceId } = await seedCapsuleViaRoutes(
     fakeRunner(),
     {
+      runtimeSecretFile: true,
       releaseActivator: {
         activate: (input) => {
           activations.push(input);
@@ -634,6 +684,29 @@ test("bootstrap wires host release activator into apply lifecycle", async () => 
 
   expect(apply.applyRun.status).toEqual("succeeded");
   expect(activations).toHaveLength(1);
+  const runtimeSecretFileBundle =
+    activations[0]?.runtimeSecretFileBundle;
+  expect(runtimeSecretFileBundle).toBeDefined();
+  expect(JSON.stringify(activations[0])).not.toContain("PLATFORM_PRIVATE_KEY");
+  const runtimeValues = JSON.parse(
+    runtimeSecretFileBundle!.toRunnerDispatch().files[0].content,
+  ) as Record<string, string>;
+  expect(Object.keys(runtimeValues).sort()).toEqual(
+    [
+      "ENCRYPTION_KEY",
+      "PLATFORM_PRIVATE_KEY",
+      "PLATFORM_PUBLIC_KEY",
+      "TAKOS_AGENT_START_TOKEN",
+      "TAKOS_INTERNAL_API_SECRET",
+    ].sort(),
+  );
+  const sealedRuntime = await store.getSecretBlob(
+    `runtime_secret_file_${capsuleId}`,
+  );
+  expect(sealedRuntime).toBeDefined();
+  for (const value of Object.values(runtimeValues)) {
+    expect(JSON.stringify(sealedRuntime)).not.toContain(value);
+  }
   expect(activations[0]?.nonSensitiveOutputs).toEqual({
     launch_url: "https://app.example.test",
   });

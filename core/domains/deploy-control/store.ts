@@ -86,6 +86,7 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 import { log } from "../../shared/log.ts";
+import { stableJsonDigest } from "../../adapters/source/digest.ts";
 
 export interface CapsuleListPageParams extends PageParams {
   readonly includeDestroyed?: boolean;
@@ -167,13 +168,11 @@ export interface PlanRunInputs {
 }
 
 /**
- * Sealed credential blob persisted alongside (but separate from) the public
- * ProviderConnection record. The plaintext is the JSON of `{ [envName]: value }`
- * encrypted as ONE blob via the secret-boundary crypto. The store only ever
- * sees ciphertext; it never decrypts.
- */
-/**
- * Opaque encryption-partition token persisted with the sealed blob.
+ * Private sealed-material row. Provider credentials use a Connection id as the
+ * owner reference; control-plane runtime material uses a namespaced Capsule
+ * reference without creating a ProviderConnection. `connectionId` is the
+ * historical column name for that opaque owner reference. The store sees only
+ * ciphertext and authenticated metadata; it never decrypts.
  *
  * Historical rows may contain provider-labelled values. New writes use the
  * connection's explicit `secretPartition`; Core must never grow a provider or
@@ -183,6 +182,7 @@ export type StoredSecretBlobKind = string;
 
 export interface StoredSecretBlob {
   readonly id: string;
+  /** Opaque owner reference; not necessarily a ProviderConnection id. */
   readonly connectionId: string;
   readonly workspaceId?: string;
   readonly kind: StoredSecretBlobKind;
@@ -317,6 +317,30 @@ export type CapsulePatch = Partial<
     | "updatedAt"
   >
 >;
+
+export interface CapsuleInstallConfigRebindInput {
+  readonly capsuleId: string;
+  readonly targetInstallConfigId: string;
+  readonly expected: {
+    readonly installConfigId: string;
+    readonly installConfigDigest: string;
+    /** Exact full-row digest of the immutable target InstallConfig. */
+    readonly targetInstallConfigDigest: string;
+    readonly currentStateGeneration: number;
+    readonly currentStateVersionId: string | undefined;
+    readonly status: Capsule["status"];
+    readonly executionAuthorityEpoch: number;
+  };
+  readonly updatedAt: string;
+}
+
+export type CapsuleInstallConfigRebindResult =
+  | { readonly status: "updated" | "replayed"; readonly capsule: Capsule }
+  | {
+      readonly status: "conflict" | "busy";
+      readonly capsule: Capsule;
+    }
+  | { readonly status: "not_found" };
 
 /**
  * Atomic provider-applied ledger commit: Run + StateVersion + Output. The
@@ -455,6 +479,14 @@ export interface RecoverableOpenTofuRunListOptions {
   readonly limit?: number;
 }
 
+export interface RuntimeSecretRetirementDispatchClaimInput {
+  readonly runId: string;
+  /** The row must still be pending and no newer than this retry fence. */
+  readonly staleBeforeMs: number;
+  /** Wall-clock time of this dispatch attempt; persisted without values. */
+  readonly attemptedAt: number;
+}
+
 /**
  * Durable runtime-safety projection derived from the single Run ledger.
  * Interface authorization consults this value at the capability boundary, so
@@ -491,6 +523,12 @@ export const APPLY_BILLING_CAPTURE_PENDING_EVENT =
   "billing.capture.pending" as const;
 export const APPLY_BILLING_CAPTURE_COMPLETED_EVENT =
   "billing.capture.completed" as const;
+export const APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT =
+  "runtime_secret.retirement.pending" as const;
+export const APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT =
+  "runtime_secret.retirement.completed" as const;
+export const APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT =
+  "runtime_secret.retirement.deferred" as const;
 
 export function applyRunBillingCapturePending(run: ApplyRun): boolean {
   let latestPending = -1;
@@ -499,6 +537,22 @@ export function applyRunBillingCapturePending(run: ApplyRun): boolean {
     const type = run.auditEvents[index]?.type;
     if (type === APPLY_BILLING_CAPTURE_PENDING_EVENT) latestPending = index;
     if (type === APPLY_BILLING_CAPTURE_COMPLETED_EVENT) latestCompleted = index;
+  }
+  return latestPending > latestCompleted;
+}
+
+/** Durable destroy-tail outbox state; the audit payload contains references only. */
+export function applyRunRuntimeSecretRetirementPending(run: ApplyRun): boolean {
+  let latestPending = -1;
+  let latestCompleted = -1;
+  for (let index = 0; index < run.auditEvents.length; index += 1) {
+    const type = run.auditEvents[index]?.type;
+    if (type === APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT) {
+      latestPending = index;
+    }
+    if (type === APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT) {
+      latestCompleted = index;
+    }
   }
   return latestPending > latestCompleted;
 }
@@ -562,6 +616,25 @@ export interface OpenTofuControlStore {
   listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
   ): Promise<readonly StoredRunRecord[]>;
+  /**
+   * Fair oldest-attempt-first retirement outbox scan. Kept separate from
+   * ordinary queued execution so archived or late-listed Workspaces cannot
+   * strand a terminal destroy cleanup intent.
+   */
+  listPendingRuntimeSecretRetirementRuns(
+    options: {
+      readonly staleBeforeMs: number;
+      readonly limit?: number;
+    },
+  ): Promise<readonly ApplyRun[]>;
+  /**
+   * Whole-Run CAS claim for one pending retirement dispatch. A winner appends
+   * value-free attempt evidence and rotates retry ordering before the external
+   * scheduler is called; stale, completed, missing, and raced rows return false.
+   */
+  claimPendingRuntimeSecretRetirementDispatch(
+    input: RuntimeSecretRetirementDispatchClaimInput,
+  ): Promise<boolean>;
 
   // Artifact ledger rows (spec §30 artifacts). Artifact bytes live in object
   // storage; these rows keep non-secret run-scoped pointers for audit and
@@ -634,6 +707,8 @@ export interface OpenTofuControlStore {
   // when `workspaceId` is absent; latency-sensitive reads must use the
   // explicit shared-only operation instead of filtering that global result.
   putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
+  /** Insert-only creation for immutable derived InstallConfig rows. */
+  createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean>;
   getInstallConfig(id: string): Promise<InstallConfig | undefined>;
   getInstallConfigsByIds(
     ids: readonly string[],
@@ -697,6 +772,14 @@ export interface OpenTofuControlStore {
     patch: CapsulePatch,
     guard?: CapsuleStateVersionGuard,
   ): Promise<Capsule | undefined>;
+  /** Private epoch read that does not reinterpret current Run safety. */
+  getCapsuleExecutionAuthorityEpoch(
+    capsuleId: string,
+  ): Promise<number | undefined>;
+  /** Exact execution-authority CAS for immutable InstallConfig replacement. */
+  rebindCapsuleInstallConfig(
+    input: CapsuleInstallConfigRebindInput,
+  ): Promise<CapsuleInstallConfigRebindResult>;
 
   /** Atomically commits terminal Run + StateVersion + optional Output + Capsule cursor. */
   commitRunState(input: CommitRunStateInput): Promise<CommitRunStateResult>;
@@ -735,6 +818,8 @@ export interface OpenTofuControlStore {
   deleteConnection(id: string): Promise<boolean>;
 
   putSecretBlob(blob: StoredSecretBlob): Promise<StoredSecretBlob>;
+  /** Atomic sealed-material create; an existing opaque owner reference wins. */
+  createSecretBlobIfAbsent(blob: StoredSecretBlob): Promise<boolean>;
   getSecretBlob(connectionId: string): Promise<StoredSecretBlob | undefined>;
   deleteSecretBlob(connectionId: string): Promise<boolean>;
 
@@ -995,11 +1080,13 @@ export interface CapsuleExecutionAuthorityResolver {
 /**
  * Provider-neutral exact runtime-authority seam.
  *
- * The durable epoch changes only on irreversible Capsule retirement. Derived
- * runtime safety is deliberately a reversible suspension: unsafe phases return
- * no authority without consuming a new epoch. Each store adapter resolves the
- * Capsule row and its latest runtime-safety candidate at one linearization
- * point; the outer adapter never composes separate reads.
+ * The durable epoch changes when execution authority is irreversibly replaced:
+ * Capsule retirement and an explicit immutable InstallConfig re-adoption both
+ * invalidate every previously reviewed Plan. Derived runtime safety is a
+ * reversible suspension: unsafe phases return no authority without consuming a
+ * new epoch. Each store adapter resolves the Capsule row and its latest
+ * runtime-safety candidate at one linearization point; the outer adapter never
+ * composes separate reads.
  */
 export function createCapsuleExecutionAuthorityResolver(
   store: Pick<
@@ -1305,6 +1392,35 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  listPendingRuntimeSecretRetirementRuns(options: {
+    readonly staleBeforeMs: number;
+    readonly limit?: number;
+  }): Promise<readonly ApplyRun[]> {
+    const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
+    return Promise.resolve(
+      Array.from(this.#runs.values())
+        .filter((row): row is ApplyRun =>
+          isPendingRuntimeSecretRetirementRun(row, options.staleBeforeMs)
+        )
+        .sort(comparePendingRuntimeSecretRetirementRunsAsc)
+        .slice(0, limit),
+    );
+  }
+
+  claimPendingRuntimeSecretRetirementDispatch(
+    input: RuntimeSecretRetirementDispatchClaimInput,
+  ): Promise<boolean> {
+    const current = this.#runs.get(input.runId);
+    const claimed = current
+      ? runtimeSecretRetirementDispatchAttempt(current, input)
+      : undefined;
+    if (!claimed) return Promise.resolve(false);
+    // No await occurs between the read and write, so this is the in-memory
+    // adapter's whole-row CAS linearization point.
+    this.#runs.set(input.runId, claimed);
+    return Promise.resolve(true);
+  }
+
   putArtifactRecord(record: ArtifactRecord): Promise<ArtifactRecord> {
     this.#artifactRecords.set(record.id, record);
     return Promise.resolve(record);
@@ -1542,6 +1658,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
     this.#installConfigs.set(config.id, config);
     return Promise.resolve(config);
+  }
+
+  createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean> {
+    if (this.#installConfigs.has(config.id)) return Promise.resolve(false);
+    this.#installConfigs.set(config.id, config);
+    return Promise.resolve(true);
   }
 
   getInstallConfig(id: string): Promise<InstallConfig | undefined> {
@@ -1798,6 +1920,83 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(updated);
   }
 
+  getCapsuleExecutionAuthorityEpoch(
+    capsuleId: string,
+  ): Promise<number | undefined> {
+    if (!this.#capsules.has(capsuleId)) return Promise.resolve(undefined);
+    return Promise.resolve(
+      this.#capsuleExecutionAuthorityEpochs.get(capsuleId) ?? 1,
+    );
+  }
+
+  async rebindCapsuleInstallConfig(
+    input: CapsuleInstallConfigRebindInput,
+  ): Promise<CapsuleInstallConfigRebindResult> {
+    const observedCapsule = this.#capsules.get(input.capsuleId);
+    if (!observedCapsule) return { status: "not_found" };
+    const observedTarget = this.#installConfigs.get(
+      input.targetInstallConfigId,
+    );
+    const observedConfig = this.#installConfigs.get(
+      observedCapsule.installConfigId,
+    );
+    const [observedConfigDigest, observedTargetDigest] = await Promise.all([
+      observedConfig ? stableJsonDigest(observedConfig) : undefined,
+      observedTarget ? stableJsonDigest(observedTarget) : undefined,
+    ]);
+
+    // stableJsonDigest is asynchronous. Re-read the authority row after that
+    // await so two concurrent callers cannot both commit from the same stale
+    // in-memory snapshot. No await occurs between this point and the write.
+    const capsule = this.#capsules.get(input.capsuleId);
+    if (!capsule) return { status: "not_found" };
+    const target = this.#installConfigs.get(input.targetInstallConfigId);
+    if (
+      !observedTarget ||
+      target !== observedTarget ||
+      observedTargetDigest !== input.expected.targetInstallConfigDigest
+    ) {
+      return { status: "conflict", capsule };
+    }
+    if (capsule.installConfigId === input.targetInstallConfigId) {
+      return { status: "replayed", capsule };
+    }
+    const currentConfig = this.#installConfigs.get(capsule.installConfigId);
+    const epoch = this.#capsuleExecutionAuthorityEpochs.get(capsule.id) ?? 1;
+    if (
+      !observedConfig ||
+      currentConfig !== observedConfig ||
+      capsule.installConfigId !== observedCapsule.installConfigId ||
+      capsule.installConfigId !== input.expected.installConfigId ||
+      observedConfigDigest !== input.expected.installConfigDigest ||
+      capsule.currentStateGeneration !==
+        input.expected.currentStateGeneration ||
+      capsule.currentStateVersionId !==
+        input.expected.currentStateVersionId ||
+      capsule.status !== input.expected.status ||
+      epoch !== input.expected.executionAuthorityEpoch
+    ) {
+      return { status: "conflict", capsule };
+    }
+    const runtimeSafety = this.#capsuleRuntimeSafety(capsule.id);
+    if (
+      Array.from(this.#runs.values()).some((run) =>
+        runBlocksCapsuleInstallConfigRebind(run, capsule.id, epoch),
+      ) ||
+      (runtimeSafety !== undefined && runtimeSafety.phase !== "safe")
+    ) {
+      return { status: "busy", capsule };
+    }
+    const updated = normalizeCapsule({
+      ...capsule,
+      installConfigId: input.targetInstallConfigId,
+      updatedAt: input.updatedAt,
+    });
+    this.#capsuleExecutionAuthorityEpochs.set(capsule.id, epoch + 1);
+    this.#capsules.set(capsule.id, updated);
+    return { status: "updated", capsule: updated };
+  }
+
   /**
    * In-memory commit. The store is single-threaded, so the sequential writes are
    * already atomic with respect to other awaits — there is no concurrent writer
@@ -1977,6 +2176,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   putSecretBlob(blob: StoredSecretBlob): Promise<StoredSecretBlob> {
     this.#secretBlobs.set(blob.connectionId, blob);
     return Promise.resolve(blob);
+  }
+
+  createSecretBlobIfAbsent(blob: StoredSecretBlob): Promise<boolean> {
+    if (this.#secretBlobs.has(blob.connectionId)) return Promise.resolve(false);
+    this.#secretBlobs.set(blob.connectionId, blob);
+    return Promise.resolve(true);
   }
 
   getSecretBlob(connectionId: string): Promise<StoredSecretBlob | undefined> {
@@ -2848,6 +3053,70 @@ export function isRecoverableOpenTofuRunRecord(
   return reference <= options.staleRunningBeforeMs;
 }
 
+export function isPendingRuntimeSecretRetirementRun(
+  row: StoredRunRecord,
+  staleBeforeMs: number,
+): row is ApplyRun {
+  if (
+    !isApplyRunRecord(row) ||
+    (row.status !== "succeeded" && row.status !== "failed") ||
+    !applyRunRuntimeSecretRetirementPending(row)
+  ) {
+    return false;
+  }
+  const lastAttempt =
+    runTimestampValue(row.updatedAt) ??
+    runTimestampValue(row.finishedAt) ??
+    storedRunRecordTimestamp(row);
+  return (
+    Number.isFinite(lastAttempt) &&
+    lastAttempt > 0 &&
+    lastAttempt <= staleBeforeMs
+  );
+}
+
+export function comparePendingRuntimeSecretRetirementRunsAsc(
+  left: ApplyRun,
+  right: ApplyRun,
+): number {
+  const attempt = (run: ApplyRun) =>
+    runTimestampValue(run.updatedAt) ??
+    runTimestampValue(run.finishedAt) ??
+    storedRunRecordTimestamp(run);
+  return attempt(left) - attempt(right) || left.id.localeCompare(right.id);
+}
+
+/** Builds the value-free CAS replacement shared by every store adapter. */
+export function runtimeSecretRetirementDispatchAttempt(
+  row: StoredRunRecord,
+  input: RuntimeSecretRetirementDispatchClaimInput,
+): ApplyRun | undefined {
+  if (
+    row.id !== input.runId ||
+    !isPendingRuntimeSecretRetirementRun(row, input.staleBeforeMs) ||
+    !Number.isFinite(input.attemptedAt) ||
+    input.attemptedAt <= 0
+  ) {
+    return undefined;
+  }
+  const attemptedAt = Math.max(
+    Math.floor(input.attemptedAt),
+    Math.floor(row.updatedAt) + 1,
+  );
+  return {
+    ...row,
+    updatedAt: attemptedAt,
+    auditEvents: [
+      ...row.auditEvents,
+      {
+        id: `audit_runtime_secret_retirement_deferred_${row.id}_${attemptedAt}_${row.auditEvents.length}`,
+        type: APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT,
+        at: attemptedAt,
+      },
+    ],
+  };
+}
+
 export function storedRunRecordTimestamp(row: StoredRunRecord): number {
   return runTimestampValue(row.createdAt) ?? 0;
 }
@@ -2868,6 +3137,39 @@ function isDispatchableOpenTofuRunRecord(row: StoredRunRecord): boolean {
   if (isApplyRunRecord(row)) return true;
   if (isSourceSyncRunRecord(row)) return true;
   return isRestoreRunRecord(row);
+}
+
+/**
+ * A rebind may not race a write Run or invalidate a Plan that can still be
+ * reviewed/applied. Terminal failed/cancelled/expired rows and consumed Plans
+ * are historical evidence, not execution authority.
+ */
+export function runBlocksCapsuleInstallConfigRebind(
+  row: StoredRunRecord,
+  capsuleId: string,
+  currentExecutionAuthorityEpoch: number,
+): boolean {
+  if (isApplyRunRecord(row)) {
+    if (row.capsuleId !== capsuleId) return false;
+    return row.status === "queued" || row.status === "running";
+  }
+  if (isPlanRunRecord(row)) {
+    if (row.capsuleId !== capsuleId) return false;
+    if (row.appliedApplyRunId) return false;
+    if (
+      row.capsuleExecutionAuthorityEpoch !== undefined &&
+      row.capsuleExecutionAuthorityEpoch !== currentExecutionAuthorityEpoch
+    ) {
+      return false;
+    }
+    return (
+      row.status === "queued" ||
+      row.status === "running" ||
+      row.status === "waiting_approval" ||
+      row.status === "succeeded"
+    );
+  }
+  return false;
 }
 
 export function isPlanRunRecord(row: StoredRunRecord): row is PlanRun {

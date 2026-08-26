@@ -45,6 +45,15 @@ function installConfig(): InstallConfig {
       generatedSecrets: [
         { binding: "INTERNAL_SECRET", bytes: 32, encoding: "hex" },
       ],
+      runtimeSecretFile: {
+        contract: "takosumi.runtime-secret-file/v1",
+        envName: "TAKOS_RUNTIME_SECRETS_FILE",
+        fileName: "runtime.json",
+        mode: 0o600,
+        values: [
+          { kind: "random", name: "FILE_SECRET", bytes: 32, encoding: "hex" },
+        ],
+      },
     },
     accountsOidcModuleVariableMaterialization: {
       contract: "takosumi.accounts-oidc-module-variables/v1",
@@ -96,6 +105,8 @@ test("public InstallConfig projection never returns secret install variables", (
   expect(serialized).not.toContain("per_install_overrides");
   expect(serialized).not.toContain("runtime-binding-profile");
   expect(serialized).not.toContain("INTERNAL_SECRET");
+  expect(serialized).not.toContain("TAKOS_RUNTIME_SECRETS_FILE");
+  expect(serialized).not.toContain("FILE_SECRET");
   expect(serialized).not.toContain("accounts-oidc-module-variables");
   expect(serialized).not.toContain("oidc_owner_sub");
 });

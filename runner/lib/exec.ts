@@ -80,7 +80,7 @@ export async function readOpenTofuPlanJson(
 ): Promise<string | undefined> {
   const result = await runCommand(
     ["tofu", "show", "-json", workspace.planPath],
-    { cwd: moduleDir, context },
+    { cwd: moduleDir, context, isolateProcessGroup: true },
   );
   return result.exitCode === 0 && result.stdout.trim().length > 0
     ? result.stdout
@@ -94,6 +94,7 @@ export async function readOpenTofuOutputsIn(
   const result = await runCommand(["tofu", "output", "-json"], {
     cwd: moduleDir,
     context,
+    isolateProcessGroup: true,
   });
   if (result.exitCode === 0 && result.stdout.trim().length > 0) {
     const parsed = JSON.parse(result.stdout) as unknown;
@@ -134,16 +135,18 @@ export async function runCommand(
     readonly cwd: string;
     readonly context?: CommandContext;
     /**
-     * Runs the command in its own process group and kills the whole group once
-     * it returns. Source-build commands are user-supplied and run before the
-     * run's provider credentials are written to disk, so a descendant left
-     * behind by a build command would still be alive — as the same uid — while
-     * those credential files exist.
+     * Runs the command in its own process group and kills the whole group on
+     * direct exit, timeout, or cancellation. Reviewed app/build commands may
+     * spawn descendants; their lifecycle must end before later credential
+     * phases or cleanup can proceed.
      */
     readonly isolateProcessGroup?: boolean;
   },
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  let timedOut = false;
+  const signal = options.context?.signal;
+  if (signal?.aborted) {
+    return { exitCode: 130, stdout: "", stderr: "command aborted" };
+  }
   const isolate = options.isolateProcessGroup === true;
   const subprocess = Bun.spawn([...command], {
     cwd: options.cwd,
@@ -152,46 +155,77 @@ export async function runCommand(
     stderr: "pipe",
     ...(isolate ? { detached: true } : {}),
   });
+  const stdoutPromise = new Response(subprocess.stdout).text();
+  const stderrPromise = new Response(subprocess.stderr).text();
+  type Termination =
+    | { readonly kind: "exit"; readonly exitCode: number }
+    | { readonly kind: "timeout"; readonly exitCode: 124 }
+    | { readonly kind: "abort"; readonly exitCode: 130 };
+  const terminations: Promise<Termination>[] = [
+    subprocess.exited.then((exitCode) => ({ kind: "exit", exitCode })),
+  ];
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timeoutMs = options.context?.timeoutMs;
-  const exited =
-    timeoutMs && timeoutMs > 0
-      ? Promise.race([
-          subprocess.exited,
-          new Promise<number>((resolve) => {
-            timeout = setTimeout(() => {
-              timedOut = true;
-              if (isolate) killProcessGroup(subprocess.pid);
-              subprocess.kill();
-              resolve(124);
-            }, timeoutMs);
-          }),
-        ])
-      : subprocess.exited;
-  // Reaping the group as soon as the direct child is done also closes the
-  // inherited stdout/stderr pipes, so a surviving descendant cannot hold the
-  // output readers open.
-  const exit = isolate
-    ? exited.then((code) => {
-        killProcessGroup(subprocess.pid);
-        return code;
-      })
-    : exited;
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(subprocess.stdout).text(),
-    new Response(subprocess.stderr).text(),
-    exit,
-  ]);
-  if (timeout) clearTimeout(timeout);
-  return {
-    exitCode,
-    stdout,
-    stderr: timedOut
-      ? [stderr, `command timed out after ${timeoutMs}ms: ${command[0]}`]
-          .filter(Boolean)
-          .join("\n")
-      : stderr,
-  };
+  if (timeoutMs && timeoutMs > 0) {
+    terminations.push(
+      new Promise<Termination>((resolve) => {
+        timeout = setTimeout(
+          () => resolve({ kind: "timeout", exitCode: 124 }),
+          timeoutMs,
+        );
+      }),
+    );
+  }
+  let abortListener: (() => void) | undefined;
+  if (signal) {
+    terminations.push(
+      new Promise<Termination>((resolve) => {
+        abortListener = () =>
+          resolve({ kind: "abort", exitCode: 130 });
+        signal.addEventListener("abort", abortListener, { once: true });
+        if (signal.aborted) abortListener();
+      }),
+    );
+  }
+
+  try {
+    const termination = await Promise.race(terminations);
+    if (isolate) {
+      // On direct exit this kills any descendant still holding inherited
+      // output pipes. On timeout/abort it also kills the direct child.
+      killProcessGroup(subprocess.pid);
+    }
+    if (termination.kind !== "exit") {
+      // Keep direct-child timeout/cancel semantics even on a platform where
+      // negative-pid process-group signalling is unavailable.
+      killProcess(subprocess.pid);
+    }
+    // Await the direct child even after a timeout/abort kill. Runtime/provider
+    // cleanup must not start while its process or output streams are live.
+    await subprocess.exited;
+    const [stdout, stderr] = await Promise.all([
+      stdoutPromise,
+      stderrPromise,
+    ]);
+    const terminationDiagnostic =
+      termination.kind === "timeout"
+        ? `command timed out after ${timeoutMs}ms`
+        : termination.kind === "abort"
+          ? "command aborted"
+          : undefined;
+    return {
+      exitCode: termination.exitCode,
+      stdout,
+      stderr: terminationDiagnostic
+        ? [stderr, terminationDiagnostic].filter(Boolean).join("\n")
+        : stderr,
+    };
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
+  }
 }
 
 /** SIGKILLs a whole process group; an already-empty group is not an error. */
@@ -200,6 +234,15 @@ function killProcessGroup(pid: number): void {
     process.kill(-pid, "SIGKILL");
   } catch {
     // The group is already gone.
+  }
+}
+
+/** SIGKILLs one direct child; an already-exited process is not an error. */
+function killProcess(pid: number): void {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // The process is already gone.
   }
 }
 

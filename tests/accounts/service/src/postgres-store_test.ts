@@ -50,6 +50,45 @@ test("PostgresAccountsStore revokes a dynamic OIDC client by registration id", a
   expect(client.calls[0].args).toContain("toc_revoked");
 });
 
+test("PostgresAccountsStore round-trips the value-free OIDC activation digest", async () => {
+  const client = new RecordingPostgresClient();
+  const store = new PostgresAccountsStore(client);
+  const activationDigest = `sha256:${"c".repeat(64)}`;
+  await store.saveOidcClient({
+    clientId: "toc_activation",
+    capsuleId: "cap_activation",
+    activationDigest,
+    namespacePath: "identity.oidc",
+    issuerUrl: "https://app.example.test",
+    redirectUris: ["https://capsule.example.test/auth/callback"],
+    allowedScopes: ["openid"],
+    subjectMode: "pairwise",
+    tokenEndpointAuthMethod: "none",
+    createdAt: 1_000,
+    updatedAt: 2_000,
+  });
+  expect(client.calls[0].sql).toContain("activation_digest");
+  expect(client.calls[0].args).toContain(activationDigest);
+
+  client.queuedRows.push([{
+    client_id: "toc_activation",
+    capsule_id: "cap_activation",
+    activation_digest: activationDigest,
+    namespace_path: "identity.oidc",
+    issuer_url: "https://app.example.test",
+    redirect_uris: ["https://capsule.example.test/auth/callback"],
+    allowed_scopes: ["openid"],
+    subject_mode: "pairwise",
+    token_endpoint_auth_method: "none",
+    client_secret_hash: null,
+    created_at: new Date(1_000),
+    updated_at: new Date(2_000),
+  }]);
+  expect(await store.findOidcClient("toc_activation")).toMatchObject({
+    activationDigest,
+  });
+});
+
 test("PostgresAccountsStore persists Interface OAuth evidence without the raw token", async () => {
   const client = new RecordingPostgresClient();
   const store = new PostgresAccountsStore(client);

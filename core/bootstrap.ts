@@ -163,6 +163,10 @@ import {
 } from "./domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "./domains/deploy-control/store_sql.ts";
 import type { CapsuleModuleVariableMaterializer } from "./domains/deploy-control/module_variable_materializer.ts";
+import {
+  createRuntimeSecretFileMaterializer,
+  type RuntimeSecretFileMaterializer,
+} from "./domains/deploy-control/runtime_secret_file_materializer.ts";
 import { log } from "./shared/log.ts";
 import type { Run } from "takosumi-contract/runs";
 import type { Dependency } from "takosumi-contract/dependencies";
@@ -391,6 +395,11 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly opentofuControlStore?: OpenTofuControlStore;
   /** Private host implementation for deterministic non-secret module values. */
   readonly moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
+  /**
+   * Optional private override for Capsule-stable runtime secret files. Hosts
+   * that supply secretCrypto receive the generic sealed implementation.
+   */
+  readonly runtimeSecretFileMaterializer?: RuntimeSecretFileMaterializer;
   /**
    * Host-owned allocator for opaque source/state/output/backup artifact refs.
    * Required by execution and backup paths; Core never derives storage layouts.
@@ -1005,6 +1014,14 @@ export async function createTakosumiService(
           sourceCredentialDrivers: options.sourceCredentialDrivers ?? {},
         })
       : undefined);
+  const runtimeSecretFileMaterializer =
+    options.runtimeSecretFileMaterializer ??
+    (options.secretCrypto
+      ? createRuntimeSecretFileMaterializer({
+          store: sharedOpenTofuStore,
+          crypto: options.secretCrypto,
+        })
+      : undefined);
   // Activity domain (Core Specification §27 / §34): the Workspace-scoped audit
   // trail. Constructed first so the controller + Capsule / Dependency /
   // RunGroup services can emit through it (fire-and-forget; a failed audit write
@@ -1140,6 +1157,9 @@ export async function createTakosumiService(
       : {}),
     ...(options.moduleVariableMaterializer
       ? { moduleVariableMaterializer: options.moduleVariableMaterializer }
+      : {}),
+    ...(runtimeSecretFileMaterializer
+      ? { runtimeSecretFileMaterializer }
       : {}),
     ...(options.runnerProfiles
       ? { runnerProfiles: options.runnerProfiles }

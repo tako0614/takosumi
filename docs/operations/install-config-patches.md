@@ -1,6 +1,6 @@
 # InstallConfig patch operation
 
-Last updated: 2026-07-17
+Last updated: 2026-08-25
 
 Use this operation when an app release publishes an immutable
 `takosumi.install-config-patch@v1` contribution and the operator has already
@@ -26,14 +26,77 @@ selected the exact target InstallConfig row.
      --json
    ```
 
-5. Read the returned InstallConfig and confirm `updatedAt`, the lifecycle
-   policy, Output allowlist, and Interface blueprints before creating a new
-   reviewed Plan.
+5. Read the returned InstallConfig and confirm its `updatedAt` revision/audit
+   metadata, lifecycle policy, Output allowlist, and Interface blueprints
+   before creating a new reviewed Plan.
 
 The patch does not alter an already reviewed Plan. A later plan captures the
 updated InstallConfig revision. It also does not download a release, discover a
 repository manifest, update a Cloud reference config, or select an app/version
 automatically.
+
+## Capsule InstallConfig re-adoption (separate from patch)
+
+When an existing Capsule must adopt a repository-owned InstallConfig discovered
+from a current SourceSnapshot, use the dedicated re-adoption operation. Do not
+patch the Capsule's current InstallConfig row or treat this as an install-plan
+reconcile step.
+
+1. As the Workspace owner/operator, read
+   `GET /api/v1/capsules/{capsuleId}` and retain only the returned opaque
+   `installConfigReAdoption.authorityGuard`. The private current InstallConfig
+   digest is not needed.
+2. Submit one closed request with a fresh `Idempotency-Key`:
+
+   ```http
+   POST /api/v1/capsules/{capsuleId}/install-config-re-adoptions
+   Idempotency-Key: <opaque-key>
+   Content-Type: application/json
+
+   {
+     "baseInstallConfigId": "<base-install-config-id>",
+     "sourceSnapshotId": "<source-snapshot-id>",
+     "reason": "<bounded non-secret reason>",
+     "expected": { "authorityGuard": "<guard-from-capsule-get>" }
+   }
+   ```
+
+   `deploymentProfileKey` may be included when the reviewed deployment profile
+   requires it. Unknown fields, secret-like reasons, malformed guards, and
+   missing idempotency keys fail before mutation.
+
+3. On 200, re-read the Capsule and the returned target InstallConfig. The
+   target is a new immutable derived row; the response is value-free and
+   identifies the previous and target rows/digests and SourceSnapshot.
+4. Create a new ordinary Plan, review it, and apply through the Run API. The
+   re-adoption endpoint never runs provider infrastructure and never consumes
+   or rewrites an existing Plan.
+
+The rebind is fenced by exact current and target InstallConfig JSON/digests and
+Capsule status, state generation, current StateVersion, and execution authority
+epoch. Unsafe or ambiguous Runs and unconsumed Plans return 409. A same-key,
+same-request retry replays the canonical target; a stale guard, changed target,
+or changed request under the same key returns 409. Successful rebind increments
+the epoch and emits only value-free idempotency/activity evidence. Missing legacy
+Plan epoch is accepted only at epoch 1; after a rebind it fails closed.
+The new epoch is part of the Accounts OIDC activation digest, so an old or
+orphaned Apply cannot authorize the newly adopted configuration; only a later
+final Apply can save the exact current digest.
+
+For the hosted Accounts profile, provider runtime-binding is read-only derivation
+with no registration authority; the direct DB-owned module-variable materializer
+owns final-Apply activation. Plan and `apply_check` remain read-only and only
+final Apply registers or repairs the exact current activation digest. The
+`updatedAt` field is ordinary audit time, not activation authority. Schema
+promotion is substrate-specific: for PostgreSQL, apply migration 043, then
+migration 044, before promoting the feature Worker. For Cloudflare D1, first
+verify the exact-v3 ledger/schema closure, then deploy the v3/v4 feature bridge,
+which accepts only exact legacy v3 or exact checksummed v4 and performs no
+request-time DDL. Retain owner-private backup and status evidence, complete the
+bounded pre-ledger backfill, perform the atomic v4 apply and read-only verify,
+and wait through the observation window before deploying the exact-v4-only
+Worker. A v3-only Worker must never remain live after v4 commits; the bridge is
+the compatible rollback floor. Both lanes are additive and forward-only.
 
 If the patch contains an `installing_principal` Interface binding proposal,
 target a shared config before Capsule creation so the authenticated create flow

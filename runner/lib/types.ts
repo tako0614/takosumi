@@ -133,6 +133,21 @@ export interface ProviderCredentialFile {
   readonly envName?: string;
 }
 
+/** Runner-private release payload; never part of provider credentials or Run state. */
+export interface RuntimeSecretFileDispatch {
+  readonly path: string;
+  readonly mode: 384;
+  readonly content: string;
+  readonly envName: string;
+  readonly secretNames: readonly string[];
+}
+
+export interface RuntimeSecretFilesDispatch {
+  readonly contract: "takosumi.runner-runtime-secret-files/v1";
+  readonly profileDigest: `sha256:${string}`;
+  readonly files: readonly [RuntimeSecretFileDispatch];
+}
+
 /** Selector-only plan scope projection received from the control-plane policy. */
 export interface PlanScopeSelector {
   readonly resourceTypePattern: string;
@@ -195,6 +210,11 @@ export interface TarVerboseEntry {
 }
 
 export interface PreparedProviderCredentialFiles {
+  readonly context: CommandContext;
+  readonly cleanup: () => Promise<void>;
+}
+
+export interface PreparedRuntimeSecretFiles {
   readonly context: CommandContext;
   readonly cleanup: () => Promise<void>;
 }

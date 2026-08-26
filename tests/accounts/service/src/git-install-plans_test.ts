@@ -189,7 +189,12 @@ test("lost acknowledgements recover exact Source, sync, Capsule, and Plan Run wi
 
   let response = await fixture.reconcile(planId);
   expect(response.status).toBe(202);
-  expect(JSON.stringify(await response.clone().json())).not.toContain(
+  const lostSource = await response.clone().json();
+  expect(lostSource.installPlan.diagnostic).toMatchObject({
+    code: "install_plan_reconcile_retryable",
+    planCreationStage: "source",
+  });
+  expect(JSON.stringify(lostSource)).not.toContain(
     "super-secret-mutation-value",
   );
   response = await fixture.reconcile(planId); // recover Source
@@ -205,16 +210,59 @@ test("lost acknowledgements recover exact Source, sync, Capsule, and Plan Run wi
 
   response = await fixture.reconcile(planId); // Capsule commits, ack lost
   expect(response.status).toBe(202);
+  expect((await response.clone().json()).installPlan.diagnostic).toMatchObject({
+    planCreationStage: "preparation",
+  });
   expect(fixture.counts.capsule).toBe(1);
   response = await fixture.reconcile(planId); // recover Capsule id
   response = await fixture.reconcile(planId); // creating -> planning
 
   response = await fixture.reconcile(planId); // Plan commits, ack lost
   expect(response.status).toBe(202);
+  expect((await response.clone().json()).installPlan.diagnostic).toMatchObject({
+    planCreationStage: "create",
+  });
   expect(fixture.counts.plan).toBe(1);
   response = await fixture.reconcile(planId); // exact deterministic Run recovery
   expect((await response.json()).installPlan.phase).toBe("reviewable");
   expect(fixture.counts).toEqual({ source: 1, sync: 1, capsule: 1, plan: 1 });
+});
+
+test("retryable Plan creation records only bounded structured controller diagnostics", async () => {
+  const fixture = installFixture({ retryablePlanErrorOnce: true });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "structured-plan-diagnostic" },
+  );
+  const planId = (await created.json()).installPlan.id as string;
+
+  await fixture.reconcile(planId); // Source
+  await fixture.reconcile(planId); // Source sync
+  fixture.succeedSourceSync();
+  let response: Response | undefined;
+  for (let step = 0; step < 5; step += 1) {
+    response = await fixture.reconcile(planId);
+  }
+  expect(response?.status).toBe(202);
+  const retryable = await response!.json();
+  expect(retryable.installPlan).toMatchObject({
+    phase: "planning",
+    diagnostic: {
+      code: "install_plan_reconcile_retryable",
+      planCreationStage: "create",
+      controllerCode: "failed_precondition",
+      reason: "module_variable_materialization_failed",
+    },
+  });
+  expect(JSON.stringify(retryable)).not.toContain(
+    "never-serialize-controller-exception-prose",
+  );
+
+  response = await fixture.reconcile(planId);
+  expect((await response.json()).installPlan.phase).toBe("reviewable");
+  expect(fixture.counts.plan).toBe(1);
 });
 
 test("lost compatibility acknowledgement adopts the exact persisted Run and report once", async () => {
@@ -414,6 +462,7 @@ type LostAckMutation =
 function installFixture(
   options: {
     readonly loseAckOnce?: readonly LostAckMutation[];
+    readonly retryablePlanErrorOnce?: boolean;
     readonly repositoryManifest?: SourceSnapshot["repositoryManifest"];
     readonly installConfigs?: readonly InstallConfig[];
   } = {},
@@ -438,6 +487,7 @@ function installFixture(
   let installConfigMutationCount = 0;
   let approvalCalls = 0;
   let applyCalls = 0;
+  let retryablePlanErrorPending = options.retryablePlanErrorOnce === true;
 
   const operations = {
     gitInstallPlans: planStore,
@@ -657,6 +707,14 @@ function installFixture(
         readonly actor?: string;
       },
     ) => {
+      if (retryablePlanErrorPending) {
+        retryablePlanErrorPending = false;
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "never-serialize-controller-exception-prose",
+          { reason: "module_variable_materialization_failed" },
+        );
+      }
       counts.plan += 1;
       const run: Run = {
         id: input.planRunId!,

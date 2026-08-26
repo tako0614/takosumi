@@ -204,6 +204,8 @@ export type OidcClientAuthMethod =
 export interface OidcClientRecord {
   clientId: string;
   capsuleId: string;
+  /** Exact control-plane authority activated by Apply; legacy absence denies. */
+  activationDigest?: string;
   namespacePath: string;
   issuerUrl: string;
   redirectUris: readonly string[];

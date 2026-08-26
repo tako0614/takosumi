@@ -18,6 +18,11 @@ import {
   resolveSessionHashSalt,
 } from "../../../../accounts/service/src/mod.ts";
 import { __resetSessionHashSaltConfigForTesting } from "../../../../accounts/service/src/session-hash-salt.ts";
+import { oidcClientActivationDigest } from "../../../../accounts/service/src/oidc-activation.ts";
+import {
+  applyD1AccountsMigrationBatch,
+  loadD1AccountsMigrationCatalog,
+} from "../../../../accounts/service/src/d1-migrations.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 function env(values: Record<string, unknown> = {}): CloudflareWorkerEnv {
@@ -26,19 +31,10 @@ function env(values: Record<string, unknown> = {}): CloudflareWorkerEnv {
 
 async function versionedAccountsDb(): Promise<SqliteFakeD1> {
   const db = new SqliteFakeD1();
-  const store = new D1AccountsStore(db);
-  await store.initialize();
-  await db
-    .prepare(
-      "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
-    )
-    .run();
-  await db
-    .prepare(
-      "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-    )
-    .bind(3, "current", Date.now())
-    .run();
+  const catalog = await loadD1AccountsMigrationCatalog();
+  for (const migration of catalog.migrations) {
+    await applyD1AccountsMigrationBatch(db, migration, 1_000 + migration.version);
+  }
   return db;
 }
 
@@ -603,6 +599,12 @@ test("Cloudflare authorize revalidates a Capsule OIDC client with canonical Cont
     allowedScopes: ["openid", "profile"],
     subjectMode: "pairwise",
     tokenEndpointAuthMethod: "none",
+    activationDigest: await oidcClientActivationDigest({
+      workspaceId,
+      capsuleId,
+      executionAuthorityEpoch: 1,
+      installConfig: installConfig as never,
+    }),
     createdAt: now,
     updatedAt: now,
   });
@@ -620,6 +622,7 @@ test("Cloudflare authorize revalidates a Capsule OIDC client with canonical Cont
             status: "active",
           }),
           getInstallConfig: async () => installConfig,
+          getCapsuleExecutionAuthorityEpoch: async () => 1,
         },
         workspaces: {
           getWorkspace: async () => ({
@@ -716,20 +719,8 @@ test("Cloudflare multi-client config injects one confidential secret by exact cl
 });
 
 test("Cloudflare identity handler lazily revalidates Interface OAuth against Core", async () => {
-  const db = new SqliteFakeD1();
-  const store = new D1AccountsStore(db);
-  await store.initialize();
-  await db
-    .prepare(
-      "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
-    )
-    .run();
-  await db
-    .prepare(
-      "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-    )
-    .bind(3, "current", Date.now())
-    .run();
+  const db = await versionedAccountsDb();
+  const store = new D1AccountsStore(db, { schemaMode: "predeployed" });
   const issued = await issueInterfaceOAuthAccessToken({
     store,
     subject: "principal_cloudflare",
@@ -789,20 +780,8 @@ test("Cloudflare identity handler lazily revalidates Interface OAuth against Cor
 });
 
 test("Cloudflare OIDC signing rotation publishes bounded overlap then removes the previous key", async () => {
-  const db = new SqliteFakeD1();
-  const store = new D1AccountsStore(db);
-  await store.initialize();
-  await db
-    .prepare(
-      "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
-    )
-    .run();
-  await db
-    .prepare(
-      "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-    )
-    .bind(3, "current", Date.now())
-    .run();
+  const db = await versionedAccountsDb();
+  const store = new D1AccountsStore(db, { schemaMode: "predeployed" });
   const oldKeyPair = await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
     true,
@@ -883,20 +862,8 @@ test("Cloudflare OIDC signing rotation publishes bounded overlap then removes th
 });
 
 test("predeployed accounts routes perform multiple document operations with zero request-time DDL", async () => {
-  const db = new SqliteFakeD1();
-  const store = new D1AccountsStore(db);
-  await store.initialize();
-  await db
-    .prepare(
-      "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
-    )
-    .run();
-  await db
-    .prepare(
-      "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-    )
-    .bind(3, "current", Date.now())
-    .run();
+  const db = await versionedAccountsDb();
+  const store = new D1AccountsStore(db, { schemaMode: "predeployed" });
   const sessionSalt = "predeployed-accounts-test-session-salt";
   const sessionId = "sess_predeployed_route";
   registerSessionHashSaltConfig({ salt: sessionSalt });

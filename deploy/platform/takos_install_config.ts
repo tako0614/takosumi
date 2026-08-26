@@ -4,12 +4,12 @@ import {
   type InstallConfig,
 } from "takosumi-contract/install-configs";
 import { TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 } from "takosumi-contract/repository-manifest";
+import { CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY } from "../../providers/cloudflare/credentials.ts";
 
 export const TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL_ENV =
   "TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL" as const;
 export const TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256_ENV =
   "TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256" as const;
-
 export const TAKOS_HOSTED_INSTALL_CONFIG_ID =
   "cfg-hosted-takos-cloudflare-direct-v1" as const;
 export const TAKOS_HOSTED_INSTALL_CONFIG_NAME =
@@ -21,6 +21,42 @@ const TAKOS_SOURCE = Object.freeze({
 });
 const TAKOS_PROVIDER_SOURCE = "registry.opentofu.org/cloudflare/cloudflare";
 const TAKOS_COMPOSITION_TIMESTAMP = "2026-08-25T00:00:00.000Z";
+const TAKOS_RUNTIME_BINDING_MATERIALIZATION = Object.freeze({
+  contract: "takosumi.runtime-binding-profile/v1" as const,
+  runtimeSecretFile: Object.freeze({
+    contract: "takosumi.runtime-secret-file/v1" as const,
+    envName: "TAKOS_RUNTIME_SECRETS_FILE",
+    fileName: "takos-runtime-secrets.json",
+    mode: 0o600 as const,
+    values: Object.freeze([
+      Object.freeze({
+        kind: "rsa-key-pair" as const,
+        privateName: "PLATFORM_PRIVATE_KEY",
+        publicName: "PLATFORM_PUBLIC_KEY",
+        modulusLength: 2048 as const,
+        hash: "SHA-256" as const,
+      }),
+      Object.freeze({
+        kind: "random" as const,
+        name: "ENCRYPTION_KEY",
+        bytes: 32,
+        encoding: "base64" as const,
+      }),
+      Object.freeze({
+        kind: "random" as const,
+        name: "TAKOS_AGENT_START_TOKEN",
+        bytes: 32,
+        encoding: "hex" as const,
+      }),
+      Object.freeze({
+        kind: "random" as const,
+        name: "TAKOS_INTERNAL_API_SECRET",
+        bytes: 32,
+        encoding: "hex" as const,
+      }),
+    ]),
+  }),
+});
 
 // SemVer 2.0.0 identifiers. Keeping this closed prevents mutable GitHub
 // release aliases (for example `latest`) from becoming lifecycle authority.
@@ -35,6 +71,15 @@ const SEMVER_PATTERN = new RegExp(
 const RELEASE_DESCRIPTOR_URL_PATTERN =
   /^https:\/\/github\.com\/tako0614\/takos\/releases\/download\/v([^/]+)\/takosumi-artifact\.json$/u;
 const RELEASE_DESCRIPTOR_SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
+const TAKOS_ACCOUNTS_CALLBACK_PATH = "/auth/oidc/callback";
+const TAKOS_REQUIRED_ACCOUNTS_SCOPES = Object.freeze([
+  "openid",
+  "profile",
+  "email",
+  "offline_access",
+  "capsules:read",
+  "capsules:write",
+]);
 
 export interface TakosInstallConfigEnvironment {
   readonly [name: string]: unknown;
@@ -73,7 +118,10 @@ export function composeTakosInstallConfig(
     throw invalidDescriptorEnvironment("descriptor values are malformed");
   }
 
-  return createTakosInstallConfig(descriptorUrl, descriptorSha256);
+  return createTakosInstallConfig(
+    descriptorUrl,
+    descriptorSha256,
+  );
 }
 
 export function isCreateOnlyReleaseDescriptorUrl(value: string): boolean {
@@ -102,6 +150,32 @@ function createTakosInstallConfig(
       outputs: ["node_modules/wrangler/bin/wrangler.js"],
     },
     variableMapping: {},
+    installExperience: {
+      projections: [
+        {
+          kind: "oidc_client",
+          variables: {},
+          callbackPath: TAKOS_ACCOUNTS_CALLBACK_PATH,
+          scopes: TAKOS_REQUIRED_ACCOUNTS_SCOPES,
+        },
+      ],
+    },
+    accountsOidcModuleVariableMaterialization: {
+      contract: "takosumi.accounts-oidc-module-variables/v2",
+      resourceNameVariable: "project_name",
+      publicUrlVariable: "public_url",
+      additionalInputVariables: [
+        "cloudflare_account_id",
+        "cloudflare_workers_subdomain",
+      ],
+      accountsUrlVariable: "takosumi_accounts_url",
+      issuerUrlVariable: "takosumi_accounts_issuer_url",
+      clientIdVariable: "takosumi_accounts_client_id",
+      redirectUriVariable: "takosumi_accounts_redirect_uri",
+      callbackPath: TAKOS_ACCOUNTS_CALLBACK_PATH,
+      scopes: TAKOS_REQUIRED_ACCOUNTS_SCOPES,
+    },
+    runtimeBindingMaterialization: TAKOS_RUNTIME_BINDING_MATERIALIZATION,
     installContextVariableMapping: {
       "env.TAKOSUMI_WORKSPACE_ID": "workspace_id",
     },
@@ -141,6 +215,9 @@ function createTakosInstallConfig(
       allowedProviders: [TAKOS_PROVIDER_SOURCE],
       providerCredentials: {
         requiredProviders: [TAKOS_PROVIDER_SOURCE],
+        requiredCredentialCapabilities: [
+          CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY,
+        ],
       },
       repositoryInstallUx: {
         allowedInterfacePermissions: [UI_SURFACE_OPEN_PERMISSION],

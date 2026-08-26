@@ -84,6 +84,19 @@ import {
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import type { CapsuleModuleVariableMaterializer } from "../../../../core/domains/deploy-control/module_variable_materializer.ts";
+import {
+  RuntimeSecretFileBundle,
+  type RuntimeSecretFileMaterializer,
+} from "../../../../core/domains/deploy-control/runtime_secret_file_materializer.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import type {
+  CloudflareWorkerEnv,
+  R2Bucket,
+} from "../../../../worker/src/bindings.ts";
+import { CloudflareContainerOpenTofuRunner } from "../../../../worker/src/container_runner.ts";
+import { OpenTofuRunnerObject } from "../../../../worker/src/durable/OpenTofuRunnerObject.ts";
+import { createRunnerReleaseActivator } from "../../../../worker/src/release_activator.ts";
+import { digestBytes } from "../../../../worker/src/state_crypto.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -224,6 +237,26 @@ class RejectingApplyHeartbeatStore extends InMemoryOpenTofuControlStore {
       };
     }
     return await super.transitionRun(input);
+  }
+}
+
+class FailingNthInstallConfigReadStore extends InMemoryOpenTofuControlStore {
+  installConfigReads = 0;
+  failAtInstallConfigRead: number | undefined;
+
+  override getInstallConfig(id: string): Promise<InstallConfig | undefined> {
+    this.installConfigReads += 1;
+    if (this.installConfigReads === this.failAtInstallConfigRead) {
+      return Promise.reject(
+        new Error("injected value-free retirement intent resolution failure"),
+      );
+    }
+    return super.getInstallConfig(id);
+  }
+
+  armInstallConfigReadFailure(read: number): void {
+    this.installConfigReads = 0;
+    this.failAtInstallConfigRead = read;
   }
 }
 
@@ -653,6 +686,121 @@ function lifecycleInstallConfig(
   };
 }
 
+const RUNTIME_SECRET_PROFILE = {
+  contract: "takosumi.runtime-binding-profile/v1",
+  runtimeSecretFile: {
+    contract: "takosumi.runtime-secret-file/v1",
+    envName: "TAKOS_RUNTIME_SECRETS_FILE",
+    fileName: "takos-runtime-secrets.json",
+    mode: 0o600,
+    values: [
+      {
+        kind: "random",
+        name: "ONLY_SECRET",
+        bytes: 32,
+        encoding: "hex",
+      },
+    ],
+  },
+} as const;
+
+function runtimeSecretLifecycleInstallConfig(): Partial<InstallConfig> {
+  return {
+    ...lifecycleInstallConfig([
+      {
+        id: "activate",
+        phase: "post_apply",
+        executor: "runner",
+        command: ["bun", "run", "app:activate"],
+      },
+    ]),
+    runtimeBindingMaterialization: RUNTIME_SECRET_PROFILE,
+  };
+}
+
+function oidcMaterializedInstallConfig(): Partial<InstallConfig> {
+  return {
+    workspaceId: "ws_test001",
+    variableMapping: {
+      project_name: "yuru-main",
+      worker_name: "",
+    },
+    accountsOidcModuleVariableMaterialization: {
+      contract: "takosumi.accounts-oidc-module-variables/v1",
+      workerNameVariable: "worker_name",
+      projectNameVariable: "project_name",
+      issuerUrlVariable: "takosumi_accounts_issuer_url",
+      clientIdVariable: "takosumi_accounts_client_id",
+      ownerSubjectVariable: "oidc_owner_sub",
+      allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
+    },
+  };
+}
+
+async function fixtureOidcActivationDigest(input: {
+  readonly capsule: { readonly id: string; readonly workspaceId: string };
+  readonly installConfig: InstallConfig;
+  readonly capsuleExecutionAuthorityEpoch?: number;
+}): Promise<string> {
+  return await stableJsonDigest({
+    contract: "fixture.accounts-oidc-activation/v1",
+    workspaceId: input.capsule.workspaceId,
+    capsuleId: input.capsule.id,
+    executionAuthorityEpoch: input.capsuleExecutionAuthorityEpoch ?? 1,
+    installConfigDigest: await stableJsonDigest(input.installConfig),
+  });
+}
+
+function fixtureAuthorityBoundModuleVariableMaterializer(
+  observations: {
+    readonly phases?: string[];
+    readonly epochs?: Array<number | undefined>;
+    readonly registeredActivationDigests?: string[];
+  } = {},
+): CapsuleModuleVariableMaterializer {
+  const variables = {
+    takosumi_accounts_issuer_url: "https://app.takosumi.com",
+    takosumi_accounts_client_id: "tko_public_client",
+    oidc_owner_sub: "tsub_pairwise_owner",
+    allow_unpinned_owner_claim: false,
+  } as const;
+  return {
+    async materialize(input) {
+      observations.phases?.push(input.phase);
+      observations.epochs?.push(input.capsuleExecutionAuthorityEpoch);
+      const activationDigest = await fixtureOidcActivationDigest(input);
+      if (input.phase === "apply") {
+        observations.registeredActivationDigests?.push(activationDigest);
+      }
+      return {
+        digest: await stableJsonDigest({
+          contract: "fixture.accounts-oidc-module-variables/v1",
+          activationDigest,
+          variables,
+        }),
+        variables,
+      };
+    },
+    async retire() {},
+  };
+}
+
+function fakeRuntimeSecretFileBundle(): RuntimeSecretFileBundle {
+  return new RuntimeSecretFileBundle({
+    contract: "takosumi.runner-runtime-secret-files/v1",
+    profileDigest: `sha256:${"a".repeat(64)}`,
+    files: [
+      {
+        path: "takos-runtime-secrets.json",
+        mode: 0o600,
+        content: '{"ONLY_SECRET":"fixture-secret-value"}\n',
+        envName: "TAKOS_RUNTIME_SECRETS_FILE",
+        secretNames: ["ONLY_SECRET"],
+      },
+    ],
+  });
+}
+
 async function failedFirstApplyScenario(
   actions: readonly Omit<
     InstallConfigLifecycleAction,
@@ -848,6 +996,356 @@ test("explicit source build is sealed with the plan and replayed for apply", asy
   });
   expect(applyRun.status).toEqual("succeeded");
   expect(runner.applyJobs[0]?.sourceBuild).toEqual(sourceBuild);
+});
+
+test("an epoch-two Capsule rejects a legacy Plan row with no execution-authority epoch", async () => {
+  const { store, runner, controller } = await seededController();
+  const capsule = await store.getCapsule("cap_fixture1");
+  if (!capsule) throw new Error("fixture Capsule is missing");
+  const previous = await store.getInstallConfig(capsule.installConfigId);
+  if (!previous) throw new Error("fixture InstallConfig is missing");
+  const target = {
+    ...previous,
+    id: "cfg_epoch_two",
+    name: "epoch-two",
+    createdAt: "2026-08-25T00:00:00.000Z",
+    updatedAt: "2026-08-25T00:00:00.000Z",
+  };
+  await store.putInstallConfig(target);
+  expect(
+    (
+      await store.rebindCapsuleInstallConfig({
+        capsuleId: capsule.id,
+        targetInstallConfigId: target.id,
+        expected: {
+          installConfigId: previous.id,
+          installConfigDigest: await stableJsonDigest(previous),
+          targetInstallConfigDigest: await stableJsonDigest(target),
+          currentStateGeneration: capsule.currentStateGeneration,
+          currentStateVersionId: capsule.currentStateVersionId,
+          status: capsule.status,
+          executionAuthorityEpoch: 1,
+        },
+        updatedAt: "2026-08-25T00:00:01.000Z",
+      })
+    ).status,
+  ).toBe("updated");
+
+  const { planRun } = await controller.createCapsulePlan(capsule.id);
+  expect(planRun.capsuleExecutionAuthorityEpoch).toBe(2);
+  const {
+    capsuleExecutionAuthorityEpoch: _legacyMissingEpoch,
+    ...legacyPlanRun
+  } = planRun;
+  await store.putPlanRun(legacyPlanRun);
+
+  await expect(
+    controller.createApplyRun({
+      planRunId: legacyPlanRun.id,
+      expected: applyExpectedGuardFromPlanRun(legacyPlanRun),
+    }),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "capsule_execution_authority_changed" },
+  });
+  expect(runner.applyJobs).toHaveLength(0);
+});
+
+test("an epoch-two Capsule uses one exact authority for Plan materialization and Apply-only OIDC activation", async () => {
+  const phases: string[] = [];
+  const epochs: Array<number | undefined> = [];
+  const registeredActivationDigests: string[] = [];
+  const moduleVariableMaterializer =
+    fixtureAuthorityBoundModuleVariableMaterializer({
+      phases,
+      epochs,
+      registeredActivationDigests,
+    });
+  const { store, runner, controller } = await seededController(
+    {
+      installConfig: oidcMaterializedInstallConfig(),
+    },
+    { moduleVariableMaterializer },
+  );
+  const capsule = await store.getCapsule("cap_fixture1");
+  if (!capsule) throw new Error("fixture Capsule is missing");
+  const previous = await store.getInstallConfig(capsule.installConfigId);
+  if (!previous) throw new Error("fixture InstallConfig is missing");
+  const target = {
+    ...previous,
+    id: "cfg_epoch_two_oidc",
+    name: "epoch-two-oidc",
+    createdAt: "2026-08-25T01:00:00.000Z",
+    updatedAt: "2026-08-25T01:00:00.000Z",
+  };
+  await store.putInstallConfig(target);
+  expect(
+    (
+      await store.rebindCapsuleInstallConfig({
+        capsuleId: capsule.id,
+        targetInstallConfigId: target.id,
+        expected: {
+          installConfigId: previous.id,
+          installConfigDigest: await stableJsonDigest(previous),
+          targetInstallConfigDigest: await stableJsonDigest(target),
+          currentStateGeneration: capsule.currentStateGeneration,
+          currentStateVersionId: capsule.currentStateVersionId,
+          status: capsule.status,
+          executionAuthorityEpoch: 1,
+        },
+        updatedAt: "2026-08-25T01:00:01.000Z",
+      })
+    ).status,
+  ).toBe("updated");
+  const rebound = await store.getCapsule(capsule.id);
+  if (!rebound) throw new Error("rebound Capsule is missing");
+  const expectedActivationDigest = await fixtureOidcActivationDigest({
+    capsule: rebound,
+    installConfig: target,
+    capsuleExecutionAuthorityEpoch: 2,
+  });
+
+  const { planRun } = await controller.createCapsulePlan(capsule.id);
+
+  expect(planRun.status).toBe("succeeded");
+  expect(planRun.capsuleExecutionAuthorityEpoch).toBe(2);
+  expect(phases).toEqual(["plan", "plan"]);
+  expect(epochs).toEqual([2, 2]);
+  expect(registeredActivationDigests).toEqual([]);
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(phases).toEqual(["plan", "plan", "apply_check", "apply"]);
+  expect(epochs).toEqual([2, 2, 2, 2]);
+  expect(registeredActivationDigests).toEqual([expectedActivationDigest]);
+  expect(runner.applyJobs).toHaveLength(1);
+});
+
+test("Capsule Plan fails closed when re-adoption races outer and persisted materialization authority", async () => {
+  const inner = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(inner, {
+    environment: "preview",
+    installConfig: oidcMaterializedInstallConfig(),
+  });
+  const previous = await inner.getInstallConfig(seeded.capsule.installConfigId);
+  if (!previous) throw new Error("fixture InstallConfig is missing");
+  const target = {
+    ...previous,
+    id: "cfg_racing_rebind",
+    name: "racing-rebind",
+    createdAt: "2026-08-25T02:00:00.000Z",
+    updatedAt: "2026-08-25T02:00:00.000Z",
+  };
+  await inner.putInstallConfig(target);
+  const expected = {
+    installConfigId: previous.id,
+    installConfigDigest: await stableJsonDigest(previous),
+    targetInstallConfigDigest: await stableJsonDigest(target),
+    currentStateGeneration: seeded.capsule.currentStateGeneration,
+    currentStateVersionId: seeded.capsule.currentStateVersionId,
+    status: seeded.capsule.status,
+    executionAuthorityEpoch: 1,
+  } as const;
+  let epochReads = 0;
+  const store = new Proxy(inner, {
+    get(targetStore, property, receiver) {
+      if (property === "getCapsuleExecutionAuthorityEpoch") {
+        return async (capsuleId: string) => {
+          epochReads += 1;
+          if (epochReads === 2) {
+            const rebound = await targetStore.rebindCapsuleInstallConfig({
+              capsuleId,
+              targetInstallConfigId: target.id,
+              expected,
+              updatedAt: "2026-08-25T02:00:01.000Z",
+            });
+            expect(rebound.status).toBe("updated");
+          }
+          return await targetStore.getCapsuleExecutionAuthorityEpoch(capsuleId);
+        };
+      }
+      const value = Reflect.get(targetStore, property, receiver);
+      return typeof value === "function" ? value.bind(targetStore) : value;
+    },
+  }) as OpenTofuControlStore;
+  const moduleVariableMaterializer =
+    fixtureAuthorityBoundModuleVariableMaterializer();
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+    moduleVariableMaterializer,
+  });
+
+  await expect(
+    controller.createCapsulePlan(seeded.capsule.id),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "capsule_execution_authority_changed" },
+  });
+  expect(epochReads).toBe(2);
+  expect((await inner.getCapsule(seeded.capsule.id))?.installConfigId).toBe(
+    target.id,
+  );
+  expect(runner.planJobs).toHaveLength(0);
+});
+
+test("Capsule Plan without a materializer rejects re-adoption between outer authority capture and inner epoch read", async () => {
+  const inner = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(inner, {
+    environment: "preview",
+    installConfig: {
+      variableMapping: { authority_marker: "old-config" },
+    },
+  });
+  const previous = await inner.getInstallConfig(seeded.capsule.installConfigId);
+  if (!previous) throw new Error("fixture InstallConfig is missing");
+  const target = {
+    ...previous,
+    id: "cfg_racing_rebind_without_materializer",
+    name: "racing-rebind-without-materializer",
+    variableMapping: { authority_marker: "new-config" },
+    createdAt: "2026-08-25T02:10:00.000Z",
+    updatedAt: "2026-08-25T02:10:00.000Z",
+  };
+  await inner.putInstallConfig(target);
+  const expected = {
+    installConfigId: previous.id,
+    installConfigDigest: await stableJsonDigest(previous),
+    targetInstallConfigDigest: await stableJsonDigest(target),
+    currentStateGeneration: seeded.capsule.currentStateGeneration,
+    currentStateVersionId: seeded.capsule.currentStateVersionId,
+    status: seeded.capsule.status,
+    executionAuthorityEpoch: 1,
+  } as const;
+  let epochReads = 0;
+  let planWrites = 0;
+  const store = new Proxy(inner, {
+    get(targetStore, property, receiver) {
+      if (property === "getCapsuleExecutionAuthorityEpoch") {
+        return async (capsuleId: string) => {
+          epochReads += 1;
+          if (epochReads === 2) {
+            const rebound = await targetStore.rebindCapsuleInstallConfig({
+              capsuleId,
+              targetInstallConfigId: target.id,
+              expected,
+              updatedAt: "2026-08-25T02:10:01.000Z",
+            });
+            expect(rebound.status).toBe("updated");
+          }
+          return await targetStore.getCapsuleExecutionAuthorityEpoch(capsuleId);
+        };
+      }
+      if (property === "putPlanRun") {
+        return async (planRun: PlanRun) => {
+          planWrites += 1;
+          return await targetStore.putPlanRun(planRun);
+        };
+      }
+      const value = Reflect.get(targetStore, property, receiver);
+      return typeof value === "function" ? value.bind(targetStore) : value;
+    },
+  }) as OpenTofuControlStore;
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  await expect(
+    controller.createCapsulePlan(seeded.capsule.id),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "capsule_execution_authority_changed" },
+  });
+  expect(epochReads).toBe(2);
+  expect(planWrites).toBe(0);
+  expect((await inner.getCapsule(seeded.capsule.id))?.installConfigId).toBe(
+    target.id,
+  );
+  expect(runner.planJobs).toHaveLength(0);
+});
+
+test("Capsule Plan re-adoption after the final authority check remains fenced at Apply", async () => {
+  const inner = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(inner, {
+    environment: "preview",
+    installConfig: {
+      variableMapping: { authority_marker: "old-config" },
+    },
+  });
+  const previous = await inner.getInstallConfig(seeded.capsule.installConfigId);
+  if (!previous) throw new Error("fixture InstallConfig is missing");
+  const target = {
+    ...previous,
+    id: "cfg_rebind_after_plan_authority_check",
+    name: "rebind-after-plan-authority-check",
+    variableMapping: { authority_marker: "new-config" },
+    createdAt: "2026-08-25T02:20:00.000Z",
+    updatedAt: "2026-08-25T02:20:00.000Z",
+  };
+  await inner.putInstallConfig(target);
+  const expected = {
+    installConfigId: previous.id,
+    installConfigDigest: await stableJsonDigest(previous),
+    targetInstallConfigDigest: await stableJsonDigest(target),
+    currentStateGeneration: seeded.capsule.currentStateGeneration,
+    currentStateVersionId: seeded.capsule.currentStateVersionId,
+    status: seeded.capsule.status,
+    executionAuthorityEpoch: 1,
+  } as const;
+  let rebound = false;
+  const store = new Proxy(inner, {
+    get(targetStore, property, receiver) {
+      if (property === "putPlanRun") {
+        return async (planRun: PlanRun) => {
+          if (!rebound) {
+            const result = await targetStore.rebindCapsuleInstallConfig({
+              capsuleId: seeded.capsule.id,
+              targetInstallConfigId: target.id,
+              expected,
+              updatedAt: "2026-08-25T02:20:01.000Z",
+            });
+            expect(result.status).toBe("updated");
+            rebound = true;
+          }
+          return await targetStore.putPlanRun(planRun);
+        };
+      }
+      const value = Reflect.get(targetStore, property, receiver);
+      return typeof value === "function" ? value.bind(targetStore) : value;
+    },
+  }) as OpenTofuControlStore;
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await controller.createCapsulePlan(seeded.capsule.id);
+
+  expect(planRun.status).toBe("succeeded");
+  expect(planRun.capsuleExecutionAuthorityEpoch).toBe(1);
+  expect(rebound).toBe(true);
+  expect(runner.planJobs).toHaveLength(1);
+  await expect(
+    controller.createApplyRun({
+      planRunId: planRun.id,
+      expected: applyExpectedGuardFromPlanRun(planRun),
+    }),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "capsule_execution_authority_changed" },
+  });
+  expect(runner.applyJobs).toHaveLength(0);
 });
 
 test("capsule plan does not wait for runner profile seed persistence", async () => {
@@ -4578,6 +5076,279 @@ test("release activator receives service-side post-apply actions as opaque argv"
   });
 });
 
+test("post-apply runner lifecycle materializes the DB-owned runtime secret bundle only after provider apply", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  let providerApplied = false;
+  const originalApply = runner.apply.bind(runner);
+  runner.apply = async (job, control) => {
+    const result = await originalApply(job, control);
+    providerApplied = true;
+    return result;
+  };
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: runtimeSecretLifecycleInstallConfig(),
+  });
+  const bundle = fakeRuntimeSecretFileBundle();
+  const materializeCalls: unknown[] = [];
+  const activations: ReleaseActivationInput[] = [];
+  const controller = controllerWith(store, runner, {
+    runtimeSecretFileMaterializer: {
+      materialize: (input) => {
+        expect(providerApplied).toBe(true);
+        materializeCalls.push(input);
+        return Promise.resolve(bundle);
+      },
+      retire: () => Promise.resolve(),
+    },
+    releaseActivator: {
+      activate: (input) => {
+        activations.push(input);
+        return Promise.resolve({ status: "succeeded" });
+      },
+    },
+  });
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  expect(materializeCalls).toHaveLength(0);
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(materializeCalls).toEqual([
+    {
+      workspaceId: "ws_test001",
+      capsuleId: "cap_fixture1",
+      installConfigId: "cfg_fixture",
+      phase: "post_apply",
+    },
+  ]);
+  expect(activations).toHaveLength(1);
+  expect(activations[0]?.runtimeSecretFileBundle).toBe(bundle);
+  expect(JSON.stringify(activations[0])).not.toContain("fixture-secret-value");
+});
+
+test("failed provider apply and destroy admission never expose or rotate runtime secrets", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  runner.apply = async (job) => {
+    runner.applyJobs.push(job);
+    return {
+      providerExecutionFailure: {
+        kind: "provider_execution_failed" as const,
+        statePersistence: "persisted" as const,
+      },
+      stateDigest: STATE_DIGEST,
+      providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      rawOutputRef: job.rawOutputRef,
+    };
+  };
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: runtimeSecretLifecycleInstallConfig(),
+  });
+  let materializeCalls = 0;
+  let retireCalls = 0;
+  const controller = controllerWith(store, runner, {
+    runtimeSecretFileMaterializer: {
+      materialize: () => {
+        materializeCalls += 1;
+        return Promise.resolve(fakeRuntimeSecretFileBundle());
+      },
+      retire: () => {
+        retireCalls += 1;
+        return Promise.resolve();
+      },
+    },
+    releaseActivator: {
+      activate: () => Promise.resolve({ status: "succeeded" }),
+    },
+  });
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(materializeCalls).toBe(0);
+  expect(retireCalls).toBe(0);
+  expect(runner.destroyJobs).toHaveLength(0);
+});
+
+test("successful destroy retires the exact Capsule runtime secret bundle without rematerializing it", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: runtimeSecretLifecycleInstallConfig(),
+  });
+  const materializeCalls: Parameters<RuntimeSecretFileMaterializer["materialize"]>[0][] = [];
+  const retireCalls: Parameters<RuntimeSecretFileMaterializer["retire"]>[0][] = [];
+  const controller = controllerWith(store, runner, {
+    runtimeSecretFileMaterializer: {
+      materialize: (input) => {
+        materializeCalls.push(input);
+        return Promise.resolve(fakeRuntimeSecretFileBundle());
+      },
+      retire: (input) => {
+        retireCalls.push(input);
+        return Promise.resolve();
+      },
+    },
+    releaseActivator: {
+      activate: () => Promise.resolve({ status: "succeeded" }),
+    },
+  });
+
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroy.planRun.id);
+  const destroyed = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(destroyed.applyRun.status).toBe("succeeded");
+  expect(destroyed.capsule?.status).toBe("destroyed");
+  expect(materializeCalls).toHaveLength(1);
+  expect(retireCalls).toEqual([
+    {
+      workspaceId: "ws_test001",
+      capsuleId: "cap_fixture1",
+      installConfigId: "cfg_fixture",
+      profileDigest: await stableJsonDigest(
+        RUNTIME_SECRET_PROFILE.runtimeSecretFile,
+      ),
+    },
+  ]);
+});
+
+test("runtime-secret retirement intent resolution fails before provider destroy dispatch", async () => {
+  const store = new FailingNthInstallConfigReadStore();
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: runtimeSecretLifecycleInstallConfig(),
+  });
+  const controller = controllerWith(store, runner, {
+    runtimeSecretFileMaterializer: {
+      materialize: () => Promise.resolve(fakeRuntimeSecretFileBundle()),
+      retire: () => Promise.resolve(),
+    },
+    releaseActivator: {
+      activate: () => Promise.resolve({ status: "succeeded" }),
+    },
+  });
+
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroy.planRun.id);
+  // Apply admission and its serialized revalidation consume the first two
+  // reads. The third is #runtimeSecretRetirementIntent, immediately before the
+  // destroy path may dispatch any lifecycle or Provider work.
+  store.armInstallConfigReadFailure(3);
+
+  const failed = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(store.installConfigReads).toBe(3);
+  expect(failed.applyRun.status).toBe("failed");
+  expect(runner.destroyJobs).toHaveLength(0);
+});
+
+test("destroy commits a durable runtime-secret retirement intent and retries without replaying provider destroy", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: runtimeSecretLifecycleInstallConfig(),
+  });
+  const retired = new Set<string>();
+  let retireAttempts = 0;
+  const controller = controllerWith(store, runner, {
+    runtimeSecretFileMaterializer: {
+      materialize: () => Promise.resolve(fakeRuntimeSecretFileBundle()),
+      retire: (input) => {
+        retireAttempts += 1;
+        retired.add(`${input.capsuleId}:${input.profileDigest}`);
+        if (retireAttempts === 1) {
+          // Models an acknowledgement lost after an idempotent secret-store
+          // delete. The durable intent must remain retryable.
+          return Promise.reject(new Error("injected retirement ack loss"));
+        }
+        return Promise.resolve();
+      },
+    },
+    releaseActivator: {
+      activate: () => Promise.resolve({ status: "succeeded" }),
+    },
+  });
+
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroy.planRun.id);
+  const first = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(first.applyRun.status).toBe("succeeded");
+  expect(first.capsule?.status).toBe("destroyed");
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect(retireAttempts).toBe(1);
+  expect(retired.size).toBe(1);
+  expect(
+    first.applyRun.auditEvents.some(
+      (event) => event.type === "runtime_secret.retirement.pending",
+    ),
+  ).toBe(true);
+  expect(
+    first.applyRun.auditEvents.some(
+      (event) => event.type === "runtime_secret.retirement.completed",
+    ),
+  ).toBe(false);
+  expect(
+    (
+      await store.listPendingRuntimeSecretRetirementRuns({
+        staleBeforeMs: Number.MAX_SAFE_INTEGER,
+      })
+    ).map((run) => run.id),
+  ).toContain(first.applyRun.id);
+
+  const repaired = await controller.runQueuedApply(first.applyRun.id);
+  expect(repaired.applyRun.status).toBe("succeeded");
+  expect(
+    repaired.applyRun.auditEvents.some(
+      (event) => event.type === "runtime_secret.retirement.completed",
+    ),
+  ).toBe(true);
+  expect(retireAttempts).toBe(2);
+  expect(retired.size).toBe(1);
+  expect(runner.destroyJobs).toHaveLength(1);
+
+  await controller.runQueuedApply(first.applyRun.id);
+  expect(retireAttempts).toBe(2);
+  expect(runner.destroyJobs).toHaveLength(1);
+});
+
 test("lifecycle action plan fails when the selected RunnerProfile lacks its declared capability", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
@@ -7660,6 +8431,215 @@ test("capsule apply: a D1 ledger-tail failure requeues the same ApplyRun without
   ).toBe(1);
 });
 
+test("capsule apply: a D1 ledger-tail retry reaches durable release authority without invoking the command twice", async () => {
+  const inner = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
+  const providerRunner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(inner, {
+    environment: "preview",
+    installConfig: lifecycleInstallConfig([
+      {
+        id: "publish",
+        phase: "post_apply",
+        executor: "runner",
+        command: ["bun", "run", "publish"],
+      },
+    ]),
+  });
+  const sourceArchive = new TextEncoder().encode(
+    "fixture source archive for durable release replay",
+  );
+  const sourceArchiveDigest = await digestBytes(sourceArchive);
+  await inner.putSourceSnapshot({
+    ...seeded.snapshot,
+    archiveDigest: sourceArchiveDigest,
+    archiveSizeBytes: sourceArchive.byteLength,
+  });
+
+  const releaseAuthority = new Map<string, unknown>();
+  const releaseStorage = {
+    get<T>(key: string): Promise<T | undefined> {
+      return Promise.resolve(releaseAuthority.get(key) as T | undefined);
+    },
+    put<T>(key: string, value: T): Promise<void> {
+      releaseAuthority.set(key, value);
+      return Promise.resolve();
+    },
+    delete(key: string): Promise<boolean> {
+      return Promise.resolve(releaseAuthority.delete(key));
+    },
+  };
+  const sourceBucket = {
+    get(key: string) {
+      if (key !== seeded.snapshot.archiveRef) return Promise.resolve(null);
+      return Promise.resolve({
+        key,
+        size: sourceArchive.byteLength,
+        etag: "fixture-release-source",
+        uploaded: new Date(0),
+        arrayBuffer: () =>
+          Promise.resolve(
+            sourceArchive.buffer.slice(
+              sourceArchive.byteOffset,
+              sourceArchive.byteOffset + sourceArchive.byteLength,
+            ) as ArrayBuffer,
+          ),
+      });
+    },
+  } as unknown as R2Bucket;
+  const runnerObject = new OpenTofuRunnerObject(
+    { storage: releaseStorage } as never,
+    {
+      TAKOSUMI_CONTROL_DB: {} as CloudflareWorkerEnv["TAKOSUMI_CONTROL_DB"],
+      R2_ARTIFACTS: sourceBucket,
+      R2_SOURCE: sourceBucket,
+      COORDINATION: {} as CloudflareWorkerEnv["COORDINATION"],
+      TAKOSUMI_SECRET_STORE_PASSPHRASE:
+        "capsule-run-durable-release-test-passphrase-0123456789",
+    } as CloudflareWorkerEnv,
+  );
+  let externalReleaseInvocations = 0;
+  let durableReleaseDeliveries = 0;
+  const durableReleaseStatuses: number[] = [];
+  const durableReleaseStateVersionIds: string[] = [];
+  Object.defineProperty(runnerObject, "containerFetch", {
+    value(request: Request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/healthz") return Response.json({ ok: true });
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path.startsWith("/runs/release_")) {
+        externalReleaseInvocations += 1;
+        const releaseRunId = decodeURIComponent(path.slice("/runs/".length));
+        return Response.json({
+          runId: releaseRunId,
+          action: "release",
+          status: "succeeded",
+          exitCode: 0,
+          commandCount: 1,
+          stdout: "release output is deliberately not replayed",
+        });
+      }
+      return Response.json({ error: "unexpected runner request" }, { status: 500 });
+    },
+  });
+  Object.defineProperty(runnerObject, "destroy", {
+    value: () => Promise.resolve(),
+  });
+  const durableReleaseRunner = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName(name: string) {
+        return name;
+      },
+      get(id: unknown) {
+        return {
+          async fetch(request: Request) {
+            expect(id).toBe(new URL(request.url).pathname.slice("/runs/".length));
+            const envelope = (await request.clone().json()) as {
+              readonly request?: {
+                readonly activation?: { readonly stateVersionId?: string };
+              };
+            };
+            if (envelope.request?.activation?.stateVersionId) {
+              durableReleaseStateVersionIds.push(
+                envelope.request.activation.stateVersionId,
+              );
+            }
+            durableReleaseDeliveries += 1;
+            const response = await runnerObject.fetch(request);
+            durableReleaseStatuses.push(response.status);
+            return response;
+          },
+        };
+      },
+    },
+  } as unknown as CloudflareWorkerEnv);
+  const runner = Object.assign(providerRunner, {
+    release: durableReleaseRunner.release.bind(durableReleaseRunner),
+  });
+
+  let commitAttempts = 0;
+  const store = new Proxy(inner, {
+    get(target, property, receiver) {
+      if (property === "commitRunState") {
+        return (input: Parameters<OpenTofuControlStore["commitRunState"]>[0]) => {
+          commitAttempts += 1;
+          if (commitAttempts === 1) {
+            return Promise.reject(
+              new Error("injected: release succeeded before ledger tail failed"),
+            );
+          }
+          return target.commitRunState(input);
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as OpenTofuControlStore;
+  const profile = {
+    ...multiProviderRunnerProfile(),
+    capabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY],
+  };
+  let controller: OpenTofuController;
+  controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+    activity: activityRecorderFor(store),
+    releaseActivator: createRunnerReleaseActivator(runner),
+    enqueueRun: async (dispatch) => {
+      if (dispatch.cause === "controller_retry") return;
+      if (dispatch.action === "plan") {
+        await controller.runQueuedPlan(dispatch.runId);
+      } else if (dispatch.action === "apply") {
+        await controller.runQueuedApply(dispatch.runId);
+      }
+    },
+  });
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  const first = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(first.applyRun.status).toBe("queued");
+  expect(externalReleaseInvocations).toBe(1);
+  expect(
+    Array.from(releaseAuthority.values()).some(
+      (value) =>
+        typeof value === "object" &&
+        value !== null &&
+        "phase" in value &&
+        value.phase === "completed",
+    ),
+  ).toBe(true);
+
+  const repaired = await controller.runQueuedApply(first.applyRun.id);
+
+  expect(repaired.applyRun.id).toBe(first.applyRun.id);
+  expect(durableReleaseStateVersionIds[1]).toBe(
+    durableReleaseStateVersionIds[0],
+  );
+  expect(repaired.applyRun.status).toBe("succeeded");
+  expect(repaired.applyRun.stateVersionId).toBe(
+    durableReleaseStateVersionIds[0],
+  );
+  expect(
+    await inner.getStateVersion(durableReleaseStateVersionIds[0]!),
+  ).toMatchObject({
+    id: durableReleaseStateVersionIds[0],
+    generation: 1,
+    digest: STATE_DIGEST,
+    createdByRunId: first.applyRun.id,
+  });
+  expect(commitAttempts).toBe(2);
+  expect(providerRunner.applyJobs.map((job) => job.applyRun.id)).toEqual([
+    first.applyRun.id,
+    first.applyRun.id,
+  ]);
+  expect(durableReleaseDeliveries).toBe(2);
+  expect(durableReleaseStatuses).toEqual([200, 200]);
+  expect(externalReleaseInvocations).toBe(1);
+});
+
 test("capsule destroy: a D1 ledger-tail failure requeues the same ApplyRun without destroying twice", async () => {
   const inner = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
   const runner = recordingRunner();
@@ -8191,6 +9171,7 @@ test("a second successful apply preserves StateVersion history and advances the 
 
   expect(await store.getStateVersion(firstStateVersionId)).toBeDefined();
   expect(secondApply.applyRun.stateVersionId).toBeDefined();
+  expect(secondApply.applyRun.stateVersionId).not.toBe(firstStateVersionId);
   expect(
     (await store.listStateVersions("cap_fixture1", "preview")).map(
       (stateVersion) => stateVersion.generation,

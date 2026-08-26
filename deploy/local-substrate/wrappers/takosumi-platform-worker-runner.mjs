@@ -26,11 +26,14 @@
  * ============================================================================
  */
 import { Miniflare } from "miniflare";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
-if (process.env.LOCAL_SUBSTRATE_TEST_BED !== "1") {
+async function main() {
+  if (process.env.LOCAL_SUBSTRATE_TEST_BED !== "1") {
   console.error(
     "[takosumi-platform-worker] refusing to start: this runner is local-substrate-only.\n" +
       "    It pass-throughs ALL TAKOSUMI_* env vars into worker bindings and injects\n" +
@@ -39,8 +42,8 @@ if (process.env.LOCAL_SUBSTRATE_TEST_BED !== "1") {
       "    For production use the ecosystem release-production-safely controller.\n" +
       "    For local-substrate use, set LOCAL_SUBSTRATE_TEST_BED=1.",
   );
-  process.exit(1);
-}
+    process.exit(1);
+  }
 
 const scriptPath =
   process.env.WORKER_SCRIPT ?? "/worker/takosumi-platform-worker.mjs";
@@ -149,8 +152,20 @@ await applyLocalAccountsD1Migrations(mf, accountsD1MigrationsPath);
 
 const url = await mf.ready;
 console.log(`[takosumi-platform-worker] miniflare serving at ${url}`);
+}
 
-async function applyLocalAccountsD1Migrations(miniflare, artifactPath) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  await main();
+}
+
+export async function applyLocalAccountsD1Migrations(
+  miniflare,
+  artifactPath,
+  options = {},
+) {
   let artifact;
   try {
     artifact = JSON.parse(readFileSync(artifactPath, "utf8"));
@@ -160,66 +175,174 @@ async function applyLocalAccountsD1Migrations(miniflare, artifactPath) {
       { cause },
     );
   }
-  if (
-    artifact?.kind !== "takosumi.accounts.local-d1-migrations@v1" ||
-    !Array.isArray(artifact.migrations)
-  ) {
+  const runtimeModulePath =
+    options.runtimeModulePath ?? artifactPath.replace(/\.json$/u, ".runtime.mjs");
+  if (runtimeModulePath === artifactPath) {
     throw new Error(
-      `[takosumi-platform-worker] accounts D1 migration artifact has an unsupported shape: ${artifactPath}`,
+      "[takosumi-platform-worker] accounts D1 migration policy mismatch",
     );
   }
-
-  const versions = new Set();
-  for (const [index, migration] of artifact.migrations.entries()) {
-    if (
-      !Number.isInteger(migration?.version) ||
-      migration.version !== index ||
-      versions.has(migration.version) ||
-      typeof migration.name !== "string" ||
-      migration.name.length === 0 ||
-      typeof migration.sql !== "string" ||
-      migration.sql.length === 0
-    ) {
-      throw new Error(
-        `[takosumi-platform-worker] accounts D1 migration artifact is not a contiguous ordered catalog: ${artifactPath}`,
-      );
-    }
-    versions.add(migration.version);
+  let migrationRuntime;
+  try {
+    migrationRuntime = await import(pathToFileURL(runtimeModulePath).href);
+  } catch (cause) {
+    throw new Error(
+      "[takosumi-platform-worker] accounts D1 migration runtime is missing or invalid",
+      { cause },
+    );
   }
+  if (
+    typeof migrationRuntime.loadD1AccountsMigrationCatalog !== "function" ||
+    typeof migrationRuntime.backfillD1AccountsActivationDigests !== "function" ||
+    typeof migrationRuntime.applyD1AccountsMigrationBatch !== "function" ||
+    typeof migrationRuntime.readD1AccountsMigrationState !== "function"
+  ) {
+    throw new Error(
+      "[takosumi-platform-worker] accounts D1 migration runtime is missing or invalid",
+    );
+  }
+  const catalog = await migrationRuntime.loadD1AccountsMigrationCatalog();
+  assertLocalAccountsD1Artifact(artifact, catalog);
 
   const database = await miniflare.getD1Database("TAKOSUMI_ACCOUNTS_DB");
-  await database.exec(
-    "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
+  let state = await migrationRuntime.readD1AccountsMigrationState(
+    database,
+    catalog,
   );
-  const existing = await database
-    .prepare(
-      "SELECT version, name FROM takosumi_accounts_schema_migrations ORDER BY version",
-    )
-    .all();
-  const existingByVersion = new Map(
-    (existing.results ?? []).map((row) => [Number(row.version), row.name]),
-  );
+  assertExactLocalAccountsD1Prefix(state, catalog);
+  let prefixLength = state.exactPrefixLength;
   const applied = [];
-  for (const migration of artifact.migrations) {
-    const existingName = existingByVersion.get(migration.version);
-    if (existingName !== undefined) {
-      if (existingName !== migration.name) {
+  const lostAcknowledgementReconciled = [];
+  let activationDigestBackfill;
+  for (const migration of catalog.migrations.slice(prefixLength)) {
+    if (migration.version === 4) {
+      activationDigestBackfill =
+        await migrationRuntime.backfillD1AccountsActivationDigests(database);
+    }
+    try {
+      await migrationRuntime.applyD1AccountsMigrationBatch(
+        database,
+        migration,
+        Date.now(),
+      );
+    } catch (cause) {
+      let reconciledState;
+      try {
+        reconciledState = await migrationRuntime.readD1AccountsMigrationState(
+          database,
+          catalog,
+        );
+      } catch {
         throw new Error(
-          `[takosumi-platform-worker] accounts D1 migration ${migration.version} name mismatch: ledger=${existingName}, catalog=${migration.name}`,
+          "[takosumi-platform-worker] accounts D1 migration state is indeterminate",
+          { cause },
         );
       }
-      continue;
+      if (
+        reconciledState.issues.length === 0 &&
+        reconciledState.exactPrefixLength === migration.version + 1
+      ) {
+        lostAcknowledgementReconciled.push(migration.version);
+        state = reconciledState;
+        prefixLength = migration.version + 1;
+        continue;
+      }
+      if (
+        reconciledState.issues.length === 0 &&
+        reconciledState.exactPrefixLength === migration.version
+      ) {
+        throw new Error(
+          "[takosumi-platform-worker] accounts D1 migration did not commit; restart required",
+          { cause },
+        );
+      }
+      throw new Error(
+        "[takosumi-platform-worker] accounts D1 migration state is indeterminate",
+        { cause },
+      );
     }
-    await database.exec(migration.sql);
-    await database
-      .prepare(
-        "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-      )
-      .bind(migration.version, migration.name, Date.now())
-      .run();
+    state = await migrationRuntime.readD1AccountsMigrationState(
+      database,
+      catalog,
+    );
+    if (
+      state.issues.length !== 0 ||
+      state.exactPrefixLength !== migration.version + 1
+    ) {
+      throw new Error(
+        "[takosumi-platform-worker] accounts D1 migration acknowledgement has no exact receipt",
+      );
+    }
+    prefixLength = migration.version + 1;
     applied.push(migration.version);
   }
+  const current = catalog.migrations.at(prefixLength - 1)?.version ?? -1;
   console.log(
-    `[takosumi-platform-worker] accounts D1 migrations applied=${applied.length} current=${artifact.migrations.at(-1)?.version ?? -1}`,
+    `[takosumi-platform-worker] accounts D1 migrations applied=${applied.length} current=${current}`,
   );
+  return {
+    applied,
+    lostAcknowledgementReconciled,
+    current,
+    ...(activationDigestBackfill ? { activationDigestBackfill } : {}),
+  };
+}
+
+function assertLocalAccountsD1Artifact(artifact, catalog) {
+  const expected = {
+    kind: "takosumi.accounts.local-d1-migrations@v2",
+    catalogDigest: catalog.digest,
+    policyDigest: catalog.policyDigest,
+    headVersion: catalog.headVersion,
+    migrations: catalog.migrations,
+    schemaClosures: catalog.schemaClosures,
+    preLedgerPolicy: catalog.preLedgerPolicy,
+  };
+  const policyDigest = sha256(
+    JSON.stringify({
+      preLedgerPolicy: artifact?.preLedgerPolicy,
+      schemaClosures: Array.isArray(artifact?.schemaClosures)
+        ? artifact.schemaClosures.map(
+            ({ headVersion, ledgerShape, digest }) => ({
+              headVersion,
+              ledgerShape,
+              digest,
+            }),
+          )
+        : null,
+    }),
+  );
+  const schemaDigestsAreExact =
+    Array.isArray(artifact?.schemaClosures) &&
+    artifact.schemaClosures.every(
+      (closure) =>
+        closure &&
+        sha256(JSON.stringify({ objects: closure.objects })) === closure.digest,
+    );
+  if (
+    artifact?.policyDigest !== policyDigest ||
+    !schemaDigestsAreExact ||
+    JSON.stringify(artifact) !== JSON.stringify(expected)
+  ) {
+    throw new Error(
+      "[takosumi-platform-worker] accounts D1 migration policy mismatch",
+    );
+  }
+}
+
+function assertExactLocalAccountsD1Prefix(state, catalog) {
+  if (
+    state.issues.length !== 0 ||
+    !Number.isInteger(state.exactPrefixLength) ||
+    state.exactPrefixLength < 0 ||
+    state.exactPrefixLength > catalog.migrations.length
+  ) {
+    throw new Error(
+      "[takosumi-platform-worker] accounts D1 state is not an exact catalog prefix",
+    );
+  }
+}
+
+function sha256(value) {
+  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
 }

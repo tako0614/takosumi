@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
 import { createTakosumiService } from "../../../core/bootstrap.ts";
+import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import { defaultCapsuleInstallConfig } from "../../../core/domains/capsules/default_install_config.ts";
 import {
   INSTALL_CONFIG_PATCH_V1_KIND,
   type InstallConfig,
 } from "takosumi-contract/install-configs";
+import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 
 const TOKEN = "install-config-operator-token";
 
@@ -188,6 +190,169 @@ test("operator API cannot mutate immutable host InstallConfigs", async () => {
   expect(response.status).toBe(403);
   expect((await response.json()).error.message).toContain("immutable");
   expect(await operations.capsules.getInstallConfig(before.id)).toEqual(before);
+});
+
+test("internal InstallConfig PATCH rejects compiled and re-adopted rows for every principal", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const now = "2026-08-26T00:00:00.000Z";
+  const workspaceId = "ws_install_config_immutable";
+  await store.putWorkspace({
+    id: workspaceId,
+    handle: "install-config-immutable",
+    displayName: "InstallConfig immutable",
+    type: "personal",
+    ownerUserId: "user_install_config_immutable",
+    createdAt: now,
+    updatedAt: now,
+  });
+  await store.putSource({
+    id: "src_install_config_immutable",
+    workspaceId,
+    name: "immutable-repo",
+    url: "https://example.com/acme/immutable.git",
+    defaultRef: "main",
+    defaultPath: ".",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+    hookSecretHash: "sha256:hook",
+    autoSync: false,
+  });
+  const compiled: InstallConfig = {
+    id: "cfg-compiled-route",
+    workspaceId,
+    name: "compiled-route",
+    variableMapping: { original: "compiled" },
+    outputAllowlist: {},
+    policy: {},
+    internal: {
+      reason: "per_install_overrides",
+      sourceSnapshotId: "snap_compiled_route",
+      repositoryInstallUxDigest: `sha256:${"a".repeat(64)}`,
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+  const reAdopted: InstallConfig = {
+    id: "cfg-re-adopted-route",
+    workspaceId,
+    name: "re-adopted-route",
+    variableMapping: { original: "re-adopted" },
+    outputAllowlist: {},
+    policy: {},
+    internal: {
+      reason: "per_install_overrides",
+      sourceSnapshotId: "snap_re_adopted_route",
+      repositoryInstallUxDigest: `sha256:${"b".repeat(64)}`,
+      reAdoption: {
+        capsuleId: "cap_install_config_immutable",
+        actorSubject: "user_install_config_immutable",
+        reason: "adopt reviewed repository setup",
+        idempotencyKeyHash: `sha256:${"c".repeat(64)}`,
+        requestDigest: `sha256:${"d".repeat(64)}`,
+        previousInstallConfigId: "cfg_previous_route",
+        previousInstallConfigDigest: `sha256:${"e".repeat(64)}`,
+        previousCapsuleStatus: "pending",
+        previousStateGeneration: 0,
+        previousExecutionAuthorityEpoch: 1,
+        authorityGuard: `sha256:${"f".repeat(64)}`,
+        derivedTargetDigest: `sha256:${"1".repeat(64)}`,
+        baseInstallConfigId: "cfg_base_route",
+        sourceSnapshotId: "snap_re_adopted_route",
+      },
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+  await store.putInstallConfig(compiled);
+  await store.putInstallConfig(reAdopted);
+
+  let putCount = 0;
+  const putInstallConfig = store.putInstallConfig.bind(store);
+  store.putInstallConfig = async (config) => {
+    putCount += 1;
+    return await putInstallConfig(config);
+  };
+  const { app, operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: store,
+    authorizeDeployControlBearer: ({ token }) => {
+      if (token === "operator") {
+        return {
+          actor: "operator",
+          workspaceIds: "*",
+          operations: "*",
+          runnerProfileIds: "*",
+        };
+      }
+      if (token === "scoped") {
+        return {
+          actor: "workspace-user",
+          workspaceIds: [workspaceId],
+          operations: "*",
+          runnerProfileIds: "*",
+        };
+      }
+      return undefined;
+    },
+  });
+  const capsule = await operations.capsules.createCapsule({
+    workspaceId,
+    name: "immutable-capsule",
+    environment: "production",
+    sourceId: "src_install_config_immutable",
+    installConfigId: compiled.id,
+    installingPrincipalId: "user_install_config_immutable",
+  });
+  const beforeCapsule = await operations.capsules.getCapsule(capsule.id);
+  const beforeEpoch = await operations.capsules.getCapsuleExecutionAuthorityEpoch(
+    capsule.id,
+  );
+  const beforeRows = new Map(
+    await Promise.all(
+      [compiled.id, reAdopted.id].map(async (id) => {
+        const row = await operations.capsules.getInstallConfig(id);
+        return [id, { row, digest: await stableJsonDigest(row) }] as const;
+      }),
+    ),
+  );
+  putCount = 0;
+
+  for (const token of ["operator", "scoped"]) {
+    for (const id of [compiled.id, reAdopted.id]) {
+      const response = await app.request(`/internal/v1/install-configs/${id}`, {
+        method: "PATCH",
+        headers: headers(token),
+        body: JSON.stringify({
+          kind: INSTALL_CONFIG_PATCH_V1_KIND,
+          variableMapping: { changed: "must-not-persist" },
+        }),
+      });
+      expect(response.status).toBe(409);
+      expect((await response.json()).error).toMatchObject({
+        code: "failed_precondition",
+        details: { reason: "repository_install_ux_immutable" },
+      });
+    }
+  }
+
+  expect(putCount).toBe(0);
+  for (const id of [compiled.id, reAdopted.id]) {
+    const before = beforeRows.get(id);
+    const after = await operations.capsules.getInstallConfig(id);
+    expect(after).toEqual(before?.row);
+    expect(await stableJsonDigest(after)).toBe(before?.digest);
+    expect(after.internal?.reAdoption?.derivedTargetDigest).toBe(
+      before?.row.internal?.reAdoption?.derivedTargetDigest,
+    );
+  }
+  expect(await operations.capsules.getCapsule(capsule.id)).toEqual(
+    beforeCapsule,
+  );
+  expect(
+    await operations.capsules.getCapsuleExecutionAuthorityEpoch(capsule.id),
+  ).toBe(beforeEpoch);
 });
 
 test("Workspace-scoped bearer cannot patch a shared InstallConfig", async () => {

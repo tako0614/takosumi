@@ -324,6 +324,8 @@ const RUNNER_MUTATION_INDETERMINATE_HEADER =
 // record-format migration accidentally grant a second provider dispatch.
 const RUNNER_MUTATION_AUTHORITY_STORAGE_KEY = "runner-mutation-authority";
 const RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX = "runner-mutation-dispatch@v2:";
+const RUNNER_RELEASE_AUTHORITY_STORAGE_KEY = "runner-release-authority";
+const RUNNER_RELEASE_DISPATCH_STORAGE_PREFIX = "runner-release-dispatch@v1:";
 
 interface RunnerMutationDispatchRecord {
   readonly kind: "takosumi.runner-mutation-dispatch@v2";
@@ -350,6 +352,37 @@ type RunnerMutationAuthorityClaim =
     }
   | { readonly kind: "blocked" };
 
+interface RunnerReleaseCompletedOutcome {
+  readonly status: "succeeded" | "failed";
+  readonly exitCode: number;
+  readonly commandCount: number;
+  readonly failedCommandId?: string;
+}
+
+interface RunnerReleaseDispatchRecord {
+  readonly kind: "takosumi.runner-release-dispatch@v1";
+  readonly releaseRunId: string;
+  readonly applyRunId: string;
+  /** Exact ordered lifecycle action set covered by this one-shot authority. */
+  readonly actionIds: readonly string[];
+  /** SHA-256 over immutable release inputs; request values are never stored. */
+  readonly semanticDigest: string;
+  readonly phase: "preparing" | "dispatched" | "completed" | "indeterminate";
+  readonly redispatchBlocked: true;
+  readonly outcome?: RunnerReleaseCompletedOutcome;
+}
+
+type RunnerReleaseAuthorityClaim =
+  | {
+      readonly kind: "preparing";
+      readonly record: RunnerReleaseDispatchRecord;
+    }
+  | {
+      readonly kind: "replay";
+      readonly record: RunnerReleaseDispatchRecord;
+    }
+  | { readonly kind: "blocked" };
+
 export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<CloudflareWorkerEnv> {
   defaultPort = 8080;
   requiredPorts = [8080];
@@ -360,6 +393,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   #stateCryptoInstance: StateArtifactCrypto | undefined;
   #lastStartupSeconds: number | undefined;
   readonly #activeMutationPreparations = new Set<string>();
+  readonly #activeReleasePreparations = new Set<string>();
   readonly #localRunnerProxyUrl: URL | undefined;
   readonly #artifactLimits: RunnerArtifactLimits;
 
@@ -838,6 +872,218 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     return runnerMutationIndeterminateResponse(record.action);
   }
 
+  async #claimReleasePreparation(
+    releaseRunId: string,
+    requestPayload: unknown,
+  ): Promise<RunnerReleaseAuthorityClaim> {
+    let identity: {
+      readonly applyRunId: string;
+      readonly actionIds: readonly string[];
+      readonly semanticDigest: string;
+    };
+    try {
+      identity = await runnerReleaseSemanticIdentity(
+        releaseRunId,
+        requestPayload,
+        this.env,
+      );
+    } catch (error) {
+      console.error("OpenTofu runner release authority rejected", {
+        action: "release",
+        errorName: safeRunnerErrorName(error),
+        redispatchBlocked: true,
+      });
+      return { kind: "blocked" };
+    }
+    if (this.#activeReleasePreparations.size > 0) {
+      return { kind: "blocked" };
+    }
+    this.#activeReleasePreparations.add(identity.semanticDigest);
+    try {
+      const existing = await this.ctx.storage.get<unknown>(
+        RUNNER_RELEASE_AUTHORITY_STORAGE_KEY,
+      );
+      if (existing !== undefined) {
+        const record = parseRunnerReleaseDispatchRecord(existing);
+        if (
+          !record ||
+          record.releaseRunId !== releaseRunId ||
+          record.applyRunId !== identity.applyRunId ||
+          !sameOrderedStrings(record.actionIds, identity.actionIds) ||
+          record.semanticDigest !== identity.semanticDigest
+        ) {
+          this.#activeReleasePreparations.delete(identity.semanticDigest);
+          return { kind: "blocked" };
+        }
+        if (record.phase !== "preparing") {
+          this.#activeReleasePreparations.delete(identity.semanticDigest);
+          return { kind: "replay", record };
+        }
+        return { kind: "preparing", record };
+      }
+
+      const record: RunnerReleaseDispatchRecord = {
+        kind: "takosumi.runner-release-dispatch@v1",
+        releaseRunId,
+        applyRunId: identity.applyRunId,
+        actionIds: identity.actionIds,
+        semanticDigest: identity.semanticDigest,
+        phase: "preparing",
+        redispatchBlocked: true,
+      };
+      await this.#writeReleaseDispatchRecord(record);
+      return { kind: "preparing", record };
+    } catch (error) {
+      this.#activeReleasePreparations.delete(identity.semanticDigest);
+      throw error;
+    }
+  }
+
+  async #markReleaseDispatched(
+    preparation: RunnerReleaseDispatchRecord,
+  ): Promise<RunnerReleaseDispatchRecord | undefined> {
+    const current = parseRunnerReleaseDispatchRecord(
+      await this.ctx.storage.get<unknown>(
+        RUNNER_RELEASE_AUTHORITY_STORAGE_KEY,
+      ),
+    );
+    if (
+      !current ||
+      current.phase !== "preparing" ||
+      !sameReleaseDispatchIdentity(current, preparation)
+    ) {
+      this.#activeReleasePreparations.delete(preparation.semanticDigest);
+      return undefined;
+    }
+    const dispatched: RunnerReleaseDispatchRecord = {
+      ...current,
+      phase: "dispatched",
+    };
+    await this.#writeReleaseDispatchRecord(dispatched);
+    this.#activeReleasePreparations.delete(preparation.semanticDigest);
+    return dispatched;
+  }
+
+  async #releaseReleasePreparation(
+    preparation: RunnerReleaseDispatchRecord,
+  ): Promise<void> {
+    try {
+      const current = parseRunnerReleaseDispatchRecord(
+        await this.ctx.storage.get<unknown>(
+          RUNNER_RELEASE_AUTHORITY_STORAGE_KEY,
+        ),
+      );
+      if (
+        !current ||
+        current.phase !== "preparing" ||
+        !sameReleaseDispatchIdentity(current, preparation)
+      ) {
+        return;
+      }
+      const authorityDelete = this.ctx.storage.delete(
+        RUNNER_RELEASE_AUTHORITY_STORAGE_KEY,
+      );
+      const evidenceDelete = this.ctx.storage.delete(
+        `${RUNNER_RELEASE_DISPATCH_STORAGE_PREFIX}${preparation.semanticDigest}`,
+      );
+      await Promise.all([authorityDelete, evidenceDelete]);
+    } finally {
+      this.#activeReleasePreparations.delete(preparation.semanticDigest);
+    }
+  }
+
+  async #writeReleaseDispatchRecord(
+    record: RunnerReleaseDispatchRecord,
+  ): Promise<void> {
+    const authorityWrite = this.ctx.storage.put(
+      RUNNER_RELEASE_AUTHORITY_STORAGE_KEY,
+      record,
+    );
+    const evidenceWrite = this.ctx.storage.put(
+      `${RUNNER_RELEASE_DISPATCH_STORAGE_PREFIX}${record.semanticDigest}`,
+      record,
+    );
+    await Promise.all([authorityWrite, evidenceWrite]);
+  }
+
+  async #dispatchReleaseOnce(
+    request: Request,
+    record: RunnerReleaseDispatchRecord,
+  ): Promise<Response> {
+    try {
+      return await this.#containerFetch(request);
+    } catch (error) {
+      return await this.#recordReleaseIndeterminate(record, error);
+    }
+  }
+
+  async #completeReleaseDispatch(
+    record: RunnerReleaseDispatchRecord,
+    outcome: RunnerReleaseCompletedOutcome,
+  ): Promise<Response | true | undefined> {
+    try {
+      const current = parseRunnerReleaseDispatchRecord(
+        await this.ctx.storage.get<unknown>(
+          RUNNER_RELEASE_AUTHORITY_STORAGE_KEY,
+        ),
+      );
+      if (
+        !current ||
+        current.phase !== "dispatched" ||
+        !sameReleaseDispatchIdentity(current, record)
+      ) {
+        return undefined;
+      }
+      await this.#writeReleaseDispatchRecord({
+        ...current,
+        phase: "completed",
+        outcome,
+      });
+      return true;
+    } catch (error) {
+      return await this.#recordReleaseIndeterminate(record, error);
+    }
+  }
+
+  async #recordReleaseIndeterminate(
+    record: RunnerReleaseDispatchRecord,
+    error: unknown,
+  ): Promise<Response> {
+    console.error("OpenTofu runner release outcome is indeterminate", {
+      action: "release",
+      errorName: safeRunnerErrorName(error),
+      redispatchBlocked: true,
+    });
+    try {
+      const current = parseRunnerReleaseDispatchRecord(
+        await this.ctx.storage.get<unknown>(
+          RUNNER_RELEASE_AUTHORITY_STORAGE_KEY,
+        ),
+      );
+      if (current && sameReleaseDispatchIdentity(current, record)) {
+        if (current.phase === "completed" && current.outcome) {
+          return runnerCompletedReleaseResponse(current);
+        }
+        if (current.phase === "dispatched") {
+          await this.#writeReleaseDispatchRecord({
+            ...current,
+            phase: "indeterminate",
+          });
+        }
+      }
+    } catch (storageError) {
+      console.error(
+        "OpenTofu runner release indeterminate evidence update failed",
+        {
+          action: "release",
+          errorName: safeRunnerErrorName(storageError),
+          redispatchBlocked: true,
+        },
+      );
+    }
+    return runnerReleaseIndeterminateResponse();
+  }
+
   async #fetchWithDurablePlanArtifacts(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const match = /^\/runs\/([^/]+)$/.exec(url.pathname);
@@ -903,6 +1149,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     let mutationPreparation: RunnerMutationDispatchRecord | undefined;
     let mutationDispatch: RunnerMutationDispatchRecord | undefined;
     let mutationRequest: Request | undefined;
+    let releasePreparation: RunnerReleaseDispatchRecord | undefined;
+    let releaseDispatch: RunnerReleaseDispatchRecord | undefined;
+    let releaseRequest: Request | undefined;
     if (isRunnerMutationAction(envelope.action)) {
       const claim = await this.#claimMutationPreparation(
         runId,
@@ -935,6 +1184,21 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           mutationPreparation,
         );
       }
+    }
+    if (envelope.action === "release") {
+      const claim = await this.#claimReleasePreparation(
+        runId,
+        envelope.request,
+      );
+      if (claim.kind === "blocked") {
+        return runnerReleaseIndeterminateResponse();
+      }
+      if (claim.kind === "replay") {
+        return claim.record.phase === "completed" && claim.record.outcome
+          ? runnerCompletedReleaseResponse(claim.record)
+          : runnerReleaseIndeterminateResponse();
+      }
+      releasePreparation = claim.record;
     }
     try {
       // M2: restore the snapshotted source tree into the container before any
@@ -982,9 +1246,28 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           );
         }
       }
+      if (releasePreparation) {
+        releaseRequest = dispatchRequest();
+        if (releaseRequest.signal.aborted) {
+          throw releaseRequest.signal.reason instanceof Error
+            ? releaseRequest.signal.reason
+            : new DOMException(
+                "OpenTofu runner release was aborted before dispatch",
+                "AbortError",
+              );
+        }
+        releaseDispatch =
+          await this.#markReleaseDispatched(releasePreparation);
+        if (!releaseDispatch) {
+          return runnerReleaseIndeterminateResponse();
+        }
+      }
     } catch (error) {
       if (mutationPreparation && !mutationDispatch) {
         await this.#releaseMutationPreparation(mutationPreparation);
+      }
+      if (releasePreparation && !releaseDispatch) {
+        await this.#releaseReleasePreparation(releasePreparation);
       }
       throw error;
     }
@@ -994,6 +1277,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       unboundedRunnerResponse = await this.#dispatchMutationOnce(
         mutationRequest,
         mutationDispatch,
+      );
+    } else if (releaseDispatch && releaseRequest) {
+      unboundedRunnerResponse = await this.#dispatchReleaseOnce(
+        releaseRequest,
+        releaseDispatch,
       );
     } else {
       unboundedRunnerResponse = await this.#containerFetchAfterReady(
@@ -1010,6 +1298,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         this.#artifactLimits.runnerResponse,
       );
     } catch (error) {
+      if (releaseDispatch) {
+        return await this.#recordReleaseIndeterminate(releaseDispatch, error);
+      }
       if (
         mutationDispatch &&
         !(error instanceof RunnerArtifactSizeLimitError)
@@ -1017,6 +1308,37 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         return await this.#recordMutationIndeterminate(mutationDispatch, error);
       }
       throw error;
+    }
+    if (
+      releaseDispatch &&
+      runnerResponse.headers.get(RUNNER_MUTATION_INDETERMINATE_HEADER) === "1"
+    ) {
+      return runnerResponse;
+    }
+    if (releaseDispatch) {
+      let outcome: RunnerReleaseCompletedOutcome;
+      try {
+        outcome = releaseCompletedOutcome(
+          await readJsonObject(
+            runnerResponse.clone(),
+            this.#artifactLimits.runnerResponse,
+          ),
+          releaseDispatch,
+        );
+      } catch (error) {
+        return await this.#recordReleaseIndeterminate(releaseDispatch, error);
+      }
+      const completion = await this.#completeReleaseDispatch(
+        releaseDispatch,
+        outcome,
+      );
+      if (completion instanceof Response) return completion;
+      if (completion !== true) {
+        return await this.#recordReleaseIndeterminate(
+          releaseDispatch,
+          new Error("release completion authority changed before commit"),
+        );
+      }
     }
     const providerExecutionFailed =
       envelope.action === "apply" &&
@@ -3392,6 +3714,458 @@ function parseRunnerMutationDispatchRecord(
     phase,
     redispatchBlocked: true,
   };
+}
+
+function parseRunnerReleaseDispatchRecord(
+  value: unknown,
+): RunnerReleaseDispatchRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  const releaseRunId = stringField(value, "releaseRunId");
+  const applyRunId = stringField(value, "applyRunId");
+  const actionIds = value.actionIds;
+  const semanticDigest = stringField(value, "semanticDigest");
+  const phase = stringField(value, "phase");
+  if (
+    value.kind !== "takosumi.runner-release-dispatch@v1" ||
+    !releaseRunId ||
+    !applyRunId ||
+    !Array.isArray(actionIds) ||
+    actionIds.length === 0 ||
+    actionIds.some((id) => typeof id !== "string" || id.length === 0) ||
+    new Set(actionIds).size !== actionIds.length ||
+    !semanticDigest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(semanticDigest) ||
+    (phase !== "preparing" &&
+      phase !== "dispatched" &&
+      phase !== "completed" &&
+      phase !== "indeterminate") ||
+    value.redispatchBlocked !== true
+  ) {
+    return undefined;
+  }
+  const outcome = parseRunnerReleaseCompletedOutcome(value.outcome);
+  if (
+    (phase === "completed" && !outcome) ||
+    (phase !== "completed" && value.outcome !== undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "takosumi.runner-release-dispatch@v1",
+    releaseRunId,
+    applyRunId,
+    actionIds: [...actionIds] as string[],
+    semanticDigest,
+    phase,
+    redispatchBlocked: true,
+    ...(outcome ? { outcome } : {}),
+  };
+}
+
+function parseRunnerReleaseCompletedOutcome(
+  value: unknown,
+): RunnerReleaseCompletedOutcome | undefined {
+  if (!isRecord(value)) return undefined;
+  const status = stringField(value, "status");
+  const exitCode = value.exitCode;
+  const commandCount = value.commandCount;
+  const failedCommandId = stringField(value, "failedCommandId");
+  if (
+    (status !== "succeeded" && status !== "failed") ||
+    typeof exitCode !== "number" ||
+    !Number.isSafeInteger(exitCode) ||
+    typeof commandCount !== "number" ||
+    !Number.isSafeInteger(commandCount) ||
+    commandCount < 0 ||
+    (status === "succeeded" && exitCode !== 0) ||
+    (status === "failed" && exitCode === 0)
+  ) {
+    return undefined;
+  }
+  return {
+    status,
+    exitCode,
+    commandCount,
+    ...(failedCommandId ? { failedCommandId } : {}),
+  };
+}
+
+function sameReleaseDispatchIdentity(
+  left: RunnerReleaseDispatchRecord,
+  right: RunnerReleaseDispatchRecord,
+): boolean {
+  return (
+    left.releaseRunId === right.releaseRunId &&
+    left.applyRunId === right.applyRunId &&
+    sameOrderedStrings(left.actionIds, right.actionIds) &&
+    left.semanticDigest === right.semanticDigest
+  );
+}
+
+async function runnerReleaseSemanticIdentity(
+  releaseRunId: string,
+  requestPayload: unknown,
+  env: CloudflareWorkerEnv,
+): Promise<{
+  readonly applyRunId: string;
+  readonly actionIds: readonly string[];
+  readonly semanticDigest: string;
+}> {
+  if (!isRecord(requestPayload)) {
+    throw new Error("runner release request must be an object");
+  }
+  const activation = recordField(requestPayload, "activation");
+  const applyRunId = activation && stringField(activation, "applyRunId");
+  const workspaceId = activation && stringField(activation, "workspaceId");
+  const capsuleId = activation && stringField(activation, "capsuleId");
+  const stateVersionId = activation && stringField(activation, "stateVersionId");
+  const sourceSnapshotId =
+    activation && stringField(activation, "sourceSnapshotId");
+  const sourceCommit = activation && stringField(activation, "sourceCommit");
+  if (
+    !applyRunId ||
+    !workspaceId ||
+    !capsuleId ||
+    !stateVersionId ||
+    !sourceSnapshotId ||
+    !sourceCommit
+  ) {
+    throw new Error(
+      "runner release requires exact ApplyRun, Workspace, Capsule, StateVersion, and SourceSnapshot authority",
+    );
+  }
+  if (`release_${safeKeySegment(applyRunId)}` !== releaseRunId) {
+    throw new Error("runner release id does not match activation.applyRunId");
+  }
+  const release = recordField(requestPayload, "release");
+  const commands = release?.commands;
+  if (!Array.isArray(commands) || commands.length === 0) {
+    throw new Error("runner release requires immutable command actions");
+  }
+  const actionIds = commands.map((command) => {
+    if (!isRecord(command) || !stringField(command, "id")) {
+      throw new Error("runner release command action requires an id");
+    }
+    return stringField(command, "id")!;
+  });
+  if (new Set(actionIds).size !== actionIds.length) {
+    throw new Error("runner release command action ids must be unique");
+  }
+  const request: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(requestPayload)) {
+    if (key === "runtimeSecrets") {
+      request[key] = runnerReleaseRuntimeSecretSemantics(value);
+      continue;
+    }
+    if (key === "credentials") {
+      request[key] = await runnerReleaseCredentialSemantics(
+        value,
+        activation!,
+        env,
+      );
+      continue;
+    }
+    request[key] = value;
+  }
+  return {
+    applyRunId,
+    actionIds,
+    semanticDigest: await digestText(
+      canonicalRunnerMutationJson({
+        kind: "takosumi.runner-release-semantics@v1",
+        releaseRunId,
+        applyRunId,
+        request,
+      }),
+    ),
+  };
+}
+
+function runnerReleaseRuntimeSecretSemantics(value: unknown): unknown {
+  if (value === undefined) return null;
+  if (!isRecord(value)) {
+    throw new Error("runner release runtime secret dispatch must be an object");
+  }
+  const contract = stringField(value, "contract");
+  const profileDigest = stringField(value, "profileDigest");
+  const files = value.files;
+  if (
+    contract !== "takosumi.runner-runtime-secret-files/v1" ||
+    !profileDigest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(profileDigest) ||
+    !Array.isArray(files) ||
+    files.length !== 1
+  ) {
+    throw new Error("runner release runtime secret profile is invalid");
+  }
+  const file = files[0];
+  if (!isRecord(file)) {
+    throw new Error("runner release runtime secret file is invalid");
+  }
+  const path = stringField(file, "path");
+  const envName = stringField(file, "envName");
+  const secretNames = file.secretNames;
+  if (
+    !path ||
+    !envName ||
+    file.mode !== 0o600 ||
+    typeof file.content !== "string" ||
+    !Array.isArray(secretNames) ||
+    secretNames.length === 0 ||
+    secretNames.some((name) => typeof name !== "string" || name.length === 0)
+  ) {
+    throw new Error("runner release runtime secret file profile is invalid");
+  }
+  return {
+    contract,
+    profileDigest,
+    files: [
+      {
+        path,
+        mode: 0o600,
+        envName,
+        secretNames: [...secretNames],
+      },
+    ],
+  };
+}
+
+async function runnerReleaseCredentialSemantics(
+  value: unknown,
+  activation: Readonly<Record<string, unknown>>,
+  env: CloudflareWorkerEnv,
+): Promise<unknown> {
+  if (!isRecord(value)) {
+    throw new Error("runner release credentials must be an object");
+  }
+  const rawEnv = recordField(value, "env") ?? {};
+  if (Object.values(rawEnv).some((entry) => typeof entry !== "string")) {
+    throw new Error("runner release credential env must contain strings");
+  }
+  const rawFiles = value.files;
+  if (rawFiles !== undefined && !Array.isArray(rawFiles)) {
+    throw new Error("runner release credential files must be an array");
+  }
+  const files = (Array.isArray(rawFiles) ? rawFiles : []).map((entry) => {
+    if (!isRecord(entry)) {
+      throw new Error("runner release credential file must be an object");
+    }
+    const path = stringField(entry, "path");
+    const content = stringField(entry, "content");
+    const mode = entry.mode;
+    if (!path || content === undefined || typeof mode !== "number") {
+      throw new Error(
+        "runner release credential file requires path, mode, and content",
+      );
+    }
+    return {
+      path,
+      mode,
+      ...(stringField(entry, "envName")
+        ? { envName: stringField(entry, "envName")! }
+        : {}),
+    };
+  });
+  const deliveries = [
+    ...Object.entries(rawEnv).map(([name, entry]) => ({
+      delivery: `env:${name}`,
+      value: entry as string,
+    })),
+    ...(Array.isArray(rawFiles)
+      ? rawFiles.flatMap((entry) =>
+          isRecord(entry) &&
+          typeof entry.path === "string" &&
+          typeof entry.content === "string"
+            ? [{ delivery: `file:${entry.path}`, value: entry.content }]
+            : [],
+        )
+      : []),
+  ];
+  const signedTokenDeliveries = new Map<string, Set<string>>();
+  for (const entry of deliveries) {
+    if (!isRunCredentialToken(entry.value)) continue;
+    const tokenDeliveries =
+      signedTokenDeliveries.get(entry.value) ?? new Set<string>();
+    tokenDeliveries.add(entry.delivery);
+    signedTokenDeliveries.set(entry.value, tokenDeliveries);
+  }
+  const authorities: RunnerVerifiedCredentialAuthority[] = [];
+  if (signedTokenDeliveries.size > 0) {
+    const secret = runCredentialTokenSecret(env as Record<string, unknown>);
+    if (!secret) {
+      throw new Error("Run credential verification authority is unavailable");
+    }
+    const bindings = mutationCredentialManifestBindings(value);
+    const signingAuthorityDigest = await digestText(secret);
+    const workspaceId = stringField(activation, "workspaceId");
+    const capsuleId = stringField(activation, "capsuleId");
+    const applyRunId = stringField(activation, "applyRunId");
+    if (!workspaceId || !capsuleId || !applyRunId) {
+      throw new Error(
+        "signed release credentials require exact ApplyRun Workspace and Capsule context",
+      );
+    }
+    for (const [token, tokenDeliveries] of signedTokenDeliveries) {
+      const verified = await verifyRunCredentialTokenAuthority(token, { secret });
+      if (!verified.ok) {
+        throw new Error(`Run credential verification failed: ${verified.reason}`);
+      }
+      const payload = verified.payload;
+      if (
+        (payload.phase !== "apply" && payload.phase !== "destroy") ||
+        payload.workspaceId !== workspaceId ||
+        payload.capsuleId !== capsuleId ||
+        payload.runId !== applyRunId ||
+        payload.sub !== payload.installingPrincipalId
+      ) {
+        throw new Error(
+          "signed Run credential authority mismatches the release activation",
+        );
+      }
+      if (
+        !bindings.some(
+          (binding) =>
+            stringField(binding, "connectionId") === payload.connectionId &&
+            stringField(binding, "providerSource") === payload.provider,
+        )
+      ) {
+        throw new Error(
+          "signed Run credential authority mismatches the credential manifest",
+        );
+      }
+      authorities.push({
+        kind: "takosumi.run-credential-authority@v1",
+        tokenType: payload.typ,
+        tokenVersion: payload.v,
+        signingAuthorityDigest,
+        audience: payload.aud,
+        subject: payload.sub,
+        workspaceId: payload.workspaceId,
+        capsuleId: payload.capsuleId,
+        runId: payload.runId,
+        installingPrincipalId: payload.installingPrincipalId,
+        connectionId: payload.connectionId,
+        provider: payload.provider,
+        phase: payload.phase,
+        scopes: [...payload.scopes].sort(),
+        deliveries: [...tokenDeliveries].sort(),
+      });
+    }
+  }
+  return {
+    envNames: Object.keys(rawEnv).sort(),
+    files: files.sort((left, right) =>
+      canonicalRunnerMutationJson(left).localeCompare(
+        canonicalRunnerMutationJson(right),
+      ),
+    ),
+    manifest: value.manifest ?? null,
+    authorities: authorities.sort((left, right) =>
+      canonicalRunnerMutationJson(left).localeCompare(
+        canonicalRunnerMutationJson(right),
+      ),
+    ),
+    opaqueMaterialDigests: (
+      await Promise.all(
+        deliveries
+          .filter((entry) => !isRunCredentialToken(entry.value))
+          .map(async (entry) => ({
+            delivery: entry.delivery,
+            materialDigest: await digestText(
+              canonicalRunnerMutationJson({
+                kind: "takosumi.runner-release-opaque-credential@v1",
+                delivery: entry.delivery,
+                material: entry.value,
+              }),
+            ),
+          })),
+      )
+    ).sort((left, right) => left.delivery.localeCompare(right.delivery)),
+  };
+}
+
+function releaseCompletedOutcome(
+  payload: Record<string, unknown>,
+  record: RunnerReleaseDispatchRecord,
+): RunnerReleaseCompletedOutcome {
+  if (
+    stringField(payload, "runId") !== record.releaseRunId ||
+    stringField(payload, "action") !== "release"
+  ) {
+    throw new Error("runner release response identity does not match dispatch");
+  }
+  const outcome = parseRunnerReleaseCompletedOutcome({
+    ...payload,
+    commandCount:
+      typeof payload.commandCount === "number"
+        ? payload.commandCount
+        : record.actionIds.length,
+  });
+  if (!outcome || outcome.commandCount !== record.actionIds.length) {
+    throw new Error("runner release response has no terminal outcome");
+  }
+  return outcome;
+}
+
+function sameOrderedStrings(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+function runnerCompletedReleaseResponse(
+  record: RunnerReleaseDispatchRecord,
+): Response {
+  const outcome = record.outcome;
+  if (!outcome) return runnerReleaseIndeterminateResponse();
+  return Response.json(
+    {
+      runId: record.releaseRunId,
+      action: "release",
+      status: outcome.status,
+      exitCode: outcome.exitCode,
+      commandCount: outcome.commandCount,
+      ...(outcome.failedCommandId
+        ? { failedCommandId: outcome.failedCommandId }
+        : {}),
+      ...(outcome.status === "failed"
+        ? {
+            phase: "release",
+            stderr:
+              "release command previously completed with a failed outcome; automatic redispatch is blocked",
+          }
+        : {}),
+    },
+    { status: outcome.status === "succeeded" ? 200 : 500 },
+  );
+}
+
+function runnerReleaseIndeterminateResponse(): Response {
+  return Response.json(
+    {
+      error: "OpenTofu runner release outcome is indeterminate",
+      errorCode: RUNNER_MUTATION_INDETERMINATE_CODE,
+      status: "failed",
+      phase: "release",
+      retryable: false,
+      outcome: "indeterminate",
+      evidence: {
+        kind: RUNNER_MUTATION_INDETERMINATE_CODE,
+        action: "release",
+        redispatchBlocked: true,
+      },
+      detail:
+        "release mutation may have occurred; automatic redispatch is blocked until authoritative repair confirms the outcome",
+    },
+    {
+      status: 409,
+      headers: { [RUNNER_MUTATION_INDETERMINATE_HEADER]: "1" },
+    },
+  );
 }
 
 const MUTABLE_RUN_EVIDENCE_FIELDS = new Set([

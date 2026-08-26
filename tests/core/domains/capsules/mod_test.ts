@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import type {
   OpenTofuControlStore,
@@ -8,6 +9,7 @@ import type {
 } from "../../../../core/domains/deploy-control/store.ts";
 import {
   CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
+  INSTALL_CONFIG_PATCH_V1_KIND,
   type InstallConfig,
 } from "takosumi-contract/install-configs";
 import type { Workspace } from "takosumi-contract/workspaces";
@@ -557,6 +559,105 @@ test("a Workspace-owned InstallConfig cannot author a new operator lifecycle act
   // Re-persisting the inherited action (and narrowing) stays allowed.
   const unchanged = await service.putInstallConfig(stored);
   expect(unchanged.lifecycleActions?.[0]?.id).toBe("activate");
+});
+
+test("repository-derived InstallConfigs reject patches without changing authority", async () => {
+  const { store, service } = build();
+  await seedWorkspace(store);
+  await seedSource(store);
+
+  const compiled = await seedConfig(store, {
+    id: "icfg_compiled",
+    workspaceId: "ws_1",
+    internal: {
+      reason: "per_install_overrides",
+      sourceSnapshotId: "snap_compiled",
+      repositoryInstallUxDigest: `sha256:${"a".repeat(64)}`,
+    },
+    variableMapping: { original: "compiled" },
+  });
+  const capsule = await createCapsule(service, {
+    installConfigId: compiled.id,
+  });
+  const sealed = await seedConfig(store, {
+    id: "icfg_re_adopted",
+    workspaceId: "ws_1",
+    internal: {
+      reason: "per_install_overrides",
+      sourceSnapshotId: "snap_re_adopted",
+      repositoryInstallUxDigest: `sha256:${"b".repeat(64)}`,
+      reAdoption: {
+        capsuleId: capsule.id,
+        actorSubject: "user_1",
+        reason: "adopt reviewed repository setup",
+        idempotencyKeyHash: `sha256:${"c".repeat(64)}`,
+        requestDigest: `sha256:${"d".repeat(64)}`,
+        previousInstallConfigId: "cfg_previous",
+        previousInstallConfigDigest: `sha256:${"e".repeat(64)}`,
+        previousCapsuleStatus: capsule.status,
+        previousStateGeneration: capsule.currentStateGeneration,
+        previousExecutionAuthorityEpoch: 1,
+        authorityGuard: `sha256:${"f".repeat(64)}`,
+        derivedTargetDigest: `sha256:${"1".repeat(64)}`,
+        baseInstallConfigId: "cfg_base",
+        sourceSnapshotId: "snap_re_adopted",
+      },
+    },
+    variableMapping: { original: "re-adopted" },
+  });
+
+  let putCount = 0;
+  const putInstallConfig = store.putInstallConfig.bind(store);
+  store.putInstallConfig = async (config) => {
+    putCount += 1;
+    return await putInstallConfig(config);
+  };
+  const beforeCapsule = await service.getCapsule(capsule.id);
+  const beforeEpoch = await service.getCapsuleExecutionAuthorityEpoch(
+    capsule.id,
+  );
+  const patch = {
+    kind: INSTALL_CONFIG_PATCH_V1_KIND,
+    variableMapping: { changed: "must-not-persist" },
+  };
+
+  for (const row of [compiled, sealed]) {
+    const before = await service.getInstallConfig(row.id);
+    const beforeDigest = await stableJsonDigest(before);
+    const beforeSeal = before.internal?.reAdoption?.derivedTargetDigest;
+    await expect(service.applyInstallConfigPatch(row.id, patch)).rejects
+      .toMatchObject({
+        code: "failed_precondition",
+        details: { reason: "repository_install_ux_immutable" },
+        message: expect.stringContaining("compiled repository install configuration is immutable"),
+      });
+    expect(putCount).toBe(0);
+    const after = await service.getInstallConfig(row.id);
+    expect(after).toEqual(before);
+    expect(await stableJsonDigest(after)).toBe(beforeDigest);
+    expect(after.internal?.reAdoption?.derivedTargetDigest).toBe(beforeSeal);
+  }
+
+  expect(await service.getCapsule(capsule.id)).toEqual(beforeCapsule);
+  expect(await service.getCapsuleExecutionAuthorityEpoch(capsule.id)).toBe(
+    beforeEpoch,
+  );
+
+  const mutable = await seedConfig(store, {
+    id: "icfg_mutable",
+    workspaceId: "ws_1",
+    internal: { reason: "per_install_overrides" },
+  });
+  putCount = 0;
+  const mutableResult = await service.applyInstallConfigPatch(mutable.id, patch);
+  expect(mutableResult.variableMapping).toEqual({ changed: "must-not-persist" });
+  expect(putCount).toBe(1);
+
+  const shared = await seedConfig(store, { id: "cfg_shared" });
+  putCount = 0;
+  const sharedResult = await service.applyInstallConfigPatch(shared.id, patch);
+  expect(sharedResult.variableMapping).toEqual({ changed: "must-not-persist" });
+  expect(putCount).toBe(1);
 });
 
 test("InstallConfig reads list only selectable service-side configuration", async () => {

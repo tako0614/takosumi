@@ -6,6 +6,7 @@ import type {
   ControlWorkspaceRole,
 } from "./control-operations.ts";
 import type { AccountsStore } from "./store.ts";
+import { oidcClientActivationDigest } from "./oidc-activation.ts";
 
 export interface OidcLiveGrantClient {
   readonly clientId: string;
@@ -138,10 +139,12 @@ export async function validateOidcLiveGrant(input: {
   // check closes the crash window between updating that declaration and
   // activating the matching Accounts client registration.
   let installConfig;
+  let executionAuthorityEpoch;
   try {
-    installConfig = await operations.capsules.getInstallConfig(
-      capsule.installConfigId,
-    );
+    [installConfig, executionAuthorityEpoch] = await Promise.all([
+      operations.capsules.getInstallConfig(capsule.installConfigId),
+      operations.capsules.getCapsuleExecutionAuthorityEpoch(capsule.id),
+    ]);
   } catch {
     return { ok: false, reason: "install_grant_missing" };
   }
@@ -163,11 +166,18 @@ export async function validateOidcLiveGrant(input: {
       return { ok: false, reason: "client_binding_changed" };
     }
   }
-  const installConfigUpdatedAt = Date.parse(installConfig.updatedAt);
-  if (
-    Number.isFinite(installConfigUpdatedAt) &&
-    currentClient.updatedAt < installConfigUpdatedAt
-  ) {
+  let activationDigest: string;
+  try {
+    activationDigest = await oidcClientActivationDigest({
+      workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
+      executionAuthorityEpoch,
+      installConfig,
+    });
+  } catch {
+    return { ok: false, reason: "install_grant_stale" };
+  }
+  if (currentClient.activationDigest !== activationDigest) {
     return { ok: false, reason: "install_grant_stale" };
   }
   if (

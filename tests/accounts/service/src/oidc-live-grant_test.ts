@@ -14,6 +14,7 @@ import {
   InMemoryAccountsStore,
   type OidcClientRecord,
 } from "../../../../accounts/service/src/store.ts";
+import { oidcClientActivationDigest } from "../../../../accounts/service/src/oidc-activation.ts";
 
 const issuer = "https://accounts.example.test";
 const clientId = "toc_live_grant";
@@ -39,17 +40,19 @@ async function pkceChallenge(verifier: string): Promise<string> {
     .replace(/=+$/u, "");
 }
 
-function liveGrantFixture() {
+async function liveGrantFixture() {
   const store = new InMemoryAccountsStore();
   const now = Date.now();
   const state: {
     capsuleStatus: CapsuleStatus;
     memberStatus: WorkspaceMemberStatus;
     memberRoles: string[];
+    executionAuthorityEpoch: number;
   } = {
     capsuleStatus: "active",
     memberStatus: "active",
     memberRoles: ["member"],
+    executionAuthorityEpoch: 1,
   };
   const client: OidcClientRecord = {
     clientId,
@@ -93,6 +96,8 @@ function liveGrantFixture() {
         status: state.capsuleStatus,
       }),
       getInstallConfig: async () => installConfig,
+      getCapsuleExecutionAuthorityEpoch: async () =>
+        state.executionAuthorityEpoch,
     },
     workspaces: {
       getWorkspace: async () => ({
@@ -128,7 +133,15 @@ function liveGrantFixture() {
     createdAt: now,
     expiresAt: now + 60_000,
   });
-  store.saveOidcClient(client);
+  store.saveOidcClient({
+    ...client,
+    activationDigest: await oidcClientActivationDigest({
+      workspaceId,
+      capsuleId,
+      executionAuthorityEpoch: state.executionAuthorityEpoch,
+      installConfig: installConfig as InstallConfig,
+    }),
+  });
   return {
     store,
     state,
@@ -157,7 +170,7 @@ function authorizeRequest(): { request: Request; url: URL } {
 }
 
 test("authorize resolves a current Capsule grant and terminal status revokes its client", async () => {
-  const { store, state, operations } = liveGrantFixture();
+  const { store, state, operations } = await liveGrantFixture();
   const first = authorizeRequest();
   const allowed = await handleAuthorize({
     ...first,
@@ -183,13 +196,56 @@ test("authorize resolves a current Capsule grant and terminal status revokes its
   expect(store.findOidcClientForCapsule(capsuleId)).toBeUndefined();
 });
 
+test("dynamic grant denies a legacy or stale activation digest without revoking its Apply-repairable client", async () => {
+  const { store, state, operations } = await liveGrantFixture();
+  const current = store.findOidcClient(clientId)!;
+  store.saveOidcClient({ ...current, activationDigest: undefined });
+  const legacy = authorizeRequest();
+  expect((await handleAuthorize({
+    ...legacy,
+    flow,
+    clients: new Map(),
+    store,
+    operations,
+  })).status).toBe(400);
+  expect(store.findOidcClient(clientId)).toBeDefined();
+
+  store.saveOidcClient(current);
+  state.executionAuthorityEpoch = 2;
+  const stale = authorizeRequest();
+  expect((await handleAuthorize({
+    ...stale,
+    flow,
+    clients: new Map(),
+    store,
+    operations,
+  })).status).toBe(400);
+  expect(store.findOidcClient(clientId)?.activationDigest).toBe(
+    current.activationDigest,
+  );
+});
+
+test("dynamic grant denies current InstallConfig or OIDC profile drift", async () => {
+  const { store, operations, installConfig } = await liveGrantFixture();
+  installConfig.variableMapping.application_url =
+    "https://changed.example.test";
+  const changedConfig = authorizeRequest();
+  expect((await handleAuthorize({
+    ...changedConfig,
+    flow,
+    clients: new Map(),
+    store,
+    operations,
+  })).status).toBe(400);
+});
+
 test("authorize materializes required Interfaces for the exact pairwise Principal", async () => {
   const {
     store,
     operations,
     installConfig,
     requiredInterfaceCalls,
-  } = liveGrantFixture();
+  } = await liveGrantFixture();
   installConfig.requiredInterfaces = [
     {
       key: "ai",
@@ -198,6 +254,16 @@ test("authorize materializes required Interfaces for the exact pairwise Principa
       delivery: { type: "oauth2" },
     },
   ];
+  const currentClient = store.findOidcClient(clientId)!;
+  store.saveOidcClient({
+    ...currentClient,
+    activationDigest: await oidcClientActivationDigest({
+      workspaceId,
+      capsuleId,
+      executionAuthorityEpoch: 1,
+      installConfig: installConfig as InstallConfig,
+    }),
+  });
   const request = authorizeRequest();
 
   const response = await handleAuthorize({
@@ -222,7 +288,7 @@ test("authorize materializes required Interfaces for the exact pairwise Principa
 });
 
 test("composition OIDC client may request one live Workspace-bound Principal token", async () => {
-  const { store, operations } = liveGrantFixture();
+  const { store, operations } = await liveGrantFixture();
   const compositionClientId = "takosumi-platform-local";
   const compositionRedirectUri =
     "https://app.example.test/platform/callback";
@@ -325,7 +391,7 @@ test("composition OIDC client may request one live Workspace-bound Principal tok
 });
 
 test("Workspace-bound composition tokens project Workspace claims without a Capsule", async () => {
-  const { store, state, operations } = liveGrantFixture();
+  const { store, state, operations } = await liveGrantFixture();
   const compositionClientId = "takosumi-platform-workspace-claims";
   const compositionRedirectUri =
     "https://app.example.test/platform/workspace-callback";
@@ -462,7 +528,7 @@ test("Workspace-bound composition tokens project Workspace claims without a Caps
 });
 
 test("authorization-code denial logs only its closed diagnostic stage", async () => {
-  const { store, operations } = liveGrantFixture();
+  const { store, operations } = await liveGrantFixture();
   const warn = spyOn(console, "warn").mockImplementation(() => {});
   try {
     const response = await handleToken({
@@ -495,7 +561,7 @@ test("authorization-code denial logs only its closed diagnostic stage", async ()
 });
 
 test("UserInfo uses the current role and refresh revokes the chain after membership loss", async () => {
-  const { store, state, operations } = liveGrantFixture();
+  const { store, state, operations } = await liveGrantFixture();
   state.memberRoles = ["viewer"];
   store.saveAccessToken("takat_live_grant", {
     clientId,

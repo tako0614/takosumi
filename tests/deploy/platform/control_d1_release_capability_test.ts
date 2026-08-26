@@ -111,6 +111,7 @@ test("control D1 release capability proves bounded REST transport without provid
   );
   expect(capability.source.files.map((file) => file.path)).toEqual([
     "deploy/platform/control_d1_schema_rest.ts",
+    "deploy/cloudflare/d1-rest-transport.ts",
     "deploy/platform/control_d1_schema.ts",
     "deploy/platform/control_d1_release_capability.ts",
     "tests/deploy/platform/control_d1_schema_test.ts",

@@ -571,6 +571,7 @@ function revisionFixture(
         if (id !== installConfig.id) throw new OpenTofuControllerError("not_found", "missing");
         return installConfig;
       },
+      getCapsuleExecutionAuthorityEpoch: async () => 1,
       listCapsulesPage: async () => ({ items: [capsule] }),
     },
     getCapsuleAdoptedSourceRevision: async (capsuleId: string) => {

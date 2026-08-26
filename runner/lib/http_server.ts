@@ -31,7 +31,20 @@ import {
   runCompatibilityCheck,
 } from "./plan_apply.ts";
 import { classifyOpenTofuFailure } from "./exec.ts";
+import type { RuntimeSecretFileSystem } from "./runtime_secrets.ts";
+
+interface RunnerRequestDependencies {
+  readonly runtimeSecretFileSystem?: Partial<RuntimeSecretFileSystem>;
+}
+
 export async function handleRunnerRequest(request: Request): Promise<Response> {
+  return await handleRunnerRequestWithDependencies(request);
+}
+
+export async function handleRunnerRequestWithDependencies(
+  request: Request,
+  dependencies: RunnerRequestDependencies = {},
+): Promise<Response> {
   {
     const url = new URL(request.url);
     if (url.pathname === "/healthz" || url.pathname === "/container/health") {
@@ -174,7 +187,12 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
           : action === "backup"
             ? await runBackup(runId, body.request)
             : action === "release"
-              ? await runRelease(runId, body.request, request.signal)
+              ? await runRelease(
+                  runId,
+                  body.request,
+                  request.signal,
+                  dependencies.runtimeSecretFileSystem,
+                )
               : action === "plan"
                 ? await runPlan(runId, body.request, request.signal)
                 : await runReviewedPlanApply(

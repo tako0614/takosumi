@@ -153,6 +153,10 @@ import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { handleCapsuleRevisionPlans } from "./revision-plans.ts";
+import {
+  capsuleInstallConfigReAdoptionGuard,
+  handleCapsuleInstallConfigReAdoption,
+} from "./install-config-re-adoptions.ts";
 
 export async function handleCapsules(
   ctx: ControlDispatchContext,
@@ -178,6 +182,12 @@ export async function handleCapsules(
             operations,
             capsule,
           ),
+          installConfigReAdoption: {
+            authorityGuard: await capsuleInstallConfigReAdoptionGuard(
+              operations,
+              capsule,
+            ),
+          },
         });
       }
       if (method === "PATCH") {
@@ -225,6 +235,9 @@ export async function handleCapsules(
     }
     if (leaf === "revision-plans" && segments.length === 3) {
       return await handleCapsuleRevisionPlans(ctx, capsule, method);
+    }
+    if (leaf === "install-config-re-adoptions" && segments.length === 3) {
+      return await handleCapsuleInstallConfigReAdoption(ctx, capsule, method);
     }
     if (leaf === "destroy-plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");

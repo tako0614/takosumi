@@ -129,6 +129,16 @@ for (const [name, make] of STORES) {
     expect(await store.deleteSecretBlob(blob.connectionId)).toBe(false);
   });
 
+  test(`${name}: sealed material create-if-absent preserves the first writer`, async () => {
+    const store = make();
+    const first = secretBlob("runtime_secret_file_capsule_1");
+    const competing = { ...first, ciphertext: "Y29tcGV0aW5n" };
+
+    expect(await store.createSecretBlobIfAbsent(first)).toBe(true);
+    expect(await store.createSecretBlobIfAbsent(competing)).toBe(false);
+    expect(await store.getSecretBlob(first.connectionId)).toEqual(first);
+  });
+
   test(`${name}: listConnections excludes secret material entirely`, async () => {
     const store = make();
     const conn = connection();

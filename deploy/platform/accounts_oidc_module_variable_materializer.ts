@@ -1,5 +1,6 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { AccountsStore } from "../../accounts/service/src/store.ts";
+import { oidcClientActivationDigest } from "../../accounts/service/src/oidc-activation.ts";
 import type { Capsule } from "../../contract/capsules.ts";
 import { isWorkspaceBindableOperatorConnection } from "../../contract/connections.ts";
 import type {
@@ -8,6 +9,7 @@ import type {
 } from "../../contract/install-configs.ts";
 import { installExperienceOidcClient } from "../../contract/install-experience.ts";
 import { isSecretKey } from "../../contract/redaction.ts";
+import { sameProviderSource } from "../../contract/provider-env-rules.ts";
 import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
 import type { ResolvedCapsuleProviderBinding } from "../../core/domains/connections/mod.ts";
 import type {
@@ -22,16 +24,19 @@ import {
   validateCapsulePublicOidcClientRegistration,
 } from "./accounts_oidc_client_registration.ts";
 
-const PROFILE_CONTRACT =
+const PAIRWISE_PROFILE_CONTRACT =
   "takosumi.accounts-oidc-module-variables/v1" as const;
+const BROWSER_PROFILE_CONTRACT =
+  "takosumi.accounts-oidc-module-variables/v2" as const;
 const CLOUDFLARE_PROVIDER =
   "registry.opentofu.org/cloudflare/cloudflare" as const;
-const CALLBACK_PATH = "/api/auth/callback/takos" as const;
-const SCOPES = ["openid", "profile", "email"] as const;
+const PAIRWISE_CALLBACK_PATH = "/api/auth/callback/takos" as const;
+const PAIRWISE_SCOPES = ["openid", "profile", "email"] as const;
 const OPENTOFU_VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const WORKER_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
 const CLOUDFLARE_ACCOUNT_ID = /^[a-f0-9]{32}$/u;
 const SUBJECT = /^tsub_[A-Za-z0-9_-]{1,128}$/u;
+const OIDC_SCOPE = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/u;
 
 export interface AccountsOidcModuleVariableControlLedger {
   getCapsule(id: string): Promise<
@@ -93,6 +98,9 @@ export function createTakosumiAccountsOidcModuleVariableMaterializer(input: {
     ) {
       invalid("Accounts OIDC module-variable InstallConfig is not current");
     }
+    const capsuleExecutionAuthorityEpoch = exactExecutionAuthorityEpoch(
+      call.capsuleExecutionAuthorityEpoch,
+    );
     const profile = currentConfig.accountsOidcModuleVariableMaterialization;
     if (!profile) {
       if (call.expectedDigest !== undefined) {
@@ -111,9 +119,12 @@ export function createTakosumiAccountsOidcModuleVariableMaterializer(input: {
       call.variables,
       metadata,
     );
-    const workerName = exactWorkerName(call.variables, exact);
-    const publicOrigin = exactHttpsOrigin(
-      `https://${workerName}.${metadata.workersSubdomain}.workers.dev`,
+    const resourceName = exactResourceName(call.variables, exact);
+    const publicOrigin = exactPublicOrigin(
+      call.variables,
+      exact,
+      resourceName,
+      metadata.workersSubdomain,
     );
     const installingPrincipalId = currentCapsule.installingPrincipalId;
     if (
@@ -122,36 +133,61 @@ export function createTakosumiAccountsOidcModuleVariableMaterializer(input: {
     ) {
       invalid("Accounts OIDC module-variable installing Principal is missing");
     }
+    const callbackPath = profileCallbackPath(exact);
+    const scopes = profileScopes(exact);
     const grant = installExperienceOidcClient(currentConfig.installExperience);
     if (
       !grant ||
-      grant.callbackPath !== CALLBACK_PATH ||
-      !sameStrings(grant.scopes ?? [], SCOPES)
+      grant.callbackPath !== callbackPath ||
+      !sameStrings(grant.scopes ?? [], scopes) ||
+      grant.issuerUrlVariable !== undefined ||
+      grant.accountsUrlVariable !== undefined ||
+      grant.clientIdVariable !== undefined ||
+      grant.redirectUriVariable !== undefined
     ) {
       invalid("Accounts OIDC module-variable grant is not exact");
     }
+    const activationDigest = await oidcClientActivationDigest({
+      workspaceId: currentCapsule.workspaceId,
+      capsuleId: currentCapsule.id,
+      executionAuthorityEpoch: capsuleExecutionAuthorityEpoch,
+      installConfig: currentConfig,
+    });
+    const clientProfileDigest = await stableJsonDigest({
+      profile: exact,
+      callbackPath,
+      scopes,
+    });
     const clientId = await derivePublicOidcClientId(
       pairwiseSubjectSecret,
-      [
-        "takosumi-accounts-module-oidc-client-v1",
-        currentCapsule.workspaceId,
-        currentCapsule.id,
-        currentConfig.id,
-      ],
+      exact.contract === PAIRWISE_PROFILE_CONTRACT
+        ? [
+            "takosumi-accounts-module-oidc-client-v1",
+            currentCapsule.workspaceId,
+            currentCapsule.id,
+            currentConfig.id,
+          ]
+        : [
+            "takosumi-accounts-module-oidc-client-v2",
+            currentCapsule.workspaceId,
+            currentCapsule.id,
+            clientProfileDigest,
+          ],
     );
     const derived = await deriveCapsulePublicOidcClientIdentity({
       capsule: currentCapsule,
       installingPrincipalId: installingPrincipalId as TakosumiSubject,
       publicOrigin,
-      callbackPath: CALLBACK_PATH,
+      callbackPath,
       clientId,
       pairwiseSubjectSecret,
     });
     const digest = await stableJsonDigest({
-      contract: PROFILE_CONTRACT,
+      contract: exact.contract,
       workspaceId: currentCapsule.workspaceId,
       capsuleId: currentCapsule.id,
       capsuleName: currentCapsule.name,
+      capsuleExecutionAuthorityEpoch,
       installConfigId: currentConfig.id,
       installConfigUpdatedAt: currentConfig.updatedAt,
       installingPrincipalId,
@@ -168,24 +204,31 @@ export function createTakosumiAccountsOidcModuleVariableMaterializer(input: {
         accountId: metadata.accountId,
         workersSubdomain: metadata.workersSubdomain,
       },
-      workerName,
+      resourceName,
       issuer,
       clientId,
       redirectUri: derived.redirectUri,
-      callbackPath: CALLBACK_PATH,
-      scopes: SCOPES,
+      callbackPath,
+      scopes,
     });
     if (call.expectedDigest !== undefined && call.expectedDigest !== digest) {
       invalid(
         "Accounts OIDC module-variable materialization changed since Plan",
       );
     }
-    const variables = {
-      [exact.issuerUrlVariable]: issuer,
-      [exact.clientIdVariable]: derived.clientId,
-      [exact.ownerSubjectVariable]: derived.ownerSubject,
-      [exact.allowUnpinnedOwnerClaimVariable]: false,
-    };
+    const variables = exact.contract === PAIRWISE_PROFILE_CONTRACT
+      ? {
+          [exact.issuerUrlVariable]: issuer,
+          [exact.clientIdVariable]: derived.clientId,
+          [exact.ownerSubjectVariable]: derived.ownerSubject,
+          [exact.allowUnpinnedOwnerClaimVariable]: false,
+        }
+      : {
+          [exact.accountsUrlVariable]: issuer,
+          [exact.issuerUrlVariable]: issuer,
+          [exact.clientIdVariable]: derived.clientId,
+          [exact.redirectUriVariable]: derived.redirectUri,
+        };
     if (call.phase !== "plan") {
       assertExactPlannedVariables(call.plannedVariables, variables);
     }
@@ -195,9 +238,10 @@ export function createTakosumiAccountsOidcModuleVariableMaterializer(input: {
       installingPrincipalId: installingPrincipalId as TakosumiSubject,
       issuer,
       publicOrigin,
-      callbackPath: CALLBACK_PATH,
-      scopes: SCOPES,
+      callbackPath,
+      scopes,
       clientId,
+      activationDigest,
       pairwiseSubjectSecret,
     };
     const registered = call.phase === "apply"
@@ -290,20 +334,55 @@ function sameCapsuleAuthority(
 function exactProfile(
   profile: InstallConfigAccountsOidcModuleVariableMaterialization,
 ): InstallConfigAccountsOidcModuleVariableMaterialization {
-  if (
-    profile.contract !== PROFILE_CONTRACT ||
-    Object.keys(profile).length !== 9
-  ) {
+  const pairwise = profile.contract === PAIRWISE_PROFILE_CONTRACT;
+  if (!pairwise && profile.contract !== BROWSER_PROFILE_CONTRACT) {
     invalid("Accounts OIDC module-variable profile is invalid");
   }
-  const sourceAndTargetNames = [
-    profile.workerNameVariable,
-    profile.projectNameVariable,
-    profile.issuerUrlVariable,
-    profile.clientIdVariable,
-    profile.ownerSubjectVariable,
-    profile.allowUnpinnedOwnerClaimVariable,
-  ];
+  const allowedKeys = pairwise
+    ? [
+        "contract",
+        "workerNameVariable",
+        "projectNameVariable",
+        "additionalInputVariables",
+        "forbiddenNonEmptyInputVariables",
+        "issuerUrlVariable",
+        "clientIdVariable",
+        "ownerSubjectVariable",
+        "allowUnpinnedOwnerClaimVariable",
+      ]
+    : [
+        "contract",
+        "resourceNameVariable",
+        "publicUrlVariable",
+        "additionalInputVariables",
+        "forbiddenNonEmptyInputVariables",
+        "accountsUrlVariable",
+        "issuerUrlVariable",
+        "clientIdVariable",
+        "redirectUriVariable",
+        "callbackPath",
+        "scopes",
+      ];
+  if (Object.keys(profile).some((key) => !allowedKeys.includes(key))) {
+    invalid("Accounts OIDC module-variable profile is invalid");
+  }
+  const sourceAndTargetNames = pairwise
+    ? [
+        profile.workerNameVariable,
+        profile.projectNameVariable,
+        profile.issuerUrlVariable,
+        profile.clientIdVariable,
+        profile.ownerSubjectVariable,
+        profile.allowUnpinnedOwnerClaimVariable,
+      ]
+    : [
+        profile.resourceNameVariable,
+        profile.publicUrlVariable,
+        profile.accountsUrlVariable,
+        profile.issuerUrlVariable,
+        profile.clientIdVariable,
+        profile.redirectUriVariable,
+      ];
   const additionalInputVariables = profile.additionalInputVariables;
   const forbiddenNonEmptyInputVariables =
     profile.forbiddenNonEmptyInputVariables;
@@ -312,17 +391,23 @@ function exactProfile(
       "cloudflare_account_id",
       "cloudflare_workers_subdomain",
     ]) ||
-    !sameStrings(forbiddenNonEmptyInputVariables ?? [], [
-      "auth_password_hash",
-      "notification_push_gateway_token",
-    ])
+    !sameStrings(
+      forbiddenNonEmptyInputVariables ?? [],
+      pairwise
+        ? ["auth_password_hash", "notification_push_gateway_token"]
+        : [],
+    )
   ) {
     invalid("Accounts OIDC module-variable profile metadata inputs are not exact");
   }
+  if (!pairwise) {
+    exactCallbackPath(profile.callbackPath);
+    exactScopes(profile.scopes);
+  }
   const names = [
     ...sourceAndTargetNames,
-    ...additionalInputVariables!,
-    ...forbiddenNonEmptyInputVariables!,
+    ...(additionalInputVariables ?? []),
+    ...(forbiddenNonEmptyInputVariables ?? []),
   ];
   if (
     sourceAndTargetNames.some(
@@ -353,9 +438,11 @@ function exactCloudflareBinding(
   }
   const binding = candidates[0]!;
   const connection = binding.connection;
+  // `binding.provider` and `connection.providerSource` are the authoritative
+  // resolver-normalized OpenTofu source. `connection.provider` is an opaque
+  // recipe label and may use the equivalent unqualified spelling.
   if (
-    connection.provider !== CLOUDFLARE_PROVIDER ||
-    connection.providerSource !== CLOUDFLARE_PROVIDER ||
+    !sameProviderSource(connection.providerSource, binding.provider) ||
     connection.status !== "verified" ||
     !connection.verifiedAt
   ) {
@@ -427,19 +514,17 @@ function verifiedCloudflareMetadata(binding: ResolvedCapsuleProviderBinding): {
   return { accountId, workersSubdomain };
 }
 
-function exactWorkerName(
+function exactResourceName(
   variables: Readonly<Record<string, unknown>>,
   profile: InstallConfigAccountsOidcModuleVariableMaterialization,
 ): string {
-  const explicit = variables[profile.workerNameVariable];
-  const fallback = variables[profile.projectNameVariable];
-  if (
-    (explicit !== undefined && typeof explicit !== "string") ||
-    typeof fallback !== "string"
-  ) {
+  const selectedRaw = profile.contract === PAIRWISE_PROFILE_CONTRACT
+    ? variables[profile.workerNameVariable] ||
+      variables[profile.projectNameVariable]
+    : variables[profile.resourceNameVariable];
+  if (typeof selectedRaw !== "string") {
     invalid("Accounts OIDC Worker/project name is missing");
   }
-  const selectedRaw = explicit || fallback;
   const selected = selectedRaw.trim();
   if (
     !selected ||
@@ -451,15 +536,44 @@ function exactWorkerName(
   return selected;
 }
 
+function exactPublicOrigin(
+  variables: Readonly<Record<string, unknown>>,
+  profile: InstallConfigAccountsOidcModuleVariableMaterialization,
+  resourceName: string,
+  workersSubdomain: string,
+): string {
+  if (profile.contract === PAIRWISE_PROFILE_CONTRACT) {
+    return exactHttpsOrigin(
+      `https://${resourceName}.${workersSubdomain}.workers.dev`,
+    );
+  }
+  const reviewed = variables[profile.publicUrlVariable];
+  if (reviewed === undefined || reviewed === null || reviewed === "") {
+    return exactHttpsOrigin(
+      `https://${resourceName}.${workersSubdomain}.workers.dev`,
+    );
+  }
+  if (typeof reviewed !== "string") {
+    invalid("Accounts OIDC reviewed public URL is invalid");
+  }
+  return exactHttpsOrigin(reviewed);
+}
+
 function assertExactMaterializerInputVariables(
   variables: Readonly<Record<string, unknown>>,
   profile: InstallConfigAccountsOidcModuleVariableMaterialization,
 ): void {
-  const allowed = new Set([
-    profile.workerNameVariable,
-    profile.projectNameVariable,
-    ...(profile.additionalInputVariables ?? []),
-  ]);
+  const allowed = new Set(profile.contract === PAIRWISE_PROFILE_CONTRACT
+    ? [
+        profile.workerNameVariable,
+        profile.projectNameVariable,
+        ...(profile.additionalInputVariables ?? []),
+      ]
+    : [
+        profile.resourceNameVariable,
+        profile.publicUrlVariable,
+        ...(profile.additionalInputVariables ?? []),
+      ]);
   if (Object.keys(variables).some((name) => !allowed.has(name))) {
     invalid(
       "Accounts OIDC materializer requires exact non-secret metadata inputs",
@@ -492,13 +606,67 @@ function exactHttpsOrigin(value: string): string {
     url.protocol !== "https:" ||
     url.username ||
     url.password ||
+    url.port ||
     url.pathname !== "/" ||
     url.search ||
-    url.hash
+    url.hash ||
+    url.origin !== value
   ) {
     invalid("Accounts OIDC HTTPS origin is invalid");
   }
   return url.origin;
+}
+
+function profileCallbackPath(
+  profile: InstallConfigAccountsOidcModuleVariableMaterialization,
+): string {
+  return profile.contract === PAIRWISE_PROFILE_CONTRACT
+    ? PAIRWISE_CALLBACK_PATH
+    : exactCallbackPath(profile.callbackPath);
+}
+
+function profileScopes(
+  profile: InstallConfigAccountsOidcModuleVariableMaterialization,
+): readonly string[] {
+  return profile.contract === PAIRWISE_PROFILE_CONTRACT
+    ? PAIRWISE_SCOPES
+    : exactScopes(profile.scopes);
+}
+
+function exactCallbackPath(value: string): string {
+  if (
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("?") ||
+    value.includes("#") ||
+    value.length > 512 ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    invalid("Accounts OIDC callback path is invalid");
+  }
+  return value;
+}
+
+function exactScopes(value: readonly string[]): readonly string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > 32 ||
+    value.some((scope) => !OIDC_SCOPE.test(scope)) ||
+    new Set(value).size !== value.length ||
+    !value.includes("openid")
+  ) {
+    invalid("Accounts OIDC scopes are invalid");
+  }
+  return value;
+}
+
+function exactExecutionAuthorityEpoch(value: number | undefined): number {
+  const epoch = value ?? 1;
+  if (!Number.isSafeInteger(epoch) || epoch < 1) {
+    invalid("Accounts OIDC Capsule execution authority is invalid");
+  }
+  return epoch;
 }
 
 function boundedSecret(value: string, label: string): string {

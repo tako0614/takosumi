@@ -16,7 +16,7 @@ import {
   type RefreshChainRetentionPageStore,
 } from "../../../../accounts/service/src/refresh-chain-retention.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
-import { listD1AccountsMigrations } from "../../../../cli/src/cli-accounts-db.ts";
+import { loadD1AccountsMigrationCatalog } from "../../../../accounts/service/src/d1-migrations.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 interface DrainResult {
@@ -82,11 +82,13 @@ test("in-memory refresh-chain retention matches the bounded page contract", asyn
 test("D1 refresh-chain retention uses timestamp+key indexes and does not skip equal timestamps", async () => {
   const db = new SqliteFakeD1();
   await db.exec(D1_ACCOUNTS_STORE_INIT_SQL);
-  const retentionMigration = listD1AccountsMigrations().find(
+  const retentionMigration = (await loadD1AccountsMigrationCatalog()).migrations.find(
     (migration) => migration.name === "refresh_chain_retention_indexes",
   );
   expect(retentionMigration).toBeDefined();
-  await db.exec(retentionMigration!.sql);
+  for (const statement of retentionMigration!.body) {
+    await db.prepare(statement.sql).bind(...statement.params).run();
+  }
   await Promise.all([
     insertD1Document(db, "refresh_chain_links", "a", {
       parentHash: "a",

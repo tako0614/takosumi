@@ -29,6 +29,8 @@ export const CONTROL_D1_RELEASE_CAPABILITY_COMMAND =
   "bun scripts/control-d1-schema.ts release-capability" as const;
 
 const SOURCE_FILE_PATH = "deploy/platform/control_d1_schema_rest.ts" as const;
+const TRANSPORT_SOURCE_FILE_PATH =
+  "deploy/cloudflare/d1-rest-transport.ts" as const;
 const SCHEMA_SOURCE_FILE_PATH = "deploy/platform/control_d1_schema.ts" as const;
 const CAPABILITY_SOURCE_FILE_PATH =
   "deploy/platform/control_d1_release_capability.ts" as const;
@@ -521,7 +523,13 @@ function createCapabilityFetch(
                 .bind(...(queryBody.params ?? []))
                 .all(),
             ];
-      return Response.json({ success: true, result: results });
+      return Response.json({
+        success: true,
+        result: results.map((entry) => ({
+          ...entry,
+          results: entry.results ?? [],
+        })),
+      });
     } catch {
       return Response.json(
         { success: false, errors: [{ code: 7500 }] },
@@ -856,6 +864,7 @@ async function readSourceFileDigests(
 ): Promise<readonly ControlD1ReleaseCapabilityFileDigest[]> {
   const paths = [
     SOURCE_FILE_PATH,
+    TRANSPORT_SOURCE_FILE_PATH,
     SCHEMA_SOURCE_FILE_PATH,
     CAPABILITY_SOURCE_FILE_PATH,
     TEST_FILE_PATH,

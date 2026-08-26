@@ -34,10 +34,12 @@ import {
 } from "../deploy-control/errors.ts";
 import { validateResourceMigrationDeclaration } from "../deploy-control/resource_migrations.ts";
 import type {
+  CapsuleInstallConfigRebindInput,
   CapsuleListPageParams,
   OpenTofuControlStore,
 } from "../deploy-control/store.ts";
 import {
+  type IdempotentActivityRecorder,
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
 } from "../activity/mod.ts";
@@ -55,6 +57,7 @@ import {
 } from "takosumi-contract/interfaces";
 import { materializeInstallContextVariables } from "../deploy-control/validation.ts";
 import { parseInstallConfigPatchV1 } from "./install_config_patch.ts";
+import { stableJsonDigest } from "../../adapters/source/digest.ts";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -78,12 +81,31 @@ export interface CreateCapsuleRequest {
   readonly autoUpdate?: boolean;
 }
 
+export interface RebindCapsuleInstallConfigRequest {
+  readonly capsuleId: string;
+  readonly targetInstallConfigId: string;
+  readonly expected: CapsuleInstallConfigRebindInput["expected"];
+  readonly actorSubject: string;
+  readonly reason: string;
+  readonly requestDigest: string;
+}
+
+export interface RebindCapsuleInstallConfigResponse {
+  readonly capsule: Capsule;
+  readonly replayed: boolean;
+  readonly targetInstallConfigDigest: string;
+}
+
 /** Stable reason returned when an in-flight Capsule lifecycle holds its lease. */
 export const CAPSULE_LIFECYCLE_BUSY_REASON = "capsule_lifecycle_busy";
 
 /** Stable reason returned when durable runtime evidence forbids abandonment. */
 export const CAPSULE_RUNTIME_STATE_PRESENT_REASON =
   "capsule_runtime_state_present";
+
+/** Stable reason returned when an immutable repository-derived InstallConfig is patched. */
+export const REPOSITORY_INSTALL_UX_IMMUTABLE_REASON =
+  "repository_install_ux_immutable";
 
 /**
  * Host-owned admission for abandoning a no-state Capsule. Abandonment must
@@ -104,7 +126,7 @@ export interface CapsulesServiceDependencies {
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
   /** Workspace-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
-  readonly activity?: ActivityRecorder;
+  readonly activity?: ActivityRecorder & Partial<IdempotentActivityRecorder>;
   readonly projects?: ProjectsService;
   /** Optional host-owned lifecycle admission for serialized abandonment. */
   readonly capsuleAbandonAdmission?: CapsuleAbandonAdmission;
@@ -114,7 +136,7 @@ export class CapsulesService {
   readonly #store: OpenTofuControlStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => Date;
-  readonly #activity: ActivityRecorder;
+  readonly #activity: ActivityRecorder & Partial<IdempotentActivityRecorder>;
   readonly #projects: ProjectsService;
   #capsuleAbandonAdmission?: CapsuleAbandonAdmission;
 
@@ -295,6 +317,102 @@ export class CapsulesService {
     return await this.#store.getCapsulesByIds(ids);
   }
 
+  /**
+   * Rebind one Capsule to a newly-created immutable derived InstallConfig.
+   * This is a separate explicit authority transition, never an ordinary patch
+   * and never hidden inside Plan creation.
+   */
+  async rebindInstallConfig(
+    request: RebindCapsuleInstallConfigRequest,
+  ): Promise<RebindCapsuleInstallConfigResponse> {
+    requireNonEmptyString(request.capsuleId, "capsuleId");
+    requireNonEmptyString(request.targetInstallConfigId, "targetInstallConfigId");
+    requireNonEmptyString(request.actorSubject, "actorSubject");
+    requireNonEmptyString(request.reason, "reason");
+    requireNonEmptyString(request.requestDigest, "requestDigest");
+    if (
+      request.reason.trim() !== request.reason ||
+      new TextEncoder().encode(request.reason).byteLength > 256 ||
+      /[\u0000-\u001f\u007f]/u.test(request.reason) ||
+      containsSecretLikeString(request.reason)
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "re-adoption reason must be bounded non-secret text",
+      );
+    }
+    const target = await this.getInstallConfig(request.targetInstallConfigId);
+    const before = await this.#requireCapsule(request.capsuleId);
+    if (
+      target.workspaceId !== undefined &&
+      target.workspaceId !== before.workspaceId
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "target InstallConfig is not available to the Capsule Workspace",
+      );
+    }
+    const targetInstallConfigDigest = await stableJsonDigest(target);
+    const result = await this.#store.rebindCapsuleInstallConfig({
+      capsuleId: request.capsuleId,
+      targetInstallConfigId: target.id,
+      expected: {
+        ...request.expected,
+        targetInstallConfigDigest,
+      },
+      updatedAt: this.#now().toISOString(),
+    });
+    if (result.status === "not_found") {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `capsule ${request.capsuleId} not found`,
+      );
+    }
+    if (result.status === "busy") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Capsule has an active or reviewable Run",
+        { reason: "capsule_install_config_rebind_busy" },
+      );
+    }
+    if (result.status === "conflict") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Capsule InstallConfig authority changed before rebind",
+        { reason: "capsule_install_config_rebind_conflict" },
+      );
+    }
+    const activity = {
+      workspaceId: result.capsule.workspaceId,
+      action: "capsule.install_config_rebound",
+      targetType: "capsule",
+      targetId: result.capsule.id,
+      metadata: {
+        actorSubject: request.actorSubject,
+        reason: request.reason,
+        previousInstallConfigId: request.expected.installConfigId,
+        previousInstallConfigDigest: request.expected.installConfigDigest,
+        targetInstallConfigId: target.id,
+        targetInstallConfigDigest,
+        requestDigest: request.requestDigest,
+      },
+    } as const;
+    if (this.#activity.recordIdempotent) {
+      await this.#activity.recordIdempotent(
+        `activity_capsule_install_config_rebind_${target.id}`,
+        result.capsule.updatedAt,
+        activity,
+      );
+    } else if (result.status === "updated") {
+      await this.#activity.record(activity);
+    }
+    return {
+      capsule: result.capsule,
+      replayed: result.status === "replayed",
+      targetInstallConfigDigest,
+    };
+  }
+
   async listCapsules(workspaceId: string): Promise<readonly Capsule[]> {
     requireNonEmptyString(workspaceId, "workspaceId");
     return await this.#store.listCapsules(workspaceId);
@@ -461,6 +579,46 @@ export class CapsulesService {
     return await this.#store.putInstallConfig(config);
   }
 
+  async createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean> {
+    requireNonEmptyString(config.id, "id");
+    requireNonEmptyString(config.name, "name");
+    if (config.sourceSelector) {
+      validateInstallConfigSourceSelector(config.sourceSelector);
+    }
+    if (config.sourceBuild) validateSourceBuild(config.sourceBuild);
+    validateLifecycleActions(config);
+    materializeInstallContextVariables(config.installContextVariableMapping, {
+      workspaceId: "workspace-validation",
+      capsuleId: "capsule-validation",
+    });
+    if (
+      config.workspaceId !== undefined &&
+      !(await this.#store.getWorkspace(config.workspaceId))
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "workspace does not exist",
+      );
+    }
+    validateCapsuleInterfaceBlueprints(config.interfaceBlueprints ?? []);
+    validateCapsuleRequiredInterfaces(config.requiredInterfaces ?? []);
+    return await this.#store.createInstallConfigIfAbsent(config);
+  }
+
+  async getCapsuleExecutionAuthorityEpoch(
+    capsuleId: string,
+  ): Promise<number> {
+    await this.#requireCapsule(capsuleId);
+    const epoch = await this.#store.getCapsuleExecutionAuthorityEpoch(capsuleId);
+    if (epoch === undefined) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Capsule execution authority is unavailable",
+      );
+    }
+    return epoch;
+  }
+
   /**
    * Apply a versioned, operator-selected mutable contribution to one exact
    * InstallConfig row. The caller chooses the target id explicitly; this
@@ -472,6 +630,16 @@ export class CapsulesService {
   ): Promise<InstallConfig> {
     const patch = parseInstallConfigPatchV1(value);
     const current = await this.getInstallConfig(id);
+    if (
+      current.internal?.repositoryInstallUxDigest !== undefined ||
+      current.internal?.reAdoption !== undefined
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "A compiled repository install configuration is immutable; change the reviewed setup inputs through a new install preflight.",
+        { reason: REPOSITORY_INSTALL_UX_IMMUTABLE_REASON },
+      );
+    }
     if (
       current.workspaceId !== undefined &&
       capsuleInterfaceBlueprintsNeedInstallingPrincipal(

@@ -10,11 +10,11 @@ provider です。その他の API / instance lifecycle は、それを提供す
 
 ## 基本方針
 
-| 状況 | 扱い方 |
-| --- | --- |
-| 外部 resource に標準 API / OpenTofu provider がある | plain Stack flow でその surface を使う |
-| Form を提供する Host がある | その Host が定義・instance・lifecycle の authority を持つ |
-| 一回限りの不足 | generic-env ProviderConnection と通常の OpenTofu module で扱う |
+| 状況                                                | 扱い方                                                         |
+| --------------------------------------------------- | -------------------------------------------------------------- |
+| 外部 resource に標準 API / OpenTofu provider がある | plain Stack flow でその surface を使う                         |
+| Form を提供する Host がある                         | その Host が定義・instance・lifecycle の authority を持つ      |
+| 一回限りの不足                                      | generic-env ProviderConnection と通常の OpenTofu module で扱う |
 
 Takosumi は自前の Terraform / OpenTofu provider を配布しません。Takoform は通常の
 provider として使います。外部 provider は plain Stack flow でそのまま実行され、
@@ -87,8 +87,8 @@ personal access token です。S3-compatible endpoint のように標準 protoco
 PAT の公開 Accounts surface は次のとおりです。これらの応答は成功・認証失敗・入力
 エラーを含め、必ず `Cache-Control: no-store` と `Pragma: no-cache` を返します。
 
-| メソッド | パス                                  | 認証                               | 説明                                |
-| -------- | ------------------------------------- | ---------------------------------- | ----------------------------------- |
+| メソッド | パス                                      | 認証                               | 説明                                |
+| -------- | ----------------------------------------- | ---------------------------------- | ----------------------------------- |
 | GET      | `/api/v1/account/tokens`                  | account session                    | 対話的一覧                          |
 | GET      | `/api/v1/account/tokens/scopes`           | account session                    | 現在の self-service scope catalog   |
 | POST     | `/api/v1/account/tokens`                  | account session                    | PAT を作成する                      |
@@ -148,13 +148,13 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 86 件です。
+次の 87 件です。
 
 **Account views**
 
-| メソッド | パス                             | 説明                                                        |
-| -------- | -------------------------------- | ----------------------------------------------------------- |
-| GET      | `/api/v1/views/workspaces.v1`    | アカウントの active membership Workspace inventory を読む |
+| メソッド | パス                          | 説明                                                      |
+| -------- | ----------------------------- | --------------------------------------------------------- |
+| GET      | `/api/v1/views/workspaces.v1` | アカウントの active membership Workspace inventory を読む |
 
 `/api/v1/views/workspaces.v1` は、初回ログインの個人 Workspace 作成・修復を持つ
 `GET /api/v1/workspaces` とは別の読み取り専用 projection です。認証済みアカウントの
@@ -188,28 +188,29 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 
 **Project と Capsule**
 
-| メソッド | パス                                                      | 説明                               |
-| -------- | --------------------------------------------------------- | ---------------------------------- |
-| GET      | `/api/v1/workspaces/{workspaceId}/projects`               | Project を一覧する                 |
-| POST     | `/api/v1/workspaces/{workspaceId}/projects`               | Project を作る                     |
-| GET      | `/api/v1/projects/{projectId}`                            | Project を読む                     |
-| GET      | `/api/v1/workspaces/{workspaceId}/capsules`               | Capsule を一覧する                 |
-| POST     | `/api/v1/workspaces/{workspaceId}/capsules`               | Capsule を作る                     |
-| GET      | `/api/v1/capsules/{capsuleId}`                            | Capsule を読む                     |
-| PATCH    | `/api/v1/capsules/{capsuleId}`                            | Capsule を更新する                 |
-| DELETE   | `/api/v1/capsules/{capsuleId}`                            | 破棄計画を作る                     |
-| GET      | `/api/v1/capsules/{capsuleId}/outputs`                    | 公開 Output を読む                 |
-| GET      | `/api/v1/capsules/{capsuleId}/usage-summary`              | 利用量の集計を読む                 |
-| GET      | `/api/v1/capsules/{capsuleId}/state-versions`             | StateVersion を一覧する            |
-| GET      | `/api/v1/capsules/{capsuleId}/dependencies`               | 依存を一覧する                     |
-| POST     | `/api/v1/capsules/{capsuleId}/dependencies`               | 依存を作る                         |
-| DELETE   | `/api/v1/dependencies/{dependencyId}`                     | 依存を削除する                     |
-| GET      | `/api/v1/capsules/{capsuleId}/provider-bindings`          | ProviderBinding の選択を読む       |
-| PUT      | `/api/v1/capsules/{capsuleId}/provider-bindings`          | ProviderBinding の選択を置き換える |
-| GET      | `/api/v1/workspaces/{workspaceId}/current-state-versions` | 現在の StateVersion をまとめて読む |
-| GET      | `/api/v1/capsule-configs`                                 | Capsule 作成設定を一覧する         |
-| GET      | `/api/v1/capsule-configs/{capsuleConfigId}`               | Capsule 作成設定を読む             |
-| PATCH    | `/api/v1/capsule-configs/{capsuleConfigId}`               | Capsule 作成設定を更新する         |
+| メソッド | パス                                                       | 説明                                         |
+| -------- | ---------------------------------------------------------- | -------------------------------------------- |
+| GET      | `/api/v1/workspaces/{workspaceId}/projects`                | Project を一覧する                           |
+| POST     | `/api/v1/workspaces/{workspaceId}/projects`                | Project を作る                               |
+| GET      | `/api/v1/projects/{projectId}`                             | Project を読む                               |
+| GET      | `/api/v1/workspaces/{workspaceId}/capsules`                | Capsule を一覧する                           |
+| POST     | `/api/v1/workspaces/{workspaceId}/capsules`                | Capsule を作る                               |
+| GET      | `/api/v1/capsules/{capsuleId}`                             | Capsule を読む                               |
+| POST     | `/api/v1/capsules/{capsuleId}/install-config-re-adoptions` | SourceSnapshot の InstallConfig を再採用する |
+| PATCH    | `/api/v1/capsules/{capsuleId}`                             | Capsule を更新する                           |
+| DELETE   | `/api/v1/capsules/{capsuleId}`                             | 破棄計画を作る                               |
+| GET      | `/api/v1/capsules/{capsuleId}/outputs`                     | 公開 Output を読む                           |
+| GET      | `/api/v1/capsules/{capsuleId}/usage-summary`               | 利用量の集計を読む                           |
+| GET      | `/api/v1/capsules/{capsuleId}/state-versions`              | StateVersion を一覧する                      |
+| GET      | `/api/v1/capsules/{capsuleId}/dependencies`                | 依存を一覧する                               |
+| POST     | `/api/v1/capsules/{capsuleId}/dependencies`                | 依存を作る                                   |
+| DELETE   | `/api/v1/dependencies/{dependencyId}`                      | 依存を削除する                               |
+| GET      | `/api/v1/capsules/{capsuleId}/provider-bindings`           | ProviderBinding の選択を読む                 |
+| PUT      | `/api/v1/capsules/{capsuleId}/provider-bindings`           | ProviderBinding の選択を置き換える           |
+| GET      | `/api/v1/workspaces/{workspaceId}/current-state-versions`  | 現在の StateVersion をまとめて読む           |
+| GET      | `/api/v1/capsule-configs`                                  | Capsule 作成設定を一覧する                   |
+| GET      | `/api/v1/capsule-configs/{capsuleConfigId}`                | Capsule 作成設定を読む                       |
+| PATCH    | `/api/v1/capsule-configs/{capsuleConfigId}`                | Capsule 作成設定を更新する                   |
 
 Capsule を作ってから実行するには、まず計画を作り、内容を確認してから適用します。
 Run は必ず計画の作成から始まります。
@@ -223,25 +224,25 @@ Run は必ず計画の作成から始まります。
 
 **Source**
 
-| メソッド | パス                                             | 説明                        |
-| -------- | ------------------------------------------------ | --------------------------- |
-| GET      | `/api/v1/sources`                                | Source を一覧する           |
-| POST     | `/api/v1/sources`                                | Source を作る               |
-| GET      | `/api/v1/sources/{sourceId}`                     | Source を読む               |
-| PATCH    | `/api/v1/sources/{sourceId}`                     | Source のメタ情報を更新する |
-| POST     | `/api/v1/sources/{sourceId}/sync`                | 同期 Run を作る             |
-| GET      | `/api/v1/sources/{sourceId}/snapshots`           | SourceSnapshot を一覧する   |
+| メソッド | パス                                                                          | 説明                                                                 |
+| -------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| GET      | `/api/v1/sources`                                                             | Source を一覧する                                                    |
+| POST     | `/api/v1/sources`                                                             | Source を作る                                                        |
+| GET      | `/api/v1/sources/{sourceId}`                                                  | Source を読む                                                        |
+| PATCH    | `/api/v1/sources/{sourceId}`                                                  | Source のメタ情報を更新する                                          |
+| POST     | `/api/v1/sources/{sourceId}/sync`                                             | 同期 Run を作る                                                      |
+| GET      | `/api/v1/sources/{sourceId}/snapshots`                                        | SourceSnapshot を一覧する                                            |
 | GET      | `/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/deployment-profiles` | その Snapshot で実在を確認できた DB 所有のデプロイ方法だけを一覧する |
-| POST     | `/api/v1/sources/{sourceId}/compatibility-check` | 互換性レポートを作る        |
-| GET      | `/api/v1/compatibility-reports/{reportId}`       | 互換性レポートを読む        |
+| POST     | `/api/v1/sources/{sourceId}/compatibility-check`                              | 互換性レポートを作る                                                 |
+| GET      | `/api/v1/compatibility-reports/{reportId}`                                    | 互換性レポートを読む                                                 |
 
 **Git install plan**
 
-| メソッド | パス                                                        | 説明                                       |
-| -------- | ----------------------------------------------------------- | ------------------------------------------ |
-| POST     | `/api/v1/workspaces/{workspaceId}/install-plans`            | Git から reviewable Plan Run まで準備する |
-| GET      | `/api/v1/install-plans/{installPlanId}`                      | coordinator の現在状態を読む              |
-| POST     | `/api/v1/install-plans/{installPlanId}/reconcile`            | 明示的に一段だけ進める                     |
+| メソッド | パス                                              | 説明                                      |
+| -------- | ------------------------------------------------- | ----------------------------------------- |
+| POST     | `/api/v1/workspaces/{workspaceId}/install-plans`  | Git から reviewable Plan Run まで準備する |
+| GET      | `/api/v1/install-plans/{installPlanId}`           | coordinator の現在状態を読む              |
+| POST     | `/api/v1/install-plans/{installPlanId}/reconcile` | 明示的に一段だけ進める                    |
 
 作成には `Idempotency-Key` が必須です。同じ Workspace・actor・key と同じ正規化 request
 は同じ record を返し、内容が異なれば 409 になります。coordinator が保持するのは Source、
@@ -251,11 +252,11 @@ variable 値、credential、token、Output 値は受け付けません。`review
 
 **Git revision plan**
 
-| メソッド | パス                                                        | 説明                                               |
-| -------- | ----------------------------------------------------------- | -------------------------------------------------- |
-| POST     | `/api/v1/capsules/{capsuleId}/revision-plans`               | 既存 Capsule の Git ref 更新 intent を作成・再生する |
-| GET      | `/api/v1/revision-plans/{revisionPlanId}`                   | coordinator の現在状態を副作用なしで読む          |
-| POST     | `/api/v1/revision-plans/{revisionPlanId}/reconcile`         | 明示的に一段だけ進める                             |
+| メソッド | パス                                                | 説明                                                 |
+| -------- | --------------------------------------------------- | ---------------------------------------------------- |
+| POST     | `/api/v1/capsules/{capsuleId}/revision-plans`       | 既存 Capsule の Git ref 更新 intent を作成・再生する |
+| GET      | `/api/v1/revision-plans/{revisionPlanId}`           | coordinator の現在状態を副作用なしで読む             |
+| POST     | `/api/v1/revision-plans/{revisionPlanId}/reconcile` | 明示的に一段だけ進める                               |
 
 作成 body は `{ "ref": "<git-ref>" }` だけを受け付け、`Idempotency-Key` が
 必須です。新規作成は 201、同じ key と同じ正規化 request の再生は 200、同じ key の
@@ -272,6 +273,63 @@ StateVersion が参照する Plan Run の SourceSnapshot が Capsule の追跡�
 `GET /api/v1/capsules/{capsuleId}` はこの非 secret な導出値を
 `adoptedSourceRevision: { sourceSnapshotId, ref, path, resolvedCommit }` として返します。
 初回 apply 前はこの field はありません。
+
+**Capsule InstallConfig の再採用**
+
+`GET /api/v1/capsules/{capsuleId}` は、認証済み caller が読める opaque
+`installConfigReAdoption.authorityGuard` を返します。これは private な
+InstallConfig digest を知る必要なく、そのまま再採用 request の期待値に使えます。
+書き込みは Workspace owner または operator (owner/admin membership) だけが実行でき、
+次の POST は `Idempotency-Key` header を必須とします。
+
+```http
+POST /api/v1/capsules/{capsuleId}/install-config-re-adoptions
+Idempotency-Key: <opaque-key>
+Content-Type: application/json
+
+{
+  "baseInstallConfigId": "<base-install-config-id>",
+  "sourceSnapshotId": "<source-snapshot-id>",
+  "deploymentProfileKey": "<optional-profile-key>",
+  "reason": "<bounded non-secret reason>",
+  "expected": { "authorityGuard": "<guard-from-capsule-get>" }
+}
+```
+
+`deploymentProfileKey` は省略可能です。body はこの閉じた shape だけを受け付け、
+`reason` は bounded かつ secret-like value を含めません。成功は 200 で、response は
+次の value-free projection です。
+
+```json
+{
+  "capsule": { "id": "<capsule-id>" },
+  "installConfigReAdoption": {
+    "replayed": false,
+    "previousInstallConfigId": "<previous-install-config-id>",
+    "previousInstallConfigDigest": "sha256:<digest>",
+    "targetInstallConfigId": "<derived-target-install-config-id>",
+    "targetInstallConfigDigest": "sha256:<digest>",
+    "sourceSnapshotId": "<source-snapshot-id>"
+  }
+}
+```
+
+実際の `capsule` は通常の public Capsule projection であり、上の短縮例は shape の説明
+です。再送は同じ key/request の canonical target を返し、別 request、stale guard、
+current/target record の digest・JSON drift、unsafe な Run/未消費 Plan では 409 になります。
+認証されていない caller は 401、Workspace にアクセスできない caller は 403、body や
+header の validation failure は 400 です。再採用は既存 row の patch ではなく immutable な
+derived InstallConfig の作成と Capsule の authority-fenced rebind です。Plan、approval、
+Apply は通常の Run API が引き続き所有し、この endpoint は infrastructure を実行しません。
+
+memory / PostgreSQL / D1 の各 store は、current と target の exact InstallConfig
+record digest/JSON、および Capsule status、`currentStateGeneration`、
+`currentStateVersionId`、`executionAuthorityEpoch` を一つの CAS fence で検証します。
+成功時だけ epoch が増え、value-free activity と idempotency receipt が残ります。
+legacy Plan に epoch がない場合は epoch 1 のときだけ許容され、authority replacement
+後は fail closed です。
+この epoch は Capsule OIDC activation authority にも含まれるため、再採用前の old/orphan
+Apply が新しい InstallConfig を認可することはありません。
 
 **Run と StateVersion**
 
@@ -413,14 +471,43 @@ discovery が揃ってからです。
 Operator / hosted service はその汎用 seam に Enterprise SSO、SCIM、商用 audit export を追加できます。
 
 Takosumi は Git metadata、provider output、または任意の provider 呼び出しから
-Accounts OIDC client を推測して登録しません。Host が DB 所有の InstallConfig で
-private OIDC materialization を明示した場合だけ、Plan では非 secret 値を導出して
-authority digest に固定し、最終 Apply の再検証時に exact client を冪等登録できます。
-既に登録済みの Capsule client は current Capsule / InstallConfig / Workspace membership /
-scope を利用時に再検証し、無効な terminal binding は best-effort で revoke します。
+Accounts OIDC client を推測して登録しません。provider runtime-binding は read-only
+derivation であり、registration authority を持ちません。Host が DB 所有の InstallConfig で
+direct な Accounts OIDC module-variable materializer を明示した場合だけ、その materializer が
+final-Apply activation を所有し、Plan と `apply_check` では非 secret 値を
+導出して authority digest に固定します。この二つの phase は Accounts を変更しません。
+最終 Apply の再検証時だけ exact client を冪等登録でき、現在の value-free
+`activationDigest` を保存します。この digest は contract
+`takosumi.accounts-oidc-activation/v1`、Workspace/Capsule、
+`executionAuthorityEpoch`、full InstallConfig digest、OIDC profile digest を束ねます。
+live grant は current Capsule/config/profile/epoch と digest の exact match を要求し、legacy
+null または mismatch は stale/denied として Apply 修復まで認可しません。`updatedAt` は通常の
+監査時刻であり authority ではありません。既に登録済みの Capsule client は current
+Capsule / InstallConfig / Workspace membership / scope を利用時に再検証し、無効な terminal
+binding は best-effort で revoke します。
+
+Takos hosted の browser profile の登録は、exact six scopes
+`openid`, `profile`, `email`, `offline_access`, `capsules:read`, `capsules:write` と
+callback `/auth/oidc/callback` を使います。redirect URI は reviewed HTTPS `public_url`
+の exact origin から導出され、path/query/credential や non-HTTPS origin は受け付けません。
+同じ Capsule と profile なら InstallConfig row を replacement しても client identity は
+安定し、client secret は作成・保存しません。bulk/operator secret と generic
+ProviderConnection は引き続き operator/Accounts の所有です。
 Accounts が発行する Workspace-scoped token と Interface 呼び出しは、引き続き scope と
 Workspace の両方を検証します。token の実体は利用側の secret store に暗号化して保存し、
 OpenTofu state や Output には保存しません。
+
+Accounts schema は additive な protected migration ですが、promotion order は substrate ごとに
+異なります。PostgreSQL では migration 043 を適用してから migration 044 を適用し、feature
+Worker を promote する前に完了させます。043 は nullable `activation_digest` と NOT VALID
+shape check を追加し、044 はその check を validate します。Cloudflare D1 では、まず exact-v3
+ledger/schema closure を確認してから v3/v4 feature bridge を deploy します。bridge は exact
+legacy v3 または checksummed v4 だけを受け付け、request-time DDL は行いません。owner-private
+backup and status evidence を保持し、bounded pre-ledger backfill を完了してから atomic v4
+apply and read-only verify を実行します。observation window の後に exact-v4-only Worker を
+deploy してください。v4 commit 後に v3-only Worker を live に残してはならず、bridge が
+compatible rollback floor です。両 lane は forward-only です。legacy null は保存されますが、
+exact current digest を Apply が保存するまで live grant を許可しません。
 
 `GET /oauth/authorize` の任意の `workspace_id` は、複数 Workspace を持つ
 Principal が発行先を明示するための選択子です。Accounts は認可コードの発行直前に

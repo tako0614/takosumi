@@ -3731,7 +3731,9 @@ export interface SourcePollOperations extends SourceWebhookOperations {
 
 export interface OpenTofuRunRepairOperations {
   readonly workspaces: {
-    listWorkspaces(): Promise<
+    listWorkspacesByIds(
+      workspaceIds: readonly string[],
+    ): Promise<
       readonly { readonly id: string; readonly archivedAt?: string }[]
     >;
   };
@@ -3741,6 +3743,15 @@ export interface OpenTofuRunRepairOperations {
       readonly staleRunningBeforeMs: number;
       readonly limit?: number;
     }): Promise<readonly Run[]>;
+    listPendingRuntimeSecretRetirementRuns(options: {
+      readonly staleBeforeMs: number;
+      readonly limit?: number;
+    }): Promise<readonly Run[]>;
+    claimPendingRuntimeSecretRetirementDispatch(input: {
+      readonly runId: string;
+      readonly staleBeforeMs: number;
+      readonly attemptedAt: number;
+    }): Promise<boolean>;
   };
 }
 
@@ -3997,11 +4008,14 @@ function positiveInteger(value: number | undefined, fallback: number): number {
 const SCHEDULED_RUN_REPAIR_WORKSPACE_LIMIT = 100;
 const SCHEDULED_RUN_REPAIR_RUNS_PER_WORKSPACE = 50;
 const SCHEDULED_RUN_REPAIR_QUEUED_STALE_MS = 2 * 60 * 1000;
+const SCHEDULED_RUN_REPAIR_WORKSPACE_LOOKUP_CHUNK_SIZE = 90;
 
 export interface OpenTofuRunRepairResult {
   readonly workspacesScanned: number;
   readonly runsScanned: number;
   readonly rescheduled: number;
+  readonly ordinaryFailures: number;
+  readonly retirementFailures: number;
 }
 
 async function runScheduledOpenTofuRunRepair(
@@ -4048,25 +4062,51 @@ export async function repairStaleOpenTofuRuns(
   const queuedStaleMs =
     options.queuedStaleMs ?? SCHEDULED_RUN_REPAIR_QUEUED_STALE_MS;
   const runningStaleMs = options.runningStaleMs ?? RUN_HEARTBEAT_STALE_MS;
-  const workspaces = (await operations.workspaces.listWorkspaces())
-    .filter((workspace) => !workspace.archivedAt)
-    .slice(0, Math.max(0, Math.floor(workspaceLimit)));
-  const activeWorkspaceIds = new Set(
-    workspaces.map((workspace) => workspace.id),
-  );
-  const runLimit = Math.max(
-    0,
-    Math.floor(runsPerWorkspace) * Math.max(1, workspaces.length),
-  );
+  let workspacesScanned = 0;
   let runsScanned = 0;
   let rescheduled = 0;
+  let ordinaryFailures = 0;
+  let retirementFailures = 0;
+  const scheduledRunIds = new Set<string>();
   try {
+    const runLimit = Math.max(
+      0,
+      Math.floor(runsPerWorkspace) *
+        Math.max(1, Math.max(0, Math.floor(workspaceLimit))),
+    );
     const runs = await operations.controller.listRecoverableOpenTofuRuns({
       staleQueuedBeforeMs: now - queuedStaleMs,
       staleRunningBeforeMs: now - runningStaleMs,
       limit: runLimit,
     });
     runsScanned = runs.length;
+    const requiredWorkspaceIds = [
+      ...new Set(
+        runs.flatMap((run) =>
+          typeof run.workspaceId === "string" ? [run.workspaceId] : [],
+        ),
+      ),
+    ];
+    const activeWorkspaceIds = new Set<string>();
+    for (
+      let offset = 0;
+      offset < requiredWorkspaceIds.length;
+      offset += SCHEDULED_RUN_REPAIR_WORKSPACE_LOOKUP_CHUNK_SIZE
+    ) {
+      const workspaceIds = requiredWorkspaceIds.slice(
+        offset,
+        offset + SCHEDULED_RUN_REPAIR_WORKSPACE_LOOKUP_CHUNK_SIZE,
+      );
+      const requestedIds = new Set(workspaceIds);
+      const workspaces =
+        await operations.workspaces.listWorkspacesByIds(workspaceIds);
+      for (const workspace of workspaces) {
+        if (requestedIds.has(workspace.id) && !workspace.archivedAt) {
+          activeWorkspaceIds.add(workspace.id);
+        }
+      }
+    }
+    workspacesScanned = activeWorkspaceIds.size;
     for (const run of runs) {
       const workspaceId = run.workspaceId;
       if (!workspaceId || !activeWorkspaceIds.has(workspaceId)) continue;
@@ -4076,13 +4116,67 @@ export async function repairStaleOpenTofuRuns(
         fallbackWorkspaceId: workspaceId,
       });
       if (!dispatch) continue;
-      await scheduler.schedule(dispatch);
-      rescheduled += 1;
+      try {
+        await scheduler.schedule(dispatch);
+        scheduledRunIds.add(run.id);
+        rescheduled += 1;
+      } catch {
+        ordinaryFailures += 1;
+      }
     }
   } catch {
-    // Best-effort: a repair failure must not abort the cron tick.
+    ordinaryFailures += 1;
   }
-  return { workspacesScanned: workspaces.length, runsScanned, rescheduled };
+
+  try {
+    // Terminal retirement intents are a Takosumi-owned outbox, not ordinary
+    // Workspace execution. Scan them independently of the active Workspace
+    // prefix so archived Workspaces and ids beyond the first catalog page still
+    // retire sealed Capsule material. Failed attempts update their durable Run
+    // timestamp, making this bounded oldest-attempt-first scan fair over time.
+    const retirementStaleBeforeMs = now - queuedStaleMs;
+    const retirementRuns =
+      await operations.controller.listPendingRuntimeSecretRetirementRuns({
+        staleBeforeMs: retirementStaleBeforeMs,
+        limit: Math.max(1, Math.floor(runsPerWorkspace)),
+      });
+    runsScanned += retirementRuns.length;
+    for (const run of retirementRuns) {
+      if (scheduledRunIds.has(run.id)) continue;
+      const workspaceId = run.workspaceId;
+      if (!workspaceId) continue;
+      const dispatch = recoverableRunDispatch(run, now, {
+        queuedStaleMs,
+        runningStaleMs,
+        fallbackWorkspaceId: workspaceId,
+      });
+      if (!dispatch || dispatch.action !== "apply") continue;
+      try {
+        const claimed =
+          await operations.controller
+            .claimPendingRuntimeSecretRetirementDispatch({
+              runId: run.id,
+              staleBeforeMs: retirementStaleBeforeMs,
+              attemptedAt: now,
+            });
+        if (!claimed) continue;
+        await scheduler.schedule(dispatch);
+        scheduledRunIds.add(run.id);
+        rescheduled += 1;
+      } catch {
+        retirementFailures += 1;
+      }
+    }
+  } catch {
+    retirementFailures += 1;
+  }
+  return {
+    workspacesScanned,
+    runsScanned,
+    rescheduled,
+    ordinaryFailures,
+    retirementFailures,
+  };
 }
 
 function recoverableRunDispatch(

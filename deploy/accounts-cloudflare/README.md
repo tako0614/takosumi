@@ -67,40 +67,49 @@ canonical Takosumi control plane rather than Accounts storage.
 
 ## D1 schema migration
 
-The handler refuses to serve account-plane traffic when the D1 database it is
-bound to reports a `takosumi_accounts_schema_migrations.version` that drifts from
-the version this code expects. A
-`takosumi_accounts_schema_migrations(version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)`
-bookkeeping table is created on first contact, but the handler never advances the
-recorded version itself — that is the migration runner's job. The handler reads
-only `version` from this table; the table name and column shape are identical to
-the table the `accounts migrate-d1` runner writes
-(`D1_SCHEMA_MIGRATIONS_TABLE_SQL` in `cli/src/cli-accounts-db.ts`), so a
-`migrate-d1` run is visible to this gate.
+`accounts/service/src/d1-migrations.ts` is the sole Accounts D1 catalog. The
+CLI, Worker gate, and local substrate consume the same ordered v0-v4 names and
+checksums. The current feature bridge accepts only either the exact legacy v3
+ledger shape or the exact checksummed v4 closure. Missing rows, gaps, name or
+checksum drift, partial `ALTER`, older/newer heads, missing owned tables or
+indexes, and an incomplete v4 activation-digest backfill all fail closed.
 
-- A brand-new D1 database (no `takosumi_accounts_schema_migrations` rows) is the
-  baseline (version 0). The initial table layout is created by
-  `D1AccountsStore.initialize()` via `D1_ACCOUNTS_STORE_INIT_SQL`. The `migrate-d1`
-  runner records the same baseline as version 0, so running it on a fresh database
-  does not trip the gate.
-- When a real migration is added in `@takosjp/takosumi-accounts-service`, the
-  constant `EXPECTED_D1_SCHEMA_VERSION` and a new `D1_ACCOUNTS_MIGRATIONS` entry
-  (version 1, 2, …) are bumped together. The handler refuses to serve the account
-  plane until the migration runner has recorded the matching
-  `(version, name, applied_at)` row.
-- Do not run `migrate-d1` concurrently against the same D1 database. There is no
-  advisory lock; a racing second runner fails loud on the `version` PRIMARY KEY.
-  Run it from a single deploy job.
-- A drifted D1 raises a `worker_configuration_error`
-  (`D1 schema version <recorded> is behind this Worker (expected <expected>); run ... migration runner before serving account-plane traffic`),
-  also logged via `console.error` without exposing tenant data. If the code is
-  older than the database (recorded version > expected version), it refuses for the
-  same reason — roll forward or roll the migration back to keep schema and code in
-  lockstep.
+While the exact-v3 bridge serves, the owner CLI inventories Capsule-bound OIDC
+clients in deterministic `key` chunks of at most 100 and performs one guarded,
+restart-safe update per chunk in the same atomic batch as an exact-v3
+ledger/schema fence. It reconciles a lost acknowledgement read-only, adopts
+only an exact clean v4 after fence loss, never writes after a drifted/missing
+v4 cutoff, never prints keys/documents, and requires a global zero-missing result. The
+unpublished v4 migration is then one D1 batch transaction: its first statement
+re-fences the exact v0-v3 legacy names, canonical `sqlite_master` closure, and
+zero-missing, then it adds the
+nullable `checksum` column, backfills the immutable v0-v3 checksums, and inserts
+the v4 receipt. A concurrent same-catalog runner is reconciled by the exact
+receipt; a conflicting or partial result is indeterminate and is never retried
+blindly.
 
-The schema version is verified once per isolate (cached alongside the handler).
-In `predeployed` mode, expect a single
-`SELECT version FROM takosumi_accounts_schema_migrations ORDER BY version DESC LIMIT 1`
-query per cold start and no request-time DDL. Do not enable this mode until the
-operator migration lane has created the document/index tables and recorded the
-exact expected migration version.
+Hosted operation is a one-time bridge sequence:
+
+1. deploy this v3/v4-compatible bridge while the protected database is exact v3;
+2. obtain and privately retain backup/Time Travel evidence outside source
+   checkouts, bind its opaque digest to the plan configuration confirmation;
+3. run bounded pre-ledger backfill, apply atomic v4, and read-only verify it;
+4. after the observation window, deploy the separate exact-v4 tightening commit.
+
+Before constructing any plan or reading a token, the owner CLI uses reviewed
+Git configuration to require that the real checkout top-level is the owning
+Takosumi root, its observed HEAD equals `--source-commit`, and tracked plus
+untracked status is empty. Ambient Git repository/config/fsmonitor authority is
+excluded. Local substrate renders the Accounts-owned runtime beside the catalog
+and authenticates the exact policy/schema closures before using that same
+bounded backfill algorithm against its persisted D1.
+
+After v4 commits, a v3-only artifact is past the rollback cutoff. Roll back code
+only to the bridge (or roll forward); Time Travel restore remains a separate
+incident authority and is never invoked by the migration CLI.
+
+`predeployed` performs only the strict catalog/schema reads and zero
+request-time DDL. `bootstrap` may initialize the base store, but it does not
+advance the migration ledger and the bridge still requires exact v3 or v4
+before serving traffic. Gate diagnostics contain only digests and issue codes,
+never rows, SQL values, tokens, or target IDs.

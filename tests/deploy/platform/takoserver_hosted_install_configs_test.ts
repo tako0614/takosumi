@@ -9,47 +9,14 @@ import { composeTakoserverHostedWorkerEnv } from "../../../deploy/platform/takos
 import { OPERATOR_CONTROL_MCP_INSTALL_CONFIG } from "../../../deploy/operator-control-mcp.ts";
 import { CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY } from "../../../providers/cloudflare/credentials.ts";
 
-test("Takosumi Hosted exposes runnable Takoform and Cloudflare provider profiles", () => {
-  expect(TAKOSERVER_HOSTED_INSTALL_CONFIGS).toHaveLength(2);
-  const [takoform, cloudflare] = TAKOSERVER_HOSTED_INSTALL_CONFIGS;
-  expect(takoform?.id).toBe("cfg-hosted-yurucommu-takoform-v2");
-  expect(takoform?.name).toBe("yurucommu-takoform-v2");
-  expect(takoform?.store?.deploymentProfile).toMatchObject({
-    key: "takoform-v2",
-    label: { ja: "Takoform", en: "Takoform" },
-    description: {
-      ja: "自分で接続したTakoform Hostへ配置します。",
-      en: "Deploy to a Takoform Host you connected.",
-    },
-    recommended: true,
-  });
-  expect(takoform?.store?.deploymentProfile).not.toHaveProperty("management");
-  expect(takoform?.sourceSelector).toEqual({
-    url: "https://github.com/tako0614/yurucommu.git",
-    path: ".",
-  });
-  expect(takoform?.modulePath).toBe("deploy/takoform");
-  expect(takoform?.policy.allowedProviders).toEqual([
-    TAKOSERVER_TAKOFORM_PROVIDER_SOURCE,
-  ]);
-  expect(takoform?.policy.providerCredentials).toEqual({
-    requiredProviders: [TAKOSERVER_TAKOFORM_PROVIDER_SOURCE],
-  });
-  expect(takoform?.runtimeBindingMaterialization).toEqual({
-    contract: "takosumi.runtime-binding-profile/v1",
-    generatedSecrets: [
-      { binding: "ENCRYPTION_KEY", bytes: 32, encoding: "hex" },
-    ],
-    oidcClient: {
-      issuerBinding: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
-      clientIdBinding: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
-      ownerSubjectBinding: "TAKOSUMI_ACCOUNTS_OWNER_SUB",
-      redirectUriBinding: "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
-      callbackPath: "/api/auth/callback/takos",
-      scopes: ["openid", "profile", "email"],
-    },
-  });
-
+test("Takosumi Hosted exposes only the direct Cloudflare Yurucommu profile", () => {
+  expect(TAKOSERVER_HOSTED_INSTALL_CONFIGS).toHaveLength(1);
+  expect(
+    TAKOSERVER_HOSTED_INSTALL_CONFIGS.some(
+      (config) => config.id === "cfg-hosted-yurucommu-takoform-v2",
+    ),
+  ).toBe(false);
+  const [cloudflare] = TAKOSERVER_HOSTED_INSTALL_CONFIGS;
   expect(cloudflare?.store?.deploymentProfile).toEqual({
     key: "cloudflare-v1",
     label: { ja: "Cloudflare", en: "Cloudflare" },

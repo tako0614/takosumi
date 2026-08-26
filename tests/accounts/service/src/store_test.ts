@@ -29,6 +29,7 @@ test("InMemoryAccountsStore indexes Capsule OIDC registrations without a Capsule
   store.saveOidcClient({
     clientId: "oidc_capsule",
     capsuleId: "cap_office",
+    activationDigest: `sha256:${"a".repeat(64)}`,
     namespacePath: "identity.oidc",
     issuerUrl: "https://app.example.test",
     redirectUris: ["https://office.example.test/oauth/callback"],
@@ -42,6 +43,9 @@ test("InMemoryAccountsStore indexes Capsule OIDC registrations without a Capsule
   expect(store.findOidcClient("oidc_capsule")?.capsuleId).toBe("cap_office");
   expect(store.findOidcClientForCapsule("cap_office")?.namespacePath).toBe(
     "identity.oidc",
+  );
+  expect(store.findOidcClient("oidc_capsule")?.activationDigest).toBe(
+    `sha256:${"a".repeat(64)}`,
   );
   expect(() =>
     store.saveOidcClient({

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 
-import type {
-  D1Database,
-  D1PreparedStatement,
-  D1Result,
-} from "../../worker/src/bindings.ts";
+import type { D1PreparedStatement, D1Result } from "../../worker/src/bindings.ts";
+import {
+  CloudflareD1RestTransport,
+  type CloudflareD1RestTransportOptions,
+  type D1RestQuery,
+} from "../cloudflare/d1-rest-transport.ts";
 
 export interface CloudflareControlD1RestDatabaseOptions {
   readonly accountId: string;
@@ -15,16 +16,6 @@ export interface CloudflareControlD1RestDatabaseOptions {
   readonly importPollAttempts?: number;
   readonly wait?: (milliseconds: number) => Promise<void>;
 }
-
-type D1Query = {
-  readonly sql: string;
-  readonly params?: readonly (string | number | null)[];
-};
-
-type D1ApiEnvelope = {
-  readonly success?: boolean;
-  readonly result?: readonly D1Result[];
-};
 
 type D1ImportResult = {
   readonly at_bookmark?: string;
@@ -40,9 +31,23 @@ type D1ImportEnvelope = {
   readonly result?: D1ImportResult;
 };
 
+function controlTransportOptions(
+  options: CloudflareControlD1RestDatabaseOptions,
+): CloudflareD1RestTransportOptions {
+  const accountId = opaqueSegment(options.accountId, "account_id_invalid");
+  const databaseId = opaqueSegment(options.databaseId, "database_id_invalid");
+  const apiToken = required(options.apiToken, "api_token_missing");
+  return {
+    accountId,
+    databaseId,
+    apiToken,
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+    errorFactory: (code) => new ControlD1RestError(code),
+  };
+}
+
 /** Operator-only D1 REST adapter. Response bodies are never exposed in errors. */
-export class CloudflareControlD1RestDatabase implements D1Database {
-  readonly #url: URL;
+export class CloudflareControlD1RestDatabase extends CloudflareD1RestTransport {
   readonly #importUrl: URL;
   readonly #apiToken: string;
   readonly #fetch: typeof fetch;
@@ -51,14 +56,11 @@ export class CloudflareControlD1RestDatabase implements D1Database {
   readonly #wait: (milliseconds: number) => Promise<void>;
 
   constructor(options: CloudflareControlD1RestDatabaseOptions) {
+    super(controlTransportOptions(options));
     const accountId = opaqueSegment(options.accountId, "account_id_invalid");
     const databaseId = opaqueSegment(options.databaseId, "database_id_invalid");
     this.#apiToken = required(options.apiToken, "api_token_missing");
     this.#fetch = options.fetch ?? fetch;
-    this.#url = new URL(
-      `/client/v4/accounts/${encodeURIComponent(accountId)}/d1/database/${encodeURIComponent(databaseId)}/query`,
-      "https://api.cloudflare.com",
-    );
     this.#importUrl = new URL(
       `/client/v4/accounts/${encodeURIComponent(accountId)}/d1/database/${encodeURIComponent(databaseId)}/import`,
       "https://api.cloudflare.com",
@@ -78,70 +80,17 @@ export class CloudflareControlD1RestDatabase implements D1Database {
     this.#wait = options.wait ?? wait;
   }
 
-  prepare(query: string): D1PreparedStatement {
-    return new CloudflareControlD1RestStatement(this, query);
-  }
-
   async batch<T = unknown>(
     statements: readonly D1PreparedStatement[],
   ): Promise<readonly D1Result<T>[]> {
-    const queries = statements.map((statement) => {
-      if (
-        !(statement instanceof CloudflareControlD1RestStatement) ||
-        statement.database !== this
-      ) {
-        throw new ControlD1RestError("batch_statement_invalid");
-      }
-      return statement.query;
-    });
+    const queries = this.restQueries(statements);
     if (queries.some((query) => requiresSqlFileImport(query.sql))) {
       await this.#importSql(renderSqlFile(queries));
       return statements.map(() => ({
         success: true,
       })) as readonly D1Result<T>[];
     }
-    return (await this.#request({ batch: queries })) as readonly D1Result<T>[];
-  }
-
-  async run<T = unknown>(query: D1Query): Promise<D1Result<T>> {
-    return ((await this.#request(query))[0] ?? {
-      success: true,
-      results: [],
-    }) as D1Result<T>;
-  }
-
-  async #request(
-    body: D1Query | { readonly batch: readonly D1Query[] },
-  ): Promise<readonly D1Result[]> {
-    let response: Response;
-    try {
-      response = await this.#fetch(this.#url, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.#apiToken}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-    } catch {
-      throw new ControlD1RestError("cloudflare_d1_request_failed");
-    }
-
-    let envelope: D1ApiEnvelope;
-    try {
-      envelope = (await response.json()) as D1ApiEnvelope;
-    } catch {
-      throw new ControlD1RestError("cloudflare_d1_response_invalid");
-    }
-    const results = envelope.result ?? [];
-    if (
-      !response.ok ||
-      envelope.success !== true ||
-      results.some((result) => result.success === false)
-    ) {
-      throw new ControlD1RestError("cloudflare_d1_query_failed");
-    }
-    return results;
+    return await super.batch<T>(statements);
   }
 
   async #importSql(sql: string): Promise<void> {
@@ -263,42 +212,6 @@ export class CloudflareControlD1RestDatabase implements D1Database {
   }
 }
 
-class CloudflareControlD1RestStatement implements D1PreparedStatement {
-  #values: readonly unknown[] = [];
-
-  constructor(
-    readonly database: CloudflareControlD1RestDatabase,
-    readonly sql: string,
-  ) {}
-
-  get query(): D1Query {
-    return {
-      sql: this.sql,
-      ...(this.#values.length > 0
-        ? { params: this.#values.map(d1Parameter) }
-        : {}),
-    };
-  }
-
-  bind(...values: readonly unknown[]): D1PreparedStatement {
-    this.#values = values;
-    return this;
-  }
-
-  async first<T = unknown>(): Promise<T | null> {
-    const result = await this.database.run<T>(this.query);
-    return result.results?.[0] ?? null;
-  }
-
-  async all<T = unknown>(): Promise<D1Result<T>> {
-    return await this.database.run<T>(this.query);
-  }
-
-  async run<T = unknown>(): Promise<D1Result<T>> {
-    return await this.database.run<T>(this.query);
-  }
-}
-
 export class ControlD1RestError extends Error {
   constructor(readonly code: string) {
     super(code);
@@ -306,15 +219,7 @@ export class ControlD1RestError extends Error {
   }
 }
 
-function d1Parameter(value: unknown): string | number | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value === "boolean") return value ? 1 : 0;
-  if (typeof value === "string") return value;
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  throw new ControlD1RestError("query_parameter_invalid");
-}
-
-function renderSqlFile(queries: readonly D1Query[]): string {
+function renderSqlFile(queries: readonly D1RestQuery[]): string {
   if (queries.length === 0) {
     throw new ControlD1RestError("compound_sql_empty");
   }
@@ -324,7 +229,7 @@ function renderSqlFile(queries: readonly D1Query[]): string {
     .join("\n")}\n`;
 }
 
-function renderBoundSql(query: D1Query): string {
+function renderBoundSql(query: D1RestQuery): string {
   const parameters = query.params ?? [];
   let parameterIndex = 0;
   let output = "";

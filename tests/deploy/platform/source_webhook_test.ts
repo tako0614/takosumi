@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
+import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 import {
   CloudflareD1OpenTofuControlStore,
 } from "../../../worker/src/d1_opentofu_store.ts";
+import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 
 import { TAKOSUMI_API_VERSION } from "../../../contract/capabilities.ts";
 import {
@@ -548,15 +550,23 @@ test("stale Capsule auto-plan creates one pending update plan per stale Capsule"
 test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", async () => {
   const now = Date.parse("2026-07-01T23:40:00.000Z");
   const recoveryQueries: unknown[] = [];
+  const retirementQueries: unknown[] = [];
   const scheduled: unknown[] = [];
   const result = await repairStaleOpenTofuRuns(
     {
       workspaces: {
-        listWorkspaces: () =>
-          Promise.resolve([
-            { id: "space_a" },
-            { id: "space_archived", archivedAt: "2026-07-01T00:00:00.000Z" },
-          ]),
+        listWorkspacesByIds: (workspaceIds) => {
+          const requested = new Set(workspaceIds);
+          return Promise.resolve(
+            [
+              { id: "space_a" },
+              {
+                id: "space_archived",
+                archivedAt: "2026-07-01T00:00:00.000Z",
+              },
+            ].filter((workspace) => requested.has(workspace.id)),
+          );
+        },
       },
       controller: {
         listRecoverableOpenTofuRuns: (options) => {
@@ -624,6 +634,37 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
             }),
           ]);
         },
+        listPendingRuntimeSecretRetirementRuns: (options) => {
+          retirementQueries.push(options);
+          return Promise.resolve([
+            runRecord({
+              id: "apply_billing_pending",
+              workspaceId: "space_a",
+              type: "apply",
+              status: "succeeded",
+              createdAt: new Date(now - 20_000).toISOString(),
+              finishedAt: new Date(now - 10_000).toISOString(),
+            }),
+            runRecord({
+              id: "destroy_retirement_archived",
+              workspaceId: "space_archived",
+              type: "destroy_apply",
+              status: "succeeded",
+              createdAt: new Date(now - 20_000).toISOString(),
+              finishedAt: new Date(now - 10_000).toISOString(),
+            }),
+            runRecord({
+              id: "destroy_retirement_after_prefix",
+              workspaceId: "space_after_active_prefix",
+              type: "destroy_apply",
+              status: "failed",
+              createdAt: new Date(now - 20_000).toISOString(),
+              finishedAt: new Date(now - 10_000).toISOString(),
+            }),
+          ]);
+        },
+        claimPendingRuntimeSecretRetirementDispatch: () =>
+          Promise.resolve(true),
       },
     },
     {
@@ -634,6 +675,7 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
     },
     {
       now,
+      workspaceLimit: 1,
       queuedStaleMs: 1_000,
       runningStaleMs: 1_000,
     },
@@ -645,6 +687,9 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
       staleRunningBeforeMs: now - 1_000,
       limit: 50,
     },
+  ]);
+  expect(retirementQueries).toEqual([
+    { staleBeforeMs: now - 1_000, limit: 50 },
   ]);
   expect(scheduled).toEqual([
     {
@@ -667,12 +712,464 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
       runId: "apply_billing_pending",
       workspaceId: "space_a",
     },
+    {
+      action: "apply",
+      runId: "destroy_retirement_archived",
+      workspaceId: "space_archived",
+    },
+    {
+      action: "apply",
+      runId: "destroy_retirement_after_prefix",
+      workspaceId: "space_after_active_prefix",
+    },
   ]);
   expect(result).toEqual({
     workspacesScanned: 1,
-    runsScanned: 9,
-    rescheduled: 4,
+    runsScanned: 12,
+    rescheduled: 6,
+    ordinaryFailures: 0,
+    retirementFailures: 0,
   });
+});
+
+test("scheduled run repair resolves only recoverable Run Workspaces beyond the catalog prefix", async () => {
+  const now = Date.parse("2026-07-02T00:00:00.000Z");
+  const inventory = Array.from({ length: 101 }, (_, index) => ({
+    id: `space_${String(index + 1).padStart(3, "0")}`,
+  }));
+  let catalogCalls = 0;
+  const workspaceLookups: string[][] = [];
+  const scheduled: unknown[] = [];
+  const operations = {
+    workspaces: {
+      listWorkspaces: () => {
+        catalogCalls += 1;
+        return Promise.resolve(inventory);
+      },
+      listWorkspacesByIds: (workspaceIds: readonly string[]) => {
+        workspaceLookups.push([...workspaceIds]);
+        const requested = new Set(workspaceIds);
+        return Promise.resolve(
+          inventory.filter((workspace) => requested.has(workspace.id)),
+        );
+      },
+    },
+    controller: {
+      listRecoverableOpenTofuRuns: () =>
+        Promise.resolve([
+          runRecord({
+            id: "apply_workspace_101",
+            workspaceId: "space_101",
+            type: "apply",
+            status: "queued",
+            createdAt: new Date(now - 10_000).toISOString(),
+          }),
+        ]),
+      listPendingRuntimeSecretRetirementRuns: () => Promise.resolve([]),
+      claimPendingRuntimeSecretRetirementDispatch: () =>
+        Promise.resolve(true),
+    },
+  };
+
+  const result = await repairStaleOpenTofuRuns(
+    operations,
+    {
+      schedule: (dispatch) => {
+        scheduled.push(dispatch);
+        return Promise.resolve();
+      },
+    },
+    {
+      now,
+      workspaceLimit: 100,
+      runsPerWorkspace: 1,
+      queuedStaleMs: 1_000,
+      runningStaleMs: 1_000,
+    },
+  );
+
+  expect(catalogCalls).toBe(0);
+  expect(workspaceLookups).toEqual([["space_101"]]);
+  expect(scheduled).toEqual([
+    {
+      action: "apply",
+      runId: "apply_workspace_101",
+      workspaceId: "space_101",
+    },
+  ]);
+  expect(result).toEqual({
+    workspacesScanned: 1,
+    runsScanned: 1,
+    rescheduled: 1,
+    ordinaryFailures: 0,
+    retirementFailures: 0,
+  });
+});
+
+test("scheduled run repair chunks keyed Workspace lookup and skips missing or archived owners", async () => {
+  const now = Date.parse("2026-07-02T00:05:00.000Z");
+  const activeWorkspaceIds = Array.from(
+    { length: 181 },
+    (_, index) => `space_required_${String(index + 1).padStart(3, "0")}`,
+  );
+  const requiredWorkspaceIds = [
+    ...activeWorkspaceIds,
+    "space_required_archived",
+    "space_required_missing",
+  ];
+  const workspaceLookups: string[][] = [];
+  const scheduled: string[] = [];
+
+  const result = await repairStaleOpenTofuRuns(
+    {
+      workspaces: {
+        listWorkspacesByIds: (workspaceIds) => {
+          workspaceLookups.push([...workspaceIds]);
+          return Promise.resolve(
+            workspaceIds.flatMap((workspaceId) => {
+              if (workspaceId === "space_required_missing") return [];
+              return [
+                workspaceId === "space_required_archived"
+                  ? {
+                      id: workspaceId,
+                      archivedAt: "2026-07-02T00:00:00.000Z",
+                    }
+                  : { id: workspaceId },
+              ];
+            }),
+          );
+        },
+      },
+      controller: {
+        listRecoverableOpenTofuRuns: () =>
+          Promise.resolve(
+            requiredWorkspaceIds.map((workspaceId, index) =>
+              runRecord({
+                id: `apply_chunked_${String(index + 1).padStart(3, "0")}`,
+                workspaceId,
+                type: "apply",
+                status: "queued",
+                createdAt: new Date(now - 10_000).toISOString(),
+              }),
+            ),
+          ),
+        listPendingRuntimeSecretRetirementRuns: () => Promise.resolve([]),
+        claimPendingRuntimeSecretRetirementDispatch: () =>
+          Promise.resolve(true),
+      },
+    },
+    {
+      schedule: (dispatch) => {
+        scheduled.push(dispatch.workspaceId);
+        return Promise.resolve();
+      },
+    },
+    {
+      now,
+      workspaceLimit: requiredWorkspaceIds.length,
+      runsPerWorkspace: 1,
+      queuedStaleMs: 1_000,
+      runningStaleMs: 1_000,
+    },
+  );
+
+  expect(workspaceLookups.map((workspaceIds) => workspaceIds.length)).toEqual([
+    90, 90, 3,
+  ]);
+  expect(workspaceLookups.flat()).toEqual(requiredWorkspaceIds);
+  expect(workspaceLookups.flat()).not.toContain("space_unrelated");
+  expect(scheduled).toEqual(activeWorkspaceIds);
+  expect(result).toEqual({
+    workspacesScanned: activeWorkspaceIds.length,
+    runsScanned: requiredWorkspaceIds.length,
+    rescheduled: activeWorkspaceIds.length,
+    ordinaryFailures: 0,
+    retirementFailures: 0,
+  });
+});
+
+test("runtime secret retirement repair survives a keyed Workspace lookup failure", async () => {
+  const now = Date.parse("2026-07-02T00:00:00.000Z");
+  const catalogFailure =
+    "workspace lookup failed for /private/catalog/path with secret-value";
+  const scheduled: unknown[] = [];
+
+  const result = await repairStaleOpenTofuRuns(
+    {
+      workspaces: {
+        listWorkspacesByIds: () => Promise.reject(new Error(catalogFailure)),
+      },
+      controller: {
+        listRecoverableOpenTofuRuns: () =>
+          Promise.resolve([
+            runRecord({
+              id: "apply_workspace_lookup_failure",
+              workspaceId: "space_active",
+              type: "apply",
+              status: "queued",
+              createdAt: new Date(now - 10_000).toISOString(),
+            }),
+          ]),
+        listPendingRuntimeSecretRetirementRuns: () =>
+          Promise.resolve([
+            runRecord({
+              id: "destroy_retirement_catalog_failure",
+              workspaceId: "space_archived",
+              type: "destroy_apply",
+              status: "succeeded",
+              createdAt: new Date(now - 20_000).toISOString(),
+              finishedAt: new Date(now - 10_000).toISOString(),
+            }),
+          ]),
+        claimPendingRuntimeSecretRetirementDispatch: () =>
+          Promise.resolve(true),
+      },
+    },
+    {
+      schedule: (dispatch) => {
+        scheduled.push(dispatch);
+        return Promise.resolve();
+      },
+    },
+    { now, queuedStaleMs: 1_000, runningStaleMs: 1_000 },
+  );
+
+  expect(scheduled).toEqual([
+    {
+      action: "apply",
+      runId: "destroy_retirement_catalog_failure",
+      workspaceId: "space_archived",
+    },
+  ]);
+  expect(result).toEqual({
+    workspacesScanned: 0,
+    runsScanned: 2,
+    rescheduled: 1,
+    ordinaryFailures: 1,
+    retirementFailures: 0,
+  });
+  expect(JSON.stringify(result)).not.toContain(catalogFailure);
+  expect(JSON.stringify(result)).not.toContain("space_archived");
+  expect(JSON.stringify(result)).not.toContain(
+    "destroy_retirement_catalog_failure",
+  );
+});
+
+test("runtime secret retirement repair survives ordinary query and dispatch failures", async () => {
+  const now = Date.parse("2026-07-02T00:10:00.000Z");
+  const cases = ["recoverable-query", "ordinary-dispatch"] as const;
+
+  for (const failure of cases) {
+    const failureDetail =
+      `${failure} failed for /private/run/path with secret-value`;
+    const scheduled: string[] = [];
+    const result = await repairStaleOpenTofuRuns(
+      {
+        workspaces: {
+          listWorkspacesByIds: (workspaceIds) =>
+            Promise.resolve(
+              workspaceIds.includes("space_a") ? [{ id: "space_a" }] : [],
+            ),
+        },
+        controller: {
+          listRecoverableOpenTofuRuns: () =>
+            failure === "recoverable-query"
+              ? Promise.reject(new Error(failureDetail))
+              : Promise.resolve([
+                  runRecord({
+                    id: "apply_ordinary_dispatch_failure",
+                    type: "apply",
+                    status: "queued",
+                    createdAt: new Date(now - 10_000).toISOString(),
+                  }),
+                  runRecord({
+                    id: "apply_ordinary_after_failure",
+                    type: "apply",
+                    status: "queued",
+                    createdAt: new Date(now - 10_000).toISOString(),
+                  }),
+                ]),
+          listPendingRuntimeSecretRetirementRuns: () =>
+            Promise.resolve([
+              runRecord({
+                id: `destroy_retirement_after_${failure}`,
+                workspaceId: "space_archived",
+                type: "destroy_apply",
+                status: "succeeded",
+                createdAt: new Date(now - 20_000).toISOString(),
+                finishedAt: new Date(now - 10_000).toISOString(),
+              }),
+            ]),
+          claimPendingRuntimeSecretRetirementDispatch: () =>
+            Promise.resolve(true),
+        },
+      },
+      {
+        schedule: (dispatch) => {
+          scheduled.push(dispatch.runId);
+          return failure === "ordinary-dispatch" &&
+              dispatch.runId === "apply_ordinary_dispatch_failure"
+            ? Promise.reject(new Error(failureDetail))
+            : Promise.resolve();
+        },
+      },
+      { now, queuedStaleMs: 1_000, runningStaleMs: 1_000 },
+    );
+
+    expect(scheduled).toEqual(
+      failure === "recoverable-query"
+        ? [`destroy_retirement_after_${failure}`]
+        : [
+            "apply_ordinary_dispatch_failure",
+            "apply_ordinary_after_failure",
+            `destroy_retirement_after_${failure}`,
+          ],
+    );
+    expect(result).toEqual({
+      workspacesScanned: failure === "recoverable-query" ? 0 : 1,
+      runsScanned: failure === "recoverable-query" ? 1 : 3,
+      rescheduled: failure === "recoverable-query" ? 1 : 2,
+      ordinaryFailures: 1,
+      retirementFailures: 0,
+    });
+    expect(JSON.stringify(result)).not.toContain(failureDetail);
+    expect(JSON.stringify(result)).not.toContain("space_archived");
+  }
+});
+
+test("runtime secret retirement repair rotates a poisoned real-size prefix before selecting later pending rows", async () => {
+  const now = Date.parse("2026-07-02T00:20:00.000Z");
+  const dispatchFailure =
+    "retirement dispatch failed for /private/run/path with secret-value";
+  const store = new InMemoryOpenTofuControlStore();
+  const pending = Array.from({ length: 51 }, (_, index): ApplyRun => {
+    const runId = `destroy_retirement_fair_${String(index).padStart(2, "0")}`;
+    const effectAt = now - 20_000 + index;
+    return {
+      id: runId,
+      planRunId: `plan_${runId}`,
+      workspaceId: `space_archived_${index}`,
+      capsuleId: `capsule_retirement_fair_${index}`,
+      operation: "destroy",
+      runnerProfileId: "opentofu-default",
+      status: "succeeded",
+      expected: {
+        planRunId: `plan_${runId}`,
+        capsuleId: `capsule_retirement_fair_${index}`,
+        runnerProfileId: "opentofu-default",
+        sourceDigest: "sha256:source",
+        variablesDigest: "sha256:variables",
+        policyDecisionDigest: "sha256:policy",
+        planDigest: "sha256:plan",
+        planArtifactDigest: "sha256:plan",
+      },
+      stateBackend: { kind: "managed", ref: "state" } as never,
+      stateLock: { status: "recorded", backendRef: "state" },
+      auditEvents: [
+        {
+          id: `audit_retirement_pending_${index}`,
+          type: "runtime_secret.retirement.pending",
+          at: effectAt,
+          data: {
+            capsuleId: `capsule_retirement_fair_${index}`,
+            providerDestroyCommitted: true,
+          },
+        },
+      ],
+      createdAt: effectAt - 10,
+      updatedAt: effectAt,
+      startedAt: effectAt - 5,
+      finishedAt: effectAt,
+    };
+  });
+  for (const run of pending) await store.putApplyRun(run);
+  const poisoned = new Set(pending.slice(0, 50).map((run) => run.id));
+  const attempts: string[] = [];
+  const operations = {
+    workspaces: {
+      listWorkspacesByIds: () => Promise.resolve([]),
+    },
+    controller: {
+      listRecoverableOpenTofuRuns: () => Promise.resolve([]),
+      listPendingRuntimeSecretRetirementRuns: async (options: {
+        readonly staleBeforeMs: number;
+        readonly limit?: number;
+      }) =>
+        (await store.listPendingRuntimeSecretRetirementRuns(options)).map(
+          (run) =>
+            runRecord({
+              id: run.id,
+              workspaceId: run.workspaceId,
+              type: "destroy_apply",
+              status: run.status,
+              createdAt: new Date(run.createdAt).toISOString(),
+              finishedAt: run.finishedAt === undefined
+                ? undefined
+                : new Date(run.finishedAt).toISOString(),
+            }),
+        ),
+      claimPendingRuntimeSecretRetirementDispatch: (input: {
+        readonly runId: string;
+        readonly staleBeforeMs: number;
+        readonly attemptedAt: number;
+      }) => store.claimPendingRuntimeSecretRetirementDispatch(input),
+    },
+  };
+  const scheduler = {
+    schedule: (dispatch: { readonly runId: string }) => {
+      attempts.push(dispatch.runId);
+      if (poisoned.has(dispatch.runId)) {
+        return Promise.reject(new Error(dispatchFailure));
+      }
+      return Promise.resolve();
+    },
+  };
+
+  const first = await repairStaleOpenTofuRuns(operations, scheduler, {
+    now,
+    queuedStaleMs: 1_000,
+    runningStaleMs: 1_000,
+  });
+  expect(attempts).toEqual(pending.slice(0, 50).map((run) => run.id));
+  expect(first).toEqual({
+    workspacesScanned: 0,
+    runsScanned: 50,
+    rescheduled: 0,
+    ordinaryFailures: 0,
+    retirementFailures: 50,
+  });
+  expect(JSON.stringify(first)).not.toContain(dispatchFailure);
+  expect(JSON.stringify(first)).not.toContain(pending[0]!.id);
+
+  attempts.length = 0;
+  const next = await repairStaleOpenTofuRuns(operations, scheduler, {
+    now,
+    queuedStaleMs: 1_000,
+    runningStaleMs: 1_000,
+  });
+  expect(attempts).toEqual([pending[50]!.id]);
+  expect(next).toEqual({
+    workspacesScanned: 0,
+    runsScanned: 1,
+    rescheduled: 1,
+    ordinaryFailures: 0,
+    retirementFailures: 0,
+  });
+  for (const run of pending.slice(0, 50)) {
+    const current = await store.getApplyRun(run.id);
+    expect(
+      current?.auditEvents.some(
+        (event) => event.type === "runtime_secret.retirement.pending",
+      ),
+      run.id,
+    ).toBe(true);
+    expect(
+      current?.auditEvents.some(
+        (event) => event.type === "runtime_secret.retirement.completed",
+      ),
+      run.id,
+    ).toBe(false);
+  }
 });
 
 test("drift sweep is OFF by default and only enabled by the =1 flag", () => {

@@ -50,6 +50,12 @@ import {
 import { workspaceForRun } from "./artifacts.ts";
 import { parseSourceBuild } from "./parsing.ts";
 import { runSourceBuild } from "./source_build.ts";
+import {
+  assertReleaseCommandsDoNotOverrideRuntimeSecretEnv,
+  prepareRuntimeSecretFiles,
+  runtimeSecretFilesFromRequest,
+  type RuntimeSecretFileSystem,
+} from "./runtime_secrets.ts";
 
 export async function runBackup(
   runId: string,
@@ -119,8 +125,14 @@ export async function runRelease(
   runId: string,
   request: unknown,
   signal?: AbortSignal,
+  runtimeSecretFileSystem: Partial<RuntimeSecretFileSystem> = {},
 ): Promise<JsonRecord> {
   const release = parseRelease(request);
+  const runtimeSecrets = runtimeSecretFilesFromRequest(request);
+  assertReleaseCommandsDoNotOverrideRuntimeSecretEnv(
+    release.commands,
+    runtimeSecrets,
+  );
   const sourceIdentityRedactionValues = releaseSourceIdentityValues(release);
   const workspace = workspaceForRun(runId);
   await assertDirectory(workspace.sourceRoot, "release source root");
@@ -142,7 +154,16 @@ export async function runRelease(
         ),
       ]
     : [];
+  let preparedRuntimeSecrets:
+    | Awaited<ReturnType<typeof prepareRuntimeSecretFiles>>
+    | undefined;
   try {
+    preparedRuntimeSecrets = await prepareRuntimeSecretFiles(
+      preparedCredentials.context,
+      workspace,
+      runtimeSecrets,
+      runtimeSecretFileSystem,
+    );
     for (const command of release.commands) {
       const cwd = releaseCommandCwd(workspace, command);
       await assertDirectory(
@@ -155,22 +176,26 @@ export async function runRelease(
         `release command ${command.id} working directory`,
       );
       const context: CommandContext = {
-        ...preparedCredentials.context,
+        ...preparedRuntimeSecrets.context,
         redactionValues: [
-          ...(preparedCredentials.context.redactionValues ?? []),
+          ...(preparedRuntimeSecrets.context.redactionValues ?? []),
           ...sourceIdentityRedactionValues,
         ],
         env: {
-          ...preparedCredentials.context.env,
+          ...preparedRuntimeSecrets.context.env,
           ...releaseBaseEnv(runId, release),
           ...(command.env ?? {}),
         },
         timeoutMs:
           releaseCommandTimeoutMs(command) ??
-          preparedCredentials.context.timeoutMs ??
+          preparedRuntimeSecrets.context.timeoutMs ??
           10 * 60 * 1000,
       };
-      const result = await runCommand(command.command, { cwd, context });
+      const result = await runCommand(command.command, {
+        cwd,
+        context,
+        isolateProcessGroup: true,
+      });
       logs.push(
         redactReleaseCommandOutput(
           `$ ${command.command.join(" ")}\n${result.stdout}\n${result.stderr}`,
@@ -195,17 +220,24 @@ export async function runRelease(
         };
       }
     }
+    return {
+      runId,
+      action: "release",
+      status: "succeeded",
+      exitCode: 0,
+      commandCount: release.commands.length,
+      stdout: logs.join("\n"),
+    };
   } finally {
+    let runtimeCleanupError: unknown;
+    try {
+      await preparedRuntimeSecrets?.cleanup();
+    } catch (error) {
+      runtimeCleanupError = error;
+    }
     await preparedCredentials.cleanup();
+    if (runtimeCleanupError) throw runtimeCleanupError;
   }
-  return {
-    runId,
-    action: "release",
-    status: "succeeded",
-    exitCode: 0,
-    commandCount: release.commands.length,
-    stdout: logs.join("\n"),
-  };
 }
 
 export async function runProviderSnapshotBackup(

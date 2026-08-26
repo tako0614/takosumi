@@ -87,6 +87,21 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     return row ? rowPlan(row) : undefined;
   }
 
+  async hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean> {
+    const row = await this.#db
+      .prepare(
+        `select exists (
+           select 1 from git_install_plans
+            where json_extract(record_json, '$.operation') = 'revision'
+              and json_extract(record_json, '$.capsuleId') = ?
+              and phase not in ('failed', 'reviewable')
+         ) as present`,
+      )
+      .bind(capsuleId)
+      .first<{ readonly present: number }>();
+    return row?.present === 1;
+  }
+
   async claimReconcile(input: {
     readonly id: string;
     readonly expectedGeneration: number;

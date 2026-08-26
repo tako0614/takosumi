@@ -334,6 +334,14 @@ describe("generalization boundary scanner", () => {
           "// Immutable account-plane schema migration catalog ends.",
         ].join("\n"),
       },
+      {
+        path: "accounts/service/src/d1-migrations.ts",
+        content: [
+          "// Immutable account-plane schema migration catalog begins.",
+          "const sql = `select stripeCustomerId from billing_accounts_by_stripe_customer`;",
+          "// Immutable account-plane schema migration catalog ends.",
+        ].join("\n"),
+      },
     ]);
 
     expect(violations).toEqual([]);

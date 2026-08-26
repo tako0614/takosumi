@@ -92,17 +92,35 @@ Four more go in the same way. `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` and
 `TAKOSUMI_SECRET_STORE_PASSPHRASE` is the sealing key for credentials and state, and
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN` is the bearer for the operator-only API.
 
-Apply the accounts D1 schema. This calls `bunx wrangler d1 execute` once per pending
-migration, and the versions it applied stay in `takosumi_accounts_schema_migrations`.
+Apply the Accounts D1 schema through the owner CLI. First retain private backup or
+Time Travel evidence and bind its opaque digest to plan/apply. Plan makes no remote
+call, apply sends one atomic REST batch per migration, and verify is read-only.
 
 ```bash
-takosumi accounts migrate-d1 --database-id takosumi-accounts --remote
+takosumi accounts migrate-d1 plan \
+  --environment production \
+  --account-id "$CLOUDFLARE_ACCOUNT_ID" \
+  --database-id "$CLOUDFLARE_DATABASE_ID" \
+  --source-commit "$SOURCE_COMMIT" \
+  --backup-evidence-digest "$BACKUP_EVIDENCE_DIGEST"
+# Review the source/catalog/target/configuration digests before apply.
+takosumi accounts migrate-d1 apply ... \
+  --confirm-source-digest "$SOURCE_DIGEST" \
+  --confirm-catalog-digest "$CATALOG_DIGEST" \
+  --confirm-target-digest "$TARGET_DIGEST" \
+  --confirm-configuration-digest "$CONFIGURATION_DIGEST"
+takosumi accounts migrate-d1 verify ...
 ```
 
-The command cannot be rolled back. Running it from two jobs at once makes one of them fail
-on the primary key collision for a version, so call it from a single deploy job. To watch
-what it does before your first deployment, add `--local` and it targets your local
-miniflare instead.
+A same-catalog concurrent runner can adopt the exact winning receipt; conflict or partial
+state fails closed, and a lost acknowledgement is never blindly retried. After v4, a
+v3-only Worker is past the rollback cutoff. Deploy the v3/v4 bridge, apply and verify v4,
+then ship the later exact-v4 Worker. The CLI never restores a database; keep raw bookmarks,
+target IDs, and restore authority outside source checkouts in owner-private 0600/0700
+custody. While the exact-v3 bridge serves, `apply` inventories and backfills OIDC clients
+in deterministic `key` chunks of at most 100, requires zero missing values, then re-fences
+the exact-v3 ledger/schema closure plus zero-missing in the first statement of the atomic
+v4 batch.
 
 The control plane D1 needs no migrations. While `TAKOSUMI_CONTROL_D1_SCHEMA_MODE` is at
 its default of `bootstrap`, the schema settles on the first request. To run against a

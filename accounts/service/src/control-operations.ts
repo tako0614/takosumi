@@ -289,6 +289,7 @@ export interface ControlPlaneOperations {
       readonly autoUpdate?: boolean;
     }): Promise<Capsule>;
     putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
+    createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean>;
     getInstallConfig(id: string): Promise<InstallConfig>;
     getInstallConfigsByIds?(
       ids: readonly string[],
@@ -320,6 +321,26 @@ export interface ControlPlaneOperations {
     patchCapsuleStatus(id: string, status: Capsule["status"]): Promise<Capsule>;
     setCapsuleAutoUpdate(id: string, enabled: boolean): Promise<Capsule>;
     abandonUnappliedCapsule(id: string, reason: string): Promise<Capsule>;
+    getCapsuleExecutionAuthorityEpoch(capsuleId: string): Promise<number>;
+    rebindInstallConfig(request: {
+      readonly capsuleId: string;
+      readonly targetInstallConfigId: string;
+      readonly expected: {
+        readonly installConfigId: string;
+        readonly installConfigDigest: string;
+        readonly currentStateGeneration: number;
+        readonly currentStateVersionId: string | undefined;
+        readonly status: Capsule["status"];
+        readonly executionAuthorityEpoch: number;
+      };
+      readonly actorSubject: string;
+      readonly reason: string;
+      readonly requestDigest: string;
+    }): Promise<{
+      readonly capsule: Capsule;
+      readonly replayed: boolean;
+      readonly targetInstallConfigDigest: string;
+    }>;
     putProviderBindingSet(
       profile: ProviderBindingSet,
     ): Promise<ProviderBindingSet>;

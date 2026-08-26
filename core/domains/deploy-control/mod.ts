@@ -113,6 +113,7 @@ import {
   CapsuleStateGenerationGuardConflict,
   type OpenTofuControlStore,
   type PlanRunInputs,
+  type RuntimeSecretRetirementDispatchClaimInput,
 } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import {
@@ -173,6 +174,11 @@ import type {
 import { getCapsuleAdoptedSourceSnapshot } from "./capsule_source_revision.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 import type { SensitiveOutputResolver } from "../output-shares/mod.ts";
+import type {
+  RunnerRuntimeSecretFilesDispatch,
+  RuntimeSecretFileBundle,
+  RuntimeSecretFileMaterializer,
+} from "./runtime_secret_file_materializer.ts";
 import type {
   Dependency,
   DependencySnapshot,
@@ -542,6 +548,8 @@ export interface ReleaseCommandRunJob {
   readonly nonSensitiveOutputs: Readonly<Record<string, JsonValue>>;
   readonly providerConfigurations: ProviderConfigurationsEnvelope;
   readonly credentials?: RunCredentials;
+  /** Runner-only plaintext dispatch opened immediately before release. */
+  readonly runtimeSecrets?: RunnerRuntimeSecretFilesDispatch;
   readonly applyRunId: string;
   readonly workspaceId?: string;
   readonly capsuleId: string;
@@ -581,6 +589,11 @@ export interface ReleaseActivationInput {
    * set as apply/destroy; never persisted or recorded in activity.
    */
   readonly credentials?: RunCredentials;
+  /**
+   * Opaque host-owned runtime material. Only the runner adapter may unwrap it;
+   * operator activators and JSON projections must never receive plaintext.
+   */
+  readonly runtimeSecretFileBundle?: RuntimeSecretFileBundle;
   /** Service-side InstallConfig actions pinned with the reviewed Plan. */
   readonly commands: readonly ReleaseActivationAction[];
   /** Optional InstallConfig source preparation for runner release commands. */
@@ -917,6 +930,8 @@ export interface OpenTofuControllerDependencies {
    * It is not a provider extension and receives no credential bundle.
    */
   readonly moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
+  /** Private control-plane authority for Capsule-stable runner secret files. */
+  readonly runtimeSecretFileMaterializer?: RuntimeSecretFileMaterializer;
   /** Host authority for allocating opaque durable artifact references. */
   readonly artifactReferenceAllocator?: ArtifactReferenceAllocator;
   /**
@@ -1435,6 +1450,12 @@ export class OpenTofuController {
         ? {
             moduleVariableMaterializer:
               dependencies.moduleVariableMaterializer,
+          }
+        : {}),
+      ...(dependencies.runtimeSecretFileMaterializer
+        ? {
+            runtimeSecretFileMaterializer:
+              dependencies.runtimeSecretFileMaterializer,
           }
         : {}),
       sourceLifecycle: this.#sourceLifecycle,
@@ -2076,6 +2097,19 @@ export class OpenTofuController {
     return await this.#runQuery.listRecoverableOpenTofuRuns(options);
   }
 
+  async listPendingRuntimeSecretRetirementRuns(options: {
+    readonly staleBeforeMs: number;
+    readonly limit?: number;
+  }): Promise<readonly Run[]> {
+    return await this.#runQuery.listPendingRuntimeSecretRetirementRuns(options);
+  }
+
+  async claimPendingRuntimeSecretRetirementDispatch(
+    input: RuntimeSecretRetirementDispatchClaimInput,
+  ): Promise<boolean> {
+    return await this.#store.claimPendingRuntimeSecretRetirementDispatch(input);
+  }
+
   async getRunLogs(id: string): Promise<RunLogsResponse> {
     return await this.#runQuery.getRunLogs(id);
   }
@@ -2222,6 +2256,7 @@ const APPLY_EXPECTED_GUARD_KEYS = [
   "planRunId",
   "capsuleId",
   "currentStateVersionId",
+  "capsuleExecutionAuthorityEpoch",
   "runnerProfileId",
   "sourceDigest",
   "variablesDigest",
@@ -2273,6 +2308,12 @@ export function applyExpectedGuardFromPlanRun(
     ...(capsuleId ? { capsuleId } : {}),
     ...(capsuleId
       ? { currentStateVersionId: planRun.capsuleCurrentStateVersionId ?? null }
+      : {}),
+    ...(planRun.capsuleExecutionAuthorityEpoch !== undefined
+      ? {
+          capsuleExecutionAuthorityEpoch:
+            planRun.capsuleExecutionAuthorityEpoch,
+        }
       : {}),
     runnerProfileId: planRun.runnerProfileId,
     sourceDigest: planRun.sourceDigest,

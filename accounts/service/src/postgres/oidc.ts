@@ -18,6 +18,7 @@ const accountsV1 = pgSchema("accounts_v1");
 const oidcClients = accountsV1.table("oidc_clients", {
   clientId: text("client_id").primaryKey(),
   capsuleId: text("capsule_id").notNull(),
+  activationDigest: text("activation_digest"),
   serviceId: text("namespace_path").notNull(),
   issuerUrl: text("issuer_url").notNull(),
   redirectUris: text("redirect_uris").array().notNull(),
@@ -43,6 +44,7 @@ export async function saveOidcClient(
       target: oidcClients.clientId,
       set: {
         serviceId: values.serviceId,
+        activationDigest: values.activationDigest,
         issuerUrl: values.issuerUrl,
         redirectUris: values.redirectUris,
         allowedScopes: values.allowedScopes,
@@ -96,6 +98,7 @@ export async function revokeOidcClient(
 const oidcClientColumns = {
   client_id: oidcClients.clientId,
   capsule_id: oidcClients.capsuleId,
+  activation_digest: oidcClients.activationDigest,
   namespace_path: oidcClients.serviceId,
   issuer_url: oidcClients.issuerUrl,
   redirect_uris: oidcClients.redirectUris,
@@ -111,6 +114,7 @@ function oidcClientValues(record: OidcClientRecord) {
   return {
     clientId: record.clientId,
     capsuleId: record.capsuleId,
+    activationDigest: record.activationDigest ?? null,
     serviceId: record.namespacePath,
     issuerUrl: record.issuerUrl,
     redirectUris: [...record.redirectUris],

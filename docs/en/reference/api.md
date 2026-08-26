@@ -160,7 +160,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 86
+`accounts/service/src/control-route-inventory.ts`; it currently contains 87
 public route descriptors. Representative operations from that inventory are:
 
 ```http

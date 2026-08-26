@@ -16,7 +16,10 @@ check remains active. Migration `039` then removes the superseded check in a
 separate short transaction. Migration `040` adds the `NOT VALID` v3 check for
 the Workspace-bound `ai.models.read`, `ai.chat`, and `ai.embeddings` scopes;
 migration `041` validates it while v2 remains active, and migration `042`
-removes the superseded v2 check in a separate short transaction.
+removes the superseded v2 check in a separate short transaction. Migration
+`043` additively records the Capsule activation digest on dynamic OIDC grants,
+and migration `044` validates its nullable legacy-compatible shape check. A
+legacy null remains stored but is denied until an exact Apply refreshes it.
 
 - **Substrate**: Postgres (the `node-postgres` reference distribution and any
   compatible operator deployment).

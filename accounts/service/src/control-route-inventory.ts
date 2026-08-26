@@ -71,6 +71,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
+      method: "POST",
+      path: "/api/v1/capsules/{capsuleId}/install-config-re-adoptions",
+      summary: "Re-adopt and CAS-rebind one Capsule to its latest repository InstallConfig",
+      auth: "account-session",
+    },
+    {
       method: "GET",
       path: "/api/v1/revision-plans/{revisionPlanId}",
       summary: "Read a Git revision plan without advancing it",

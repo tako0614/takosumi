@@ -209,6 +209,19 @@ test("PAT scope widening validates before removing the legacy check", async () =
   expect(dropV2).not.toContain("IF EXISTS");
 });
 
+test("dynamic OIDC activation digest expands before validation", async () => {
+  const add = await readMigration("043_oidc_client_activation_digest.sql");
+  const validate = await readMigration(
+    "044_validate_oidc_client_activation_digest.sql",
+  );
+  expect(add).toContain("ADD COLUMN IF NOT EXISTS activation_digest text");
+  expect(add).toContain("oidc_clients_activation_digest_check CHECK");
+  expect(add).toContain(") NOT VALID;");
+  expect(validate).toContain(
+    "VALIDATE CONSTRAINT oidc_clients_activation_digest_check",
+  );
+});
+
 interface AppliedCatalogFixture {
   readonly schemaVersion: number;
   readonly migrations: readonly {

@@ -19,95 +19,6 @@ const SOURCE = Object.freeze({
 });
 const TIMESTAMP = "2026-08-20T00:00:00.000Z";
 
-function base(
-  id: string,
-  name: string,
-  deploymentProfile: NonNullable<InstallConfig["store"]>["deploymentProfile"],
-): InstallConfig {
-  return {
-    id,
-    name,
-    sourceSelector: SOURCE,
-    modulePath: "deploy/takoform",
-    variableMapping: {},
-    outputAllowlist: {},
-    policy: {
-      allowedProviders: [TAKOSERVER_TAKOFORM_PROVIDER_SOURCE],
-      providerCredentials: {
-        requiredProviders: [TAKOSERVER_TAKOFORM_PROVIDER_SOURCE],
-      },
-      repositoryInstallUx: {
-        allowedInterfacePermissions: [UI_SURFACE_OPEN_PERMISSION],
-        requiredManifestApiVersion:
-          TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
-      },
-    },
-    store: {
-      source: SOURCE,
-      deploymentProfile,
-      order: 30,
-      surface: "apps",
-      kind: "app",
-      provider: "Takos ecosystem",
-      suggestedName: "yurucommu",
-      badge: { ja: "SNS", en: "Social" },
-      name: { ja: "Yurucommu", en: "Yurucommu" },
-      description: {
-        ja: "ゆるくつながる feed / story 型コミュニケーション。",
-        en: "A relaxed feed and story communication app.",
-      },
-    },
-    createdAt: TIMESTAMP,
-    updatedAt: TIMESTAMP,
-  };
-}
-
-const takoform = base(
-  "cfg-hosted-yurucommu-takoform-v2",
-  "yurucommu-takoform-v2",
-  {
-    key: "takoform-v2",
-    label: { ja: "Takoform", en: "Takoform" },
-    description: {
-      ja: "自分で接続したTakoform Hostへ配置します。",
-      en: "Deploy to a Takoform Host you connected.",
-    },
-    order: 10,
-    recommended: true,
-  },
-);
-
-const takoformRuntime = Object.freeze({
-  installExperience: {
-    projections: [
-      {
-        kind: "oidc_client" as const,
-        variables: {},
-        callbackPath: "/api/auth/callback/takos",
-        scopes: ["openid", "profile", "email"],
-      },
-    ],
-  },
-  runtimeBindingMaterialization: {
-    contract: "takosumi.runtime-binding-profile/v1" as const,
-    generatedSecrets: [
-      {
-        binding: "ENCRYPTION_KEY",
-        bytes: 32 as const,
-        encoding: "hex" as const,
-      },
-    ],
-    oidcClient: {
-      issuerBinding: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
-      clientIdBinding: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
-      ownerSubjectBinding: "TAKOSUMI_ACCOUNTS_OWNER_SUB",
-      redirectUriBinding: "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
-      callbackPath: "/api/auth/callback/takos",
-      scopes: ["openid", "profile", "email"],
-    },
-  },
-});
-
 const cloudflare: InstallConfig = {
   id: "cfg-hosted-yurucommu-cloudflare-direct-v1",
   name: "yurucommu-cloudflare-direct-v1",
@@ -203,11 +114,10 @@ const cloudflare: InstallConfig = {
   updatedAt: TIMESTAMP,
 };
 
+// The provider runtime-binding RPC can derive values, but its current wire
+// contract cannot return public-origin evidence to the owning Takosumi Run.
+// Keep the Takoform profile nonselectable until a cross-repository contract can
+// bind and redeem that evidence after successful Apply. Direct Cloudflare uses
+// the existing Run-owned DB OIDC path and remains the only selectable profile.
 export const TAKOSERVER_HOSTED_INSTALL_CONFIGS: readonly InstallConfig[] =
-  Object.freeze([
-    Object.freeze({
-      ...takoform,
-      ...takoformRuntime,
-    }),
-    Object.freeze(cloudflare),
-  ]);
+  Object.freeze([Object.freeze(cloudflare)]);

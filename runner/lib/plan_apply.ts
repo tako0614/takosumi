@@ -350,6 +350,7 @@ export async function initPlanAndBuildResponse(
       runCommand(["tofu", "init", "-input=false", "-no-color"], {
         cwd: moduleDir,
         context: commandContext,
+        isolateProcessGroup: true,
       }),
     ),
   );
@@ -377,7 +378,11 @@ export async function initPlanAndBuildResponse(
         "-out",
         workspace.planPath,
       ],
-      { cwd: moduleDir, context: commandContext },
+      {
+        cwd: moduleDir,
+        context: commandContext,
+        isolateProcessGroup: true,
+      },
     ),
   );
   if (plan.exitCode !== 0) {
@@ -553,6 +558,7 @@ export async function runReviewedPlanApply(
         runCommand(["tofu", "init", "-input=false", "-no-color"], {
           cwd: moduleDir,
           context: applyContext,
+          isolateProcessGroup: true,
         }),
       ),
     );
@@ -570,7 +576,11 @@ export async function runReviewedPlanApply(
     const result = await timer.measure("tofu_apply", () =>
       runCommand(
         ["tofu", "apply", "-input=false", "-no-color", workspace.planPath],
-        { cwd: moduleDir, context: applyContext },
+        {
+          cwd: moduleDir,
+          context: applyContext,
+          isolateProcessGroup: true,
+        },
       ),
     );
     const outputs =

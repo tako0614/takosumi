@@ -172,6 +172,7 @@ export interface PersonalAccessTokenRow {
 export interface OidcClientRow {
   client_id: string;
   capsule_id: string;
+  activation_digest: string | null;
   namespace_path: string;
   issuer_url: string;
   redirect_uris: string[];
@@ -317,6 +318,7 @@ export function oidcClientFromRow(row: OidcClientRow): OidcClientRecord {
   return {
     clientId: row.client_id,
     capsuleId: row.capsule_id,
+    activationDigest: optional(row.activation_digest),
     namespacePath: row.namespace_path,
     issuerUrl: row.issuer_url,
     redirectUris: row.redirect_uris,

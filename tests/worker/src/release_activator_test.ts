@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type { ReleaseActivationInput } from "../../../core/domains/deploy-control/mod.ts";
+import { RuntimeSecretFileBundle } from "../../../core/domains/deploy-control/runtime_secret_file_materializer.ts";
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 import {
   createCompositeReleaseActivator,
@@ -422,24 +423,34 @@ test("composite release activator fails closed when mixed commands lack runner a
   });
 });
 
-test("composite release activator never passes runner credentials to operator branch", async () => {
+test("composite release activator keeps runner credentials and runtime secrets out of the operator branch", async () => {
   let runnerCredentials: ReleaseActivationInput["credentials"];
   let operatorCredentials: ReleaseActivationInput["credentials"];
+  let runnerRuntimeSecrets: ReleaseActivationInput["runtimeSecretFileBundle"];
+  let operatorRuntimeSecrets: ReleaseActivationInput["runtimeSecretFileBundle"];
   let operatorOwnsCredentials = true;
+  let operatorOwnsRuntimeSecrets = true;
   const runner = {
     async activate(input: ReleaseActivationInput) {
       runnerCredentials = input.credentials;
+      runnerRuntimeSecrets = input.runtimeSecretFileBundle;
       return { status: "succeeded" as const };
     },
   };
   const operator = {
     async activate(input: ReleaseActivationInput) {
       operatorCredentials = input.credentials;
+      operatorRuntimeSecrets = input.runtimeSecretFileBundle;
       operatorOwnsCredentials = Object.hasOwn(input, "credentials");
+      operatorOwnsRuntimeSecrets = Object.hasOwn(
+        input,
+        "runtimeSecretFileBundle",
+      );
       return { status: "succeeded" as const };
     },
   };
   const activator = createCompositeReleaseActivator({ runner, operator });
+  const runtimeSecretFileBundle = fakeRuntimeSecretFileBundle();
   const input = {
     ...fakeActivationInput([
       {
@@ -458,13 +469,66 @@ test("composite release activator never passes runner credentials to operator br
     credentials: {
       env: { CLOUDFLARE_API_TOKEN: "fixture-provider-token" },
     },
+    runtimeSecretFileBundle,
   } as ReleaseActivationInput;
 
   await activator!.activate(input);
 
   expect(runnerCredentials).toEqual(input.credentials);
+  expect(runnerRuntimeSecrets).toBe(runtimeSecretFileBundle);
   expect(operatorCredentials).toBeUndefined();
+  expect(operatorRuntimeSecrets).toBeUndefined();
   expect(operatorOwnsCredentials).toBe(false);
+  expect(operatorOwnsRuntimeSecrets).toBe(false);
+});
+
+test("runner release activator alone unwraps the opaque runtime secret bundle", async () => {
+  let capturedJob: Parameters<NonNullable<import("../../../core/domains/deploy-control/mod.ts").OpenTofuRunner["release"]>>[0] | undefined;
+  const activator = createRunnerReleaseActivator({
+    release: async (job) => {
+      capturedJob = job;
+      return {
+        status: "succeeded",
+        runId: job.runId,
+        commandCount: job.commands.length,
+      };
+    },
+  });
+  const runtimeSecretFileBundle = fakeRuntimeSecretFileBundle();
+
+  await activator!.activate({
+    ...fakeRunnerActivationInput(),
+    runtimeSecretFileBundle,
+  });
+
+  expect(capturedJob?.runtimeSecrets).toEqual(
+    runtimeSecretFileBundle.toRunnerDispatch(),
+  );
+});
+
+test("runner release activator refuses runtime secrets outside post-apply", async () => {
+  let called = false;
+  const activator = createRunnerReleaseActivator({
+    release: async () => {
+      called = true;
+      throw new Error("runner must not receive destroy-time runtime secrets");
+    },
+  });
+
+  await expect(
+    activator!.activate({
+      ...fakeRunnerActivationInput(),
+      commands: [
+        {
+          id: "cleanup",
+          phase: "pre_destroy",
+          command: ["bun", "run", "cleanup"],
+        },
+      ],
+      runtimeSecretFileBundle: fakeRuntimeSecretFileBundle(),
+    }),
+  ).rejects.toThrow("post-apply");
+  expect(called).toBe(false);
 });
 
 test("runner release activator leaves commands pending without source archive", async () => {
@@ -815,4 +879,20 @@ function fakeActivationInput(
     },
     commands,
   } as unknown as ReleaseActivationInput;
+}
+
+function fakeRuntimeSecretFileBundle(): RuntimeSecretFileBundle {
+  return new RuntimeSecretFileBundle({
+    contract: "takosumi.runner-runtime-secret-files/v1",
+    profileDigest: `sha256:${"a".repeat(64)}`,
+    files: [
+      {
+        path: "runtime.json",
+        mode: 0o600,
+        content: '{"ONLY_SECRET":"fixture-secret-value"}\n',
+        envName: "TAKOS_RUNTIME_SECRETS_FILE",
+        secretNames: ["ONLY_SECRET"],
+      },
+    ],
+  });
 }

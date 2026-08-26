@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { D1AccountsStore } from "../../../accounts/service/src/mod.ts";
 import {
+  applyD1AccountsMigrationBatch,
+  loadD1AccountsMigrationCatalog,
+} from "../../../accounts/service/src/d1-migrations.ts";
+import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
 } from "../../../contract/api-surface.ts";
@@ -198,17 +202,14 @@ test("platform delegates the canonical Accounts API v1 surface", async () => {
   const accountsDb = new SqliteFakeD1();
   const accountsStore = new D1AccountsStore(accountsDb);
   await accountsStore.initialize();
-  await accountsDb
-    .prepare(
-      "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
-    )
-    .run();
-  await accountsDb
-    .prepare(
-      "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-    )
-    .bind(3, "current", Date.now())
-    .run();
+  const catalog = await loadD1AccountsMigrationCatalog();
+  for (const migration of catalog.migrations) {
+    await applyD1AccountsMigrationBatch(
+      accountsDb,
+      migration,
+      Date.now() + migration.version,
+    );
+  }
   const env = {
     ...baseEnv,
     TAKOSUMI_ACCOUNTS_DB: accountsDb,

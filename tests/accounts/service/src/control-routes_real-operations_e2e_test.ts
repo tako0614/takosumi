@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
+import { resolveRepoOwnedDeploymentProfile } from "../../../../accounts/service/src/control/repo-owned-install-config.ts";
+import { oidcClientActivationDigest } from "../../../../accounts/service/src/oidc-activation.ts";
+import { validateOidcLiveGrant } from "../../../../accounts/service/src/oidc-live-grant.ts";
 import {
   handleControlRoute,
   type ControlPlaneOperations,
@@ -246,10 +249,14 @@ function seedSession(
 function request(
   method: string,
   path: string,
-  init: { readonly cookie?: string; readonly body?: unknown } = {},
+  init: {
+    readonly cookie?: string;
+    readonly body?: unknown;
+    readonly headers?: Readonly<Record<string, string>>;
+  } = {},
 ): { readonly request: Request; readonly url: URL } {
   const url = new URL(`${ORIGIN}${path}`);
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...init.headers };
   if (init.cookie) headers.cookie = init.cookie;
   if (init.body !== undefined) headers["content-type"] = "application/json";
   return {
@@ -270,12 +277,14 @@ async function controlJson<T>(
     readonly method: string;
     readonly path: string;
     readonly body?: unknown;
+    readonly headers?: Readonly<Record<string, string>>;
   },
   expectedStatus: number,
 ): Promise<T> {
   const built = request(input.method, input.path, {
     cookie: input.cookie,
     ...(input.body !== undefined ? { body: input.body } : {}),
+    ...(input.headers ? { headers: input.headers } : {}),
   });
   const response = await handleControlRoute({
     request: built.request,
@@ -2425,4 +2434,755 @@ test("authenticated repository Interface review persists exact proposals and app
       (entry) => entry.name === "repo-interface-conflict",
     ),
   ).toBe(false);
+});
+
+const TAKOS_PUBLIC_ORIGIN =
+  "https://takos-production-v1.shoutatomiyama0614.workers.dev";
+const TAKOS_CALLBACK_PATH = "/auth/oidc/callback";
+const TAKOS_SCOPES = [
+  "openid",
+  "profile",
+  "email",
+  "offline_access",
+  "capsules:read",
+  "capsules:write",
+] as const;
+
+async function reAdoptionRouteFixture(
+  suffix: string,
+  options: { readonly legacyProfile?: boolean } = {},
+) {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const foreignCookie = seedSession(accountStore, `foreign_${suffix}`);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const baseRunner = recordingRunner();
+  const runner: RecordingRunner = {
+    ...baseRunner,
+    readCapsuleSourceFiles: (job) => {
+      baseRunner.capsuleSourceFileJobs.push(job);
+      return Promise.resolve([
+        {
+          path: "main.tf",
+          text: `
+variable "public_url" {
+  type = string
+}
+
+terraform {
+  required_providers {
+    cloudflare = { source = "cloudflare/cloudflare" }
+  }
+}
+
+output "launch_url" { value = var.public_url }
+`,
+        },
+      ]);
+    },
+  };
+  const repositoryUrl = `https://git.example.com/takos/${suffix}.git`;
+  const baseInstallConfig: InstallConfig = {
+    id: `cfg_takos_profile_${suffix}`,
+    name: `takos-profile-${suffix}`,
+    sourceSelector: { url: repositoryUrl, path: "." },
+    modulePath: ".",
+    variableMapping: {},
+    installExperience: {
+      projections: [
+        {
+          kind: "oidc_client",
+          variables: {},
+          callbackPath: TAKOS_CALLBACK_PATH,
+          scopes: TAKOS_SCOPES,
+        },
+      ],
+    },
+    accountsOidcModuleVariableMaterialization: {
+      contract: "takosumi.accounts-oidc-module-variables/v2",
+      resourceNameVariable: "project_name",
+      publicUrlVariable: "public_url",
+      accountsUrlVariable: "takosumi_accounts_url",
+      issuerUrlVariable: "takosumi_accounts_issuer_url",
+      clientIdVariable: "takosumi_accounts_client_id",
+      redirectUriVariable: "takosumi_accounts_redirect_uri",
+      callbackPath: TAKOS_CALLBACK_PATH,
+      scopes: TAKOS_SCOPES,
+    },
+    runtimeBindingMaterialization: {
+      contract: "takosumi.runtime-binding-profile/v1",
+      runtimeSecretFile: {
+        contract: "takosumi.runtime-secret-file/v1",
+        envName: "TAKOS_RUNTIME_SECRETS_FILE",
+        fileName: "takos-runtime-secrets.json",
+        mode: 0o600,
+        values: [
+          {
+            kind: "rsa-key-pair",
+            privateName: "PLATFORM_PRIVATE_KEY",
+            publicName: "PLATFORM_PUBLIC_KEY",
+            modulusLength: 2048,
+            hash: "SHA-256",
+          },
+          {
+            kind: "random",
+            name: "ENCRYPTION_KEY",
+            bytes: 32,
+            encoding: "base64",
+          },
+          {
+            kind: "random",
+            name: "TAKOS_AGENT_START_TOKEN",
+            bytes: 32,
+            encoding: "hex",
+          },
+          {
+            kind: "random",
+            name: "TAKOS_INTERNAL_API_SECRET",
+            bytes: 32,
+            encoding: "hex",
+          },
+        ],
+      },
+    },
+    outputAllowlist: {},
+    policy: {
+      repositoryInstallUx: {
+        requiredManifestApiVersion: "takosumi.com/v2.2",
+      },
+    },
+    store: {
+      source: { url: repositoryUrl, path: "." },
+      ...(options.legacyProfile
+        ? {}
+        : {
+          deploymentProfile: {
+            key: "cloudflare-direct-v1",
+            label: { ja: "Cloudflareへ直接配置", en: "Direct Cloudflare" },
+            description: {
+              ja: "Cloudflareへ配置します。",
+              en: "Deploy to Cloudflare.",
+            },
+            order: 10,
+            recommended: true,
+          },
+        },
+      ),
+      order: 1,
+      surface: "apps",
+      kind: "app",
+      provider: "Takos ecosystem",
+      suggestedName: "takos",
+      badge: { ja: "Takos", en: "Takos" },
+      name: { ja: "Takos", en: "Takos" },
+      description: { ja: "Takos", en: "Takos" },
+    },
+    createdAt: "2026-08-25T00:00:00.000Z",
+    updatedAt: "2026-08-25T00:00:00.000Z",
+  };
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuRunner: runner,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    operatorInstallConfigs: [baseInstallConfig],
+  });
+  const snapshotId = `snap_re_adoption_${suffix}`;
+  const workspaceId = `ws_re_adoption_${suffix}`;
+  const seeded = await seedCapsuleModel(deployStore, {
+    workspaceId,
+    sourceId: `src_re_adoption_${suffix}`,
+    snapshotId,
+    capsuleId: `cap_re_adoption_${suffix}`,
+    installConfigId: `icfg_old_derived_${suffix}`,
+    sourceUrl: repositoryUrl,
+    name: `takos-${suffix}`,
+    installConfig: {
+      workspaceId,
+      modulePath: ".",
+      internal: {
+        reason: "per_install_overrides",
+        sourceSnapshotId: snapshotId,
+      },
+      variableMapping: { public_url: TAKOS_PUBLIC_ORIGIN },
+      installExperience: baseInstallConfig.installExperience,
+    },
+  });
+  await deployStore.putCapsule({
+    ...seeded.capsule,
+    installingPrincipalId: "user_test",
+    status: "active",
+  });
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest: `sha256:${"7".repeat(64)}`,
+      document: {
+        apiVersion: "takosumi.com/v2.2",
+        kind: "Repository",
+        install: {
+          defaultModule: ".",
+          modules: {
+            ".": {
+              inputs: [
+                {
+                  name: "public_url",
+                  source: { kind: "user" },
+                  type: "string",
+                  required: true,
+                  label: { ja: "公開URL", en: "Public URL" },
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+  });
+  return {
+    accountStore,
+    cookie,
+    foreignCookie,
+    deployStore,
+    operations,
+    seeded,
+    baseInstallConfig,
+  };
+}
+
+async function readReAdoptionGuard(
+  fixture: Awaited<ReturnType<typeof reAdoptionRouteFixture>>,
+): Promise<string> {
+  const response = await controlJson<{
+    readonly installConfigReAdoption: { readonly authorityGuard: string };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "GET",
+      path: `/api/v1/capsules/${fixture.seeded.capsule.id}`,
+    },
+    200,
+  );
+  return response.installConfigReAdoption.authorityGuard;
+}
+
+function reAdoptionBody(
+  fixture: Awaited<ReturnType<typeof reAdoptionRouteFixture>>,
+  authorityGuard: string,
+) {
+  return {
+    baseInstallConfigId: fixture.baseInstallConfig.id,
+    sourceSnapshotId: fixture.seeded.snapshot.id,
+    deploymentProfileKey: "cloudflare-direct-v1",
+    reason: "Adopt the reviewed immutable Takos profile",
+    expected: { authorityGuard },
+  };
+}
+
+test("re-adoption uses only the public guard, preserves Takos origin, and does not use the OIDC clock as config authority", async () => {
+  const fixture = await reAdoptionRouteFixture("route");
+  const previousOidcGrantUpdatedAt =
+    Date.parse(fixture.baseInstallConfig.updatedAt) + 60_000;
+  await fixture.accountStore.saveOidcClient({
+    clientId: "tko_existing_re_adoption_route",
+    capsuleId: fixture.seeded.capsule.id,
+    namespacePath: "identity.oidc",
+    issuerUrl: "https://app.takosumi.com",
+    redirectUris: [`${TAKOS_PUBLIC_ORIGIN}${TAKOS_CALLBACK_PATH}`],
+    allowedScopes: TAKOS_SCOPES,
+    subjectMode: "pairwise",
+    tokenEndpointAuthMethod: "none",
+    createdAt: previousOidcGrantUpdatedAt - 60_000,
+    updatedAt: previousOidcGrantUpdatedAt,
+  });
+  expect(
+    (await fixture.operations.capsules.listSharedInstallConfigs({
+      includeInternal: false,
+    })).map((config) => config.id),
+  ).toContain(fixture.baseInstallConfig.id);
+  const { source } = await fixture.operations.getSource(
+    fixture.seeded.source.id,
+  );
+  const snapshot = await fixture.operations.getSourceSnapshot(
+    fixture.seeded.snapshot.id,
+  );
+  expect(
+    resolveRepoOwnedDeploymentProfile({
+      source,
+      sourceSnapshot: snapshot,
+      candidates: await fixture.operations.capsules.listSharedInstallConfigs({
+        includeInternal: false,
+      }),
+      deploymentProfileKey: "cloudflare-direct-v1",
+    }),
+  ).toMatchObject({
+    ok: true,
+    kind: "profile",
+    installConfig: { id: fixture.baseInstallConfig.id },
+  });
+  const path = `/api/v1/capsules/${fixture.seeded.capsule.id}`;
+  const unauthenticated = request("GET", path);
+  expect(
+    (
+      await handleControlRoute({
+        request: unauthenticated.request,
+        url: unauthenticated.url,
+        store: fixture.accountStore,
+        operations: fixture.operations,
+      })
+    )?.status,
+  ).toBe(401);
+  await controlJson(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.foreignCookie,
+      method: "GET",
+      path,
+    },
+    403,
+  );
+
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const body = reAdoptionBody(fixture, authorityGuard);
+  const adopted = await controlJson<{
+    readonly capsule: {
+      readonly installConfigId: string;
+      readonly updatedAt: string;
+    };
+    readonly installConfigReAdoption: {
+      readonly replayed: boolean;
+      readonly targetInstallConfigId: string;
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path: `${path}/install-config-re-adoptions`,
+      headers: { "idempotency-key": "re-adopt-route-v1" },
+      body,
+    },
+    200,
+  );
+  expect(adopted.installConfigReAdoption.replayed).toBe(false);
+
+  const publicTarget = await controlJson<{
+    readonly installConfig: InstallConfig;
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "GET",
+      path: `/api/v1/capsule-configs/${adopted.installConfigReAdoption.targetInstallConfigId}`,
+    },
+    200,
+  );
+  expect(publicTarget.installConfig.variableMapping.public_url).toBe(
+    TAKOS_PUBLIC_ORIGIN,
+  );
+  expect(publicTarget.installConfig.installExperience?.projections).toEqual([
+    {
+      kind: "oidc_client",
+      variables: {},
+      callbackPath: TAKOS_CALLBACK_PATH,
+      scopes: TAKOS_SCOPES,
+    },
+  ]);
+  expect(Date.parse(publicTarget.installConfig.updatedAt)).toBe(
+    Date.parse(fixture.baseInstallConfig.updatedAt) + 1,
+  );
+
+  await Bun.sleep(5);
+  const currentClient = fixture.accountStore.findOidcClient(
+    "tko_existing_re_adoption_route",
+  );
+  if (!currentClient) throw new Error("seeded OIDC client is missing");
+  await fixture.accountStore.saveOidcClient({
+    ...currentClient,
+    updatedAt: currentClient.updatedAt + 120_000,
+  });
+  const replay = await controlJson<typeof adopted>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path: `${path}/install-config-re-adoptions`,
+      headers: { "idempotency-key": "re-adopt-route-v1" },
+      body,
+    },
+    200,
+  );
+  expect(replay.installConfigReAdoption).toMatchObject({
+    replayed: true,
+    targetInstallConfigId:
+      adopted.installConfigReAdoption.targetInstallConfigId,
+  });
+  expect(
+    (
+      await fixture.operations.capsules.getInstallConfig(
+        adopted.installConfigReAdoption.targetInstallConfigId,
+      )
+    ).updatedAt,
+  ).toBe(publicTarget.installConfig.updatedAt);
+
+  const activity = await controlJson<{
+    readonly events: readonly {
+      readonly action: string;
+      readonly createdAt: string;
+      readonly metadata: Readonly<Record<string, unknown>>;
+    }[];
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "GET",
+      path: `/api/v1/workspaces/${fixture.seeded.workspace.id}/activity`,
+    },
+    200,
+  );
+  const rebound = activity.events.filter(
+    (event) => event.action === "capsule.install_config_rebound",
+  );
+  expect(rebound).toHaveLength(1);
+  expect(rebound[0]?.createdAt).toBe(adopted.capsule.updatedAt);
+  expect(JSON.stringify(rebound)).not.toContain("token=");
+
+  await controlJson(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path: `${path}/install-config-re-adoptions`,
+      headers: { "idempotency-key": "re-adopt-stale-guard" },
+      body,
+    },
+    409,
+  );
+  await controlJson(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path: `${path}/install-config-re-adoptions`,
+      headers: { "idempotency-key": "re-adopt-bad-reason" },
+      body: { ...body, reason: "bad\nreason" },
+    },
+    400,
+  );
+
+});
+
+test("re-adoption rejects present invalid deployment profile keys before durable mutation", async () => {
+  const invalidProfileKeys = [
+    { label: "number", value: 7 },
+    { label: "null", value: null },
+    { label: "empty", value: "" },
+    { label: "whitespace", value: " " },
+  ] as const;
+
+  for (const { label, value } of invalidProfileKeys) {
+    const fixture = await reAdoptionRouteFixture(`invalid-profile-${label}`);
+    const capsuleBefore = await fixture.operations.capsules.getCapsule(
+      fixture.seeded.capsule.id,
+    );
+    const configIdsBefore = (
+      await fixture.deployStore.listInstallConfigs(capsuleBefore.workspaceId)
+    ).map((config) => config.id).sort();
+    const authorityGuard = await readReAdoptionGuard(fixture);
+
+    await controlJson(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path:
+          `/api/v1/capsules/${capsuleBefore.id}/install-config-re-adoptions`,
+        headers: { "idempotency-key": `re-adopt-invalid-${label}-v1` },
+        body: {
+          ...reAdoptionBody(fixture, authorityGuard),
+          deploymentProfileKey: value,
+        },
+      },
+      400,
+    );
+
+    expect(
+      await fixture.operations.capsules.getCapsule(capsuleBefore.id),
+    ).toMatchObject({
+      installConfigId: capsuleBefore.installConfigId,
+      updatedAt: capsuleBefore.updatedAt,
+    });
+    expect(
+      (
+        await fixture.deployStore.listInstallConfigs(capsuleBefore.workspaceId)
+      ).map((config) => config.id).sort(),
+    ).toEqual(configIdsBefore);
+
+    const activity = await controlJson<{
+      readonly events: readonly { readonly action: string }[];
+    }>(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "GET",
+        path: `/api/v1/workspaces/${capsuleBefore.workspaceId}/activity`,
+      },
+      200,
+    );
+    expect(
+      activity.events.filter(
+        (event) => event.action === "capsule.install_config_rebound",
+      ),
+    ).toHaveLength(0);
+  }
+});
+
+test("re-adoption keeps the omitted deployment profile default idempotent", async () => {
+  const fixture = await reAdoptionRouteFixture("omitted-profile", {
+    legacyProfile: true,
+  });
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const { deploymentProfileKey, ...body } = reAdoptionBody(
+    fixture,
+    authorityGuard,
+  );
+  expect(deploymentProfileKey).toBe("cloudflare-direct-v1");
+  const path =
+    `/api/v1/capsules/${fixture.seeded.capsule.id}/install-config-re-adoptions`;
+  const call = () =>
+    controlJson<{
+      readonly installConfigReAdoption: {
+        readonly replayed: boolean;
+        readonly targetInstallConfigId: string;
+      };
+    }>(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: { "idempotency-key": "re-adopt-omitted-profile-v1" },
+        body,
+      },
+      200,
+    );
+
+  const adopted = await call();
+  const replay = await call();
+  expect(adopted.installConfigReAdoption.replayed).toBe(false);
+  expect(replay.installConfigReAdoption).toMatchObject({
+    replayed: true,
+    targetInstallConfigId:
+      adopted.installConfigReAdoption.targetInstallConfigId,
+  });
+});
+
+test("concurrent identical re-adoptions produce one audited winner and one canonical replay", async () => {
+  const fixture = await reAdoptionRouteFixture("race");
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const body = reAdoptionBody(fixture, authorityGuard);
+  const path = `/api/v1/capsules/${fixture.seeded.capsule.id}/install-config-re-adoptions`;
+  const call = () =>
+    controlJson<{
+      readonly installConfigReAdoption: {
+        readonly replayed: boolean;
+        readonly targetInstallConfigId: string;
+      };
+    }>(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: { "idempotency-key": "re-adopt-race-v1" },
+        body,
+      },
+      200,
+    );
+  const results = await Promise.all([call(), call()]);
+  expect(results.map((result) => result.installConfigReAdoption.replayed).sort())
+    .toEqual([false, true]);
+  expect(
+    new Set(
+      results.map(
+        (result) => result.installConfigReAdoption.targetInstallConfigId,
+      ),
+    ).size,
+  ).toBe(1);
+
+  const activity = await controlJson<{
+    readonly events: readonly { readonly action: string }[];
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "GET",
+      path: `/api/v1/workspaces/${fixture.seeded.workspace.id}/activity`,
+    },
+    200,
+  );
+  expect(
+    activity.events.filter(
+      (event) => event.action === "capsule.install_config_rebound",
+    ),
+  ).toHaveLength(1);
+});
+
+test("busy old Apply cannot carry an orphan target OIDC grant across re-adoption epoch", async () => {
+  const fixture = await reAdoptionRouteFixture("oidc-orphan");
+  const capsule = await fixture.operations.capsules.getCapsule(
+    fixture.seeded.capsule.id,
+  );
+  const oldConfig = await fixture.operations.capsules.getInstallConfig(
+    capsule.installConfigId,
+  );
+  const clientId = "tko_re_adoption_oidc_orphan";
+  const oldActivationDigest = await oidcClientActivationDigest({
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    executionAuthorityEpoch: 1,
+    installConfig: oldConfig,
+  });
+  const initialClientUpdatedAt = Date.parse(oldConfig.updatedAt) + 30_000;
+  await fixture.accountStore.saveOidcClient({
+    clientId,
+    capsuleId: capsule.id,
+    activationDigest: oldActivationDigest,
+    namespacePath: "identity.oidc",
+    issuerUrl: "https://app.takosumi.com",
+    redirectUris: [`${TAKOS_PUBLIC_ORIGIN}${TAKOS_CALLBACK_PATH}`],
+    allowedScopes: TAKOS_SCOPES,
+    subjectMode: "pairwise",
+    tokenEndpointAuthMethod: "none",
+    createdAt: initialClientUpdatedAt - 1,
+    updatedAt: initialClientUpdatedAt,
+  });
+
+  const runningApply: ApplyRun = {
+    id: "apply_re_adoption_oidc_orphan",
+    planRunId: "plan_re_adoption_oidc_orphan",
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    operation: "update",
+    runnerProfileId: "opentofu-default",
+    status: "running",
+    expected: {
+      planRunId: "plan_re_adoption_oidc_orphan",
+      capsuleId: capsule.id,
+      runnerProfileId: "opentofu-default",
+      sourceDigest: `sha256:${"1".repeat(64)}`,
+      variablesDigest: `sha256:${"2".repeat(64)}`,
+      policyDecisionDigest: `sha256:${"3".repeat(64)}`,
+      planDigest: `sha256:${"4".repeat(64)}`,
+      planArtifactDigest: `sha256:${"4".repeat(64)}`,
+    },
+    stateBackend: { kind: "managed", ref: "state" } as never,
+    stateLock: { status: "recorded", backendRef: "state" },
+    auditEvents: [],
+    createdAt: initialClientUpdatedAt,
+    updatedAt: initialClientUpdatedAt,
+    startedAt: initialClientUpdatedAt,
+  };
+  await fixture.deployStore.putApplyRun(runningApply);
+
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const body = reAdoptionBody(fixture, authorityGuard);
+  const path = `/api/v1/capsules/${capsule.id}/install-config-re-adoptions`;
+  await controlJson(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-oidc-orphan-v1" },
+      body,
+    },
+    409,
+  );
+  const orphanTargets = (
+    await fixture.deployStore.listInstallConfigs(capsule.workspaceId)
+  ).filter(
+    (config) =>
+      config.internal?.reAdoption?.idempotencyKeyHash !== undefined,
+  );
+  expect(orphanTargets).toHaveLength(1);
+
+  // The old Apply may finish and refresh only the old epoch after the target
+  // row exists. A newer clock cannot make that grant valid after re-adoption.
+  const oldClient = fixture.accountStore.findOidcClient(clientId);
+  if (!oldClient) throw new Error("old OIDC client is missing");
+  await fixture.accountStore.saveOidcClient({
+    ...oldClient,
+    activationDigest: oldActivationDigest,
+    updatedAt: oldClient.updatedAt + 120_000,
+  });
+  await fixture.deployStore.putApplyRun({
+    ...runningApply,
+    status: "succeeded",
+    updatedAt: runningApply.updatedAt + 120_000,
+    finishedAt: runningApply.updatedAt + 120_000,
+  });
+
+  const rebound = await controlJson<{
+    readonly installConfigReAdoption: {
+      readonly replayed: boolean;
+      readonly targetInstallConfigId: string;
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-oidc-orphan-v1" },
+      body,
+    },
+    200,
+  );
+  expect(rebound.installConfigReAdoption.replayed).toBe(false);
+  expect(rebound.installConfigReAdoption.targetInstallConfigId).toBe(
+    orphanTargets[0]?.id,
+  );
+  expect(
+    await fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(
+      capsule.id,
+    ),
+  ).toBe(2);
+
+  expect(
+    await validateOidcLiveGrant({
+      store: fixture.accountStore,
+      operations: fixture.operations,
+      client: {
+        clientId,
+        capsuleId: capsule.id,
+        allowedScopes: TAKOS_SCOPES,
+      },
+      capsuleId: capsule.id,
+      workspaceId: capsule.workspaceId,
+      scope: TAKOS_SCOPES.join(" "),
+      takosumiSubject: "user_test",
+    }),
+  ).toEqual({ ok: false, reason: "install_grant_stale" });
+  expect(fixture.accountStore.findOidcClient(clientId)?.updatedAt).toBe(
+    oldClient.updatedAt + 120_000,
+  );
 });

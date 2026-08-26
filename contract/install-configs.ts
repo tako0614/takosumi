@@ -18,6 +18,7 @@ import type { ScopeBoundaryPolicy } from "./plan-scope.ts";
 import type { RepositoryManifestInterfaceApiVersion } from "./repository-manifest.ts";
 import type { JsonValue } from "./types.ts";
 import type { ConnectionScopeKind } from "./connections.ts";
+import type { CapsuleStatus } from "./capsules.ts";
 
 export type { Capsule, PublicCapsule, CapsuleStatus } from "./capsules.ts";
 export type {
@@ -633,19 +634,57 @@ export interface RuntimeOidcClientBindings {
   readonly scopes?: readonly string[];
 }
 
+export interface RuntimeSecretRandomValue {
+  readonly kind: "random";
+  readonly name: string;
+  readonly bytes: number;
+  readonly encoding: "hex" | "base64";
+}
+
+export interface RuntimeSecretRsaKeyPairValue {
+  readonly kind: "rsa-key-pair";
+  readonly privateName: string;
+  readonly publicName: string;
+  readonly modulusLength: 2048;
+  readonly hash: "SHA-256";
+}
+
+export type RuntimeSecretFileValue =
+  | RuntimeSecretRandomValue
+  | RuntimeSecretRsaKeyPairValue;
+
+/**
+ * Value-free declaration for one Capsule-stable, runner-private JSON file.
+ * The host generates and seals the values under Capsule authority. The runner
+ * receives the plaintext only for post-apply lifecycle execution, writes the
+ * file mode exactly, exports only `envName`, and removes it afterwards.
+ */
+export interface RuntimeSecretFileMaterialization {
+  readonly contract: "takosumi.runtime-secret-file/v1";
+  readonly envName: string;
+  readonly fileName: string;
+  readonly mode: 384;
+  readonly values: readonly RuntimeSecretFileValue[];
+}
+
 /**
  * Operator-owned, value-free runtime binding declaration.
  *
  * The Git module may declare that a Worker Version needs sensitive binding
  * names, but it cannot mint their values.  This profile lets the private host
  * materializer derive only an exact, DB-owned set after re-reading the current
- * Capsule, Run, InstallConfig, and installing Principal.  No generated value
- * is persisted in OpenTofu state or returned through a public InstallConfig.
+ * Capsule, Run, InstallConfig, and installing Principal. The port is read-only:
+ * it cannot patch InstallConfig or activate Accounts OIDC, so the exact grant
+ * must already be present in the DB-owned InstallConfig. Generated values are
+ * never persisted in OpenTofu state or returned through a public InstallConfig;
+ * a runtime secret file, when declared, is kept only as opaque sealed host
+ * material and opened only on the runner dispatch path.
  */
 export interface InstallConfigRuntimeBindingMaterialization {
   readonly contract: "takosumi.runtime-binding-profile/v1";
   readonly generatedSecrets?: readonly RuntimeGeneratedSecretBinding[];
   readonly oidcClient?: RuntimeOidcClientBindings;
+  readonly runtimeSecretFile?: RuntimeSecretFileMaterialization;
 }
 
 /**
@@ -657,7 +696,7 @@ export interface InstallConfigRuntimeBindingMaterialization {
  * current Capsule, InstallConfig, and verified Workspace ProviderBinding. Raw
  * credentials and generated runtime secrets never cross this port.
  */
-export interface InstallConfigAccountsOidcModuleVariableMaterialization {
+export interface InstallConfigAccountsOidcPairwiseModuleVariableMaterialization {
   readonly contract: "takosumi.accounts-oidc-module-variables/v1";
   /** Optional Worker name; an empty value falls back to projectNameVariable. */
   readonly workerNameVariable: string;
@@ -672,6 +711,35 @@ export interface InstallConfigAccountsOidcModuleVariableMaterialization {
   readonly ownerSubjectVariable: string;
   readonly allowUnpinnedOwnerClaimVariable: string;
 }
+
+/**
+ * Private host declaration for a Capsule-bound public browser client whose
+ * four ordinary module variables are derived by Takosumi Accounts. The client
+ * identity is stable for the Capsule and this exact profile across immutable
+ * InstallConfig replacements; a changed profile is a distinct authority and
+ * is never silently rotated during Plan.
+ */
+export interface InstallConfigAccountsOidcBrowserModuleVariableMaterialization {
+  readonly contract: "takosumi.accounts-oidc-module-variables/v2";
+  /** Public resource name used for the workers.dev fallback origin. */
+  readonly resourceNameVariable: string;
+  /** Optional exact reviewed HTTPS origin. Empty/unset uses workers.dev. */
+  readonly publicUrlVariable: string;
+  /** Additional non-secret public scalar inputs passed to the host materializer. */
+  readonly additionalInputVariables?: readonly string[];
+  /** Input names that Core rejects when a non-empty value is requested. */
+  readonly forbiddenNonEmptyInputVariables?: readonly string[];
+  readonly accountsUrlVariable: string;
+  readonly issuerUrlVariable: string;
+  readonly clientIdVariable: string;
+  readonly redirectUriVariable: string;
+  readonly callbackPath: string;
+  readonly scopes: readonly string[];
+}
+
+export type InstallConfigAccountsOidcModuleVariableMaterialization =
+  | InstallConfigAccountsOidcPairwiseModuleVariableMaterialization
+  | InstallConfigAccountsOidcBrowserModuleVariableMaterialization;
 
 /**
  * Service-side install configuration. Workspace-neutral rows are operator
@@ -703,6 +771,26 @@ export interface InstallConfig {
     /** Immutable proposal provenance; never selectable through public APIs. */
     readonly sourceSnapshotId?: string;
     readonly repositoryInstallUxDigest?: string;
+    /** Value-free authority/audit receipt for an explicit Capsule re-adoption. */
+    readonly reAdoption?: {
+      readonly capsuleId: string;
+      readonly actorSubject: string;
+      readonly reason: string;
+      readonly idempotencyKeyHash: string;
+      readonly requestDigest: string;
+      readonly previousInstallConfigId: string;
+      readonly previousInstallConfigDigest: string;
+      readonly previousCapsuleStatus: CapsuleStatus;
+      readonly previousStateGeneration: number;
+      readonly previousStateVersionId?: string;
+      readonly previousExecutionAuthorityEpoch: number;
+      readonly authorityGuard: string;
+      /** Digest sealing the exact derived target before this seal field. */
+      readonly derivedTargetDigest: string;
+      readonly baseInstallConfigId: string;
+      readonly sourceSnapshotId: string;
+      readonly deploymentProfileKey?: string;
+    };
   };
   readonly variableMapping: Readonly<Record<string, unknown>>;
   /**

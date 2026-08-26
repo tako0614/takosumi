@@ -291,6 +291,7 @@ export class CloudflareContainerOpenTofuRunner
         outputs: job.nonSensitiveOutputs,
         providerConfigurations: job.providerConfigurations,
         ...(job.credentials ? { credentials: job.credentials } : {}),
+        ...(job.runtimeSecrets ? { runtimeSecrets: job.runtimeSecrets } : {}),
         activation: {
           applyRunId: job.applyRunId,
           ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),

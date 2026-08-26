@@ -120,6 +120,16 @@ export class RunQueryService {
     return await Promise.all(rows.map((row) => this.#projectStoredRun(row)));
   }
 
+  async listPendingRuntimeSecretRetirementRuns(options: {
+    readonly staleBeforeMs: number;
+    readonly limit?: number;
+  }): Promise<readonly Run[]> {
+    const rows = await this.#store.listPendingRuntimeSecretRetirementRuns(
+      options,
+    );
+    return await Promise.all(rows.map((row) => this.#projectStoredRun(row)));
+  }
+
   async #projectStoredRun(row: StoredRunRecord): Promise<Run> {
     if (isStoredPlanRun(row)) {
       return projectPlanRun(row, {

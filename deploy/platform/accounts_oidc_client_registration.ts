@@ -19,6 +19,7 @@ export interface RegisterCapsulePublicOidcClientInput {
   readonly callbackPath: string;
   readonly scopes: readonly string[];
   readonly clientId: string;
+  readonly activationDigest: string;
   readonly pairwiseSubjectSecret: string;
   readonly clock: () => Date;
 }
@@ -112,14 +113,28 @@ export async function registerCapsulePublicOidcClient(
 ): Promise<CapsulePublicOidcClientIdentity> {
   const { identity, existing } =
     await validateCapsulePublicOidcClientRegistration(input);
-  if (existing) return identity;
   const now = input.clock().getTime();
   if (!Number.isSafeInteger(now) || now <= 0) {
     throw new TypeError("clock is invalid");
   }
+  if (!/^sha256:[0-9a-f]{64}$/u.test(input.activationDigest)) {
+    throw new TypeError("OIDC client activation authority is invalid");
+  }
+  if (existing) {
+    if (existing.activationDigest === input.activationDigest) {
+      return identity;
+    }
+    await input.accounts.saveOidcClient({
+      ...existing,
+      activationDigest: input.activationDigest,
+      updatedAt: Math.max(existing.updatedAt, now),
+    });
+    return identity;
+  }
   const registration: OidcClientRecord = {
     clientId: input.clientId,
     capsuleId: input.capsule.id,
+    activationDigest: input.activationDigest,
     namespacePath: "identity.oidc",
     issuerUrl: input.issuer,
     redirectUris: [identity.redirectUri],

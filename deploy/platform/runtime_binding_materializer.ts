@@ -1,7 +1,5 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
-import { D1AccountsStore } from "../../accounts/service/src/d1-store.ts";
 import { oidcAllowedScopes } from "../../accounts/service/src/oidc-live-grant.ts";
-import type { AccountsStore } from "../../accounts/service/src/store.ts";
 import type { Capsule } from "../../contract/capsules.ts";
 import type {
   InstallConfig,
@@ -16,8 +14,8 @@ import { resolveCanonicalCapsuleRunCredentialContext } from "../../core/domains/
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
 import type { D1Database as ControlD1Database } from "../../worker/src/bindings.ts";
 import {
+  deriveCapsulePublicOidcClientIdentity,
   derivePublicOidcClientId,
-  registerCapsulePublicOidcClient,
 } from "./accounts_oidc_client_registration.ts";
 
 const AUTHORITY_CONTRACT = "takosumi.runtime-bindings/v1";
@@ -45,13 +43,7 @@ export interface RuntimeBindingControlLedger {
     | undefined
   >;
   getInstallConfig(id: string): Promise<InstallConfig | undefined>;
-  putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
 }
-
-export type RuntimeBindingAccountsLedger = Pick<
-  AccountsStore,
-  "findOidcClient" | "findOidcClientForCapsule" | "saveOidcClient"
->;
 
 export interface TakosumiRuntimeBindingMaterializer {
   materializeRuntimeBindings(input: {
@@ -73,8 +65,6 @@ export interface TakosumiRuntimeBindingMaterializer {
 export interface RuntimeBindingMaterializerCloudflareEnv {
   readonly TAKOSUMI_CONTROL_DB: ControlD1Database;
   readonly TAKOSUMI_CONTROL_D1_SCHEMA_MODE?: "bootstrap" | "predeployed";
-  readonly TAKOSUMI_ACCOUNTS_DB: import("@takosjp/takosumi-accounts-service").D1Database;
-  readonly TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE?: import("@takosjp/takosumi-accounts-service").D1AccountsSchemaMode;
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
   readonly TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET?: string;
   readonly TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY?: string;
@@ -93,11 +83,7 @@ export function createCloudflareTakosumiRuntimeBindingMaterializer(
         resolveCanonicalCapsuleRunCredentialContext(store, request),
       getCapsule: (id) => store.getCapsule(id),
       getInstallConfig: (id) => store.getInstallConfig(id),
-      putInstallConfig: (config) => store.putInstallConfig(config),
     },
-    accounts: new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
-      schemaMode: env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE ?? "bootstrap",
-    }),
     issuer: env.TAKOSUMI_ACCOUNTS_ISSUER ?? "",
     pairwiseSubjectSecret:
       env.TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET ?? "",
@@ -107,11 +93,9 @@ export function createCloudflareTakosumiRuntimeBindingMaterializer(
 
 export function createTakosumiRuntimeBindingMaterializer(input: {
   readonly control: RuntimeBindingControlLedger;
-  readonly accounts: RuntimeBindingAccountsLedger;
   readonly issuer: string;
   readonly pairwiseSubjectSecret: string;
   readonly derivationKey: string;
-  readonly clock?: () => Date;
 }): TakosumiRuntimeBindingMaterializer {
   const issuer = exactHttpsOrigin(input.issuer);
   const pairwiseSubjectSecret = boundedSecret(
@@ -119,7 +103,6 @@ export function createTakosumiRuntimeBindingMaterializer(input: {
     "pairwiseSubjectSecret",
   );
   const derivationKey = boundedSecret(input.derivationKey, "derivationKey");
-  const clock = input.clock ?? (() => new Date());
 
   return {
     async materializeRuntimeBindings(call) {
@@ -136,7 +119,10 @@ export function createTakosumiRuntimeBindingMaterializer(input: {
         canonical.context.capsuleId !== authority.capsuleId ||
         canonical.context.runId !== authority.runId ||
         canonical.context.phase !== authority.phase ||
-        canonical.context.lifecycleIntent !== "provision" ||
+        (authority.phase === "apply" &&
+          canonical.context.lifecycleIntent !== "provision") ||
+        (authority.phase === "destroy" &&
+          canonical.context.lifecycleIntent !== "destroy") ||
         !/^tsub_[A-Za-z0-9_-]{1,128}$/u.test(
           canonical.context.installingPrincipalId,
         )
@@ -152,7 +138,7 @@ export function createTakosumiRuntimeBindingMaterializer(input: {
       ) {
         invalid("runtime binding Capsule is not current");
       }
-      let config = await input.control.getInstallConfig(
+      const config = await input.control.getInstallConfig(
         capsule.installConfigId,
       );
       if (
@@ -182,32 +168,19 @@ export function createTakosumiRuntimeBindingMaterializer(input: {
       if (profile.oidcClient) {
         const callbackPath = exactCallbackPath(profile.oidcClient.callbackPath);
         const scopes = oidcAllowedScopes(profile.oidcClient.scopes);
+        const grantDeclarations =
+          config.installExperience?.projections?.filter(
+            (projection) => projection.kind === "oidc_client",
+          ) ?? [];
         const grant = installExperienceOidcClient(config.installExperience);
         if (
+          grantDeclarations.length !== 1 ||
+          Object.keys(grantDeclarations[0]!.variables).length !== 0 ||
           !grant ||
           grant.callbackPath !== callbackPath ||
           !sameStrings(oidcAllowedScopes(grant.scopes), scopes)
         ) {
-          const now = clock();
-          if (!Number.isFinite(now.getTime())) invalid("clock is invalid");
-          config = await input.control.putInstallConfig({
-            ...config,
-            installExperience: {
-              ...config.installExperience,
-              projections: [
-                ...(config.installExperience?.projections ?? []).filter(
-                  (projection) => projection.kind !== "oidc_client",
-                ),
-                {
-                  kind: "oidc_client",
-                  variables: {},
-                  callbackPath,
-                  scopes,
-                },
-              ],
-            },
-            updatedAt: now.toISOString(),
-          });
+          invalid("runtime binding OIDC grant differs from the DB-owned profile");
         }
         const clientId = await derivePublicOidcClientId(derivationKey, [
           "takosumi-runtime-oidc-client-v1",
@@ -215,24 +188,20 @@ export function createTakosumiRuntimeBindingMaterializer(input: {
           authority.capsuleId,
           config.id,
         ]);
-        const registered = await registerCapsulePublicOidcClient({
-          accounts: input.accounts,
+        const identity = await deriveCapsulePublicOidcClientIdentity({
           capsule,
           installingPrincipalId: canonical.context
             .installingPrincipalId as TakosumiSubject,
-          issuer,
           publicOrigin,
           callbackPath,
-          scopes,
           clientId,
           pairwiseSubjectSecret,
-          clock,
         });
         values[profile.oidcClient.issuerBinding] = issuer;
-        values[profile.oidcClient.clientIdBinding] = registered.clientId;
+        values[profile.oidcClient.clientIdBinding] = identity.clientId;
         values[profile.oidcClient.ownerSubjectBinding] =
-          registered.ownerSubject;
-        values[profile.oidcClient.redirectUriBinding] = registered.redirectUri;
+          identity.ownerSubject;
+        values[profile.oidcClient.redirectUriBinding] = identity.redirectUri;
       }
 
       if (!sameStrings(Object.keys(values).sort(), declared)) {
@@ -271,7 +240,11 @@ function exactProfile(
   value: InstallConfigRuntimeBindingMaterialization | undefined,
 ): InstallConfigRuntimeBindingMaterialization {
   if (!isRecord(value)) invalid("runtime binding profile is missing");
-  exactKeys(value, ["contract"], ["generatedSecrets", "oidcClient"]);
+  exactKeys(value, ["contract"], [
+    "generatedSecrets",
+    "oidcClient",
+    "runtimeSecretFile",
+  ]);
   if (value.contract !== PROFILE_CONTRACT) invalid("runtime binding profile is invalid");
   if (!Array.isArray(value.generatedSecrets) || value.generatedSecrets.length > 16) {
     invalid("generated secret profile is invalid");

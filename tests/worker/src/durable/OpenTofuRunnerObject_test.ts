@@ -1959,6 +1959,546 @@ test("OpenTofu runner Durable Object grants one concurrent mutation dispatch aut
   assert.equal(providerCalls, 1);
 });
 
+test("OpenTofu runner Durable Object replays a completed release without invoking commands twice", async () => {
+  const applyRunId = "apply_release_completed_replay";
+  const releaseRunId = `release_${applyRunId}`;
+  const r2 = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  let releaseCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "POST" && path === `/runs/${releaseRunId}`) {
+        releaseCalls += 1;
+        return Response.json({
+          runId: releaseRunId,
+          action: "release",
+          status: "succeeded",
+          exitCode: 0,
+          commandCount: 1,
+          stdout: "release command output that must not be persisted",
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const request = () =>
+    new Request(`https://runner/runs/${releaseRunId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "release",
+        runId: releaseRunId,
+        request: {
+          release: {
+            commands: [
+              {
+                id: "activate",
+                command: ["bun", "run", "activate"],
+              },
+            ],
+          },
+          activation: {
+            applyRunId,
+            workspaceId: "workspace_release",
+            capsuleId: "capsule_release",
+            stateVersionId: "state_release_1",
+            sourceSnapshotId: "snapshot_release_1",
+            sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+          },
+          providerConfigurations: {
+            format: "takosumi.provider-configurations@v1",
+            providers: [],
+          },
+        },
+      }),
+    });
+
+  const first = await runnerWithContainer(r2, container, { storage }).fetch(
+    request(),
+  );
+  assert.equal(first.status, 200);
+  const replay = await runnerWithContainer(r2, container, { storage }).fetch(
+    request(),
+  );
+
+  assert.equal(replay.status, 200);
+  assert.equal(releaseCalls, 1);
+  assert.deepEqual(await replay.json(), {
+    runId: releaseRunId,
+    action: "release",
+    status: "succeeded",
+    exitCode: 0,
+    commandCount: 1,
+  });
+});
+
+test("OpenTofu runner Durable Object resumes preparing release authority with rematerialized runtime values and identical opaque credentials", async () => {
+  const applyRunId = "apply_release_preparing_resume";
+  const releaseRunId = `release_${applyRunId}`;
+  const firstSecret = "first-runtime-secret-value-must-not-persist";
+  const rematerializedSecret =
+    "rematerialized-runtime-secret-value-must-not-persist";
+  const providerSecret = "same-provider-credential-must-not-persist";
+  const r2 = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  storage.failPutAfterCommit(2);
+  let releaseCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "POST" && path === `/runs/${releaseRunId}`) {
+        releaseCalls += 1;
+        return Response.json({
+          runId: releaseRunId,
+          action: "release",
+          status: "succeeded",
+          exitCode: 0,
+          commandCount: 1,
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+
+  const first = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId, {
+      runtimeSecret: firstSecret,
+      providerSecret,
+    }),
+  );
+  assert.equal(first.status, 500);
+  assert.equal(releaseCalls, 0);
+
+  const resumed = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId, {
+      runtimeSecret: rematerializedSecret,
+      providerSecret,
+    }),
+  );
+
+  assert.equal(resumed.status, 200);
+  assert.equal(releaseCalls, 1);
+  const durableEvidence = JSON.stringify(storage.entries());
+  for (const forbidden of [
+    firstSecret,
+    rematerializedSecret,
+    providerSecret,
+    "private/runtime-secrets.json",
+  ]) {
+    assert.equal(durableEvidence.includes(forbidden), false);
+  }
+});
+
+test("OpenTofu runner Durable Object rejects changed opaque provider credential material while preparing", async () => {
+  const applyRunId = "apply_release_provider_digest_drift";
+  const firstProviderSecret = "first-provider-credential-must-not-persist";
+  const changedProviderSecret = "changed-provider-credential-must-not-persist";
+  const r2 = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  storage.failPutAfterCommit(2);
+  let releaseCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname === `/runs/release_${applyRunId}`
+      ) {
+        releaseCalls += 1;
+        return Response.json({
+          runId: `release_${applyRunId}`,
+          action: "release",
+          status: "succeeded",
+          exitCode: 0,
+          commandCount: 1,
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+
+  const first = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId, {
+      providerSecret: firstProviderSecret,
+    }),
+  );
+  assert.equal(first.status, 500);
+  assert.equal(releaseCalls, 0);
+
+  const drifted = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId, {
+      providerSecret: changedProviderSecret,
+    }),
+  );
+
+  assert.equal(drifted.status, 409);
+  assert.equal(releaseCalls, 0);
+  const durableEvidence = JSON.stringify(storage.entries());
+  assert.equal(durableEvidence.includes(firstProviderSecret), false);
+  assert.equal(durableEvidence.includes(changedProviderSecret), false);
+});
+
+test("OpenTofu runner Durable Object resumes preparing release authority with an equivalent freshly signed credential", async () => {
+  const planRunId = "release_signed_preparing_resume";
+  const applyRunId = `apply_${planRunId}`;
+  const releaseRunId = `release_${applyRunId}`;
+  const firstToken = await signedMutationToken(planRunId, {
+    action: "apply",
+    jti: "release-signed-first",
+  });
+  const remintedToken = await signedMutationToken(planRunId, {
+    action: "apply",
+    jti: "release-signed-second",
+  });
+  const r2 = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  storage.failPutAfterCommit(2);
+  let releaseCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname === `/runs/${releaseRunId}`
+      ) {
+        releaseCalls += 1;
+        return Response.json({
+          runId: releaseRunId,
+          action: "release",
+          status: "succeeded",
+          exitCode: 0,
+          commandCount: 1,
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const env = {
+    TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET,
+  };
+
+  const first = await runnerWithContainer(r2, container, {
+    storage,
+    env,
+  }).fetch(
+    durableReleaseRequest(applyRunId, {
+      providerSecret: firstToken,
+      providerSource: RUN_CREDENTIAL_PROVIDER,
+      providerConnectionId: "connection_semantic",
+      workspaceId: "workspace_semantic",
+      capsuleId: "capsule_semantic",
+    }),
+  );
+  assert.equal(first.status, 500);
+  assert.equal(releaseCalls, 0);
+
+  const resumed = await runnerWithContainer(r2, container, {
+    storage,
+    env,
+  }).fetch(
+    durableReleaseRequest(applyRunId, {
+      providerSecret: remintedToken,
+      providerSource: RUN_CREDENTIAL_PROVIDER,
+      providerConnectionId: "connection_semantic",
+      workspaceId: "workspace_semantic",
+      capsuleId: "capsule_semantic",
+    }),
+  );
+
+  assert.equal(resumed.status, 200);
+  assert.equal(releaseCalls, 1);
+  const evidence = JSON.stringify(storage.entries());
+  assert.equal(evidence.includes(firstToken), false);
+  assert.equal(evidence.includes(remintedToken), false);
+});
+
+test("OpenTofu runner Durable Object adopts a completed release when the completion acknowledgement is lost", async () => {
+  const applyRunId = "apply_release_completed_ack_lost";
+  const releaseRunId = `release_${applyRunId}`;
+  const r2 = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  storage.failPutAfterCommit(5);
+  let releaseCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname === `/runs/${releaseRunId}`
+      ) {
+        releaseCalls += 1;
+        return Response.json({
+          runId: releaseRunId,
+          action: "release",
+          status: "succeeded",
+          exitCode: 0,
+          commandCount: 1,
+          stdout: "ack-lost-release-output-must-not-be-replayed",
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+
+  const first = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+  assert.equal(first.status, 200);
+  assert.equal((await first.text()).includes("ack-lost-release-output"), false);
+
+  const replay = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+  assert.equal(replay.status, 200);
+  assert.equal(releaseCalls, 1);
+  assert.match(JSON.stringify(storage.entries()), /"phase":"completed"/);
+});
+
+test("OpenTofu runner Durable Object replays a value-free failed release outcome after cleanup", async () => {
+  const applyRunId = "apply_release_failed_completed";
+  const releaseRunId = `release_${applyRunId}`;
+  const failureSecret = "failed-release-secret-must-not-persist";
+  const r2 = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  let releaseCalls = 0;
+  let cleanupCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname === `/runs/${releaseRunId}`
+      ) {
+        releaseCalls += 1;
+        cleanupCalls += 1;
+        return Response.json(
+          {
+            runId: releaseRunId,
+            action: "release",
+            status: "failed",
+            exitCode: 17,
+            phase: "release",
+            failedCommandId: "activate",
+            stderr: `release failed token=${failureSecret}`,
+          },
+          { status: 500 },
+        );
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+
+  const first = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+  assert.equal(first.status, 500);
+  const replay = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+
+  assert.equal(replay.status, 500);
+  const replayText = await replay.text();
+  assert.equal(releaseCalls, 1);
+  assert.equal(cleanupCalls, 1);
+  assert.equal(replayText.includes(failureSecret), false);
+  assert.equal(JSON.stringify(storage.entries()).includes(failureSecret), false);
+  assert.match(replayText, /automatic redispatch is blocked/);
+  assert.match(JSON.stringify(storage.entries()), /"phase":"completed"/);
+});
+
+test("OpenTofu runner Durable Object blocks release redispatch when completion persistence does not land", async () => {
+  const applyRunId = "apply_release_completion_not_committed";
+  const releaseRunId = `release_${applyRunId}`;
+  const r2 = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  storage.failPutBeforeCommit(5);
+  let releaseCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname === `/runs/${releaseRunId}`
+      ) {
+        releaseCalls += 1;
+        return Response.json({
+          runId: releaseRunId,
+          action: "release",
+          status: "succeeded",
+          exitCode: 0,
+          commandCount: 1,
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+
+  const first = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+  assert.equal(first.status, 409);
+  assertReleaseIndeterminateResponse(await first.text());
+
+  const retry = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+  assert.equal(retry.status, 409);
+  assertReleaseIndeterminateResponse(await retry.text());
+  assert.equal(releaseCalls, 1);
+  assert.match(JSON.stringify(storage.entries()), /"phase":"indeterminate"/);
+});
+
+test("OpenTofu runner Durable Object never invokes a release after dispatched persistence loses acknowledgement", async () => {
+  const applyRunId = "apply_release_dispatched_ack_lost";
+  const releaseRunId = `release_${applyRunId}`;
+  const r2 = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  storage.failPutAfterCommit(3);
+  let releaseCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname === `/runs/${releaseRunId}`
+      ) {
+        releaseCalls += 1;
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+
+  const first = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+  assert.equal(first.status, 500);
+
+  const retry = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+  assert.equal(retry.status, 409);
+  assertReleaseIndeterminateResponse(await retry.text());
+  assert.equal(releaseCalls, 0);
+  assert.match(JSON.stringify(storage.entries()), /"phase":"dispatched"/);
+});
+
+test("OpenTofu runner Durable Object makes release transport loss durably indeterminate without redispatch", async () => {
+  const applyRunId = "apply_release_transport_indeterminate";
+  const releaseRunId = `release_${applyRunId}`;
+  const runtimeSecret = "transport-runtime-secret-must-not-persist";
+  const providerSecret = "transport-provider-secret-must-not-persist";
+  const r2 = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  let releaseCalls = 0;
+  let cleanupCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname === `/runs/${releaseRunId}`
+      ) {
+        releaseCalls += 1;
+        try {
+          throw new TypeError(
+            `release transport lost token=${providerSecret} path=/private/runtime`,
+          );
+        } finally {
+          cleanupCalls += 1;
+        }
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const request = () =>
+    durableReleaseRequest(applyRunId, { runtimeSecret, providerSecret });
+
+  const first = await runnerWithContainer(r2, container, { storage }).fetch(
+    request(),
+  );
+  assert.equal(first.status, 409);
+  const firstText = await first.text();
+  assertReleaseIndeterminateResponse(firstText);
+  const retry = await runnerWithContainer(r2, container, { storage }).fetch(
+    request(),
+  );
+  assert.equal(retry.status, 409);
+  assert.equal(releaseCalls, 1);
+  assert.equal(cleanupCalls, 1);
+  const evidence = `${firstText}\n${JSON.stringify(storage.entries())}`;
+  for (const forbidden of [runtimeSecret, providerSecret, "/private/runtime"]) {
+    assert.equal(evidence.includes(forbidden), false);
+  }
+  assert.match(evidence, /"phase":"indeterminate"/);
+});
+
+test("OpenTofu runner Durable Object rejects ordered action, ApplyRun, source, state, and runtime profile drift", async () => {
+  const applyRunId = "apply_release_semantic_drift";
+  const releaseRunId = `release_${applyRunId}`;
+  const r2 = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  let releaseCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname === `/runs/${releaseRunId}`
+      ) {
+        releaseCalls += 1;
+        return Response.json({
+          runId: releaseRunId,
+          action: "release",
+          status: "succeeded",
+          exitCode: 0,
+          commandCount: 2,
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const options = {
+    storage,
+  };
+
+  const first = await runnerWithContainer(r2, container, options).fetch(
+    durableReleaseRequest(applyRunId, {
+      commandIds: ["prepare", "activate"],
+      runtimeSecret: "stable-profile-value",
+    }),
+  );
+  assert.equal(first.status, 200);
+
+  const driftedRequests = [
+    durableReleaseRequest(applyRunId, {
+      commandIds: ["activate", "prepare"],
+      runtimeSecret: "stable-profile-value",
+    }),
+    durableReleaseRequest(applyRunId, {
+      activationApplyRunId: "apply_release_semantic_drift_other",
+      commandIds: ["prepare", "activate"],
+      runtimeSecret: "stable-profile-value",
+    }),
+    durableReleaseRequest(applyRunId, {
+      commandIds: ["prepare", "activate"],
+      runtimeSecret: "stable-profile-value",
+      sourceCommit: "fedcba9876543210fedcba9876543210fedcba98",
+    }),
+    durableReleaseRequest(applyRunId, {
+      commandIds: ["prepare", "activate"],
+      runtimeSecret: "stable-profile-value",
+      stateVersionId: "state_release_2",
+    }),
+    durableReleaseRequest(applyRunId, {
+      commandIds: ["prepare", "activate"],
+      runtimeSecret: "rotated-profile-value",
+      runtimeProfileDigest: `sha256:${"b".repeat(64)}`,
+    }),
+  ];
+  for (const drifted of driftedRequests) {
+    const response = await runnerWithContainer(r2, container, options).fetch(
+      drifted,
+    );
+    assert.equal(response.status, 409);
+    assertReleaseIndeterminateResponse(await response.text());
+  }
+  assert.equal(releaseCalls, 1);
+});
+
 test("OpenTofu runner Durable Object treats a response-body transport loss after apply as indeterminate", async () => {
   const runId = "apply_response_stream_lost";
   const r2 = new FakeR2Bucket();
@@ -2558,6 +3098,99 @@ function mutationRequest(
   });
 }
 
+function durableReleaseRequest(
+  applyRunId: string,
+  options: {
+    readonly runtimeSecret?: string;
+    readonly providerSecret?: string;
+    readonly providerSource?: string;
+    readonly providerConnectionId?: string;
+    readonly runtimeProfileDigest?: string;
+    readonly activationApplyRunId?: string;
+    readonly workspaceId?: string;
+    readonly capsuleId?: string;
+    readonly sourceCommit?: string;
+    readonly stateVersionId?: string;
+    readonly commandIds?: readonly string[];
+  } = {},
+): Request {
+  const releaseRunId = `release_${applyRunId}`;
+  return new Request(`https://runner/runs/${releaseRunId}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run@v1",
+      action: "release",
+      runId: releaseRunId,
+      request: {
+        release: {
+          commands: (options.commandIds ?? ["activate"]).map((id) => ({
+            id,
+            command: ["bun", "run", id],
+          })),
+        },
+        activation: {
+          applyRunId: options.activationApplyRunId ?? applyRunId,
+          workspaceId: options.workspaceId ?? "workspace_release",
+          capsuleId: options.capsuleId ?? "capsule_release",
+          stateVersionId: options.stateVersionId ?? "state_release_1",
+          sourceSnapshotId: "snapshot_release_1",
+          sourceCommit:
+            options.sourceCommit ??
+            "0123456789abcdef0123456789abcdef01234567",
+        },
+        providerConfigurations: {
+          format: "takosumi.provider-configurations@v1",
+          providers: [],
+        },
+        ...(options.providerSecret
+          ? {
+              credentials: {
+                env: { PROVIDER_RELEASE_TOKEN: options.providerSecret },
+                manifest: {
+                  bindings: [
+                    {
+                      providerSource:
+                        options.providerSource ??
+                        "registry.opentofu.org/example/release-provider",
+                      connectionId:
+                        options.providerConnectionId ?? "connection_release",
+                      recipeId: "release-token",
+                      authMode: "token",
+                      envNames: ["PROVIDER_RELEASE_TOKEN"],
+                      fileEnvNames: [],
+                      requiredEnvGroups: [["PROVIDER_RELEASE_TOKEN"]],
+                    },
+                  ],
+                },
+              },
+            }
+          : {}),
+        ...(options.runtimeSecret
+          ? {
+              runtimeSecrets: {
+                contract: "takosumi.runner-runtime-secret-files/v1",
+                profileDigest:
+                  options.runtimeProfileDigest ?? `sha256:${"a".repeat(64)}`,
+                files: [
+                  {
+                    path: "private/runtime-secrets.json",
+                    mode: 0o600,
+                    content: JSON.stringify({
+                      ONLY_SECRET: options.runtimeSecret,
+                    }),
+                    envName: "TAKOS_RUNTIME_SECRETS_FILE",
+                    secretNames: ["ONLY_SECRET"],
+                  },
+                ],
+              },
+            }
+          : {}),
+      },
+    }),
+  });
+}
+
 async function signedMutationToken(
   planRunId: string,
   options: {
@@ -2782,9 +3415,23 @@ function assertMutationIndeterminateResponse(
   });
 }
 
+function assertReleaseIndeterminateResponse(text: string): void {
+  const payload = JSON.parse(text) as Record<string, unknown>;
+  assert.equal(payload.errorCode, "runner_mutation_indeterminate");
+  assert.equal(payload.phase, "release");
+  assert.equal(payload.retryable, false);
+  assert.equal(payload.outcome, "indeterminate");
+  assert.deepEqual(payload.evidence, {
+    kind: "runner_mutation_indeterminate",
+    action: "release",
+    redispatchBlocked: true,
+  });
+}
+
 class FakeDoStorage {
   #values = new Map<string, unknown>();
   #putCalls = 0;
+  readonly #putFailuresBeforeCommit = new Set<number>();
   readonly #putFailuresAfterCommit = new Set<number>();
   #nextGetGate:
     | {
@@ -2805,6 +3452,11 @@ class FakeDoStorage {
 
   put<T = unknown>(key: string, value: T): Promise<void> {
     this.#putCalls += 1;
+    if (this.#putFailuresBeforeCommit.delete(this.#putCalls)) {
+      return Promise.reject(
+        new Error("simulated Durable Object storage pre-commit failure"),
+      );
+    }
     this.#values.set(key, value);
     if (this.#putFailuresAfterCommit.delete(this.#putCalls)) {
       return Promise.reject(
@@ -2824,6 +3476,10 @@ class FakeDoStorage {
 
   failPutAfterCommit(call: number): void {
     this.#putFailuresAfterCommit.add(call);
+  }
+
+  failPutBeforeCommit(call: number): void {
+    this.#putFailuresBeforeCommit.add(call);
   }
 
   deferNextGet(): {

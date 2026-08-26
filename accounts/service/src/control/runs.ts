@@ -421,6 +421,12 @@ function applyExpectedGuardFromPlanRun(
     ...(capsuleId
       ? { currentStateVersionId: planRun.capsuleCurrentStateVersionId ?? null }
       : {}),
+    ...(planRun.capsuleExecutionAuthorityEpoch !== undefined
+      ? {
+          capsuleExecutionAuthorityEpoch:
+            planRun.capsuleExecutionAuthorityEpoch,
+        }
+      : {}),
     runnerProfileId: planRun.runnerProfileId,
     sourceDigest: planRun.sourceDigest,
     variablesDigest: planRun.variablesDigest,

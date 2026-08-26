@@ -104,6 +104,19 @@ same exact source commit. Back up, apply, and read-only verify staging before
 production. A platform Worker deployment must not depend on its first request
 to create or repair the required schema.
 
+Accounts D1 v4 uses a separate one-time owner lane. First deploy the feature
+bridge, which accepts only exact legacy v3 or exact checksummed v4 and performs
+no request-time DDL in `predeployed` mode. Privately retain the current backup /
+Time Travel bookmark, pass only its opaque evidence digest to
+`accounts migrate-d1 apply`, confirm the backup-bound configuration digest,
+complete its deterministic 100-row pre-ledger backfill, and read-only verify the
+atomic v4 result. The v4 batch first re-fences the exact v3 ledger/schema
+closure plus zero-missing. After
+the observation window, deploy the separate exact-v4 tightening artifact. Once v4 commits, do
+not roll code back to a v3-only artifact; the bridge is the compatible rollback
+floor. Restore is a separate incident action and the migration CLI never invokes
+it.
+
 For a self-host/operator-owned Cloudflare reference deployment only, the
 operator may use its own Wrangler config:
 

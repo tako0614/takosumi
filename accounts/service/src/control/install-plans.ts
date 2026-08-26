@@ -23,7 +23,10 @@ import type {
 } from "takosumi-contract/sources";
 
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
-import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
+import {
+  OpenTofuControllerError,
+  structuredErrorReason,
+} from "../../../../core/domains/deploy-control/errors.ts";
 import {
   GIT_INSTALL_PLAN_RECONCILE_LEASE_MS,
   publicGitInstallPlan,
@@ -58,6 +61,8 @@ const MAX_SOURCE_INVENTORY = 500;
 const MAX_CAPSULE_INVENTORY = 500;
 const MAX_DIAGNOSTIC_CODE = 64;
 const MAX_DIAGNOSTIC_MESSAGE = 256;
+const MAX_DIAGNOSTIC_REASON = 128;
+const DIAGNOSTIC_TOKEN = /^[A-Za-z][A-Za-z0-9._:-]*$/u;
 const CONNECTION_REFERENCE_PATTERN = /^conn_[0-9A-Za-z]{8,64}$/u;
 
 /** POST /api/v1/workspaces/:workspaceId/install-plans (Workspace auth is done by the parent handler). */
@@ -206,11 +211,10 @@ async function reconcileInstallPlan(
       // was lost. Release the lease without moving phase; the next explicit
       // reconcile first discovers canonical evidence before mutating again.
       outcome = {
-        plan: withDiagnostic(acquired.plan, {
-          code: "install_plan_reconcile_retryable",
-          message:
-            "Takosumi could not confirm the last coordinator step. Reconcile again to recover canonical state.",
-        }),
+        plan: withDiagnostic(
+          acquired.plan,
+          retryableDiagnostic(acquired.plan, error),
+        ),
         retryable: true,
       };
     }
@@ -1027,11 +1031,64 @@ function boundedDiagnostic(
   const message = diagnostic.message
     .replace(/[\r\n\0]/gu, " ")
     .slice(0, MAX_DIAGNOSTIC_MESSAGE);
+  const controllerCode = boundedDiagnosticToken(
+    diagnostic.controllerCode,
+    MAX_DIAGNOSTIC_CODE,
+  );
+  const reason = boundedDiagnosticToken(
+    diagnostic.reason,
+    MAX_DIAGNOSTIC_REASON,
+  );
   return {
     code: code.slice(0, MAX_DIAGNOSTIC_CODE),
     message:
       message || "Takosumi could not safely advance this install plan.",
+    ...(diagnostic.planCreationStage === "source" ||
+    diagnostic.planCreationStage === "preparation" ||
+    diagnostic.planCreationStage === "create"
+      ? { planCreationStage: diagnostic.planCreationStage }
+      : {}),
+    ...(controllerCode ? { controllerCode } : {}),
+    ...(reason ? { reason } : {}),
   };
+}
+
+function retryableDiagnostic(
+  plan: StoredGitInstallPlan,
+  error: unknown,
+): GitInstallPlanDiagnostic {
+  const controllerCode =
+    error instanceof OpenTofuControllerError ? error.code : undefined;
+  const reason =
+    error instanceof OpenTofuControllerError
+      ? structuredErrorReason(error)
+      : undefined;
+  return {
+    code: "install_plan_reconcile_retryable",
+    message:
+      "Takosumi could not confirm the last coordinator step. Reconcile again to recover canonical state.",
+    planCreationStage: planCreationStage(plan.phase),
+    ...(controllerCode ? { controllerCode } : {}),
+    ...(reason ? { reason } : {}),
+  };
+}
+
+function planCreationStage(
+  phase: StoredGitInstallPlan["phase"],
+): NonNullable<GitInstallPlanDiagnostic["planCreationStage"]> {
+  if (phase === "syncing_source") return "source";
+  if (phase === "planning" || phase === "reviewable") return "create";
+  return "preparation";
+}
+
+function boundedDiagnosticToken(
+  value: string | undefined,
+  maxLength: number,
+): string | undefined {
+  if (!value || value.length > maxLength || !DIAGNOSTIC_TOKEN.test(value)) {
+    return undefined;
+  }
+  return value;
 }
 
 class PermanentInstallPlanError extends Error {

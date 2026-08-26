@@ -86,17 +86,36 @@ bunx wrangler secret put TAKOSUMI_ACCOUNT_SESSION_HASH_SALT \
 `TAKOSUMI_SECRET_STORE_PASSPHRASE` が認証情報と state の封印鍵、
 `TAKOSUMI_DEPLOY_CONTROL_TOKEN` が operator 専用 API の bearer です。
 
-accounts 側の D1 スキーマを適用します。保留中のマイグレーションごとに
-`bunx wrangler d1 execute` を呼び、適用した版が
-`takosumi_accounts_schema_migrations` に残ります。
+accounts 側の D1 スキーマは Accounts owner CLI で適用します。先に owner-private な
+backup / Time Travel evidence を保全し、その opaque digest を plan/apply に結びます。
+`plan` は remote call を行わず、`apply` は migration ごとに 1 つの atomic REST batch、
+`verify` は read-only です。
 
 ```bash
-takosumi accounts migrate-d1 --database-id takosumi-accounts --remote
+takosumi accounts migrate-d1 plan \
+  --environment production \
+  --account-id "$CLOUDFLARE_ACCOUNT_ID" \
+  --database-id "$CLOUDFLARE_DATABASE_ID" \
+  --source-commit "$SOURCE_COMMIT" \
+  --backup-evidence-digest "$BACKUP_EVIDENCE_DIGEST"
+# plan の source/catalog/target/configuration digest を人が確認してから apply に渡す
+takosumi accounts migrate-d1 apply ... \
+  --confirm-source-digest "$SOURCE_DIGEST" \
+  --confirm-catalog-digest "$CATALOG_DIGEST" \
+  --confirm-target-digest "$TARGET_DIGEST" \
+  --confirm-configuration-digest "$CONFIGURATION_DIGEST"
+takosumi accounts migrate-d1 verify ...
 ```
 
-このコマンドは前に戻せません。複数のジョブから同時に走らせると、片方が version の
-主キー衝突で失敗します。deploy ジョブ 1 つから呼んでください。初回デプロイの前に
-挙動だけ見たいときは `--local` を付けて手元の miniflare を対象にできます。
+同じ catalog の concurrent runner は exact receipt を採用できますが、conflict / partial
+state は fail-closed です。lost acknowledgement を blind retry せず、明示的な次の
+operator invocation まで止めます。v4 の後は v3-only Worker へ戻せません。v3/v4 bridge
+Worker → v4 apply/verify → 後日の exact-v4 Worker の順で進めます。CLI は restore を
+行わず、raw backup/bookmark と target ID は source checkout 外の owner-private
+0700 directory / 0600 file にだけ保持します。`apply` は exact v3 の bridge 中に
+OIDC client を `key` 順 100 row 以下で backfill し、zero-missing を確認した後、v4
+atomic batch の先頭で exact v3 ledger/schema closure と zero-missing を再度 fence
+します。
 
 control plane 側の D1 にマイグレーションは要りません。`TAKOSUMI_CONTROL_D1_SCHEMA_MODE`
 が既定の `bootstrap` のあいだ、最初のリクエストでスキーマが整います。事前に用意した

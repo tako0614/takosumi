@@ -1,6 +1,17 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { Miniflare } from "miniflare";
+import {
+  applyD1AccountsMigrationBatch,
+  loadD1AccountsMigrationCatalog,
+  readD1AccountsMigrationState,
+  type D1AccountsMigrationDatabase,
+} from "../../accounts/service/src/d1-migrations.ts";
+import { applyLocalAccountsD1Migrations } from "../../deploy/local-substrate/wrappers/takosumi-platform-worker-runner.mjs";
 
 const composePath = resolve(
   import.meta.dir,
@@ -680,9 +691,11 @@ test("local-substrate configures workerd outbound TLS with the explicit Pebble r
 });
 
 test("local-substrate migrates the local accounts D1 before serving traffic", () => {
-  expect(renderAccountsD1Migrations).toContain("listD1AccountsMigrations()");
   expect(renderAccountsD1Migrations).toContain(
-    'kind: "takosumi.accounts.local-d1-migrations@v1"',
+    "loadD1AccountsMigrationCatalog()",
+  );
+  expect(renderAccountsD1Migrations).toContain(
+    'kind: "takosumi.accounts.local-d1-migrations@v2"',
   );
   expect(serviceWorkerEnv).toContain(
     "WORKER_ACCOUNTS_D1_MIGRATIONS_PATH=/worker/takosumi-accounts-d1-migrations.json",
@@ -698,13 +711,284 @@ test("local-substrate migrates the local accounts D1 before serving traffic", ()
     'miniflare.getD1Database("TAKOSUMI_ACCOUNTS_DB")',
   );
   expect(platformWorkerRunner).toContain(
-    "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations",
+    "migrationRuntime.backfillD1AccountsActivationDigests(database)",
   );
-  expect(platformWorkerRunner).toContain("await database.exec(migration.sql)");
   expect(platformWorkerRunner).toContain(
-    "INSERT INTO takosumi_accounts_schema_migrations",
+    "migrationRuntime.applyD1AccountsMigrationBatch(",
   );
+  expect(platformWorkerRunner).toContain(
+    "migrationRuntime.readD1AccountsMigrationState(",
+  );
+  expect(platformWorkerRunner).not.toContain(
+    "await database.exec(migration.sql)",
+  );
+  expect(platformWorkerRunner).not.toContain("readLocalAccountsD1Prefix");
 });
+
+test("local-substrate Accounts D1 runner exposes an import-safe migration seam", async () => {
+  const process = Bun.spawn(
+    [
+      "bun",
+      "-e",
+      `const module = await import(${JSON.stringify(pathToFileURL(platformWorkerRunnerPath).href)}); if (typeof module.applyLocalAccountsD1Migrations !== "function") process.exit(2);`,
+    ],
+    {
+      cwd: resolve(import.meta.dir, "../.."),
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  expect(await process.exited).toBe(0);
+});
+
+test("local-substrate rendered migration artifact is the Accounts-owned catalog", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "takosumi-accounts-d1-"));
+  const output = join(directory, "catalog.json");
+  const runtimeOutput = join(directory, "catalog.runtime.mjs");
+  try {
+    const process = Bun.spawn(["bun", renderAccountsD1MigrationsPath, output], {
+      cwd: resolve(import.meta.dir, "../.."),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await process.exited).toBe(0);
+    const artifact = JSON.parse(await readFile(output, "utf8"));
+    const catalog = await loadD1AccountsMigrationCatalog();
+    expect(artifact).toEqual({
+      kind: "takosumi.accounts.local-d1-migrations@v2",
+      catalogDigest: catalog.digest,
+      policyDigest: catalog.policyDigest,
+      headVersion: catalog.headVersion,
+      migrations: catalog.migrations,
+      schemaClosures: catalog.schemaClosures,
+      preLedgerPolicy: catalog.preLedgerPolicy,
+    });
+    expect(await Bun.file(runtimeOutput).exists()).toBe(true);
+    const runtime = await import(
+      `${pathToFileURL(runtimeOutput).href}?test=${Date.now()}`
+    );
+    expect(await runtime.loadD1AccountsMigrationCatalog()).toEqual(catalog);
+    expect(typeof runtime.backfillD1AccountsActivationDigests).toBe("function");
+    expect(typeof runtime.applyD1AccountsMigrationBatch).toBe("function");
+    expect(typeof runtime.readD1AccountsMigrationState).toBe("function");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("local-substrate upgrades a persisted exact-v3 Accounts D1 through the shared bounded policy", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "takosumi-local-d1-v3-"));
+  const artifactPath = join(directory, "catalog.json");
+  const runtime = localAccountsD1Runtime(join(directory, "persist"));
+  try {
+    await renderLocalAccountsD1Artifact(artifactPath);
+    const database = (await runtime.getD1Database(
+      "ACCOUNTS",
+    )) as unknown as D1AccountsMigrationDatabase;
+    const catalog = await loadD1AccountsMigrationCatalog();
+    for (const migration of catalog.migrations.slice(0, 4)) {
+      await applyD1AccountsMigrationBatch(
+        database,
+        migration,
+        1_000 + migration.version,
+      );
+    }
+    for (let index = 0; index < 205; index += 1) {
+      const key = `local-client-${String(index).padStart(3, "0")}`;
+      await database
+        .prepare(
+          "INSERT INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES ('oidc_clients', ?, ?, 2000)",
+        )
+        .bind(key, JSON.stringify({ clientId: key, capsuleId: `cap_${key}` }))
+        .run();
+    }
+
+    const batchSizes: number[] = [];
+    const observed: D1AccountsMigrationDatabase = {
+      prepare: (sql) => database.prepare(sql),
+      batch(statements) {
+        batchSizes.push(statements.length);
+        return database.batch(statements);
+      },
+    };
+    const report = await applyLocalAccountsD1Migrations(
+      { getD1Database: () => Promise.resolve(observed) },
+      artifactPath,
+    );
+    expect(report).toMatchObject({
+      applied: [4],
+      activationDigestBackfill: {
+        inventoryCount: 205,
+        candidateCount: 205,
+        chunkCount: 3,
+        missingAfter: 0,
+      },
+    });
+    expect(batchSizes).toEqual([2, 2, 2, 4]);
+    const state = await readD1AccountsMigrationState(database, catalog);
+    expect(state).toMatchObject({
+      headVersion: 4,
+      exactPrefixLength: 5,
+      missingActivationDigestCount: 0,
+      issues: [],
+    });
+    await runtime.ready;
+    expect((await runtime.dispatchFetch("http://local.test/")).status).toBe(200);
+  } finally {
+    await runtime.dispose();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("local-substrate rejects malformed legacy clients before any migration write", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "takosumi-local-d1-drift-"));
+  const artifactPath = join(directory, "catalog.json");
+  const runtime = localAccountsD1Runtime(join(directory, "persist"));
+  try {
+    await renderLocalAccountsD1Artifact(artifactPath);
+    const database = (await runtime.getD1Database(
+      "ACCOUNTS",
+    )) as unknown as D1AccountsMigrationDatabase;
+    const catalog = await loadD1AccountsMigrationCatalog();
+    for (const migration of catalog.migrations.slice(0, 4)) {
+      await applyD1AccountsMigrationBatch(database, migration, 1_000);
+    }
+    await database
+      .prepare(
+        "INSERT INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES ('oidc_clients', 'valid-before-drift', ?, 2000), ('oidc_clients', 'invalid-capsule', ?, 2000)",
+      )
+      .bind(
+        JSON.stringify({
+          clientId: "valid-before-drift",
+          capsuleId: "cap_valid",
+        }),
+        JSON.stringify({ clientId: "invalid-capsule" }),
+      )
+      .run();
+    let writes = 0;
+    const observed: D1AccountsMigrationDatabase = {
+      prepare: (sql) => database.prepare(sql),
+      batch(statements) {
+        writes += 1;
+        return database.batch(statements);
+      },
+    };
+    await expect(
+      applyLocalAccountsD1Migrations(
+        { getD1Database: () => Promise.resolve(observed) },
+        artifactPath,
+      ),
+    ).rejects.toThrow("activation_digest_backfill_inventory_drift");
+    expect(writes).toBe(0);
+    const state = await readD1AccountsMigrationState(database, catalog);
+    expect(state.headVersion).toBe(3);
+    expect(state.ledgerShape).toBe("legacy");
+    const valid = await database
+      .prepare(
+        "SELECT document FROM takosumi_accounts_documents WHERE bucket = 'oidc_clients' AND key = 'valid-before-drift'",
+      )
+      .first<{ readonly document: string }>();
+    expect(Object.hasOwn(JSON.parse(valid?.document ?? "null"), "activationDigest"))
+      .toBe(false);
+  } finally {
+    await runtime.dispose();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("local-substrate reconciles lost acknowledgement, restarts, and rejects policy drift", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "takosumi-local-d1-retry-"));
+  const artifactPath = join(directory, "catalog.json");
+  const runtimeModulePath = join(directory, "catalog.runtime.mjs");
+  const runtime = localAccountsD1Runtime(join(directory, "persist"));
+  try {
+    await renderLocalAccountsD1Artifact(artifactPath);
+    const database = (await runtime.getD1Database(
+      "ACCOUNTS",
+    )) as unknown as D1AccountsMigrationDatabase;
+    const catalog = await loadD1AccountsMigrationCatalog();
+    for (const migration of catalog.migrations.slice(0, 4)) {
+      await applyD1AccountsMigrationBatch(database, migration, 1_000);
+    }
+    await database
+      .prepare(
+        "INSERT INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES ('oidc_clients', 'lost-local-ack', ?, 2000)",
+      )
+      .bind(
+        JSON.stringify({
+          clientId: "lost-local-ack",
+          capsuleId: "cap_lost_local_ack",
+        }),
+      )
+      .run();
+    let loseFirstBatch = true;
+    const lostAck: D1AccountsMigrationDatabase = {
+      prepare: (sql) => database.prepare(sql),
+      async batch(statements) {
+        const results = await database.batch(statements);
+        if (loseFirstBatch) {
+          loseFirstBatch = false;
+          throw new Error("simulated_local_lost_ack");
+        }
+        return results;
+      },
+    };
+    const first = await applyLocalAccountsD1Migrations(
+      { getD1Database: () => Promise.resolve(lostAck) },
+      artifactPath,
+    );
+    expect(first.activationDigestBackfill).toMatchObject({
+      lostAcknowledgementReconciledChunks: 1,
+      missingAfter: 0,
+    });
+    const restarted = await applyLocalAccountsD1Migrations(
+      { getD1Database: () => Promise.resolve(database) },
+      artifactPath,
+    );
+    expect(restarted).toMatchObject({ applied: [], current: 4 });
+
+    const canonicalArtifact = JSON.parse(await readFile(artifactPath, "utf8"));
+    const tamperedArtifacts = [
+      {
+        ...structuredClone(canonicalArtifact),
+        preLedgerPolicy: {
+          ...canonicalArtifact.preLedgerPolicy,
+          chunkSize: 99,
+        },
+      },
+      {
+        ...structuredClone(canonicalArtifact),
+        schemaClosures: canonicalArtifact.schemaClosures.map(
+          (closure: { headVersion: number; objects: readonly unknown[] }) =>
+            closure.headVersion === 3
+              ? { ...closure, objects: closure.objects.slice(1) }
+              : closure,
+        ),
+      },
+    ];
+    for (const [index, artifact] of tamperedArtifacts.entries()) {
+      const tamperedPath = join(directory, `tampered-${index}.json`);
+      await Bun.write(tamperedPath, JSON.stringify(artifact));
+      let databaseReads = 0;
+      await expect(
+        applyLocalAccountsD1Migrations(
+          {
+            getD1Database() {
+              databaseReads += 1;
+              return Promise.resolve(database);
+            },
+          },
+          tamperedPath,
+          { runtimeModulePath },
+        ),
+      ).rejects.toThrow("accounts D1 migration policy mismatch");
+      expect(databaseReads).toBe(0);
+    }
+  } finally {
+    await runtime.dispose();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 30_000);
 
 test("local-substrate proves workerd rejects the same TLS chain without the explicit root", () => {
   expect(smoke).toContain("workerd-tls-negative.sh");
@@ -727,3 +1011,34 @@ test("local-substrate OTel collector forwards to the reachable Jaeger OTLP port"
   expect(compose).toContain("host.docker.internal:host-gateway");
   expect(otelConfig).toContain("endpoint: jaeger:4317");
 });
+
+async function renderLocalAccountsD1Artifact(output: string): Promise<void> {
+  const process = Bun.spawn(["bun", renderAccountsD1MigrationsPath, output], {
+    cwd: resolve(import.meta.dir, "../.."),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stderr] = await Promise.all([
+    process.exited,
+    new Response(process.stderr).text(),
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(`local Accounts D1 render failed: ${stderr}`);
+  }
+}
+
+function localAccountsD1Runtime(persistPath: string): Miniflare {
+  return new Miniflare({
+    compatibilityDate: "2026-07-17",
+    modules: [
+      {
+        type: "ESModule",
+        path: "local-accounts-d1-startup-proof.mjs",
+        contents:
+          "export default { fetch(){ return new Response('started') } }",
+      },
+    ],
+    d1Databases: { ACCOUNTS: "local-accounts-d1-startup-proof" },
+    d1Persist: persistPath,
+  });
+}

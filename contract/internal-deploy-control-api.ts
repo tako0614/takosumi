@@ -230,6 +230,8 @@ export interface PlanRun {
   readonly createdBy?: string;
   readonly capsuleId?: string;
   readonly capsuleCurrentStateVersionId?: string | null;
+  /** Private Capsule execution-authority epoch pinned before Plan dispatch. */
+  readonly capsuleExecutionAuthorityEpoch?: number;
   readonly source: OpenTofuExecutionSource;
   readonly sourceDigest: string;
   readonly operation: OpenTofuOperation;
@@ -466,6 +468,7 @@ export interface ApplyExpectedGuard {
   readonly planRunId: string;
   readonly capsuleId?: string;
   readonly currentStateVersionId?: string | null;
+  readonly capsuleExecutionAuthorityEpoch?: number;
   readonly runnerProfileId: string;
   readonly sourceDigest: string;
   readonly variablesDigest: string;

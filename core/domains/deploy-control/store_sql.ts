@@ -29,11 +29,13 @@ import {
   asc,
   desc,
   eq,
+  exists,
   gt,
   inArray,
   isNull,
   lt,
   ne,
+  notExists,
   or,
   type SQL,
   sql,
@@ -81,6 +83,8 @@ import type {
   BeginApplyRunResult,
   CapsuleExecutionAuthority,
   CapsuleExecutionAuthorityInput,
+  CapsuleInstallConfigRebindInput,
+  CapsuleInstallConfigRebindResult,
   CapsuleRuntimeSafety,
   CapsulePatch,
   CapsuleStateVersionGuard,
@@ -88,6 +92,7 @@ import type {
   PlanRunInputs,
   PublicHostReservation,
   RecoverableOpenTofuRunListOptions,
+  RuntimeSecretRetirementDispatchClaimInput,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
@@ -101,7 +106,6 @@ import {
   clampRecoverableOpenTofuRunListLimit,
   clampRunListLimit,
   capsuleRuntimeSafetyFromRun,
-  compareStoredRunRecordsAsc,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
   isApplyRunRecord,
@@ -110,6 +114,7 @@ import {
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
+  runtimeSecretRetirementDispatchAttempt,
 } from "./store.ts";
 import {
   artifactRecordFromRow,
@@ -123,6 +128,7 @@ import {
   usageResourceMetadataFromRow,
 } from "./store_row_mappers.ts";
 import type { SqlTransaction } from "../../adapters/storage/sql.ts";
+import { stableJsonDigest } from "../../adapters/source/digest.ts";
 
 /** Discriminator stored in the single `runs` table (§27). */
 // §27 runs.type values. Destroy runs persist their own discriminator
@@ -155,6 +161,33 @@ function pgRunCreatedAtMillisOrder(): SQL {
       WHEN ${pgSchema.runs.createdAt} ~ '^[0-9]+$'
         THEN ${pgSchema.runs.createdAt}::double precision
       ELSE EXTRACT(EPOCH FROM ${pgSchema.runs.createdAt}::timestamptz) * 1000
+    END
+  `;
+}
+
+/**
+ * Parse a stored Run timestamp with the same numeric-then-Date.parse order as
+ * runTimestampValue, without allowing malformed input to reach a cast.
+ *
+ * This deliberately remains local to recoverable-run queries. The older
+ * runtime-safety expressions above have a separate compatibility surface and
+ * must not be changed as part of this bounded listing fix.
+ */
+function pgRecoverableRunTimestampMillis(value: SQL): SQL {
+  return sql`
+    CASE
+      WHEN ${value} IS NULL THEN NULL
+      WHEN pg_input_is_valid(${value}, 'double precision') THEN
+        CASE
+          WHEN (${value})::double precision BETWEEN
+            -1.7976931348623157e+308::double precision AND
+            1.7976931348623157e+308::double precision
+            THEN (${value})::double precision
+          ELSE NULL
+        END
+      WHEN pg_input_is_valid(${value}, 'timestamptz') THEN
+        FLOOR(EXTRACT(EPOCH FROM (${value})::timestamptz) * 1000)
+      ELSE NULL
     END
   `;
 }
@@ -251,6 +284,25 @@ function pgRuntimeSafetyCandidateWhere(capsuleId: string): SQL | undefined {
       ),
     ),
   );
+}
+
+/** Atomic CAS fence mirroring capsuleRuntimeSafetyFromRun. */
+function pgCapsuleRuntimeSafetySafeOrAbsent(capsuleId: string): SQL {
+  return sql`COALESCE((
+    SELECT CASE
+      WHEN ${pgSchema.runs.kind} IN ('apply', 'restore')
+        AND ${pgSchema.runs.status} = 'succeeded' THEN TRUE
+      ELSE FALSE
+    END
+    FROM ${pgSchema.runs}
+    WHERE ${pgRuntimeSafetyCandidateWhere(capsuleId)}
+    ORDER BY
+      ${pgRunRuntimeSafetyInFlightOrder()} DESC,
+      ${pgRunRuntimeSafetyEffectAtMillisOrder()} DESC,
+      ${pgRunRuntimeSafetyRiskOrder()} DESC,
+      ${pgSchema.runs.id} DESC
+    LIMIT 1
+  ), TRUE)`;
 }
 
 /** PostgreSQL counterpart of the ordered D1 authority snapshot statement. */
@@ -457,21 +509,77 @@ function pgRunMutationDispatched(): SQL {
 /** Mirrors applyRunBillingCapturePending in the shared store model. */
 function pgRunBillingCapturePending(): SQL {
   return sql`
+    (
+      SELECT COALESCE(
+        MAX(audit_event.ordinality) FILTER (
+          WHERE audit_event.value ->> 'type' = 'billing.capture.pending'
+        ),
+        0
+      )
+      FROM jsonb_array_elements(
+        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
+      ) WITH ORDINALITY AS audit_event(value, ordinality)
+    ) > (
+      SELECT COALESCE(
+        MAX(audit_event.ordinality) FILTER (
+          WHERE audit_event.value ->> 'type' = 'billing.capture.completed'
+        ),
+        0
+      )
+      FROM jsonb_array_elements(
+        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
+      ) WITH ORDINALITY AS audit_event(value, ordinality)
+    )
+  `;
+}
+
+/** Mirrors applyRunRuntimeSecretRetirementPending in the shared store model. */
+function pgRunRuntimeSecretRetirementPending(): SQL {
+  return sql`
     EXISTS (
       SELECT 1
       FROM jsonb_array_elements(
         COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
       ) AS audit_event
-      WHERE audit_event ->> 'type' = 'billing.capture.pending'
+      WHERE audit_event ->> 'type' = 'runtime_secret.retirement.pending'
     )
     AND NOT EXISTS (
       SELECT 1
       FROM jsonb_array_elements(
         COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
       ) AS audit_event
-      WHERE audit_event ->> 'type' = 'billing.capture.completed'
+      WHERE audit_event ->> 'type' = 'runtime_secret.retirement.completed'
     )
   `;
+}
+
+function pgCapsuleInstallConfigRebindBlocked(
+  capsuleId: string,
+  executionAuthorityEpoch: number,
+): SQL {
+  return and(
+    eq(pgSchema.runs.capsuleId, capsuleId),
+    or(
+      and(
+        inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+        inArray(pgSchema.runs.status, ["queued", "running"]),
+      ),
+      and(
+        inArray(pgSchema.runs.kind, [...RUN_KINDS_PLAN]),
+        inArray(pgSchema.runs.status, [
+          "queued",
+          "running",
+          "waiting_approval",
+          "succeeded",
+        ]),
+        sql`COALESCE(${pgSchema.runs.runJson} ->> 'appliedApplyRunId', '') = ''`,
+        sql`COALESCE(
+          NULLIF(${pgSchema.runs.runJson} ->> 'capsuleExecutionAuthorityEpoch', '')::integer,
+          ${executionAuthorityEpoch}
+        ) = ${executionAuthorityEpoch}`,
+      ),
+    ),
+  )!;
 }
 
 /** An expired apply/destroy is uncertain only after it started. */
@@ -828,35 +936,124 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   async listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
   ): Promise<readonly StoredRunRecord[]> {
+    const createdAt = pgRecoverableRunTimestampMillis(
+      sql`${pgSchema.runs.createdAt}`,
+    );
+    const finishedAt = pgRecoverableRunTimestampMillis(
+      sql`${pgSchema.runs.runJson} ->> 'finishedAt'`,
+    );
+    const updatedAt = pgRecoverableRunTimestampMillis(
+      sql`${pgSchema.runs.runJson} ->> 'updatedAt'`,
+    );
+    const startedAt = pgRecoverableRunTimestampMillis(
+      sql`${pgSchema.runs.runJson} ->> 'startedAt'`,
+    );
+    const committedAt = sql`COALESCE(${finishedAt}, ${updatedAt}, ${createdAt})`;
+    const heartbeatAt = sql`CASE
+      WHEN jsonb_typeof(${pgSchema.runs.runJson} -> 'heartbeatAt') = 'number'
+        THEN ${pgRecoverableRunTimestampMillis(
+          sql`${pgSchema.runs.runJson} ->> 'heartbeatAt'`,
+        )}
+      ELSE NULL
+    END`;
+    const runningReference = sql`COALESCE(
+      ${heartbeatAt},
+      ${startedAt},
+      ${createdAt}
+    )`;
+    const dispatchableKinds = [
+      ...RUN_KINDS_PLAN,
+      "drift_check",
+      ...RUN_KINDS_APPLY,
+      RUN_KIND_SOURCE_SYNC,
+      RUN_KIND_RESTORE,
+    ] as const;
+    const where = or(
+      and(
+        eq(pgSchema.runs.status, "queued"),
+        inArray(pgSchema.runs.kind, [...dispatchableKinds]),
+        sql`${createdAt} > 0`,
+        sql`${createdAt} <= ${options.staleQueuedBeforeMs}`,
+      ),
+      and(
+        eq(pgSchema.runs.status, "running"),
+        inArray(pgSchema.runs.kind, [...dispatchableKinds]),
+        sql`${createdAt} > 0`,
+        sql`${runningReference} <= ${options.staleRunningBeforeMs}`,
+      ),
+      and(
+        inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+        inArray(pgSchema.runs.status, ["succeeded", "failed"]),
+        pgRunBillingCapturePending(),
+        sql`${committedAt} > 0`,
+        sql`${committedAt} <= ${options.staleQueuedBeforeMs}`,
+      ),
+    );
+    const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
+    const rows = await this.#db
+      .select({ json: pgSchema.runs.runJson })
+      .from(pgSchema.runs)
+      .where(where)
+      .orderBy(asc(createdAt), asc(pgSchema.runs.id))
+      .limit(limit);
+    return rows
+      .map((row) => parseRow(row) as StoredRunRecord)
+      .filter((row): row is StoredRunRecord => Boolean(row))
+      // Keep the shared predicate as a fail-closed defense for legacy rows or
+      // a future dialect drift; SQL performs the actual bound and ordering.
+      .filter((row) => isRecoverableOpenTofuRunRecord(row, options));
+  }
+
+  async listPendingRuntimeSecretRetirementRuns(options: {
+    readonly staleBeforeMs: number;
+    readonly limit?: number;
+  }): Promise<readonly ApplyRun[]> {
+    const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
+    const lastAttempt = sql`COALESCE(
+      NULLIF(${pgSchema.runs.runJson} ->> 'updatedAt', '')::double precision,
+      NULLIF(${pgSchema.runs.runJson} ->> 'finishedAt', '')::double precision,
+      ${pgRunCreatedAtMillisOrder()}
+    )`;
     const rows = await this.#db
       .select({ json: pgSchema.runs.runJson })
       .from(pgSchema.runs)
       .where(
-        or(
-          and(
-            inArray(pgSchema.runs.status, ["queued", "running"]),
-            inArray(pgSchema.runs.kind, [
-              ...RUN_KINDS_PLAN,
-              "drift_check",
-              ...RUN_KINDS_APPLY,
-              RUN_KIND_SOURCE_SYNC,
-              RUN_KIND_RESTORE,
-            ]),
-          ),
-          and(
-            inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
-            inArray(pgSchema.runs.status, ["succeeded", "failed"]),
-            pgRunBillingCapturePending(),
-          ),
+        and(
+          inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+          inArray(pgSchema.runs.status, ["succeeded", "failed"]),
+          pgRunRuntimeSecretRetirementPending(),
+          sql`${lastAttempt} <= ${options.staleBeforeMs}`,
         ),
-      );
-    const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
-    return rows
-      .map((row) => parseRow(row) as StoredRunRecord)
-      .filter((row): row is StoredRunRecord => Boolean(row))
-      .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
-      .sort(compareStoredRunRecordsAsc)
-      .slice(0, limit);
+      )
+      .orderBy(asc(lastAttempt), asc(pgSchema.runs.id))
+      .limit(limit);
+    return rows.map((row) => parseRow(row) as ApplyRun);
+  }
+
+  async claimPendingRuntimeSecretRetirementDispatch(
+    input: RuntimeSecretRetirementDispatchClaimInput,
+  ): Promise<boolean> {
+    const observed = await this.getApplyRun(input.runId);
+    const claimed = observed
+      ? runtimeSecretRetirementDispatchAttempt(observed, input)
+      : undefined;
+    if (!claimed) return false;
+    const rows = await this.#db
+      .update(pgSchema.runs)
+      .set({ status: claimed.status, runJson: claimed })
+      .where(
+        and(
+          eq(pgSchema.runs.id, input.runId),
+          inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+          inArray(pgSchema.runs.status, ["succeeded", "failed"]),
+          // This exact JSON fence is the attempt claim. A concurrent sweep or
+          // completed retirement changes the row and makes this update lose.
+          eq(pgSchema.runs.runJson, observed),
+          pgRunRuntimeSecretRetirementPending(),
+        ),
+      )
+      .returning({ id: pgSchema.runs.id });
+    return rows.length === 1;
   }
 
   async listSourceSyncRuns(
@@ -1397,6 +1594,21 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return config;
   }
 
+  async createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean> {
+    const rows = await this.#db
+      .insert(pgSchema.installConfigs)
+      .values({
+        id: config.id,
+        workspaceId: config.workspaceId ?? null,
+        configJson: config,
+        createdAt: config.createdAt,
+        updatedAt: config.updatedAt,
+      })
+      .onConflictDoNothing({ target: pgSchema.installConfigs.id })
+      .returning({ id: pgSchema.installConfigs.id });
+    return rows.length === 1;
+  }
+
   async getInstallConfig(id: string): Promise<InstallConfig | undefined> {
     const config = await this.#pgFirstJson<InstallConfig>(
       pgSchema.installConfigs,
@@ -1612,6 +1824,228 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       };
     }
     return resolved;
+  }
+
+  async getCapsuleExecutionAuthorityEpoch(
+    capsuleId: string,
+  ): Promise<number | undefined> {
+    const rows = await this.#db
+      .select({ epoch: pgSchema.capsules.executionAuthorityEpoch })
+      .from(pgSchema.capsules)
+      .where(eq(pgSchema.capsules.id, capsuleId))
+      .limit(1);
+    return rows[0]?.epoch;
+  }
+
+  async rebindCapsuleInstallConfig(
+    input: CapsuleInstallConfigRebindInput,
+  ): Promise<CapsuleInstallConfigRebindResult> {
+    return await this.#client.transaction(async (transaction) => {
+      const db = this.#drizzleForClient(transaction);
+      const capsuleRows = await db
+        .select({
+          json: pgSchema.capsules.capsuleJson,
+          epoch: pgSchema.capsules.executionAuthorityEpoch,
+        })
+        .from(pgSchema.capsules)
+        .where(eq(pgSchema.capsules.id, input.capsuleId))
+        .limit(1);
+      const capsuleRow = capsuleRows[0];
+      if (!capsuleRow) return { status: "not_found" as const };
+      const capsule = normalizeCapsuleRecord(
+        parseJson(capsuleRow.json) as Capsule,
+      );
+      // Lock current and target in stable id order through the Capsule CAS.
+      // InstallConfig patching takes a conflicting UPDATE lock, so a patch
+      // either wins before these digest checks or waits until rebind commits.
+      const configRows = await transaction.query<{
+        readonly id: string;
+        readonly json: unknown;
+      }>(
+        `select id, config_json as json
+           from takosumi_install_configs
+          where id = $1 or id = $2
+          order by id
+          for share`,
+        [capsule.installConfigId, input.targetInstallConfigId],
+      );
+      const configsById = new Map(
+        configRows.rows.map((row) => [
+          row.id,
+          parseJson(row.json) as InstallConfig,
+        ]),
+      );
+      const targetConfig = configsById.get(input.targetInstallConfigId);
+      if (
+        !targetConfig ||
+        (await stableJsonDigest(targetConfig)) !==
+          input.expected.targetInstallConfigDigest
+      ) {
+        return { status: "conflict" as const, capsule };
+      }
+      if (capsule.installConfigId === input.targetInstallConfigId) {
+        return { status: "replayed" as const, capsule };
+      }
+      const currentConfig = configsById.get(capsule.installConfigId) as
+        | InstallConfig
+        | undefined;
+      if (
+        !currentConfig ||
+        capsule.installConfigId !== input.expected.installConfigId ||
+        (await stableJsonDigest(currentConfig)) !==
+          input.expected.installConfigDigest ||
+        capsule.currentStateGeneration !==
+          input.expected.currentStateGeneration ||
+        capsule.currentStateVersionId !==
+          input.expected.currentStateVersionId ||
+        capsule.status !== input.expected.status ||
+        capsuleRow.epoch !== input.expected.executionAuthorityEpoch
+      ) {
+        return { status: "conflict" as const, capsule };
+      }
+      const safetyRows = await db
+        .select({ json: pgSchema.runs.runJson })
+        .from(pgSchema.runs)
+        .where(pgRuntimeSafetyCandidateWhere(input.capsuleId))
+        .orderBy(
+          desc(pgRunRuntimeSafetyInFlightOrder()),
+          desc(pgRunRuntimeSafetyEffectAtMillisOrder()),
+          desc(pgRunRuntimeSafetyRiskOrder()),
+          desc(pgSchema.runs.id),
+        )
+        .limit(1);
+      const runtimeSafety = safetyRows[0]
+        ? capsuleRuntimeSafetyFromRun(
+            parseRow(safetyRows[0]) as ApplyRun | Run,
+          )
+        : undefined;
+      if (runtimeSafety !== undefined && runtimeSafety.phase !== "safe") {
+        return { status: "busy" as const, capsule };
+      }
+      const blocking = db
+        .select({ id: pgSchema.runs.id })
+        .from(pgSchema.runs)
+        .where(pgCapsuleInstallConfigRebindBlocked(
+          input.capsuleId,
+          input.expected.executionAuthorityEpoch,
+        ));
+      const currentConfigFence = db
+        .select({ id: pgSchema.installConfigs.id })
+        .from(pgSchema.installConfigs)
+        .where(
+          and(
+            eq(pgSchema.installConfigs.id, input.expected.installConfigId),
+            eq(pgSchema.installConfigs.configJson, currentConfig),
+          ),
+        );
+      const targetConfigFence = db
+        .select({ id: pgSchema.installConfigs.id })
+        .from(pgSchema.installConfigs)
+        .where(
+          and(
+            eq(
+              pgSchema.installConfigs.id,
+              input.targetInstallConfigId,
+            ),
+            eq(pgSchema.installConfigs.configJson, targetConfig),
+          ),
+        );
+      const updated = normalizeCapsuleRecord({
+        ...capsule,
+        installConfigId: input.targetInstallConfigId,
+        updatedAt: input.updatedAt,
+      });
+      const rows = await db
+        .update(pgSchema.capsules)
+        .set({
+          installConfigId: updated.installConfigId,
+          capsuleJson: updated,
+          updatedAt: updated.updatedAt,
+          executionAuthorityEpoch: sql`${pgSchema.capsules.executionAuthorityEpoch} + 1`,
+        })
+        .where(
+          and(
+            eq(pgSchema.capsules.id, input.capsuleId),
+            // The replacement record is derived from this exact observed
+            // JSON. Fence the whole record so a concurrent non-authority
+            // patch cannot be erased by the stale whole-JSON write below.
+            // updated_at is ordinary audit time and is not a revision.
+            eq(pgSchema.capsules.capsuleJson, capsule),
+            eq(
+              pgSchema.capsules.installConfigId,
+              input.expected.installConfigId,
+            ),
+            input.expected.currentStateVersionId === undefined
+              ? isNull(pgSchema.capsules.currentStateVersionId)
+              : eq(
+                  pgSchema.capsules.currentStateVersionId,
+                  input.expected.currentStateVersionId,
+                ),
+            eq(pgSchema.capsules.status, input.expected.status),
+            eq(
+              pgSchema.capsules.executionAuthorityEpoch,
+              input.expected.executionAuthorityEpoch,
+            ),
+            sql`(${pgSchema.capsules.capsuleJson} ->> 'currentStateGeneration')::integer = ${input.expected.currentStateGeneration}`,
+            // Also require the row to still exist. The shared lock above makes
+            // this exact JSON fence part of the same authority transition.
+            exists(currentConfigFence),
+            exists(targetConfigFence),
+            pgCapsuleRuntimeSafetySafeOrAbsent(input.capsuleId),
+            notExists(blocking),
+          ),
+        )
+        .returning({ json: pgSchema.capsules.capsuleJson });
+      if (rows[0]) {
+        return {
+          status: "updated" as const,
+          capsule: normalizeCapsuleRecord(parseRow(rows[0]) as Capsule),
+        };
+      }
+      const currentRows = await db
+        .select({ json: pgSchema.capsules.capsuleJson })
+        .from(pgSchema.capsules)
+        .where(eq(pgSchema.capsules.id, input.capsuleId))
+        .limit(1);
+      const current = normalizeOptionalCapsuleRecord(
+        parseRow(currentRows[0]) as Capsule | undefined,
+      );
+      if (!current) return { status: "not_found" as const };
+      if (current.installConfigId === input.targetInstallConfigId) {
+        return { status: "replayed" as const, capsule: current };
+      }
+      const busyRows = await db
+        .select({ id: pgSchema.runs.id })
+        .from(pgSchema.runs)
+        .where(pgCapsuleInstallConfigRebindBlocked(
+          input.capsuleId,
+          input.expected.executionAuthorityEpoch,
+        ))
+        .limit(1);
+      const currentSafetyRows = await db
+        .select({ json: pgSchema.runs.runJson })
+        .from(pgSchema.runs)
+        .where(pgRuntimeSafetyCandidateWhere(input.capsuleId))
+        .orderBy(
+          desc(pgRunRuntimeSafetyInFlightOrder()),
+          desc(pgRunRuntimeSafetyEffectAtMillisOrder()),
+          desc(pgRunRuntimeSafetyRiskOrder()),
+          desc(pgSchema.runs.id),
+        )
+        .limit(1);
+      const currentSafety = currentSafetyRows[0]
+        ? capsuleRuntimeSafetyFromRun(
+            parseRow(currentSafetyRows[0]) as ApplyRun | Run,
+          )
+        : undefined;
+      return {
+        status: busyRows.length > 0 ||
+            (currentSafety !== undefined && currentSafety.phase !== "safe")
+          ? ("busy" as const)
+          : ("conflict" as const),
+        capsule: current,
+      };
+    });
   }
 
   async getCapsule(id: string): Promise<Capsule | undefined> {
@@ -2233,6 +2667,28 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       pgSchema.secretBlobs.connectionId,
     );
     return blob;
+  }
+
+  async createSecretBlobIfAbsent(blob: StoredSecretBlob): Promise<boolean> {
+    const inserted = await this.#db
+      .insert(pgSchema.secretBlobs)
+      .values({
+        id: blob.id,
+        connectionId: blob.connectionId,
+        workspaceId: blob.workspaceId ?? null,
+        kind: blob.kind,
+        ciphertext: blob.ciphertext,
+        encryptedDek: blob.encryptedDek,
+        nonce: blob.nonce,
+        aad: blob.aad,
+        keyVersion: blob.keyVersion,
+        createdAt: blob.createdAt,
+        rotatedAt: blob.rotatedAt ?? null,
+        blobJson: blob,
+      })
+      .onConflictDoNothing({ target: pgSchema.secretBlobs.connectionId })
+      .returning({ id: pgSchema.secretBlobs.id });
+    return inserted.length === 1;
   }
 
   async getSecretBlob(

@@ -142,7 +142,11 @@ import {
 import {
   APPLY_BILLING_CAPTURE_COMPLETED_EVENT,
   APPLY_BILLING_CAPTURE_PENDING_EVENT,
+  APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT,
+  APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT,
+  APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
   applyRunBillingCapturePending,
+  applyRunRuntimeSecretRetirementPending,
   CapsuleStateVersionGuardConflict,
   type OpenTofuControlStore,
   type PlanRunInputs,
@@ -170,6 +174,10 @@ import type {
   CapsuleModuleVariableMaterialization,
   CapsuleModuleVariableMaterializer,
 } from "../module_variable_materializer.ts";
+import type {
+  RuntimeSecretFileBundle,
+  RuntimeSecretFileMaterializer,
+} from "../runtime_secret_file_materializer.ts";
 // Shared helpers, constants, and run-engine types stay in the controller module
 // (`../mod.ts`) so the domain's public entry point and external importers are
 // unchanged; this engine imports the ones its moved bodies reference. The
@@ -202,6 +210,40 @@ import {
   moduleDispatchFromInputs,
   withRunEnvironmentEvidence,
 } from "../mod.ts";
+
+interface RuntimeSecretRetirementIntent {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly installConfigId: string;
+  readonly profileDigest: string;
+}
+
+function runtimeSecretRetirementIntentFromRun(
+  run: ApplyRun,
+): RuntimeSecretRetirementIntent | undefined {
+  const event = [...run.auditEvents]
+    .reverse()
+    .find(
+      (entry) => entry.type === APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
+    );
+  const data = event?.data;
+  if (
+    !data ||
+    typeof data.workspaceId !== "string" ||
+    typeof data.capsuleId !== "string" ||
+    typeof data.installConfigId !== "string" ||
+    typeof data.profileDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/u.test(data.profileDigest)
+  ) {
+    return undefined;
+  }
+  return {
+    workspaceId: data.workspaceId,
+    capsuleId: data.capsuleId,
+    installConfigId: data.installConfigId,
+    profileDigest: data.profileDigest,
+  };
+}
 import type { ArtifactReferenceAllocator } from "../../../adapters/storage/artifact-references.ts";
 import type {
   CreateCapsulePlanInternal,
@@ -237,12 +279,22 @@ type InternalCreatePlanRunRequest = Omit<CreatePlanRunRequest, "source"> & {
   readonly source: OpenTofuExecutionSource;
 };
 
+interface CapsulePlanExecutionAuthority {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly installConfigId: string;
+  readonly installConfigDigest: string;
+  readonly capsuleExecutionAuthorityEpoch: number;
+}
+
 /**
  * The marker is controller-owned context, not a request-body field. Only
  * #createLegacySourcelessDestroyPlan constructs it after inventory checks.
  */
 type RunEnginePlanRunInternalContext = PlanRunInternalContext & {
   readonly legacySourcelessDestroyRecovery?: true;
+  /** Authority used to derive the private Capsule Plan request/root. */
+  readonly capsulePlanExecutionAuthority?: CapsulePlanExecutionAuthority;
 };
 
 function releaseCommandRunId(applyRunId: string): string {
@@ -786,6 +838,17 @@ function latestOutputAtGeneration(
     )[0];
 }
 
+async function stateVersionIdForApplyRun(applyRunId: string): Promise<string> {
+  // One ApplyRun owns at most one StateVersion. Derive its ledger identity from
+  // a domain-separated digest so a non-landed commit tail reconstructs the
+  // exact id without persisting a premature StateVersion pointer on the Run.
+  const digest = await stableJsonDigest({
+    kind: "takosumi.state-version-id@v1",
+    applyRunId,
+  });
+  return `state_${digest.slice("sha256:".length)}`;
+}
+
 function assertPinnedLifecycleRunnerCapabilities(
   actions: InstallConfig["lifecycleActions"],
   runnerProfile: RunnerProfile,
@@ -862,6 +925,7 @@ export interface RunEngineDependencies {
   readonly verification: RunVerificationService;
   readonly planResolution: PlanResolutionService;
   readonly moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
+  readonly runtimeSecretFileMaterializer?: RuntimeSecretFileMaterializer;
   readonly sourceLifecycle: SourceLifecycleService;
   readonly capsules: CapsuleQuery;
   readonly runSerialized: RunSerialized;
@@ -896,6 +960,7 @@ export class RunEngine {
   readonly #verification: RunVerificationService;
   readonly #planResolution: PlanResolutionService;
   readonly #moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
+  readonly #runtimeSecretFileMaterializer?: RuntimeSecretFileMaterializer;
   readonly #sourceLifecycle: SourceLifecycleService;
   readonly #capsules: CapsuleQuery;
   readonly #runSerialized: RunSerialized;
@@ -941,6 +1006,7 @@ export class RunEngine {
     this.#verification = deps.verification;
     this.#planResolution = deps.planResolution;
     this.#moduleVariableMaterializer = deps.moduleVariableMaterializer;
+    this.#runtimeSecretFileMaterializer = deps.runtimeSecretFileMaterializer;
     this.#sourceLifecycle = deps.sourceLifecycle;
     this.#capsules = deps.capsules;
     this.#runSerialized = deps.runSerialized;
@@ -1137,7 +1203,7 @@ export class RunEngine {
         "refreshOnly cannot be combined with destroy or driftCheck",
       );
     }
-    const capsule =
+    let capsule =
       requestCapsuleId !== undefined
         ? await this.#requireCapsule(requestCapsuleId)
         : undefined;
@@ -1177,13 +1243,47 @@ export class RunEngine {
         `capsule ${capsule.id} already has a current StateVersion; use operation "update"`,
       );
     }
-    const capsuleContext: PlanRunCapsuleContext | undefined = capsule
-      ? (internal.capsuleContext ?? {
-          workspaceId: capsule.workspaceId,
-          capsuleId: capsule.id,
-          environment: capsule.environment,
-        })
-      : undefined;
+    // Capture the epoch, then re-read the Capsule. A re-adoption may otherwise
+    // land after #requireCapsule and let inputs derived from the old immutable
+    // InstallConfig be stamped with the new execution-authority epoch.
+    const capsuleExecutionAuthorityEpoch =
+      await this.#store.getCapsuleExecutionAuthorityEpoch(capsule.id);
+    if (
+      typeof capsuleExecutionAuthorityEpoch !== "number" ||
+      !Number.isSafeInteger(capsuleExecutionAuthorityEpoch) ||
+      capsuleExecutionAuthorityEpoch < 1
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Capsule execution authority is unavailable",
+      );
+    }
+    const currentCapsule = await this.#requireCapsule(capsule.id);
+    const outerAuthority = internal.capsulePlanExecutionAuthority;
+    if (
+      currentCapsule.id !== capsule.id ||
+      currentCapsule.workspaceId !== capsule.workspaceId ||
+      currentCapsule.installConfigId !== capsule.installConfigId ||
+      (outerAuthority !== undefined &&
+        (outerAuthority.workspaceId !== currentCapsule.workspaceId ||
+          outerAuthority.capsuleId !== currentCapsule.id ||
+          outerAuthority.installConfigId !== currentCapsule.installConfigId ||
+          outerAuthority.capsuleExecutionAuthorityEpoch !==
+            capsuleExecutionAuthorityEpoch))
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Capsule execution authority changed before Plan creation",
+        { reason: "capsule_execution_authority_changed" },
+      );
+    }
+    capsule = currentCapsule;
+    const capsuleContext: PlanRunCapsuleContext =
+      internal.capsuleContext ?? {
+        workspaceId: capsule.workspaceId,
+        capsuleId: capsule.id,
+        environment: capsule.environment,
+      };
     const now = this.#now();
     const variables = normalizeVariables(request.variables);
     const declaredProviders = normalizeProviders(
@@ -1197,6 +1297,18 @@ export class RunEngine {
         "failed_precondition",
         `install_config_not_found: ${capsule.installConfigId}`,
         { reason: "install_config_not_found" },
+      );
+    }
+    if (
+      outerAuthority !== undefined &&
+      (currentInstallConfig.id !== outerAuthority.installConfigId ||
+        (await stableJsonDigest(currentInstallConfig)) !==
+          outerAuthority.installConfigDigest)
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Capsule execution authority changed before Plan creation",
+        { reason: "capsule_execution_authority_changed" },
       );
     }
     const materializationDigest =
@@ -1243,6 +1355,7 @@ export class RunEngine {
         rematerialized = await this.#moduleVariableMaterializer.materialize({
           phase: "plan",
           expectedDigest: materializationDigest,
+          capsuleExecutionAuthorityEpoch,
           capsule,
           installConfig: currentInstallConfig,
           resolvedProviderBindings,
@@ -1316,6 +1429,7 @@ export class RunEngine {
       ...(capsule
         ? {
             capsuleCurrentStateVersionId: capsule.currentStateVersionId ?? null,
+            capsuleExecutionAuthorityEpoch,
           }
         : {}),
       source: request.source,
@@ -1774,6 +1888,7 @@ export class RunEngine {
       request: planRequest,
       capsulePlan,
       genericRootPlan,
+      capsulePlanExecutionAuthority,
     } = await planCreationStage(
       "capsule_plan_request",
       this.#capsulePlanRequest({
@@ -1836,6 +1951,7 @@ export class RunEngine {
           ? { compatibilityReportId: compatibilityReport.id }
           : {}),
         ...(capsulePlan ? { capsulePlan } : {}),
+        capsulePlanExecutionAuthority,
         ...(lifecycleActions ? { lifecycleActions } : {}),
         ...(finalizedGenericRoot
           ? { genericRootDispatch: finalizedGenericRoot }
@@ -2404,6 +2520,7 @@ export class RunEngine {
     readonly request: CreatePlanRunRequest;
     readonly capsulePlan: CapsulePlanContext;
     readonly genericRootPlan?: GenericRootPlanContext;
+    readonly capsulePlanExecutionAuthority: CapsulePlanExecutionAuthority;
   }> {
     const moduleSource = snapshotModuleSource(
       input.source,
@@ -2415,6 +2532,7 @@ export class RunEngine {
       request: generic.request,
       capsulePlan: generic.capsulePlan,
       genericRootPlan: generic.genericRootPlan,
+      capsulePlanExecutionAuthority: generic.capsulePlanExecutionAuthority,
     };
   }
 
@@ -2439,6 +2557,7 @@ export class RunEngine {
     readonly request: CreatePlanRunRequest;
     readonly capsulePlan: CapsulePlanContext;
     readonly genericRootPlan: GenericRootPlanContext;
+    readonly capsulePlanExecutionAuthority: CapsulePlanExecutionAuthority;
   }> {
     const profile = await this.#requireRunnerProfile(
       input.runnerProfileId ?? this.#defaultRunnerProfileId,
@@ -2506,10 +2625,23 @@ export class RunEngine {
         ),
       ),
     );
+    const capsuleExecutionAuthorityEpoch =
+      await this.#store.getCapsuleExecutionAuthorityEpoch(input.capsule.id);
+    if (
+      typeof capsuleExecutionAuthorityEpoch !== "number" ||
+      !Number.isSafeInteger(capsuleExecutionAuthorityEpoch) ||
+      capsuleExecutionAuthorityEpoch < 1
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Capsule execution authority is unavailable for module-variable materialization",
+      );
+    }
     const moduleVariableMaterialization =
       await this.#materializeModuleVariablesForPlan({
         capsule: input.capsule,
         installConfig: input.installConfig,
+        capsuleExecutionAuthorityEpoch,
         resolvedProviderBindings: capsulePlan.resolvedProviderBindings,
         variables: baseVariables,
       });
@@ -2519,6 +2651,13 @@ export class RunEngine {
     });
     return {
       capsulePlan,
+      capsulePlanExecutionAuthority: {
+        workspaceId: input.capsule.workspaceId,
+        capsuleId: input.capsule.id,
+        installConfigId: input.installConfig.id,
+        installConfigDigest: await stableJsonDigest(input.installConfig),
+        capsuleExecutionAuthorityEpoch,
+      },
       request: {
         workspaceId: input.capsule.workspaceId,
         capsuleId: input.capsule.id,
@@ -2544,6 +2683,7 @@ export class RunEngine {
   async #materializeModuleVariablesForPlan(input: {
     readonly capsule: Capsule;
     readonly installConfig: InstallConfig;
+    readonly capsuleExecutionAuthorityEpoch: number;
     readonly resolvedProviderBindings: readonly ResolvedCapsuleProviderBinding[];
     readonly variables: Readonly<Record<string, JsonValue>>;
   }): Promise<CapsuleModuleVariableMaterialization | undefined> {
@@ -2563,6 +2703,8 @@ export class RunEngine {
     try {
       result = await this.#moduleVariableMaterializer.materialize({
         phase: "plan",
+        capsuleExecutionAuthorityEpoch:
+          input.capsuleExecutionAuthorityEpoch,
         capsule: input.capsule,
         installConfig: input.installConfig,
         resolvedProviderBindings: input.resolvedProviderBindings,
@@ -2634,6 +2776,8 @@ export class RunEngine {
         phase,
         expectedDigest,
         plannedVariables,
+        capsuleExecutionAuthorityEpoch:
+          planRun.capsuleExecutionAuthorityEpoch ?? 1,
         capsule,
         installConfig,
         resolvedProviderBindings,
@@ -3785,10 +3929,15 @@ export class RunEngine {
     }
     if (
       (applyRun.status === "succeeded" || applyRun.status === "failed") &&
-      applyRunBillingCapturePending(applyRun)
+      (applyRunBillingCapturePending(applyRun) ||
+        applyRunRuntimeSecretRetirementPending(applyRun))
     ) {
       const planRun = await this.#requirePlanRun(applyRun.planRunId);
-      const finalized = await this.#finalizeApplyBilling(planRun, applyRun);
+      let finalized = await this.#tryFinalizeApplyBilling(planRun, applyRun);
+      finalized = await this.#tryFinalizeRuntimeSecretRetirement(
+        planRun,
+        finalized,
+      );
       const capsule = finalized.capsuleId
         ? await this.#store.getCapsule(finalized.capsuleId)
         : undefined;
@@ -4103,16 +4252,17 @@ export class RunEngine {
    * dispatch, so the ledger pointer matches the encrypted object written at the
    * same generation. Returns `undefined` for a Run without environment context.
    * The digest is the plaintext digest the runner echoed back, when present. The
-   * record is PERSISTED atomically with the StateVersion / Output /
-   * Capsule advance by {@link OpenTofuControlStore.commitRunState}.
+   * Its id is stable for the ApplyRun across ledger-tail redelivery. The record
+   * is PERSISTED atomically with the StateVersion / Output / Capsule advance by
+   * {@link OpenTofuControlStore.commitRunState}.
    */
-  #buildStateVersion(input: {
+  async #buildStateVersion(input: {
     readonly envDispatch: RunExecutionDispatch;
     readonly generation: number;
     readonly stateDigest: string | undefined;
     readonly runId: string;
     readonly now: number;
-  }): StateVersion | undefined {
+  }): Promise<StateVersion | undefined> {
     const scope = input.envDispatch.stateScope;
     if (!scope) return undefined;
     if (!input.stateDigest?.trim()) {
@@ -4124,7 +4274,7 @@ export class RunEngine {
     const workspaceId = scope.workspaceId;
     const capsuleId = scope.subject?.kind === "capsule" ? scope.subject.id : "";
     return {
-      id: this.#newId("state"),
+      id: await stateVersionIdForApplyRun(input.runId),
       workspaceId,
       capsuleId,
       environment: scope.environment,
@@ -6427,7 +6577,7 @@ export class RunEngine {
         dispatch,
         now,
       });
-      const stateVersion = this.#buildStateVersion({
+      const stateVersion = await this.#buildStateVersion({
         envDispatch,
         generation: persistGeneration,
         stateDigest: result.stateDigest,
@@ -7051,7 +7201,7 @@ export class RunEngine {
       (await this.#requireCurrentPlannedCapsule(input.planRun));
     const stateVersion =
       failure.statePersistence === "persisted"
-        ? this.#buildStateVersion({
+        ? await this.#buildStateVersion({
             envDispatch: input.envDispatch,
             generation: input.persistGeneration,
             stateDigest: input.result.stateDigest,
@@ -7273,6 +7423,11 @@ export class RunEngine {
         commands,
         phase: "apply",
       });
+      const runtimeSecretFileBundle =
+        await this.#materializeRuntimeSecretFileAfterApply({
+          capsule: input.capsule,
+          commands,
+        });
       let result: ReleaseActivationResult;
       actionDispatched = true;
       result = await this.#releaseActivator.activate(
@@ -7287,6 +7442,7 @@ export class RunEngine {
           ...(releaseEnvironment.credentials
             ? { credentials: releaseEnvironment.credentials }
             : {}),
+          ...(runtimeSecretFileBundle ? { runtimeSecretFileBundle } : {}),
           commands,
           ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
           ...(sourceSnapshot ? { sourceSnapshot } : {}),
@@ -7981,6 +8137,115 @@ export class RunEngine {
     }
   }
 
+  async #runtimeSecretRetirementIntent(
+    capsule: Capsule,
+  ): Promise<RuntimeSecretRetirementIntent | undefined> {
+    const installConfig = await this.#store.getInstallConfig(
+      capsule.installConfigId,
+    );
+    const profile =
+      installConfig?.runtimeBindingMaterialization?.runtimeSecretFile;
+    if (!installConfig || profile === undefined) return undefined;
+    return {
+      workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
+      installConfigId: installConfig.id,
+      profileDigest: await stableJsonDigest(profile),
+    };
+  }
+
+  #withPendingRuntimeSecretRetirement(
+    run: ApplyRun,
+    now: number,
+    intent: RuntimeSecretRetirementIntent | undefined,
+  ): ApplyRun {
+    if (!intent || applyRunRuntimeSecretRetirementPending(run)) return run;
+    return {
+      ...run,
+      auditEvents: [
+        ...run.auditEvents,
+        auditEvent(run.id, APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT, now, {
+          ...intent,
+          providerDestroyCommitted: true,
+        }),
+      ],
+    };
+  }
+
+  async #finalizeRuntimeSecretRetirement(
+    planRun: PlanRun,
+    applyRun: ApplyRun,
+  ): Promise<ApplyRun> {
+    if (!applyRunRuntimeSecretRetirementPending(applyRun)) return applyRun;
+    const intent = runtimeSecretRetirementIntentFromRun(applyRun);
+    if (!intent || !planRun.capsuleId || intent.capsuleId !== planRun.capsuleId) {
+      throw new TypeError("runtime secret retirement intent is malformed");
+    }
+    if (!this.#runtimeSecretFileMaterializer) {
+      throw new TypeError("runtime secret retirement port is unavailable");
+    }
+    await this.#runtimeSecretFileMaterializer.retire(intent);
+    const completedMarker = auditEvent(
+      applyRun.id,
+      APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT,
+      this.#now(),
+      {
+        capsuleId: intent.capsuleId,
+        installConfigId: intent.installConfigId,
+        profileDigest: intent.profileDigest,
+      },
+    );
+    const result = await this.#store.transitionRun({
+      id: applyRun.id,
+      kind: "apply",
+      expectFrom: [applyRun.status],
+      run: {
+        ...applyRun,
+        auditEvents: [...applyRun.auditEvents, completedMarker],
+      },
+    });
+    return (result.run as ApplyRun | undefined) ?? applyRun;
+  }
+
+  async #tryFinalizeRuntimeSecretRetirement(
+    planRun: PlanRun,
+    applyRun: ApplyRun,
+  ): Promise<ApplyRun> {
+    try {
+      return await this.#finalizeRuntimeSecretRetirement(planRun, applyRun);
+    } catch {
+      log.warn("deploy_control.runtime_secret_file_retirement_deferred", {
+        planRunId: planRun.id,
+        applyRunId: applyRun.id,
+        capsuleId: planRun.capsuleId,
+        reason: "durable_retirement_pending",
+      });
+      // Persist a value-free retry timestamp on the terminal outbox row. The
+      // scheduler scans oldest attempt first, so one persistently failing
+      // retirement cannot starve later Capsules forever.
+      const now = this.#now();
+      const result = await this.#store.transitionRun({
+        id: applyRun.id,
+        kind: "apply",
+        expectFrom: [applyRun.status],
+        run: {
+          ...applyRun,
+          updatedAt: now,
+          auditEvents: [
+            ...applyRun.auditEvents,
+            auditEvent(
+              applyRun.id,
+              APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT,
+              now,
+              { reason: "durable_retirement_pending" },
+            ),
+          ],
+        },
+      });
+      return (result.run as ApplyRun | undefined) ?? applyRun;
+    }
+  }
+
   /**
    * Finalizes a provider-applied Run AFTER the atomic commit-tail fold. Billing
    * and runner usage are captured even when a required post-apply action made
@@ -8085,6 +8350,11 @@ export class RunEngine {
     }
     const capsule =
       plannedCapsule ?? (await this.#requireCurrentPlannedCapsule(planRun));
+    // Resolve the value-free retirement fence before any external teardown.
+    // A missing/corrupt pinned InstallConfig must fail while provider state is
+    // still untouched; only the marker append waits for successful destroy.
+    const runtimeSecretRetirementIntent =
+      await this.#runtimeSecretRetirementIntent(capsule);
     // A destroy_apply persists the post-teardown state at `base + 1`. Empty for
     // runs without capsule context.
     const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
@@ -8255,7 +8525,7 @@ export class RunEngine {
       const now = this.#now();
       // Build the post-teardown StateVersion at the generation persisted by the
       // runner, then atomically advance the Capsule and terminal Run.
-      const stateVersion = this.#buildStateVersion({
+      const stateVersion = await this.#buildStateVersion({
         envDispatch,
         generation: persistGeneration,
         stateDigest: result?.stateDigest,
@@ -8289,8 +8559,8 @@ export class RunEngine {
       // writes (commit-tail fold, S2): a torn tail can no longer leave a stuck
       // `running` destroy run over a finished teardown.
       const diagnostics = redactRunDiagnostics(result?.diagnostics);
-      const completed = this.#withPendingApplyBillingCapture(
-        {
+      const completed = this.#withPendingRuntimeSecretRetirement(
+        this.#withPendingApplyBillingCapture({
           ...effectiveRunning,
           stateVersionId: stateVersion.id,
           status: "succeeded",
@@ -8320,8 +8590,9 @@ export class RunEngine {
           ],
           updatedAt: now,
           finishedAt: now,
-        },
+        }, now),
         now,
+        runtimeSecretRetirementIntent,
       );
       const appliedPlan: PlanRun = {
         ...planRun,
@@ -8354,7 +8625,11 @@ export class RunEngine {
       });
       await this.#notifyTerminal(completed);
       const patched = committed.capsule;
-      const finalized = await this.#tryFinalizeApplyBilling(planRun, completed);
+      let finalized = await this.#tryFinalizeApplyBilling(planRun, completed);
+      finalized = await this.#tryFinalizeRuntimeSecretRetirement(
+        planRun,
+        finalized,
+      );
       try {
         await this.#recordRunnerMinuteUsage({
           workspaceId: completed.workspaceId,
@@ -8577,6 +8852,8 @@ export class RunEngine {
           installConfig,
           input.inputs.variables,
         ),
+        capsuleExecutionAuthorityEpoch:
+          input.planRun.capsuleExecutionAuthorityEpoch ?? 1,
         capsule,
         installConfig,
         resolvedProviderBindings,
@@ -8597,6 +8874,45 @@ export class RunEngine {
         reason: "best_effort_cleanup_failed",
       });
     }
+  }
+
+  async #materializeRuntimeSecretFileAfterApply(input: {
+    readonly capsule: Capsule;
+    readonly commands: readonly ReleaseActivationAction[];
+  }): Promise<RuntimeSecretFileBundle | undefined> {
+    const hasRunnerCommand = input.commands.some(
+      (action) =>
+        action.kind !== "resource_migration" &&
+        action.executor !== "operator",
+    );
+    if (!hasRunnerCommand) return undefined;
+    const installConfig = await this.#store.getInstallConfig(
+      input.capsule.installConfigId,
+    );
+    if (!installConfig) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "runtime secret file InstallConfig is unavailable",
+      );
+    }
+    if (
+      installConfig.runtimeBindingMaterialization?.runtimeSecretFile ===
+      undefined
+    ) {
+      return undefined;
+    }
+    if (!this.#runtimeSecretFileMaterializer) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "runtime secret file materializer is unavailable",
+      );
+    }
+    return await this.#runtimeSecretFileMaterializer.materialize({
+      workspaceId: input.capsule.workspaceId,
+      capsuleId: input.capsule.id,
+      installConfigId: installConfig.id,
+      phase: "post_apply",
+    });
   }
 
   async #requireRunnerProfile(id: string): Promise<RunnerProfile> {
@@ -8637,6 +8953,20 @@ export class RunEngine {
     }
     const capsule = await this.#requireCapsule(planRun.capsuleId);
     validatePlannedCapsuleCurrent({ planRun, capsule: capsule });
+    const currentEpoch =
+      await this.#store.getCapsuleExecutionAuthorityEpoch(capsule.id);
+    // Legacy Plan rows predate the explicit field and therefore belong only to
+    // epoch 1. Once an immutable authority replacement advances the Capsule,
+    // absence must fail closed rather than granting the legacy row the new
+    // epoch by implication.
+    const plannedEpoch = planRun.capsuleExecutionAuthorityEpoch ?? 1;
+    if (currentEpoch !== plannedEpoch) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${capsule.id} execution authority changed since PlanRun ${planRun.id}`,
+        { reason: "capsule_execution_authority_changed" },
+      );
+    }
     return capsule;
   }
 }
@@ -8718,16 +9048,24 @@ function requireValidModuleVariableProfile(installConfig: InstallConfig): {
   if (!profile) {
     throw moduleVariableMaterializationError("declaration is missing");
   }
-  const sourceNames = [
-    profile.workerNameVariable,
-    profile.projectNameVariable,
-  ];
-  const targetNames = [
-    profile.issuerUrlVariable,
-    profile.clientIdVariable,
-    profile.ownerSubjectVariable,
-    profile.allowUnpinnedOwnerClaimVariable,
-  ];
+  const sourceNames = profile.contract ===
+      "takosumi.accounts-oidc-module-variables/v1"
+    ? [profile.workerNameVariable, profile.projectNameVariable]
+    : [profile.resourceNameVariable, profile.publicUrlVariable];
+  const targetNames = profile.contract ===
+      "takosumi.accounts-oidc-module-variables/v1"
+    ? [
+        profile.issuerUrlVariable,
+        profile.clientIdVariable,
+        profile.ownerSubjectVariable,
+        profile.allowUnpinnedOwnerClaimVariable,
+      ]
+    : [
+        profile.accountsUrlVariable,
+        profile.issuerUrlVariable,
+        profile.clientIdVariable,
+        profile.redirectUriVariable,
+      ];
   const additionalInputNames = boundedModuleVariableNameList(
     profile.additionalInputVariables,
   );
@@ -8810,15 +9148,23 @@ function requireValidModuleVariableMaterialization(
   }
   const issuer = result.variables[profile.issuerUrlVariable];
   const clientId = result.variables[profile.clientIdVariable];
-  const ownerSubject = result.variables[profile.ownerSubjectVariable];
-  const allowUnpinnedOwnerClaim =
-    result.variables[profile.allowUnpinnedOwnerClaimVariable];
-  if (
-    !isBoundedNonSecretString(issuer) ||
-    !isBoundedNonSecretString(clientId) ||
-    !isBoundedNonSecretString(ownerSubject) ||
-    allowUnpinnedOwnerClaim !== false
-  ) {
+  const valid = profile.contract ===
+      "takosumi.accounts-oidc-module-variables/v1"
+    ? isBoundedNonSecretString(issuer) &&
+      isBoundedNonSecretString(clientId) &&
+      isBoundedNonSecretString(
+        result.variables[profile.ownerSubjectVariable],
+      ) &&
+      result.variables[profile.allowUnpinnedOwnerClaimVariable] === false
+    : isBoundedNonSecretString(issuer) &&
+      isBoundedNonSecretString(clientId) &&
+      isBoundedNonSecretString(
+        result.variables[profile.accountsUrlVariable],
+      ) &&
+      isBoundedNonSecretString(
+        result.variables[profile.redirectUriVariable],
+      );
+  if (!valid) {
     throw moduleVariableMaterializationError(
       "host returned an invalid or secret-shaped public OIDC value",
     );

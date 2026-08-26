@@ -1056,7 +1056,10 @@ function isAllowedHistoryLocation(
       return true;
     }
   }
-  if (path === "cli/src/cli-accounts-db.ts") {
+  if (
+    path === "cli/src/cli-accounts-db.ts" ||
+    path === "accounts/service/src/d1-migrations.ts"
+  ) {
     const migrationStart = content.indexOf(
       "// Immutable account-plane schema migration catalog begins.",
     );

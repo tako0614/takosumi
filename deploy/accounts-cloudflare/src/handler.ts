@@ -35,6 +35,7 @@ import {
   isWorkerReadinessPath,
 } from "./routes.ts";
 import { checkPlatformBindings } from "./bindings-check.ts";
+import { ensureAccountsD1WorkerSchema } from "./d1-schema-gate.ts";
 
 export interface CloudflareWorkerEnv {
   readonly [name: string]: unknown;
@@ -492,17 +493,6 @@ function usesIdentityOnlyAccountsHandler(pathname: string): boolean {
   return false;
 }
 
-// D1 schema version expected by the deployed code. The baseline
-// version (0) matches the initial `D1_ACCOUNTS_STORE_INIT_SQL` `CREATE TABLE
-// IF NOT EXISTS` statements that `D1AccountsStore.initialize()` runs. Bump
-// this when a real migration is added to the migration runner
-// (`@takosjp/takosumi-accounts-service`). The Worker refuses to serve
-// account-plane traffic when the D1 database reports a newer version (Worker
-// is behind the schema) or an older version (database is behind the Worker)
-// so operators don't silently run a schema that does not match the service.
-// See `README.md` → "D1 schema migration" for the runner workflow.
-const EXPECTED_D1_SCHEMA_VERSION = 3;
-
 async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   env: TEnv,
   options: CreateCloudflareWorkerOptions<TEnv>,
@@ -520,7 +510,7 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   if (schemaMode === "bootstrap") {
     await store.initialize();
   }
-  await ensureD1SchemaVersion(env.TAKOSUMI_ACCOUNTS_DB, schemaMode);
+  await ensureAccountsD1WorkerSchema(env.TAKOSUMI_ACCOUNTS_DB);
   await seedLocalSubstrateAccount(store, env);
   // TAKOSUMI_ACCOUNTS_ISSUER must be explicitly set. We deliberately do NOT
   // fall back to the first request URL: caching that as the issuer poisons
@@ -622,63 +612,6 @@ function resolveCloudflareSessionHashSalt(env: CloudflareWorkerEnv): string {
   throw new TypeError(
     "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT must be set for the Cloudflare Worker account session store",
   );
-}
-
-interface SchemaMigrationRow {
-  readonly version: number;
-}
-
-// Verify the D1 database has been migrated up to the version this Worker
-// expects. We create the bookkeeping table on first contact (so a brand-new
-// D1 database isn't rejected) but we never silently advance the recorded
-// version; the migration runner in
-// `@takosjp/takosumi-accounts-service` (CLI `accounts migrate-d1`) must
-// do that. A drifted version fails fast with a clear pointer to the runner
-// so operators don't run a service against a stale schema. The check uses
-// the D1 binding directly so we don't depend on a private API of
-// D1AccountsStore.
-//
-// The table name + column shape MUST match the runner's
-// `takosumi_accounts_schema_migrations` ledger (see
-// `cli/src/cli-accounts-db.ts`'s `D1_SCHEMA_MIGRATIONS_TABLE_SQL`).
-// The runner records `(version, name, applied_at)` rows; this Worker reads
-// only `version` from that same table so a `migrate-d1` run is visible to
-// the version gate. Keeping the names in lockstep is what makes the
-// fail-closed gate satisfiable by the documented runner.
-async function ensureD1SchemaVersion(
-  db: CloudflareWorkerEnv["TAKOSUMI_ACCOUNTS_DB"],
-  schemaMode: "bootstrap" | "predeployed",
-): Promise<void> {
-  // D1 `exec()` runs one statement per line; keep this single-line. Mirrors
-  // `D1_SCHEMA_MIGRATIONS_TABLE_SQL` in the CLI migrate-d1 runner so the
-  // table the Worker reads is exactly the table the runner writes.
-  if (schemaMode === "bootstrap") {
-    await db.exec(
-      "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);",
-    );
-  }
-  const row = await db
-    .prepare(
-      "SELECT version FROM takosumi_accounts_schema_migrations ORDER BY version DESC LIMIT 1",
-    )
-    .first<SchemaMigrationRow>();
-  const currentVersion = row?.version ?? 0;
-  if (currentVersion > EXPECTED_D1_SCHEMA_VERSION) {
-    console.error(
-      `D1 schema_migrations.version=${currentVersion} is newer than this Worker expects (${EXPECTED_D1_SCHEMA_VERSION}). Roll forward the Worker or roll back the migration.`,
-    );
-    throw new TypeError(
-      `D1 schema version ${currentVersion} is newer than this Worker (expected ${EXPECTED_D1_SCHEMA_VERSION}); see README "D1 schema migration" for the migration runner workflow`,
-    );
-  }
-  if (currentVersion < EXPECTED_D1_SCHEMA_VERSION) {
-    console.error(
-      `D1 schema_migrations.version=${currentVersion} is behind expected ${EXPECTED_D1_SCHEMA_VERSION}; run the takosumi accounts D1 migration runner before serving traffic.`,
-    );
-    throw new TypeError(
-      `D1 schema version ${currentVersion} is behind this Worker (expected ${EXPECTED_D1_SCHEMA_VERSION}); run \`bun run cli -- accounts migrate-d1\` or the equivalent migration runner before serving account-plane traffic`,
-    );
-  }
 }
 
 function accountsD1SchemaMode(

@@ -169,6 +169,7 @@ function operatorActivationInput(
   // composite phase may also contain operator commands, but that boundary must
   // never expose the runner's dispatch-only bundle to the operator adapter.
   delete operatorInput.credentials;
+  delete operatorInput.runtimeSecretFileBundle;
   return operatorInput;
 }
 
@@ -218,6 +219,14 @@ export function createRunnerReleaseActivator(
           message: `${phase} release commands require a source snapshot archive`,
         };
       }
+      if (
+        input.runtimeSecretFileBundle &&
+        input.commands.some((command) => command.phase !== "post_apply")
+      ) {
+        throw new TypeError(
+          "runtime secret files are available only to post-apply runner commands",
+        );
+      }
       const workspaceId = input.applyRun.workspaceId;
       const runnerCommands = input.commands.filter(isRunnerExecutableCommand);
       if (runnerCommands.length !== input.commands.length) {
@@ -235,6 +244,12 @@ export function createRunnerReleaseActivator(
           nonSensitiveOutputs: input.nonSensitiveOutputs,
           providerConfigurations: input.providerConfigurations,
           ...(input.credentials ? { credentials: input.credentials } : {}),
+          ...(input.runtimeSecretFileBundle
+            ? {
+                runtimeSecrets:
+                  input.runtimeSecretFileBundle.toRunnerDispatch(),
+              }
+            : {}),
           ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
           applyRunId: input.applyRun.id,
           workspaceId,

@@ -73,6 +73,19 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     return result.rows[0] ? rowPlan(result.rows[0]) : undefined;
   }
 
+  async hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean> {
+    const result = await this.#client.query<{ readonly present: boolean }>(
+      `select exists (
+         select 1 from ${TABLE}
+          where record_json ->> 'operation' = 'revision'
+            and record_json ->> 'capsuleId' = $1
+            and phase not in ('failed', 'reviewable')
+       ) as present`,
+      [capsuleId],
+    );
+    return result.rows[0]?.present === true;
+  }
+
   async claimReconcile(input: {
     readonly id: string;
     readonly expectedGeneration: number;

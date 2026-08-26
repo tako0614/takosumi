@@ -441,6 +441,51 @@ test("current docs keep retired Resource HTTP surfaces absent and externalize Fo
   assert.doesNotMatch(runbook, /production.*FormActivation.*reviewed/i);
 });
 
+test("activation-digest docs keep PostgreSQL and D1 promotion order separate", async () => {
+  const paths = [
+    "docs/internal/core-spec.md",
+    "docs/internal/core-conformance.md",
+    "docs/reference/api.md",
+    "docs/operations/secret-rotation.md",
+    "docs/operations/install-config-patches.md",
+  ] as const;
+
+  for (const path of paths) {
+    const normalized = (await readText(new URL(path, ROOT))).replace(/\s+/g, " ");
+
+    assert.match(
+      normalized,
+      /PostgreSQL.*?(?:migration )?043.*?(?:migration )?044.*?(?:before promoting the feature Worker|before the feature Worker promotion|feature Worker.{0,40}(?:promot|promotion|昇格))/i,
+      `${path} must order PostgreSQL 043 then 044 before the feature Worker`,
+    );
+    assert.match(
+      normalized,
+      /provider runtime-binding.*?read-only.*?(?:no registration authority|registration authority を持ちません).*?(?:direct|DB-owned).*?(?:final-Apply activation|final Apply)/i,
+      `${path} must keep provider runtime binding read-only and direct DB-owned activation authoritative`,
+    );
+    assert.match(
+      normalized,
+      /Cloudflare D1.*?exact-v3.*?feature bridge.*?owner-private backup and status evidence.*?bounded pre-ledger backfill.*?atomic v4 apply.*?read-only verify.*?observation.*?exact-v4-only Worker/i,
+      `${path} must document the D1 bridge, migration, and promotion order`,
+    );
+    assert.match(
+      normalized,
+      /(?:v3-only Worker must never remain live after v4|v4 commit 後に v3-only Worker を live に残してはならず).*?bridge.*?(?:rollback floor|compatible rollback floor)/i,
+      `${path} must keep the bridge as the D1 rollback floor`,
+    );
+    assert.doesNotMatch(
+      normalized,
+      /(?:predeploy|pre-deploy).*?(?:Cloudflare D1|D1) (?:migration )?v4.*?(?:before|prior to).*?(?:promot|feature Worker)/i,
+      `${path} must not predeploy D1 v4 before its feature bridge`,
+    );
+    assert.doesNotMatch(
+      normalized,
+      /(?:Cloudflare D1|D1) (?:migration )?v4.*?both lanes are predeployed.*?(?:Worker|promotion)/i,
+      `${path} must not claim that PostgreSQL and D1 share a predeploy order`,
+    );
+  }
+});
+
 test("workspace packages stay private source modules", async () => {
   for (const path of [
     "package.json",

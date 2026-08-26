@@ -218,7 +218,13 @@ function createD1RestAndImportFetch(
                 .bind(...(body.params ?? []))
                 .all(),
             ];
-      return Response.json({ success: true, result });
+      return Response.json({
+        success: true,
+        result: result.map((entry) => ({
+          ...entry,
+          results: entry.results ?? [],
+        })),
+      });
     } catch {
       return Response.json(
         { success: false, errors: [{ code: 7500, message: "SQLITE_ERROR" }] },
@@ -4128,9 +4134,14 @@ test("control D1 REST adapter emits the documented single and batch shapes", asy
         url: String(input),
         body: JSON.parse(String(init?.body ?? "{}")),
       });
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        readonly batch?: readonly unknown[];
+      };
       return Response.json({
         success: true,
-        result: [{ success: true, results: [{ value: "ready" }] }],
+        result: body.batch
+          ? body.batch.map(() => ({ success: true, results: [] }))
+          : [{ success: true, results: [{ value: "ready" }] }],
       });
     },
   });

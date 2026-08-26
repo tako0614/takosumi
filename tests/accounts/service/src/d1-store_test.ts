@@ -84,6 +84,7 @@ test("D1AccountsStore indexes Capsule OIDC registrations directly", async () => 
   await store.saveOidcClient({
     clientId: "oidc_d1",
     capsuleId: "cap_d1",
+    activationDigest: `sha256:${"b".repeat(64)}`,
     namespacePath: "identity.oidc",
     issuerUrl: "https://app.example.test",
     redirectUris: ["https://capsule.example.test/oauth/callback"],
@@ -96,6 +97,9 @@ test("D1AccountsStore indexes Capsule OIDC registrations directly", async () => 
 
   expect((await store.findOidcClientForCapsule("cap_d1"))?.clientId).toBe(
     "oidc_d1",
+  );
+  expect((await store.findOidcClient("oidc_d1"))?.activationDigest).toBe(
+    `sha256:${"b".repeat(64)}`,
   );
   await store.revokeOidcClient("oidc_d1");
   expect(await store.findOidcClient("oidc_d1")).toBeUndefined();

@@ -80,7 +80,7 @@ OAuth overlap must exactly match `overlapWindowSeconds`.
   "kind": "takosumi.identity-security-rotation-log@v1",
   "rotationRunId": "rotation-run-id",
   "environment": "production",
-  "issuer": "https://app.takosumi.com",
+  "issuer": "https://issuer.example.invalid",
   "owner": "operator-subject",
   "reviewer": "reviewer-subject",
   "startedAt": "2026-01-01T00:00:00.000Z",
@@ -140,6 +140,76 @@ takosumi connections revoke <old-connection-id>
 Any helper input file stays outside the repo and is deleted after import.
 Shell history, logs, PR comments, and terminal transcripts must not contain the
 credential.
+
+## Takos hosted Capsule runtime-secret file
+
+Takos has a narrow DB-owned hosted profile for five per-Capsule runtime values;
+it is not a bulk/operator secret registry. The profile generates exactly these
+names: `PLATFORM_PRIVATE_KEY` (RSA-2048 private key), `PLATFORM_PUBLIC_KEY`
+(the matching RSA-2048 public key), `ENCRYPTION_KEY` (32 random bytes, base64),
+`TAKOS_AGENT_START_TOKEN` (32 random bytes, hex), and
+`TAKOS_INTERNAL_API_SECRET` (32 random bytes, hex). This runbook never records
+their values.
+
+The controller seals the material in the Takos secret boundary, outside
+ProviderConnection, InstallConfig public projections, state, Outputs, Run or
+audit records, diagnostics, and logs. A Capsule keeps the same sealed material
+for the same profile across InstallConfig replacement. A profile-digest change
+is a fail-closed authority fence, not an automatic rotation; handle an
+intentional profile change as a separately reviewed lifecycle operation.
+
+The only delivery phase is successful `post_apply`. The runner receives one
+`takos-runtime-secrets.json` file through `TAKOS_RUNTIME_SECRETS_FILE`, in a
+temporary `0700` directory with file mode `0600`. It validates the closed JSON
+shape and exact names, then removes the file and directory. Truncate, fsync,
+unlink, or directory-removal failure is fail-closed and must be repaired before
+the Run is treated as clean; no raw value belongs in the diagnostic.
+
+Destroy cleanup is a durable outbox tail. After provider destroy and the atomic
+terminal Capsule transition, the controller records a value-free
+`runtime_secret.retirement.pending` intent and attempts to retire the sealed
+material. Success records `runtime_secret.retirement.completed`; a failure
+leaves the pending intent and never replays provider destroy. Scheduled repair
+scans this retirement outbox independently of the active Workspace catalog, so
+archived Workspaces and rows beyond the active prefix are included. Deferred
+attempts update their retry timestamp and are selected oldest-attempt-first on
+later bounded sweeps, which provides eventual coverage without exposing values
+or creating another lifecycle ledger.
+
+Workspace provider credentials, bulk/operator secrets, OIDC signing keys, and
+other generic Connection material remain operator-owned and follow the normal
+rotation procedure above. This hosted profile is the sole narrow exception.
+
+## Capsule OIDC activation authority
+
+The hosted Accounts profile uses a value-free `activationDigest`, not an
+Accounts-row timestamp, as its live-grant authority. The digest binds contract
+`takosumi.accounts-oidc-activation/v1`, Workspace and Capsule identity,
+`executionAuthorityEpoch`, the full InstallConfig digest, and the OIDC profile
+digest. Live grant requires an exact match to the current Capsule/config/profile
+and epoch. A legacy null or mismatched digest is stale and denied without
+deleting the client; only final Apply may save the exact current digest. Plan and
+`apply_check` may validate it but never mutate Accounts. The client id remains
+stable for the Capsule and profile across InstallConfig replacement, while
+`updatedAt` is ordinary audit time only and never authority.
+
+Provider runtime-binding remains read-only derivation and has no registration
+authority; the direct DB-owned Accounts module-variable materializer owns
+final-Apply activation. The Accounts schema migration order is
+substrate-specific. For PostgreSQL,
+apply migration 043, then migration 044, before promoting the feature Worker;
+043 adds the nullable `activation_digest` column and its NOT VALID shape check,
+and 044 validates that check. For Cloudflare D1, first verify the exact-v3
+ledger/schema closure, then deploy the v3/v4 feature bridge. The bridge accepts
+only exact legacy v3 or exact checksummed v4 and performs no request-time DDL.
+Retain owner-private backup and status evidence, complete the bounded pre-ledger
+backfill, perform the atomic v4 apply and read-only verify, and wait through the
+observation window before deploying the exact-v4-only Worker. A v3-only Worker
+must never remain live after v4 commits; the bridge is the compatible rollback
+floor. Both lanes are additive and forward-only, and the Worker must fail closed
+on missing or drifted schema rather than performing request-time repair. A legacy
+nullable digest remains stored for migration compatibility until Apply repairs
+it with the current value.
 
 ## Worker secret delivery
 

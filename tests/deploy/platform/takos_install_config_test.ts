@@ -7,11 +7,24 @@ import {
 import { composeTakoserverHostedWorkerEnv } from "../../../deploy/platform/takoserver_hosted_worker.ts";
 import { TAKOSERVER_HOSTED_INSTALL_CONFIGS } from "../../../deploy/platform/takoserver_hosted_install_configs.ts";
 import { OPERATOR_CONTROL_MCP_INSTALL_CONFIG } from "../../../deploy/operator-control-mcp.ts";
+import { evaluateProviderConnectionCredentialPolicy } from "../../../core/domains/deploy-control/provider_policy.ts";
 
 const descriptorUrl =
   "https://github.com/tako0614/takos/releases/download/v0.11.8/takosumi-artifact.json";
 const descriptorSha256 =
   "sha256:f6e9ee74d352803bf9a4af07be57b7c03e9ed61d6127794c382e224ff1775b2c";
+const accountsIssuer = "https://app.takosumi.com";
+
+function configuredEnvironment(
+  extra: Readonly<Record<string, unknown>> = {},
+): Readonly<Record<string, unknown>> {
+  return {
+    TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL: descriptorUrl,
+    TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256: descriptorSha256,
+    TAKOSUMI_ACCOUNTS_ISSUER: accountsIssuer,
+    ...extra,
+  };
+}
 
 test("Takos profile is absent until both release descriptor values are supplied", () => {
   expect(composeTakosInstallConfig({})).toBeUndefined();
@@ -22,11 +35,9 @@ test("Takos profile is absent until both release descriptor values are supplied"
 });
 
 test("valid Takos release descriptor composes the exact Cloudflare profile", () => {
-  const config = composeTakosInstallConfig({
-    TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL: descriptorUrl,
-    TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256: descriptorSha256,
+  const config = composeTakosInstallConfig(configuredEnvironment({
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "must-not-enter-install-config",
-  });
+  }));
 
   expect(config).toMatchObject({
     id: TAKOS_HOSTED_INSTALL_CONFIG_ID,
@@ -42,6 +53,79 @@ test("valid Takos release descriptor composes the exact Cloudflare profile", () 
       outputs: ["node_modules/wrangler/bin/wrangler.js"],
     },
     variableMapping: {},
+    installExperience: {
+      projections: [{
+        kind: "oidc_client",
+        variables: {},
+        callbackPath: "/auth/oidc/callback",
+        scopes: [
+          "openid",
+          "profile",
+          "email",
+          "offline_access",
+          "capsules:read",
+          "capsules:write",
+        ],
+      }],
+    },
+    accountsOidcModuleVariableMaterialization: {
+      contract: "takosumi.accounts-oidc-module-variables/v2",
+      resourceNameVariable: "project_name",
+      publicUrlVariable: "public_url",
+      additionalInputVariables: [
+        "cloudflare_account_id",
+        "cloudflare_workers_subdomain",
+      ],
+      accountsUrlVariable: "takosumi_accounts_url",
+      issuerUrlVariable: "takosumi_accounts_issuer_url",
+      clientIdVariable: "takosumi_accounts_client_id",
+      redirectUriVariable: "takosumi_accounts_redirect_uri",
+      callbackPath: "/auth/oidc/callback",
+      scopes: [
+        "openid",
+        "profile",
+        "email",
+        "offline_access",
+        "capsules:read",
+        "capsules:write",
+      ],
+    },
+    runtimeBindingMaterialization: {
+      contract: "takosumi.runtime-binding-profile/v1",
+      runtimeSecretFile: {
+        contract: "takosumi.runtime-secret-file/v1",
+        envName: "TAKOS_RUNTIME_SECRETS_FILE",
+        fileName: "takos-runtime-secrets.json",
+        mode: 0o600,
+        values: [
+          {
+            kind: "rsa-key-pair",
+            privateName: "PLATFORM_PRIVATE_KEY",
+            publicName: "PLATFORM_PUBLIC_KEY",
+            modulusLength: 2048,
+            hash: "SHA-256",
+          },
+          {
+            kind: "random",
+            name: "ENCRYPTION_KEY",
+            bytes: 32,
+            encoding: "base64",
+          },
+          {
+            kind: "random",
+            name: "TAKOS_AGENT_START_TOKEN",
+            bytes: 32,
+            encoding: "hex",
+          },
+          {
+            kind: "random",
+            name: "TAKOS_INTERNAL_API_SECRET",
+            bytes: 32,
+            encoding: "hex",
+          },
+        ],
+      },
+    },
     installContextVariableMapping: {
       "env.TAKOSUMI_WORKSPACE_ID": "workspace_id",
     },
@@ -84,6 +168,9 @@ test("valid Takos release descriptor composes the exact Cloudflare profile", () 
     allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     providerCredentials: {
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+      requiredCredentialCapabilities: [
+        "cloudflare.account-workers-subdomain.v1",
+      ],
     },
     repositoryInstallUx: {
       allowedInterfacePermissions: ["ui.open"],
@@ -131,21 +218,68 @@ test("valid Takos release descriptor composes the exact Cloudflare profile", () 
   );
 });
 
+test("Takos ProviderBinding admits the reverified Cloudflare connection and rejects generic-env", () => {
+  const config = composeTakosInstallConfig(configuredEnvironment());
+  expect(config).toBeDefined();
+  expect(
+    evaluateProviderConnectionCredentialPolicy(
+      {
+        id: "conn_8727_reverified_cloudflare",
+        scope: "workspace",
+        credentialRecipe: { id: "cloudflare", authMode: "api_token" },
+        credentialVerification: {
+          kind: "takosumi.credential-verification@v1",
+          verifierId: "cloudflare/account-workers-subdomain@v1",
+          capabilities: ["cloudflare.account-workers-subdomain.v1"],
+        },
+      },
+      config!.policy,
+    ),
+  ).toEqual([]);
+  expect(
+    evaluateProviderConnectionCredentialPolicy(
+      {
+        id: "conn_a422_generic_env",
+        scope: "workspace",
+        credentialRecipe: { id: "generic-env", authMode: "env" },
+        credentialVerification: {
+          kind: "takosumi.credential-verification@v1",
+          verifierId: "declared-env@v1",
+          capabilities: [],
+        },
+      },
+      config!.policy,
+    ),
+  ).toContain(
+    "provider credential policy rejects connection conn_a422_generic_env credential capabilities missing cloudflare.account-workers-subdomain.v1",
+  );
+});
+
 test("valid Takos profile preserves the existing hosted and operator MCP entries", () => {
   const composed = composeTakoserverHostedWorkerEnv({
-    TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL: descriptorUrl,
-    TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256: descriptorSha256,
+    ...configuredEnvironment(),
     TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED: "1",
-    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.test",
   } as never);
   expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toEqual([
     ...TAKOSERVER_HOSTED_INSTALL_CONFIGS,
     expect.objectContaining({ id: TAKOS_HOSTED_INSTALL_CONFIG_ID }),
     {
       ...OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
-      variableMapping: { takosumi_origin: "https://app.takosumi.test" },
+      variableMapping: { takosumi_origin: accountsIssuer },
     },
   ]);
+});
+
+test("Takos hosted profile does not pin a global Accounts client", () => {
+  const config = composeTakosInstallConfig(configuredEnvironment({
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://wrong.example.test",
+    TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([
+      { clientId: "global-client-must-not-be-selected" },
+    ]),
+  }));
+  expect(config?.variableMapping).toEqual({});
+  expect(JSON.stringify(config)).not.toContain("global-client-must-not-be-selected");
+  expect(JSON.stringify(config)).not.toContain("wrong.example.test");
 });
 
 test("Takos release descriptor xor and malformed values fail closed", () => {

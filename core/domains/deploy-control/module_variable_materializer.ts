@@ -31,6 +31,11 @@ export interface CapsuleModuleVariableMaterializerInput {
    * Required during Apply admission and the final pre-dispatch Apply commit.
    */
   readonly plannedVariables?: Readonly<Record<string, JsonValue>>;
+  /**
+   * Reviewed Capsule execution authority. Legacy callers without the field are
+   * epoch 1 only; Core supplies it for every current Plan/Apply/retirement.
+   */
+  readonly capsuleExecutionAuthorityEpoch?: number;
   readonly capsule: Capsule;
   readonly installConfig: InstallConfig;
   readonly resolvedProviderBindings: readonly ResolvedCapsuleProviderBinding[];

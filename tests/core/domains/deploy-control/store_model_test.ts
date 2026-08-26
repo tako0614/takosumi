@@ -16,9 +16,15 @@ import {
   CapsuleStateVersionGuardConflict,
   InMemoryOpenTofuControlStore,
   type OpenTofuControlStore,
+  type StoredSecretBlob,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import type {
+  D1Database,
+  D1PreparedStatement,
+} from "../../../../worker/src/bindings.ts";
+import type { SqlClient } from "../../../../core/adapters/storage/sql.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import {
   seedCapsuleModel,
@@ -44,6 +50,43 @@ async function stores(): Promise<readonly [string, OpenTofuControlStore][]> {
     ["postgres", new SqlOpenTofuControlStore({ client: pgClient })],
     ["d1", new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())],
   ];
+}
+
+function recordingSqlClient(
+  client: SqlClient,
+  queries: string[],
+): SqlClient {
+  return {
+    query(sql, parameters) {
+      queries.push(sql);
+      return client.query(sql, parameters);
+    },
+    transaction: (fn) => client.transaction(fn),
+  };
+}
+
+function recordingD1(database: D1Database, queries: string[]): D1Database {
+  return {
+    prepare(query) {
+      queries.push(query);
+      const statement = database.prepare(query);
+      return {
+        bind(...values) {
+          return statement.bind(...values);
+        },
+        first<T>() {
+          return statement.first<T>();
+        },
+        all<T>() {
+          return statement.all<T>();
+        },
+        run<T>() {
+          return statement.run<T>();
+        },
+      } satisfies D1PreparedStatement;
+    },
+    batch: (statements) => database.batch(statements),
+  };
 }
 
 function workspace(overrides: Partial<Workspace> = {}): Workspace {
@@ -1471,6 +1514,472 @@ test("terminal billing-finalization markers are recoverable on every store backe
       ).map((run) => run.id),
       label,
     ).not.toContain(pending.id);
+  }
+});
+
+test("recoverable run listing applies exact stale predicates before the shared limit", async () => {
+  const options = {
+    staleQueuedBeforeMs: 200,
+    staleRunningBeforeMs: 200,
+    limit: 2,
+  };
+  for (const [label, store] of await stores()) {
+    const put = async (
+      run: ApplyRun,
+    ): Promise<void> => await store.putApplyRun(run);
+    const queuedOld = applyRunForSafety({
+      id: `recoverable_queued_old_${label}`,
+      capsuleId: `capsule_recoverable_old_${label}`,
+      operation: "update",
+      status: "queued",
+      effectAt: 110,
+    });
+    const queuedTie = {
+      ...applyRunForSafety({
+        id: `recoverable_queued_tie_${label}`,
+        capsuleId: `capsule_recoverable_tie_${label}`,
+        operation: "update",
+        status: "queued",
+        effectAt: 120,
+      }),
+      createdAt: "120" as unknown as number,
+    } as ApplyRun;
+    const queuedBoundary = {
+      ...applyRunForSafety({
+        id: `recoverable_queued_boundary_${label}`,
+        capsuleId: `capsule_recoverable_boundary_${label}`,
+        operation: "update",
+        status: "queued",
+        effectAt: 210,
+      }),
+      createdAt: "200" as unknown as number,
+    } as ApplyRun;
+    const queuedFresh = {
+      ...applyRunForSafety({
+        id: `recoverable_queued_fresh_${label}`,
+        capsuleId: `capsule_recoverable_fresh_${label}`,
+        operation: "update",
+        status: "queued",
+        effectAt: 300,
+      }),
+      createdAt: "201" as unknown as number,
+    } as ApplyRun;
+    const runningFromIso = {
+      ...applyRunForSafety({
+        id: `recoverable_running_iso_${label}`,
+        capsuleId: `capsule_recoverable_running_iso_${label}`,
+        operation: "update",
+        status: "queued",
+        effectAt: 310,
+      }),
+      status: "running",
+      createdAt: 300,
+      startedAt: "1970-01-01T00:00:00.150Z",
+      heartbeatAt: undefined,
+    } as unknown as ApplyRun;
+    const runningFreshHeartbeat = {
+      ...runningFromIso,
+      id: `recoverable_running_fresh_${label}`,
+      capsuleId: `capsule_recoverable_running_fresh_${label}`,
+      heartbeatAt: 201,
+    } as ApplyRun;
+    const runningStringHeartbeat = {
+      ...runningFromIso,
+      id: `recoverable_running_string_heartbeat_${label}`,
+      capsuleId: `capsule_recoverable_running_string_heartbeat_${label}`,
+      heartbeatAt: "201" as unknown as number,
+    } as ApplyRun;
+    const malformed = {
+      ...queuedOld,
+      id: `recoverable_malformed_${label}`,
+      capsuleId: `capsule_recoverable_malformed_${label}`,
+      createdAt: "not-a-timestamp",
+    } as unknown as ApplyRun;
+    const billingPending = {
+      ...queuedOld,
+      id: `recoverable_billing_pending_${label}`,
+      capsuleId: `capsule_recoverable_billing_${label}`,
+      status: "succeeded",
+      createdAt: 100,
+      finishedAt: 150,
+      auditEvents: [
+        {
+          id: `billing_pending_${label}`,
+          type: "billing.capture.pending",
+          at: 150,
+        },
+      ],
+    } as ApplyRun;
+    const billingCompletedAfterPending = {
+      ...billingPending,
+      id: `recoverable_billing_completed_${label}`,
+      capsuleId: `capsule_recoverable_billing_completed_${label}`,
+      auditEvents: [
+        ...billingPending.auditEvents,
+        {
+          id: `billing_completed_${label}`,
+          type: "billing.capture.completed",
+          at: 151,
+        },
+      ],
+    } as ApplyRun;
+    const billingPendingAfterCompleted = {
+      ...billingPending,
+      id: `recoverable_billing_retried_${label}`,
+      capsuleId: `capsule_recoverable_billing_retried_${label}`,
+      createdAt: 130,
+      auditEvents: [
+        {
+          id: `billing_completed_first_${label}`,
+          type: "billing.capture.completed",
+          at: 149,
+        },
+        ...billingPending.auditEvents,
+      ],
+    } as ApplyRun;
+
+    for (const run of [
+      queuedFresh,
+      runningFreshHeartbeat,
+      runningStringHeartbeat,
+      malformed,
+      queuedBoundary,
+      queuedTie,
+      queuedOld,
+      runningFromIso,
+      billingCompletedAfterPending,
+      billingPendingAfterCompleted,
+      billingPending,
+    ]) {
+      await put(run);
+    }
+
+    expect(
+      (await store.listRecoverableOpenTofuRuns(options)).map((run) => run.id),
+      label,
+    ).toEqual([
+      billingPending.id,
+      queuedOld.id,
+    ]);
+    expect(
+      (
+        await store.listRecoverableOpenTofuRuns({
+          ...options,
+          limit: 20,
+        })
+      ).map((run) => run.id),
+      label,
+    ).toEqual([
+      billingPending.id,
+      queuedOld.id,
+      queuedTie.id,
+      billingPendingAfterCompleted.id,
+      queuedBoundary.id,
+      runningFromIso.id,
+      runningStringHeartbeat.id,
+    ]);
+  }
+});
+
+test("recoverable backend SQL pushes staleness, ordering, audit, and limit", async () => {
+  const options = {
+    staleQueuedBeforeMs: 200,
+    staleRunningBeforeMs: 200,
+    limit: 2,
+  };
+  const pgClient = await PGliteSqlClient.create();
+  pgClients.push(pgClient);
+  const pgQueries: string[] = [];
+  const pgStore = new SqlOpenTofuControlStore({
+    client: recordingSqlClient(pgClient, pgQueries),
+  });
+  await pgStore.listRecoverableOpenTofuRuns(options);
+  const pgQuery = pgQueries.find((query) =>
+    query.includes('select "run_json" from "takosumi_runs"'),
+  );
+  expect(pgQuery).toBeDefined();
+  expect(pgQuery).toContain("pg_input_is_valid");
+  expect(pgQuery).toContain("billing.capture.pending");
+  expect(pgQuery).toContain("billing.capture.completed");
+  expect(pgQuery).toMatch(/order by[\s\S]*created_at[\s\S]*limit \$\d+/iu);
+  expect(pgQuery).toMatch(/created_at[\s\S]*<= \$\d+/iu);
+
+  const d1Queries: string[] = [];
+  const d1Store = new CloudflareD1OpenTofuControlStore(
+    recordingD1(new SqliteFakeD1(), d1Queries),
+  );
+  await d1Store.listRecoverableOpenTofuRuns(options);
+  const d1Query = d1Queries.find((query) =>
+    query.includes('select "run_json" from "runs"'),
+  );
+  expect(d1Query).toBeDefined();
+  expect(d1Query).toContain("json_valid");
+  expect(d1Query).toContain("billing.capture.pending");
+  expect(d1Query).toContain("billing.capture.completed");
+  expect(d1Query).toMatch(/order by[\s\S]*created_at[\s\S]*limit \?/iu);
+  expect(d1Query).toMatch(/created_at[\s\S]*<= \?/iu);
+});
+
+test("recoverable running age reads JSON heartbeat beyond stale projections", async () => {
+  const options = {
+    staleQueuedBeforeMs: 500,
+    staleRunningBeforeMs: 500,
+    limit: 1,
+  };
+  const fresh = (backend: string): ApplyRun =>
+    ({
+      ...applyRunForSafety({
+        id: `recoverable_projection_fresh_${backend}`,
+        capsuleId: `capsule_recoverable_projection_fresh_${backend}`,
+        operation: "update",
+        status: "queued",
+        effectAt: 110,
+      }),
+      status: "running",
+      createdAt: 100,
+      startedAt: 100,
+      heartbeatAt: 1000,
+    } as ApplyRun);
+  const stale = (backend: string): ApplyRun =>
+    ({
+      ...applyRunForSafety({
+        id: `recoverable_projection_stale_${backend}`,
+        capsuleId: `capsule_recoverable_projection_stale_${backend}`,
+        operation: "update",
+        status: "queued",
+        effectAt: 210,
+      }),
+      status: "running",
+      createdAt: 200,
+      startedAt: 200,
+      heartbeatAt: 100,
+    } as ApplyRun);
+
+  const pgClient = await PGliteSqlClient.create();
+  pgClients.push(pgClient);
+  const pgStore = new SqlOpenTofuControlStore({ client: pgClient });
+  const pgFresh = fresh("postgres");
+  const pgStale = stale("postgres");
+  await pgStore.putApplyRun(pgFresh);
+  await pgStore.putApplyRun(pgStale);
+  await pgClient.query(
+    "update takosumi_runs set heartbeat_at = null where id = $1",
+    [pgFresh.id],
+  );
+  await pgClient.query(
+    "update takosumi_runs set heartbeat_at = $1 where id = $2",
+    [9999, pgStale.id],
+  );
+  expect(
+    (await pgStore.listRecoverableOpenTofuRuns(options)).map((run) => run.id),
+  ).toEqual([pgStale.id]);
+
+  const d1Database = new SqliteFakeD1();
+  const d1Store = new CloudflareD1OpenTofuControlStore(d1Database);
+  const d1Fresh = fresh("d1");
+  const d1Stale = stale("d1");
+  await d1Store.putApplyRun(d1Fresh);
+  await d1Store.putApplyRun(d1Stale);
+  await d1Database
+    .prepare("update runs set heartbeat_at = null where id = ?")
+    .bind(d1Fresh.id)
+    .run();
+  await d1Database
+    .prepare("update runs set heartbeat_at = ? where id = ?")
+    .bind(9999, d1Stale.id)
+    .run();
+  expect(
+    (await d1Store.listRecoverableOpenTofuRuns(options)).map((run) => run.id),
+  ).toEqual([d1Stale.id]);
+});
+
+test("runtime-secret retirement dispatch claims rotate the real bound without losing concurrent attempts", async () => {
+  for (const [label, store] of await stores()) {
+    const pending = Array.from({ length: 51 }, (_, index) =>
+      applyRunForSafety({
+        id: `apply_retirement_fair_${label}_${index}`,
+        capsuleId: `capsule_retirement_fair_${label}_${index}`,
+        operation: "destroy",
+        status: "succeeded",
+        effectAt: 100 + index,
+        auditEvents: [
+          {
+            id: `audit_retirement_fair_${label}_${index}`,
+            type: "runtime_secret.retirement.pending",
+            at: 100 + index,
+            data: {
+              capsuleId: `capsule_retirement_fair_${label}_${index}`,
+              providerDestroyCommitted: true,
+            },
+          },
+        ],
+      }),
+    );
+    for (const run of pending) await store.putApplyRun(run);
+    const first = await store.listPendingRuntimeSecretRetirementRuns({
+      staleBeforeMs: 300,
+      limit: 50,
+    });
+    expect(first).toHaveLength(50);
+    expect(first.map((run) => run.id), label).toEqual(
+      pending.slice(0, 50).map((run) => run.id),
+    );
+
+    const concurrent = await Promise.all([
+      store.claimPendingRuntimeSecretRetirementDispatch({
+        runId: first[0]!.id,
+        staleBeforeMs: 300,
+        attemptedAt: 1_000,
+      }),
+      store.claimPendingRuntimeSecretRetirementDispatch({
+        runId: first[0]!.id,
+        staleBeforeMs: 300,
+        attemptedAt: 1_000,
+      }),
+    ]);
+    expect(concurrent.filter(Boolean), label).toHaveLength(1);
+    for (const run of first.slice(1)) {
+      expect(
+        await store.claimPendingRuntimeSecretRetirementDispatch({
+          runId: run.id,
+          staleBeforeMs: 300,
+          attemptedAt: 1_000,
+        }),
+        `${label}:${run.id}`,
+      ).toBe(true);
+    }
+
+    const second = await store.listPendingRuntimeSecretRetirementRuns({
+      staleBeforeMs: 300,
+      limit: 50,
+    });
+    expect(second.map((run) => run.id), label).toEqual([pending[50]!.id]);
+
+    for (const run of first) {
+      const claimed = await store.getApplyRun(run.id);
+      expect(claimed?.updatedAt, `${label}:${run.id}`).toBe(1_000);
+      const deferred = claimed?.auditEvents.filter(
+        (event) => event.type === "runtime_secret.retirement.deferred",
+      );
+      expect(
+        deferred,
+        `${label}:${run.id}`,
+      ).toHaveLength(1);
+      expect(deferred?.[0], `${label}:${run.id}`).toEqual({
+        id: expect.any(String),
+        type: "runtime_secret.retirement.deferred",
+        at: 1_000,
+      });
+      expect(
+        claimed?.auditEvents.some(
+          (event) => event.type === "runtime_secret.retirement.completed",
+        ),
+        `${label}:${run.id}`,
+      ).toBe(false);
+    }
+
+    const completed = pending[50]!;
+    await store.putApplyRun({
+      ...completed,
+      updatedAt: 200,
+      auditEvents: [
+        ...completed.auditEvents,
+        {
+          id: `audit_retirement_completed_${completed.id}`,
+          type: "runtime_secret.retirement.completed",
+          at: 200,
+        },
+      ],
+    });
+    expect(
+      await store.claimPendingRuntimeSecretRetirementDispatch({
+        runId: completed.id,
+        staleBeforeMs: 300,
+        attemptedAt: 1_000,
+      }),
+      label,
+    ).toBe(false);
+  }
+});
+
+test("terminal runtime-secret retirement markers are recoverable on every store backend", async () => {
+  for (const [label, store] of await stores()) {
+    const pending = applyRunForSafety({
+      id: `apply_runtime_retirement_pending_${label}`,
+      capsuleId: `capsule_runtime_retirement_pending_${label}`,
+      operation: "destroy",
+      status: "succeeded",
+      effectAt: 100,
+      auditEvents: [
+        {
+          id: `audit_runtime_retirement_pending_${label}`,
+          type: "runtime_secret.retirement.pending",
+          at: 100,
+          data: {
+            capsuleId: `capsule_runtime_retirement_pending_${label}`,
+            providerDestroyCommitted: true,
+          },
+        },
+      ],
+    });
+    await store.putApplyRun(pending);
+
+    expect(
+      (
+        await store.listPendingRuntimeSecretRetirementRuns({
+          staleBeforeMs: 200,
+        })
+      ).map((run) => run.id),
+      label,
+    ).toContain(pending.id);
+
+    await store.putApplyRun({
+      ...pending,
+      auditEvents: [
+        ...pending.auditEvents,
+        {
+          id: `audit_runtime_retirement_completed_${label}`,
+          type: "runtime_secret.retirement.completed",
+          at: 150,
+        },
+      ],
+    });
+    expect(
+      (
+        await store.listPendingRuntimeSecretRetirementRuns({
+          staleBeforeMs: 200,
+        })
+      ).map((run) => run.id),
+      label,
+    ).not.toContain(pending.id);
+  }
+});
+
+test("sealed secret create-if-absent converges under concurrent writers on every store backend", async () => {
+  for (const [label, store] of await stores()) {
+    const connectionId = `runtime_secret_file_concurrent_${label}`;
+    const blob = (suffix: string): StoredSecretBlob => ({
+      id: `secret_${label}_${suffix}`,
+      connectionId,
+      workspaceId: `workspace_${label}`,
+      kind: `runtime-secret-file:capsule_${label}`,
+      ciphertext: `sealed-${suffix}`,
+      encryptedDek: `runtime-secret-file-aes-gcm/v1/runtime-secret-file:capsule_${label}`,
+      nonce: `nonce-${suffix}`,
+      aad: `aad-${suffix}`,
+      keyVersion: 1,
+      createdAt: TS,
+    });
+    const candidates = [blob("a"), blob("b")];
+    const created = await Promise.all(
+      candidates.map((candidate) =>
+        store.createSecretBlobIfAbsent(candidate),
+      ),
+    );
+
+    expect(created.filter(Boolean), label).toHaveLength(1);
+    const winner = candidates[created.findIndex(Boolean)];
+    expect(await store.getSecretBlob(connectionId), label).toEqual(winner);
   }
 });
 

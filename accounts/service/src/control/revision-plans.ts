@@ -119,6 +119,8 @@ export async function handleCapsuleRevisionPlans(
   }
   const sourcePath = adoptedSourceRevision?.path ?? source.defaultPath;
   const installConfigDigest = await stableJsonDigest(installConfig);
+  const capsuleExecutionAuthorityEpoch =
+    await ctx.operations.capsules.getCapsuleExecutionAuthorityEpoch(capsule.id);
   const normalizedRequest = {
     operation: "revision" as const,
     capsuleId: capsule.id,
@@ -133,6 +135,7 @@ export async function handleCapsuleRevisionPlans(
     createdBy: ctx.session.subject,
     actorSubject: ctx.session.subject,
     idempotencyKeyHash,
+    capsuleExecutionAuthorityEpoch,
     requestDigest,
     operation: "revision",
     source: {
@@ -572,6 +575,8 @@ async function assertRevisionIdentity(
     throw error;
   }
   const configDigest = await stableJsonDigest(installConfig);
+  const capsuleExecutionAuthorityEpoch =
+    await operations.capsules.getCapsuleExecutionAuthorityEpoch(capsule.id);
   const modulePath = normalizeCompatibilityReportModulePath(
     installConfig.modulePath,
   );
@@ -585,6 +590,9 @@ async function assertRevisionIdentity(
     capsule.environment !== plan.capsule.environment ||
     capsule.status === "destroyed" ||
     capsule.currentStateGeneration !== base.capsuleStateGeneration ||
+    (plan.capsuleExecutionAuthorityEpoch !== undefined &&
+      capsuleExecutionAuthorityEpoch !==
+        plan.capsuleExecutionAuthorityEpoch) ||
     (capsule.currentStateVersionId ?? undefined) !==
       (base.capsuleStateVersionId ?? undefined) ||
     source.id !== plan.sourceId ||

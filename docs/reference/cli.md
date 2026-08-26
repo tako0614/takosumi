@@ -73,23 +73,66 @@ takosumi accounts migrate --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
 `--dry-run` を付けると、適用せずに何が実行されるかだけを表示します。接続先は
 `TAKOSUMI_ACCOUNTS_DATABASE_URL` からも読みます。
 
-Cloudflare D1 を使う場合は別のコマンドです。保留中のマイグレーションごとに
-`bunx wrangler d1 execute` を呼び、適用済みの版を `takosumi_accounts_schema_migrations`
-に記録します。
+Cloudflare D1 は Accounts owner CLI を使います。`plan` は remote call が 0、
+`status` / `verify` は read-only、`apply` は保留中の migration ごとに Cloudflare
+D1 REST API の transaction batch を 1 回だけ送ります。raw Wrangler は使いません。
 
 ```bash
-takosumi accounts migrate-d1 --database-id takosumi-accounts --remote
+takosumi accounts migrate-d1 backup-status \
+  --environment staging \
+  --account-id "$CLOUDFLARE_ACCOUNT_ID" \
+  --database-id "$CLOUDFLARE_DATABASE_ID" \
+  --source-commit "$SOURCE_COMMIT" \
+  --out "$OWNER_PRIVATE_0700_DIR/accounts-d1-bookmark.json"
+
+takosumi accounts migrate-d1 plan \
+  --environment staging \
+  --account-id "$CLOUDFLARE_ACCOUNT_ID" \
+  --database-id "$CLOUDFLARE_DATABASE_ID" \
+  --source-commit "$SOURCE_COMMIT" \
+  --backup-evidence-digest "$BACKUP_EVIDENCE_DIGEST"
+
+takosumi accounts migrate-d1 apply \
+  --environment staging \
+  --account-id "$CLOUDFLARE_ACCOUNT_ID" \
+  --database-id "$CLOUDFLARE_DATABASE_ID" \
+  --source-commit "$SOURCE_COMMIT" \
+  --backup-evidence-digest "$BACKUP_EVIDENCE_DIGEST" \
+  --confirm-source-digest "$SOURCE_DIGEST" \
+  --confirm-catalog-digest "$CATALOG_DIGEST" \
+  --confirm-target-digest "$TARGET_DIGEST" \
+  --confirm-configuration-digest "$CONFIGURATION_DIGEST"
+
+takosumi accounts migrate-d1 verify \
+  --environment staging \
+  --account-id "$CLOUDFLARE_ACCOUNT_ID" \
+  --database-id "$CLOUDFLARE_DATABASE_ID" \
+  --source-commit "$SOURCE_COMMIT"
 ```
 
 | オプション | 意味 |
 | --- | --- |
-| `--database-id` | D1 のデータベース名または binding 名 |
-| `--wrangler-config` | 別のチェックアウトから実行するときの wrangler 設定 |
-| `--account-id` | Cloudflare のアカウント ID (既定と違う場合に必要) |
-| `--remote` / `--local` | リモートの D1 か、手元の miniflare か。既定は `--remote` |
-| `--env` | wrangler に渡す `--env` プロファイル |
+| `--environment` | `staging` または `production` |
+| `--account-id` / `--database-id` | realized config の明示的な Cloudflare account / D1 UUID。出力には出さない |
+| `--source-commit` | 実行する owning checkout の 40 桁 commit。CLI は plan 構築や token/env/remote/evidence I/O より前に、ambient `GIT_*` と global/system config を除外した Git で exact top-level、HEAD、tracked/untracked clean status を観測し、この値との一致を要求する |
+| `--backup-evidence-digest` | owner-private な bookmark/backup evidence の opaque SHA-256。`apply` では必須 |
+| `--confirm-*-digest` | `plan` で確認した source/catalog/target/configuration digest。configuration は backup evidence と versioned backfill/schema policy を束縛し、`apply` では 4 つとも必須 |
 
-初回デプロイ前に動作を確かめるときは `--local` を使います。
+token は `CLOUDFLARE_API_TOKEN` だけから読み、出力しません。raw bookmark、account / database
+ID、restore 手順は source checkout 外の owner-private evidence に保管します。directory は
+owner UID の 0700、出力先は absolute な未作成 path で、CLI は完成した 0600 regular
+file を no-replace で atomic publish します。
+CLI は restore を実行しません。`--dry-run` は `plan` の互換 alias です。local D1 は
+local-substrate が同じ catalog、schema closure、versioned pre-ledger policy と Accounts-owned
+runtime を認証して適用するため `--local` は廃止しました。
+
+`apply` は exact v3 のまま `oidc_clients` を `key` 順 100 row 以下で bounded
+inventory/backfill し、全 row が Capsule-bound であることと zero-missing を確認します。
+各 chunk の guarded UPDATE は exact-v3 ledger/schema fence と同じ D1 atomic batch に入り、
+fence loss 後は read-only に exact clean v4 だけを採用します。v4 の missing/drift/partial
+state には post-cutoff repair write を行いません。
+その後の v4 atomic batch の先頭で exact v3 ledger/schema closure と zero-missing を
+再確認します。row key や document は transcript に出力しません。
 
 ### 初期データを入れる
 

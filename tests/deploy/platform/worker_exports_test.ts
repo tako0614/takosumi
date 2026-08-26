@@ -8,7 +8,7 @@ import {
   type D1PreparedStatement,
   type D1Result,
 } from "../../../accounts/service/src/d1-store.ts";
-import { listD1AccountsMigrations } from "../../../cli/src/cli-accounts-db.ts";
+import { loadD1AccountsMigrationCatalog } from "../../../accounts/service/src/d1-migrations.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 test("platform Worker exposes only handler-compatible runtime exports", () => {
@@ -52,10 +52,12 @@ test("platform exports its already-composed Capsule execution authority", async 
 test("platform scheduled Accounts retention runs a bounded predeployed slice", async () => {
   const db = new SqliteFakeD1();
   await db.exec(D1_ACCOUNTS_STORE_INIT_SQL);
-  const retentionMigration = listD1AccountsMigrations().find(
+  const retentionMigration = (await loadD1AccountsMigrationCatalog()).migrations.find(
     (migration) => migration.name === "refresh_chain_retention_indexes",
   );
-  await db.exec(retentionMigration!.sql);
+  for (const statement of retentionMigration!.body) {
+    await db.prepare(statement.sql).bind(...statement.params).run();
+  }
   await insertDocument(db, "refresh_chain_links", "old-parent", {
     parentHash: "old-parent",
     childHash: "old-child",

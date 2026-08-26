@@ -7,6 +7,8 @@ export interface StoredGitInstallPlan extends GitInstallPlan {
   readonly actorSubject: string;
   /** SHA-256 digest of the caller's Idempotency-Key; raw key is never stored. */
   readonly idempotencyKeyHash: string;
+  /** Private Capsule execution-authority fence for revision coordination. */
+  readonly capsuleExecutionAuthorityEpoch?: number;
 }
 
 export interface ClaimedGitInstallPlan {
@@ -34,6 +36,7 @@ export interface GitInstallPlanStore {
   readonly durable: boolean;
   create(plan: StoredGitInstallPlan): Promise<CreateGitInstallPlanResult>;
   get(id: string): Promise<StoredGitInstallPlan | undefined>;
+  hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean>;
   claimReconcile(input: {
     readonly id: string;
     readonly expectedGeneration: number;
@@ -89,6 +92,17 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
   async get(id: string): Promise<StoredGitInstallPlan | undefined> {
     const entry = this.#entries.get(id);
     return entry ? clone(entry.plan) : undefined;
+  }
+
+  hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean> {
+    return Promise.resolve(
+      Array.from(this.#entries.values()).some(
+        ({ plan }) =>
+          plan.operation === "revision" &&
+          plan.capsuleId === capsuleId &&
+          plan.phase !== "failed" && plan.phase !== "reviewable",
+      ),
+    );
   }
 
   async claimReconcile(
@@ -147,6 +161,7 @@ export function publicGitInstallPlan(plan: StoredGitInstallPlan): GitInstallPlan
   const {
     actorSubject: _actorSubject,
     idempotencyKeyHash: _idempotencyKeyHash,
+    capsuleExecutionAuthorityEpoch: _capsuleExecutionAuthorityEpoch,
     ...publicPlan
   } = plan;
   return publicPlan;
@@ -161,6 +176,8 @@ export function assertImmutableScope(
     current.workspaceId !== next.workspaceId ||
     current.actorSubject !== next.actorSubject ||
     current.idempotencyKeyHash !== next.idempotencyKeyHash ||
+    current.capsuleExecutionAuthorityEpoch !==
+      next.capsuleExecutionAuthorityEpoch ||
     current.requestDigest !== next.requestDigest ||
     current.createdBy !== next.createdBy ||
     current.createdAt !== next.createdAt ||

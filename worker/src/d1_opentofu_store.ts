@@ -29,6 +29,7 @@ import {
   asc,
   desc,
   eq,
+  exists,
   gt,
   inArray,
   isNull,
@@ -95,6 +96,8 @@ import type {
   BeginApplyRunResult,
   CapsuleExecutionAuthority,
   CapsuleExecutionAuthorityInput,
+  CapsuleInstallConfigRebindInput,
+  CapsuleInstallConfigRebindResult,
   CapsuleRuntimeSafety,
   CapsulePatch,
   CapsuleStateVersionGuard,
@@ -102,6 +105,7 @@ import type {
   PlanRunInputs,
   PublicHostReservation,
   RecoverableOpenTofuRunListOptions,
+  RuntimeSecretRetirementDispatchClaimInput,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
@@ -115,7 +119,6 @@ import {
   clampRecoverableOpenTofuRunListLimit,
   clampRunListLimit,
   capsuleRuntimeSafetyFromRun,
-  compareStoredRunRecordsAsc,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
   isApplyRunRecord,
@@ -124,6 +127,7 @@ import {
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
+  runtimeSecretRetirementDispatchAttempt,
 } from "../../core/domains/deploy-control/store.ts";
 import {
   artifactRecordFromRow,
@@ -134,6 +138,7 @@ import {
   normalizeSourceSnapshotRecord,
   usageEventFromRow,
 } from "../../core/domains/deploy-control/store_row_mappers.ts";
+import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
 import * as schema from "../../core/adapters/storage/drizzle/schema/d1.ts";
 import type { D1Database, D1PreparedStatement, D1Result } from "./bindings.ts";
 import {
@@ -182,6 +187,47 @@ function d1RunCreatedAtMillisOrder(): SQL {
         CAST(strftime('%s', ${schema.runs.createdAt}) AS INTEGER) * 1000
         + CAST(substr(strftime('%f', ${schema.runs.createdAt}), 4, 3) AS INTEGER)
       )
+    END
+  `;
+}
+
+/**
+ * Parse a stored Run timestamp with the same numeric-then-Date.parse order as
+ * runTimestampValue. SQLite casts are intentionally guarded by json_valid so
+ * malformed values become NULL instead of silently becoming zero.
+ */
+function d1RecoverableRunTimestampMillis(value: SQL): SQL {
+  const textValue = sql`trim(CAST(${value} AS TEXT))`;
+  const numericValue = sql`CAST(${textValue} AS REAL)`;
+  const isoValue = sql`
+    CAST(strftime('%s', ${textValue}) AS INTEGER) * 1000
+      + CAST(substr(strftime('%f', ${textValue}), 4, 3) AS INTEGER)
+  `;
+  const finiteNumericValue = sql`
+    CASE
+      WHEN abs(${numericValue}) <= 1.7976931348623157e+308
+        THEN ${numericValue}
+      ELSE NULL
+    END
+  `;
+  return sql`
+    CASE
+      WHEN ${value} IS NULL THEN NULL
+      WHEN json_valid(${textValue}) = 1 THEN
+        CASE
+          WHEN json_type(${textValue}) IN ('integer', 'real')
+            THEN ${finiteNumericValue}
+          ELSE NULL
+        END
+      WHEN substr(${textValue}, 1, 1) IN ('+', '-')
+        AND json_valid(substr(${textValue}, 2)) = 1 THEN
+        CASE
+          WHEN json_type(substr(${textValue}, 2)) IN ('integer', 'real')
+            THEN ${finiteNumericValue}
+          ELSE NULL
+        END
+      WHEN strftime('%s', ${textValue}) IS NOT NULL THEN ${isoValue}
+      ELSE NULL
     END
   `;
 }
@@ -287,6 +333,25 @@ function d1RuntimeSafetyCandidateWhere(capsuleId: string): SQL | undefined {
       ),
     ),
   );
+}
+
+/** Atomic CAS fence mirroring capsuleRuntimeSafetyFromRun. */
+function d1CapsuleRuntimeSafetySafeOrAbsent(capsuleId: string): SQL {
+  return sql`COALESCE((
+    SELECT CASE
+      WHEN ${schema.runs.type} IN ('apply', 'restore')
+        AND ${schema.runs.status} = 'succeeded' THEN 1
+      ELSE 0
+    END
+    FROM ${schema.runs}
+    WHERE ${d1RuntimeSafetyCandidateWhere(capsuleId)}
+    ORDER BY
+      ${d1RunRuntimeSafetyInFlightOrder()} DESC,
+      ${d1RunRuntimeSafetyEffectAtMillisOrder()} DESC,
+      ${d1RunRuntimeSafetyRiskOrder()} DESC,
+      ${schema.runs.id} DESC
+    LIMIT 1
+  ), 1) = 1`;
 }
 
 /**
@@ -553,17 +618,79 @@ function d1RunMutationDispatched(): SQL {
 /** Mirrors applyRunBillingCapturePending in the shared store model. */
 function d1RunBillingCapturePending(): SQL {
   return sql`
+    (
+      SELECT COALESCE(
+        MAX(
+          CASE
+            WHEN json_extract(audit_event.value, '$.type') =
+              'billing.capture.pending'
+              THEN CAST(audit_event.key AS INTEGER) + 1
+            ELSE 0
+          END
+        ),
+        0
+      )
+      FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
+    ) > (
+      SELECT COALESCE(
+        MAX(
+          CASE
+            WHEN json_extract(audit_event.value, '$.type') =
+              'billing.capture.completed'
+              THEN CAST(audit_event.key AS INTEGER) + 1
+            ELSE 0
+          END
+        ),
+        0
+      )
+      FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
+    )
+  `;
+}
+
+/** Mirrors applyRunRuntimeSecretRetirementPending in the shared store model. */
+function d1RunRuntimeSecretRetirementPending(): SQL {
+  return sql`
     EXISTS (
       SELECT 1
       FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
-      WHERE json_extract(audit_event.value, '$.type') = 'billing.capture.pending'
+      WHERE json_extract(audit_event.value, '$.type') = 'runtime_secret.retirement.pending'
     )
     AND NOT EXISTS (
       SELECT 1
       FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
-      WHERE json_extract(audit_event.value, '$.type') = 'billing.capture.completed'
+      WHERE json_extract(audit_event.value, '$.type') = 'runtime_secret.retirement.completed'
     )
   `;
+}
+
+function d1CapsuleInstallConfigRebindBlocked(
+  capsuleId: string,
+  executionAuthorityEpoch: number,
+): SQL {
+  return and(
+    eq(schema.runs.capsuleId, capsuleId),
+    or(
+      and(
+        inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+        inArray(schema.runs.status, ["queued", "running"]),
+      ),
+      and(
+        inArray(schema.runs.type, [RUN_KIND_PLAN, "destroy_plan"]),
+        inArray(schema.runs.status, [
+          "queued",
+          "running",
+          "waiting_approval",
+          "succeeded",
+        ]),
+        sql`COALESCE(json_extract(${schema.runs.runJson}, '$.appliedApplyRunId'), '') = ''`,
+        sql`COALESCE(
+          CAST(json_extract(${schema.runs.runJson}, '$.capsuleExecutionAuthorityEpoch') AS INTEGER),
+          ${executionAuthorityEpoch}
+        ) = ${executionAuthorityEpoch}`,
+      ),
+    ),
+  )!;
 }
 
 /** An expired apply/destroy is uncertain only after it started. */
@@ -1070,36 +1197,128 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
   ): Promise<readonly StoredRunRecord[]> {
+    const createdAt = d1RecoverableRunTimestampMillis(
+      sql`${schema.runs.createdAt}`,
+    );
+    const finishedAt = d1RecoverableRunTimestampMillis(
+      sql`json_extract(${schema.runs.runJson}, '$.finishedAt')`,
+    );
+    const updatedAt = d1RecoverableRunTimestampMillis(
+      sql`json_extract(${schema.runs.runJson}, '$.updatedAt')`,
+    );
+    const startedAt = d1RecoverableRunTimestampMillis(
+      sql`json_extract(${schema.runs.runJson}, '$.startedAt')`,
+    );
+    const committedAt = sql`COALESCE(${finishedAt}, ${updatedAt}, ${createdAt})`;
+    const heartbeatAt = sql`CASE
+      WHEN json_type(${schema.runs.runJson}, '$.heartbeatAt') IN (
+        'integer',
+        'real'
+      ) THEN ${d1RecoverableRunTimestampMillis(
+        sql`json_extract(${schema.runs.runJson}, '$.heartbeatAt')`,
+      )}
+      ELSE NULL
+    END`;
+    const runningReference = sql`COALESCE(
+      ${heartbeatAt},
+      ${startedAt},
+      ${createdAt}
+    )`;
+    const dispatchableKinds = [
+      RUN_KIND_PLAN,
+      "destroy_plan",
+      "drift_check",
+      RUN_KIND_APPLY,
+      "destroy_apply",
+      RUN_KIND_SOURCE_SYNC,
+      RUN_KIND_RESTORE,
+    ] as const;
+    const where = or(
+      and(
+        eq(schema.runs.status, "queued"),
+        inArray(schema.runs.type, [...dispatchableKinds]),
+        sql`${createdAt} > 0`,
+        sql`${createdAt} <= ${options.staleQueuedBeforeMs}`,
+      ),
+      and(
+        eq(schema.runs.status, "running"),
+        inArray(schema.runs.type, [...dispatchableKinds]),
+        sql`${createdAt} > 0`,
+        sql`${runningReference} <= ${options.staleRunningBeforeMs}`,
+      ),
+      and(
+        inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+        inArray(schema.runs.status, ["succeeded", "failed"]),
+        d1RunBillingCapturePending(),
+        sql`${committedAt} > 0`,
+        sql`${committedAt} <= ${options.staleQueuedBeforeMs}`,
+      ),
+    );
+    const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
     const rows = await this.#drizzleManyJson<StoredRunRecord>(
       schema.runs,
       schema.runs.runJson,
       {
-        where: or(
-          and(
-            inArray(schema.runs.status, ["queued", "running"]),
-            inArray(schema.runs.type, [
-              RUN_KIND_PLAN,
-              "destroy_plan",
-              "drift_check",
-              RUN_KIND_APPLY,
-              "destroy_apply",
-              RUN_KIND_SOURCE_SYNC,
-              RUN_KIND_RESTORE,
-            ]),
-          ),
-          and(
-            inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
-            inArray(schema.runs.status, ["succeeded", "failed"]),
-            d1RunBillingCapturePending(),
-          ),
-        ),
+        where,
+        orderBy: [asc(createdAt), asc(schema.runs.id)],
+        limit,
       },
     );
+    // Keep the shared predicate as a fail-closed defense for legacy rows or
+    // a future dialect drift; SQL performs the actual bound and ordering.
+    return rows.filter((row) => isRecoverableOpenTofuRunRecord(row, options));
+  }
+
+  async listPendingRuntimeSecretRetirementRuns(options: {
+    readonly staleBeforeMs: number;
+    readonly limit?: number;
+  }): Promise<readonly ApplyRun[]> {
     const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
-    return [...rows]
-      .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
-      .sort(compareStoredRunRecordsAsc)
-      .slice(0, limit);
+    const lastAttempt = sql`COALESCE(
+      CAST(json_extract(${schema.runs.runJson}, '$.updatedAt') AS INTEGER),
+      CAST(json_extract(${schema.runs.runJson}, '$.finishedAt') AS INTEGER),
+      ${d1RunCreatedAtMillisOrder()}
+    )`;
+    return await this.#drizzleManyJson<ApplyRun>(
+      schema.runs,
+      schema.runs.runJson,
+      {
+        where: and(
+          inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+          inArray(schema.runs.status, ["succeeded", "failed"]),
+          d1RunRuntimeSecretRetirementPending(),
+          sql`${lastAttempt} <= ${options.staleBeforeMs}`,
+        ),
+        orderBy: [asc(lastAttempt), asc(schema.runs.id)],
+        limit,
+      },
+    );
+  }
+
+  async claimPendingRuntimeSecretRetirementDispatch(
+    input: RuntimeSecretRetirementDispatchClaimInput,
+  ): Promise<boolean> {
+    const observed = await this.getApplyRun(input.runId);
+    const claimed = observed
+      ? runtimeSecretRetirementDispatchAttempt(observed, input)
+      : undefined;
+    if (!claimed) return false;
+    const result = await this.#orm
+      .update(schema.runs)
+      .set({ status: claimed.status, runJson: claimed as unknown })
+      .where(
+        and(
+          eq(schema.runs.id, input.runId),
+          inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+          inArray(schema.runs.status, ["succeeded", "failed"]),
+          // D1's serialized whole-row fence gives the same one-winner claim as
+          // Postgres JSON equality and the synchronous memory adapter.
+          eq(schema.runs.runJson, observed as unknown),
+          d1RunRuntimeSecretRetirementPending(),
+        ),
+      )
+      .run();
+    return changes(result as D1Result) === 1;
   }
 
   async listSourceSyncRuns(
@@ -1826,6 +2045,22 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return config;
   }
 
+  async createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean> {
+    await this.#ensureSchema();
+    const result = await this.#orm
+      .insert(schema.installConfigs)
+      .values({
+        id: config.id,
+        workspaceId: config.workspaceId ?? null,
+        recordJson: config,
+        createdAt: config.createdAt,
+        updatedAt: config.updatedAt,
+      })
+      .onConflictDoNothing({ target: schema.installConfigs.id })
+      .run();
+    return changes(result as D1Result) > 0;
+  }
+
   async getInstallConfig(id: string): Promise<InstallConfig | undefined> {
     const config = await this.#drizzleFirstJson<InstallConfig>(
       schema.installConfigs,
@@ -2040,6 +2275,192 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       };
     }
     return resolved;
+  }
+
+  async getCapsuleExecutionAuthorityEpoch(
+    capsuleId: string,
+  ): Promise<number | undefined> {
+    await this.#ensureSchema();
+    const row = await this.#orm
+      .select({ epoch: schema.capsules.executionAuthorityEpoch })
+      .from(schema.capsules)
+      .where(eq(schema.capsules.id, capsuleId))
+      .limit(1)
+      .get();
+    return row?.epoch;
+  }
+
+  async rebindCapsuleInstallConfig(
+    input: CapsuleInstallConfigRebindInput,
+  ): Promise<CapsuleInstallConfigRebindResult> {
+    await this.#ensureSchema();
+    const row = await this.#orm
+      .select({
+        json: schema.capsules.recordJson,
+        epoch: schema.capsules.executionAuthorityEpoch,
+      })
+      .from(schema.capsules)
+      .where(eq(schema.capsules.id, input.capsuleId))
+      .limit(1)
+      .get();
+    if (!row) return { status: "not_found" };
+    const capsule = normalizeCapsuleRecord(row.json as Capsule);
+    const targetConfig = await this.getInstallConfig(
+      input.targetInstallConfigId,
+    );
+    if (
+      !targetConfig ||
+      (await stableJsonDigest(targetConfig)) !==
+        input.expected.targetInstallConfigDigest
+    ) {
+      return { status: "conflict", capsule };
+    }
+    if (capsule.installConfigId === input.targetInstallConfigId) {
+      return { status: "replayed", capsule };
+    }
+    const currentConfig = await this.getInstallConfig(capsule.installConfigId);
+    if (
+      !currentConfig ||
+      capsule.installConfigId !== input.expected.installConfigId ||
+      (await stableJsonDigest(currentConfig)) !==
+        input.expected.installConfigDigest ||
+      capsule.currentStateGeneration !==
+        input.expected.currentStateGeneration ||
+      capsule.currentStateVersionId !==
+        input.expected.currentStateVersionId ||
+      capsule.status !== input.expected.status ||
+      row.epoch !== input.expected.executionAuthorityEpoch
+    ) {
+      return { status: "conflict", capsule };
+    }
+    const safetyRow = await this.#orm
+      .select({ json: schema.runs.runJson })
+      .from(schema.runs)
+      .where(d1RuntimeSafetyCandidateWhere(input.capsuleId))
+      .orderBy(
+        desc(d1RunRuntimeSafetyInFlightOrder()),
+        desc(d1RunRuntimeSafetyEffectAtMillisOrder()),
+        desc(d1RunRuntimeSafetyRiskOrder()),
+        desc(schema.runs.id),
+      )
+      .limit(1)
+      .get();
+    const runtimeSafety = safetyRow
+      ? capsuleRuntimeSafetyFromRun(safetyRow.json as ApplyRun | Run)
+      : undefined;
+    if (runtimeSafety !== undefined && runtimeSafety.phase !== "safe") {
+      return { status: "busy", capsule };
+    }
+    const blocking = this.#orm
+      .select({ id: schema.runs.id })
+      .from(schema.runs)
+      .where(d1CapsuleInstallConfigRebindBlocked(
+        input.capsuleId,
+        input.expected.executionAuthorityEpoch,
+      ));
+    const currentConfigFence = this.#orm
+      .select({ id: schema.installConfigs.id })
+      .from(schema.installConfigs)
+      .where(
+        and(
+          eq(schema.installConfigs.id, input.expected.installConfigId),
+          eq(schema.installConfigs.recordJson, currentConfig),
+        ),
+      );
+    const targetConfigFence = this.#orm
+      .select({ id: schema.installConfigs.id })
+      .from(schema.installConfigs)
+      .where(
+        and(
+          eq(schema.installConfigs.id, input.targetInstallConfigId),
+          eq(schema.installConfigs.recordJson, targetConfig),
+        ),
+      );
+    const updated = normalizeCapsuleRecord({
+      ...capsule,
+      installConfigId: input.targetInstallConfigId,
+      updatedAt: input.updatedAt,
+    });
+    const result = await this.#orm
+      .update(schema.capsules)
+      .set({
+        installConfigId: updated.installConfigId,
+        recordJson: updated,
+        updatedAt: updated.updatedAt,
+        executionAuthorityEpoch: sql`${schema.capsules.executionAuthorityEpoch} + 1`,
+      })
+      .where(
+        and(
+          eq(schema.capsules.id, input.capsuleId),
+          // The replacement record is derived from this exact observed JSON.
+          // A same-timestamp auto-update / compatibility patch must make this
+          // stale whole-record write lose instead of being overwritten.
+          eq(schema.capsules.recordJson, capsule),
+          eq(
+            schema.capsules.installConfigId,
+            input.expected.installConfigId,
+          ),
+          eq(
+            schema.capsules.currentStateGeneration,
+            input.expected.currentStateGeneration,
+          ),
+          input.expected.currentStateVersionId === undefined
+            ? isNull(schema.capsules.currentStateVersionId)
+            : eq(
+                schema.capsules.currentStateVersionId,
+                input.expected.currentStateVersionId,
+              ),
+          eq(schema.capsules.status, input.expected.status),
+          eq(
+            schema.capsules.executionAuthorityEpoch,
+            input.expected.executionAuthorityEpoch,
+          ),
+          exists(currentConfigFence),
+          exists(targetConfigFence),
+          d1CapsuleRuntimeSafetySafeOrAbsent(input.capsuleId),
+          notExists(blocking),
+        ),
+      )
+      .run();
+    if (changes(result as D1Result) > 0) {
+      return { status: "updated", capsule: updated };
+    }
+    const current = await this.getCapsule(input.capsuleId);
+    if (!current) return { status: "not_found" };
+    if (current.installConfigId === input.targetInstallConfigId) {
+      return { status: "replayed", capsule: current };
+    }
+    const busy = await this.#orm
+      .select({ id: schema.runs.id })
+      .from(schema.runs)
+      .where(d1CapsuleInstallConfigRebindBlocked(
+        input.capsuleId,
+        input.expected.executionAuthorityEpoch,
+      ))
+      .limit(1)
+      .get();
+    const currentSafetyRow = await this.#orm
+      .select({ json: schema.runs.runJson })
+      .from(schema.runs)
+      .where(d1RuntimeSafetyCandidateWhere(input.capsuleId))
+      .orderBy(
+        desc(d1RunRuntimeSafetyInFlightOrder()),
+        desc(d1RunRuntimeSafetyEffectAtMillisOrder()),
+        desc(d1RunRuntimeSafetyRiskOrder()),
+        desc(schema.runs.id),
+      )
+      .limit(1)
+      .get();
+    const currentSafety = currentSafetyRow
+      ? capsuleRuntimeSafetyFromRun(currentSafetyRow.json as ApplyRun | Run)
+      : undefined;
+    return {
+      status: busy ||
+          (currentSafety !== undefined && currentSafety.phase !== "safe")
+        ? "busy"
+        : "conflict",
+      capsule: current,
+    };
   }
 
   async getCapsule(id: string): Promise<Capsule | undefined> {
@@ -2633,6 +3054,29 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       schema.secretBlobs.connectionId,
     );
     return blob;
+  }
+
+  async createSecretBlobIfAbsent(blob: StoredSecretBlob): Promise<boolean> {
+    await this.#ensureSchema();
+    const inserted = await this.#orm
+      .insert(schema.secretBlobs)
+      .values({
+        id: blob.id,
+        connectionId: blob.connectionId,
+        workspaceId: blob.workspaceId ?? null,
+        kind: blob.kind,
+        ciphertext: blob.ciphertext,
+        encryptedDek: blob.encryptedDek,
+        nonce: blob.nonce,
+        aad: blob.aad,
+        keyVersion: blob.keyVersion,
+        createdAt: blob.createdAt,
+        rotatedAt: blob.rotatedAt ?? null,
+        blobJson: blob,
+      })
+      .onConflictDoNothing({ target: schema.secretBlobs.connectionId })
+      .run();
+    return changes(inserted as D1Result) > 0;
   }
 
   async getSecretBlob(

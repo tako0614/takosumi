@@ -35,12 +35,31 @@ import {
   accountsMigratePlan,
   type AccountsStoreResource,
   applyAccountsMigrations,
-  applyD1AccountsMigrations,
   buildAccountsDatabaseConfig,
   createAccountsStoreResource,
-  type D1ExecuteCommand,
   loadAccountsMigrations,
 } from "./cli-accounts-db.ts";
+import {
+  D1AccountsMigrationError,
+  loadD1AccountsMigrationCatalog,
+  type D1AccountsMigrationCatalog,
+  type D1AccountsMigrationDatabase,
+} from "../../accounts/service/src/d1-migrations.ts";
+import {
+  applyPlannedD1AccountsMigrations,
+  assertD1AccountsApplyConfirmations,
+  buildD1AccountsMigrationPlan,
+  captureD1AccountsBackupEvidence,
+  statusPlannedD1AccountsMigrations,
+  verifyPlannedD1AccountsMigrations,
+  type D1AccountsRemoteEnvironment,
+} from "./cli-accounts-d1.ts";
+import { resolve } from "node:path";
+import {
+  CloudflareD1RestTransport,
+  D1RestTransportError,
+} from "../../deploy/cloudflare/d1-rest-transport.ts";
+import { realpath } from "node:fs/promises";
 import {
   buildPasskeyOptions,
   buildUpstreamOAuthOptions,
@@ -51,6 +70,8 @@ import {
   formatAccountsTokensList,
 } from "./cli-format.ts";
 import type { CliIo } from "./cli-io.ts";
+
+const ACCOUNTS_D1_SOURCE_ROOT = resolve(import.meta.dir, "../..");
 
 export interface AccountsSeedPlan {
   kind: "takosumi.accounts.seed@v1";
@@ -144,74 +165,374 @@ export async function runAccountsMigrate(
   }
 }
 
-/**
- * Run the `accounts migrate-d1` subcommand.
- *
- * Translates CLI flags (`--database-id`, `--account-id`, `--dry-run`,
- * `--json`) into an `applyD1AccountsMigrations` call. The option name is
- * historical; Wrangler 4's `d1 execute` positional is a database name or
- * binding. Tests can substitute a different `D1ExecuteCommand` through the
- * optional second argument to keep the suite hermetic (the production code path
- * shells out to `bunx wrangler d1 execute`, which would hit the real Cloudflare
- * API).
- *
- * Exit codes:
- *   - 0 on success.
- *   - 1 on a wrangler failure or any unhandled error during apply.
- *   - 2 on missing or invalid flags.
- */
+export interface AccountsD1CliDependencies {
+  readonly apiToken?: string;
+  readonly readApiToken?: () => string | undefined;
+  readonly catalog?: D1AccountsMigrationCatalog;
+  readonly now?: () => number;
+  readonly inspectSourceCheckout?: (input: {
+    readonly sourceRoot: string;
+  }) => Promise<{
+    readonly commit: string;
+    readonly status: string;
+  }>;
+  readonly fetch?: typeof fetch;
+  readonly createDatabase?: (input: {
+    readonly accountId: string;
+    readonly databaseId: string;
+    readonly apiToken: string;
+  }) => D1AccountsMigrationDatabase;
+  readonly readBookmark?: (input: {
+    readonly accountId: string;
+    readonly databaseId: string;
+    readonly apiToken: string;
+  }) => Promise<string>;
+}
+
 export async function runAccountsMigrateD1(
   args: string[],
   io: CliIo,
-  injectedCommand?: D1ExecuteCommand,
+  dependencies: AccountsD1CliDependencies = {},
 ): Promise<number> {
   const options = parseOptions(args);
   if (options.help) {
     io.stdout(accountsMigrateD1HelpText());
     return 0;
   }
+  const positionalMode = [
+    "plan",
+    "apply",
+    "verify",
+    "status",
+    "backup-status",
+  ].includes(args[0] ?? "")
+    ? (args[0] as
+        | "plan"
+        | "apply"
+        | "verify"
+        | "status"
+        | "backup-status")
+    : undefined;
+  const mode = positionalMode ??
+    (booleanOption(options, "dryRun") ? "plan" : undefined);
+  if (!mode) {
+    io.stderr(
+      "migrate-d1 mode must be plan, apply, verify, status, or backup-status",
+    );
+    return 2;
+  }
+  if (mode !== "plan" && booleanOption(options, "dryRun")) {
+    io.stderr("--dry-run is only the legacy alias for migrate-d1 plan");
+    return 2;
+  }
+  if (booleanOption(options, "local")) {
+    io.stderr("--local is retired; local-substrate owns local D1 migration");
+    return 2;
+  }
+  if (
+    options.remote !== undefined ||
+    options.wranglerConfig !== undefined ||
+    options.env !== undefined
+  ) {
+    io.stderr(
+      "--remote, --env, and --wrangler-config are retired; use explicit REST target options",
+    );
+    return 2;
+  }
   const databaseId = optionalStringOption(options, "databaseId");
-  if (!databaseId) {
-    io.stderr("--database-id is required");
-    return 2;
-  }
   const accountId = optionalStringOption(options, "accountId");
-  const dryRun = booleanOption(options, "dryRun");
-  // `--local`/`--remote` select the wrangler D1 target. `--remote` is the
-  // default and is mutually exclusive with `--local`.
-  const local = booleanOption(options, "local");
-  if (local && booleanOption(options, "remote")) {
-    io.stderr("--local and --remote are mutually exclusive");
+  const sourceCommit = optionalStringOption(options, "sourceCommit");
+  const environmentValue = optionalStringOption(options, "environment");
+  if (!databaseId || !accountId || !sourceCommit) {
+    io.stderr("--database-id, --account-id, and --source-commit are required");
     return 2;
   }
-  const env = optionalStringOption(options, "env");
-  const wranglerConfig = optionalStringOption(options, "wranglerConfig");
+  if (environmentValue !== "staging" && environmentValue !== "production") {
+    io.stderr("--environment must be staging or production");
+    return 2;
+  }
+  const environment = environmentValue as D1AccountsRemoteEnvironment;
+  const backupEvidenceDigest = optionalStringOption(
+    options,
+    "backupEvidenceDigest",
+  );
+  const sourceRoot = ACCOUNTS_D1_SOURCE_ROOT;
+  let observedSourceCommit: string;
   try {
-    const report = await applyD1AccountsMigrations({
-      databaseId,
-      ...(accountId ? { accountId } : {}),
-      dryRun,
-      ...(local ? { target: "local" as const } : {}),
-      ...(env ? { env } : {}),
-      ...(wranglerConfig ? { wranglerConfig } : {}),
-      ...(injectedCommand ? { command: injectedCommand } : {}),
-    });
-    if (dryRun || booleanOption(options, "json")) {
-      io.stdout(JSON.stringify(report, null, 2));
-    } else {
-      io.stdout(
-        `D1 migrations applied: ${report.applied.length} (skipped ${report.skipped.length}).`,
+    const source = await (
+      dependencies.inspectSourceCheckout ?? inspectAccountsD1SourceCheckout
+    )({ sourceRoot });
+    if (!/^[0-9a-f]{40}$/u.test(source.commit)) {
+      throw new D1AccountsMigrationError(
+        "source_checkout_inspection_failed",
       );
     }
-    return 0;
+    if (source.commit !== sourceCommit) {
+      throw new D1AccountsMigrationError("source_checkout_commit_mismatch");
+    }
+    if (typeof source.status !== "string") {
+      throw new D1AccountsMigrationError(
+        "source_checkout_inspection_failed",
+      );
+    }
+    if (source.status.length !== 0) {
+      throw new D1AccountsMigrationError("source_checkout_dirty");
+    }
+    observedSourceCommit = source.commit;
   } catch (error) {
     io.stderr(
-      `Failed to apply D1 migrations: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      error instanceof D1AccountsMigrationError
+        ? cliAccountsD1FailureCode(error)
+        : "source_checkout_inspection_failed",
+    );
+    return 2;
+  }
+  let plan;
+  try {
+    plan = await buildD1AccountsMigrationPlan({
+      sourceCommit: observedSourceCommit,
+      environment,
+      accountId,
+      databaseId,
+      ...(backupEvidenceDigest ? { backupEvidenceDigest } : {}),
+    });
+  } catch (error) {
+    io.stderr(cliAccountsD1FailureCode(error));
+    return 2;
+  }
+  if (mode === "plan") {
+    io.stdout(JSON.stringify(plan, null, 2));
+    return 0;
+  }
+  if (mode === "apply" && !backupEvidenceDigest) {
+    io.stderr("backup_evidence_digest_required");
+    return 2;
+  }
+
+  const applyConfirmations = {
+    confirmSourceDigest:
+      optionalStringOption(options, "confirmSourceDigest") ?? "",
+    confirmCatalogDigest:
+      optionalStringOption(options, "confirmCatalogDigest") ?? "",
+    confirmTargetDigest:
+      optionalStringOption(options, "confirmTargetDigest") ?? "",
+    confirmConfigurationDigest:
+      optionalStringOption(options, "confirmConfigurationDigest") ?? "",
+  };
+  if (mode === "apply") {
+    try {
+      await assertD1AccountsApplyConfirmations(plan, applyConfirmations);
+    } catch (error) {
+      const failureCode = cliAccountsD1FailureCode(error);
+      io.stderr(
+        JSON.stringify(
+          {
+            ...plan,
+            mode,
+            status: "invalid",
+            issues: [failureCode],
+            failureCode,
+          },
+          null,
+          2,
+        ),
+      );
+      return 1;
+    }
+  }
+
+  const apiToken = (
+    dependencies.apiToken ??
+    dependencies.readApiToken?.() ??
+    process.env.CLOUDFLARE_API_TOKEN
+  )?.trim();
+  if (!apiToken) {
+    io.stderr("api_token_missing");
+    return 2;
+  }
+  if (mode === "backup-status") {
+    const out = optionalStringOption(options, "out");
+    if (!out) {
+      io.stderr("backup_evidence_out_required");
+      return 2;
+    }
+    try {
+      const bookmark = dependencies.readBookmark
+        ? await dependencies.readBookmark({ accountId, databaseId, apiToken })
+        : await new CloudflareD1RestTransport({
+            accountId,
+            databaseId,
+            apiToken,
+            ...(dependencies.fetch ? { fetch: dependencies.fetch } : {}),
+          }).readTimeTravelBookmark();
+      const transcript = await captureD1AccountsBackupEvidence({
+        plan,
+        bookmark,
+        capturedAt: new Date((dependencies.now ?? Date.now)()).toISOString(),
+        out,
+        sourceRoots: [sourceRoot],
+      });
+      io.stdout(JSON.stringify(transcript, null, 2));
+      return 0;
+    } catch (error) {
+      const failureCode = cliAccountsD1FailureCode(error);
+      io.stderr(
+        JSON.stringify(
+          {
+            ...plan,
+            mode,
+            status: "invalid",
+            issues: [failureCode],
+            failureCode,
+          },
+          null,
+          2,
+        ),
+      );
+      return 1;
+    }
+  }
+  const catalog =
+    dependencies.catalog ?? (await loadD1AccountsMigrationCatalog());
+  const database =
+    dependencies.createDatabase?.({ accountId, databaseId, apiToken }) ??
+    new CloudflareD1RestTransport({
+      accountId,
+      databaseId,
+      apiToken,
+      ...(dependencies.fetch ? { fetch: dependencies.fetch } : {}),
+    });
+  try {
+    const report =
+      mode === "apply"
+        ? await applyPlannedD1AccountsMigrations({
+            database,
+            catalog,
+            plan,
+            ...applyConfirmations,
+            ...(dependencies.now ? { now: dependencies.now } : {}),
+          })
+        : mode === "verify"
+          ? await verifyPlannedD1AccountsMigrations({ database, catalog, plan })
+          : await statusPlannedD1AccountsMigrations({ database, catalog, plan });
+    io.stdout(JSON.stringify(report, null, 2));
+    return report.status === "invalid" ? 1 : 0;
+  } catch (error) {
+    const failureCode = cliAccountsD1FailureCode(error);
+    io.stderr(
+      JSON.stringify(
+        {
+          ...plan,
+          mode,
+          status: "invalid",
+          issues: [failureCode],
+          failureCode,
+        },
+        null,
+        2,
+      ),
     );
     return 1;
   }
+}
+
+const REVIEWED_GIT_CONFIG_ARGS = [
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.attributesFile=/dev/null",
+  "-c",
+  "commit.gpgSign=false",
+  "-c",
+  "tag.gpgSign=false",
+] as const;
+
+export async function inspectAccountsD1SourceCheckout(input: {
+  readonly sourceRoot: string;
+}): Promise<{ readonly commit: string; readonly status: string }> {
+  try {
+    const expectedRoot = await realpath(ACCOUNTS_D1_SOURCE_ROOT);
+    const requestedRoot = await realpath(input.sourceRoot);
+    if (requestedRoot !== expectedRoot) {
+      throw new D1AccountsMigrationError(
+        "source_checkout_inspection_failed",
+      );
+    }
+    const topLevel = (
+      await accountsD1GitOutput(expectedRoot, [
+        "rev-parse",
+        "--show-toplevel",
+      ])
+    ).trim();
+    if ((await realpath(topLevel)) !== expectedRoot) {
+      throw new D1AccountsMigrationError(
+        "source_checkout_inspection_failed",
+      );
+    }
+    const commit = (
+      await accountsD1GitOutput(expectedRoot, ["rev-parse", "HEAD"])
+    ).trim();
+    const status = await accountsD1GitOutput(expectedRoot, [
+      "status",
+      "--porcelain",
+      "--untracked-files=all",
+    ]);
+    return { commit, status };
+  } catch (error) {
+    if (error instanceof D1AccountsMigrationError) throw error;
+    throw new D1AccountsMigrationError("source_checkout_inspection_failed");
+  }
+}
+
+async function accountsD1GitOutput(
+  sourceRoot: string,
+  args: readonly string[],
+): Promise<string> {
+  const child = Bun.spawn(
+    ["git", ...REVIEWED_GIT_CONFIG_ARGS, "-C", sourceRoot, ...args],
+    {
+      env: Object.fromEntries(
+        Object.entries({
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          TMPDIR: process.env.TMPDIR,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_TERMINAL_PROMPT: "0",
+          LC_ALL: "C",
+          LANG: "C",
+        }).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined,
+        ),
+      ),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const [exitCode, output] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  if (exitCode !== 0) {
+    throw new D1AccountsMigrationError("source_checkout_inspection_failed");
+  }
+  return output;
+}
+
+function cliAccountsD1FailureCode(error: unknown): string {
+  if (
+    error instanceof D1AccountsMigrationError ||
+    error instanceof D1RestTransportError
+  ) {
+    return /^[a-z][a-z0-9_]{0,127}$/u.test(error.code)
+      ? error.code
+      : "accounts_d1_operation_failed";
+  }
+  return "accounts_d1_operation_failed";
 }
 
 export async function runAccountsServe(

@@ -39,10 +39,10 @@ realized config では accounts と control-plane を別 database / schema に�
 
 Migration は customer-facing command surface ではありません。operator は
 platform worker deploy と同じ change window で migration を扱い、production /
-staging の database id や backup id は private run log にだけ記録します。
-Wrangler 4.x の `d1 execute` は positional に D1 database name / binding を受け取るため、
-runbook の `--database-id` には UUID ではなく realized config の database name または binding
-名を渡す。UUID は private evidence として記録してもよいが、CLI 実行引数の正本にしない。
+staging の database id や backup id は private run log にだけ記録します。Accounts
+owner CLI は raw Wrangler を使わず Cloudflare D1 REST API を呼ぶため、realized config
+の明示的な account ID と D1 database UUID を受け取ります。transcript は ID/token/row
+を出さず、それらから作った target/config/ledger/schema digest だけを残します。
 
 control-plane D1 の通常リリースでは ad hoc `d1 execute` ではなく
 [Control D1 schema predeploy](control-d1-schema-predeploy.md) を使い、current OSS commit
@@ -56,6 +56,13 @@ migration は deploy 前の明示的な `bun run db:migrate` jobだけが適用�
 boot は `storage_migrations` ledgerをread-onlyで検証します。pending migration、
 未知のledger row、checksum drift、database接続失敗、またはproduction-like環境で
 database URLが欠けている場合、processはtrafficを受けずに起動失敗します。
+
+Accounts D1 の feature bridge も request-time migration を行いません。bridge は exact
+legacy v3 または exact checksummed v4 だけを受理し、`predeployed` では schema/ledger
+を read-only 検証して DDL は 0 です。one-time rollout は bridge deploy → bounded
+pre-ledger backfill → v4 atomic apply/read-only verify → observation window → separate
+exact-v4 tightening の順です。
+v4 commit 後は v3-only artifact が rollback cutoff の外になります。
 
 protected production schema は forward-only です。確認句やoverride flagを付けた
 down-migration runnerも公開せず、失敗後は互換な直前artifact、forward repair、
@@ -180,9 +187,52 @@ Self-host/operator-owned Cloudflare D1 reference compositionの実行例:
 
 ```bash
 cd takosumi
-bun run cli -- accounts migrate-d1 --database-id takosumi-accounts-staging --remote
-bun run cli -- accounts migrate-d1 --database-id takosumi-accounts --remote
+bun run cli -- accounts migrate-d1 plan \
+  --environment staging \
+  --account-id "$CLOUDFLARE_ACCOUNT_ID" \
+  --database-id "$CLOUDFLARE_DATABASE_ID" \
+  --source-commit "$SOURCE_COMMIT" \
+  --backup-evidence-digest "$BACKUP_EVIDENCE_DIGEST"
+# plan の source/catalog/target/configuration digest と private backup evidence を確認
+bun run cli -- accounts migrate-d1 apply ... \
+  --confirm-source-digest "$SOURCE_DIGEST" \
+  --confirm-catalog-digest "$CATALOG_DIGEST" \
+  --confirm-target-digest "$TARGET_DIGEST" \
+  --confirm-configuration-digest "$CONFIGURATION_DIGEST"
+bun run cli -- accounts migrate-d1 verify ...
 ```
+
+同じ手順を staging 完了後に production の explicit ID で繰り返します。`plan` は remote
+call 0、`status` / `verify` は read-only です。apply は pending migration ごとに plain
+receipt INSERT を含む D1 atomic batch を 1 回だけ送り、同一 catalog の racing winner
+だけ exact receipt で reconcile します。exact pre-state のままなら新しい operator
+invocation での retry を要求し、partial/mismatch/read failure は indeterminate です。
+raw bookmark は source checkout 外の owner UID 0700 directory / atomic no-replace
+0600 regular file の owner-private custody に置き、apply にはその opaque digest だけを
+渡します。configuration digest はこの backup evidence と versioned backfill/schema
+policy（`key` cursor / 100-row chunk を含む）を同時に束縛します。restore は別の
+incident authority です。
+
+全 mode は plan 構築より前に owning Takosumi checkout を hardened Git で観測します。
+`rev-parse --show-toplevel` の realpath、HEAD、tracked/untracked を含む porcelain status
+が exact import-relative root / `--source-commit` / clean state と一致しない限り、token、
+transport、bookmark、evidence file には触れません。ambient `GIT_DIR` / `GIT_WORK_TREE`、
+global/system config、external fsmonitor は authority になりません。
+
+bridge Worker が exact v3 を serve している間に、owner CLI は
+`bucket='oidc_clients' AND key > cursor` を `ORDER BY key LIMIT 100` で読みます。
+各 row が `key == clientId`、non-empty `capsuleId`、valid non-null
+`activationDigest` を満たす Capsule-bound document であることを確認し、
+chunk ごとに exact-v3 ledger/schema guard と bucket/key/missing 条件付き UPDATE を
+同じ D1 atomic batch で一度だけ行います。cursor は memory only、UPDATE は restart-safe
+で、lost acknowledgement は選択済み key と exact state の read-only reconciliation
+だけを行います。fence loss では exact clean v4 だけを採用し、v4+missing や drift へ
+post-cutoff repair write をしません。key/document は public evidence に出しません。全体の
+zero-missing を確認した後、v4 batch の第1 statement が exact v3 ledger、canonical
+`sqlite_master` schema closure、zero-missing を同一 transaction 内で再 fence し、続いて ALTER、v0-v3 checksum
+backfill、v4 receipt を commit します。順序は bridge deploy → bounded backfill →
+atomic v4 → exact-v4-only Worker であり、v4 後に bridge より古い Worker へ rollback
+しません。
 
 production 後（`$TAKOSUMI_ORIGIN` は operator が公開した origin）:
 
@@ -204,6 +254,6 @@ public evidence:
 private evidence:
 
 - production migration run log
-- backup snapshot id
+- backup snapshot/bookmark id とその opaque evidence digest
 - database id / account id
 - restore drill link

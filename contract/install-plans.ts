@@ -69,6 +69,12 @@ export interface GitInstallPlanDiagnostic {
   readonly code: string;
   /** Bounded non-secret operator/user guidance. */
   readonly message: string;
+  /** Coarse coordinator boundary where a retryable step could not be confirmed. */
+  readonly planCreationStage?: "source" | "preparation" | "create";
+  /** Bounded deploy-control error code, when the owner returned one. */
+  readonly controllerCode?: string;
+  /** Bounded structured reason from the owner error contract; never exception prose. */
+  readonly reason?: string;
 }
 
 /** Public, secret-free coordinator record. */
