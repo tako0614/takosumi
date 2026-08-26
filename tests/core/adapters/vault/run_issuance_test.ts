@@ -173,6 +173,26 @@ describe("Vault run-issued credential recipe", () => {
     ).rejects.toThrow(/canonical Capsule Run credential context is unavailable/);
   });
 
+  test("issues recovery credentials only from the exact committed post-apply ledger", async () => {
+    const { store, vault } = fixture(issuingDriver());
+    const connection = await verifiedConnection(store, vault);
+    await seedRunningPlan(store);
+    const output = await seedCommittedPostApplyRecovery(store);
+
+    const mint = () =>
+      vault.mintForCapsuleProviderBindings(
+        "workspace_1",
+        [{ provider: PROVIDER, connectionId: connection.id }],
+        { phase: "plan", capsuleId: "capsule_1", runId: "plan_1" },
+      );
+    expect((await mint()).env).toEqual({
+      RUN_CREDENTIAL_TOKEN: "issued:plan_1",
+    });
+
+    await store.putOutput({ ...output, stateGeneration: 8 });
+    await expect(mint()).rejects.toThrow(/runtime_safety_mismatch/);
+  });
+
   test("requires empty material, operator scope, exact driver, and resolved descriptor", async () => {
     for (const input of [
       { values: { RAW_OPERATOR_SECRET: "must-not-store" } },
@@ -567,6 +587,30 @@ function validDriver(): CredentialRecipeRuntimeDriver {
   };
 }
 
+function issuingDriver(): CredentialRecipeRuntimeDriver {
+  return {
+    evidenceIssuer: "fixture",
+    verify: async () => ({ ok: true }),
+    mint: async ({ connection, issueRunCredential }) => {
+      if (!issueRunCredential) throw new Error("issuer missing");
+      const issued = await issueRunCredential({});
+      return {
+        env: { RUN_CREDENTIAL_TOKEN: issued.token },
+        evidence: {
+          connectionId: connection.id,
+          provider: connection.provider,
+          temporary: true,
+          ttlEnforced: true,
+          expiresAt: issued.expiresAt,
+          ttlSeconds: issued.ttlSeconds,
+          issuer: "fixture",
+          secretValueStored: false,
+        },
+      };
+    },
+  };
+}
+
 async function register(vault: StaticSecretConnectionVault) {
   return await vault.register({
     provider: PROVIDER,
@@ -599,6 +643,87 @@ async function seedRunningPlan(
     installingPrincipalId: "principal_installer",
   });
   await store.putPlanRun(planRun());
+}
+
+async function seedCommittedPostApplyRecovery(
+  store: InMemoryOpenTofuControlStore,
+) {
+  const failedApplyId = "apply_failed_post_apply";
+  const stateVersion = {
+    id: "state_applied_1",
+    workspaceId: "workspace_1",
+    capsuleId: "capsule_1",
+    environment: "production",
+    generation: 7,
+    stateRef: "state/ref/7",
+    digest: "sha256:state",
+    createdByRunId: failedApplyId,
+    createdAt: "2026-06-04T00:00:00.000Z",
+  };
+  const output = {
+    id: "output_applied_1",
+    workspaceId: "workspace_1",
+    capsuleId: "capsule_1",
+    stateGeneration: 7,
+    rawArtifactRef: "output/ref/7",
+    publicOutputs: {},
+    workspaceOutputs: {},
+    outputDigest: "sha256:output",
+    createdAt: "2026-06-04T00:00:00.000Z",
+  };
+  await store.putStateVersion(stateVersion);
+  await store.putOutput(output);
+  const capsule = await store.getCapsule("capsule_1");
+  await store.putCapsule({
+    ...capsule!,
+    status: "error",
+    currentStateVersionId: stateVersion.id,
+    currentStateGeneration: stateVersion.generation,
+    currentOutputId: output.id,
+  });
+  const plan = await store.getPlanRun("plan_1");
+  await store.putPlanRun({
+    ...plan!,
+    capsuleCurrentStateVersionId: stateVersion.id,
+  });
+  const base = applyRun();
+  await store.putApplyRun({
+    ...base,
+    id: failedApplyId,
+    planRunId: "plan_failed_post_apply",
+    stateVersionId: stateVersion.id,
+    outputId: output.id,
+    status: "failed",
+    expected: {
+      ...base.expected,
+      planRunId: "plan_failed_post_apply",
+    },
+    auditEvents: [
+      {
+        id: "audit_apply_completed",
+        type: "apply.completed",
+        at: 1,
+        data: {
+          stateVersionId: stateVersion.id,
+          outputId: output.id,
+        },
+      },
+      {
+        id: "audit_apply_failed",
+        type: "apply.failed",
+        at: 2,
+        data: {
+          providerDispatched: true,
+          providerApplySucceeded: true,
+          lifecycleActionPhase: "post_apply",
+          lifecycleActionStatus: "failed",
+        },
+      },
+    ],
+    updatedAt: 2,
+    finishedAt: 2,
+  });
+  return output;
 }
 
 function planRun(): PlanRun {

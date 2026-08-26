@@ -260,6 +260,152 @@ describe("platform extension Run credential", () => {
     }
   });
 
+  test("accepts only the exact committed post-apply recovery receipt", async () => {
+    const env = {
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET,
+    } as never;
+    const issued = await createRunCredentialToken({
+      ...TOKEN_INPUT,
+      jti: "jti_post_apply_recovery",
+    });
+    const capsule = {
+      status: "error",
+      environment: "production",
+      currentStateVersionId: "state_applied_1",
+      currentStateGeneration: 7,
+      currentOutputId: "output_applied_1",
+    };
+    const plan = {
+      capsuleCurrentStateVersionId: "state_applied_1",
+    };
+    const priorApply = {
+      id: "apply_failed_post_apply",
+      planRunId: "plan_failed_post_apply",
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      operation: "update",
+      status: "failed",
+      stateVersionId: "state_applied_1",
+      outputId: "output_applied_1",
+      auditEvents: [
+        {
+          type: "apply.completed",
+          data: {
+            stateVersionId: "state_applied_1",
+            outputId: "output_applied_1",
+          },
+        },
+        {
+          type: "apply.failed",
+          data: {
+            providerDispatched: true,
+            providerApplySucceeded: true,
+            lifecycleActionPhase: "post_apply",
+            lifecycleActionStatus: "failed",
+          },
+        },
+      ],
+    };
+    const stateVersion = {
+      id: "state_applied_1",
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      environment: "production",
+      generation: 7,
+      stateRef: "state/ref/7",
+      digest: "sha256:state",
+      createdByRunId: "apply_failed_post_apply",
+      createdAt: "2026-08-26T00:00:00.000Z",
+    };
+    const output = {
+      id: "output_applied_1",
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      stateGeneration: 7,
+      rawArtifactRef: "output/ref/7",
+      publicOutputs: {},
+      workspaceOutputs: {},
+      outputDigest: "sha256:output",
+      createdAt: "2026-08-26T00:00:00.000Z",
+    };
+    const safety = {
+      phase: "unknown",
+      runId: "apply_failed_post_apply",
+      runType: "apply",
+    };
+    const recoveryLedger = (
+      overrides: {
+        readonly capsule?: Record<string, unknown>;
+        readonly priorApply?: Record<string, unknown>;
+        readonly stateVersion?: Record<string, unknown> | null;
+        readonly output?: Record<string, unknown> | null;
+      } = {},
+    ) =>
+      ledger({
+        capsule: { ...capsule, ...overrides.capsule },
+        plan,
+        priorApply: { ...priorApply, ...overrides.priorApply },
+        stateVersion: overrides.stateVersion === null
+          ? null
+          : { ...stateVersion, ...overrides.stateVersion },
+        output: overrides.output === null
+          ? null
+          : { ...output, ...overrides.output },
+        safety,
+      });
+
+    expect(
+      await verifyPlatformExtensionRunCredentialToken(
+        env,
+        issued.token,
+        ROUTE,
+        recoveryLedger(),
+      ),
+    ).toMatchObject({
+      authenticated: true,
+      runId: "apply_1",
+      phase: "apply",
+      lifecycleIntent: "provision",
+    });
+
+    for (const currentLedger of [
+      recoveryLedger({
+        priorApply: { stateVersionId: "state_other" },
+      }),
+      recoveryLedger({
+        capsule: { currentOutputId: "output_other" },
+      }),
+      recoveryLedger({
+        stateVersion: { createdByRunId: "apply_succeeded_other" },
+      }),
+      recoveryLedger({
+        output: { stateGeneration: 8 },
+      }),
+      recoveryLedger({
+        priorApply: {
+          auditEvents: [{
+            type: "apply.failed",
+            data: {
+              providerDispatched: true,
+              providerApplySucceeded: true,
+              lifecycleActionPhase: "post_apply",
+              lifecycleActionStatus: "pending",
+            },
+          }],
+        },
+      }),
+    ]) {
+      expect(
+        await verifyPlatformExtensionRunCredentialToken(
+          env,
+          issued.token,
+          ROUTE,
+          currentLedger,
+        ),
+      ).toEqual({ authenticated: false });
+    }
+  });
+
   test("accepts a destroy Plan credential for persisted partial-state recovery", async () => {
     const issued = await createRunCredentialToken({
       ...TOKEN_INPUT,
@@ -337,6 +483,9 @@ function ledger(
     readonly capsule?: Record<string, unknown>;
     readonly plan?: Record<string, unknown>;
     readonly apply?: Record<string, unknown>;
+    readonly priorApply?: Record<string, unknown>;
+    readonly stateVersion?: Record<string, unknown> | null;
+    readonly output?: Record<string, unknown> | null;
     readonly connection?: Record<string, unknown> | null;
     readonly blob?: Record<string, unknown>;
     readonly safety?: Record<string, unknown>;
@@ -366,6 +515,9 @@ function ledger(
     status: "running",
     ...overrides.apply,
   };
+  const priorApply = overrides.priorApply;
+  const stateVersion = overrides.stateVersion ?? undefined;
+  const output = overrides.output ?? undefined;
   const connection = overrides.connection === null
     ? undefined
     : {
@@ -389,7 +541,11 @@ function ledger(
   return {
     getCapsule: async (id) => (id === capsule.id ? capsule : undefined) as never,
     getPlanRun: async (id) => (id === plan.id ? plan : undefined) as never,
-    getApplyRun: async (id) => (id === apply.id ? apply : undefined) as never,
+    getApplyRun: async (id) =>
+      (id === apply.id ? apply : id === priorApply?.id ? priorApply : undefined) as never,
+    getStateVersion: async (id) =>
+      (id === stateVersion?.id ? stateVersion : undefined) as never,
+    getOutput: async (id) => (id === output?.id ? output : undefined) as never,
     getCapsuleRuntimeSafety: async () => overrides.safety as never,
     getConnection: async (id) =>
       (id === TOKEN_INPUT.connectionId ? connection : undefined) as never,

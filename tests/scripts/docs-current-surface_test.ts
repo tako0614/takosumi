@@ -387,6 +387,67 @@ test("core spec names the final OSS model and excludes operator-provided capacit
   assert.doesNotMatch(coreSpec, /Final Plan.*current direction|Final Plan.*authoritative/);
 });
 
+test("core conformance records receipt-fenced post_apply recovery without making runtime safety safe", async () => {
+  const conformance = await readText(
+    new URL("docs/internal/core-conformance.md", ROOT),
+  );
+  const rows = conformance
+    .split("\n")
+    .filter((line) => line.startsWith("| Failed post_apply recovery "));
+  assert.equal(
+    rows.length,
+    1,
+    "core conformance must have one current failed post_apply recovery row",
+  );
+  const row = rows[0]!.replace(/\s+/g, " ");
+
+  assert.match(
+    row,
+    /provider-applied `StateVersion`\/`Output` remain committed/,
+  );
+  assert.match(row, /`runtimeSafety` remains `unknown`/);
+  assert.match(
+    row,
+    /only a fresh running `Plan`\/`Apply` whose base exactly equals the Capsule current `StateVersion` may receive credentials/,
+  );
+  assert.match(row, /decisive failed `create`\/`update` ApplyRun/);
+  assert.match(
+    row,
+    /exactly one ordered `apply\.completed` → `apply\.failed` receipt/,
+  );
+  assert.match(row, /Capsule status `error`/);
+  assert.match(
+    row,
+    /present provenance-matching `StateVersion`\/`Output` rows with exact generation and ownership/,
+  );
+  assert.match(row, /`providerDispatched=true`/);
+  assert.match(row, /`providerApplySucceeded=true`/);
+  assert.match(row, /terminal `post_apply` lifecycle failure/);
+  assert.match(
+    row,
+    /State\/output\/audit drift, destroy\/restore, consumed Plan or replay, and config rebind remain refused/,
+  );
+  assert.match(row, /recovery does not make `runtimeSafety` `safe`/);
+  assert.doesNotMatch(
+    row,
+    /`runtimeSafety` (?:becomes|is|turns) `safe`/,
+    "post_apply recovery must not claim runtime safety is safe",
+  );
+
+  for (const evidence of [
+    "run_credential_context unit",
+    "platform extension",
+    "Vault issuance",
+    "Capsule Run producer",
+    "tests/core/domains/deploy-control/run_credential_context_test.ts",
+    "tests/deploy/platform/run_credential_extension_test.ts",
+    "tests/core/adapters/vault/run_issuance_test.ts",
+    "tests/core/domains/deploy-control/capsule_run_test.ts",
+  ]) {
+    assert.ok(row.includes(evidence), `missing post_apply recovery evidence: ${evidence}`);
+  }
+});
+
 test("Service Form migration docs keep portable identity separate from the old Resource wire", async () => {
   const coreSpec = await readText(new URL("docs/internal/core-spec.md", ROOT));
   const conformance = await readText(

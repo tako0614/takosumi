@@ -39,6 +39,8 @@ export type CapsuleRunCredentialLedger = Pick<
   | "getCapsule"
   | "getPlanRun"
   | "getApplyRun"
+  | "getStateVersion"
+  | "getOutput"
   | "getCapsuleRuntimeSafety"
 >;
 
@@ -133,6 +135,10 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
       workspaceId,
       capsuleId,
       capsule.currentStateVersionId,
+      capsule.currentOutputId,
+      capsule.status,
+      capsule.environment,
+      capsule.currentStateGeneration,
     ));
   const currentApplyExecutionMatches =
     input.phase === "apply" &&
@@ -171,10 +177,11 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
 }
 
 /**
- * A provider-dispatched ordinary apply can fail after its exact partial state
- * was durably committed as the Capsule's current StateVersion. A fresh reviewed
- * plan/apply is the only normal convergence path. Bind that recovery to the
- * decisive failed ApplyRun and its exact persisted-state receipt; every other
+ * A provider-dispatched ordinary apply can fail after partial state persistence
+ * or after its provider-applied StateVersion/Output were durably committed but
+ * post-apply lifecycle failed. A fresh reviewed plan/apply is the only normal
+ * convergence path. Bind that recovery to the decisive failed ApplyRun and its
+ * exact receipt; runtime safety itself remains unknown, and every other
  * unknown/restore/destroy or stale-state condition remains fail-closed.
  */
 async function persistedPartialApplyMatches(
@@ -183,25 +190,93 @@ async function persistedPartialApplyMatches(
   workspaceId: string,
   capsuleId: string,
   currentStateVersionId: string,
+  currentOutputId: string | undefined,
+  capsuleStatus: string,
+  capsuleEnvironment: string,
+  currentStateGeneration: number,
 ): Promise<boolean> {
   const failed = await store.getApplyRun(failedApplyRunId);
   if (
     !failed ||
     failed.status !== "failed" ||
-    failed.operation === "destroy" ||
+    (failed.operation !== "create" && failed.operation !== "update") ||
     failed.workspaceId !== workspaceId ||
     failed.capsuleId !== capsuleId ||
     failed.stateVersionId !== currentStateVersionId
   ) {
     return false;
   }
-  return failed.auditEvents.some(
+  const persistedProviderFailureReceipt = failed.auditEvents.some(
     (event) =>
       event.type === "apply.failed" &&
       event.data?.providerDispatched === true &&
       event.data.providerApplySucceeded === false &&
       event.data.statePersistence === "persisted" &&
       event.data.stateVersionId === currentStateVersionId,
+  );
+  if (persistedProviderFailureReceipt) return true;
+
+  if (
+    capsuleStatus !== "error" ||
+    failed.outputId === undefined ||
+    currentOutputId === undefined ||
+    failed.outputId !== currentOutputId
+  ) {
+    return false;
+  }
+
+  const completedReceipts = failed.auditEvents
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event.type === "apply.completed");
+  const failedReceipts = failed.auditEvents
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event.type === "apply.failed");
+  if (completedReceipts.length !== 1 || failedReceipts.length !== 1) {
+    return false;
+  }
+  const completedReceipt = completedReceipts[0]!;
+  const failedReceipt = failedReceipts[0]!;
+  // Audit events are append-only, while both terminal receipts may share the
+  // same commit clock. Array order is therefore the canonical happens-before.
+  if (
+    completedReceipt.index >= failedReceipt.index ||
+    completedReceipt.event.data?.stateVersionId !== currentStateVersionId ||
+    completedReceipt.event.data.outputId !== currentOutputId ||
+    failedReceipt.event.data?.providerDispatched !== true ||
+    failedReceipt.event.data.providerApplySucceeded !== true ||
+    failedReceipt.event.data.lifecycleActionPhase !== "post_apply" ||
+    !terminalLifecycleFailureStatus(
+      failedReceipt.event.data.lifecycleActionStatus,
+    )
+  ) {
+    return false;
+  }
+
+  const [stateVersion, output] = await Promise.all([
+    store.getStateVersion(currentStateVersionId),
+    store.getOutput(currentOutputId),
+  ]);
+  return (
+    stateVersion?.id === currentStateVersionId &&
+    stateVersion.workspaceId === workspaceId &&
+    stateVersion.capsuleId === capsuleId &&
+    stateVersion.environment === capsuleEnvironment &&
+    stateVersion.generation === currentStateGeneration &&
+    stateVersion.createdByRunId === failed.id &&
+    output?.id === currentOutputId &&
+    output.workspaceId === workspaceId &&
+    output.capsuleId === capsuleId &&
+    output.stateGeneration === stateVersion.generation &&
+    output.stateGeneration === currentStateGeneration
+  );
+}
+
+function terminalLifecycleFailureStatus(value: unknown): boolean {
+  return (
+    value === "failed" ||
+    value === "skipped" ||
+    value === "unavailable" ||
+    value === "error"
   );
 }
 

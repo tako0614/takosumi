@@ -359,6 +359,294 @@ describe("canonical Capsule Run credential context", () => {
     }
   });
 
+  test("allows a fresh plan and apply after an exact committed post-apply failure", async () => {
+    const capsule = {
+      ...CAPSULE,
+      status: "error",
+      environment: "production",
+      currentStateVersionId: "state_applied_1",
+      currentStateGeneration: 7,
+      currentOutputId: "output_applied_1",
+    };
+    const plan = {
+      ...PLAN,
+      capsuleCurrentStateVersionId: "state_applied_1",
+    };
+    const safety = {
+      phase: "unknown" as const,
+      runId: "apply_failed_post_apply",
+      runType: "apply" as const,
+    };
+    const completedAudit = (
+      dataOverrides: Record<string, unknown> = {},
+    ) => [{
+      type: "apply.completed",
+      data: {
+        stateVersionId: "state_applied_1",
+        outputId: "output_applied_1",
+        ...dataOverrides,
+      },
+    }];
+    const failedAudit = (
+      dataOverrides: Record<string, unknown> = {},
+      type = "apply.failed",
+    ) => [{
+      type,
+      data: {
+        providerDispatched: true,
+        providerApplySucceeded: true,
+        lifecycleActionPhase: "post_apply",
+        lifecycleActionStatus: "failed",
+        ...dataOverrides,
+      },
+    }];
+    const priorApply = {
+      ...APPLY,
+      id: "apply_failed_post_apply",
+      status: "failed",
+      stateVersionId: "state_applied_1",
+      outputId: "output_applied_1",
+      auditEvents: [...completedAudit(), ...failedAudit()],
+    };
+    const stateVersion = {
+      id: "state_applied_1",
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      environment: "production",
+      generation: 7,
+      stateRef: "state/ref/7",
+      digest: "sha256:state",
+      createdByRunId: "apply_failed_post_apply",
+      createdAt: "2026-08-26T00:00:00.000Z",
+    };
+    const output = {
+      id: "output_applied_1",
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      stateGeneration: 7,
+      rawArtifactRef: "output/ref/7",
+      publicOutputs: {},
+      workspaceOutputs: {},
+      outputDigest: "sha256:output",
+      createdAt: "2026-08-26T00:00:00.000Z",
+    };
+
+    for (const phase of ["plan", "apply"] as const) {
+      expect(
+        await resolveCanonicalCapsuleRunCredentialContext(
+          ledger({ capsule, plan, priorApply, stateVersion, output, safety }),
+          {
+            workspaceId: "workspace_1",
+            capsuleId: "capsule_1",
+            runId: phase === "plan" ? "plan_1" : "apply_1",
+            phase,
+          },
+        ),
+      ).toMatchObject({ ok: true, context: { phase } });
+    }
+
+    for (const lifecycleActionStatus of [
+      "failed",
+      "skipped",
+      "unavailable",
+      "error",
+    ]) {
+      expect(
+        await resolveCanonicalCapsuleRunCredentialContext(
+          ledger({
+            capsule,
+            plan,
+            priorApply: {
+              ...priorApply,
+              auditEvents: [
+                ...completedAudit(),
+                ...failedAudit({ lifecycleActionStatus }),
+              ],
+            },
+            stateVersion,
+            output,
+            safety,
+          }),
+          {
+            workspaceId: "workspace_1",
+            capsuleId: "capsule_1",
+            runId: "plan_1",
+            phase: "plan",
+          },
+        ),
+      ).toMatchObject({ ok: true, context: { phase: "plan" } });
+    }
+
+    for (const overrides of [
+      { capsule: { ...capsule, status: "active" } },
+      {
+        capsule: { ...capsule, currentStateVersionId: "state_other" },
+      },
+      {
+        capsule: { ...capsule, currentStateVersionId: undefined },
+        plan: { ...plan, capsuleCurrentStateVersionId: undefined },
+      },
+      { capsule: { ...capsule, currentOutputId: "output_other" } },
+      {
+        capsule: { ...capsule, currentOutputId: undefined },
+        priorApply: { ...priorApply, outputId: undefined },
+      },
+      { priorApply: { ...priorApply, operation: "destroy" } },
+      { priorApply: { ...priorApply, status: "succeeded" } },
+      { priorApply: { ...priorApply, stateVersionId: "state_other" } },
+      { priorApply: { ...priorApply, outputId: "output_other" } },
+      { stateVersion: null },
+      {
+        stateVersion: { ...stateVersion, workspaceId: "workspace_other" },
+      },
+      {
+        stateVersion: { ...stateVersion, capsuleId: "capsule_other" },
+      },
+      {
+        stateVersion: { ...stateVersion, environment: "staging" },
+      },
+      {
+        stateVersion: { ...stateVersion, generation: 8 },
+      },
+      {
+        stateVersion: {
+          ...stateVersion,
+          createdByRunId: "apply_succeeded_other",
+        },
+      },
+      { output: null },
+      { output: { ...output, workspaceId: "workspace_other" } },
+      { output: { ...output, capsuleId: "capsule_other" } },
+      { output: { ...output, stateGeneration: 8 } },
+      {
+        priorApply: {
+          ...priorApply,
+          auditEvents: failedAudit(),
+        },
+      },
+      {
+        priorApply: {
+          ...priorApply,
+          auditEvents: completedAudit(),
+        },
+      },
+      {
+        priorApply: {
+          ...priorApply,
+          auditEvents: [
+            ...completedAudit(),
+            ...completedAudit(),
+            ...failedAudit(),
+          ],
+        },
+      },
+      {
+        priorApply: {
+          ...priorApply,
+          auditEvents: [
+            ...completedAudit(),
+            ...failedAudit(),
+            ...failedAudit({ providerApplySucceeded: false }),
+          ],
+        },
+      },
+      {
+        priorApply: {
+          ...priorApply,
+          auditEvents: [...failedAudit(), ...completedAudit()],
+        },
+      },
+      {
+        priorApply: {
+          ...priorApply,
+          auditEvents: [
+            ...completedAudit({ stateVersionId: "state_other" }),
+            ...failedAudit(),
+          ],
+        },
+      },
+      {
+        priorApply: {
+          ...priorApply,
+          auditEvents: [
+            ...completedAudit({ outputId: "output_other" }),
+            ...failedAudit(),
+          ],
+        },
+      },
+      {
+        priorApply: {
+          ...priorApply,
+          auditEvents: [
+            ...completedAudit({ outputId: undefined }),
+            ...failedAudit(),
+          ],
+        },
+      },
+      {
+        priorApply: {
+          ...priorApply,
+          auditEvents: [
+            ...completedAudit(),
+            ...failedAudit({ providerDispatched: false }),
+          ],
+        },
+      },
+      {
+        priorApply: {
+          ...priorApply,
+          auditEvents: [
+            ...completedAudit(),
+            ...failedAudit({ providerApplySucceeded: false }),
+          ],
+        },
+      },
+      {
+        priorApply: {
+          ...priorApply,
+          auditEvents: [
+            ...completedAudit(),
+            ...failedAudit({ lifecycleActionPhase: "pre_apply" }),
+          ],
+        },
+      },
+      ...["succeeded", "pending", "not_applicable", "indeterminate"].map(
+        (lifecycleActionStatus) => ({
+          priorApply: {
+            ...priorApply,
+            auditEvents: [
+              ...completedAudit(),
+              ...failedAudit({ lifecycleActionStatus }),
+            ],
+          },
+        }),
+      ),
+      {
+        safety: { ...safety, runId: "apply_failed_other" },
+      },
+    ]) {
+      expect(
+        await resolveCanonicalCapsuleRunCredentialContext(
+          ledger({
+            capsule,
+            plan,
+            priorApply,
+            stateVersion,
+            output,
+            safety,
+            ...overrides,
+          }),
+          {
+            workspaceId: "workspace_1",
+            capsuleId: "capsule_1",
+            runId: "plan_1",
+            phase: "plan",
+          },
+        ),
+      ).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
+    }
+  });
+
   test("fails closed on a runtime phase outside the public union", async () => {
     expect(
       await resolveCanonicalCapsuleRunCredentialContext(ledger(), {
@@ -377,6 +665,8 @@ function ledger(
     readonly plan?: Record<string, unknown>;
     readonly apply?: Record<string, unknown>;
     readonly priorApply?: Record<string, unknown>;
+    readonly stateVersion?: Record<string, unknown> | null;
+    readonly output?: Record<string, unknown> | null;
     readonly safety?: Record<string, unknown>;
   } = {},
 ): CapsuleRunCredentialLedger {
@@ -384,11 +674,16 @@ function ledger(
   const plan = overrides.plan ?? PLAN;
   const apply = overrides.apply ?? APPLY;
   const priorApply = overrides.priorApply;
+  const stateVersion = overrides.stateVersion ?? undefined;
+  const output = overrides.output ?? undefined;
   return {
     getCapsule: async (id) => (id === capsule.id ? capsule : undefined) as never,
     getPlanRun: async (id) => (id === plan.id ? plan : undefined) as never,
     getApplyRun: async (id) =>
       (id === apply.id ? apply : id === priorApply?.id ? priorApply : undefined) as never,
+    getStateVersion: async (id) =>
+      (id === stateVersion?.id ? stateVersion : undefined) as never,
+    getOutput: async (id) => (id === output?.id ? output : undefined) as never,
     getCapsuleRuntimeSafety: async () => overrides.safety as never,
   };
 }
