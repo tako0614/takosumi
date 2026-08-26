@@ -33,6 +33,7 @@ import {
   DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
   OpenTofuControllerError,
   OpenTofuController,
+  OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
@@ -5005,6 +5006,69 @@ test("service-side lifecycle action receives only non-sensitive OpenTofu outputs
     "https://yuru-smoke-secret.example",
   );
   expect(JSON.stringify(activity)).not.toContain("super-secret-token");
+});
+
+test("post-apply terminal release failure retains bounded redacted command diagnostics", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const materializerFailure = JSON.stringify({
+    stage: "runtime_secret_materialization",
+    code: "runtime_secret_file_failed",
+  });
+  const secret = "run-engine-release-secret";
+  const detail = `${materializerFailure}\ntoken=[redacted]`;
+  let activationCalls = 0;
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: lifecycleInstallConfig([
+      {
+        id: "activate",
+        phase: "post_apply",
+        executor: "runner",
+        command: ["bun", "run", "release"],
+      },
+    ]),
+  });
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: () => {
+        activationCalls += 1;
+        return Promise.reject(
+          new OpenTofuRunnerExecutionError(
+            "runner request failed (release_command_failed)",
+            {
+              reason: "release_command_failed",
+              detail: `${materializerFailure}\ntoken=${secret}`,
+            },
+          ),
+        );
+      },
+    },
+  });
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  const { applyRun, capsule } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("failed");
+  expect(capsule?.status).toBe("error");
+  expect(activationCalls).toBe(1);
+  const diagnostic = applyRun.diagnostics?.find(
+    (entry) => entry.code === CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
+  );
+  expect(diagnostic).toMatchObject({
+    severity: "error",
+    code: CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
+    detail,
+  });
+  expect(diagnostic?.message).toContain("release_command_failed");
+  expect(diagnostic?.detail).toContain(materializerFailure);
+  expect(diagnostic?.detail).toContain("[redacted]");
+  expect(diagnostic?.detail).not.toContain(secret);
+  expect((diagnostic?.detail ?? "").length).toBeLessThanOrEqual(4_096);
 });
 
 test("release activator receives service-side post-apply actions as opaque argv", async () => {

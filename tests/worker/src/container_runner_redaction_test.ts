@@ -755,6 +755,158 @@ test("container runner maps finite plan failures to non-retryable execution erro
   );
 });
 
+test("container runner maps terminal release command failures to bounded execution diagnostics", async () => {
+  const secret = "release-command-adapter-secret";
+  const materializerFailure = JSON.stringify({
+    stage: "runtime_secret_materialization",
+    code: "runtime_secret_file_failed",
+  });
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        runId: "release_run_failure",
+        action: "release",
+        status: "failed",
+        exitCode: 17,
+        phase: "release",
+        failedCommandId: "activate",
+        stderr: [
+          materializerFailure,
+          `token=${secret}`,
+          `Authorization: Bearer ${secret}`,
+          "E".repeat(5_000),
+        ].join("\n"),
+        stdout: `release stdout password=${secret}`,
+        errorCode: "release_command_failed",
+        detail: `${materializerFailure}\npassword=${secret}`,
+      },
+      undefined,
+      500,
+    ),
+  );
+
+  let error: unknown;
+  try {
+    await runner.release({
+      runId: "release_run_failure",
+      applyRunId: "apply_run_failure",
+      capsuleId: "capsule_failure",
+      stateVersionId: "state_failure",
+      sourceSnapshot: {
+        id: "snapshot_failure",
+        sourceId: "source_failure",
+        url: "https://github.com/acme/release.git",
+        ref: "main",
+        resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
+        path: ".",
+        archiveRef:
+          "workspaces/workspace_failure/sources/source_failure/snapshots/snapshot_failure/source.tar.zst",
+        archiveDigest: `sha256:${"a".repeat(64)}`,
+        archiveSizeBytes: 128,
+        fetchedByRunId: "source_sync_failure",
+        fetchedAt: "2026-08-13T00:00:00.000Z",
+      },
+      nonSensitiveOutputs: {},
+      providerConfigurations: {
+        format: "takosumi.provider-configurations@v1",
+        providers: [],
+      },
+      commands: [
+        {
+          id: "activate",
+          phase: "post_apply",
+          command: ["bun", "run", "release"],
+        },
+      ],
+    } as Parameters<CloudflareContainerOpenTofuRunner["release"]>[0]);
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(OpenTofuRunnerExecutionError);
+  expect(error).not.toBeInstanceOf(OpenTofuRunnerInfrastructureError);
+  expect((error as OpenTofuRunnerExecutionError).reason).toBe(
+    "release_command_failed",
+  );
+  const detail = (error as OpenTofuRunnerExecutionError).detail ?? "";
+  expect(detail).toContain(materializerFailure);
+  expect(detail).toContain("diagnostics omitted");
+  expect(detail).toContain("[redacted]");
+  expect(detail).not.toContain(secret);
+  expect(detail.length).toBeLessThanOrEqual(4_096);
+  expect((error as Error).message).toBe(
+    "runner request failed (release_command_failed)",
+  );
+});
+
+test("container runner keeps generic release setup failures on the infrastructure fallback", async () => {
+  const secret = "release-setup-adapter-secret-must-not-escape";
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        runId: "release_run_setup_failure",
+        action: "release",
+        status: "failed",
+        exitCode: 1,
+        phase: "release",
+        errorCode: "release_command_failed",
+        stderr: `runtime secret setup failed token=${secret}`,
+        stdout: `validation failed password=${secret}`,
+      },
+      undefined,
+      500,
+    ),
+  );
+
+  let error: unknown;
+  try {
+    await runner.release({
+      runId: "release_run_setup_failure",
+      applyRunId: "apply_run_setup_failure",
+      capsuleId: "capsule_setup_failure",
+      stateVersionId: "state_setup_failure",
+      sourceSnapshot: {
+        id: "snapshot_setup_failure",
+        sourceId: "source_setup_failure",
+        url: "https://github.com/acme/release.git",
+        ref: "main",
+        resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
+        path: ".",
+        archiveRef:
+          "workspaces/workspace_setup_failure/sources/source_setup_failure/snapshots/snapshot_setup_failure/source.tar.zst",
+        archiveDigest: `sha256:${"a".repeat(64)}`,
+        archiveSizeBytes: 128,
+        fetchedByRunId: "source_sync_setup_failure",
+        fetchedAt: "2026-08-13T00:00:00.000Z",
+      },
+      nonSensitiveOutputs: {},
+      providerConfigurations: {
+        format: "takosumi.provider-configurations@v1",
+        providers: [],
+      },
+      commands: [
+        {
+          id: "activate",
+          phase: "post_apply",
+          command: ["bun", "run", "release"],
+        },
+      ],
+    } as Parameters<CloudflareContainerOpenTofuRunner["release"]>[0]);
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(OpenTofuRunnerInfrastructureError);
+  expect(error).not.toBeInstanceOf(OpenTofuRunnerExecutionError);
+  expect((error as OpenTofuRunnerInfrastructureError).reason).toBe(
+    "runner_rejected",
+  );
+  expect((error as Error).message).toBe(
+    "runner request failed (runner_rejected)",
+  );
+  expect((error as Error).message).not.toContain(secret);
+});
+
 test("container runner reads Capsule compatibility source files", async () => {
   let captured: Record<string, unknown> | undefined;
   const runner = new CloudflareContainerOpenTofuRunner(

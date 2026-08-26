@@ -95,6 +95,7 @@ import { getCapsuleAdoptedSourceSnapshot } from "../capsule_source_revision.ts";
 import {
   isRunnerInfrastructureRequeueError,
   OpenTofuControllerError,
+  OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
   RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
   requireNonEmptyString,
@@ -485,6 +486,8 @@ interface LifecycleActionOutcome {
   readonly reason?: string;
   readonly kind?: string;
   readonly message?: string;
+  /** Already-redacted bounded detail from a terminal runner command failure. */
+  readonly detail?: string;
   readonly hasHealthUrl?: boolean;
   readonly metadataKeys?: readonly string[];
   readonly commandCount: number;
@@ -519,14 +522,44 @@ class CapsuleLifecycleActionError extends OpenTofuControllerError {
 }
 
 function runFailureDiagnostics(error: unknown) {
-  const primary = errorDiagnostic(error);
+  const primary = lifecycleActionDiagnostic(error);
   if (!(error instanceof RunExecutionRenewalError)) return [primary];
   return [
     { ...primary, code: error.diagnosticCode },
     ...(error.secondaryError === undefined
       ? []
-      : [errorDiagnostic(error.secondaryError)]),
+      : [lifecycleActionDiagnostic(error.secondaryError)]),
   ];
+}
+
+const MAX_LIFECYCLE_ACTION_DIAGNOSTIC_DETAIL_CHARS = 4_096;
+
+function lifecycleActionDiagnostic(error: unknown) {
+  const primary = errorDiagnostic(error);
+  const lifecycleError = lifecycleActionErrorEvidence(error);
+  const detail = lifecycleError?.outcome.detail;
+  if (!detail) return primary;
+  return {
+    ...primary,
+    detail: boundedLifecycleActionDiagnosticDetail(
+      redactString(detail, { redactedValue: "[redacted]" }),
+    ),
+  };
+}
+
+function boundedLifecycleActionDiagnosticDetail(detail: string): string {
+  if (detail.length <= MAX_LIFECYCLE_ACTION_DIAGNOSTIC_DETAIL_CHARS) {
+    return detail;
+  }
+  const omission = "\n... diagnostics omitted ...\n";
+  if (MAX_LIFECYCLE_ACTION_DIAGNOSTIC_DETAIL_CHARS <= omission.length) {
+    return detail.slice(0, MAX_LIFECYCLE_ACTION_DIAGNOSTIC_DETAIL_CHARS);
+  }
+  const retainedLength =
+    MAX_LIFECYCLE_ACTION_DIAGNOSTIC_DETAIL_CHARS - omission.length;
+  const headLength = Math.ceil(retainedLength / 2);
+  const tailLength = retainedLength - headLength;
+  return `${detail.slice(0, headLength)}${omission}${detail.slice(-tailLength)}`;
 }
 
 function lifecycleActionErrorEvidence(
@@ -7482,6 +7515,9 @@ export class RunEngine {
         activityStatus: "failed",
         actionDispatched,
         message: errorMessage(error),
+        ...(error instanceof OpenTofuRunnerExecutionError && error.detail
+          ? { detail: error.detail }
+          : {}),
       };
     }
   }
@@ -7501,7 +7537,7 @@ export class RunEngine {
       status: "failed",
       diagnostics: [
         ...(input.providerApplied.diagnostics ?? []),
-        errorDiagnostic(error),
+        lifecycleActionDiagnostic(error),
       ],
       auditEvents: [
         ...input.providerApplied.auditEvents,
@@ -7897,6 +7933,9 @@ export class RunEngine {
         activityStatus: "failed",
         actionDispatched,
         message: errorMessage(error),
+        ...(error instanceof OpenTofuRunnerExecutionError && error.detail
+          ? { detail: error.detail }
+          : {}),
         commandCount: commands.length,
         outputCount: Object.keys(nonSensitiveOutputs).length,
       };

@@ -38,6 +38,7 @@ const R2_PUT_RETRY_MAX_MS = 10_000;
 const BOUNDED_STREAM_INITIAL_BYTES = 64 * 1024;
 const RUNNER_ARTIFACT_RELAY_FAILED_CODE = "runner_artifact_relay_failed";
 const RUNNER_REJECTED_CODE = "runner_rejected";
+const RUNNER_RELEASE_COMMAND_FAILED_CODE = "release_command_failed";
 const RUNNER_PROVIDER_EXECUTION_FAILED_CODE = "provider_execution_failed";
 const RUNNER_PROVIDER_FAILURE_CODES = new Set([
   "apply_failed",
@@ -357,6 +358,8 @@ interface RunnerReleaseCompletedOutcome {
   readonly exitCode: number;
   readonly commandCount: number;
   readonly failedCommandId?: string;
+  /** Bounded, redacted stderr/stdout from a terminal failed release command. */
+  readonly detail?: string;
 }
 
 interface RunnerReleaseDispatchRecord {
@@ -1382,6 +1385,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           runnerResponse,
           envelope.action,
           this.#artifactLimits.runnerResponse,
+          releaseDispatch?.actionIds,
         );
       }
       return runnerResponse;
@@ -3746,7 +3750,10 @@ function parseRunnerReleaseDispatchRecord(
   const outcome = parseRunnerReleaseCompletedOutcome(value.outcome);
   if (
     (phase === "completed" && !outcome) ||
-    (phase !== "completed" && value.outcome !== undefined)
+    (phase !== "completed" && value.outcome !== undefined) ||
+    (outcome?.status === "failed" &&
+      outcome.failedCommandId !== undefined &&
+      !actionIds.includes(outcome.failedCommandId))
   ) {
     return undefined;
   }
@@ -3787,6 +3794,12 @@ function parseRunnerReleaseCompletedOutcome(
     exitCode,
     commandCount,
     ...(failedCommandId ? { failedCommandId } : {}),
+    ...(status === "failed"
+      ? (() => {
+          const detail = normalizedReleaseCommandFailureDetail(value);
+          return detail ? { detail } : {};
+        })()
+      : {}),
   };
 }
 
@@ -4104,7 +4117,23 @@ function releaseCompletedOutcome(
   if (!outcome || outcome.commandCount !== record.actionIds.length) {
     throw new Error("runner release response has no terminal outcome");
   }
-  return outcome;
+  if (
+    outcome.status !== "failed" ||
+    (stringField(payload, "phase") === "release" &&
+      outcome.failedCommandId !== undefined &&
+      record.actionIds.includes(outcome.failedCommandId))
+  ) {
+    return outcome;
+  }
+  // A failed setup/validation/runtime-secret path is still a completed,
+  // one-shot release outcome, but it is not evidence that a release command
+  // reached a terminal response. Strip command detail and the untrusted id so
+  // the normalization boundary keeps the historical runner_rejected fallback.
+  return {
+    status: outcome.status,
+    exitCode: outcome.exitCode,
+    commandCount: outcome.commandCount,
+  };
 }
 
 function sameOrderedStrings(
@@ -4135,6 +4164,12 @@ function runnerCompletedReleaseResponse(
       ...(outcome.status === "failed"
         ? {
             phase: "release",
+            ...(outcome.failedCommandId
+              ? {
+                  errorCode: RUNNER_RELEASE_COMMAND_FAILED_CODE,
+                  ...(outcome.detail ? { detail: outcome.detail } : {}),
+                }
+              : {}),
             stderr:
               "release command previously completed with a failed outcome; automatic redispatch is blocked",
           }
@@ -4575,6 +4610,7 @@ async function normalizeRunnerFailureResponse(
   response: Response,
   phase: string | undefined,
   maxBytes: number,
+  releaseActionIds?: readonly string[],
 ): Promise<Response> {
   let payload: Record<string, unknown> = {};
   try {
@@ -4583,18 +4619,28 @@ async function normalizeRunnerFailureResponse(
     // The failure envelope below is intentionally finite even when the
     // provider returned malformed or non-JSON text.
   }
-  const errorCode = finiteRunnerFailureCode(payload);
+  const errorCode = finiteRunnerFailureCode(payload, phase, releaseActionIds);
   if (errorCode === RUNNER_MUTATION_INDETERMINATE_CODE) {
     return runnerMutationIndeterminateResponse(
       phase === "apply" || phase === "destroy" ? phase : "apply",
     );
   }
   const detail = normalizedRunnerExecutionFailureDetail(payload, errorCode);
+  const terminalReleaseFailure =
+    errorCode === RUNNER_RELEASE_COMMAND_FAILED_CODE;
   return jsonResponse(
     {
       status: "failed",
       errorCode,
       phase: runnerFailurePhase(phase),
+      ...(terminalReleaseFailure &&
+      typeof payload.exitCode === "number" &&
+      Number.isSafeInteger(payload.exitCode)
+        ? { exitCode: payload.exitCode }
+        : {}),
+      ...(terminalReleaseFailure && stringField(payload, "failedCommandId")
+        ? { failedCommandId: stringField(payload, "failedCommandId")! }
+        : {}),
       ...(detail ? { detail } : {}),
       ...(errorCode === "runner_artifact_relay_ambiguous"
         ? { retryable: true }
@@ -4608,6 +4654,9 @@ function normalizedRunnerExecutionFailureDetail(
   payload: Record<string, unknown>,
   errorCode: ReturnType<typeof finiteRunnerFailureCode>,
 ): string | undefined {
+  if (errorCode === RUNNER_RELEASE_COMMAND_FAILED_CODE) {
+    return normalizedReleaseCommandFailureDetail(payload);
+  }
   if (
     !RUNNER_PLAN_EXECUTION_FAILURE_CODES.has(errorCode) &&
     !RUNNER_PROVIDER_FAILURE_CODES.has(errorCode)
@@ -4639,6 +4688,24 @@ function normalizedRunnerExecutionFailureDetail(
   );
 }
 
+function normalizedReleaseCommandFailureDetail(
+  payload: Record<string, unknown>,
+): string | undefined {
+  const detail = [
+    stringField(payload, "detail"),
+    stringField(payload, "stderr"),
+    stringField(payload, "stdout"),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n")
+    .trim();
+  if (!detail) return undefined;
+  return boundedRunnerFailureDetail(
+    redactString(detail, { redactedValue: "[redacted]" }),
+    MAX_NORMALIZED_RUNNER_FAILURE_DETAIL_CHARS,
+  );
+}
+
 function boundedRunnerFailureDetail(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   const omission = "\n... diagnostics omitted ...\n";
@@ -4651,9 +4718,12 @@ function boundedRunnerFailureDetail(text: string, maxLength: number): string {
 
 function finiteRunnerFailureCode(
   payload: Record<string, unknown>,
+  phase?: string,
+  releaseActionIds?: readonly string[],
 ):
   | typeof RUNNER_REJECTED_CODE
   | typeof RUNNER_MUTATION_INDETERMINATE_CODE
+  | typeof RUNNER_RELEASE_COMMAND_FAILED_CODE
   | typeof RUNNER_PROVIDER_EXECUTION_FAILED_CODE
   | "apply_failed"
   | "runner_artifact_relay_ambiguous"
@@ -4669,6 +4739,9 @@ function finiteRunnerFailureCode(
   | "opentofu_init_failed"
   | "source_build_failed"
   | "opentofu_plan_failed" {
+  if (isTerminalReleaseCommandFailure(payload, phase, releaseActionIds)) {
+    return RUNNER_RELEASE_COMMAND_FAILED_CODE;
+  }
   const value = stringField(payload, "errorCode");
   const providerFailure = recordField(payload, "providerExecutionFailure");
   if (
@@ -4702,6 +4775,25 @@ function finiteRunnerFailureCode(
             | "opentofu_plan_failed")
         : RUNNER_REJECTED_CODE;
   }
+}
+
+function isTerminalReleaseCommandFailure(
+  payload: Record<string, unknown>,
+  phase: string | undefined,
+  releaseActionIds?: readonly string[],
+): boolean {
+  const failedCommandId = stringField(payload, "failedCommandId");
+  return (
+    phase === "release" &&
+    stringField(payload, "phase") === "release" &&
+    stringField(payload, "status") === "failed" &&
+    typeof payload.exitCode === "number" &&
+    Number.isSafeInteger(payload.exitCode) &&
+    payload.exitCode !== 0 &&
+    failedCommandId !== undefined &&
+    releaseActionIds !== undefined &&
+    releaseActionIds.includes(failedCommandId)
+  );
 }
 
 function runnerFailurePhase(phase: string | undefined): RunnerFailurePhase {

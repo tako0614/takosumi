@@ -54,6 +54,7 @@ const RUNNER_SUBSTRATE_RESET_PATTERN =
   /durable object reset because its code was updated/i;
 const RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE = "runner_artifact_relay_ambiguous";
 const RUNNER_REJECTED_CODE = "runner_rejected";
+const RUNNER_RELEASE_COMMAND_FAILED_CODE = "release_command_failed";
 const RUNNER_PLAN_EXECUTION_FAILURE_CODES = new Set([
   "provider_source_invalid",
   "provider_package_unavailable",
@@ -597,7 +598,7 @@ export class CloudflareContainerOpenTofuRunner
               response.status,
               action,
             );
-            const executionError = runnerExecutionErrorFromPayload(payload);
+            const executionError = runnerExecutionErrorFromPayload(payload, action);
             if (executionError) throw executionError;
             const relayInfrastructureError =
               runnerInfrastructureErrorFromPayload(payload);
@@ -878,8 +879,20 @@ function runnerInfrastructureErrorFromPayload(
 
 function runnerExecutionErrorFromPayload(
   payload: Record<string, unknown>,
+  action: ContainerRunnerAction,
 ): OpenTofuRunnerExecutionError | undefined {
   const errorCode = stringFromRecord(payload, "errorCode");
+  if (
+    action === "release" &&
+    errorCode === RUNNER_RELEASE_COMMAND_FAILED_CODE &&
+    isTerminalReleaseCommandFailurePayload(payload)
+  ) {
+    const detail = runnerExecutionDetailFromPayload(payload);
+    return new OpenTofuRunnerExecutionError(runnerFailureMessage(errorCode), {
+      reason: errorCode,
+      ...(detail ? { detail } : {}),
+    });
+  }
   if (errorCode && RUNNER_PLAN_EXECUTION_FAILURE_CODES.has(errorCode)) {
     const detail = runnerExecutionDetailFromPayload(payload);
     return new OpenTofuRunnerExecutionError(runnerFailureMessage(errorCode), {
@@ -899,6 +912,20 @@ function runnerExecutionErrorFromPayload(
     );
   }
   return undefined;
+}
+
+function isTerminalReleaseCommandFailurePayload(
+  payload: Record<string, unknown>,
+): boolean {
+  const failedCommandId = stringFromRecord(payload, "failedCommandId");
+  return (
+    stringFromRecord(payload, "status") === "failed" &&
+    stringFromRecord(payload, "phase") === "release" &&
+    typeof payload.exitCode === "number" &&
+    Number.isSafeInteger(payload.exitCode) &&
+    payload.exitCode !== 0 &&
+    failedCommandId !== undefined
+  );
 }
 
 function runnerExecutionDetailFromPayload(

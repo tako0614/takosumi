@@ -1381,6 +1381,182 @@ test("OpenTofu runner Durable Object preserves finite plan execution failures", 
   assert.equal(body.includes(marker), false);
 });
 
+test("OpenTofu runner Durable Object preserves bounded redacted terminal release diagnostics", async () => {
+  const applyRunId = "apply_release_diagnostic_preservation";
+  const releaseRunId = `release_${applyRunId}`;
+  const secret = "release-command-diagnostic-secret";
+  const materializerFailure = JSON.stringify({
+    stage: "runtime_secret_materialization",
+    code: "runtime_secret_file_failed",
+  });
+  const r2 = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  let releaseCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname === `/runs/${releaseRunId}`
+      ) {
+        releaseCalls += 1;
+        return Response.json(
+          {
+            runId: releaseRunId,
+            action: "release",
+            status: "failed",
+            exitCode: 17,
+            phase: "release",
+            failedCommandId: "activate",
+            stderr: [
+              materializerFailure,
+              `token=${secret}`,
+              `Authorization: Bearer ${secret}`,
+              "E".repeat(5_000),
+            ].join("\n"),
+            stdout: `release stdout password=${secret}`,
+          },
+          { status: 500 },
+        );
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+
+  const first = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+  assert.equal(first.status, 500);
+  const firstPayload = (await first.json()) as Record<string, unknown>;
+  assert.equal(firstPayload.errorCode, "release_command_failed");
+  assert.equal(firstPayload.phase, "release");
+  assert.equal(firstPayload.detail?.toString().includes(materializerFailure), true);
+  assert.equal(firstPayload.detail?.toString().includes(secret), false);
+  assert.equal(firstPayload.detail?.toString().includes("[redacted]"), true);
+  assert.equal(firstPayload.detail?.toString().includes("diagnostics omitted"), true);
+  assert.ok(typeof firstPayload.detail === "string");
+  assert.ok((firstPayload.detail as string).length <= 4_096);
+
+  const replay = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+  assert.equal(replay.status, 500);
+  const replayText = await replay.text();
+  assert.equal(releaseCalls, 1);
+  assert.equal(replayText.includes(secret), false);
+  assert.match(replayText, /release_command_failed/);
+  assert.match(replayText, /runtime_secret_file_failed/);
+  assert.match(replayText, /automatic redispatch is blocked/);
+  assert.equal(JSON.stringify(storage.entries()).includes(secret), false);
+});
+
+test("OpenTofu runner Durable Object keeps generic release setup failures on the runner_rejected fallback", async () => {
+  const applyRunId = "apply_release_generic_failure";
+  const releaseRunId = `release_${applyRunId}`;
+  const secret = "generic-release-setup-secret-must-not-persist";
+  const r2 = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  let releaseCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname === `/runs/${releaseRunId}`
+      ) {
+        releaseCalls += 1;
+        return Response.json(
+          {
+            runId: releaseRunId,
+            action: "release",
+            status: "failed",
+            exitCode: 1,
+            errorCode: "runtime_secret_file_failed",
+            stderr: `release setup token=${secret}`,
+            stdout: `runtime secret setup failed password=${secret}`,
+          },
+          { status: 500 },
+        );
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+
+  const first = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+  assert.equal(first.status, 500);
+  const firstPayload = (await first.json()) as Record<string, unknown>;
+  assert.equal(firstPayload.errorCode, "runner_rejected");
+  assert.equal(firstPayload.phase, "release");
+  assert.equal(firstPayload.detail, undefined);
+  assert.equal(JSON.stringify(firstPayload).includes(secret), false);
+
+  const replay = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+  assert.equal(replay.status, 500);
+  const replayText = await replay.text();
+  assert.equal(releaseCalls, 1);
+  assert.equal(replayText.includes("release_command_failed"), false);
+  assert.equal(replayText.includes(secret), false);
+  assert.match(replayText, /automatic redispatch is blocked/);
+  assert.equal(JSON.stringify(storage.entries()).includes(secret), false);
+});
+
+test("OpenTofu runner Durable Object rejects an unknown release command id from the terminal diagnostic envelope", async () => {
+  const applyRunId = "apply_release_unknown_command_failure";
+  const releaseRunId = `release_${applyRunId}`;
+  const secret = "unknown-release-command-secret-must-not-persist";
+  const r2 = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  let releaseCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname === `/runs/${releaseRunId}`
+      ) {
+        releaseCalls += 1;
+        return Response.json(
+          {
+            runId: releaseRunId,
+            action: "release",
+            status: "failed",
+            exitCode: 17,
+            phase: "release",
+            failedCommandId: "unknown-command",
+            errorCode: "release_command_failed",
+            stderr: `release failed token=${secret}`,
+          },
+          { status: 500 },
+        );
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+
+  const first = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+  assert.equal(first.status, 500);
+  const firstPayload = (await first.json()) as Record<string, unknown>;
+  assert.equal(firstPayload.errorCode, "runner_rejected");
+  assert.equal(firstPayload.phase, "release");
+  assert.equal(firstPayload.detail, undefined);
+  assert.equal(JSON.stringify(firstPayload).includes(secret), false);
+
+  const replay = await runnerWithContainer(r2, container, { storage }).fetch(
+    durableReleaseRequest(applyRunId),
+  );
+  assert.equal(replay.status, 500);
+  const replayText = await replay.text();
+  assert.equal(releaseCalls, 1);
+  assert.equal(replayText.includes("release_command_failed"), false);
+  assert.equal(replayText.includes("unknown-command"), false);
+  assert.equal(replayText.includes(secret), false);
+  assert.match(replayText, /automatic redispatch is blocked/);
+  assert.equal(JSON.stringify(storage.entries()).includes(secret), false);
+});
+
 test("OpenTofu runner Durable Object restores reviewed R2 plan artifact before apply", async () => {
   const calls: string[] = [];
   const r2 = new FakeR2Bucket();
@@ -2253,7 +2429,7 @@ test("OpenTofu runner Durable Object adopts a completed release when the complet
   assert.match(JSON.stringify(storage.entries()), /"phase":"completed"/);
 });
 
-test("OpenTofu runner Durable Object replays a value-free failed release outcome after cleanup", async () => {
+test("OpenTofu runner Durable Object replays bounded shared-redacted failed release diagnostics without credentials or outputs", async () => {
   const applyRunId = "apply_release_failed_completed";
   const releaseRunId = `release_${applyRunId}`;
   const failureSecret = "failed-release-secret-must-not-persist";
