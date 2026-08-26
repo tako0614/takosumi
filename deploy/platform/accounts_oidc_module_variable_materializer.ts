@@ -32,6 +32,10 @@ const CLOUDFLARE_PROVIDER =
   "registry.opentofu.org/cloudflare/cloudflare" as const;
 const PAIRWISE_CALLBACK_PATH = "/api/auth/callback/takos" as const;
 const PAIRWISE_SCOPES = ["openid", "profile", "email"] as const;
+const FLAT_CLOUDFLARE_TARGET_VARIABLES = [
+  "cloudflare_account_id",
+  "cloudflare_workers_subdomain",
+] as const;
 const OPENTOFU_VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const WORKER_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
 const CLOUDFLARE_ACCOUNT_ID = /^[a-f0-9]{32}$/u;
@@ -115,10 +119,17 @@ export function createTakosumiAccountsOidcModuleVariableMaterializer(input: {
       currentCapsule.workspaceId,
     );
     const metadata = verifiedCloudflareMetadata(binding);
-    assertModuleCloudflareTargetsMatchVerifiedMetadata(
-      call.variables,
-      metadata,
-    );
+    if (exact.contract === PAIRWISE_PROFILE_CONTRACT) {
+      assertModuleCloudflareTargetsMatchVerifiedMetadata(
+        call.variables,
+        metadata,
+      );
+    } else {
+      assertInstallConfigCloudflareTargetsMatchVerifiedMetadata(
+        currentConfig,
+        metadata,
+      );
+    }
     const resourceName = exactResourceName(call.variables, exact);
     const publicOrigin = exactPublicOrigin(
       call.variables,
@@ -387,10 +398,20 @@ function exactProfile(
   const forbiddenNonEmptyInputVariables =
     profile.forbiddenNonEmptyInputVariables;
   if (
-    !sameStrings(additionalInputVariables ?? [], [
-      "cloudflare_account_id",
-      "cloudflare_workers_subdomain",
-    ]) ||
+    !(pairwise
+      ? sameStrings(
+          additionalInputVariables ?? [],
+          FLAT_CLOUDFLARE_TARGET_VARIABLES,
+        )
+      : sameStrings(additionalInputVariables ?? [], []) ||
+        // Rows composed before the nested Cloudflare target fix carried these
+        // output-shaped names. They were never root module inputs, so their
+        // absence at materialization time is safe. Accept the sealed legacy
+        // profile while validating the actual DB-owned `cloudflare` object.
+        sameStrings(
+          additionalInputVariables ?? [],
+          FLAT_CLOUDFLARE_TARGET_VARIABLES,
+        )) ||
     !sameStrings(
       forbiddenNonEmptyInputVariables ?? [],
       pairwise
@@ -563,6 +584,17 @@ function assertExactMaterializerInputVariables(
   variables: Readonly<Record<string, unknown>>,
   profile: InstallConfigAccountsOidcModuleVariableMaterialization,
 ): void {
+  if (
+    profile.contract === BROWSER_PROFILE_CONTRACT &&
+    FLAT_CLOUDFLARE_TARGET_VARIABLES.some((name) =>
+      Object.hasOwn(variables, name)
+    )
+  ) {
+    // Legacy v2 profile metadata is accepted only so already-persisted rows
+    // keep working when RunEngine filters these undeclared flat names. If a
+    // source ever declares them, they must not survive into runner authority.
+    invalid("Accounts OIDC legacy flat Cloudflare module inputs are invalid");
+  }
   const allowed = new Set(profile.contract === PAIRWISE_PROFILE_CONTRACT
     ? [
         profile.workerNameVariable,
@@ -588,6 +620,29 @@ function assertModuleCloudflareTargetsMatchVerifiedMetadata(
   if (
     variables.cloudflare_account_id !== metadata.accountId ||
     variables.cloudflare_workers_subdomain !== metadata.workersSubdomain
+  ) {
+    invalid(
+      "Accounts OIDC module Cloudflare targets differ from verified metadata",
+    );
+  }
+}
+
+function assertInstallConfigCloudflareTargetsMatchVerifiedMetadata(
+  installConfig: InstallConfig,
+  metadata: { readonly accountId: string; readonly workersSubdomain: string },
+): void {
+  const raw = installConfig.variableMapping.cloudflare;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    invalid(
+      "Accounts OIDC module Cloudflare targets differ from verified metadata",
+    );
+  }
+  const target = raw as Readonly<Record<string, unknown>>;
+  const names = Object.keys(target).sort();
+  if (
+    !sameStrings(names, ["account_id", "workers_subdomain"]) ||
+    target.account_id !== metadata.accountId ||
+    target.workers_subdomain !== metadata.workersSubdomain
   ) {
     invalid(
       "Accounts OIDC module Cloudflare targets differ from verified metadata",

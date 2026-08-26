@@ -164,10 +164,6 @@ function createTakosInstallConfig(
       contract: "takosumi.accounts-oidc-module-variables/v2",
       resourceNameVariable: "project_name",
       publicUrlVariable: "public_url",
-      additionalInputVariables: [
-        "cloudflare_account_id",
-        "cloudflare_workers_subdomain",
-      ],
       accountsUrlVariable: "takosumi_accounts_url",
       issuerUrlVariable: "takosumi_accounts_issuer_url",
       clientIdVariable: "takosumi_accounts_client_id",

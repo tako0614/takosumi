@@ -500,6 +500,85 @@ describe("Takos Accounts OIDC module-variable profile", () => {
       planned[1]!.variables.takosumi_accounts_client_id,
     );
   });
+
+  test("validates the actual nested Cloudflare module target and accepts sealed legacy v2 metadata", async () => {
+    let config = takosOidcInstallConfig();
+    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
+      control: {
+        async getCapsule() {
+          return takosOidcCapsule(config.id);
+        },
+        async getInstallConfig() {
+          return config;
+        },
+      },
+      accounts: {
+        async findOidcClient() {
+          return undefined;
+        },
+        async findOidcClientForCapsule() {
+          return undefined;
+        },
+        async saveOidcClient() {
+          throw new Error("Plan must not write");
+        },
+      },
+      issuer: "https://app.takosumi.com",
+      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
+    });
+
+    const legacyProfile = config.accountsOidcModuleVariableMaterialization!;
+    config = {
+      ...config,
+      accountsOidcModuleVariableMaterialization: {
+        ...legacyProfile,
+        additionalInputVariables: [
+          "cloudflare_account_id",
+          "cloudflare_workers_subdomain",
+        ],
+      },
+    };
+    await expect(materializer.materialize({
+      phase: "plan",
+      capsule: takosOidcCapsule(config.id),
+      installConfig: config,
+      resolvedProviderBindings: [directCloudflareBinding()],
+      // Mirrors RunEngine after it filters provider defaults against the real
+      // Takos root module, which declares `cloudflare` rather than flat names.
+      variables: takosOidcVariables(),
+    })).resolves.toMatchObject({
+      digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+    });
+
+    const base = takosOidcInstallConfig();
+    for (const cloudflare of [
+      {
+        account_id: "0".repeat(32),
+        workers_subdomain: "team-workers",
+      },
+      {
+        account_id: CLOUDFLARE_ACCOUNT_ID,
+        workers_subdomain: "other-team",
+      },
+      {
+        account_id: CLOUDFLARE_ACCOUNT_ID,
+        workers_subdomain: "team-workers",
+        ignored_override: "not-closed",
+      },
+    ]) {
+      config = {
+        ...base,
+        variableMapping: { ...base.variableMapping, cloudflare },
+      };
+      await expect(materializer.materialize({
+        phase: "plan",
+        capsule: takosOidcCapsule(config.id),
+        installConfig: config,
+        resolvedProviderBindings: [directCloudflareBinding()],
+        variables: takosOidcVariables(),
+      })).rejects.toThrow(/verified metadata/i);
+    }
+  });
 });
 
 const CLOUDFLARE_PROVIDER =
@@ -661,6 +740,10 @@ function takosOidcInstallConfig(input: {
     variableMapping: {
       project_name: "takos-main",
       public_url: input.publicUrl ?? null,
+      cloudflare: {
+        account_id: CLOUDFLARE_ACCOUNT_ID,
+        workers_subdomain: "team-workers",
+      },
     },
     createdAt: NOW.toISOString(),
     updatedAt: input.updatedAt ?? NOW.toISOString(),
@@ -685,8 +768,6 @@ function takosOidcVariables(publicUrl: string | null = null) {
   return {
     project_name: "takos-main",
     public_url: publicUrl,
-    cloudflare_account_id: CLOUDFLARE_ACCOUNT_ID,
-    cloudflare_workers_subdomain: "team-workers",
   } as const;
 }
 

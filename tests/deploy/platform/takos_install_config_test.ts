@@ -72,10 +72,6 @@ test("valid Takos release descriptor composes the exact Cloudflare profile", () 
       contract: "takosumi.accounts-oidc-module-variables/v2",
       resourceNameVariable: "project_name",
       publicUrlVariable: "public_url",
-      additionalInputVariables: [
-        "cloudflare_account_id",
-        "cloudflare_workers_subdomain",
-      ],
       accountsUrlVariable: "takosumi_accounts_url",
       issuerUrlVariable: "takosumi_accounts_issuer_url",
       clientIdVariable: "takosumi_accounts_client_id",
@@ -133,6 +129,10 @@ test("valid Takos release descriptor composes the exact Cloudflare profile", () 
     createdAt: "2026-08-25T00:00:00.000Z",
     updatedAt: "2026-08-25T00:00:00.000Z",
   });
+  expect(
+    config?.accountsOidcModuleVariableMaterialization
+      ?.additionalInputVariables,
+  ).toBeUndefined();
   expect(config?.lifecycleActions).toEqual([
     {
       apiVersion: "takosumi.dev/v1alpha1",
