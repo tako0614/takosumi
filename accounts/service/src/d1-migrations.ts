@@ -111,7 +111,7 @@ export interface D1AccountsActivationDigestBackfillReport {
 
 export interface D1AccountsWorkerStateAssessment {
   readonly compatible: boolean;
-  readonly headVersion: 3 | 4 | null;
+  readonly headVersion: 4 | null;
   readonly issues: readonly string[];
 }
 
@@ -119,10 +119,11 @@ export const D1_ACCOUNTS_MIGRATIONS_TABLE =
   "takosumi_accounts_schema_migrations" as const;
 
 /**
- * Transient feature bridge. The later tightening commit changes only this
- * accepted-head constant from `[3, 4]` to `[4]`.
+ * Exact-v4 production gate. The preceding feature bridge accepted `[3, 4]`
+ * only long enough to backfill and atomically migrate protected D1 data. That
+ * bridge remains the rollback floor; this artifact must never serve legacy v3.
  */
-export const D1_ACCOUNTS_WORKER_ACCEPTED_HEADS = [3, 4] as const;
+export const D1_ACCOUNTS_WORKER_ACCEPTED_HEADS = [4] as const;
 
 const LEGACY_LEDGER_SQL =
   "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)";
@@ -719,8 +720,8 @@ export async function readD1AccountsMigrationState(
 export function assessD1AccountsWorkerState(
   state: D1AccountsMigrationState,
 ): D1AccountsWorkerStateAssessment {
-  const accepted = D1_ACCOUNTS_WORKER_ACCEPTED_HEADS.includes(
-    state.headVersion as 3 | 4,
+  const accepted = D1_ACCOUNTS_WORKER_ACCEPTED_HEADS.some(
+    (headVersion) => headVersion === state.headVersion,
   );
   const shapeMatches =
     (state.headVersion === 3 && state.ledgerShape === "legacy") ||
@@ -730,10 +731,7 @@ export function assessD1AccountsWorkerState(
   if (!shapeMatches) issues.push("worker_ledger_shape_not_accepted");
   return {
     compatible: issues.length === 0,
-    headVersion:
-      accepted && (state.headVersion === 3 || state.headVersion === 4)
-        ? state.headVersion
-        : null,
+    headVersion: accepted && state.headVersion === 4 ? state.headVersion : null,
     issues,
   };
 }

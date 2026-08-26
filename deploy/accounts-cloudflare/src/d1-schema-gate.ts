@@ -6,15 +6,16 @@ import {
 } from "../../../accounts/service/src/d1-migrations.ts";
 
 export interface AccountsD1WorkerSchemaEvidence {
-  readonly headVersion: 3 | 4;
+  readonly headVersion: 4;
   readonly catalogDigest: string;
   readonly ledgerDigest: string;
   readonly schemaDigest: string;
 }
 
 /**
- * Read-only transient bridge gate for the activationDigest feature Worker.
- * Exact legacy v3 and exact checksummed v4 are the only accepted closures.
+ * Read-only exact-v4 gate for the activationDigest Worker. The earlier v3/v4
+ * bridge is the rollback floor, but this tightened artifact serves only the
+ * exact checksummed v4 closure.
  */
 export async function ensureAccountsD1WorkerSchema(
   database: D1AccountsMigrationDatabase,

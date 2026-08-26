@@ -484,6 +484,20 @@ test("activation-digest docs keep PostgreSQL and D1 promotion order separate", a
       `${path} must not claim that PostgreSQL and D1 share a predeploy order`,
     );
   }
+
+  const accountsReadme = (
+    await readText(new URL("deploy/accounts-cloudflare/README.md", ROOT))
+  ).replace(/\s+/g, " ");
+  assert.match(
+    accountsReadme,
+    /current Worker gate.*?only.*?exact checksummed v4/i,
+    "the current Accounts artifact must identify itself as exact-v4-only",
+  );
+  assert.doesNotMatch(
+    accountsReadme,
+    /current feature bridge.*?exact legacy v3.*?exact checksummed v4/i,
+    "the retired bridge must not be described as the current Worker",
+  );
 });
 
 test("workspace packages stay private source modules", async () => {

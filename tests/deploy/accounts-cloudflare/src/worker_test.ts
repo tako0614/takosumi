@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import {
   accountsExternalLoginConfigured,
   createCloudflareWorker,
@@ -29,13 +29,18 @@ function env(values: Record<string, unknown> = {}): CloudflareWorkerEnv {
   return values as CloudflareWorkerEnv;
 }
 
-async function versionedAccountsDb(): Promise<SqliteFakeD1> {
+async function accountsDbAtHead(headVersion: 3 | 4): Promise<SqliteFakeD1> {
   const db = new SqliteFakeD1();
   const catalog = await loadD1AccountsMigrationCatalog();
   for (const migration of catalog.migrations) {
+    if (migration.version > headVersion) break;
     await applyD1AccountsMigrationBatch(db, migration, 1_000 + migration.version);
   }
   return db;
+}
+
+async function versionedAccountsDb(): Promise<SqliteFakeD1> {
+  return accountsDbAtHead(4);
 }
 
 afterEach(() => {
@@ -929,6 +934,40 @@ test("predeployed accounts schema mode fails closed when schema is absent", asyn
   );
 
   expect(response.status).toBe(500);
+  expect(predeployedDb.execCount).toBe(0);
+});
+
+test("predeployed Accounts Worker rejects exact legacy v3 after v4 tightening", async () => {
+  const predeployedDb = new NoDdlD1Database(await accountsDbAtHead(3));
+  const diagnostics: string[] = [];
+  const errorSpy = spyOn(console, "error").mockImplementation((value) => {
+    if (typeof value === "string") diagnostics.push(value);
+  });
+
+  let response: Response;
+  try {
+    response = await createCloudflareWorker().fetch(
+      new Request("https://app.example.test/api/v1/account/session/me"),
+      env({
+        TAKOSUMI_ACCOUNTS_DB: predeployedDb,
+        TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+        TAKOSUMI_ACCOUNTS_ISSUER: "https://app.example.test",
+        TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:
+          "predeployed-accounts-v3-test-session-salt",
+      }),
+    );
+  } finally {
+    errorSpy.mockRestore();
+  }
+
+  expect(response.status).toBe(500);
+  expect(
+    diagnostics.some(
+      (diagnostic) =>
+        diagnostic.includes('"event":"accounts_d1_schema_incompatible"') &&
+        diagnostic.includes('"worker_catalog_head_not_accepted"'),
+    ),
+  ).toBe(true);
   expect(predeployedDb.execCount).toBe(0);
 });
 

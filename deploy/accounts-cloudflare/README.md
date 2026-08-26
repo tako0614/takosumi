@@ -69,18 +69,20 @@ canonical Takosumi control plane rather than Accounts storage.
 
 `accounts/service/src/d1-migrations.ts` is the sole Accounts D1 catalog. The
 CLI, Worker gate, and local substrate consume the same ordered v0-v4 names and
-checksums. The current feature bridge accepts only either the exact legacy v3
-ledger shape or the exact checksummed v4 closure. Missing rows, gaps, name or
-checksum drift, partial `ALTER`, older/newer heads, missing owned tables or
-indexes, and an incomplete v4 activation-digest backfill all fail closed.
+checksums. The current Worker gate accepts only the exact checksummed v4
+closure. Exact legacy v3, missing rows, gaps, name or checksum drift, partial
+`ALTER`, older/newer heads, missing owned tables or indexes, and an incomplete
+v4 activation-digest backfill all fail closed. The preceding reviewed feature
+bridge accepted exact legacy v3 or exact v4 only for the one-time migration
+window and remains the compatible rollback floor.
 
-While the exact-v3 bridge serves, the owner CLI inventories Capsule-bound OIDC
-clients in deterministic `key` chunks of at most 100 and performs one guarded,
+During that bridge window, the owner CLI inventories Capsule-bound OIDC clients
+in deterministic `key` chunks of at most 100 and performs one guarded,
 restart-safe update per chunk in the same atomic batch as an exact-v3
 ledger/schema fence. It reconciles a lost acknowledgement read-only, adopts
 only an exact clean v4 after fence loss, never writes after a drifted/missing
-v4 cutoff, never prints keys/documents, and requires a global zero-missing result. The
-unpublished v4 migration is then one D1 batch transaction: its first statement
+v4 cutoff, never prints keys/documents, and requires a global zero-missing
+result. The v4 migration is one D1 batch transaction: its first statement
 re-fences the exact v0-v3 legacy names, canonical `sqlite_master` closure, and
 zero-missing, then it adds the
 nullable `checksum` column, backfills the immutable v0-v3 checksums, and inserts
@@ -90,11 +92,11 @@ blindly.
 
 Hosted operation is a one-time bridge sequence:
 
-1. deploy this v3/v4-compatible bridge while the protected database is exact v3;
+1. deploy the reviewed v3/v4-compatible bridge predecessor while the protected database is exact v3;
 2. obtain and privately retain backup/Time Travel evidence outside source
    checkouts, bind its opaque digest to the plan configuration confirmation;
 3. run bounded pre-ledger backfill, apply atomic v4, and read-only verify it;
-4. after the observation window, deploy the separate exact-v4 tightening commit.
+4. after the observation window, deploy this current exact-v4-only artifact.
 
 Before constructing any plan or reading a token, the owner CLI uses reviewed
 Git configuration to require that the real checkout top-level is the owning
@@ -110,6 +112,6 @@ incident authority and is never invoked by the migration CLI.
 
 `predeployed` performs only the strict catalog/schema reads and zero
 request-time DDL. `bootstrap` may initialize the base store, but it does not
-advance the migration ledger and the bridge still requires exact v3 or v4
-before serving traffic. Gate diagnostics contain only digests and issue codes,
-never rows, SQL values, tokens, or target IDs.
+advance the migration ledger; the current Worker still requires exact v4 before
+serving traffic. Gate diagnostics contain only digests and issue codes, never
+rows, SQL values, tokens, or target IDs.

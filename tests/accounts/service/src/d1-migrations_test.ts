@@ -85,7 +85,7 @@ test("Accounts owns one checksummed D1 v0-v4 catalog without a v4 self-reference
   expect(receipt?.params).toEqual([4, v4.name, v4.checksum, 1_000]);
 });
 
-test("the feature bridge accepts only exact v3 or exact v4 Accounts D1 closure", async () => {
+test("the exact-v4 Worker rejects legacy v3 and accepts only exact v4 Accounts D1 closure", async () => {
   const catalog = await loadD1AccountsMigrationCatalog();
 
   const exactV3 = await databaseAtHead(3);
@@ -93,7 +93,11 @@ test("the feature bridge accepts only exact v3 or exact v4 Accounts D1 closure",
     assessD1AccountsWorkerState(
       await readD1AccountsMigrationState(exactV3, catalog),
     ),
-  ).toMatchObject({ compatible: true, headVersion: 3 });
+  ).toMatchObject({
+    compatible: false,
+    headVersion: null,
+    issues: ["worker_catalog_head_not_accepted"],
+  });
   await exactV3
     .prepare(
       "INSERT INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES ('oidc_clients', 'bridge-backfill', ?, 2000)",
@@ -109,7 +113,11 @@ test("the feature bridge accepts only exact v3 or exact v4 Accounts D1 closure",
     assessD1AccountsWorkerState(
       await readD1AccountsMigrationState(exactV3, catalog),
     ),
-  ).toMatchObject({ compatible: true, headVersion: 3 });
+  ).toMatchObject({
+    compatible: false,
+    headVersion: null,
+    issues: ["worker_catalog_head_not_accepted"],
+  });
 
   const exactV4 = await databaseAtHead(4);
   expect(
@@ -197,10 +205,10 @@ test("the feature bridge accepts only exact v3 or exact v4 Accounts D1 closure",
   }
 });
 
-test("the feature bridge rejects same-named tables and indexes with structural drift", async () => {
+test("the exact-v4 Worker rejects same-named tables and indexes with structural drift", async () => {
   const catalog = await loadD1AccountsMigrationCatalog();
 
-  const wrongDocuments = await databaseAtHead(3);
+  const wrongDocuments = await databaseAtHead(4);
   await wrongDocuments.prepare("DROP TABLE takosumi_accounts_documents").run();
   await wrongDocuments
     .prepare(
