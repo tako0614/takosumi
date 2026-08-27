@@ -22,19 +22,13 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.select": "Choose this",
   "installStore.configureHint":
     "Confirm the name and add. Repository analysis happens next.",
-  "installStore.deploymentProfileTitle": "Provider / module",
-  "installStore.deploymentProfileHint":
-    "Choose the provider and module for this service. Select a compatible Host / account next.",
-  "installStore.deploymentProfileChoose": "Choose a Provider / module",
-  "installStore.deploymentProfileRecommended": "Recommended",
-  "installStore.deploymentProfileConfirm":
-    "I confirm this Provider / module",
-  "installStore.deploymentProfileRequired":
-    "Choose and confirm a Provider / module before adding the service.",
-  "installStore.deploymentProfileLoading":
-    "Loading available Providers / modules.",
-  "installStore.deploymentProfileUnavailable":
-    "Takosumi could not safely determine this service's Providers / modules.",
+  "installStore.moduleTitle": "Choose a module",
+  "installStore.moduleHint":
+    "Choose one declared module directory from this fixed repository revision.",
+  "installStore.moduleChoose": "Module directory",
+  "installStore.moduleConfirm": "Continue with this module",
+  "installStore.moduleUnavailable":
+    "Takosumi could not safely determine this SourceSnapshot's modules.",
   "installStore.name": "Service name",
   "installStore.sourceDetails": "Source details",
   "installStore.sourceUrl": "Git URL",
@@ -68,8 +62,6 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.chooseConnection": "Choose a Host / account",
   "installStore.destination": "Host / account",
   "installStore.destinationSummary": "Host / account: {destination}",
-  "installStore.destinationContext": "Selected Provider / module",
-  "installStore.destinationProfile": "Profile",
   "installStore.providerModule": "Provider / module",
   "installStore.connect": "Add a new connection",
   "installStore.continue": "Continue",

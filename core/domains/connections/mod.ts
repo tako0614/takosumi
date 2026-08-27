@@ -21,7 +21,10 @@ import {
   canonicalRunCredentialSettings,
   isWorkspaceBindableOperatorConnection,
 } from "takosumi-contract/connections";
-import { sameProviderSource } from "takosumi-contract/provider-env-rules";
+import {
+  normalizeProviderSourceAddress,
+  sameProviderSource,
+} from "takosumi-contract/provider-env-rules";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import {
   OpenTofuControllerError,
@@ -45,6 +48,18 @@ export interface ResolvedCapsuleProviderBinding {
   readonly runCredentialSettings?: ProviderBinding["runCredentialSettings"];
   readonly connection: ProviderConnection;
   readonly materialization: ProviderConnectionMaterialization;
+}
+
+/** Exact child-module provider identity required by one Run. */
+export interface RequiredProviderBindingIdentity {
+  readonly source: string;
+  readonly moduleLocalName: string;
+  /** Absent means the child module's default provider configuration. */
+  readonly childAlias?: string;
+  /** True when absence of this exact tuple must block the Run. */
+  readonly credentialRequired?: boolean;
+  readonly allowed: boolean;
+  readonly version?: string;
 }
 
 export function validateCapsuleProviderBindings(
@@ -176,9 +191,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export async function resolvedProviderBindingsDigest(
   resolved: readonly ResolvedCapsuleProviderBinding[] | undefined,
 ): Promise<string> {
+  assertUniqueProviderBindingIdentities(resolved ?? []);
   const entries = (resolved ?? [])
     .map((entry) => ({
-      provider: entry.provider,
+      provider: normalizeProviderSourceAddress(entry.provider),
       moduleLocalName: entry.moduleLocalName ?? null,
       childAlias: entry.childAlias ?? null,
       rootAlias: entry.rootAlias ?? null,
@@ -311,25 +327,78 @@ export class ConnectionsService {
       "capsule provider binding set bindings",
     );
     const policy = await this.#policyForCapsule(capsule);
-    return await Promise.all(
+    const resolved = await Promise.all(
       bindings.map((binding) => this.#resolveBinding(capsule, binding, policy)),
     );
+    assertUniqueProviderBindingIdentities(resolved);
+    return resolved;
   }
 
   async resolveProviderBindingsForRun(
     capsule: Capsule,
-    requiredProviders: readonly string[],
+    requiredProviders: readonly RequiredProviderBindingIdentity[],
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
-    const explicit = await this.resolveProviderBindings(capsule);
-    if (requiredProviders.length === 0) return explicit;
+    return await this.#resolveProviderBindingsForRun(
+      capsule,
+      requiredProviders,
+      false,
+    );
+  }
 
-    const missing = requiredProviders
+  /**
+   * Compatibility decoder for a PlanRun persisted before exact provider rows
+   * existed. Only this path may interpret a source-only default binding as the
+   * provider type's historical local name.
+   */
+  async resolveProviderBindingsForLegacyStoredRun(
+    capsule: Capsule,
+    requiredProviders: readonly RequiredProviderBindingIdentity[],
+  ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    return await this.#resolveProviderBindingsForRun(
+      capsule,
+      requiredProviders,
+      true,
+    );
+  }
+
+  async #resolveProviderBindingsForRun(
+    capsule: Capsule,
+    requiredProviders: readonly RequiredProviderBindingIdentity[],
+    allowLegacySourceOnlyDefault: boolean,
+  ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    const required = validateRequiredProviderBindingIdentities(requiredProviders);
+    if (required.length === 0) return [];
+    const explicit = await this.resolveProviderBindings(capsule);
+    const ambiguous = explicit.find(
+      (entry) =>
+        entry.alias !== undefined &&
+        required.some(
+          (identity) =>
+            normalizeProviderSourceAddress(identity.source) ===
+            normalizeProviderSourceAddress(entry.provider),
+        ),
+    );
+    if (ambiguous) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `deprecated ambiguous ProviderBinding alias cannot satisfy an exact provider identity: ${ambiguous.alias}`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+      );
+    }
+
+    const missing = required
       .filter(
         (required) =>
+          required.credentialRequired === true &&
           !explicit.some((entry) =>
-            sameProviderSource(required, entry.provider),
+            sameProviderBindingIdentity(
+              required,
+              entry,
+              allowLegacySourceOnlyDefault,
+            )
           ),
       )
+      .map(formatRequiredProviderBindingIdentity)
       .sort();
     if (missing.length > 0) {
       throw new OpenTofuControllerError(
@@ -338,7 +407,16 @@ export class ConnectionsService {
         { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
       );
     }
-    return explicit;
+    return required.flatMap((identity) => {
+      const match = explicit.find((entry) =>
+        sameProviderBindingIdentity(
+          identity,
+          entry,
+          allowLegacySourceOnlyDefault,
+        )
+      );
+      return match ? [match] : [];
+    });
   }
 
   /** Resolve one Target-selected Provider Connection for a Resource Run. */
@@ -492,6 +570,202 @@ export class ConnectionsService {
     ]);
     return mergePolicyConfigs(workspace?.policy, installConfig?.policy);
   }
+}
+
+function sameProviderBindingIdentity(
+  required: RequiredProviderBindingIdentity,
+  resolved: ResolvedCapsuleProviderBinding,
+  allowLegacySourceOnlyDefault: boolean,
+): boolean {
+  return (
+    resolved.alias === undefined &&
+    normalizeProviderSourceAddress(required.source) ===
+      normalizeProviderSourceAddress(resolved.provider) &&
+    (required.moduleLocalName === resolved.moduleLocalName ||
+      (allowLegacySourceOnlyDefault &&
+        resolved.moduleLocalName === undefined &&
+        required.moduleLocalName === providerTypeName(resolved.provider))) &&
+    required.childAlias === resolved.childAlias
+  );
+}
+
+export function validateRequiredProviderBindingIdentities(
+  requirements: readonly RequiredProviderBindingIdentity[],
+): readonly RequiredProviderBindingIdentity[] {
+  if (!Array.isArray(requirements)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "required provider identities must be an array",
+    );
+  }
+  const seen = new Set<string>();
+  const validated: RequiredProviderBindingIdentity[] = [];
+  const allowedKeys = new Set([
+    "source",
+    "moduleLocalName",
+    "childAlias",
+    "version",
+    "allowed",
+    "credentialRequired",
+  ]);
+  for (const [index, requirement] of requirements.entries()) {
+    if (!isRecord(requirement)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `required provider identities[${index}] must be an object`,
+      );
+    }
+    const unexpected = Object.keys(requirement).find(
+      (key) => !allowedKeys.has(key),
+    );
+    if (unexpected) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `required provider identities[${index}].${unexpected} is not allowed`,
+      );
+    }
+    const source = nonEmptyField(
+      requirement.source,
+      `required provider identities[${index}].source`,
+    );
+    if (
+      requirement.source !== source ||
+      normalizeProviderSourceAddress(source) !== source
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `required provider identities[${index}].source must be canonical`,
+      );
+    }
+    const moduleLocalName = providerIdentifierField(
+      requirement.moduleLocalName,
+      `required provider identities[${index}].moduleLocalName`,
+    );
+    if (requirement.moduleLocalName !== moduleLocalName) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `required provider identities[${index}].moduleLocalName must not contain surrounding whitespace`,
+      );
+    }
+    const childAlias =
+      requirement.childAlias === undefined
+        ? undefined
+        : providerIdentifierField(
+        requirement.childAlias,
+        `required provider identities[${index}].childAlias`,
+      );
+    if (
+      childAlias !== undefined &&
+      requirement.childAlias !== childAlias
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `required provider identities[${index}].childAlias must not contain surrounding whitespace`,
+      );
+    }
+    if (requirement.allowed !== true) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `required provider identities[${index}].allowed must be true`,
+      );
+    }
+    if (
+      requirement.credentialRequired !== undefined &&
+      typeof requirement.credentialRequired !== "boolean"
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `required provider identities[${index}].credentialRequired must be a boolean`,
+      );
+    }
+    if (
+      requirement.version !== undefined &&
+      (typeof requirement.version !== "string" ||
+        !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(
+          requirement.version,
+        ))
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `required provider identities[${index}].version must be an exact version literal`,
+      );
+    }
+    const identity: RequiredProviderBindingIdentity = {
+      source,
+      moduleLocalName,
+      ...(childAlias ? { childAlias } : {}),
+      ...(requirement.version ? { version: requirement.version } : {}),
+      allowed: true,
+      ...(requirement.credentialRequired !== undefined
+        ? { credentialRequired: requirement.credentialRequired }
+        : {}),
+    };
+    const key = providerBindingIdentityKey(identity);
+    if (seen.has(key)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `duplicate required provider identity: ${formatRequiredProviderBindingIdentity(identity)}`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+      );
+    }
+    seen.add(key);
+    validated.push(identity);
+  }
+  return validated;
+}
+
+function providerBindingModuleLocalName(
+  binding: Pick<ResolvedCapsuleProviderBinding, "provider" | "moduleLocalName">,
+): string {
+  return binding.moduleLocalName ?? providerTypeName(binding.provider);
+}
+
+function providerTypeName(source: string): string {
+  const canonical = normalizeProviderSourceAddress(source);
+  return canonical.split("/").at(-1) ?? canonical;
+}
+
+function formatRequiredProviderBindingIdentity(
+  identity: RequiredProviderBindingIdentity,
+): string {
+  return `${normalizeProviderSourceAddress(identity.source)} (${identity.moduleLocalName}${identity.childAlias ? `.${identity.childAlias}` : " default"})`;
+}
+
+function assertUniqueProviderBindingIdentities(
+  bindings: readonly ResolvedCapsuleProviderBinding[],
+): void {
+  const seen = new Set<string>();
+  for (const binding of bindings) {
+    const identity = providerBindingIdentityKey({
+      source: binding.provider,
+      moduleLocalName: providerBindingModuleLocalName(binding),
+      ...(binding.childAlias ? { childAlias: binding.childAlias } : {}),
+      allowed: true,
+    });
+    if (seen.has(identity)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `duplicate provider binding identity: ${formatRequiredProviderBindingIdentity({
+          source: binding.provider,
+          moduleLocalName: providerBindingModuleLocalName(binding),
+          ...(binding.childAlias ? { childAlias: binding.childAlias } : {}),
+          allowed: true,
+        })}`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+      );
+    }
+    seen.add(identity);
+  }
+}
+
+function providerBindingIdentityKey(
+  identity: RequiredProviderBindingIdentity,
+): string {
+  return JSON.stringify([
+    normalizeProviderSourceAddress(identity.source),
+    identity.moduleLocalName,
+    identity.childAlias ?? null,
+  ]);
 }
 
 function operatorConnectionMap(

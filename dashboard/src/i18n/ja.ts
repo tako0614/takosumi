@@ -27,19 +27,13 @@ export const ja = {
   "installStore.select": "これを選ぶ",
   "installStore.configureHint":
     "名前を確認したら追加できます。リポジトリ解析はその後に行います。",
-  "installStore.deploymentProfileTitle": "プロバイダー / モジュール",
-  "installStore.deploymentProfileHint":
-    "このサービスで使うプロバイダーとモジュールを選びます。次に互換性のあるホスト / アカウントを選択します。",
-  "installStore.deploymentProfileChoose": "プロバイダー / モジュールを選択",
-  "installStore.deploymentProfileRecommended": "おすすめ",
-  "installStore.deploymentProfileConfirm":
-    "このプロバイダー / モジュールで追加することを確認しました",
-  "installStore.deploymentProfileRequired":
-    "プロバイダー / モジュールを選び、確認してから追加してください。",
-  "installStore.deploymentProfileLoading":
-    "利用できるプロバイダー / モジュールを読み込んでいます。",
-  "installStore.deploymentProfileUnavailable":
-    "このサービスで利用できるプロバイダー / モジュールを安全に特定できませんでした。",
+  "installStore.moduleTitle": "モジュールを選択",
+  "installStore.moduleHint":
+    "この固定されたリポジトリ版で宣言されたモジュールから、追加するディレクトリを選びます。",
+  "installStore.moduleChoose": "モジュールディレクトリ",
+  "installStore.moduleConfirm": "このモジュールで続ける",
+  "installStore.moduleUnavailable":
+    "このSourceSnapshotのモジュールを安全に特定できませんでした。",
   "installStore.name": "サービス名",
   "installStore.sourceDetails": "取得元の詳細",
   "installStore.sourceUrl": "Git URL",
@@ -73,8 +67,6 @@ export const ja = {
   "installStore.chooseConnection": "ホスト / アカウントを選択",
   "installStore.destination": "ホスト / アカウント",
   "installStore.destinationSummary": "ホスト / アカウント: {destination}",
-  "installStore.destinationContext": "選択したプロバイダー / モジュール",
-  "installStore.destinationProfile": "プロファイル",
   "installStore.providerModule": "プロバイダー / モジュール",
   "installStore.connect": "新しい接続を追加",
   "installStore.continue": "続ける",

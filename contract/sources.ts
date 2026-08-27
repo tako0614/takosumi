@@ -21,6 +21,7 @@
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 import {
   parseRepositoryManifestText,
+  TAKOSUMI_INSTALL_UX_MAX_MODULES,
   type RepositoryManifestDocument,
 } from "./repository-manifest.ts";
 
@@ -279,6 +280,179 @@ export function toPublicSourceSnapshot(
 }
 
 /**
+ * Bounded public projection of the installable module directories declared by
+ * one immutable repository manifest. The manifest document itself (including
+ * inputs, provider requirements, and policy proposals) never crosses this
+ * seam. `absent` and `invalid` deliberately carry no module candidates so an
+ * untrusted or missing manifest cannot grant module-path authority.
+ */
+export interface SourceSnapshotInstallModule {
+  readonly path: string;
+  readonly default?: boolean;
+}
+
+export type SourceSnapshotInstallModulesResponse =
+  | {
+      readonly status: "absent";
+      readonly sourceSnapshotId: string;
+      readonly modules: readonly [];
+    }
+  | {
+      readonly status: "invalid";
+      readonly sourceSnapshotId: string;
+      readonly manifestDigest?: string;
+      readonly modules: readonly [];
+    }
+  | {
+      readonly status: "ready";
+      readonly sourceSnapshotId: string;
+      readonly manifestDigest: string;
+      readonly defaultModule?: string;
+      readonly modules: readonly SourceSnapshotInstallModule[];
+    };
+
+/**
+ * Project only validated, immutable `install.modules` own keys for a
+ * SourceSnapshot. Sorting uses code-point comparison so every client receives
+ * the same order regardless of locale. This is intentionally a projection
+ * helper rather than a generic manifest serializer.
+ */
+export function sourceSnapshotInstallModulesProjection(
+  snapshot: SourceSnapshot,
+): SourceSnapshotInstallModulesResponse {
+  const sourceSnapshotId = snapshot.id;
+  const observation = snapshot.repositoryManifest;
+  if (!observation || observation.status === "absent") {
+    return { status: "absent", sourceSnapshotId, modules: [] };
+  }
+  if (observation.status === "invalid") {
+    return {
+      status: "invalid",
+      sourceSnapshotId,
+      ...(sha256Digest(observation.digest)
+        ? { manifestDigest: observation.digest }
+        : {}),
+      modules: [],
+    };
+  }
+
+  if (!sha256Digest(observation.digest)) {
+    return {
+      status: "invalid",
+      sourceSnapshotId,
+      modules: [],
+    };
+  }
+
+  // `RepositoryManifestSnapshot` is produced by the strict manifest parser,
+  // but keep this boundary defensive for old/hand-seeded durable rows. A
+  // malformed present observation is invalid rather than a source of paths.
+  const install = observation.document?.install;
+  const modules = plainRecord(install) ? install.modules : undefined;
+  if (
+    !plainRecord(install) ||
+    !plainRecord(modules) ||
+    Object.keys(modules).length < 1 ||
+    Object.keys(modules).length > TAKOSUMI_INSTALL_UX_MAX_MODULES
+  ) {
+    return {
+      status: "invalid",
+      sourceSnapshotId,
+      manifestDigest: observation.digest,
+      modules: [],
+    };
+  }
+  const paths = Object.keys(modules);
+  if (
+    paths.some(
+      (path) =>
+        !isProjectionModulePath(path) ||
+        !isModuleDirectoryPath(path) ||
+        !plainRecord(modules[path]),
+    )
+  ) {
+    return {
+      status: "invalid",
+      sourceSnapshotId,
+      manifestDigest: observation.digest,
+      modules: [],
+    };
+  }
+  paths.sort(compareModulePath);
+  const hasDefaultModule = Object.prototype.hasOwnProperty.call(
+    install,
+    "defaultModule",
+  );
+  const rawDefaultModule = hasDefaultModule
+    ? install.defaultModule
+    : undefined;
+  if (hasDefaultModule && typeof rawDefaultModule !== "string") {
+    return {
+      status: "invalid",
+      sourceSnapshotId,
+      manifestDigest: observation.digest,
+      modules: [],
+    };
+  }
+  const defaultModule =
+    typeof rawDefaultModule === "string" ? rawDefaultModule : undefined;
+  if (
+    defaultModule !== undefined &&
+    (!isProjectionModulePath(defaultModule) ||
+      !isModuleDirectoryPath(defaultModule) ||
+      !Object.prototype.hasOwnProperty.call(modules, defaultModule))
+  ) {
+    return {
+      status: "invalid",
+      sourceSnapshotId,
+      manifestDigest: observation.digest,
+      modules: [],
+    };
+  }
+  return {
+    status: "ready",
+    sourceSnapshotId,
+    manifestDigest: observation.digest,
+    ...(defaultModule !== undefined ? { defaultModule } : {}),
+    modules: paths.map((path) =>
+      path === defaultModule ? { path, default: true } : { path },
+    ),
+  };
+}
+
+function compareModulePath(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** Keep this projection defensive even when a hand-seeded durable row bypasses
+ * the repository-manifest parser. The parser uses the same canonical spelling
+ * for module keys; aliases such as `./deploy/app` must never become choices. */
+function isProjectionModulePath(value: string): boolean {
+  if (
+    !value ||
+    value.trim() !== value ||
+    value.length > 1_024 ||
+    value.startsWith("/") ||
+    value.startsWith("./") ||
+    value.endsWith("/") ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    /^[A-Za-z]:/u.test(value)
+  ) {
+    return false;
+  }
+  if (value === ".") return true;
+  return !value
+    .split("/")
+    .some((segment) => !segment || segment === "." || segment === "..");
+}
+
+/** A manifest module is a directory choice, never an individual OpenTofu file. */
+function isModuleDirectoryPath(value: string): boolean {
+  return !/(?:\.tf|\.tofu)(?:\.json)?$/iu.test(value);
+}
+
+/**
  * SourceSyncRun ledger record. The lighter run kind that reuses the run
  * status/heartbeat lifecycle: `queued` -> `running` -> terminal, with the
  * resolution result fields filled on success. Never projected with credentials.
@@ -452,6 +626,11 @@ export const SOURCE_SNAPSHOT_FILE_PATH = (
   sourceSnapshotId: string,
 ): string =>
   `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(sourceSnapshotId)}/file`;
+export const SOURCE_SNAPSHOT_INSTALL_MODULES_PATH = (
+  sourceId: string,
+  sourceSnapshotId: string,
+): string =>
+  `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(sourceSnapshotId)}/install-modules`;
 export const WORKSPACE_STABLE_SOURCE_TAG_PATH = (workspaceId: string): string =>
   `${INTERNAL_V1_PREFIX}/workspaces/${encodeURIComponent(workspaceId)}/source-ref-resolutions/stable-semver`;
 export const SOURCE_COMPATIBILITY_CHECK_PATH = (id: string): string =>

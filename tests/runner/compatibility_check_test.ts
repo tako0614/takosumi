@@ -100,7 +100,6 @@ exit 0
     });
     expect(body.files).toEqual([
       { path: "main.tf", text: "terraform {}\n" },
-      { path: "nested/outputs.tf", text: 'output "x" { value = 1 }\n' },
     ]);
   } finally {
     Bun.env.PATH = previousPath;
@@ -120,7 +119,10 @@ test("compatibility_check runs inside source.modulePath when provided", async ()
     await mkdir(moduleRoot, { recursive: true });
     await mkdir(join(sourceRoot, ".well-known"), { recursive: true });
     await writeFile(join(sourceRoot, "root.tf"), "terraform {}\n");
-    await writeFile(join(moduleRoot, "main.tf"), "terraform {}\n");
+    await writeFile(
+      join(moduleRoot, "main.tf"),
+      'terraform { required_providers { cloudflare = { source = "cloudflare/cloudflare" } } }\n',
+    );
     await writeFile(
       join(sourceRoot, ".well-known", "tcs.json"),
       '{"schemaVersion":"tcs.repo/v1","inputs":[]}\n',
@@ -184,7 +186,10 @@ esac
         path: ".terraform.lock.hcl",
         text: 'provider "registry.opentofu.org/cloudflare/cloudflare" {}\n',
       },
-      { path: "main.tf", text: "terraform {}\n" },
+      {
+        path: "main.tf",
+        text: 'terraform { required_providers { cloudflare = { source = "cloudflare/cloudflare" } } }\n',
+      },
       {
         path: ".well-known/tcs.json",
         text: '{"schemaVersion":"tcs.repo/v1","inputs":[]}\n',
@@ -207,7 +212,10 @@ test("compatibility_check runs tofu init without provider credentials and return
   const previousCloudflareToken = Bun.env.CLOUDFLARE_API_TOKEN;
   try {
     await mkdir(sourceRoot, { recursive: true });
-    await writeFile(join(sourceRoot, "main.tf"), "terraform {}\n");
+    await writeFile(
+      join(sourceRoot, "main.tf"),
+      'terraform { required_providers { aws = { source = "hashicorp/aws" } } }\n',
+    );
     const tofuPath = join(fakeBin, "tofu");
     await writeFile(
       tofuPath,
@@ -261,7 +269,10 @@ esac
         path: ".terraform.lock.hcl",
         text: 'provider "registry.opentofu.org/hashicorp/aws" {}\n',
       },
-      { path: "main.tf", text: "terraform {}\n" },
+      {
+        path: "main.tf",
+        text: 'terraform { required_providers { aws = { source = "hashicorp/aws" } } }\n',
+      },
     ]);
   } finally {
     if (previousPath === undefined) delete Bun.env.PATH;
@@ -639,6 +650,7 @@ case "$1" in
     cp "$TF_CLI_CONFIG_FILE" "$PWD/strict-tofu.rc.seen"
     mkdir -p "$PWD/.terraform/providers/registry.opentofu.org/cloudflare/cloudflare/1.0.0/linux_amd64"
     printf 'provider-binary' > "$PWD/.terraform/providers/registry.opentofu.org/cloudflare/cloudflare/1.0.0/linux_amd64/terraform-provider-cloudflare"
+    printf 'provider "registry.opentofu.org/cloudflare/cloudflare" {}\n' > "$PWD/.terraform.lock.hcl"
     echo "init"
     ;;
   plan)

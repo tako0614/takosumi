@@ -10,6 +10,7 @@ import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-co
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   fakeProviderVault,
+  providerRequirementsForFixture,
   seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -457,6 +458,8 @@ output "endpoint" {
         ref: "main",
       },
       operation: "update",
+      requiredProviderRequirements:
+        providerRequirementsForFixture([CLOUDFLARE]),
       requiredProviders: [CLOUDFLARE],
     });
   const duringPlan = await operations.interfaces.get(iface.metadata.id);
@@ -554,6 +557,8 @@ output "endpoint" {
         ref: "main",
       },
       operation: "destroy",
+      requiredProviderRequirements:
+        providerRequirementsForFixture([CLOUDFLARE]),
       requiredProviders: [CLOUDFLARE],
     });
   await operations.controller.dispatchQueuedRun({

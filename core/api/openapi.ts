@@ -3241,6 +3241,73 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+    SourceSnapshotInstallModule: {
+      type: "object",
+      required: ["path"],
+      properties: {
+        path: {
+          type: "string",
+          minLength: 1,
+          description:
+            "Canonical repository module directory key; individual .tf files are never choices.",
+        },
+        default: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    SourceSnapshotInstallModulesResponse: {
+      oneOf: [
+        {
+          type: "object",
+          required: ["status", "sourceSnapshotId", "modules"],
+          properties: {
+            status: { const: "absent" },
+            sourceSnapshotId: { type: "string" },
+            modules: { type: "array", maxItems: 0, items: {} },
+          },
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          required: ["status", "sourceSnapshotId", "modules"],
+          properties: {
+            status: { const: "invalid" },
+            sourceSnapshotId: { type: "string" },
+            manifestDigest: {
+              type: "string",
+              pattern: "^sha256:[0-9a-f]{64}$",
+            },
+            modules: { type: "array", maxItems: 0, items: {} },
+          },
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          required: [
+            "status",
+            "sourceSnapshotId",
+            "manifestDigest",
+            "modules",
+          ],
+          properties: {
+            status: { const: "ready" },
+            sourceSnapshotId: { type: "string" },
+            manifestDigest: {
+              type: "string",
+              pattern: "^sha256:[0-9a-f]{64}$",
+            },
+            defaultModule: { type: "string", minLength: 1 },
+            modules: {
+              type: "array",
+              minItems: 1,
+              maxItems: 32,
+              items: ref("SourceSnapshotInstallModule"),
+            },
+          },
+          additionalProperties: false,
+        },
+      ],
+    },
   };
 }
 

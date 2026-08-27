@@ -36,7 +36,10 @@ import type {
   RunnerSecretExposurePolicy,
 } from "@takosumi/internal/deploy-control-api";
 import type { CreateRestoreRequest } from "takosumi-contract/backups";
-import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import type {
+  CapsuleCompatibilityReport,
+  CapsuleProviderRequirement,
+} from "takosumi-contract/capsules";
 import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
 import { usesDeclaredEnvCredentialRecipe } from "takosumi-contract/connections";
 import type {
@@ -81,6 +84,7 @@ import {
   ConnectionsService,
   resolvedProviderBindingsDigest,
   type ResolvedCapsuleProviderBinding,
+  validateRequiredProviderBindingIdentities,
 } from "../../connections/mod.ts";
 import type { ActivityRecorder } from "../../activity/mod.ts";
 import type { RecordActivityInput } from "../../activity/mod.ts";
@@ -101,6 +105,7 @@ import {
   OpenTofuControllerError,
   OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
+  PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
   RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
   requireNonEmptyString,
   runErrorCode,
@@ -201,7 +206,6 @@ import {
   newId,
   NON_TERMINAL_RUN_STATUSES,
   providerInstallationAuditEvents,
-  providersRequiringProviderBindings,
   publicCapsule,
   publicPlanRun,
   redactRunApproval,
@@ -640,26 +644,111 @@ function requestedGenericCapsuleVariables(
   return requested;
 }
 
-function providerBindingResolutionProviders(
-  providers: readonly string[],
+function providerBindingResolutionRequirements(
+  requirements: readonly CapsuleProviderRequirement[],
   runnerProfile?: Pick<RunnerProfile, "requireProviderBindings">,
-  credentialRequiredProviders: readonly string[] = [],
-): readonly string[] {
+): readonly CapsuleProviderRequirement[] {
   return runnerProfile?.requireProviderBindings === true
-    ? providersRequiringProviderBindings(providers, runnerProfile)
-    : normalizeProviders(credentialRequiredProviders);
+    ? requirements.map((requirement) => ({
+        ...requirement,
+        credentialRequired: true,
+      }))
+    : requirements;
 }
 
-function credentialRequiredProvidersFromCompatibilityReport(
-  report: CapsuleCompatibilityReport | undefined,
-): readonly string[] {
-  return normalizeProviders(
-    (report?.providers ?? [])
-      .filter(
-        (provider) => provider.allowed && provider.credentialRequired === true,
-      )
-      .map((provider) => provider.source),
+function requiredProviderRequirementsForNewPlan(
+  requiredProviders: readonly string[],
+  exact: readonly CapsuleProviderRequirement[],
+  defaultCredentialRequired = false,
+): readonly CapsuleProviderRequirement[] {
+  const requirements = exact.map((requirement) =>
+    defaultCredentialRequired
+      ? { ...requirement, credentialRequired: true }
+      : requirement,
   );
+  const validated = validateRequiredProviderBindingIdentities(requirements);
+  if (requirements.some((requirement) => requirement.allowed !== true)) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "required provider requirements must contain only allowed providers",
+    );
+  }
+  const sourceSet = new Set(
+    requirements.map((requirement) => requirement.source),
+  );
+  const requiredSourceSet = new Set(
+    requiredProviders.map(canonicalProviderAddress),
+  );
+  if (
+    sourceSet.size !== requiredSourceSet.size ||
+    [...requiredSourceSet].some((source) => !sourceSet.has(source))
+  ) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "required provider requirements do not match requiredProviders",
+    );
+  }
+  return validated;
+}
+
+/**
+ * Decode only a genuinely pre-field stored PlanRun. The legacy source mirror
+ * cannot recover aliases or module-local names, so its conservative identity
+ * is usable only for the historical default-name path and never for a new
+ * request that omitted exact rows.
+ */
+function legacyProviderRequirementsForStoredPlan(
+  requiredProviders: readonly string[],
+): readonly CapsuleProviderRequirement[] {
+  return requiredProviders.map((source) => ({
+    source: canonicalProviderAddress(source),
+    moduleLocalName: providerTypeLocalName(source),
+    allowed: true,
+  }));
+}
+
+function providerRequirementsFromCompatibilityReport(
+  report: CapsuleCompatibilityReport | undefined,
+  requiredProviders: readonly string[],
+): readonly CapsuleProviderRequirement[] {
+  if (!report) return [];
+  const required = new Set(requiredProviders.map(canonicalProviderAddress));
+  const requirements = report.providers.filter(
+    (provider) =>
+      provider.allowed &&
+      required.has(canonicalProviderAddress(provider.source)),
+  );
+  return validateRequiredProviderBindingIdentities(requirements);
+}
+
+function providerRequirementsFromResolvedBindings(
+  resolved: readonly ResolvedCapsuleProviderBinding[],
+): readonly CapsuleProviderRequirement[] {
+  const ambiguous = resolved.find(
+    (entry) => entry.alias !== undefined || entry.moduleLocalName === undefined,
+  );
+  if (ambiguous) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      ambiguous.alias !== undefined
+        ? `deprecated ambiguous ProviderBinding alias cannot compile an exact provider identity: ${ambiguous.alias}`
+        : `ProviderBinding ${ambiguous.provider} must declare moduleLocalName before it can compile an exact provider identity`,
+      { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+    );
+  }
+  const requirements = resolved.map((entry) => ({
+    source: canonicalProviderAddress(entry.provider),
+    moduleLocalName: entry.moduleLocalName!,
+    ...(entry.childAlias ? { childAlias: entry.childAlias } : {}),
+    allowed: true,
+    credentialRequired: true,
+  }));
+  return validateRequiredProviderBindingIdentities(requirements);
+}
+
+function providerTypeLocalName(source: string): string {
+  const canonical = canonicalProviderAddress(source);
+  return canonical.split("/").at(-1) ?? canonical;
 }
 
 function rootProviderRequirementsFromCompatibilityReport(
@@ -667,20 +756,18 @@ function rootProviderRequirementsFromCompatibilityReport(
   requiredProviders: readonly string[],
 ): readonly RootProviderRequirement[] | undefined {
   if (!report) return undefined;
-  const required = new Set(requiredProviders.map(canonicalProviderAddress));
-  const requirements = report.providers
-    .filter(
-      (provider) =>
-        provider.allowed &&
-        required.has(canonicalProviderAddress(provider.source)),
-    )
-    .map((provider) => ({
-      provider: provider.source,
-      localName:
-        provider.localName ??
-        canonicalProviderAddress(provider.source).split("/").at(-1) ??
-        provider.source,
-    }));
+  const requirements = providerRequirementsFromCompatibilityReport(
+    report,
+    requiredProviders,
+  ).flatMap((provider, index, all) =>
+    all.findIndex(
+      (candidate) =>
+        candidate.source === provider.source &&
+        candidate.moduleLocalName === provider.moduleLocalName,
+    ) === index
+      ? [{ provider: provider.source, localName: provider.moduleLocalName }]
+      : [],
+  );
   return requirements.length > 0 ? requirements : undefined;
 }
 
@@ -1191,7 +1278,7 @@ export class RunEngine {
 
   resolveCapsuleProviderBindingsForRun(
     capsule: Capsule,
-    requiredProviders: readonly string[],
+    requiredProviders: readonly CapsuleProviderRequirement[],
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     return this.#resolveCapsuleProviderBindingsForRun(
       capsule,
@@ -1324,8 +1411,20 @@ export class RunEngine {
       };
     const now = this.#now();
     const variables = normalizeVariables(request.variables);
+    if (!Array.isArray(request.requiredProviderRequirements)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "requiredProviderRequirements must be present for every new Plan, including an explicit empty array",
+      );
+    }
     const declaredProviders = normalizeProviders(
-      request.requiredProviders ?? [],
+      request.requiredProviders ??
+        request.requiredProviderRequirements.map((entry) => entry.source),
+    );
+    const requiredProviderRequirements = requiredProviderRequirementsForNewPlan(
+      declaredProviders,
+      request.requiredProviderRequirements,
+      profile.requireProviderBindings === true,
     );
     const currentInstallConfig = await this.#store.getInstallConfig(
       capsule.installConfigId,
@@ -1372,20 +1471,12 @@ export class RunEngine {
         currentInstallConfig,
         variables,
       );
-      const compatibilityReport = internal.compatibilityReportId
-        ? await this.#store.getCapsuleCompatibilityReport(
-            internal.compatibilityReportId,
-          )
-        : undefined;
       const resolvedProviderBindings =
         await this.#resolveCapsuleProviderBindingsForRun(
           capsule,
-          providerBindingResolutionProviders(
-            declaredProviders,
+          providerBindingResolutionRequirements(
+            requiredProviderRequirements,
             profile,
-            credentialRequiredProvidersFromCompatibilityReport(
-              compatibilityReport,
-            ),
           ),
         );
       let rematerialized: CapsuleModuleVariableMaterialization | undefined;
@@ -1476,6 +1567,7 @@ export class RunEngine {
       runnerProfileId: profile.id,
       variablesDigest,
       requiredProviders: declaredProviders,
+      requiredProviderRequirements,
       baseStateGeneration,
       ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
       ...(internal.compatibilityReportId
@@ -1558,6 +1650,7 @@ export class RunEngine {
             { ...request, source: request.source },
             capsule,
             internal.compatibilityReportId,
+            requiredProviderRequirements,
           )
         : undefined);
     const generatedRoot = genericRootDispatch?.generatedRoot;
@@ -2557,6 +2650,7 @@ export class RunEngine {
   }): Promise<{
     readonly request: CreatePlanRunRequest;
     readonly capsulePlan: CapsulePlanContext;
+    readonly requiredProviderRequirements: readonly CapsuleProviderRequirement[];
     readonly genericRootPlan?: GenericRootPlanContext;
     readonly capsulePlanExecutionAuthority: CapsulePlanExecutionAuthority;
   }> {
@@ -2569,6 +2663,7 @@ export class RunEngine {
     return {
       request: generic.request,
       capsulePlan: generic.capsulePlan,
+      requiredProviderRequirements: generic.requiredProviderRequirements,
       genericRootPlan: generic.genericRootPlan,
       capsulePlanExecutionAuthority: generic.capsulePlanExecutionAuthority,
     };
@@ -2594,6 +2689,7 @@ export class RunEngine {
   ): Promise<{
     readonly request: CreatePlanRunRequest;
     readonly capsulePlan: CapsulePlanContext;
+    readonly requiredProviderRequirements: readonly CapsuleProviderRequirement[];
     readonly genericRootPlan: GenericRootPlanContext;
     readonly capsulePlanExecutionAuthority: CapsulePlanExecutionAuthority;
   }> {
@@ -2605,30 +2701,34 @@ export class RunEngine {
       profile.allowedProviders,
     );
     let requiredProviders = compatibilityProviders;
-    let capsulePlan = await this.#planResolution.resolveCapsulePlan(
-      input.capsule,
-      providerBindingResolutionProviders(
+    let requiredProviderRequirements =
+      providerRequirementsFromCompatibilityReport(
+        input.compatibilityReport,
         requiredProviders,
+      );
+    if (
+      input.compatibilityReport === undefined &&
+      requiredProviderRequirements.length === 0
+    ) {
+      const resolvedBindings = await this.#resolveCapsuleProviderBindings(
+        input.capsule,
+      );
+      if (resolvedBindings.length > 0) {
+        requiredProviderRequirements = providerRequirementsFromResolvedBindings(
+          resolvedBindings,
+        );
+        requiredProviders = normalizeProviders(
+          requiredProviderRequirements.map((requirement) => requirement.source),
+        );
+      }
+    }
+    const capsulePlan = await this.#planResolution.resolveCapsulePlan(
+      input.capsule,
+      providerBindingResolutionRequirements(
+        requiredProviderRequirements,
         profile,
-        credentialRequiredProvidersFromCompatibilityReport(
-          input.compatibilityReport,
-        ),
       ),
     );
-    const bindingProviders = capsulePlan.requiredProvidersFromBindings;
-    if (requiredProviders.length === 0 && bindingProviders.length > 0) {
-      requiredProviders = bindingProviders;
-      capsulePlan = await this.#planResolution.resolveCapsulePlan(
-        input.capsule,
-        providerBindingResolutionProviders(
-          requiredProviders,
-          profile,
-          credentialRequiredProvidersFromCompatibilityReport(
-            input.compatibilityReport,
-          ),
-        ),
-      );
-    }
     const sourceFiles = await this.#sourceModuleFilesForGenericCapsule(
       input.compatibilityReport,
       input.snapshot,
@@ -2683,6 +2783,7 @@ export class RunEngine {
     });
     return {
       capsulePlan,
+      requiredProviderRequirements,
       capsulePlanExecutionAuthority: {
         workspaceId: input.capsule.workspaceId,
         capsuleId: input.capsule.id,
@@ -2696,6 +2797,7 @@ export class RunEngine {
         source: moduleSource,
         operation: input.operation,
         runnerProfileId: profile.id,
+        requiredProviderRequirements,
         requiredProviders,
         ...(Object.keys(variables).length > 0 ? { variables } : {}),
       },
@@ -2915,6 +3017,7 @@ export class RunEngine {
     request: CreatePlanRunRequest,
     capsule: Capsule,
     compatibilityReportId: string | undefined,
+    requiredProviderRequirements: readonly CapsuleProviderRequirement[],
   ): Promise<GenericRootDispatchContext> {
     const installConfig = await this.#store.getInstallConfig(
       capsule.installConfigId,
@@ -2941,10 +3044,9 @@ export class RunEngine {
     const lifecycleActions = lifecycleActionsForPlan(installConfig, profile);
     const resolved = await this.#resolveCapsuleProviderBindingsForRun(
       capsule,
-      providerBindingResolutionProviders(
-        requiredProviders,
+      providerBindingResolutionRequirements(
+        requiredProviderRequirements,
         profile,
-        credentialRequiredProvidersFromCompatibilityReport(compatibilityReport),
       ),
     );
     return await this.#genericRootDispatchForRequest(
@@ -2991,7 +3093,7 @@ export class RunEngine {
    */
   #resolveCapsuleProviderBindingsForRun(
     capsule: Capsule,
-    requiredProviders: readonly string[],
+    requiredProviders: readonly CapsuleProviderRequirement[],
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
@@ -3000,6 +3102,34 @@ export class RunEngine {
         this.#allowOperatorScopedProviderConnections,
     });
     return this.#connectionsService.resolveProviderBindingsForRun(
+      capsule,
+      requiredProviders,
+    );
+  }
+
+  #resolveCapsuleProviderBindings(
+    capsule: Capsule,
+  ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    this.#connectionsService ??= new ConnectionsService({
+      store: this.#store,
+      operatorProviderConnections: this.#operatorProviderConnections,
+      allowOperatorScopedProviderConnections:
+        this.#allowOperatorScopedProviderConnections,
+    });
+    return this.#connectionsService.resolveProviderBindings(capsule);
+  }
+
+  #resolveCapsuleProviderBindingsForLegacyStoredRun(
+    capsule: Capsule,
+    requiredProviders: readonly CapsuleProviderRequirement[],
+  ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    this.#connectionsService ??= new ConnectionsService({
+      store: this.#store,
+      operatorProviderConnections: this.#operatorProviderConnections,
+      allowOperatorScopedProviderConnections:
+        this.#allowOperatorScopedProviderConnections,
+    });
+    return this.#connectionsService.resolveProviderBindingsForLegacyStoredRun(
       capsule,
       requiredProviders,
     );
@@ -3034,10 +3164,26 @@ export class RunEngine {
         { reason: "legacy_sourceless_destroy_ineligible" },
       );
     }
-    const resolvedBindings = await this.#resolveCapsuleProviderBindingsForRun(
-      capsule,
-      providersRequiringProviderBindings(requiredProviders, runnerProfile),
+    const requiredProviderRequirements = requiredProviderRequirementsForNewPlan(
+      requiredProviders,
+      appliedPlan.requiredProviderRequirements ??
+        legacyProviderRequirementsForStoredPlan(requiredProviders),
+      runnerProfile.requireProviderBindings === true,
     );
+    const bindingRequirements = providerBindingResolutionRequirements(
+      requiredProviderRequirements,
+      runnerProfile,
+    );
+    const resolvedBindings =
+      appliedPlan.requiredProviderRequirements === undefined
+        ? await this.#resolveCapsuleProviderBindingsForLegacyStoredRun(
+            capsule,
+            bindingRequirements,
+          )
+        : await this.#resolveCapsuleProviderBindingsForRun(
+            capsule,
+            bindingRequirements,
+          );
     const generatedRoot = generateOpenTofuChildModuleRoot({
       requiredProviders,
       inputs: {},
@@ -3052,6 +3198,7 @@ export class RunEngine {
       appliedPlanRunId: appliedPlan.id,
       sourceSnapshotId: appliedPlan.sourceSnapshotId,
       requiredProviders,
+      requiredProviderRequirements,
     });
     return await this.createPlanRun(
       {
@@ -3062,6 +3209,7 @@ export class RunEngine {
           digest: sourceDigest,
         },
         operation: "destroy",
+        requiredProviderRequirements,
         requiredProviders,
         runnerProfileId: runnerProfile.id,
       },
@@ -4568,17 +4716,45 @@ export class RunEngine {
           planRun.compatibilityReportId,
         )
       : undefined;
+    const requiredProviderRequirements =
+      planRun.requiredProviderRequirements !== undefined
+        ? requiredProviderRequirementsForNewPlan(
+            planRun.requiredProviders,
+            planRun.requiredProviderRequirements,
+          )
+        : requiredProviderRequirementsForNewPlan(
+            planRun.requiredProviders,
+            legacyProviderRequirementsForStoredPlan(
+              planRun.requiredProviders,
+            ).map((requirement) => ({
+              ...requirement,
+              ...(compatibilityReport?.providers.some(
+                (provider) =>
+                  canonicalProviderAddress(provider.source) ===
+                    requirement.source &&
+                  provider.credentialRequired === true,
+              )
+                ? { credentialRequired: true }
+                : {}),
+            })),
+          );
     // Run-scoped: exact ProviderBindings required by this plan and its
     // CompatibilityReport. This keeps minted credentials aligned with the
     // generated provider blocks without inferring requirements from allowlists.
-    return await this.#connectionsService.resolveProviderBindingsForRun(
-      capsule,
-      providerBindingResolutionProviders(
-        planRun.requiredProviders,
-        profile,
-        credentialRequiredProvidersFromCompatibilityReport(compatibilityReport),
-      ),
+    const bindingRequirements = providerBindingResolutionRequirements(
+      requiredProviderRequirements,
+      profile,
     );
+    return planRun.requiredProviderRequirements === undefined ||
+        planRun.source.kind === "operator_module"
+      ? await this.#connectionsService.resolveProviderBindingsForLegacyStoredRun(
+          capsule,
+          bindingRequirements,
+        )
+      : await this.#connectionsService.resolveProviderBindingsForRun(
+          capsule,
+          bindingRequirements,
+        );
   }
 
   /**
@@ -6044,6 +6220,12 @@ export class RunEngine {
     const requiredProviders = normalizeProviders(
       result.requiredProviders ?? running.requiredProviders,
     );
+    if (running.requiredProviderRequirements !== undefined) {
+      requiredProviderRequirementsForNewPlan(
+        requiredProviders,
+        running.requiredProviderRequirements,
+      );
+    }
     // Re-evaluate against the SAME provider-free allowance as the create gate:
     // a provider-free Capsule that observes zero providers at
     // plan time stays passed instead of tripping the "providers before init"

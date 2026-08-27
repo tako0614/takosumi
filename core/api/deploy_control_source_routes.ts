@@ -11,7 +11,10 @@ import type {
   StableSourceTagResolutionRequest,
   SourceSnapshotFileResponse,
 } from "takosumi-contract/sources";
-import { toPublicSourceSnapshot } from "takosumi-contract/sources";
+import {
+  sourceSnapshotInstallModulesProjection,
+  toPublicSourceSnapshot,
+} from "takosumi-contract/sources";
 import { TAKOSUMI_REPOSITORY_MANIFEST_PATH } from "../../contract/repository-manifest.ts";
 import type { CreateSourceCompatibilityCheckRequest } from "takosumi-contract/capsules";
 import { isAbsolute, normalize } from "node:path";
@@ -37,6 +40,7 @@ import {
   TAKOSUMI_SOURCE_ROUTE,
   TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE,
   TAKOSUMI_SOURCE_SNAPSHOT_FILE_ROUTE,
+  TAKOSUMI_SOURCE_SNAPSHOT_INSTALL_MODULES_ROUTE,
   TAKOSUMI_WORKSPACE_STABLE_SOURCE_TAG_ROUTE,
   TAKOSUMI_SOURCE_SYNC_ROUTE,
   TAKOSUMI_SOURCES_ROUTE,
@@ -164,6 +168,19 @@ export const DEPLOY_CONTROL_SOURCE_ENDPOINTS: readonly DeployControlEndpoint[] =
       },
       notImplementedMessage:
         "SourceSnapshot presentation-file inspection not wired",
+    },
+    {
+      method: "GET",
+      path: TAKOSUMI_SOURCE_SNAPSHOT_INSTALL_MODULES_ROUTE,
+      summary:
+        "Lists validated repository-owned install module directories for one immutable SourceSnapshot.",
+      auth: "deploy-control-token",
+      operationId: "listSourceSnapshotInstallModules",
+      openapi: {
+        pathParams: ["sourceId", "sourceSnapshotId"],
+        okSchema: "SourceSnapshotInstallModulesResponse",
+      },
+      notImplementedMessage: "SourceSnapshot install module projection not wired",
     },
     {
       method: "POST",
@@ -402,6 +419,41 @@ export function mountDeployControlSourceRoutes(
         { sourceSnapshotId, ...file } satisfies SourceSnapshotFileResponse,
         200,
       );
+    });
+  });
+
+  app.get(TAKOSUMI_SOURCE_SNAPSHOT_INSTALL_MODULES_ROUTE, async (c) => {
+    const auth = await authorizeDeployControl(c, dependencies);
+    if (!auth.ok) return auth.response;
+    const sourceId = c.req.param("sourceId");
+    const sourceSnapshotId = c.req.param("sourceSnapshotId");
+    if (
+      !SOURCE_ID_PATTERN.test(sourceId) ||
+      !/^snap_[0-9a-zA-Z]{8,64}$/u.test(sourceSnapshotId)
+    ) {
+      return c.json(
+        errorEnvelope(
+          c,
+          "invalid_argument",
+          "invalid Source or SourceSnapshot id",
+        ),
+        400,
+      );
+    }
+    return await runHandler(c, async () => {
+      const source = await controller.getSource(sourceId);
+      ensureWorkspacePermission(auth.principal, source.source.workspaceId);
+      const snapshot = await controller.getSourceSnapshot(sourceSnapshotId);
+      if (
+        snapshot.sourceId !== sourceId ||
+        snapshot.workspaceId !== source.source.workspaceId
+      ) {
+        throw new OpenTofuControllerError(
+          "not_found",
+          "SourceSnapshot does not belong to Source",
+        );
+      }
+      return c.json(sourceSnapshotInstallModulesProjection(snapshot), 200);
     });
   });
 

@@ -46,6 +46,10 @@ const SERVICE_IDENTITY_MAX_BYTES = 1024;
 const API_PREFIX = "/api/v1";
 const CLOUDFLARE_PROVIDER_SOURCE =
   "registry.opentofu.org/cloudflare/cloudflare";
+const EXACT_PROVIDER_SOURCE_PATTERN =
+  /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\/[a-z0-9][a-z0-9_-]*\/[a-z0-9][a-z0-9_-]*$/u;
+const OPENTOFU_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+const MAX_SMOKE_PROVIDER_BINDINGS = 64;
 const NODE_HTTP_TRANSPORT_SCRIPT = String.raw`
 const chunks = [];
 function finish(payload) {
@@ -198,6 +202,19 @@ type SmokeRunTiming = {
   readonly totalMs?: number;
 };
 
+export interface SmokeProviderBindingInput {
+  /** Exact canonical provider source required by the selected module. */
+  readonly provider: string;
+  /** Exact local provider name in the selected module, when declared. */
+  readonly moduleLocalName?: string;
+  /** Alias expected by the selected module; omitted means its default. */
+  readonly childAlias?: string;
+  /** Alias of the generated root provider block; omitted means its default. */
+  readonly rootAlias?: string;
+  /** Existing Workspace ProviderConnection selected explicitly by the operator. */
+  readonly connectionId: string;
+}
+
 export interface PlatformControlPlaneSmokeOptions {
   readonly url: string;
   readonly accountSessionToken: string;
@@ -212,6 +229,14 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
   /** Existing workspace/provider connection to bind without creating or revoking it. */
   readonly providerConnectionId?: string;
+  /**
+   * Explicit 0..N ProviderBindings for the selected module. The singular
+   * providerConnectionId remains a compatibility shorthand for one default
+   * binding whose provider source is read from that connection.
+   */
+  readonly providerBindings: readonly SmokeProviderBindingInput[];
+  /** True when the operator supplied the 0..N binding set, including `[]`. */
+  readonly providerBindingsExplicit: boolean;
   readonly cloudflareResourcePreflight: CloudflareResourcePreflightMode;
   readonly runnerProfileId?: string;
   readonly workspace: string;
@@ -325,6 +350,9 @@ export interface PlatformControlPlaneSmokeResult {
     readonly cloudflareWorkersSubdomainSource: NonSecretInputSource;
     readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
     readonly providerConnectionId?: string;
+    readonly providerBindingCount: number;
+    readonly providerBindingsExplicit: boolean;
+    readonly providerBindingsDigest?: string;
     readonly cloudflareResourcePreflight: CloudflareResourcePreflightMode;
     readonly runnerProfileId?: string;
     readonly sourceMode: "git";
@@ -376,6 +404,8 @@ interface CliArgs {
   readonly cloudflareWorkersSubdomainFile?: string;
   readonly cloudflareConnectionMode?: string;
   readonly providerConnectionId?: string;
+  readonly providerBindingsJson?: string;
+  readonly providerBindingsJsonFile?: string;
   readonly cloudflareResourcePreflight?: string;
   readonly runnerProfileId?: string;
   readonly workspace?: string;
@@ -698,12 +728,40 @@ export async function resolveOptions(
   const providerConnectionId = optionalProviderConnectionId(
     args.providerConnectionId ?? env.TAKOSUMI_SMOKE_PROVIDER_CONNECTION_ID,
   );
+  const providerBindingsInline =
+    args.providerBindingsJson ?? env.TAKOSUMI_SMOKE_PROVIDER_BINDINGS_JSON;
+  const providerBindingsFile =
+    args.providerBindingsJsonFile ??
+    env.TAKOSUMI_SMOKE_PROVIDER_BINDINGS_JSON_FILE;
   if (
-    providerConnectionId !== undefined &&
+    providerBindingsInline !== undefined &&
+    providerBindingsFile !== undefined
+  ) {
+    throw new Error(
+      "--provider-bindings-json cannot be combined with --provider-bindings-json-file",
+    );
+  }
+  const providerBindingsExplicit =
+    providerBindingsInline !== undefined || providerBindingsFile !== undefined;
+  const providerBindings = parseSmokeProviderBindings(
+    await readJsonValueInput({
+      inline: providerBindingsInline,
+      file: providerBindingsFile,
+      label: "provider bindings",
+      fallback: [],
+    }),
+  );
+  if (providerConnectionId !== undefined && providerBindingsExplicit) {
+    throw new Error(
+      "--provider-connection-id cannot be combined with --provider-bindings-json or --provider-bindings-json-file",
+    );
+  }
+  if (
+    (providerConnectionId !== undefined || providerBindingsExplicit) &&
     cloudflareConnectionMode !== "none"
   ) {
     throw new Error(
-      "--provider-connection-id / TAKOSUMI_SMOKE_PROVIDER_CONNECTION_ID requires --cloudflare-connection-mode none; it cannot be combined with guided or generic-env",
+      "existing ProviderBindings require --cloudflare-connection-mode none; they cannot be combined with guided or generic-env",
     );
   }
   const verificationMode = parseVerificationMode(
@@ -726,7 +784,10 @@ export async function resolveOptions(
     verificationMode === "cloudflare-worker" ||
     cloudflareResourcePreflight !== "none";
   const providerlessOpenTofuSmoke =
-    cloudflareConnectionMode === "none" && verificationMode === "opentofu";
+    cloudflareConnectionMode === "none" &&
+    verificationMode === "opentofu" &&
+    providerConnectionId === undefined &&
+    providerBindings.length === 0;
   const cloudflareAccountId = cloudflareInputsRequired
     ? await readNonSecretInput({
         file: args.cloudflareAccountIdFile ?? env.CLOUDFLARE_ACCOUNT_ID_FILE,
@@ -923,6 +984,8 @@ export async function resolveOptions(
     cloudflareWorkersSubdomainSource: cloudflareWorkersSubdomain.source,
     cloudflareConnectionMode,
     ...(providerConnectionId ? { providerConnectionId } : {}),
+    providerBindings,
+    providerBindingsExplicit,
     cloudflareResourcePreflight,
     ...(runnerProfileId ? { runnerProfileId } : {}),
     workspace,
@@ -1107,10 +1170,11 @@ export function dryRunResult(
 function providerCredentialPath(
   options: Pick<
     PlatformControlPlaneSmokeOptions,
-    "cloudflareConnectionMode" | "providerConnectionId"
+    "cloudflareConnectionMode" | "providerConnectionId" | "providerBindings"
   >,
 ): "workspace_scoped_provider_connection" | "none" {
   return options.providerConnectionId !== undefined ||
+    options.providerBindings.length > 0 ||
     options.cloudflareConnectionMode !== "none"
     ? "workspace_scoped_provider_connection"
     : "none";
@@ -1119,11 +1183,12 @@ function providerCredentialPath(
 function temporaryProviderConnection(
   options: Pick<
     PlatformControlPlaneSmokeOptions,
-    "cloudflareConnectionMode" | "providerConnectionId"
+    "cloudflareConnectionMode" | "providerConnectionId" | "providerBindings"
   >,
 ): boolean {
   return (
     options.providerConnectionId === undefined &&
+    options.providerBindings.length === 0 &&
     options.cloudflareConnectionMode !== "none"
   );
 }
@@ -1211,7 +1276,7 @@ export async function runPlatformControlPlaneSmoke(
   };
   let connectionId: string | undefined;
   let providerConnectionId: string | undefined = options.providerConnectionId;
-  let providerConnectionSource: string | undefined;
+  let providerBindings: readonly SmokeProviderBindingInput[] = [];
   let connectionRevoked = false;
   let sourceId: string | undefined;
   let sourceSyncRunId: string | undefined;
@@ -1246,13 +1311,38 @@ export async function runPlatformControlPlaneSmoke(
       serviceIdentitySampleCount += 1;
     }
     workspaceId = await resolveWorkspaceId(options);
-    if (options.providerConnectionId !== undefined) {
-      beginStep("existingProviderConnectionSelected");
-      providerConnectionSource = await lookupExistingProviderConnectionSource(
-        options,
-        workspaceId,
-        options.providerConnectionId,
+    if (options.providerBindings.length > 0) {
+      beginStep("existingProviderConnectionsSelected");
+      providerBindings = await Promise.all(
+        options.providerBindings.map(async (binding, index) => {
+          const actualProvider = await lookupExistingProviderConnectionSource(
+            options,
+            workspaceId,
+            binding.connectionId,
+          );
+          if (canonicalProviderSource(actualProvider) !== binding.provider) {
+            throw new Error(
+              `ProviderBinding[${index}] connection source ${actualProvider} does not match binding provider ${binding.provider}`,
+            );
+          }
+          return binding;
+        }),
       );
+      completeStep("existingProviderConnectionsSelected");
+    } else if (options.providerConnectionId !== undefined) {
+      beginStep("existingProviderConnectionSelected");
+      const providerConnectionSource =
+        await lookupExistingProviderConnectionSource(
+          options,
+          workspaceId,
+          options.providerConnectionId,
+        );
+      providerBindings = [
+        {
+          provider: canonicalProviderSource(providerConnectionSource),
+          connectionId: options.providerConnectionId,
+        },
+      ];
       completeStep("existingProviderConnectionSelected");
     } else if (options.cloudflareConnectionMode !== "none") {
       beginStep("workspaceScopedProviderConnection");
@@ -1263,6 +1353,12 @@ export async function runPlatformControlPlaneSmoke(
       );
       connectionId = connection.rawConnectionId;
       providerConnectionId = connection.providerConnectionId;
+      providerBindings = [
+        {
+          provider: CLOUDFLARE_PROVIDER_SOURCE,
+          connectionId: connection.providerConnectionId,
+        },
+      ];
       completeStep("workspaceScopedProviderConnection");
       if (options.cloudflareConnectionMode === "generic-env") {
         beginStep("genericEnvProviderConnection");
@@ -1286,10 +1382,7 @@ export async function runPlatformControlPlaneSmoke(
     beginStep("plan");
     const deploy = await deployGitSourceCapsule(options, {
       workspaceId,
-      ...(providerConnectionId ? { providerConnectionId } : {}),
-      ...(providerConnectionSource
-        ? { providerConnectionSource }
-        : {}),
+      providerBindings,
     });
     sourceId = deploy.sourceId;
     sourceSyncRunId = deploy.sourceSyncRunId;
@@ -1718,10 +1811,22 @@ export function failedResult(
       : {}),
     timedOutRunId: input.timedOutRunId,
     runCancellationStatus: input.runCancellationStatus,
-    runCancellationError: input.runCancellationError,
+    runCancellationError:
+      input.runCancellationError === undefined
+        ? undefined
+        : publicErrorMessage(
+            input.runCancellationError,
+            options.providerBindings.map((binding) => binding.connectionId),
+          ),
     connectionRevokeSkippedReason: input.connectionRevokeSkippedReason,
-    failureCleanup: input.failureCleanup,
-    error: publicErrorMessage(input.error),
+    failureCleanup: redactFailureCleanup(
+      input.failureCleanup,
+      options.providerBindings.map((binding) => binding.connectionId),
+    ),
+    error: publicErrorMessage(
+      input.error,
+      options.providerBindings.map((binding) => binding.connectionId),
+    ),
     nextAction: failedNextAction(input),
     inputs: publicInputSummary(options),
   };
@@ -2092,8 +2197,7 @@ async function deployGitSourceCapsule(
   options: PlatformControlPlaneSmokeOptions,
   input: {
     readonly workspaceId: string;
-    readonly providerConnectionId?: string;
-    readonly providerConnectionSource?: string;
+    readonly providerBindings: readonly SmokeProviderBindingInput[];
   },
 ): Promise<
   DeployResponse & {
@@ -2135,13 +2239,10 @@ async function deployGitSourceCapsule(
     sourceSnapshotId,
     capsuleId: capsule.id,
   });
-  if (input.providerConnectionId) {
+  if (input.providerBindings.length > 0) {
     await putCapsuleProviderBindings(options, {
       capsuleId: capsule.id,
-      providerConnectionId: input.providerConnectionId,
-      ...(input.providerConnectionSource
-        ? { providerSource: input.providerConnectionSource }
-        : {}),
+      bindings: input.providerBindings,
     });
   }
   const plan = await requestJson<{ readonly run: RunRecord }>({
@@ -2472,8 +2573,7 @@ async function putCapsuleProviderBindings(
   options: PlatformControlPlaneSmokeOptions,
   input: {
     readonly capsuleId: string;
-    readonly providerConnectionId: string;
-    readonly providerSource?: string;
+    readonly bindings: readonly SmokeProviderBindingInput[];
   },
 ): Promise<void> {
   await requestJson({
@@ -2488,23 +2588,20 @@ async function putCapsuleProviderBindings(
 }
 
 export function smokeCapsuleProviderBindingsBody(input: {
-  readonly providerConnectionId: string;
-  readonly providerSource?: string;
+  readonly bindings: readonly SmokeProviderBindingInput[];
 }): Readonly<Record<string, unknown>> {
   return {
-    bindings: [
-      {
-        // Provider bindings address providers by source, not by the
-        // module-local name; the bare name never matches the connection's
-        // normalized registry source at plan time.
-        provider:
-          input.providerSource === undefined
-            ? "cloudflare/cloudflare"
-            : canonicalProviderSource(input.providerSource),
-        alias: "main",
-        connectionId: input.providerConnectionId,
-      },
-    ],
+    bindings: [...input.bindings]
+      .sort(compareSmokeProviderBindings)
+      .map((binding) => ({
+        provider: binding.provider,
+        ...(binding.moduleLocalName
+          ? { moduleLocalName: binding.moduleLocalName }
+          : {}),
+        ...(binding.childAlias ? { childAlias: binding.childAlias } : {}),
+        ...(binding.rootAlias ? { rootAlias: binding.rootAlias } : {}),
+        connectionId: binding.connectionId,
+      })),
   };
 }
 
@@ -3624,15 +3721,43 @@ function cloudflareApiErrorCode(body: unknown): string {
   return [code, message].filter(Boolean).join(": ") || "unknown_error";
 }
 
-function publicErrorMessage(error: unknown): string {
+function publicErrorMessage(
+  error: unknown,
+  redactedValues: readonly string[] = [],
+): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message
+  let redacted = message
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer <redacted>")
     .replace(
       /\b((?:token|secret|authorization|cookie)=)[^\s&]+/giu,
       "$1<redacted>",
     )
     .replace(/(takosumi_session=)[^;\s]+/giu, "$1<redacted>");
+  for (const value of [...new Set(redactedValues)].filter(Boolean)) {
+    redacted = redacted.replaceAll(value, "<provider-connection>");
+  }
+  return redacted;
+}
+
+function redactFailureCleanup(
+  cleanup: FailureCleanupResult | undefined,
+  redactedValues: readonly string[],
+): FailureCleanupResult | undefined {
+  if (cleanup === undefined) return undefined;
+  return {
+    ...cleanup,
+    ...(cleanup.destroyError === undefined
+      ? {}
+      : {
+          destroyError: publicErrorMessage(
+            cleanup.destroyError,
+            redactedValues,
+          ),
+        }),
+    ...(cleanup.error === undefined
+      ? {}
+      : { error: publicErrorMessage(cleanup.error, redactedValues) }),
+  };
 }
 
 function errorMessage(error: unknown): string {
@@ -3725,14 +3850,18 @@ function parseExpectedServiceIdentity(
   const headerName = rawHeaderName.trim().toLowerCase();
   const value = rawValue.trim();
   if (!headerName || !HTTP_HEADER_NAME.test(headerName)) {
-    throw new Error("expected service identity header must be a valid HTTP header name");
+    throw new Error(
+      "expected service identity header must be a valid HTTP header name",
+    );
   }
   if (
     !value ||
     Buffer.byteLength(value) > SERVICE_IDENTITY_MAX_BYTES ||
     /[\r\n]/u.test(value)
   ) {
-    throw new Error("expected service identity must be one bounded header value");
+    throw new Error(
+      "expected service identity must be one bounded header value",
+    );
   }
   return { headerName, value };
 }
@@ -3759,7 +3888,9 @@ export function assertServiceIdentityResponse(
   expectation: { readonly headerName: string; readonly value: string },
 ): void {
   if (headers.get(expectation.headerName) !== expectation.value) {
-    throw new Error("service identity response header did not match expectation");
+    throw new Error(
+      "service identity response header did not match expectation",
+    );
   }
 }
 
@@ -3864,13 +3995,154 @@ function parseCloudflareConnectionMode(
   );
 }
 
-function optionalProviderConnectionId(value: string | undefined): string | undefined {
+function optionalProviderConnectionId(
+  value: string | undefined,
+): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") {
     throw new Error("--provider-connection-id must be a non-empty string");
   }
   const normalized = value.trim();
   return normalized || undefined;
+}
+
+export function parseSmokeProviderBindings(
+  value: JsonSmokeValue,
+): readonly SmokeProviderBindingInput[] {
+  if (!Array.isArray(value)) {
+    throw new Error("provider bindings must be a JSON array");
+  }
+  if (value.length > MAX_SMOKE_PROVIDER_BINDINGS) {
+    throw new Error(
+      `provider bindings must contain at most ${MAX_SMOKE_PROVIDER_BINDINGS} entries`,
+    );
+  }
+  const bindings = value.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`provider bindings[${index}] must be an object`);
+    }
+    const allowed = new Set([
+      "provider",
+      "moduleLocalName",
+      "childAlias",
+      "rootAlias",
+      "connectionId",
+    ]);
+    const unknown = Object.keys(entry).filter((key) => !allowed.has(key));
+    if (unknown.length > 0) {
+      throw new Error(
+        `provider bindings[${index}] has unknown fields: ${unknown.sort().join(", ")}`,
+      );
+    }
+    const provider = requiredTrimmedString(
+      entry.provider,
+      `provider bindings[${index}].provider`,
+    );
+    if (
+      !EXACT_PROVIDER_SOURCE_PATTERN.test(provider) ||
+      canonicalProviderSource(provider) !== provider
+    ) {
+      throw new Error(
+        `provider bindings[${index}].provider must be an exact canonical provider source`,
+      );
+    }
+    const connectionId = requiredTrimmedString(
+      entry.connectionId,
+      `provider bindings[${index}].connectionId`,
+    );
+    const moduleLocalName = optionalOpenTofuIdentifier(
+      entry.moduleLocalName,
+      `provider bindings[${index}].moduleLocalName`,
+    );
+    const childAlias = optionalOpenTofuIdentifier(
+      entry.childAlias,
+      `provider bindings[${index}].childAlias`,
+    );
+    const rootAlias = optionalOpenTofuIdentifier(
+      entry.rootAlias,
+      `provider bindings[${index}].rootAlias`,
+    );
+    return {
+      provider,
+      ...(moduleLocalName ? { moduleLocalName } : {}),
+      ...(childAlias ? { childAlias } : {}),
+      ...(rootAlias ? { rootAlias } : {}),
+      connectionId,
+    } satisfies SmokeProviderBindingInput;
+  });
+  const addresses = new Set<string>();
+  const rootTargets = new Set<string>();
+  const rootSources = new Map<string, string>();
+  for (const binding of bindings) {
+    const address = stableJson([
+      binding.provider,
+      binding.moduleLocalName ?? null,
+      binding.childAlias ?? null,
+    ]);
+    if (addresses.has(address)) {
+      throw new Error(
+        `duplicate ProviderBinding address for ${binding.provider}`,
+      );
+    }
+    addresses.add(address);
+    const localProvider =
+      binding.moduleLocalName ?? binding.provider.split("/").at(-1)!;
+    const existingSource = rootSources.get(localProvider);
+    if (existingSource !== undefined && existingSource !== binding.provider) {
+      throw new Error(
+        `root provider local name ${localProvider} maps to multiple provider sources`,
+      );
+    }
+    rootSources.set(localProvider, binding.provider);
+    const rootTarget = stableJson([localProvider, binding.rootAlias ?? null]);
+    if (rootTargets.has(rootTarget)) {
+      throw new Error(
+        `duplicate root provider target for ${localProvider}${binding.rootAlias ? `.${binding.rootAlias}` : " (default)"}`,
+      );
+    }
+    rootTargets.add(rootTarget);
+  }
+  return bindings.sort(compareSmokeProviderBindings);
+}
+
+function requiredTrimmedString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function optionalOpenTofuIdentifier(
+  value: unknown,
+  label: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = requiredTrimmedString(value, label);
+  if (!OPENTOFU_IDENTIFIER_PATTERN.test(normalized)) {
+    throw new Error(`${label} must be a valid OpenTofu identifier`);
+  }
+  return normalized;
+}
+
+function compareSmokeProviderBindings(
+  left: SmokeProviderBindingInput,
+  right: SmokeProviderBindingInput,
+): number {
+  const leftKey = stableJson([
+    left.provider,
+    left.moduleLocalName ?? null,
+    left.childAlias ?? null,
+    left.rootAlias ?? null,
+    left.connectionId,
+  ]);
+  const rightKey = stableJson([
+    right.provider,
+    right.moduleLocalName ?? null,
+    right.childAlias ?? null,
+    right.rootAlias ?? null,
+    right.connectionId,
+  ]);
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
 }
 
 function parseAuthTokenKind(value: string | undefined): SmokeAuthTokenKind {
@@ -4279,6 +4551,9 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly cloudflareWorkersSubdomainSource: NonSecretInputSource;
   readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
   readonly providerConnectionId?: string;
+  readonly providerBindingCount: number;
+  readonly providerBindingsExplicit: boolean;
+  readonly providerBindingsDigest?: string;
   readonly cloudflareResourcePreflight: CloudflareResourcePreflightMode;
   readonly runnerProfileId?: string;
   readonly sourceMode: "git";
@@ -4309,6 +4584,13 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
     cloudflareConnectionMode: options.cloudflareConnectionMode,
     ...(options.providerConnectionId
       ? { providerConnectionId: options.providerConnectionId }
+      : {}),
+    providerBindingCount: options.providerBindings.length,
+    providerBindingsExplicit: options.providerBindingsExplicit,
+    ...(options.providerBindingsExplicit || options.providerBindings.length > 0
+      ? {
+          providerBindingsDigest: digestJson(options.providerBindings),
+        }
       : {}),
     cloudflareResourcePreflight: options.cloudflareResourcePreflight,
     ...(options.runnerProfileId
@@ -4549,6 +4831,7 @@ function requiredSteps(
     | "sourceMode"
     | "cloudflareConnectionMode"
     | "providerConnectionId"
+    | "providerBindings"
     | "cloudflareResourcePreflight"
     | "verificationMode"
     | "requireReleaseActivation"
@@ -4558,11 +4841,13 @@ function requiredSteps(
   >,
 ): readonly string[] {
   const steps = [
-    ...(options?.providerConnectionId
-      ? ["existingProviderConnectionSelected"]
-      : options?.cloudflareConnectionMode === "none"
-        ? ["providerConnectionNotRequired"]
-        : ["workspaceScopedProviderConnection"]),
+    ...(options?.providerBindings && options.providerBindings.length > 0
+      ? ["existingProviderConnectionsSelected"]
+      : options?.providerConnectionId
+        ? ["existingProviderConnectionSelected"]
+        : options?.cloudflareConnectionMode === "none"
+          ? ["providerConnectionNotRequired"]
+          : ["workspaceScopedProviderConnection"]),
     ...(options?.cloudflareConnectionMode === "generic-env"
       ? ["genericEnvProviderConnection"]
       : []),
@@ -5365,6 +5650,8 @@ Options:
   --workspace-display-name <name>                 display name used with --ensure-workspace
   --cloudflare-connection-mode <guided|generic-env|none> default none; guided/generic-env explicitly enable the Cloudflare reference contribution
   --provider-connection-id <id>                   bind an existing Workspace ProviderConnection; also TAKOSUMI_SMOKE_PROVIDER_CONNECTION_ID; mutually exclusive with guided/generic-env and never revoked
+  --provider-bindings-json <json>                 explicit array of 0..N {provider,moduleLocalName?,childAlias?,rootAlias?,connectionId}; mutually exclusive with the singular shorthand and guided/generic-env
+  --provider-bindings-json-file <path>            read the same non-secret binding array from JSON; or TAKOSUMI_SMOKE_PROVIDER_BINDINGS_JSON_FILE
   --cloudflare-resource-preflight <workers|account-resources|d1|none>
                                                    verify only the capabilities needed by the selected smoke before apply; workers is the Stable EdgeWorker gate, account-resources is the explicit Preview suite
   --runner-profile-id <id>                         request an enabled runner profile for Capsule plans; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID; providerless OpenTofu defaults to ${DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID}

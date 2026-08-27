@@ -69,6 +69,7 @@ test("Deploy Control API v1 request and response DTO top-level shapes are frozen
     "source",
     "runnerProfileId",
     "variables",
+    "requiredProviderRequirements",
     "requiredProviders",
   ]);
   expect(Object.keys(fixtures.planRunResponse)).toEqual(["planRun"]);

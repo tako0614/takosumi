@@ -5,9 +5,14 @@
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 
-export const CAPSULE_COMPATIBILITY_MAX_FILES = 256;
-export const CAPSULE_COMPATIBILITY_MAX_FILE_BYTES = 1024 * 1024;
-export const CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+import { DEFAULT_OPENTOFU_CONFIGURATION_LIMITS } from "../../lib/opentofu-configuration/src/mod.ts";
+
+export const CAPSULE_COMPATIBILITY_MAX_FILES =
+  DEFAULT_OPENTOFU_CONFIGURATION_LIMITS.maxFiles;
+export const CAPSULE_COMPATIBILITY_MAX_FILE_BYTES =
+  DEFAULT_OPENTOFU_CONFIGURATION_LIMITS.maxFileBytes;
+export const CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES =
+  DEFAULT_OPENTOFU_CONFIGURATION_LIMITS.maxTotalBytes;
 export const DEFAULT_PROVIDER_MIRROR_PATH = "/opt/opentofu/provider-mirror";
 export const PROVIDER_PLUGIN_CACHE_DIR_ENV =
   "TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR";

@@ -8,12 +8,8 @@
  * store-input defaulting rules the one-tap install path relies on.
  */
 import {
-  compareInstallConfigDeploymentProfiles,
-  installConfigDeploymentProfileSetIsValid,
-  isInstallConfigDeploymentProfile,
   normalizeInstallConfigSourcePath,
   normalizeInstallConfigSourceUrl,
-  type InstallConfigDeploymentProfile,
   type JsonValue,
 } from "takosumi-contract";
 import {
@@ -23,7 +19,7 @@ import {
   type CapsuleCompatibilityResult,
   type InstallConfig,
   type RunStatus,
-  type SourceSnapshotDeploymentProfileCatalog,
+  type SourceSnapshotInstallModulesResponse,
 } from "../../lib/control-api.ts";
 import {
   hasInstallPrefillParams,
@@ -62,14 +58,19 @@ interface EnvVariableRow {
 }
 
 type StoreMetadata = NonNullable<InstallConfig["store"]>;
-type StoreDeploymentProfile = InstallConfigDeploymentProfile;
-type StoreDeploymentProfileCatalog =
-  | { readonly status: "none" | "legacy"; readonly profiles: readonly [] }
-  | { readonly status: "invalid"; readonly profiles: readonly [] }
+
+export type InstallModuleCatalog =
+  | { readonly status: "none" | "absent"; readonly modules: readonly [] }
+  | { readonly status: "invalid"; readonly modules: readonly [] }
   | {
       readonly status: "ready";
-      readonly profiles: readonly StoreDeploymentProfile[];
-      readonly preselectedKey?: string;
+      readonly sourceSnapshotId: string;
+      readonly manifestDigest: string;
+      readonly defaultModule?: string;
+      readonly modules: readonly {
+        readonly path: string;
+        readonly default?: boolean;
+      }[];
     };
 
 const DEFAULT_STORE_BADGE = {
@@ -757,63 +758,72 @@ function storeInstallConfigsForSource(
 }
 
 /**
- * Public-safe profile projection for one canonical product listing. The
- * returned objects contain label/description and opaque ordering only; module,
- * provider, environment, and InstallConfig identity stay outside the UI model.
+ * Validate the bounded repository module projection before it drives the
+ * chooser. Unknown/invalid statuses are fail-closed and expose no path. The
+ * server is authoritative; this client-side check only prevents malformed
+ * responses from becoming an executable selection.
  */
-function storeDeploymentProfileCatalogForSource(
-  configs: readonly InstallConfig[],
-  url: string,
-): StoreDeploymentProfileCatalog {
-  const matches = storeInstallConfigsForSource(configs, url);
-  if (matches.length === 0) return { status: "none", profiles: [] };
-  const rawProfiles = matches.map(
-    (config) => config.store?.deploymentProfile as unknown,
-  );
-  const profiles = rawProfiles.filter(isInstallConfigDeploymentProfile);
-  if (profiles.length === 0 && matches.length === 1) {
-    return { status: "legacy", profiles: [] };
-  }
+function installModuleCatalogFromSnapshot(
+  catalog: SourceSnapshotInstallModulesResponse,
+): InstallModuleCatalog {
+  if (catalog.status === "absent") return { status: "absent", modules: [] };
+  if (catalog.status === "invalid") return { status: "invalid", modules: [] };
   if (
-    profiles.length !== matches.length ||
-    !installConfigDeploymentProfileSetIsValid(profiles)
+    catalog.status !== "ready" ||
+    !catalog.sourceSnapshotId.trim() ||
+    !/^sha256:[0-9a-f]{64}$/u.test(catalog.manifestDigest) ||
+    !Array.isArray(catalog.modules) ||
+    catalog.modules.length < 1 ||
+    catalog.modules.length > 32
   ) {
-    return { status: "invalid", profiles: [] };
+    return { status: "invalid", modules: [] };
   }
-  const sorted = [...profiles].sort(compareInstallConfigDeploymentProfiles);
-  const preselectedKey = sorted.find((profile) => profile.recommended)?.key;
+  const seen = new Set<string>();
+  const modules = catalog.modules.map((module) => {
+    if (!module || typeof module.path !== "string") return undefined;
+    const path = module.path.trim();
+    if (
+      !path ||
+      path !== normalizeSourcePath(path) ||
+      /(?:\.tf|\.tofu)(?:\.json)?$/iu.test(path) ||
+      seen.has(path) ||
+      (module.default !== undefined && typeof module.default !== "boolean")
+    ) {
+      return undefined;
+    }
+    seen.add(path);
+    return {
+      path,
+      ...(module.default === true ? { default: true } : {}),
+    };
+  });
+  if (modules.some((module) => module === undefined)) {
+    return { status: "invalid", modules: [] };
+  }
+  const sorted = (modules as {
+    readonly path: string;
+    readonly default?: boolean;
+  }[]).sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
+  const defaults = sorted.filter((module) => module.default === true);
+  if (defaults.length > 1) return { status: "invalid", modules: [] };
+  if (
+    catalog.defaultModule !== undefined &&
+    (!catalog.defaultModule.trim() ||
+      !sorted.some((module) => module.path === catalog.defaultModule) ||
+      (defaults[0] && defaults[0].path !== catalog.defaultModule))
+  ) {
+    return { status: "invalid", modules: [] };
+  }
   return {
     status: "ready",
-    profiles: sorted,
-    ...(preselectedKey !== undefined ? { preselectedKey } : {}),
-  };
-}
-
-/**
- * Validate the narrow snapshot-backed API projection before rendering it.
- * Source URL and module eligibility are intentionally absent here: the
- * authenticated server already bound both to the exact SourceSnapshot.
- */
-function storeDeploymentProfileCatalogFromSnapshot(
-  catalog: SourceSnapshotDeploymentProfileCatalog,
-): StoreDeploymentProfileCatalog {
-  if (catalog.status !== "ready") {
-    return { status: catalog.status, profiles: [] };
-  }
-  if (
-    catalog.profiles.length === 0 ||
-    !installConfigDeploymentProfileSetIsValid(catalog.profiles)
-  ) {
-    return { status: "invalid", profiles: [] };
-  }
-  const profiles = [...catalog.profiles].sort(
-    compareInstallConfigDeploymentProfiles,
-  );
-  const preselectedKey = profiles.find((profile) => profile.recommended)?.key;
-  return {
-    status: "ready",
-    profiles,
-    ...(preselectedKey !== undefined ? { preselectedKey } : {}),
+    sourceSnapshotId: catalog.sourceSnapshotId,
+    manifestDigest: catalog.manifestDigest,
+    ...(catalog.defaultModule !== undefined
+      ? { defaultModule: catalog.defaultModule }
+      : {}),
+    modules: sorted,
   };
 }
 
@@ -1016,8 +1026,6 @@ export type {
   InputVariableRow,
   EnvVariableRow,
   StoreMetadata,
-  StoreDeploymentProfile,
-  StoreDeploymentProfileCatalog,
   StoreEntry,
   StoreInputField,
   StoreInstallFeature,
@@ -1083,8 +1091,7 @@ export {
   storeSourceMatchesListing,
   storeSourceMatchesCoordinate,
   storeInstallConfigsForSource,
-  storeDeploymentProfileCatalogForSource,
-  storeDeploymentProfileCatalogFromSnapshot,
+  installModuleCatalogFromSnapshot,
   uniqueStoreInstallConfigForSource,
   storeMetadataFromStoreListing,
   storeEntryIdFromStoreListing,

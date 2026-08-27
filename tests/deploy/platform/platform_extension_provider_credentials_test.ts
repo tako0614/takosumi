@@ -59,6 +59,9 @@ test("a configured extension contributes one exact run-issued provider broker", 
       runCredentialSettings: { requiredAvailableMinor: 2300 },
     },
   ]);
+  expect(composition?.credentialRequiredProviderSources).toEqual([
+    "registry.terraform.io/tako0614/takoform",
+  ]);
   const recipe = composition?.credentialRecipes[0];
   expect(recipe).toMatchObject({
     id: "takosumi-hosted-takoform-run",
@@ -161,6 +164,70 @@ test("a configured extension contributes one exact run-issued provider broker", 
     phase: "apply",
     lifecycleIntent: "provision",
   });
+});
+
+test("provider broker sources contribute a sorted deduplicated exact-source authority", () => {
+  const composition = platformExtensionProviderCredentialComposition({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      {
+        basePath: "/extensions/one",
+        handlerKey: "ONE",
+        authDelivery: "context",
+        runCredential: {
+          audience: "operator.one.v1",
+          requiredScopes: ["one.invoke"],
+        },
+        providerCredentialBroker: {
+          connectionId: "conn_providerOne01",
+          recipeId: "provider-one-run",
+          providerSource: "registry.example.com/acme/one",
+          displayName: "Provider One",
+          exchangePath: "/credentials/one",
+          envNames: ["PROVIDER_ONE_TOKEN"],
+        },
+      },
+      {
+        basePath: "/extensions/two",
+        handlerKey: "TWO",
+        authDelivery: "context",
+        runCredential: {
+          audience: "operator.two.v1",
+          requiredScopes: ["two.invoke"],
+        },
+        providerCredentialBroker: {
+          connectionId: "conn_providerTwo01",
+          recipeId: "provider-two-run",
+          providerSource: "registry.example.com/acme/one",
+          displayName: "Provider One duplicate",
+          exchangePath: "/credentials/one",
+          envNames: ["PROVIDER_TWO_TOKEN"],
+        },
+      },
+      {
+        basePath: "/extensions/three",
+        handlerKey: "THREE",
+        authDelivery: "context",
+        runCredential: {
+          audience: "operator.three.v1",
+          requiredScopes: ["three.invoke"],
+        },
+        providerCredentialBroker: {
+          connectionId: "conn_providerThree01",
+          recipeId: "provider-three-run",
+          providerSource: "registry.opentofu.org/acme/three",
+          displayName: "Provider Three",
+          exchangePath: "/credentials/three",
+          envNames: ["PROVIDER_THREE_TOKEN"],
+        },
+      },
+    ]),
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.test",
+  });
+
+  expect(composition?.credentialRequiredProviderSources).toEqual([
+    "registry.example.com/acme/one",
+    "registry.opentofu.org/acme/three",
+  ]);
 });
 
 test("broker failures log only a stable status boundary", async () => {

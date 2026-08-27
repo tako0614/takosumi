@@ -27,7 +27,6 @@ import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/caps
 import {
   adoptRepoOwnedInstallConfig,
   resolveRepoOwnedInstallModulePath,
-  resolveRepoOwnedDeploymentProfile,
 } from "./repo-owned-install-config.ts";
 
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
@@ -121,6 +120,17 @@ export async function handleCapsuleInstallConfigReAdoption(
     );
   }
   const body = await readJsonObject(ctx.request);
+  if (
+    body &&
+    Object.prototype.hasOwnProperty.call(body, "deploymentProfileKey")
+  ) {
+    return errorJson(
+      "invalid_request",
+      "deploymentProfileKey is no longer accepted; module choice comes from the immutable SourceSnapshot manifest and host policy is generic or operator-explicit.",
+      400,
+      ctx.request,
+    );
+  }
   const request = body ? parseRequest(body) : undefined;
   if (!request) {
     return errorJson(
@@ -240,18 +250,15 @@ export async function handleCapsuleInstallConfigReAdoption(
       ctx.request,
     );
   }
-  const sharedConfigs =
-    request.baseInstallConfigId !== undefined ||
-      request.deploymentProfileKey !== undefined
-      ? await ctx.operations.capsules.listSharedInstallConfigs({
-        includeInternal: false,
-      })
-      : [];
+  // A re-adoption may use the generic host InstallConfig or an operator-
+  // explicitly supplied generic shared config. Legacy Store deployment
+  // profiles are intentionally not read here; their source-URL catalog is
+  // historical data and cannot contribute provider, policy, or module
+  // authority.
   const resolved = await resolveReAdoptionBaseInstallConfig({
     operations: ctx.operations,
     source,
     sourceSnapshot,
-    sharedConfigs,
     baseInstallConfigId: request.baseInstallConfigId,
     deploymentProfileKey: request.deploymentProfileKey,
   });
@@ -577,83 +584,65 @@ async function resolveReAdoptionBaseInstallConfig(input: {
   readonly operations: ControlPlaneOperations;
   readonly source: Source;
   readonly sourceSnapshot: SourceSnapshot;
-  readonly sharedConfigs: readonly InstallConfig[];
   readonly baseInstallConfigId: string | undefined;
   readonly deploymentProfileKey: string | undefined;
 }): Promise<ReAdoptionBaseInstallConfigResolution> {
-  if (
-    input.baseInstallConfigId === undefined &&
-    input.deploymentProfileKey === undefined
-  ) {
-    try {
-      const baseConfig = await input.operations.capsules.getInstallConfig(
-        DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
-      );
-      if (
-        baseConfig.workspaceId === undefined &&
-        baseConfig.internal === undefined
-      ) {
-        const moduleSelection = resolveRepoOwnedInstallModulePath({
-          sourceSnapshot: input.sourceSnapshot,
-          ...(baseConfig.modulePath !== undefined
-            ? { modulePath: baseConfig.modulePath }
-            : {}),
-        });
-        if (!moduleSelection.ok) {
-          return {
-            ok: false,
-            message: moduleSelection.diagnostic.message,
-          };
-        }
-        return {
-          ok: true,
-          baseConfig,
-          modulePath: moduleSelection.modulePath,
-        };
-      }
-    } catch (error) {
-      if (
-        !(error instanceof OpenTofuControllerError) ||
-        error.code !== "not_found"
-      ) {
-        throw error;
-      }
-      // A missing generic default is exposed through the typed fail-closed
-      // diagnostic below. Operational failures must remain observable.
+  if (input.deploymentProfileKey !== undefined) {
+    return {
+      ok: false,
+      message:
+        "deploymentProfileKey is no longer a source or policy selector; use the generic host policy.",
+    };
+  }
+  const configId = input.baseInstallConfigId ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID;
+  let baseConfig: InstallConfig;
+  try {
+    baseConfig = await input.operations.capsules.getInstallConfig(configId);
+  } catch (error) {
+    if (
+      !(error instanceof OpenTofuControllerError) ||
+      error.code !== "not_found"
+    ) {
+      throw error;
     }
     return {
       ok: false,
-      message: "The generic host InstallConfig is unavailable.",
+      message:
+        input.baseInstallConfigId === undefined
+          ? "The generic host InstallConfig is unavailable."
+          : "The requested generic host InstallConfig is unavailable.",
     };
   }
-
-  const profile = resolveRepoOwnedDeploymentProfile({
-    source: input.source,
-    sourceSnapshot: input.sourceSnapshot,
-    candidates: input.sharedConfigs,
-    ...(input.deploymentProfileKey !== undefined
-      ? { deploymentProfileKey: input.deploymentProfileKey }
-      : {}),
-  });
+  // Explicit base configs are an operator choice only when they are genuinely
+  // generic shared policy. Source-URL/Store rows (including legacy profile
+  // rows) are rejected before any provider or policy fields are read.
   if (
-    !profile.ok ||
-    (profile.kind !== "profile" && profile.kind !== "legacy") ||
-    input.baseInstallConfigId === undefined ||
-    profile.installConfig.id !== input.baseInstallConfigId
+    baseConfig.workspaceId !== undefined ||
+    baseConfig.internal !== undefined ||
+    baseConfig.sourceSelector !== undefined ||
+    baseConfig.store !== undefined
   ) {
     return {
       ok: false,
       message:
-        "The requested DB-owned deployment profile is unavailable for this SourceSnapshot.",
+        "The requested InstallConfig is not a generic host policy configuration.",
+    };
+  }
+  const moduleSelection = resolveRepoOwnedInstallModulePath({
+    sourceSnapshot: input.sourceSnapshot,
+  });
+  if (!moduleSelection.ok && input.sourceSnapshot.repositoryManifest) {
+    return {
+      ok: false,
+      message: moduleSelection.diagnostic.message,
     };
   }
   return {
     ok: true,
-    baseConfig: profile.installConfig,
-    modulePath:
-      profile.kind === "profile"
-        ? profile.modulePath
-        : (profile.installConfig.modulePath ?? input.sourceSnapshot.path),
+    baseConfig,
+    modulePath: moduleSelection.ok
+      ? moduleSelection.modulePath
+      : input.source.defaultPath,
   };
 }
 
@@ -747,9 +736,10 @@ function parseRequest(
   ) {
     return undefined;
   }
-  if (baseInstallConfigId === undefined && deploymentProfileKey !== undefined) {
-    return undefined;
-  }
+  // Legacy deployment-profile rows are inert history. Re-adoption accepts
+  // only the generic host policy or an explicitly named generic config; a
+  // profile key would otherwise invite source-URL policy selection.
+  if (deploymentProfileKey !== undefined) return undefined;
   const reason = exactString(value.reason);
   const authorityGuard = exactString(expected.authorityGuard);
   if (

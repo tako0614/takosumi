@@ -357,18 +357,8 @@ async function stubSourceOptionsRead(
 interface ProviderDestinationFixtureState extends SourceCreateFixtureState {
   readonly mutations: string[];
   readonly compatibilityBodies: unknown[];
-  readonly profileDiscoveryRequests: string[];
+  readonly installModuleRequests: string[];
   bindingBody?: { readonly bindings?: readonly Record<string, unknown>[] };
-}
-
-interface ProviderDestinationFixtureOptions {
-  readonly deploymentProfiles?: readonly {
-    readonly key: string;
-    readonly label: { readonly ja: string; readonly en: string };
-    readonly description: { readonly ja: string; readonly en: string };
-    readonly order: number;
-    readonly recommended: boolean;
-  }[];
 }
 
 /** Stub a complete manual source check while retaining mutation ordering. */
@@ -383,12 +373,11 @@ async function stubProviderDestinationFixture(
       credentialRequired: true,
     },
   ],
-  options: ProviderDestinationFixtureOptions = {},
 ): Promise<ProviderDestinationFixtureState> {
   const state: ProviderDestinationFixtureState = {
     mutations: [],
     compatibilityBodies: [],
-    profileDiscoveryRequests: [],
+    installModuleRequests: [],
     sourceListReads: [],
     sourcePosts: [],
   };
@@ -498,14 +487,18 @@ async function stubProviderDestinationFixture(
     }
     if (
       path ===
-        `/api/v1/sources/${sourceId}/snapshots/${snapshotId}/deployment-profiles` &&
+        `/api/v1/sources/${sourceId}/snapshots/${snapshotId}/install-modules` &&
       request.method() === "GET"
     ) {
-      state.profileDiscoveryRequests.push(path);
+      state.installModuleRequests.push(path);
       return route.fulfill({
-        json: options.deploymentProfiles
-          ? { status: "ready", profiles: options.deploymentProfiles }
-          : { status: "none", profiles: [] },
+        json: {
+          status: "ready",
+          sourceSnapshotId: snapshotId,
+          manifestDigest: `sha256:${"a".repeat(64)}`,
+          defaultModule: ".",
+          modules: [{ path: ".", default: true }],
+        },
       });
     }
     if (path === `/api/v1/sources/${sourceId}/compatibility-check`) {
@@ -1393,7 +1386,8 @@ test.describe("Takosumi dashboard browser surface", () => {
     const resolvedCommit = "0123456789abcdef0123456789abcdef01234567";
     const seenMutations: string[] = [];
     const prematureConfigReads: string[] = [];
-    const profileDiscoveryRequests: string[] = [];
+    const installModuleRequests: string[] = [];
+    const compatibilityBodies: unknown[] = [];
     const stableRefResolutionBodies: unknown[] = [];
     const sourcePostBodies: unknown[] = [];
     const syncBodies: unknown[] = [];
@@ -1454,73 +1448,7 @@ test.describe("Takosumi dashboard browser surface", () => {
         url.search === "?view=store"
       ) {
         prematureConfigReads.push(`${path}${url.search}`);
-        const profileConfig = (input: {
-          readonly id: string;
-          readonly key: string;
-          readonly label: string;
-          readonly modulePath: string;
-          readonly order: number;
-          readonly recommended: boolean;
-        }) => ({
-          id: input.id,
-          name: input.key,
-          sourceSelector: {
-            url: "https://github.com/example/service.git",
-            path: ".",
-          },
-          modulePath: input.modulePath,
-          variableMapping: {},
-          outputAllowlist: {},
-          policy: {},
-          store: {
-            source: {
-              url: "https://github.com/example/service.git",
-              path: ".",
-            },
-            order: 1,
-            surface: "service",
-            kind: "application",
-            provider: "portable-e2e",
-            suggestedName: "example-service",
-            badge: { ja: "追加", en: "Add" },
-            name: { ja: "Example Service", en: "Example Service" },
-            description: { ja: "Example", en: "Example" },
-            deploymentProfile: {
-              key: input.key,
-              label: { ja: input.label, en: input.label },
-              description: {
-                ja: `${input.label} fixture`,
-                en: `${input.label} fixture`,
-              },
-              order: input.order,
-              recommended: input.recommended,
-            },
-          },
-          createdAt: now,
-          updatedAt: now,
-        });
-        return route.fulfill({
-          json: {
-            installConfigs: [
-              profileConfig({
-                id: "cfg_store_takoform_e2e",
-                key: "takoform-v2",
-                label: "Takoform",
-                modulePath: "deploy/takoform",
-                order: 20,
-                recommended: true,
-              }),
-              profileConfig({
-                id: "cfg_store_cloudflare_e2e",
-                key: "cloudflare-v1",
-                label: "Cloudflare",
-                modulePath: "deploy/cloudflare",
-                order: 10,
-                recommended: false,
-              }),
-            ],
-          },
-        });
+        return route.fulfill({ json: { installConfigs: [] } });
       }
       if (path === "/api/v1/connections") {
         return route.fulfill({ json: { connections: [] } });
@@ -1603,45 +1531,25 @@ test.describe("Takosumi dashboard browser surface", () => {
       }
       if (
         path ===
-          "/api/v1/sources/src_install_e2e/snapshots/snap_install_e2e/deployment-profiles" &&
+          "/api/v1/sources/src_install_e2e/snapshots/snap_install_e2e/install-modules" &&
         request.method() === "GET"
       ) {
-        profileDiscoveryRequests.push(path);
+        installModuleRequests.push(path);
         return route.fulfill({
           json: {
             status: "ready",
-            profiles: [
-              {
-                key: "takoform-v2",
-                label: {
-                  ja: "Takoform",
-                  en: "Takoform",
-                },
-                description: {
-                  ja: "Takoform fixture",
-                  en: "Takoform fixture",
-                },
-                order: 20,
-                recommended: true,
-              },
-              {
-                key: "cloudflare-v1",
-                label: {
-                  ja: "Cloudflare",
-                  en: "Cloudflare",
-                },
-                description: {
-                  ja: "Cloudflare fixture",
-                  en: "Cloudflare fixture",
-                },
-                order: 10,
-                recommended: false,
-              },
+            sourceSnapshotId: "snap_install_e2e",
+            manifestDigest: `sha256:${"b".repeat(64)}`,
+            defaultModule: "deploy/takoform",
+            modules: [
+              { path: "." },
+              { path: "deploy/takoform", default: true },
             ],
           },
         });
       }
       if (path === "/api/v1/sources/src_install_e2e/compatibility-check") {
+        compatibilityBodies.push(request.postDataJSON());
         return route.fulfill({
           json: {
             report: {
@@ -1736,27 +1644,35 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(hostingOption).toHaveCount(0);
     expect(prematureConfigReads).toEqual([]);
     await page.getByRole("button", { name: /追加|Add/u }).last().click();
-    await expect(hostingOption).toBeVisible();
-    expect(profileDiscoveryRequests).toEqual([
-      "/api/v1/sources/src_install_e2e/snapshots/snap_install_e2e/deployment-profiles",
+    const moduleChooser = page.getByTestId("install-module-chooser");
+    await expect(moduleChooser).toBeVisible();
+    await expect
+      .poll(() => installModuleRequests.length)
+      .toBe(1);
+    expect(installModuleRequests).toEqual([
+      "/api/v1/sources/src_install_e2e/snapshots/snap_install_e2e/install-modules",
     ]);
     expect(seenMutations).not.toContain(
       "POST /api/v1/sources/src_install_e2e/compatibility-check",
     );
-    await expect(hostingOption).toHaveValue("");
-    await expect(hostingOption).toContainText(
-      /Takoform.*おすすめ|Takoform.*Recommended/u,
-    );
-    await hostingOption.selectOption("takoform-v2");
-    await expect(hostingOption).toHaveValue("takoform-v2");
-    await expect(page.getByText("Takoform fixture", { exact: true })).toBeVisible();
-    const hostingOptionConfirmation = page.getByRole("checkbox", {
-      name: /このプロバイダー \/ モジュールで追加することを確認しました|I confirm this Provider \/ module/u,
+    const moduleOption = moduleChooser.getByRole("combobox", {
+      name: /モジュールディレクトリ|Module directory/u,
     });
-    await expect(hostingOptionConfirmation).toBeVisible();
-    await expect(hostingOptionConfirmation).not.toBeChecked();
-    await hostingOptionConfirmation.check();
-    await page.getByRole("button", { name: /追加|Add/u }).last().click();
+    await expect(moduleOption).toHaveValue("deploy/takoform");
+    await expect(moduleOption.locator("option")).toHaveText([".", "deploy/takoform (default)"]);
+    await moduleChooser
+      .getByRole("button", {
+        name: /このモジュールで続ける|Continue with this module/u,
+      })
+      .click();
+    await expect
+      .poll(() => compatibilityBodies.length)
+      .toBe(1);
+    expect(compatibilityBodies[0]).toMatchObject({
+      compileInstallUx: true,
+      modulePath: "deploy/takoform",
+      sourceSnapshotId: "snap_install_e2e",
+    });
     await expect(
       page.getByRole("heading", { name: /サービスを設定|Set up the service/u }),
     ).toBeVisible();
@@ -1781,7 +1697,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     expect(syncBodies).toEqual([{ expectedRef: resolvedCommit }]);
   });
 
-  test("direct Git installs discover and submit the snapshot-bound deployment profile", async ({
+  test("direct Git installs submit the exact manifest module path", async ({
     page,
   }) => {
     test.skip(
@@ -1790,35 +1706,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
-    const state = await stubProviderDestinationFixture(
-      page,
-      [],
-      [],
-      {
-        deploymentProfiles: [
-          {
-            key: "takoform-v2",
-            label: { ja: "Takoform", en: "Takoform" },
-            description: {
-              ja: "Run on a Takoform Host",
-              en: "Run on a Takoform Host",
-            },
-            order: 10,
-            recommended: true,
-          },
-          {
-            key: "cloudflare-v1",
-            label: { ja: "Cloudflare", en: "Cloudflare" },
-            description: {
-              ja: "Run with a connected Cloudflare account",
-              en: "Run with a connected Cloudflare account",
-            },
-            order: 20,
-            recommended: false,
-          },
-        ],
-      },
-    );
+    const state = await stubProviderDestinationFixture(page, [], []);
     const query = new URLSearchParams({
       git: "https://github.com/tako0614/yurucommu.git",
       ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
@@ -1826,38 +1714,30 @@ test.describe("Takosumi dashboard browser surface", () => {
       name: "yurucommu",
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    const hostingOption = page.getByRole("combobox", {
-      name: /プロバイダー|Provider/u,
-    });
-    await expect(hostingOption).toHaveCount(0);
+    await expect(page.getByTestId("install-module-chooser")).toHaveCount(0);
 
     await page.getByRole("button", { name: /追加|Add/u }).click();
-    await expect(hostingOption).toBeVisible();
+    await expect
+      .poll(() => state.sourcePosts.length)
+      .toBe(1);
     expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
-    expect(state.profileDiscoveryRequests).toEqual([
-      "/api/v1/sources/src_provider_destination_e2e/snapshots/snap_provider_destination_e2e/deployment-profiles",
+    await expect
+      .poll(() => state.installModuleRequests.length)
+      .toBe(1);
+    expect(state.installModuleRequests).toEqual([
+      "/api/v1/sources/src_provider_destination_e2e/snapshots/snap_provider_destination_e2e/install-modules",
     ]);
-    expect(state.compatibilityBodies).toHaveLength(0);
-    await expect(hostingOption).toHaveValue("");
-
-    await hostingOption.selectOption("takoform-v2");
-    await expect(hostingOption).toHaveValue("takoform-v2");
-    await expect(
-      page.getByText("Run on a Takoform Host", { exact: true }),
-    ).toBeVisible();
-    const confirmation = page.getByRole("checkbox", {
-      name: /このプロバイダー \/ モジュールで追加することを確認しました|I confirm this Provider \/ module/u,
-    });
-    await confirmation.check();
-    await page.getByRole("button", { name: /追加|Add/u }).click();
     await expect
       .poll(() => state.compatibilityBodies.length)
       .toBe(1);
     expect(state.compatibilityBodies[0]).toMatchObject({
       compileInstallUx: true,
-      deploymentProfileKey: "takoform-v2",
+      modulePath: ".",
       sourceSnapshotId: "snap_provider_destination_e2e",
     });
+    expect(state.compatibilityBodies[0]).not.toHaveProperty(
+      "deploymentProfileKey",
+    );
     expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();

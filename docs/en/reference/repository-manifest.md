@@ -64,15 +64,32 @@ repository-relative path of at most 1,024 characters. Absolute paths, `./`
 prefixes, drive prefixes, a trailing slash, backslashes, NUL, empty segments,
 and `.` or `..` segments are invalid.
 
-For Store `compileInstallUx`, neither the client nor the Store sends a
-`modulePath`. After source sync, the server selects from the exact
-SourceSnapshot manifest, runs compatibility for that exact path, and persists
-the same path in the derived InstallConfig:
+For a Store URL-only `compileInstallUx`, the client initially sends no
+`modulePath`. After source sync, the authenticated
+`GET /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules`
+projection exposes only the manifest's module directory keys. A multi-module
+response is shown as a chooser (with `defaultModule` preselected, but never
+implicitly confirmed); one module may be selected automatically. Compatibility
+is called only after that selection boundary. The server then selects from the
+exact SourceSnapshot manifest, runs compatibility for that exact path, and
+persists the same path in the derived InstallConfig:
 
 Direct Git and repository-owned source options use the same `compileInstallUx`
 flow and may send their selected `modulePath`. The server validates that path
 as an exact `install.modules` key in the immutable SourceSnapshot manifest;
-Store metadata never selects executable behavior.
+Store metadata and DB-owned deployment-profile rows never select executable
+module, provider, or policy behavior. Historical profile rows are not a
+source-URL catalog; repository installs use the generic host policy (or an
+operator-explicit generic configuration) together with the manifest selection.
+
+The install-modules response is a bounded projection with `status`, the exact
+`sourceSnapshotId`, optional `manifestDigest`/`defaultModule`, and
+`modules: [{ path, default? }]`. It never returns manifest inputs, provider
+requirements, policy, or individual `.tf` files. `absent` and `invalid`
+responses contain no candidates; an explicit path against either response is a
+typed fail-closed 4xx. This endpoint is account-session authenticated and
+checks both Source Workspace access and the exact SourceSnapshot-to-Source
+relationship.
 
 1. If `modules` has one entry, select its only key.
 2. Multiple entries require `install.defaultModule` in `takosumi.com/v2.1`,
@@ -83,8 +100,13 @@ Store metadata never selects executable behavior.
 Takosumi never guesses `.`, the first JSON object key, a path from
 `.well-known/tcs.json`, `Source.defaultPath`, or a base
 `InstallConfig.modulePath`. A missing or invalid default returns a typed
-diagnostic before compatibility runs. Ordinary manual Git compatibility
-requests may continue to supply an explicit `modulePath`.
+diagnostic before compatibility runs. A plain Git compile request that omits
+the path may continue through the existing generic `Source.defaultPath`
+fallback. An explicit path on `compileInstallUx` is fail-closed unless it is
+proven as an own key of a present, valid immutable manifest; an absent or
+invalid manifest cannot grant that authority and returns a typed 4xx. Ordinary
+manual (non-compile) Git compatibility requests may continue to supply an
+explicit `modulePath`.
 
 ### Valid multi-module v2.1 example
 

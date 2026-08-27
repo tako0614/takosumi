@@ -22,11 +22,10 @@
 
 import type { JsonValue } from "takosumi-contract";
 import type { Capsule } from "@takosumi/internal/deploy-control-api";
+import type { CapsuleProviderRequirement } from "takosumi-contract/capsules";
 import type { RootProviderBinding } from "takosumi-rootgen";
 import type { ResolvedCapsuleProviderBinding } from "../connections/mod.ts";
 import { OpenTofuControllerError } from "./errors.ts";
-import { canonicalProviderAddress } from "./provider_policy.ts";
-import { normalizeProviders } from "./validation.ts";
 
 /**
  * Provider context for a Capsule plan. A generated child-module wrapper is
@@ -42,11 +41,6 @@ export interface CapsulePlanContext {
   readonly resolvedProviderBindings: readonly ResolvedCapsuleProviderBinding[];
   /** Provider mapping derived from the resolved Provider Bindings. */
   readonly providerBindings: readonly RootProviderBinding[];
-  /**
-   * Fully-qualified provider addresses derived from resolved ProviderBindings,
-   * from explicit ProviderBindings.
-   */
-  readonly requiredProvidersFromBindings: readonly string[];
   /**
    * Non-secret provider scope metadata available to fill requested Capsule
    * inputs. The controller only applies these defaults under keys already
@@ -73,7 +67,7 @@ export interface PlanResolutionServiceDependencies {
    */
   readonly resolveCapsuleProviderBindingsForRun: (
     capsule: Capsule,
-    requiredProviders: readonly string[],
+    requiredProviders: readonly CapsuleProviderRequirement[],
   ) => Promise<readonly ResolvedCapsuleProviderBinding[]>;
 }
 
@@ -84,7 +78,7 @@ export interface PlanResolutionServiceDependencies {
 export class PlanResolutionService {
   readonly #resolveCapsuleProviderBindingsForRun: (
     capsule: Capsule,
-    requiredProviders: readonly string[],
+    requiredProviders: readonly CapsuleProviderRequirement[],
   ) => Promise<readonly ResolvedCapsuleProviderBinding[]>;
 
   constructor(dependencies: PlanResolutionServiceDependencies) {
@@ -100,7 +94,7 @@ export class PlanResolutionService {
    */
   async resolveCapsulePlan(
     capsule: Capsule,
-    credentialRequiredProviders: readonly string[],
+    providerRequirements: readonly CapsuleProviderRequirement[],
   ): Promise<CapsulePlanContext> {
     // Run-scoped resolution so generated-root provider blocks come from the
     // reviewed ProviderBinding records.
@@ -109,14 +103,13 @@ export class PlanResolutionService {
     // PlanRun.requiredProviders but do not force a ProviderConnection.
     const resolved = await this.#resolveCapsuleProviderBindingsForRun(
       capsule,
-      credentialRequiredProviders,
+      providerRequirements,
     );
     const providerBindings = providerBindingsFromResolved(resolved);
     const providerInputDefaults = providerInputDefaultsFromResolved(resolved);
     return {
       resolvedProviderBindings: resolved,
       providerBindings,
-      requiredProvidersFromBindings: requiredProvidersFromResolved(resolved),
       providerInputDefaults,
     };
   }
@@ -143,16 +136,6 @@ export function providerBindingsFromResolved(
     });
   }
   return providers;
-}
-
-function requiredProvidersFromResolved(
-  resolved: readonly ResolvedCapsuleProviderBinding[],
-): readonly string[] {
-  return normalizeProviders(
-    resolved.map((entry) =>
-      canonicalProviderAddress(entry.connection.providerSource),
-    ),
-  );
 }
 
 function providerInputDefaultsFromResolved(

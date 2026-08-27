@@ -431,6 +431,12 @@ export const REFERENCE_INSTALLED_CREDENTIAL_RECIPES =
 export const REFERENCE_CREDENTIAL_RECIPE_COMPOSITION = Object.freeze({
   credentialRecipes: REFERENCE_INSTALLED_CREDENTIAL_RECIPES,
   credentialRecipeDrivers: REFERENCE_CREDENTIAL_RECIPE_DRIVERS,
+  // The reference host has an explicit direct-Cloudflare execution lane.
+  // Recipe presence alone is not an execution requirement; this exact source
+  // is the provider policy authority consumed by the generic default config.
+  credentialRequiredProviderSources: Object.freeze([
+    `${OPENTOFU}/cloudflare/cloudflare`,
+  ]),
   sourceCredentialDrivers: REFERENCE_SOURCE_CREDENTIAL_DRIVERS,
   buildConnectionSetupRequest: buildGuidedConnectionRequest,
 });

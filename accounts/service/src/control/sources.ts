@@ -31,7 +31,10 @@ import type {
   SourceSnapshot,
   SourceSnapshotFileResponse,
 } from "takosumi-contract/sources";
-import { toPublicSourceSnapshot } from "takosumi-contract/sources";
+import {
+  sourceSnapshotInstallModulesProjection,
+  toPublicSourceSnapshot,
+} from "takosumi-contract/sources";
 import { TAKOSUMI_REPOSITORY_MANIFEST_PATH } from "../../../../contract/repository-manifest.ts";
 import type {
   CapsuleCompatibilityReportResponse,
@@ -48,7 +51,6 @@ import type {
   PublicInstallConfig,
   PublicCapsule,
 } from "takosumi-contract/install-configs";
-import { isInstallConfigDeploymentProfileKey } from "takosumi-contract/install-configs";
 import type {
   Dependency,
   DependencyMode,
@@ -142,8 +144,6 @@ import {
 import {
   latestSourceSnapshotForSource,
   previewRepoOwnedInstallConfig,
-  repoOwnedDeploymentProfileCatalog,
-  resolveRepoOwnedDeploymentProfile,
   resolveRepoOwnedInstallModulePath,
 } from "./repo-owned-install-config.ts";
 import {
@@ -334,16 +334,39 @@ export async function handleSources(
       ) {
         return errorJson("not_found", "SourceSnapshot not found", 404);
       }
-      const inventory = await listBoundedSharedInstallConfigs(operations);
-      return json(
-        inventory.ok
-          ? repoOwnedDeploymentProfileCatalog({
-              source,
-              sourceSnapshot,
-              candidates: inventory.candidates,
-            })
-          : { status: "invalid", profiles: [] },
+      // This compatibility route is intentionally inert: no URL-matched
+      // catalog can become provider, policy, or module authority. The
+      // immutable repository manifest is the sole module chooser.
+      return json({ status: "none", profiles: [] });
+    }
+    if (
+      segments.length === 5 &&
+      segments[2] === "snapshots" &&
+      segments[4] === "install-modules"
+    ) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      const sourceId = decodeURIComponent(segments[1] ?? "");
+      const sourceSnapshotId = decodeURIComponent(segments[3] ?? "");
+      const { source } = await operations.getSource(sourceId);
+      const workspaceId = sourceWorkspaceId(source);
+      if (!workspaceId) return sourceWorkspaceIdentityMissing();
+      const auth = await requireWorkspaceAccess({
+        operations,
+        store,
+        workspaceId,
+        session: ctx.session,
+      });
+      if (!auth.ok) return auth.response;
+      const sourceSnapshot = await operations.getSourceSnapshot(
+        sourceSnapshotId,
       );
+      if (
+        sourceSnapshot.sourceId !== sourceId ||
+        sourceSnapshot.workspaceId !== workspaceId
+      ) {
+        return errorJson("not_found", "SourceSnapshot not found", 404);
+      }
+      return json(sourceSnapshotInstallModulesProjection(sourceSnapshot));
     }
     if (segments.length === 3 && segments[2] === "compatibility-check") {
       const sourceId = decodeURIComponent(segments[1] ?? "");
@@ -365,9 +388,9 @@ export async function handleSources(
       const sourceSnapshotId = stringValue(body.sourceSnapshotId);
       const capsuleId = stringValue(body.capsuleId);
       // A legacy/manual compatibility check may select an existing DB-owned
-      // InstallConfig. Repository compilation accepts only an opaque deployment
-      // profile key, then resolves policy and module server-side; Store listing
-      // fields are never execution authority.
+      // InstallConfig. Repository compilation always uses the generic host
+      // InstallConfig; legacy Store deployment profiles are inert history and
+      // never select provider, policy, or module authority.
       const installConfigId = stringValue(body.installConfigId);
       const compileInstallUx = body.compileInstallUx === true;
       const capsuleName = stringValue(body.capsuleName);
@@ -397,30 +420,10 @@ export async function handleSources(
           request,
         );
       }
-      if (compileInstallUx && body.modulePath !== undefined) {
+      if (deploymentProfileKey !== undefined) {
         return errorJson(
           "invalid_request",
-          "compileInstallUx resolves modulePath server-side; callers must not select it.",
-          400,
-          request,
-        );
-      }
-      if (
-        compileInstallUx &&
-        deploymentProfileKey !== undefined &&
-        !isInstallConfigDeploymentProfileKey(deploymentProfileKey)
-      ) {
-        return errorJson(
-          "invalid_request",
-          "deploymentProfileKey must be a non-empty bounded opaque key.",
-          400,
-          request,
-        );
-      }
-      if (!compileInstallUx && deploymentProfileKey !== undefined) {
-        return errorJson(
-          "invalid_request",
-          "deploymentProfileKey is available only with compileInstallUx.",
+          "deploymentProfileKey is no longer a source or policy selector; choose a manifest module and use the generic host policy.",
           400,
           request,
         );
@@ -433,6 +436,28 @@ export async function handleSources(
           400,
         );
       }
+      if (
+        typeof body.modulePath === "string" &&
+        body.modulePath !== (modulePath === "" ? "." : modulePath)
+      ) {
+        return errorJson(
+          "invalid_request",
+          "modulePath must use the exact canonical repository manifest key.",
+          400,
+          request,
+          {},
+          { diagnosticCode: "repository_install_ux_module_path_invalid" },
+        );
+      }
+      // `modulePathValue` returns an empty string for the root path. Preserve
+      // the distinction between an omitted Store path and an explicit root
+      // selection while using the canonical manifest key for authority checks.
+      const explicitModulePath =
+        body.modulePath === undefined
+          ? undefined
+          : modulePath === ""
+            ? "."
+            : modulePath;
       let installUxSnapshot: SourceSnapshot | undefined;
       let installUxModulePath: string | undefined;
       let installUxBaseConfig: InstallConfig | undefined;
@@ -462,9 +487,7 @@ export async function handleSources(
           operations,
           source,
           installUxSnapshot,
-          typeof deploymentProfileKey === "string"
-            ? deploymentProfileKey
-            : undefined,
+          undefined,
         );
         if (!baseConfigResolution.ok) {
           return errorJson(
@@ -478,16 +501,35 @@ export async function handleSources(
         }
         installUxBaseConfig = baseConfigResolution.installConfig;
         const manifest = installUxSnapshot.repositoryManifest;
-        if (baseConfigResolution.modulePath !== undefined) {
-          installUxModulePath = baseConfigResolution.modulePath;
-        } else if (!manifest || manifest.status === "absent") {
-          // Legacy/plain repositories without a captured manifest keep the
-          // authenticated Source's default path. Client-selected module paths
-          // are not accepted by repository compilation.
-          installUxModulePath = source.defaultPath;
+        if (!manifest || manifest.status === "absent") {
+          if (explicitModulePath !== undefined) {
+            const moduleSelection = resolveRepoOwnedInstallModulePath({
+              sourceSnapshot: installUxSnapshot,
+              modulePath: explicitModulePath,
+            });
+            if (!moduleSelection.ok) {
+              return errorJson(
+                "repository_install_ux_invalid",
+                moduleSelection.diagnostic.message,
+                400,
+                request,
+                {},
+                { diagnosticCode: moduleSelection.diagnostic.code },
+              );
+            }
+            installUxModulePath = moduleSelection.modulePath;
+          } else {
+            // A plain Git install without a supplied path remains the generic
+            // flow. No manifest means there is no repository-owned authority
+            // to compile, so retain the authenticated Source default.
+            installUxModulePath = source.defaultPath;
+          }
         } else {
           const moduleSelection = resolveRepoOwnedInstallModulePath({
             sourceSnapshot: installUxSnapshot,
+            ...(explicitModulePath !== undefined
+              ? { modulePath: explicitModulePath }
+              : {}),
           });
           if (!moduleSelection.ok) {
             return errorJson(
@@ -622,86 +664,10 @@ export async function handleSources(
   return undefined;
 }
 
-const STORE_BASE_CONFIG_PAGE_SIZE = 100;
-const STORE_BASE_CONFIG_SCAN_LIMIT = 1_000;
-
-type SharedInstallConfigInventoryResolution =
-  | { readonly ok: true; readonly candidates: readonly InstallConfig[] }
-  | {
-      readonly ok: false;
-      readonly reason: "unavailable" | "ambiguous";
-      readonly message: string;
-    };
-
-async function listBoundedSharedInstallConfigs(
-  operations: ControlPlaneOperations,
-): Promise<SharedInstallConfigInventoryResolution> {
-  const listPage = operations.capsules.listSharedInstallConfigsPage;
-  if (!listPage) {
-    return {
-      ok: false,
-      reason: "unavailable",
-      message:
-        "Takosumi cannot prove deployment profiles from the bounded global catalog.",
-    };
-  }
-
-  const candidates: InstallConfig[] = [];
-  let scanned = 0;
-  let cursor: string | undefined;
-  let pagesScanned = 0;
-  const seenCursors = new Set<string>();
-  do {
-    const page = await listPage.call(
-      operations.capsules,
-      {
-        limit: STORE_BASE_CONFIG_PAGE_SIZE,
-        ...(cursor ? { cursor } : {}),
-      },
-      // Count every row toward the hard scan bound. Resolution rejects scoped,
-      // internal, or URL-mismatched rows only after the complete bounded
-      // inventory, so conflicts cannot be hidden on a later page.
-      { includeInternal: true },
-    );
-    pagesScanned += 1;
-    scanned += page.items.length;
-    candidates.push(...page.items);
-    if (scanned > STORE_BASE_CONFIG_SCAN_LIMIT) {
-      return {
-        ok: false,
-        reason: "ambiguous",
-        message:
-          "Takosumi could not prove a unique Store InstallConfig within the bounded global catalog scan.",
-      };
-    }
-    cursor = page.nextCursor;
-    if (!cursor) break;
-    if (
-      seenCursors.has(cursor) ||
-      scanned >= STORE_BASE_CONFIG_SCAN_LIMIT ||
-      pagesScanned >=
-        Math.ceil(
-          STORE_BASE_CONFIG_SCAN_LIMIT / STORE_BASE_CONFIG_PAGE_SIZE,
-        )
-    ) {
-      return {
-        ok: false,
-        reason: "ambiguous",
-        message:
-          "Takosumi could not prove a unique Store InstallConfig within the bounded global catalog scan.",
-      };
-    }
-    seenCursors.add(cursor);
-  } while (true);
-
-  return { ok: true, candidates };
-}
-
 export type StoreBaseInstallConfigResolution =
   | {
       readonly ok: true;
       readonly installConfig: InstallConfig;
-      readonly modulePath?: string;
     }
   | {
       readonly ok: false;
@@ -710,60 +676,30 @@ export type StoreBaseInstallConfigResolution =
           | "repository_install_ux_base_config_missing"
           | "repository_install_ux_base_config_ambiguous"
           | "repository_install_ux_deployment_profile_invalid"
-          | "repository_install_ux_deployment_profile_ambiguous"
-          | "repository_install_ux_deployment_profile_module_invalid";
+          | "repository_install_ux_deployment_profile_ambiguous";
         readonly message: string;
       };
     };
 
 /**
- * Resolve the policy ceiling for URL-only Store handoff. Profiled rows require
- * both the execution selector and Store source URL to match, an exact opaque
- * key, and an exact module key in the pinned manifest. One legacy unprofiled
- * row may still provide policy while the manifest default owns module choice;
- * no matching row falls back to the generic host policy.
+ * Resolve the generic host policy for repository install UX. Store/source URL
+ * catalogs and deployment-profile rows are intentionally not consulted: those
+ * rows are legacy presentation history, not provider, policy, or module
+ * authority. The immutable repository manifest owns module selection.
  */
 export async function resolveStoreBaseInstallConfig(
   operations: ControlPlaneOperations,
-  source: Source,
-  sourceSnapshot: SourceSnapshot,
+  _source: Source,
+  _sourceSnapshot: SourceSnapshot,
   deploymentProfileKey: string | undefined,
 ): Promise<StoreBaseInstallConfigResolution> {
-  const inventory = await listBoundedSharedInstallConfigs(operations);
-  if (!inventory.ok && inventory.reason === "unavailable") {
-    if (deploymentProfileKey !== undefined) {
-      return invalidStoreDeploymentProfile(
-        "repository_install_ux_deployment_profile_invalid",
-        "Takosumi cannot prove the selected deployment profile from the bounded global catalog.",
-      );
-    }
-    return await resolveDefaultStoreBaseInstallConfig(operations);
+  if (deploymentProfileKey !== undefined) {
+    return invalidStoreDeploymentProfile(
+      "repository_install_ux_deployment_profile_invalid",
+      "deploymentProfileKey is no longer a source or policy selector; use the generic host policy.",
+    );
   }
-  if (!inventory.ok) return ambiguousStoreBaseConfig(inventory.message);
-
-  const selected = resolveRepoOwnedDeploymentProfile({
-    source,
-    sourceSnapshot,
-    candidates: inventory.candidates,
-    ...(deploymentProfileKey !== undefined ? { deploymentProfileKey } : {}),
-  });
-  if (!selected.ok) return selected;
-  if (selected.kind === "none") {
-    if (deploymentProfileKey !== undefined) {
-      return invalidStoreDeploymentProfile(
-        "repository_install_ux_deployment_profile_invalid",
-        "The selected deployment profile is unavailable for this Source.",
-      );
-    }
-    return await resolveDefaultStoreBaseInstallConfig(operations);
-  }
-  return {
-    ok: true,
-    installConfig: selected.installConfig,
-    ...(selected.kind === "profile"
-      ? { modulePath: selected.modulePath }
-      : {}),
-  };
+  return await resolveDefaultStoreBaseInstallConfig(operations);
 }
 
 async function resolveDefaultStoreBaseInstallConfig(
@@ -775,7 +711,9 @@ async function resolveDefaultStoreBaseInstallConfig(
     );
     if (
       installConfig.workspaceId === undefined &&
-      installConfig.internal === undefined
+      installConfig.internal === undefined &&
+      installConfig.sourceSelector === undefined &&
+      installConfig.store === undefined
     ) {
       return { ok: true, installConfig };
     }
@@ -791,23 +729,10 @@ async function resolveDefaultStoreBaseInstallConfig(
   };
 }
 
-function ambiguousStoreBaseConfig(
-  message = "Multiple host InstallConfig overrides match the Source repository URL.",
-): StoreBaseInstallConfigResolution {
-  return {
-    ok: false,
-    diagnostic: {
-      code: "repository_install_ux_base_config_ambiguous",
-      message,
-    },
-  };
-}
-
 function invalidStoreDeploymentProfile(
   code:
     | "repository_install_ux_deployment_profile_invalid"
-    | "repository_install_ux_deployment_profile_ambiguous"
-    | "repository_install_ux_deployment_profile_module_invalid",
+    | "repository_install_ux_deployment_profile_ambiguous",
   message: string,
 ): StoreBaseInstallConfigResolution {
   return { ok: false, diagnostic: { code, message } };

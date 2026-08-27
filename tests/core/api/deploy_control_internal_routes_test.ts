@@ -211,6 +211,7 @@ test("deploy_control_internal_routes — scoped bearer enforces Workspace and re
       operation: "create",
       source: { kind: "git", url: "https://github.com/example/app.git" },
       runnerProfileId: "opentofu-default",
+      requiredProviderRequirements: [],
     }),
   });
   expect(denied.status).toEqual(403);
@@ -230,6 +231,7 @@ test("deploy_control_internal_routes — scoped bearer enforces Workspace and re
       operation: "create",
       source: { kind: "git", url: "https://github.com/example/app.git" },
       runnerProfileId: "opentofu-default",
+      requiredProviderRequirements: [],
     }),
   });
   expect(allowed.status).toEqual(201);
@@ -277,6 +279,7 @@ test("deploy_control_internal_routes — create and update reject operator_modul
           digest: `sha256:${"a".repeat(64)}`,
         },
         runnerProfileId: "opentofu-default",
+        requiredProviderRequirements: [],
       }),
     });
 
@@ -345,6 +348,7 @@ test("deploy_control_internal_routes — scoped bearer defaults to deny when sco
       workspaceId: "ws_allowed",
       source: { kind: "git", url: "https://github.com/example/app.git" },
       runnerProfileId: "opentofu-default",
+      requiredProviderRequirements: [],
     }),
   });
 

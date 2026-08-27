@@ -879,10 +879,10 @@ test("repository preflight resolves the default before exact compatibility while
     path: seeded.source.defaultPath,
   });
   expect(derivedInstallConfig.store).toBeUndefined();
-  expect(derivedInstallConfig.sourceBuild).toEqual(hostPolicy.sourceBuild);
-  expect(derivedInstallConfig.lifecycleActions).toEqual(
-    hostPolicy.lifecycleActions,
-  );
+  // Source-URL-matched InstallConfig rows are not policy/provider selectors;
+  // repository compilation uses only the generic host config.
+  expect(derivedInstallConfig.sourceBuild).toBeUndefined();
+  expect(derivedInstallConfig.lifecycleActions).toBeUndefined();
 
   const createdFromDerivedConfig = await controlJson<{
     readonly capsule: { readonly id: string; readonly installConfigId: string };
@@ -1166,7 +1166,7 @@ test("repository preflight resolves the default before exact compatibility while
   expect(manualConfig.modulePath).toBe("deploy/manual");
 });
 
-test("Store deployment profiles are listed, selected by opaque key, and module-proven before compatibility", async () => {
+test("historical Store deployment profiles are inert while manifest owns module choice", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
@@ -1264,10 +1264,8 @@ test("Store deployment profiles are listed, selected by opaque key, and module-p
   });
 
   const listed = await controlJson<{
-    readonly status: "ready";
-    readonly profiles: readonly NonNullable<
-      NonNullable<InstallConfig["store"]>["deploymentProfile"]
-    >[];
+    readonly status: "none";
+    readonly profiles: readonly [];
   }>(
     {
       operations,
@@ -1279,23 +1277,12 @@ test("Store deployment profiles are listed, selected by opaque key, and module-p
     200,
   );
   expect(listed).toEqual({
-    status: "ready",
-    profiles: [managed.store!.deploymentProfile, byoc.store!.deploymentProfile],
+    status: "none",
+    profiles: [],
   });
   expect(runner.capsuleSourceFileJobs).toHaveLength(0);
 
   for (const body of [
-    {
-      sourceSnapshotId: seeded.snapshot.id,
-      capsuleName: "profiled-app",
-      compileInstallUx: true,
-    },
-    {
-      sourceSnapshotId: seeded.snapshot.id,
-      capsuleName: "profiled-app",
-      compileInstallUx: true,
-      deploymentProfileKey: "missing-v1",
-    },
     ...[" ", "bad\u0000key", "x".repeat(129)].map(
       (deploymentProfileKey) => ({
         sourceSnapshotId: seeded.snapshot.id,
@@ -1304,13 +1291,6 @@ test("Store deployment profiles are listed, selected by opaque key, and module-p
         deploymentProfileKey,
       }),
     ),
-    {
-      sourceSnapshotId: seeded.snapshot.id,
-      capsuleName: "profiled-app",
-      compileInstallUx: true,
-      deploymentProfileKey: "byoc-v1",
-      modulePath: "deploy/byoc",
-    },
     {
       sourceSnapshotId: seeded.snapshot.id,
       capsuleName: "profiled-app",
@@ -1349,23 +1329,368 @@ test("Store deployment profiles are listed, selected by opaque key, and module-p
         sourceSnapshotId: seeded.snapshot.id,
         capsuleName: "profiled-app",
         compileInstallUx: true,
-        deploymentProfileKey: "byoc-v1",
       },
     },
     201,
   );
   expect(runner.capsuleSourceFileJobs).toHaveLength(1);
-  expect(runner.capsuleSourceFileJobs[0]?.modulePath).toBe("deploy/byoc");
+  expect(runner.capsuleSourceFileJobs[0]?.modulePath).toBe("deploy/managed");
   const derived = await operations.capsules.getInstallConfig(
     accepted.repositoryInstallUx.installConfigId,
   );
-  expect(derived.modulePath).toBe("deploy/byoc");
-  expect(derived.variableMapping).toMatchObject({ selected_profile: "byoc-v1" });
-  expect(derived.policy).toEqual(byoc.policy);
+  expect(derived.modulePath).toBe("deploy/managed");
+  expect(derived.variableMapping).toEqual({});
+  expect(derived.policy).not.toEqual(byoc.policy);
   expect(derived.store).toBeUndefined();
+
+  const explicitProfileMatch = await controlJson<{
+    readonly repositoryInstallUx: {
+      readonly status: "accepted";
+      readonly installConfigId: string;
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        capsuleName: "profiled-app",
+        compileInstallUx: true,
+        modulePath: "deploy/byoc",
+      },
+    },
+    201,
+  );
+  // The explicit manifest module is a distinct compile selection; historical
+  // profile rows are not consulted.
+  expect(runner.capsuleSourceFileJobs).toHaveLength(2);
+  expect(runner.capsuleSourceFileJobs[1]?.modulePath).toBe("deploy/byoc");
+  const explicitlyMatched = await operations.capsules.getInstallConfig(
+    explicitProfileMatch.repositoryInstallUx.installConfigId,
+  );
+  expect(explicitlyMatched.modulePath).toBe("deploy/byoc");
+
+  const profileDoesNotOverrideManifest = await controlJson<{
+    readonly repositoryInstallUx: {
+      readonly status: "accepted";
+      readonly installConfigId: string;
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        capsuleName: "profiled-app",
+        compileInstallUx: true,
+        modulePath: "deploy/managed",
+      },
+    },
+    201,
+  );
+  expect(profileDoesNotOverrideManifest.repositoryInstallUx.status).toBe(
+    "accepted",
+  );
+  // Repeating the manifest-selected module converges on the same deterministic
+  // preview identity; no profile row can create a third policy variant.
+  expect(runner.capsuleSourceFileJobs).toHaveLength(2);
 });
 
-test("repository compilation rejects client module authority while manual compatibility keeps it", async () => {
+test("historical profile rows cannot override an explicit manifest module path", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const repositoryUrl = "https://git.example.com/example/profiled-app-path-authority.git";
+  const managed: InstallConfig = {
+    id: "icfg_profile_path_managed",
+    name: "managed-v1",
+    sourceSelector: { url: repositoryUrl, path: "." },
+    modulePath: "deploy/managed",
+    variableMapping: { selected_profile: "managed-v1" },
+    outputAllowlist: {},
+    policy: {},
+    store: {
+      source: { url: repositoryUrl, path: "." },
+      order: 1,
+      surface: "service",
+      kind: "application",
+      provider: "generic",
+      suggestedName: "profiled-app",
+      badge: { ja: "追加", en: "Install" },
+      name: { ja: "Profiled app", en: "Profiled app" },
+      description: { ja: "Profiled app", en: "Profiled app" },
+      deploymentProfile: {
+        key: "managed-v1",
+        label: { ja: "managed", en: "managed" },
+        description: { ja: "managed", en: "managed" },
+        order: 1,
+        recommended: true,
+      },
+    },
+    createdAt: "2026-08-16T00:00:00.000Z",
+    updatedAt: "2026-08-16T00:00:00.000Z",
+  };
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuRunner: runner,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    operatorInstallConfigs: [managed],
+  });
+  const seeded = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_profile_path_authority",
+    sourceId: "src_profile_path_authority",
+    snapshotId: "snap_profile_path_authority",
+    sourceUrl: repositoryUrl,
+  });
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest: `sha256:${"8".repeat(64)}`,
+      document: {
+        apiVersion: "takosumi.com/v2.1",
+        kind: "Repository",
+        install: {
+          defaultModule: ".",
+          modules: {
+            ".": { inputs: [] },
+            "deploy/managed": { inputs: [] },
+          },
+        },
+      },
+    },
+  });
+  const response = await controlJson<{
+    readonly repositoryInstallUx: {
+      readonly status: "accepted";
+      readonly installConfigId: string;
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        capsuleName: "profiled-app",
+        compileInstallUx: true,
+        modulePath: ".",
+      },
+    },
+    201,
+  );
+  expect(
+    (await operations.capsules.getInstallConfig(
+      response.repositoryInstallUx.installConfigId,
+    )).modulePath,
+  ).toBe(".");
+});
+
+test("SourceSnapshot install module projection is bounded, ordered, and Workspace-scoped", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const foreignCookie = seedSession(accountStore, "foreign_install_modules");
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuRunner: recordingRunner(),
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+  });
+  const seeded = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_install_modules_projection",
+    sourceId: "src_install_modules_projection",
+    snapshotId: "snap_install_modules_projection",
+  });
+  const manifestDigest = `sha256:${"a".repeat(64)}`;
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest: manifestDigest,
+      document: {
+        apiVersion: "takosumi.com/v2.1",
+        kind: "Repository",
+        install: {
+          defaultModule: ".",
+          // Deliberately insert non-root first: the public projection has a
+          // deterministic path order independent of repository JSON order.
+          modules: {
+            "deploy/takoform": { inputs: [] },
+            ".": { inputs: [] },
+          },
+        },
+      },
+    },
+  });
+
+  const listed = await controlJson<{
+    readonly status: "ready";
+    readonly sourceSnapshotId: string;
+    readonly manifestDigest: string;
+    readonly defaultModule: string;
+    readonly modules: readonly { readonly path: string; readonly default?: boolean }[];
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "GET",
+      path: `/api/v1/sources/${seeded.source.id}/snapshots/${seeded.snapshot.id}/install-modules`,
+    },
+    200,
+  );
+  expect(listed).toEqual({
+    status: "ready",
+    sourceSnapshotId: seeded.snapshot.id,
+    manifestDigest,
+    defaultModule: ".",
+    modules: [
+      { path: ".", default: true },
+      { path: "deploy/takoform" },
+    ],
+  });
+  expect(JSON.stringify(listed)).not.toMatch(/document|inputs|provider|policy/u);
+
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest: manifestDigest,
+      document: {
+        apiVersion: "takosumi.com/v2.1",
+        kind: "Repository",
+        install: {
+          defaultModule: "deploy/main.tf",
+          modules: {
+            // The parser accepts a canonical key syntactically, but the
+            // public module projection must never turn an individual file
+            // into an install-module directory choice.
+            "deploy/main.tf": { inputs: [] },
+          },
+        },
+      },
+    },
+  });
+  const fileChoice = await controlJson<{
+    readonly status: "invalid";
+    readonly sourceSnapshotId: string;
+    readonly modules: readonly [];
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "GET",
+      path: `/api/v1/sources/${seeded.source.id}/snapshots/${seeded.snapshot.id}/install-modules`,
+    },
+    200,
+  );
+  expect(fileChoice).toEqual({
+    status: "invalid",
+    sourceSnapshotId: seeded.snapshot.id,
+    manifestDigest,
+    modules: [],
+  });
+
+  const foreign = await controlJson(
+    {
+      operations,
+      store: accountStore,
+      cookie: foreignCookie,
+      method: "GET",
+      path: `/api/v1/sources/${seeded.source.id}/snapshots/${seeded.snapshot.id}/install-modules`,
+    },
+    403,
+  );
+  expect(foreign).toHaveProperty("error");
+
+  const unrelated = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_install_modules_other",
+    sourceId: "src_install_modules_other",
+    snapshotId: "snap_install_modules_other",
+  });
+  await controlJson(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "GET",
+      path: `/api/v1/sources/${seeded.source.id}/snapshots/${unrelated.snapshot.id}/install-modules`,
+    },
+    404,
+  );
+
+  await deployStore.putSourceSnapshot({
+    ...unrelated.snapshot,
+    repositoryManifest: {
+      status: "invalid",
+      reason: "invalid_document",
+      digest: `sha256:${"b".repeat(64)}`,
+      diagnostic: "must not leave the server",
+    },
+  });
+  const invalid = await controlJson<{
+    readonly status: "invalid";
+    readonly sourceSnapshotId: string;
+    readonly manifestDigest?: string;
+    readonly modules: readonly [];
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "GET",
+      path: `/api/v1/sources/${unrelated.source.id}/snapshots/${unrelated.snapshot.id}/install-modules`,
+    },
+    200,
+  );
+  expect(invalid).toEqual({
+    status: "invalid",
+    sourceSnapshotId: unrelated.snapshot.id,
+    manifestDigest: `sha256:${"b".repeat(64)}`,
+    modules: [],
+  });
+
+  const absent = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_install_modules_absent",
+    sourceId: "src_install_modules_absent",
+    snapshotId: "snap_install_modules_absent",
+  });
+  const absentProjection = await controlJson<{
+    readonly status: "absent";
+    readonly sourceSnapshotId: string;
+    readonly modules: readonly [];
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "GET",
+      path: `/api/v1/sources/${absent.source.id}/snapshots/${absent.snapshot.id}/install-modules`,
+    },
+    200,
+  );
+  expect(absentProjection).toEqual({
+    status: "absent",
+    sourceSnapshotId: absent.snapshot.id,
+    modules: [],
+  });
+});
+
+test("repository compilation accepts exact manifest module authority while manual compatibility keeps it", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
@@ -1386,8 +1711,120 @@ test("repository compilation rejects client module authority while manual compat
     sourceUrl: "https://git.example.com/example/plain-opentofu.git",
   });
 
-  const rejected = await controlJson<{
-    readonly error: { readonly code: string; readonly message: string };
+  const digest = `sha256:${"a".repeat(64)}`;
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest,
+      document: {
+        apiVersion: "takosumi.com/v2.1",
+        kind: "Repository",
+        install: {
+          defaultModule: "deploy/manual",
+          modules: {
+            ".": { inputs: [] },
+            "deploy/manual": { inputs: [] },
+          },
+        },
+      },
+    },
+  });
+
+  const selected = await controlJson<{
+    readonly report: { readonly level: string };
+    readonly repositoryInstallUx: {
+      readonly status: "accepted";
+      readonly installConfigId: string;
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        modulePath: "deploy/manual",
+        capsuleName: "plain-git",
+        compileInstallUx: true,
+      },
+    },
+    201,
+  );
+  expect(selected.report.level).toBe("ready");
+  expect(selected.repositoryInstallUx.status).toBe("accepted");
+  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
+  expect(runner.capsuleSourceFileJobs[0]?.modulePath).toBe("deploy/manual");
+  const selectedConfig = await operations.capsules.getInstallConfig(
+    selected.repositoryInstallUx.installConfigId,
+  );
+  expect(selectedConfig.modulePath).toBe("deploy/manual");
+
+  const undeclared = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly diagnosticCode?: string };
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        modulePath: "deploy/undeclared",
+        capsuleName: "plain-git",
+        compileInstallUx: true,
+      },
+    },
+    400,
+  );
+  expect(undeclared.error).toMatchObject({
+    code: "repository_install_ux_invalid",
+    details: { diagnosticCode: "repository_install_ux_module_missing" },
+  });
+  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
+
+  const nonCanonicalAlias = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly diagnosticCode?: string };
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        modulePath: "./deploy/manual",
+        capsuleName: "plain-git",
+        compileInstallUx: true,
+      },
+    },
+    400,
+  );
+  expect(nonCanonicalAlias.error).toMatchObject({
+    code: "invalid_request",
+    details: { diagnosticCode: "repository_install_ux_module_path_invalid" },
+  });
+  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
+
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: { status: "absent" },
+  });
+  const explicitWithoutManifest = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly diagnosticCode?: string };
+    };
   }>(
     {
       operations,
@@ -1404,9 +1841,13 @@ test("repository compilation rejects client module authority while manual compat
     },
     400,
   );
-  expect(rejected.error).toMatchObject({ code: "invalid_request" });
-  expect(rejected.error.message).toContain("resolves modulePath server-side");
-  expect(runner.capsuleSourceFileJobs).toHaveLength(0);
+  expect(explicitWithoutManifest.error).toMatchObject({
+    code: "repository_install_ux_invalid",
+    details: {
+      diagnosticCode: "repository_install_ux_default_module_missing",
+    },
+  });
+  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
 
   const result = await controlJson<{
     readonly report: { readonly level: string };
@@ -1428,8 +1869,8 @@ test("repository compilation rejects client module authority while manual compat
   );
   expect(result.report.level).toBe("ready");
   expect(result.repositoryInstallUx).toEqual({ status: "absent" });
-  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
-  expect(runner.capsuleSourceFileJobs[0]?.modulePath).toBeUndefined();
+  expect(runner.capsuleSourceFileJobs).toHaveLength(2);
+  expect(runner.capsuleSourceFileJobs[1]?.modulePath).toBeUndefined();
 
   await controlJson(
     {
@@ -1441,13 +1882,118 @@ test("repository compilation rejects client module authority while manual compat
       body: {
         sourceSnapshotId: seeded.snapshot.id,
         installConfigId: DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
-        modulePath: "deploy/manual",
+        modulePath: "deploy/manual-legacy",
       },
     },
     201,
   );
-  expect(runner.capsuleSourceFileJobs).toHaveLength(2);
-  expect(runner.capsuleSourceFileJobs[1]?.modulePath).toBe("deploy/manual");
+  expect(runner.capsuleSourceFileJobs).toHaveLength(3);
+  expect(runner.capsuleSourceFileJobs[2]?.modulePath).toBe("deploy/manual-legacy");
+});
+
+test("repository compilation retains every required provider across selected-module files", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const baseRunner = recordingRunner();
+  const runner: RecordingRunner = {
+    ...baseRunner,
+    readCapsuleSourceFiles: (job) => {
+      baseRunner.capsuleSourceFileJobs.push(job);
+      return Promise.resolve([
+        {
+          path: "main.tf",
+          text: `
+terraform {
+  required_providers {
+    cloudflare = { source = "cloudflare/cloudflare" }
+  }
+}
+
+resource "cloudflare_workers_script" "app" {
+  account_id  = "fixture-account"
+  script_name = "fixture-app"
+  content     = "export default { fetch() { return new Response('ok') } }"
+}
+
+output "launch_url" { value = "https://hello.takosumi.test" }
+`,
+        },
+        {
+          path: "providers.tf",
+          text: `
+terraform {
+  required_providers {
+    random = { source = "hashicorp/random" }
+  }
+}
+`,
+        },
+      ]);
+    },
+  };
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuRunner: runner,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+  });
+  const seeded = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_multi_provider_module",
+    sourceId: "src_multi_provider_module",
+    snapshotId: "snap_multi_provider_module",
+    capsuleId: "cap_multi_provider_module",
+    installConfigId: "icfg_multi_provider_module",
+    sourceUrl: "https://git.example.com/example/multi-provider.git",
+  });
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest: `sha256:${"b".repeat(64)}`,
+      document: {
+        apiVersion: "takosumi.com/v2.1",
+        kind: "Repository",
+        install: {
+          defaultModule: "deploy/selected",
+          modules: { "deploy/selected": { inputs: [] } },
+        },
+      },
+    },
+  });
+
+  const result = await controlJson<{
+    readonly report: {
+      readonly level: string;
+      readonly providers: readonly { readonly source: string }[];
+    };
+    readonly repositoryInstallUx: { readonly status: "accepted" };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        modulePath: "deploy/selected",
+        capsuleName: "multi-provider",
+        compileInstallUx: true,
+      },
+    },
+    201,
+  );
+
+  expect(result.report.level).toBe("ready");
+  expect(result.repositoryInstallUx.status).toBe("accepted");
+  expect(result.report.providers.map((provider) => provider.source)).toEqual([
+    "registry.opentofu.org/cloudflare/cloudflare",
+    "registry.opentofu.org/hashicorp/random",
+  ]);
+  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
+  expect(runner.capsuleSourceFileJobs[0]?.modulePath).toBe("deploy/selected");
 });
 
 test("initial Plan and Apply keep the persisted repository sourceBuild after metadata changes", async () => {
@@ -2524,8 +3070,6 @@ output "launch_url" { value = var.public_url }
     : {
     id: `cfg_takos_profile_${suffix}`,
     name: `takos-profile-${suffix}`,
-    sourceSelector: { url: repositoryUrl, path: "." },
-    modulePath: ".",
     variableMapping: {},
     installExperience: {
       projections: [
@@ -2578,32 +3122,6 @@ output "launch_url" { value = var.public_url }
       repositoryInstallUx: {
         requiredManifestApiVersion: "takosumi.com/v2.2",
       },
-    },
-    store: {
-      source: { url: repositoryUrl, path: "." },
-      ...(options.legacyProfile
-        ? {}
-        : {
-          deploymentProfile: {
-            key: "cloudflare-direct-v1",
-            label: { ja: "Cloudflareへ直接配置", en: "Direct Cloudflare" },
-            description: {
-              ja: "Cloudflareへ配置します。",
-              en: "Deploy to Cloudflare.",
-            },
-            order: 10,
-            recommended: true,
-          },
-        },
-      ),
-      order: 1,
-      surface: "apps",
-      kind: "app",
-      provider: "Takos ecosystem",
-      suggestedName: "takos",
-      badge: { ja: "Takos", en: "Takos" },
-      name: { ja: "Takos", en: "Takos" },
-      description: { ja: "Takos", en: "Takos" },
     },
     createdAt: "2026-08-25T00:00:00.000Z",
     updatedAt: "2026-08-25T00:00:00.000Z",
@@ -2704,7 +3222,6 @@ function reAdoptionBody(
   return {
     baseInstallConfigId: fixture.baseInstallConfig.id,
     sourceSnapshotId: fixture.seeded.snapshot.id,
-    deploymentProfileKey: "cloudflare-direct-v1",
     reason: "Adopt the reviewed immutable Takos profile",
     expected: { authorityGuard },
   };
@@ -3047,9 +3564,10 @@ test("re-adoption uses only the public guard, preserves Takos origin, and does n
       deploymentProfileKey: "cloudflare-direct-v1",
     }),
   ).toMatchObject({
-    ok: true,
-    kind: "profile",
-    installConfig: { id: fixture.baseInstallConfig.id },
+    ok: false,
+    diagnostic: {
+      code: "repository_install_ux_deployment_profile_invalid",
+    },
   });
   const path = `/api/v1/capsules/${fixture.seeded.capsule.id}`;
   const unauthenticated = request("GET", path);
@@ -3459,16 +3977,10 @@ test("re-adoption rejects present invalid deployment profile keys before durable
   }
 });
 
-test("re-adoption keeps the omitted deployment profile default idempotent", async () => {
-  const fixture = await reAdoptionRouteFixture("omitted-profile", {
-    legacyProfile: true,
-  });
+test("re-adoption keeps the generic host default idempotent", async () => {
+  const fixture = await reAdoptionRouteFixture("generic-host");
   const authorityGuard = await readReAdoptionGuard(fixture);
-  const { deploymentProfileKey, ...body } = reAdoptionBody(
-    fixture,
-    authorityGuard,
-  );
-  expect(deploymentProfileKey).toBe("cloudflare-direct-v1");
+  const body = reAdoptionBody(fixture, authorityGuard);
   const path =
     `/api/v1/capsules/${fixture.seeded.capsule.id}/install-config-re-adoptions`;
   const call = () =>

@@ -22,5 +22,5 @@ test("reference runner executes provider and module code as the unprivileged Bun
   ]) {
     expect(text).toContain(path);
   }
-  expect(text).toContain("chmod -R a+rX ./contract ./runner");
+  expect(text).toContain("chmod -R a+rX ./contract ./lib ./runner");
 });

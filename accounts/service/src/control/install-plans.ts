@@ -6,7 +6,6 @@ import type {
   GitInstallPlanSourceRequest,
 } from "takosumi-contract";
 import {
-  isInstallConfigDeploymentProfileKey,
   normalizeInstallConfigSourceUrl,
   type Capsule,
 } from "takosumi-contract/install-configs";
@@ -82,6 +81,18 @@ export async function handleWorkspaceInstallPlans(
     );
   }
   const body = await readJsonObject(ctx.request);
+  if (
+    body &&
+    isRecord(body.options) &&
+    Object.prototype.hasOwnProperty.call(body.options, "deploymentProfileKey")
+  ) {
+    return errorJson(
+      "invalid_request",
+      "deploymentProfileKey is no longer accepted; select a module from the immutable SourceSnapshot manifest and use the generic host policy.",
+      400,
+      ctx.request,
+    );
+  }
   const parsed = body ? parseCreateRequest(body) : undefined;
   if (!parsed) {
     return errorJson(
@@ -420,7 +431,7 @@ async function prepareInstallCompilation(
     operations,
     source,
     snapshot,
-    plan.options.deploymentProfileKey,
+    undefined,
   );
   if (!base.ok) {
     return failedPlan(plan, base.diagnostic);
@@ -438,10 +449,9 @@ async function prepareInstallCompilation(
       message: "The pinned repository install manifest is invalid.",
     });
   }
-  const moduleSelection =
-    base.modulePath !== undefined
-      ? { ok: true as const, modulePath: base.modulePath }
-      : resolveRepoOwnedInstallModulePath({ sourceSnapshot: snapshot });
+  const moduleSelection = resolveRepoOwnedInstallModulePath({
+    sourceSnapshot: snapshot,
+  });
   if (!moduleSelection.ok) {
     return failedPlan(plan, moduleSelection.diagnostic);
   }
@@ -482,7 +492,7 @@ async function analyzeAndCompileInstall(
     operations,
     source,
     snapshot,
-    plan.options.deploymentProfileKey,
+    undefined,
   );
   if (!base.ok) return failedPlan(plan, base.diagnostic);
   const manifest = snapshot.repositoryManifest;
@@ -492,10 +502,9 @@ async function analyzeAndCompileInstall(
       "The pinned repository install manifest changed after compilation was prepared.",
     );
   }
-  const moduleSelection =
-    base.modulePath !== undefined
-      ? { ok: true as const, modulePath: base.modulePath }
-      : resolveRepoOwnedInstallModulePath({ sourceSnapshot: snapshot });
+  const moduleSelection = resolveRepoOwnedInstallModulePath({
+    sourceSnapshot: snapshot,
+  });
   if (!moduleSelection.ok) {
     return failedPlan(plan, moduleSelection.diagnostic);
   }
@@ -518,7 +527,7 @@ async function analyzeAndCompileInstall(
   ) {
     throw permanent(
       "install_compilation_identity_changed",
-      "The deployment profile or repository module changed after compatibility analysis was prepared.",
+      "The generic host policy or repository module changed after compatibility analysis was prepared.",
     );
   }
 
@@ -734,16 +743,8 @@ function parseCreateRequest(
     if (!isRecord(body.options)) return undefined;
     if (
       !hasOnlyKeys(body.options, [
-        "deploymentProfileKey",
         "providerBindingConnectionIds",
       ])
-    ) {
-      return undefined;
-    }
-    const deploymentProfileKey = body.options.deploymentProfileKey;
-    if (
-      deploymentProfileKey !== undefined &&
-      !isInstallConfigDeploymentProfileKey(deploymentProfileKey)
     ) {
       return undefined;
     }
@@ -760,9 +761,6 @@ function parseCreateRequest(
       providerBindingConnectionIds !== undefined &&
       Object.keys(providerBindingConnectionIds).length > 0;
     options = {
-      ...(typeof deploymentProfileKey === "string"
-        ? { deploymentProfileKey }
-        : {}),
       ...(hasProviderBindingReferences
         ? { providerBindingConnectionIds }
         : {}),

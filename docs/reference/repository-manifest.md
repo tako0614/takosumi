@@ -55,14 +55,28 @@ parser が追加で fail closed に検査します。
 repository-relative path です。absolute path、`./` prefix、drive prefix、末尾 `/`、
 backslash、NUL、空 segment、`.` / `..` segment は使えません。
 
-Store install の `compileInstallUx` では client や Store は `modulePath` を送りません。
-Source sync 後、server が exact SourceSnapshot の manifest だけから次の規則で選び、
-その path の compatibility check を実行してから derived InstallConfig に同じ値を
-保存します。
+Store の URL-only `compileInstallUx` は最初に `modulePath` を送りません。Source sync 後、
+認証済みの
+`GET /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules` projection が
+manifest の module directory key だけを返します。複数 module の場合は
+`defaultModule` を選択候補として表示しますが、暗黙には確定せず、利用者の確認後に
+compatibility を実行します。1 module の場合は自動選択できます。server はその後
+exact SourceSnapshot manifest だけから選び、該当 path の compatibility check を実行して
+から derived InstallConfig に同じ値を保存します。
 
 直接 Git と repository-owned source option は `compileInstallUx` を同じく使用し、
 選択済みの `modulePath` を送れます。その path は exact SourceSnapshot manifest の
 `install.modules` key として検証され、Store metadata は実行選択に関与しません。
+DB-owned deployment profile の行も source URL catalog として読まず、module / provider /
+policy の authority になりません。repository install は generic host policy（または
+operator が明示した generic config）と manifest の選択を組み合わせます。
+
+install-modules response は `status`、exact `sourceSnapshotId`、optional な
+`manifestDigest` / `defaultModule`、`modules: [{ path, default? }]` だけを返す bounded
+projection です。manifest の input、provider requirement、policy、個々の `.tf` file は返し
+ません。`absent` / `invalid` は候補を返さず、いずれかに対する明示 path は typed 4xx で
+fail closed します。この endpoint は account-session 認証と Source Workspace access、
+SourceSnapshot と Source の exact relation を検証します。
 
 1. `modules` が1件なら、その唯一の key を選ぶ。
 2. 複数なら `takosumi.com/v2.1`、`takosumi.com/v2.2`、または `takosumi.com/v2.3` の
@@ -73,7 +87,12 @@ Source sync 後、server が exact SourceSnapshot の manifest だけから次�
 `.`、JSON object の先頭 key、`.well-known/tcs.json` の path、`Source.defaultPath`、
 base `InstallConfig.modulePath` を fallback として推測しません。missing/invalid default
 は typed diagnostic で compatibility 実行前に失敗します。manifest がない通常の
-plain Git repository も、利用者が明示した `modulePath` を引き続き使用できます。
+plain Git repository は、path を指定しない compile なら既存の generic
+`Source.defaultPath` fallback を使用できます。compile request で利用者が明示した
+`modulePath` は、present かつ valid な manifest の `install.modules` own key として
+証明できなければ typed 4xx で fail closed します。manifest がない/invalid な場合の
+明示 path は authority を持たず、通常の manual (non-compile) compatibility request
+だけが従来どおり explicit path を指定できます。
 
 ### 有効な v2.1 multi-module 例
 

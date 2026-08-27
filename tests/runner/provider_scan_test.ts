@@ -1,10 +1,12 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 import {
   assertRunnerPolicyBeforeInit,
+  assertProviderSetStableAfterInit,
   generatedRootTreeHasNoProviderUsage,
+  requiredProvidersForGeneratedRoot,
   requiredProviderSourcesFromTerraformTree,
 } from "../../runner/lib/providers.ts";
 import { CAPSULE_COMPATIBILITY_MAX_FILES } from "../../runner/lib/constants.ts";
@@ -63,6 +65,204 @@ test("provider scan sees providers declared in tf.json and tofu files", async ()
       "registry.opentofu.org/attacker/evil",
       "registry.opentofu.org/hashicorp/aws",
     ]);
+  });
+});
+
+test("canonical provider scan follows only reachable local modules across every config spelling", async () => {
+  await withRoot(async (root) => {
+    await mkdir(join(root, "modules", "child"), { recursive: true });
+    await mkdir(join(root, "examples", "unselected"), { recursive: true });
+    await writeFile(
+      join(root, "main.tf"),
+      [
+        'module "child" {',
+        '  source = "./modules/child"',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(root, "providers.tofu"),
+      [
+        "terraform {",
+        "  required_providers {",
+        "    edge = {",
+        '      source = "cloudflare/cloudflare"',
+        '      version = "~> 5.0"',
+        "      configuration_aliases = [edge.zone]",
+        "    }",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(root, "modules", "child", "providers.tf.json"),
+      `${JSON.stringify({
+        terraform: {
+          required_providers: {
+            random: {
+              source: "hashicorp/random",
+              version: "= 3.7.2",
+            },
+          },
+        },
+      })}\n`,
+    );
+    await writeFile(
+      join(root, "modules", "child", "time.tofu.json"),
+      `${JSON.stringify({
+        terraform: {
+          required_providers: {
+            clock: { source: "hashicorp/time" },
+          },
+        },
+      })}\n`,
+    );
+    await writeFile(
+      join(root, "examples", "unselected", "main.tf"),
+      'terraform { required_providers { evil = { source = "attacker/evil" } } }\n',
+    );
+
+    const scan = await requiredProviderSourcesFromTerraformTree(root);
+    expect(scan.complete).toBe(true);
+    expect(scan.providers).toEqual([
+      "registry.opentofu.org/cloudflare/cloudflare",
+      "registry.opentofu.org/hashicorp/random",
+      "registry.opentofu.org/hashicorp/time",
+    ]);
+    expect(scan.requirements).toEqual([
+      {
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "edge",
+      },
+      {
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "edge",
+        childAlias: "zone",
+      },
+      {
+        source: "registry.opentofu.org/hashicorp/random",
+        moduleLocalName: "random",
+        version: "3.7.2",
+      },
+      {
+        source: "registry.opentofu.org/hashicorp/time",
+        moduleLocalName: "clock",
+      },
+    ]);
+  });
+});
+
+test("canonical provider scan represents zero and one provider without inventing credentials", async () => {
+  await withRoot(async (root) => {
+    await writeFile(join(root, "main.tofu"), 'output "ok" { value = true }\n');
+    expect(await requiredProviderSourcesFromTerraformTree(root)).toMatchObject({
+      complete: true,
+      providers: [],
+      requirements: [],
+    });
+    await writeFile(
+      join(root, "provider.tf"),
+      'terraform { required_providers { local = { source = "hashicorp/local" } } }\n',
+    );
+    expect(await requiredProviderSourcesFromTerraformTree(root)).toMatchObject({
+      complete: true,
+      providers: ["registry.opentofu.org/hashicorp/local"],
+      requirements: [
+        {
+          source: "registry.opentofu.org/hashicorp/local",
+          moduleLocalName: "local",
+        },
+      ],
+    });
+  });
+});
+
+test("post-init provider observation rejects source growth, alias change, and lock disagreement before Plan", async () => {
+  await withRoot(async (root) => {
+    await writeFile(
+      join(root, "provider.tf"),
+      'terraform { required_providers { edge = { source = "cloudflare/cloudflare" } } }\n',
+    );
+    const before = await requiredProviderSourcesFromTerraformTree(root);
+    const matchingLock =
+      'provider "registry.opentofu.org/cloudflare/cloudflare" {}\n';
+    expect(() =>
+      assertProviderSetStableAfterInit(before, before, matchingLock),
+    ).not.toThrow();
+
+    await writeFile(
+      join(root, "provider.tf"),
+      'terraform { required_providers { edge = { source = "cloudflare/cloudflare" configuration_aliases = [edge.zone] } } }\n',
+    );
+    const changed = await requiredProviderSourcesFromTerraformTree(root);
+    expect(() =>
+      assertProviderSetStableAfterInit(before, changed, matchingLock),
+    ).toThrow(/requirements changed/);
+    expect(() =>
+      assertProviderSetStableAfterInit(
+        before,
+        before,
+        'provider "registry.opentofu.org/hashicorp/random" {}\n',
+      ),
+    ).toThrow(/does not match/);
+    expect(() =>
+      assertProviderSetStableAfterInit(before, before, undefined),
+    ).toThrow(/lock is missing/);
+  });
+});
+
+test("runner derivation binds every exact compatibility-reviewed provider identity", async () => {
+  await withRoot(async (root) => {
+    await writeFile(
+      join(root, "provider.tf"),
+      'terraform { required_providers { edge = { source = "cloudflare/cloudflare" configuration_aliases = [edge.zone] } } }\n',
+    );
+    const request = {
+      planRun: {
+        requiredProviders: ["cloudflare/cloudflare"],
+        requiredProviderRequirements: [
+          {
+            source: "registry.opentofu.org/cloudflare/cloudflare",
+            moduleLocalName: "edge",
+            allowed: true,
+          },
+          {
+            source: "registry.opentofu.org/cloudflare/cloudflare",
+            moduleLocalName: "edge",
+            childAlias: "zone",
+            allowed: true,
+          },
+        ],
+      },
+    };
+    await expect(requiredProvidersForGeneratedRoot(request, root)).resolves.toMatchObject({
+      complete: true,
+      requirements: [
+        {
+          source: "registry.opentofu.org/cloudflare/cloudflare",
+          moduleLocalName: "edge",
+        },
+        {
+          source: "registry.opentofu.org/cloudflare/cloudflare",
+          moduleLocalName: "edge",
+          childAlias: "zone",
+        },
+      ],
+    });
+    await expect(
+      requiredProvidersForGeneratedRoot(
+        {
+          planRun: {
+            ...request.planRun,
+            requiredProviderRequirements:
+              request.planRun.requiredProviderRequirements.slice(0, 1),
+          },
+        },
+        root,
+      ),
+    ).rejects.toThrow(/do not match/);
   });
 });
 

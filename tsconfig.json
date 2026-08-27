@@ -81,6 +81,9 @@
       "takosumi-rootgen": ["./lib/rootgen/src/mod.ts"],
       "takosumi-graph": ["./lib/graph/src/mod.ts"],
       "takosumi-policy": ["./lib/policy/src/mod.ts"],
+      "takosumi-opentofu-configuration": [
+        "./lib/opentofu-configuration/src/mod.ts"
+      ],
       "@takosumi/providers": ["./providers/registry.ts"],
       "@takosumi/providers/types": ["./providers/types.ts"],
       "@takosumi/providers/*": ["./providers/*"]
@@ -93,6 +96,7 @@
     "contract",
     "lib/rootgen",
     "lib/graph",
+    "lib/opentofu-configuration",
     "accounts/contract",
     "accounts/service",
     "cli",

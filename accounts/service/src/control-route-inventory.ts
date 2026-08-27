@@ -387,7 +387,14 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       method: "GET",
       path: "/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/deployment-profiles",
       summary:
-        "List DB-owned deployment profiles proven against one SourceSnapshot manifest",
+        "Historical deployment-profile compatibility route (always empty; no authority)",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
+      path: "/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules",
+      summary:
+        "List repository-owned install module directories proven against one SourceSnapshot manifest",
       auth: "account-session",
     },
     {

@@ -8,6 +8,7 @@ import {
   adoptRepoOwnedInstallConfig,
   previewRepoOwnedInstallConfig,
   resolveRepoOwnedDeploymentProfile,
+  resolveRepoOwnedInstallModulePath,
   type RepoOwnedInstallConfigAdoptionInput,
 } from "../../../../accounts/service/src/control/repo-owned-install-config.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
@@ -450,6 +451,84 @@ test("repository install preview recovers only its full deterministic config ide
 });
 
 describe("repository-owned default module selection", () => {
+  test("accepts explicit non-root and root paths only when they are exact manifest keys", () => {
+    const document = {
+      apiVersion: "takosumi.com/v2.1",
+      kind: "Repository",
+      install: {
+        defaultModule: "deploy/default",
+        modules: {
+          ".": { inputs: [] },
+          "deploy/default": { inputs: [] },
+          "deploy/selected": { inputs: [] },
+        },
+      },
+    } satisfies RepositoryManifestDocument;
+    const snapshot = snapshotWithManifest({
+      status: "present",
+      digest: MANIFEST_DIGEST,
+      document,
+    });
+
+    expect(
+      resolveRepoOwnedInstallModulePath({
+        sourceSnapshot: snapshot,
+        modulePath: "deploy/selected",
+      }),
+    ).toEqual({ ok: true, modulePath: "deploy/selected" });
+    expect(
+      resolveRepoOwnedInstallModulePath({
+        sourceSnapshot: snapshot,
+        modulePath: ".",
+      }),
+    ).toEqual({ ok: true, modulePath: "." });
+    expect(
+      resolveRepoOwnedInstallModulePath({
+        sourceSnapshot: snapshot,
+        modulePath: "deploy/undeclared",
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostic: { code: "repository_install_ux_module_missing" },
+    });
+    for (const alias of ["./deploy/selected", "deploy/selected/", " deploy/selected"]) {
+      expect(
+        resolveRepoOwnedInstallModulePath({
+          sourceSnapshot: snapshot,
+          modulePath: alias,
+        }),
+      ).toMatchObject({
+        ok: false,
+        diagnostic: { code: "repository_install_ux_module_path_invalid" },
+      });
+    }
+  });
+
+  test("does not grant explicit path authority when the manifest is absent or invalid", () => {
+    expect(
+      resolveRepoOwnedInstallModulePath({
+        sourceSnapshot: snapshotWithManifest({ status: "absent" }),
+        modulePath: "deploy/selected",
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostic: { code: "repository_install_ux_default_module_missing" },
+    });
+    expect(
+      resolveRepoOwnedInstallModulePath({
+        sourceSnapshot: snapshotWithManifest({
+          status: "invalid",
+          reason: "invalid_document",
+          digest: MANIFEST_DIGEST,
+        }),
+        modulePath: "deploy/selected",
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostic: { code: "repository_install_ux_document_invalid" },
+    });
+  });
+
   test("infers the only declared module without consulting Source or base InstallConfig paths", async () => {
     const document = {
       apiVersion: "takosumi.com/v1",
@@ -603,7 +682,7 @@ describe("DB-owned deployment profile resolution", () => {
     },
   });
 
-  test("selects only the exact key and proves its config module in the pinned manifest", () => {
+  test("does not resolve source-URL deployment profile keys", () => {
     const managed = profile({
       id: "icfg-managed",
       key: "managed-v1",
@@ -624,26 +703,22 @@ describe("DB-owned deployment profile resolution", () => {
         candidates: [managed, byoc],
         deploymentProfileKey: "byoc-v1",
       }),
-    ).toEqual({
-      ok: true,
-      kind: "profile",
-      installConfig: byoc,
-      modulePath: "deploy/byoc",
+    ).toMatchObject({
+      ok: false,
+      diagnostic: {
+        code: "repository_install_ux_deployment_profile_invalid",
+      },
     });
     expect(
       resolveRepoOwnedDeploymentProfile({
         source,
         sourceSnapshot: profiledSnapshot,
         candidates: [managed, { ...byoc, modulePath: "deploy/missing" }],
-        deploymentProfileKey: "byoc-v1",
       }),
-    ).toMatchObject({
-      ok: false,
-      diagnostic: { code: "repository_install_ux_deployment_profile_module_invalid" },
-    });
+    ).toEqual({ ok: true, kind: "none" });
   });
 
-  test("blocks missing, duplicate, mixed, and recommendation-drifted profile groups", () => {
+  test("returns no profile for every historical candidate group", () => {
     const managed = profile({
       id: "icfg-managed",
       key: "managed-v1",
@@ -687,20 +762,28 @@ describe("DB-owned deployment profile resolution", () => {
         deploymentProfileKey: "managed-v1",
       },
     ]) {
-      expect(
-        resolveRepoOwnedDeploymentProfile({
+      const result = resolveRepoOwnedDeploymentProfile({
           source,
           sourceSnapshot: profiledSnapshot,
           candidates: input.candidates,
           ...(input.deploymentProfileKey === undefined
             ? {}
             : { deploymentProfileKey: input.deploymentProfileKey }),
-        }).ok,
-      ).toBe(false);
+        });
+      if (input.deploymentProfileKey === undefined) {
+        expect(result).toEqual({ ok: true, kind: "none" });
+      } else {
+        expect(result).toMatchObject({
+          ok: false,
+          diagnostic: {
+            code: "repository_install_ux_deployment_profile_invalid",
+          },
+        });
+      }
     }
   });
 
-  test("preserves exactly one unprofiled legacy config for defaultModule selection", () => {
+  test("does not select an unprofiled Store config either", () => {
     const legacy = baseConfig({
       id: "icfg-legacy",
       sourceSelector: { url: source.url, path: "." },
@@ -722,7 +805,7 @@ describe("DB-owned deployment profile resolution", () => {
         sourceSnapshot: profiledSnapshot,
         candidates: [legacy],
       }),
-    ).toEqual({ ok: true, kind: "legacy", installConfig: legacy });
+    ).toEqual({ ok: true, kind: "none" });
   });
 
   test("ignores scoped, internal, and independently URL-mismatched rows", () => {

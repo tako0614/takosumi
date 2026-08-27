@@ -99,6 +99,9 @@ test("reference composition advertises pre-run modes only with a mint driver", (
       })
     ],
   ).toBeUndefined();
+  expect(
+    REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRequiredProviderSources,
+  ).toEqual(["registry.opentofu.org/cloudflare/cloudflare"]);
 });
 
 test("pre-run filtering is structural and does not encode provider ids", () => {

@@ -8,7 +8,6 @@ import {
   cp,
   mkdir,
   readFile,
-  readdir,
   realpath,
   rm,
   stat,
@@ -25,6 +24,7 @@ import type {
   CommandContext,
   PlanResponseOptions,
   SourceBuildConfig,
+  TerraformTreeProviderScan,
 } from "./types.ts";
 import {
   CAPSULE_COMPATIBILITY_MAX_FILES,
@@ -84,6 +84,8 @@ import {
 } from "./parsing.ts";
 import {
   requiredProvidersForGeneratedRoot,
+  requiredProviderSourcesFromTerraformTree,
+  assertProviderSetStableAfterInit,
   assertRunnerPolicyBeforeInit,
   generatedRootTreeHasNoProviderUsage,
   providersFromPlanJson,
@@ -215,6 +217,7 @@ export async function runGeneratedRootPlan(
         ...(refreshOnly ? { refreshOnly: true } : {}),
         commandContext: preparedCredentials.context,
         requiredProviders,
+        providerScan,
         ...(outputAllowlist ? { outputAllowlist } : {}),
         ...(scopeSelectors.length > 0 ? { scopeSelectors } : {}),
         ...(parseProviderInstallationPolicy(request)
@@ -307,6 +310,7 @@ export async function runDirectRootPlan(
       ...(refreshOnly ? { refreshOnly: true } : {}),
       commandContext: preparedCredentials.context,
       requiredProviders,
+      providerScan,
       variableFilePath,
       ...(outputAllowlist ? { outputAllowlist } : {}),
       ...(scopeSelectors.length > 0 ? { scopeSelectors } : {}),
@@ -363,6 +367,13 @@ export async function initPlanAndBuildResponse(
       timer,
     );
   }
+  const postInitProviderScan =
+    await requiredProviderSourcesFromTerraformTree(moduleDir);
+  assertProviderSetStableAfterInit(
+    options.providerScan,
+    postInitProviderScan,
+    await readDependencyLockIfPresent(moduleDir),
+  );
   const plan = await timer.measure("tofu_plan", () =>
     runCommand(
       [
@@ -568,6 +579,13 @@ export async function runReviewedPlanApply(
         timer,
       );
     }
+    const postInitProviderScan =
+      await requiredProviderSourcesFromTerraformTree(moduleDir);
+    assertProviderSetStableAfterInit(
+      providerScan,
+      postInitProviderScan,
+      await readDependencyLockIfPresent(moduleDir),
+    );
     const providerInstallation = await providerInstallationEvidence(
       moduleDir,
       parseRequiredProviders(request),
@@ -786,6 +804,17 @@ export async function runCompatibilityCheck(
   await assertDirectory(moduleRoot, "compatibility module root");
   const context: CommandContext = { env: buildPhaseEnv() };
   assertCommandEnvHasNoProviderCredentials(context.env);
+  const preInitProviderScan =
+    await requiredProviderSourcesFromTerraformTree(moduleRoot);
+  if (!preInitProviderScan.complete) {
+    const diagnostic = preInitProviderScan.diagnostics.find(
+      (entry) => entry.fatal,
+    );
+    throw new Error(
+      diagnostic?.message ??
+        "compatibility provider scan did not complete before credential-free init",
+    );
+  }
   const timer = new RunnerPhaseTimer();
   const providerInit = await prepareStrictProviderMirrorInit(
     workspace,
@@ -814,9 +843,18 @@ export async function runCompatibilityCheck(
       timer,
     );
   }
+  const postInitProviderScan =
+    await requiredProviderSourcesFromTerraformTree(moduleRoot);
+  const dependencyLockText = await readDependencyLockIfPresent(moduleRoot);
+  assertProviderSetStableAfterInit(
+    preInitProviderScan,
+    postInitProviderScan,
+    dependencyLockText,
+  );
   const files = await readCapsuleCompatibilityFiles(
     moduleRoot,
     workspace.sourceRoot,
+    postInitProviderScan,
   );
   const providerLockDigest = await digestFileIfExists(
     join(moduleRoot, ".terraform.lock.hcl"),
@@ -844,62 +882,42 @@ export function compatibilityModulePath(request: unknown): string | undefined {
 export async function readCapsuleCompatibilityFiles(
   sourceRoot: string,
   repositoryRoot = sourceRoot,
+  configurationScan?: TerraformTreeProviderScan,
 ): Promise<readonly { readonly path: string; readonly text: string }[]> {
   const root = await realpath(sourceRoot);
   const repository = await realpath(repositoryRoot);
-  const out: { path: string; text: string }[] = [];
-  let totalBytes = 0;
-
-  async function walk(relativeDir: string): Promise<void> {
-    const absoluteDir = resolve(root, relativeDir);
-    const entries = await readdir(absoluteDir, { withFileTypes: true });
-    entries.sort((a, b) => a.name.localeCompare(b.name));
-    for (const entry of entries) {
-      if (
-        entry.name === ".git" ||
-        entry.name === ".terraform" ||
-        entry.name === "node_modules"
-      )
-        continue;
-      const relativePath = relativeDir
-        ? `${relativeDir}/${entry.name}`
-        : entry.name;
-      const absolutePath = resolve(root, relativePath);
-      assertPathInsideRoot(root, absolutePath, "compatibility source file");
-      if (entry.isDirectory()) {
-        await walk(relativePath);
-        continue;
-      }
-      if (
-        !entry.isFile() ||
-        (!entry.name.endsWith(".tf") && entry.name !== ".terraform.lock.hcl")
-      )
-        continue;
-      if (out.length >= CAPSULE_COMPATIBILITY_MAX_FILES) {
-        throw new Error(
-          `compatibility source files exceed ${CAPSULE_COMPATIBILITY_MAX_FILES} files`,
-        );
-      }
-      const info = await stat(absolutePath);
-      if (info.size > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) {
-        throw new Error(
-          `compatibility source file ${relativePath} exceeds ${CAPSULE_COMPATIBILITY_MAX_FILE_BYTES} bytes`,
-        );
-      }
-      totalBytes += info.size;
-      if (totalBytes > CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES) {
-        throw new Error(
-          `compatibility source files exceed ${CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES} bytes`,
-        );
-      }
-      out.push({
-        path: relativePath,
-        text: await readFile(absolutePath, "utf8"),
-      });
-    }
+  const scan =
+    configurationScan ??
+    (await requiredProviderSourcesFromTerraformTree(root));
+  if (!scan.complete) {
+    throw new Error("compatibility OpenTofu configuration scan did not complete");
   }
-
-  await walk("");
+  const out: { path: string; text: string }[] = [...scan.files];
+  let totalBytes = out.reduce(
+    (total, file) => total + new TextEncoder().encode(file.text).byteLength,
+    0,
+  );
+  const dependencyLockText = await readDependencyLockIfPresent(root);
+  if (dependencyLockText !== undefined) {
+    const lockBytes = new TextEncoder().encode(dependencyLockText).byteLength;
+    if (lockBytes > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) {
+      throw new Error(
+        `compatibility source file .terraform.lock.hcl exceeds ${CAPSULE_COMPATIBILITY_MAX_FILE_BYTES} bytes`,
+      );
+    }
+    if (out.length >= CAPSULE_COMPATIBILITY_MAX_FILES) {
+      throw new Error(
+        `compatibility source files exceed ${CAPSULE_COMPATIBILITY_MAX_FILES} files`,
+      );
+    }
+    totalBytes += lockBytes;
+    if (totalBytes > CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES) {
+      throw new Error(
+        `compatibility source files exceed ${CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES} bytes`,
+      );
+    }
+    out.unshift({ path: ".terraform.lock.hcl", text: dependencyLockText });
+  }
 
   // Store listings are discovery pointers only. The repository-owned install
   // presentation contract lives at this well-known path and must be read from
@@ -946,4 +964,19 @@ export async function readCapsuleCompatibilityFiles(
     if (code !== "ENOENT") throw error;
   }
   return out;
+}
+
+async function readDependencyLockIfPresent(
+  moduleDir: string,
+): Promise<string | undefined> {
+  try {
+    return await readFile(join(moduleDir, ".terraform.lock.hcl"), "utf8");
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { readonly code?: unknown }).code)
+        : "";
+    if (code === "ENOENT") return undefined;
+    throw error;
+  }
 }

@@ -44,7 +44,7 @@ import {
   getInstallConfig,
   listConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
-  listSourceSnapshotDeploymentProfiles,
+  listSourceSnapshotInstallModules,
   planCapsule,
   prepareCapsuleSourceSnapshot,
   putCapsuleProviderBindingSet,
@@ -108,7 +108,7 @@ import {
   setStoreJsonVariable,
   slugInputValue,
   storeDefaultInputValue,
-  storeDeploymentProfileCatalogFromSnapshot,
+  installModuleCatalogFromSnapshot,
   storeEntryFromStoreListing,
   storeInputIsDerived,
   storeInputJsonValue,
@@ -124,7 +124,7 @@ import {
   sourceBuildPreview,
   type ProviderConnectionRow,
   type StoreEntry,
-  type StoreDeploymentProfileCatalog,
+  type InstallModuleCatalog,
   type StoreInputField,
   type StoreInstallFeature,
 } from "./install-helpers.ts";
@@ -134,6 +134,7 @@ import "./install-view.css";
 type Phase =
   | "browse"
   | "configure"
+  | "module-select"
   | "entry-confirm"
   | "entry"
   | "preparing"
@@ -231,6 +232,10 @@ export default function InstallView() {
 function Inner(props: { readonly installingPrincipalId: string }) {
   const location = useLocation();
   const initial = parseInstallPrefill(location.search);
+  // `.` is the UI's display fallback, not an authority-bearing selection.
+  // Preserve whether the incoming install link actually supplied a path so a
+  // plain Git/Store flow can leave module choice to the pinned manifest.
+  const initialModulePathExplicit = Boolean(initial?.path);
   const appHandoff = appHandoffFromSearch(location.search);
   const sourceOptionsEntry = () =>
     parseCapsuleSourceOptionsInstallLink(location.search);
@@ -244,23 +249,21 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         : "browse",
   );
   const [listing, setListing] = createSignal<TcsListing | null>(null);
-  const [deploymentProfileCatalog, setDeploymentProfileCatalog] =
-    createSignal<StoreDeploymentProfileCatalog>({
-      status: "none",
-      profiles: [],
-    });
-  const [selectedDeploymentProfileKey, setSelectedDeploymentProfileKey] =
-    createSignal("");
-  const [deploymentProfileConfirmed, setDeploymentProfileConfirmed] =
+  const [installModuleCatalog, setInstallModuleCatalog] =
+    createSignal<InstallModuleCatalog>({ status: "none", modules: [] });
+  const [installModulesLoading, setInstallModulesLoading] =
     createSignal(false);
-  const [deploymentProfilesLoading, setDeploymentProfilesLoading] =
-    createSignal(false);
+  const [moduleSelectionConfirmed, setModuleSelectionConfirmed] =
+    createSignal(initialModulePathExplicit);
   const [gitUrl, setGitUrl] = createSignal(initial?.git ?? "");
   // Keep the authoritative ref exactly as supplied. Full commit refs are
   // immutable evidence; shortening them for an input display changes the
   // Source/compatibility request and can select a different commit.
   const [gitRef, setGitRef] = createSignal(initial?.ref ?? "");
   const [modulePath, setModulePath] = createSignal(initial?.path || ".");
+  const [modulePathExplicit, setModulePathExplicit] = createSignal(
+    initialModulePathExplicit,
+  );
   const [name, setName] = createSignal(
     initial?.name ?? (initial?.git ? capsuleNameFromUrl(initial.git) : ""),
   );
@@ -341,11 +344,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       ? localizedStoreText(selected.name, selected.suggestedName)[locale()]
       : name() || capsuleNameFromUrl(gitUrl());
   });
-
-  const selectedDeploymentProfile = () =>
-    deploymentProfileCatalog().profiles.find(
-      (profile) => profile.key === selectedDeploymentProfileKey(),
-    );
 
   const sourceCandidates = () =>
     sourceConnections().filter(
@@ -651,18 +649,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     if (!CAPSULE_NAME_PATTERN.test(name().trim())) {
       return t("installStore.invalidName");
     }
-    if (deploymentProfilesLoading()) {
-      return t("installStore.deploymentProfileLoading");
-    }
-    const profiles = deploymentProfileCatalog();
-    if (profiles.status === "invalid") {
-      return t("installStore.deploymentProfileUnavailable");
-    }
-    if (
-      profiles.status === "ready" &&
-      (!selectedDeploymentProfileKey() || !deploymentProfileConfirmed())
-    ) {
-      return t("installStore.deploymentProfileRequired");
+    if (modulePathExplicit() && !modulePath().trim()) {
+      return t("installStore.moduleUnavailable");
     }
     return undefined;
   };
@@ -681,14 +669,23 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setInterfaceUrl(undefined);
   };
 
-  const resetPreparedSource = () => {
+  const resetPreparedSource = (options?: {
+    readonly preserveModuleSelection?: boolean;
+  }) => {
+    const preservedModulePath = options?.preserveModuleSelection
+      ? modulePath()
+      : ".";
+    const preservedModulePathExplicit = options?.preserveModuleSelection
+      ? modulePathExplicit()
+      : false;
     setSourceId(undefined);
     setSourceSnapshotId(undefined);
     setSourceCreateReconciliationToken(undefined);
-    setDeploymentProfilesLoading(false);
-    setDeploymentProfileCatalog({ status: "none", profiles: [] });
-    setSelectedDeploymentProfileKey("");
-    setDeploymentProfileConfirmed(false);
+    setInstallModulesLoading(false);
+    setInstallModuleCatalog({ status: "none", modules: [] });
+    setModulePath(preservedModulePath);
+    setModulePathExplicit(preservedModulePathExplicit);
+    setModuleSelectionConfirmed(false);
     resetCompiledPreparation();
   };
 
@@ -717,7 +714,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setWorkspacePolicyState({ status: "unavailable" });
     setSourceConnections([]);
     setProviderConnections([]);
-    resetPreparedSource();
+    // Hydrating the persisted Workspace must not erase a path explicitly
+    // supplied by a direct Git/CapsuleSourceOptions handoff. The Source and
+    // manifest catalog are discarded, but the user's module authority stays
+    // attached to this install attempt and is revalidated against the new
+    // immutable snapshot below.
+    resetPreparedSource({ preserveModuleSelection: true });
     setError(undefined);
     setPhase(listing() || gitUrl() ? "configure" : "browse");
   });
@@ -728,6 +730,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setGitUrl(selected.source.url);
     setGitRef("");
     setModulePath(".");
+    setModulePathExplicit(false);
     setName(slugInputValue(selected.suggestedName));
     setSourceAuthConnectionId("");
     setEntryEvidence(undefined);
@@ -735,10 +738,17 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setPhase("configure");
   };
 
-  const switchDeploymentProfile = (key: string) => {
+  const chooseInstallModule = (path: string) => {
+    const catalog = installModuleCatalog();
+    if (catalog.status !== "ready") return;
+    if (!catalog.modules.some((module) => module.path === path)) return;
+    // Changing the module invalidates every derived compatibility/configuration
+    // artifact. Keep the immutable SourceSnapshot and catalog so the user can
+    // confirm another declared directory without refetching bytes.
     resetCompiledPreparation();
-    setSelectedDeploymentProfileKey(key);
-    setDeploymentProfileConfirmed(false);
+    setModulePath(path);
+    setModulePathExplicit(false);
+    setModuleSelectionConfirmed(false);
     setError(undefined);
   };
 
@@ -856,12 +866,21 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         }
         setSourceId(prepared.sourceId);
         setSourceSnapshotId(prepared.sourceSnapshotId);
+      }
 
-        setDeploymentProfilesLoading(true);
+      // Module selection is sourced exclusively from the immutable repository
+      // manifest. Fetch it before compatibility so no source URL metadata can
+      // choose a module directory or policy branch.
+      if (
+        preparedSourceId &&
+        preparedSourceSnapshotId &&
+        installModuleCatalog().status === "none"
+      ) {
+        setInstallModulesLoading(true);
         try {
-          const response = await listSourceSnapshotDeploymentProfiles(
-            prepared.sourceId,
-            prepared.sourceSnapshotId,
+          const response = await listSourceSnapshotInstallModules(
+            preparedSourceId,
+            preparedSourceSnapshotId,
             { signal: controller.signal },
           );
           if (
@@ -871,35 +890,92 @@ function Inner(props: { readonly installingPrincipalId: string }) {
             setPhase("configure");
             return;
           }
-          const catalog = storeDeploymentProfileCatalogFromSnapshot(response);
-          // The operator-selected recommendation is the simple default. The
-          // separate confirmation remains false until the user reviews it.
-          setSelectedDeploymentProfileKey(
-            catalog.status === "ready" ? (catalog.preselectedKey ?? "") : "",
-          );
-          setDeploymentProfileCatalog(catalog);
-          setDeploymentProfileConfirmed(false);
+          const catalog = installModuleCatalogFromSnapshot(response);
+          setInstallModuleCatalog(catalog);
           if (catalog.status === "invalid") {
-            setError(t("installStore.deploymentProfileUnavailable"));
+            setError(t("installStore.moduleUnavailable"));
             setPhase("configure");
             return;
           }
-          if (catalog.status === "ready") {
-            // Profile selection is a separate reviewed user action. Stop
-            // before compatibility or derived InstallConfig persistence.
+          if (catalog.status === "absent") {
+            // A URL-only plain Git flow keeps the historical Source default
+            // when no repository manifest exists. An explicit path has no
+            // manifest authority and is rejected before compatibility.
+            if (modulePathExplicit()) {
+              setError(t("installStore.moduleUnavailable"));
+              setPhase("configure");
+              return;
+            }
+            setModulePath(".");
+            setModuleSelectionConfirmed(true);
+          } else if (catalog.status !== "ready") {
+            setError(t("installStore.moduleUnavailable"));
             setPhase("configure");
+            return;
+          } else if (modulePathExplicit()) {
+            const requestedPath = modulePath().trim();
+            const selected = catalog.modules.find(
+              (module) => module.path === requestedPath,
+            );
+            if (!selected) {
+              setError(t("installStore.moduleUnavailable"));
+              setPhase("configure");
+              return;
+            }
+            // Preserve an explicit direct/CapsuleSourceOptions path exactly
+            // after canonical validation against the manifest own key.
+            setModulePath(selected.path);
+            setModuleSelectionConfirmed(true);
+          } else if (catalog.modules.length === 1) {
+            setModulePath(catalog.modules[0]!.path);
+            // A single manifest module is the noninteractive default; keep the
+            // omitted-path signal so Store URL-only compile stays implicit.
+            setModuleSelectionConfirmed(true);
+          } else {
+            const preselected =
+              catalog.defaultModule ??
+              catalog.modules.find((module) => module.default)?.path ??
+              catalog.modules[0]?.path;
+            if (preselected) setModulePath(preselected);
+            setModuleSelectionConfirmed(false);
+            // A multi-module manifest requires an explicit user confirmation
+            // before compatibility can derive any setup or provider rows.
+            setPhase("module-select");
             return;
           }
         } catch (cause) {
           if (controller.signal.aborted) throw cause;
-          setDeploymentProfileCatalog({ status: "invalid", profiles: [] });
-          setError(t("installStore.deploymentProfileUnavailable"));
+          setInstallModuleCatalog({ status: "invalid", modules: [] });
+          setError(t("installStore.moduleUnavailable"));
           setPhase("configure");
           return;
         } finally {
-          setDeploymentProfilesLoading(false);
+          setInstallModulesLoading(false);
         }
       }
+      if (
+        installModuleCatalog().status === "ready" &&
+        installModuleCatalog().modules.length > 1 &&
+        !moduleSelectionConfirmed()
+      ) {
+        setPhase("module-select");
+        return;
+      }
+      const selectedModuleCatalog = installModuleCatalog();
+      if (
+        selectedModuleCatalog.status === "invalid" ||
+        (selectedModuleCatalog.status === "absent" && modulePathExplicit())
+      ) {
+        setError(t("installStore.moduleUnavailable"));
+        setPhase("configure");
+        return;
+      }
+      if (modulePathExplicit() && !modulePath().trim()) {
+        setError(t("installStore.moduleUnavailable"));
+        setPhase("configure");
+        return;
+      }
+
       setPreparationStage("compatibility");
       const result = await checkCapsuleCompatibility({
         workspaceId: workspace,
@@ -907,7 +983,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         sourceSnapshotId: preparedSourceSnapshotId,
         gitUrl: gitUrl().trim(),
         ref: gitRef().trim(),
-        path: modulePath().trim() || ".",
+        ...(modulePathExplicit()
+          ? { path: modulePath().trim() }
+          : {}),
         name: name().trim(),
         ...(sourceAuthConnectionId()
           ? { authConnectionId: sourceAuthConnectionId() }
@@ -916,9 +994,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         // snapshot gets the same repo-owned install compilation, including
         // direct Git and CapsuleSourceOptions handoffs.
         compileInstallUx: true,
-        ...(selectedDeploymentProfileKey()
-          ? { deploymentProfileKey: selectedDeploymentProfileKey() }
-          : {}),
         signal: controller.signal,
         timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS,
         deadlineAt: preparationDeadlineAt,
@@ -1056,6 +1131,22 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     }
   };
 
+  const confirmInstallModule = () => {
+    const catalog = installModuleCatalog();
+    if (
+      catalog.status !== "ready" ||
+      !catalog.modules.some((module) => module.path === modulePath())
+    ) {
+      setError(t("installStore.moduleUnavailable"));
+      return;
+    }
+    // A confirmed chooser selection becomes an explicit module authority for
+    // the compile request, including an explicit repository root (`.`).
+    setModulePathExplicit(true);
+    setModuleSelectionConfirmed(true);
+    void prepareInstall();
+  };
+
   const providerBindings = (
     rows: readonly ProviderConnectionRow[],
   ): ProviderBindings =>
@@ -1115,7 +1206,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           environment: "production",
           sourceId: sourceId() ?? checked.sourceId!,
           installConfigId: config.id,
-          ...(modulePath().trim() && modulePath().trim() !== "."
+          ...(modulePathExplicit() && modulePath().trim()
             ? { modulePath: modulePath().trim() }
             : {}),
           ...(vars ? { vars } : {}),
@@ -1190,6 +1281,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       setGitUrl(choice.source.url);
       setGitRef(ref);
       setModulePath(choice.source.path || ".");
+      setModulePathExplicit(true);
       setName(slugInputValue(choice.id));
       setSourceAuthConnectionId("");
       setPhase("configure");
@@ -1265,17 +1357,17 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const reset = () => {
     completionAttempt += 1;
     setListing(null);
-    setDeploymentProfilesLoading(false);
-    setDeploymentProfileCatalog({ status: "none", profiles: [] });
-    setSelectedDeploymentProfileKey("");
-    setDeploymentProfileConfirmed(false);
     setGitUrl("");
     setGitRef("");
     setModulePath(".");
+    setModulePathExplicit(false);
     setName("");
     setSourceId(undefined);
     setSourceSnapshotId(undefined);
     setSourceCreateReconciliationToken(undefined);
+    setInstallModulesLoading(false);
+    setInstallModuleCatalog({ status: "none", modules: [] });
+    setModuleSelectionConfirmed(false);
     setCompatibility(undefined);
     setInstallConfig(undefined);
     setStoreEntry(undefined);
@@ -1305,7 +1397,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       installReturnPathFromPrefill({
         git: gitUrl(),
         ref: gitRef(),
-        path: modulePath(),
+        ...(modulePathExplicit() ? { path: modulePath() } : {}),
         name: name(),
       }),
       appHandoff,
@@ -1580,6 +1672,68 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         </section>
       </Show>
 
+      <Show when={phase() === "module-select"}>
+        <section
+          class="iv-workbench"
+          aria-labelledby="iv-module-title"
+          data-testid="install-module-chooser"
+        >
+          <Button
+            type="button"
+            variant="ghost"
+            icon={<ArrowLeft size={16} />}
+            onClick={reset}
+          >
+            {t("installStore.back")}
+          </Button>
+          <div class="iv-section-head">
+            <h2 id="iv-module-title">{t("installStore.moduleTitle")}</h2>
+            <p>{t("installStore.moduleHint")}</p>
+          </div>
+          <form
+            class="iv-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              confirmInstallModule();
+            }}
+          >
+            <FormField label={t("installStore.moduleChoose")} required>
+              <Select
+                value={modulePath()}
+                onChange={(event) =>
+                  chooseInstallModule(event.currentTarget.value)
+                }
+              >
+                <For each={
+                  installModuleCatalog().status === "ready"
+                    ? installModuleCatalog().modules
+                    : []
+                }>
+                  {(module) => (
+                    <option
+                      value={module.path}
+                      selected={module.path === modulePath()}
+                    >
+                      {module.path}
+                      {module.default ? " (default)" : ""}
+                    </option>
+                  )}
+                </For>
+              </Select>
+            </FormField>
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              busy={busy()}
+              icon={<PackagePlus size={18} />}
+            >
+              {t("installStore.moduleConfirm")}
+            </Button>
+          </form>
+        </section>
+      </Show>
+
       <Show when={phase() === "configure"}>
         <section class="iv-workbench">
           <Button
@@ -1597,6 +1751,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               <p>{t("installStore.configureHint")}</p>
             </div>
           </div>
+          <Show when={installModulesLoading()}>
+            <aside class="iv-setup-note" role="status">
+              {t("installStore.moduleHint")}
+            </aside>
+          </Show>
           <Show when={entryEvidence()}>
             {(evidence) => (
               <aside class="iv-source-evidence" role="note">
@@ -1641,67 +1800,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               void prepareInstall();
             }}
           >
-            <Show when={deploymentProfilesLoading()}>
-              <aside class="iv-setup-note" role="status">
-                {t("installStore.deploymentProfileLoading")}
-              </aside>
-            </Show>
-            <Show when={deploymentProfileCatalog().status === "ready"}>
-              <section
-                class="iv-setup-note"
-                aria-labelledby="iv-deployment-profile-title"
-              >
-                <h3 id="iv-deployment-profile-title">
-                  {t("installStore.deploymentProfileTitle")}
-                </h3>
-                <p>{t("installStore.deploymentProfileHint")}</p>
-                <FormField
-                  label={t("installStore.deploymentProfileTitle")}
-                  required
-                >
-                  <Select
-                    value={selectedDeploymentProfileKey()}
-                    onChange={(event) =>
-                      switchDeploymentProfile(event.currentTarget.value)
-                    }
-                  >
-                    <option value="">
-                      {t("installStore.deploymentProfileChoose")}
-                    </option>
-                    <For each={deploymentProfileCatalog().profiles}>
-                      {(profile) => (
-                        <option value={profile.key}>
-                          {localizedStoreText(profile.label, profile.key)[locale()]}
-                          {profile.recommended
-                            ? ` — ${t("installStore.deploymentProfileRecommended")}`
-                            : ""}
-                        </option>
-                      )}
-                    </For>
-                  </Select>
-                </FormField>
-                <Show when={selectedDeploymentProfile()}>
-                  {(profile) => (
-                    <p>
-                      {
-                        localizedStoreText(
-                          profile().description,
-                          profile().key,
-                        )[locale()]
-                      }
-                    </p>
-                  )}
-                </Show>
-                <Checkbox
-                  checked={deploymentProfileConfirmed()}
-                  disabled={!selectedDeploymentProfileKey()}
-                  label={t("installStore.deploymentProfileConfirm")}
-                  onChange={(event) =>
-                    setDeploymentProfileConfirmed(event.currentTarget.checked)
-                  }
-                />
-              </section>
-            </Show>
             <FormField label={t("installStore.name")} required>
               <Input
                 value={name()}
@@ -1739,6 +1837,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                       value={modulePath()}
                       onInput={(event) => {
                         resetPreparedSource();
+                        setModulePathExplicit(true);
                         setModulePath(event.currentTarget.value);
                       }}
                     />
@@ -1816,25 +1915,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                 : t("installStore.destinationHint")}
             </p>
           </div>
-          <Show when={selectedDeploymentProfile()}>
-            {(profile) => (
-              <aside
-                class="iv-destination-context"
-                data-testid="install-provider-module-context"
-                data-provider-profile-key={profile().key}
-                role="note"
-              >
-                <strong>{t("installStore.destinationContext")}</strong>
-                <p>
-                  {localizedStoreText(profile().label, profile().key)[locale()]}
-                </p>
-                <p>
-                  {t("installStore.destinationProfile")} {" "}
-                  <code>{profile().key}</code>
-                </p>
-              </aside>
-            )}
-          </Show>
           <div class="iv-connection-list">
             <For each={providerRows()}>
               {(row) => {
@@ -2105,18 +2185,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                   {appHandoff
                     ? `Open in ${appHandoffProductLabel(appHandoff.product)}`
                     : t("installStore.open")}
-                </Button>
-              )}
-            </Show>
-            <Show when={selectedDeploymentProfile()?.management}>
-              {(management) => (
-                <Button
-                  href={management().href}
-                  variant="secondary"
-                  target="_blank"
-                  rel="noreferrer noopener"
-                >
-                  {localizedStoreText(management().label, "Manage")[locale()]}
                 </Button>
               )}
             </Show>

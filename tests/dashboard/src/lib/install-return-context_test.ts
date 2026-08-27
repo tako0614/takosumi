@@ -107,6 +107,38 @@ describe("installReturnContext", () => {
     });
   });
 
+  test("preserves an omitted module path through provider-connection returns", () => {
+    const returnPath = installReturnPathFromPrefill({
+      git: "https://github.com/acme/worker.git",
+      ref: "main",
+    });
+    expect(returnPath).toEqual(
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main",
+    );
+    expect(installReturnContext(returnPath)).toMatchObject({
+      path: "",
+      ref: "main",
+    });
+
+    const href = providerConnectionsHrefForInstallReturn(returnPath);
+    const url = new URL(href, "https://app.takosumi.test");
+    expect(installReturnPathFromReturnParam(url.searchParams.get("return"))).toBe(
+      returnPath,
+    );
+  });
+
+  test("keeps an explicitly selected repository root in provider returns", () => {
+    const returnPath = installReturnPathFromPrefill({
+      git: "https://github.com/acme/worker.git",
+      ref: "main",
+      path: ".",
+    });
+    expect(returnPath).toEqual(
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=.",
+    );
+    expect(installReturnContext(returnPath)).toMatchObject({ path: "." });
+  });
+
   test("drops OpenTofu variable side channels from canonical return paths", () => {
     const returnPath = installReturnPathFromReturnParam(
       "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu&varjson.cloudflare=%7B%7D&varjson.enable_cloudflare_resources=true&var.project_name=takos-space",

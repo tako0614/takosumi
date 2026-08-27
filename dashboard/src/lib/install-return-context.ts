@@ -56,7 +56,8 @@ export function installReturnPathFromPrefill(
   params.set("git", prefill.git.trim());
   const ref = prefill.ref?.trim() ?? "";
   if (ref) params.set("ref", ref);
-  params.set("path", prefill.path?.trim() || ".");
+  const path = prefill.path?.trim() ?? "";
+  if (path) params.set("path", path);
   const name = prefill.name?.trim();
   if (name) params.set("name", name);
   const safe = parseInstallPrefill(`?${params.toString()}`);
@@ -65,7 +66,7 @@ export function installReturnPathFromPrefill(
   const canonical = new URLSearchParams();
   canonical.set("git", safe.git);
   if (safe.ref) canonical.set("ref", safe.ref);
-  canonical.set("path", safe.path || ".");
+  if (safe.path) canonical.set("path", safe.path);
   if (safe.name) canonical.set("name", safe.name);
   return `/new?${canonical.toString()}`;
 }

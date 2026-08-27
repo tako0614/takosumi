@@ -110,6 +110,7 @@ const STATE_DIGEST =
 // The fixture archives the snapshot under this object key (snapshotId snap_fixture).
 const ARCHIVE_KEY =
   "workspaces/ws_test001/sources/src_fixture/snapshots/snap_fixture/source.tar.zst";
+const AWS = "registry.opentofu.org/hashicorp/aws";
 const CLOUDFLARE_MIRROR_EVIDENCE = {
   provider: "registry.opentofu.org/cloudflare/cloudflare",
   mirrored: true,
@@ -118,6 +119,14 @@ const CLOUDFLARE_MIRROR_EVIDENCE = {
   attestationMethod: "forced_filesystem_mirror_init",
   mirrorPath:
     "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
+} as const;
+const AWS_MIRROR_EVIDENCE = {
+  provider: AWS,
+  mirrored: true,
+  installationMethod: "filesystem_mirror",
+  attested: true,
+  attestationMethod: "forced_filesystem_mirror_init",
+  mirrorPath: "/opt/opentofu/provider-mirror/registry.opentofu.org/hashicorp/aws",
 } as const;
 
 function deterministicIds(): (prefix: string) => string {
@@ -1444,7 +1453,8 @@ test("capsule plan does not invent Cloudflare Capsule inputs from scope hints", 
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -1499,7 +1509,8 @@ test("requested Cloudflare Capsule input can be filled from provider scope hints
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -1554,7 +1565,8 @@ test("dotted Cloudflare Capsule input merges with provider scope hints", async (
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -1625,7 +1637,8 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -1778,7 +1791,10 @@ test("Capsule OIDC materialization registers only on provision Apply and retires
 
 test("Capsule Run pins generic repository OIDC variables before Apply mutation", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
+  const runner = recordingRunner({
+    requiredProviders: [],
+    providerInstallation: [],
+  });
   const seeded = await seedCapsuleModel(store, {
     workspaceId: "ws_test001",
     capsuleId: "cap_fixture1",
@@ -2100,7 +2116,8 @@ test("declared generic Capsule Cloudflare inputs and outputs are wired from sour
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -2213,7 +2230,8 @@ test("standard Git Capsule variables stay ordinary OpenTofu inputs", async () =>
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -2282,7 +2300,8 @@ test("app_url stays an ordinary OpenTofu input without publicEndpoint mapping", 
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_managed_plain",
       },
     ],
@@ -2336,8 +2355,8 @@ test("generic Capsule setup variables are filtered to the declared OpenTofu modu
     findings: [],
     providers: [
       {
-        source: "cloudflare/cloudflare",
-        aliases: [],
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
         allowed: true,
       },
     ],
@@ -2416,8 +2435,8 @@ test("generic Capsule with known empty module interface receives no setup variab
     findings: [],
     providers: [
       {
-        source: "cloudflare/cloudflare",
-        aliases: [],
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
         allowed: true,
       },
     ],
@@ -2480,7 +2499,8 @@ test("explicit Cloudflare Capsule variables override provider scope hint default
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -2889,8 +2909,8 @@ test("capsule destroy remains runnable when its applied CompatibilityReport is n
     findings: [],
     providers: [
       {
-        source: "cloudflare/cloudflare",
-        aliases: [],
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
         allowed: true,
       },
     ],
@@ -2999,7 +3019,8 @@ test("capsule queued plan reconstructs dispatch when generated-root sidecar is m
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_missing_sidecar",
       },
     ],
@@ -3107,8 +3128,8 @@ test("capsule CompatibilityReport gate honors InstallConfig resource policy", as
     ],
     providers: [
       {
-        source: "cloudflare/cloudflare",
-        aliases: [],
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
         allowed: true,
       },
     ],
@@ -3141,7 +3162,10 @@ test("capsule CompatibilityReport gate honors InstallConfig resource policy", as
 
 test("capsule plan creates and pins a CompatibilityReport when SourcesService is wired", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
+  const runner = recordingRunner({
+    requiredProviders: [AWS],
+    providerInstallation: [AWS_MIRROR_EVIDENCE],
+  });
   await seedRunnableCapsuleModel(store, {
     environment: "preview",
     installConfig: {
@@ -3239,7 +3263,8 @@ test("capsule plan reuses a preflight CompatibilityReport hint without recheckin
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -3255,8 +3280,8 @@ test("capsule plan reuses a preflight CompatibilityReport hint without recheckin
     findings: [],
     providers: [
       {
-        source: "cloudflare/cloudflare",
-        aliases: [],
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
         allowed: true,
       },
     ],
@@ -3340,8 +3365,8 @@ test("capsule plan reuses the latest matching preflight CompatibilityReport when
     findings: [],
     providers: [
       {
-        source: "cloudflare/cloudflare",
-        aliases: [],
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
         allowed: true,
       },
     ],
@@ -3421,8 +3446,8 @@ test("capsule plan ignores a stale cached CompatibilityReport when a matching pr
     findings: [],
     providers: [
       {
-        source: "cloudflare/cloudflare",
-        aliases: [],
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
         allowed: true,
       },
     ],
@@ -3519,7 +3544,10 @@ test("failed compatibility analysis does not replace the Capsule current report"
 
 test("capsule plan dispatches the original source archive without a rewritten module artifact", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
+  const runner = recordingRunner({
+    requiredProviders: [AWS],
+    providerInstallation: [AWS_MIRROR_EVIDENCE],
+  });
   await seedRunnableCapsuleModel(store, { environment: "preview" });
   const sourcesService = new SourcesService({
     store,
@@ -3599,8 +3627,8 @@ test("capsule plan records runnable CompatibilityReport in policy audit", async 
     ],
     providers: [
       {
-        source: "cloudflare/cloudflare",
-        aliases: [],
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
         allowed: true,
       },
     ],
@@ -3661,7 +3689,7 @@ test("generic Capsule capsule plan derives pre-init requiredProviders from Compa
     providers: [
       {
         source: awsProvider,
-        aliases: [],
+        moduleLocalName: "aws",
         allowed: true,
       },
     ],
@@ -3681,6 +3709,63 @@ test("generic Capsule capsule plan derives pre-init requiredProviders from Compa
 
   expect(planRun.requiredProviders).toEqual([awsProvider]);
   expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([awsProvider]);
+});
+
+test("Capsule plan persists every exact default and child alias provider requirement", async () => {
+  const provider = "registry.opentofu.org/cloudflare/cloudflare";
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({
+    requiredProviders: [provider],
+    providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+  });
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "ws_test001",
+    capsuleId: "cap_fixture1",
+    environment: "preview",
+  });
+  const requiredProviderRequirements = [
+    {
+      source: provider,
+      moduleLocalName: "edge",
+      allowed: true,
+    },
+    {
+      source: provider,
+      moduleLocalName: "edge",
+      childAlias: "zone",
+      allowed: true,
+    },
+  ] as const;
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_exact_provider_aliases",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
+    level: "ready",
+    findings: [],
+    providers: requiredProviderRequirements,
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-08-27T00:00:00.000Z",
+  });
+  await store.putCapsule({
+    ...seeded.capsule,
+    compatibilityReportId: "caprep_exact_provider_aliases",
+    compatibilityStatus: "ready",
+  });
+
+  const { planRun } = await controllerWith(store, runner).createCapsulePlan(
+    seeded.capsule.id,
+  );
+
+  expect(planRun.status).toBe("succeeded");
+  expect(planRun.requiredProviderRequirements).toEqual(
+    requiredProviderRequirements,
+  );
+  expect(runner.planJobs[0]?.planRun.requiredProviderRequirements).toEqual(
+    requiredProviderRequirements,
+  );
 });
 
 test("generic OpenTofu runner profile derives pre-init requiredProviders from ProviderBinding before dispatch", async () => {
@@ -3723,7 +3808,8 @@ test("generic OpenTofu runner profile derives pre-init requiredProviders from Pr
     bindings: [
       {
         provider,
-        alias: "main",
+        moduleLocalName: "vercel",
+        rootAlias: "main",
         connectionId: "conn_vercel",
       },
     ],
@@ -3760,6 +3846,46 @@ test("generic OpenTofu runner profile derives pre-init requiredProviders from Pr
   expect(planRun.policy.status).toEqual("passed");
 });
 
+test("binding-only provider derivation rejects a missing module-local name", async () => {
+  const provider = "registry.opentofu.org/vercel/vercel";
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({ requiredProviders: [provider] });
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+  });
+  await putConnectionWithProviderEnv(store, {
+    id: "conn_vercel_legacy_binding",
+    workspaceId: seeded.capsule.workspaceId,
+    provider,
+    kind: "generic_env_provider",
+    scope: "workspace",
+    status: "verified",
+    envNames: ["VERCEL_API_TOKEN"],
+    createdAt: "2026-08-27T00:00:00.000Z",
+    updatedAt: "2026-08-27T00:00:00.000Z",
+    verifiedAt: "2026-08-27T00:00:00.000Z",
+  });
+  await store.putProviderBindingSet({
+    id: "profile_vercel_legacy_binding",
+    workspaceId: seeded.capsule.workspaceId,
+    capsuleId: seeded.capsule.id,
+    environment: seeded.capsule.environment,
+    bindings: [
+      {
+        provider,
+        connectionId: "conn_vercel_legacy_binding",
+      },
+    ],
+    createdAt: "2026-08-27T00:00:00.000Z",
+    updatedAt: "2026-08-27T00:00:00.000Z",
+  });
+
+  await expect(
+    controllerWith(store, runner).createCapsulePlan(seeded.capsule.id),
+  ).rejects.toThrow(/must declare moduleLocalName/);
+  expect(runner.planJobs).toHaveLength(0);
+});
+
 test("compatibility-declared arbitrary provider credentials require an explicit binding on the default runner", async () => {
   const provider = "registry.opentofu.org/acme/service";
   const store = new InMemoryOpenTofuControlStore();
@@ -3777,8 +3903,7 @@ test("compatibility-declared arbitrary provider credentials require an explicit 
     providers: [
       {
         source: provider,
-        localName: "service_api",
-        aliases: [],
+        moduleLocalName: "service_api",
         allowed: true,
         credentialRequired: true,
       },
@@ -3837,7 +3962,8 @@ test("generic OpenTofu runner profile permits direct provider install by default
     bindings: [
       {
         provider,
-        alias: "main",
+        moduleLocalName: "vercel",
+        rootAlias: "main",
         connectionId: "conn_vercel_direct_profile",
       },
     ],
@@ -3905,7 +4031,71 @@ test("generic Capsule plan allows provider-free modules without ProviderConnecti
   expect(runner.applyJobs[0]?.planRun.requiredProviders).toEqual([]);
 });
 
-test("provider-free Capsule apply rejects a ProviderBinding added after Plan review", async () => {
+test("an explicit empty compiler requirement set never falls back to ProviderBindings", async () => {
+  const provider = "registry.opentofu.org/vercel/vercel";
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({ requiredProviders: [] });
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+  });
+  await putConnectionWithProviderEnv(store, {
+    id: "conn_vercel_ignored",
+    workspaceId: seeded.capsule.workspaceId,
+    provider,
+    kind: "generic_env_provider",
+    scope: "workspace",
+    status: "verified",
+    envNames: ["VERCEL_API_TOKEN"],
+    createdAt: "2026-08-27T00:00:00.000Z",
+    updatedAt: "2026-08-27T00:00:00.000Z",
+    verifiedAt: "2026-08-27T00:00:00.000Z",
+  });
+  await store.putProviderBindingSet({
+    id: "bindings_vercel_ignored",
+    workspaceId: seeded.capsule.workspaceId,
+    capsuleId: seeded.capsule.id,
+    environment: seeded.capsule.environment,
+    bindings: [
+      {
+        provider,
+        moduleLocalName: "vercel",
+        connectionId: "conn_vercel_ignored",
+      },
+    ],
+    createdAt: "2026-08-27T00:00:00.000Z",
+    updatedAt: "2026-08-27T00:00:00.000Z",
+  });
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_explicit_provider_free",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
+    level: "ready",
+    findings: [],
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-08-27T00:00:00.000Z",
+  });
+  await store.putCapsule({
+    ...seeded.capsule,
+    compatibilityReportId: "caprep_explicit_provider_free",
+    compatibilityStatus: "ready",
+  });
+
+  const { planRun } = await controllerWith(store, runner).createCapsulePlan(
+    seeded.capsule.id,
+  );
+
+  expect(planRun.status).toBe("succeeded");
+  expect(planRun.requiredProviders).toEqual([]);
+  expect(planRun.requiredProviderRequirements).toEqual([]);
+  expect(runner.planJobs[0]?.planRun.requiredProviderRequirements).toEqual([]);
+  expect(runner.planJobs[0]?.generatedRoot).toBeUndefined();
+});
+
+test("provider-free Capsule apply ignores a ProviderBinding added after Plan review", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner({
     requiredProviders: [],
@@ -3947,17 +4137,15 @@ test("provider-free Capsule apply rejects a ProviderBinding added after Plan rev
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
 
-  expect(applyRun.status).toBe("failed");
-  expect(applyRun.diagnostics).toContainEqual(
-    expect.objectContaining({ code: "provider_connection_changed" }),
-  );
-  expect(runner.applyJobs).toHaveLength(0);
+  expect(applyRun.status).toBe("succeeded");
+  expect(runner.applyJobs).toHaveLength(1);
+  expect(runner.applyJobs[0]?.credentials).toBeUndefined();
 });
 
 test("low-level plan does not infer requiredProviders from ProviderBinding alone", async () => {
   const provider = "registry.opentofu.org/vercel/vercel";
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
+  const runner = recordingRunner({ requiredProviders: [] });
   const seeded = await seedRunnableCapsuleModel(store, {
     environment: "preview",
   });
@@ -3981,7 +4169,8 @@ test("low-level plan does not infer requiredProviders from ProviderBinding alone
     bindings: [
       {
         provider,
-        alias: "main",
+        moduleLocalName: "vercel",
+        rootAlias: "main",
         connectionId: "conn_vercel_direct",
       },
     ],
@@ -4021,11 +4210,13 @@ test("low-level plan does not infer requiredProviders from ProviderBinding alone
       modulePath: seeded.source.defaultPath,
     },
     runnerProfileId: genericProfile.id,
+    requiredProviderRequirements: [],
     requiredProviders: [],
   });
 
   expect(planRun.status).toEqual("succeeded");
   expect(planRun.policy.status).toEqual("passed");
+  expect(planRun.requiredProviderRequirements).toEqual([]);
   expect(runner.planJobs).toHaveLength(1);
   expect(runner.planJobs[0]?.requiredProviders).toBeUndefined();
 });
@@ -4080,11 +4271,32 @@ test("low-level plan never treats allowedProviders as discovered requirements", 
       modulePath: seeded.source.defaultPath,
     },
     runnerProfileId: strictProfile.id,
+    requiredProviderRequirements: [],
   });
 
   expect(planRun.requiredProviders).toEqual([]);
   expect(runner.planJobs).toHaveLength(1);
   expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([]);
+});
+
+test("new low-level Plans reject an absent exact provider requirement field", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, recordingRunner({ requiredProviders: [] }));
+
+  await expect(
+    controller.createPlanRun({
+      workspaceId: seeded.capsule.workspaceId,
+      capsuleId: seeded.capsule.id,
+      source: {
+        kind: "git",
+        url: seeded.source.url,
+        ref: seeded.source.defaultRef,
+        modulePath: seeded.source.defaultPath,
+      },
+      requiredProviders: [],
+    } as never),
+  ).rejects.toThrow(/requiredProviderRequirements must be present/);
 });
 
 test("generic Capsule plan creation blocks stale CompatibilityReport as policy", async () => {
@@ -4280,8 +4492,8 @@ test("capsule apply revalidates CompatibilityReport before provider credential m
     findings: [],
     providers: [
       {
-        source: "cloudflare/cloudflare",
-        aliases: [],
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
         allowed: true,
       },
     ],
@@ -4316,7 +4528,8 @@ test("capsule apply revalidates CompatibilityReport before provider credential m
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_apply_guard",
       },
     ],
@@ -4378,8 +4591,8 @@ test("capsule apply rejects a CompatibilityReport scoped to another Capsule befo
     findings: [],
     providers: [
       {
-        source: "cloudflare/cloudflare",
-        aliases: [],
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
         allowed: true,
       },
     ],
@@ -4414,7 +4627,8 @@ test("capsule apply rejects a CompatibilityReport scoped to another Capsule befo
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_apply_scope_guard",
       },
     ],
@@ -4477,7 +4691,8 @@ test("capsule apply reconstructs dispatch when generated-root sidecar is missing
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_apply_missing_sidecar",
       },
     ],
@@ -4538,7 +4753,14 @@ test("capsule plan blocks when provider lockfile digest is required but missing"
 
 test("capsule plan blocks when provider mirror evidence is required but missing", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner({ providerInstallation: undefined });
+  const requiredProviders = [
+    "registry.opentofu.org/cloudflare/cloudflare",
+    AWS,
+  ];
+  const runner = recordingRunner({
+    requiredProviders,
+    providerInstallation: undefined,
+  });
   const seeded = await seedRunnableCapsuleModel(store, {
     environment: "preview",
     installConfig: {
@@ -4548,10 +4770,7 @@ test("capsule plan blocks when provider mirror evidence is required but missing"
     },
   });
   await seedProviderConnections(store, seeded.capsule, {
-    requiredProviders: [
-      "registry.opentofu.org/cloudflare/cloudflare",
-      "registry.opentofu.org/hashicorp/aws",
-    ],
+    requiredProviders,
   });
   const profile = multiProviderRunnerProfile();
   const controller = controllerWith(store, runner, {
@@ -7490,7 +7709,8 @@ test("Workspace-owned ProviderConnection apply is not capped by host-managed pol
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_self_cf",
       },
     ],
@@ -9003,7 +9223,11 @@ test("generic Capsule captures ordinary root Outputs without publishing unallowl
     level: "ready",
     findings: [],
     providers: [
-      { source: "cloudflare/cloudflare", aliases: [], allowed: true },
+      {
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
+        allowed: true,
+      },
     ],
     resources: [{ type: "cloudflare_workers_script", count: 1, allowed: true }],
     dataSources: [],
@@ -9083,7 +9307,11 @@ test("generic Capsule retains explicit public source Outputs before applying the
     level: "ready",
     findings: [],
     providers: [
-      { source: "cloudflare/cloudflare", aliases: [], allowed: true },
+      {
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
+        allowed: true,
+      },
     ],
     resources: [{ type: "cloudflare_workers_script", count: 1, allowed: true }],
     dataSources: [],

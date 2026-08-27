@@ -147,6 +147,7 @@ export const ALLOWED_KEYS: Record<
     "capsuleId",
     "operation",
     "variables",
+    "requiredProviderRequirements",
     "requiredProviders",
   ]),
   applyRunCreate: new Set(["planRunId", "approval", "expected"]),

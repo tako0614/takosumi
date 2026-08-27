@@ -9,10 +9,23 @@ import {
   ConnectionsService,
   mintableConnectionIds,
   resolvedProviderBindingsDigest,
+  type RequiredProviderBindingIdentity,
 } from "../../../../core/domains/connections/mod.ts";
 
 const NOW = "2026-06-06T00:00:00.000Z";
 const CLOUDFLARE = "registry.opentofu.org/cloudflare/cloudflare";
+
+function requiredBinding(
+  over: Partial<RequiredProviderBindingIdentity> = {},
+): RequiredProviderBindingIdentity {
+  return {
+    source: CLOUDFLARE,
+    moduleLocalName: "cloudflare",
+    credentialRequired: true,
+    allowed: true,
+    ...over,
+  };
+}
 
 function connection(input: {
   readonly id: string;
@@ -817,8 +830,309 @@ test("a ProviderConnection from another Workspace is rejected", async () => {
 test("required providers must have explicit ProviderConnection bindings", async () => {
   const { model, service } = await setup();
   await expect(
-    service.resolveProviderBindingsForRun(model.capsule, [CLOUDFLARE]),
+    service.resolveProviderBindingsForRun(model.capsule, [requiredBinding()]),
   ).rejects.toThrow(/provider connection is required/);
+});
+
+test("an explicit empty requirement list resolves zero bindings", async () => {
+  const { store, model, service } = await setup();
+  await store.putConnection(
+    connection({ id: "conn_cf_ignored", workspaceId: model.workspace.id }),
+  );
+  await store.putProviderBindingSet({
+    id: "dp_cf_ignored",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [
+      {
+        provider: CLOUDFLARE,
+        moduleLocalName: "cloudflare",
+        connectionId: "conn_cf_ignored",
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  expect(
+    await service.resolveProviderBindingsForRun(model.capsule, []),
+  ).toEqual([]);
+});
+
+test("run binding resolution selects the exact child alias tuple", async () => {
+  const { store, model, service } = await setup();
+  for (const [id, childAlias] of [
+    ["conn_cf_account", "account"],
+    ["conn_cf_zone", "zone"],
+  ] as const) {
+    await store.putConnection(
+      connection({ id, workspaceId: model.workspace.id }),
+    );
+  }
+  await store.putProviderBindingSet({
+    id: "dp_cf_aliases",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [
+      {
+        provider: CLOUDFLARE,
+        moduleLocalName: "edge",
+        childAlias: "account",
+        rootAlias: "root_account",
+        connectionId: "conn_cf_account",
+      },
+      {
+        provider: CLOUDFLARE,
+        moduleLocalName: "edge",
+        childAlias: "zone",
+        rootAlias: "root_zone",
+        connectionId: "conn_cf_zone",
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  const resolved = await service.resolveProviderBindingsForRun(model.capsule, [
+    {
+      source: CLOUDFLARE,
+      moduleLocalName: "edge",
+      childAlias: "zone",
+      allowed: true,
+    },
+  ]);
+
+  expect(resolved.map((entry) => entry.connection.id)).toEqual([
+    "conn_cf_zone",
+  ]);
+});
+
+test("run binding resolution keeps default, two aliases, and same-source local names distinct", async () => {
+  const { store, model, service } = await setup();
+  const identities = [
+    { id: "conn_edge_default", moduleLocalName: "edge" },
+    { id: "conn_edge_account", moduleLocalName: "edge", childAlias: "account" },
+    { id: "conn_edge_zone", moduleLocalName: "edge", childAlias: "zone" },
+    { id: "conn_gateway_default", moduleLocalName: "gateway" },
+  ] as const;
+  for (const identity of identities) {
+    await store.putConnection(
+      connection({ id: identity.id, workspaceId: model.workspace.id }),
+    );
+  }
+  await store.putProviderBindingSet({
+    id: "dp_cf_exact_matrix",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: identities.map((identity) => ({
+      provider: CLOUDFLARE,
+      moduleLocalName: identity.moduleLocalName,
+      ...("childAlias" in identity
+        ? { childAlias: identity.childAlias }
+        : {}),
+      connectionId: identity.id,
+    })),
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  const resolved = await service.resolveProviderBindingsForRun(
+    model.capsule,
+    identities.map((identity) =>
+      requiredBinding({
+        moduleLocalName: identity.moduleLocalName,
+        ...("childAlias" in identity
+          ? { childAlias: identity.childAlias }
+          : {}),
+      })
+    ),
+  );
+
+  expect(resolved.map((entry) => entry.connection.id)).toEqual(
+    identities.map((identity) => identity.id),
+  );
+});
+
+test("one child alias binding cannot satisfy a missing sibling alias", async () => {
+  const { store, model, service } = await setup();
+  await store.putConnection(
+    connection({ id: "conn_cf_account", workspaceId: model.workspace.id }),
+  );
+  await store.putProviderBindingSet({
+    id: "dp_cf_one_alias",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [
+      {
+        provider: CLOUDFLARE,
+        moduleLocalName: "edge",
+        childAlias: "account",
+        connectionId: "conn_cf_account",
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  await expect(
+    service.resolveProviderBindingsForRun(model.capsule, [
+      requiredBinding({ moduleLocalName: "edge", childAlias: "account" }),
+      requiredBinding({ moduleLocalName: "edge", childAlias: "zone" }),
+    ]),
+  ).rejects.toThrow(/edge\.zone/);
+});
+
+test("a legacy source-only binding cannot satisfy an exact module-local name", async () => {
+  const { store, model, service } = await setup();
+  await store.putConnection(
+    connection({ id: "conn_cf_legacy_default", workspaceId: model.workspace.id }),
+  );
+  await store.putProviderBindingSet({
+    id: "dp_cf_legacy_default",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [
+      {
+        provider: CLOUDFLARE,
+        connectionId: "conn_cf_legacy_default",
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  await expect(
+    service.resolveProviderBindingsForRun(model.capsule, [requiredBinding()]),
+  ).rejects.toThrow(/provider connection is required/);
+
+  const legacy = await service.resolveProviderBindingsForLegacyStoredRun(
+    model.capsule,
+    [requiredBinding()],
+  );
+  expect(legacy.map((entry) => entry.connection.id)).toEqual([
+    "conn_cf_legacy_default",
+  ]);
+});
+
+test("an ambiguous deprecated alias cannot satisfy an exact default tuple", async () => {
+  const { store, model, service } = await setup();
+  await store.putConnection(
+    connection({ id: "conn_cf_legacy", workspaceId: model.workspace.id }),
+  );
+  await store.putProviderBindingSet({
+    id: "dp_cf_legacy_alias",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [
+      {
+        provider: CLOUDFLARE,
+        alias: "legacy",
+        connectionId: "conn_cf_legacy",
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  await expect(
+    service.resolveProviderBindingsForRun(model.capsule, [requiredBinding()]),
+  ).rejects.toThrow(/ambiguous.*alias/i);
+});
+
+test("run binding resolution rejects duplicate exact tuples", async () => {
+  const { store, model, service } = await setup();
+  for (const id of ["conn_cf_zone_a", "conn_cf_zone_b"]) {
+    await store.putConnection(connection({ id, workspaceId: model.workspace.id }));
+  }
+  await store.putProviderBindingSet({
+    id: "dp_cf_duplicate_alias",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: ["conn_cf_zone_a", "conn_cf_zone_b"].map((connectionId) => ({
+      provider: CLOUDFLARE,
+      moduleLocalName: "edge",
+      childAlias: "zone",
+      connectionId,
+    })),
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  await expect(
+    service.resolveProviderBindingsForRun(model.capsule, [
+      {
+        source: CLOUDFLARE,
+        moduleLocalName: "edge",
+        childAlias: "zone",
+        allowed: true,
+      },
+    ]),
+  ).rejects.toThrow(/duplicate provider binding identity/);
+});
+
+test("run binding resolution rejects duplicate required tuples", async () => {
+  const { store, model, service } = await setup();
+  await store.putConnection(
+    connection({ id: "conn_cf_default", workspaceId: model.workspace.id }),
+  );
+  await store.putProviderBindingSet({
+    id: "dp_cf_default",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [
+      {
+        provider: CLOUDFLARE,
+        moduleLocalName: "cloudflare",
+        connectionId: "conn_cf_default",
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+  const requirement = {
+    source: CLOUDFLARE,
+    moduleLocalName: "cloudflare",
+    allowed: true,
+  } as const;
+
+  await expect(
+    service.resolveProviderBindingsForRun(model.capsule, [
+      requirement,
+      requirement,
+    ]),
+  ).rejects.toThrow(/duplicate required provider identity/);
+});
+
+test("run binding resolution rejects malformed exact requirement rows", async () => {
+  const { model, service } = await setup();
+  for (const [requirement, message] of [
+    [
+      { ...requiredBinding(), source: "cloudflare/cloudflare" },
+      /source must be canonical/,
+    ],
+    [
+      { ...requiredBinding(), aliases: ["zone"] },
+      /aliases is not allowed/,
+    ],
+    [
+      { ...requiredBinding(), version: "~> 5.0" },
+      /version must be an exact version literal/,
+    ],
+  ] as const) {
+    await expect(
+      service.resolveProviderBindingsForRun(model.capsule, [
+        requirement as never,
+      ]),
+    ).rejects.toThrow(message);
+  }
 });
 
 test("Cloud mode does not implicitly bind a single public managed operator connection", async () => {
@@ -860,7 +1174,9 @@ test("Cloud mode does not implicitly bind a single public managed operator conne
   });
 
   await expect(
-    cloudService.resolveProviderBindingsForRun(model.capsule, [CLOUDFLARE]),
+    cloudService.resolveProviderBindingsForRun(model.capsule, [
+      requiredBinding(),
+    ]),
   ).rejects.toThrow(/provider connection is required/);
 });
 
@@ -904,7 +1220,9 @@ test("Cloud mode does not implicitly bind a pending public managed operator conn
   });
 
   await expect(
-    cloudService.resolveProviderBindingsForRun(model.capsule, [CLOUDFLARE]),
+    cloudService.resolveProviderBindingsForRun(model.capsule, [
+      requiredBinding(),
+    ]),
   ).rejects.toThrow(/provider connection is required/);
 });
 
@@ -932,7 +1250,9 @@ test("Cloud mode does not guess when multiple managed operator connections match
   });
 
   await expect(
-    cloudService.resolveProviderBindingsForRun(model.capsule, [CLOUDFLARE]),
+    cloudService.resolveProviderBindingsForRun(model.capsule, [
+      requiredBinding(),
+    ]),
   ).rejects.toThrow(/provider connection is required/);
 });
 

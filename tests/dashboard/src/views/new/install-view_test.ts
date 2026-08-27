@@ -1,12 +1,68 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { installModuleCatalogFromSnapshot } from "../../../../../dashboard/src/views/new/install-helpers.ts";
 
 const root = resolve(import.meta.dir, "../../../../../");
 const read = (path: string): string =>
   readFileSync(resolve(root, path), "utf8");
 
 describe("single-screen install surface", () => {
+  test("normalizes the bounded module projection without exposing files", () => {
+    const digest = `sha256:${"d".repeat(64)}`;
+    expect(
+      installModuleCatalogFromSnapshot({
+        status: "ready",
+        sourceSnapshotId: "snap_modules",
+        manifestDigest: digest,
+        defaultModule: ".",
+        modules: [
+          { path: "deploy/takoform" },
+          { path: ".", default: true },
+        ],
+      }),
+    ).toEqual({
+      status: "ready",
+      sourceSnapshotId: "snap_modules",
+      manifestDigest: digest,
+      defaultModule: ".",
+      modules: [{ path: ".", default: true }, { path: "deploy/takoform" }],
+    });
+    expect(
+      installModuleCatalogFromSnapshot({
+        status: "ready",
+        sourceSnapshotId: "snap_one",
+        manifestDigest: digest,
+        modules: [{ path: "deploy/takoform" }],
+      }),
+    ).toMatchObject({ status: "ready", modules: [{ path: "deploy/takoform" }] });
+    expect(
+      installModuleCatalogFromSnapshot({
+        status: "ready",
+        sourceSnapshotId: "snap_file",
+        manifestDigest: digest,
+        modules: [{ path: "main.tf" }],
+      }),
+    ).toEqual({ status: "invalid", modules: [] });
+  });
+
+  test("keeps absent and invalid manifests fail-closed", () => {
+    expect(
+      installModuleCatalogFromSnapshot({
+        status: "absent",
+        sourceSnapshotId: "snap_absent",
+        modules: [],
+      }),
+    ).toEqual({ status: "absent", modules: [] });
+    expect(
+      installModuleCatalogFromSnapshot({
+        status: "invalid",
+        sourceSnapshotId: "snap_invalid",
+        modules: [],
+      }),
+    ).toEqual({ status: "invalid", modules: [] });
+  });
+
   test("routes every install entry to the one /new view", () => {
     const router = read("dashboard/src/index.tsx");
     expect(router).toContain(
@@ -149,59 +205,68 @@ describe("single-screen install surface", () => {
     );
   });
 
-  test("requires visible confirmation of the DB-owned deployment profile", () => {
+  test("tracks explicit module authority separately from the UI root fallback", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("listSourceSnapshotDeploymentProfiles(");
-    expect(view).toContain("storeDeploymentProfileCatalogFromSnapshot");
-    expect(view).toContain('catalog.status === "ready" ? (catalog.preselectedKey ?? "") : ""');
-    expect(view).toContain("selectedDeploymentProfile()?.management");
-    expect(view.indexOf("await prepareCapsuleSourceSnapshot({")).toBeLessThan(
-      view.indexOf("listSourceSnapshotDeploymentProfiles("),
-    );
-    expect(view).toContain("selectedDeploymentProfileKey");
-    expect(view).toContain("deploymentProfileConfirmed");
-    expect(view).toContain('t("installStore.deploymentProfileConfirm")');
-    expect(view).toContain("deploymentProfileKey:");
-    expect(view).not.toContain("profile.modulePath");
-    expect(view).not.toContain("profile.provider");
-  });
-
-  test("discovers the snapshot-bound deployment profile for direct Git installs", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const profileDiscoveryStart = view.indexOf(
-      "const response = await listSourceSnapshotDeploymentProfiles(",
-    );
-    const profileDiscoveryEnd = view.indexOf(
-      "setPreparationStage(\"compatibility\")",
-      profileDiscoveryStart,
-    );
-    const profileDiscovery = view.slice(profileDiscoveryStart, profileDiscoveryEnd);
-    expect(profileDiscoveryStart).toBeGreaterThanOrEqual(0);
-    expect(profileDiscovery).not.toContain("if (listing())");
     expect(view).toContain(
-      "<Show when={deploymentProfileCatalog().status === \"ready\"}>",
+      "const initialModulePathExplicit = Boolean(initial?.path);",
     );
-    expect(view).not.toContain(
-      "<Show when={listing() && deploymentProfileCatalog().status === \"ready\"}>",
+    expect(view).toContain(
+      "const [modulePathExplicit, setModulePathExplicit] = createSignal(",
+    );
+    expect(view).toContain("...(modulePathExplicit()\n          ? { path:");
+    expect(view).toContain("setModulePathExplicit(false);");
+    expect(view).toContain("setModulePathExplicit(true);");
+    expect(view).toContain(
+      "...(modulePathExplicit() ? { path: modulePath() } : {}),",
     );
   });
 
-  test("switching deployment profile preserves the snapshot and clears compiled authority", () => {
+  test("does not consult source-URL deployment profiles", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
-    const switchStart = view.indexOf("const switchDeploymentProfile =");
-    const switchEnd = view.indexOf("const prepareInstall =", switchStart);
-    const switchSource = view.slice(switchStart, switchEnd);
-    expect(switchSource).toContain("resetCompiledPreparation();");
-    expect(switchSource).not.toContain("resetPreparedSource();");
+    expect(view).not.toContain("listSourceSnapshotDeploymentProfiles");
+    expect(view).not.toContain("deploymentProfileKey");
+    expect(view).not.toContain("selectedDeploymentProfile");
+    expect(view).not.toContain("deploymentProfileConfirmed");
+  });
+
+  test("chooses manifest module directories before compatibility", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("listSourceSnapshotInstallModules(");
+    expect(view).toContain("installModuleCatalogFromSnapshot");
+    expect(view).toContain('phase() === "module-select"');
+    expect(view).toContain('data-testid="install-module-chooser"');
+    expect(view).toContain("confirmInstallModule");
+    expect(view).toContain("setModuleSelectionConfirmed(false)");
+    expect(view).toContain("setModulePathExplicit(true)");
+    expect(
+      view.indexOf("listSourceSnapshotInstallModules("),
+    ).toBeLessThan(view.indexOf("await checkCapsuleCompatibility("));
+    expect(view).not.toContain("moduleFiles");
+  });
+
+  test("module changes clear every compiled and planned artifact", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const chooserStart = view.indexOf("const chooseInstallModule =");
+    const chooserEnd = view.indexOf("const confirmInstallModule =", chooserStart);
+    const chooser = view.slice(chooserStart, chooserEnd);
+    expect(chooser).toContain("resetCompiledPreparation();");
     for (const reset of [
       "setCompatibility(undefined)",
       "setInstallConfig(undefined)",
       "setProviderRows([])",
-      "setStoreValues({})",
-      "setStoreInputTouched({})",
+      "setStoreEntry(undefined)",
+      "setCapsuleId(undefined)",
+      "setPlanRunId(undefined)",
     ]) {
       expect(view).toContain(reset);
     }
+  });
+
+  test("keeps direct Git preparation independent of profile rows", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("listSourceSnapshotInstallModules(");
+    expect(view).toContain("setPreparationStage(\"compatibility\")");
+    expect(view).not.toContain("listSourceSnapshotDeploymentProfiles");
   });
 
   test("discloses persisted sourceBuild before the Plan starts", () => {
@@ -294,14 +359,12 @@ describe("single-screen install surface", () => {
 
   test("makes the provider/module then Host/account boundary explicit", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain('t("installStore.deploymentProfileTitle")');
-    expect(view).toContain('t("installStore.destinationContext")');
-    expect(view).toContain('t("installStore.destinationProfile")');
+    expect(view).toContain('t("installStore.moduleTitle")');
+    expect(view).toContain('data-testid="install-module-chooser"');
     expect(view).toContain('t("installStore.providerModule")');
     expect(view).toContain("providerModuleLabel(row)");
     expect(view).toContain("providerConnectionDisplayName(connection)");
-    expect(view).toContain('data-testid="install-provider-module-context"');
-    expect(view).toContain("data-provider-profile-key={profile().key}");
+    expect(view).not.toContain("deploymentProfile");
   });
 
   test("only auto-selects exactly one eligible Host/account", () => {

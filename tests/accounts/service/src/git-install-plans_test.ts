@@ -313,120 +313,65 @@ test("lost compatibility acknowledgement adopts the exact persisted Run and repo
   expect(fixture.installConfigMutationCount).toBe(1);
 });
 
-test("requested deployment profile cannot adopt a derived config from another profile", async () => {
-  const managed = deploymentProfileConfig({
-    id: "icfg_profile_managed",
-    key: "managed-v1",
-    modulePath: "deploy/managed",
-    recommended: true,
-  });
-  const byoc = deploymentProfileConfig({
-    id: "icfg_profile_byoc",
-    key: "byoc-v1",
-    modulePath: "deploy/byoc",
-    recommended: false,
-  });
-  const wrongDerived: InstallConfig = {
-    ...managed,
-    id: "icfg_wrong_profile",
-    workspaceId: WORKSPACE.id,
-    name: "example-repository-install",
-    internal: {
-      reason: "per_install_overrides",
-      sourceSnapshotId: "snap_one",
-      repositoryInstallUxDigest: `sha256:${"d".repeat(64)}`,
-    },
-  };
+test("Git install plans reject source-specific deployment profile selectors", async () => {
   const fixture = installFixture({
-    repositoryManifest: repositoryManifest([
-      "deploy/managed",
-      "deploy/byoc",
-    ]),
-    installConfigs: [managed, byoc, wrongDerived],
+    repositoryManifest: repositoryManifest([".", "deploy/byoc"]),
+    installConfigs: [
+      {
+        ...defaultCapsuleInstallConfig(),
+        id: "icfg_historical_profile",
+        name: "historical-profile",
+        sourceSelector: {
+          url: "https://github.com/takos/example.git",
+          path: ".",
+        },
+        modulePath: "deploy/byoc",
+      },
+    ],
   });
-  const created = await fixture.request(
+  const response = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans",
     "POST",
     {
       ...createBody(),
       options: { deploymentProfileKey: "byoc-v1" },
     },
-    { "idempotency-key": "profile-isolated-recovery" },
+    { "idempotency-key": "profile-selector-rejected" },
   );
-  const planId = (await created.json()).installPlan.id as string;
-
-  await fixture.reconcile(planId);
-  await fixture.reconcile(planId);
-  fixture.succeedSourceSync();
-  await fixture.reconcile(planId);
-  const prepared = await fixture.reconcile(planId);
-  expect((await prepared.json()).installPlan).toMatchObject({
-    phase: "analyzing_compatibility",
-    installConfigBaseId: byoc.id,
-    installModulePath: "deploy/byoc",
+  expect(response.status).toBe(400);
+  const payload = await response.json();
+  expect(payload).toMatchObject({
+    error: {
+      code: "invalid_request",
+    },
   });
-
-  const compiled = await fixture.reconcile(planId);
-  const compiledPlan = (await compiled.json()).installPlan;
-  expect(compiledPlan.phase).toBe("creating_capsule");
-  expect(compiledPlan.installConfigId).not.toBe(wrongDerived.id);
-  expect(fixture.getInstallConfig(compiledPlan.installConfigId)).toMatchObject({
-    modulePath: "deploy/byoc",
-    workspaceId: WORKSPACE.id,
-  });
+  expect(JSON.stringify(payload)).toContain("deploymentProfileKey");
+  expect(fixture.mutationCount()).toBe(0);
 });
 
-test("unavailable deployment profile fails before any near-match config recovery", async () => {
-  const managed = deploymentProfileConfig({
-    id: "icfg_only_managed",
-    key: "managed-v1",
-    modulePath: "deploy/managed",
-    recommended: true,
-  });
-  const wrongDerived: InstallConfig = {
-    ...managed,
-    id: "icfg_near_match",
-    workspaceId: WORKSPACE.id,
-    name: "example-repository-install",
-    internal: {
-      reason: "per_install_overrides",
-      sourceSnapshotId: "snap_one",
-      repositoryInstallUxDigest: `sha256:${"d".repeat(64)}`,
-    },
-  };
+test("Git install plans reject unavailable deployment profile selectors before mutation", async () => {
   const fixture = installFixture({
     repositoryManifest: repositoryManifest(["deploy/managed"]),
-    installConfigs: [managed, wrongDerived],
   });
-  const created = await fixture.request(
+  const response = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans",
     "POST",
     {
       ...createBody(),
       options: { deploymentProfileKey: "unavailable-v1" },
     },
-    { "idempotency-key": "profile-unavailable-near-match" },
+    { "idempotency-key": "profile-unavailable-rejected" },
   );
-  const planId = (await created.json()).installPlan.id as string;
-
-  await fixture.reconcile(planId);
-  await fixture.reconcile(planId);
-  fixture.succeedSourceSync();
-  await fixture.reconcile(planId);
-  const failed = await fixture.reconcile(planId);
-  expect((await failed.json()).installPlan).toMatchObject({
-    phase: "failed",
-    diagnostic: {
-      code: "repository_install_ux_deployment_profile_invalid",
-    },
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({
+    error: { code: "invalid_request" },
   });
-  expect(fixture.counts.capsule).toBe(0);
-  expect(fixture.compatibilityMutationCount).toBe(0);
+  expect(fixture.mutationCount()).toBe(0);
 });
 
-test("terminal install-plan diagnostics are bounded and secret-free", async () => {
+test("deployment profile rejection is bounded and secret-free", async () => {
   const fixture = installFixture();
-  const created = await fixture.request(
+  const response = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans",
     "POST",
     {
@@ -435,21 +380,11 @@ test("terminal install-plan diagnostics are bounded and secret-free", async () =
     },
     { "idempotency-key": "bounded-diagnostic" },
   );
-  const planId = (await created.json()).installPlan.id as string;
-  await fixture.reconcile(planId); // Source
-  await fixture.reconcile(planId); // sync
-  fixture.succeedSourceSync();
-  await fixture.reconcile(planId); // snapshot
-  const failed = await fixture.reconcile(planId); // profile validation
-  const payload = await failed.json();
-  expect(payload.installPlan.phase).toBe("failed");
-  expect(payload.nextAction).toBe("none");
-  expect(payload.links.reconcile).toBeUndefined();
-  expect(payload.installPlan.diagnostic.code.length).toBeLessThanOrEqual(64);
-  expect(payload.installPlan.diagnostic.message.length).toBeLessThanOrEqual(
-    256,
-  );
+  expect(response.status).toBe(400);
+  const payload = await response.json();
+  expect(payload.error.message.length).toBeLessThanOrEqual(256);
   expect(JSON.stringify(payload)).not.toContain("never-record-this-hook-secret");
+  expect(fixture.mutationCount()).toBe(0);
 });
 
 type LostAckMutation =
@@ -894,43 +829,4 @@ function repositoryManifest(
       },
     },
   } as NonNullable<SourceSnapshot["repositoryManifest"]>;
-}
-
-function deploymentProfileConfig(input: {
-  readonly id: string;
-  readonly key: string;
-  readonly modulePath: string;
-  readonly recommended: boolean;
-}): InstallConfig {
-  return {
-    ...defaultCapsuleInstallConfig(),
-    id: input.id,
-    name: input.key,
-    sourceSelector: {
-      url: "https://github.com/takos/example.git",
-      path: ".",
-    },
-    modulePath: input.modulePath,
-    store: {
-      source: {
-        url: "https://github.com/takos/example.git",
-        path: ".",
-      },
-      order: input.recommended ? 1 : 2,
-      surface: "service",
-      kind: "app",
-      provider: "test-profile",
-      suggestedName: "example",
-      badge: { ja: "追加", en: "Install" },
-      name: { ja: input.key, en: input.key },
-      description: { ja: input.key, en: input.key },
-      deploymentProfile: {
-        key: input.key,
-        label: { ja: input.key, en: input.key },
-        description: { ja: input.key, en: input.key },
-        order: input.recommended ? 1 : 2,
-        recommended: input.recommended,
-      },
-    },
-  };
 }

@@ -68,6 +68,14 @@ const source = {
   modulePath: "infra",
 } as const;
 
+const requiredProviderRequirements = [
+  {
+    source: "registry.example.com/acme/example",
+    moduleLocalName: "example",
+    allowed: true,
+  },
+] as const;
+
 const planRun = {
   id: "plan_0123456789abcdef",
   workspaceId,
@@ -79,6 +87,7 @@ const planRun = {
   runnerProfileId: runnerProfile.id,
   variablesDigest:
     "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  requiredProviderRequirements,
   requiredProviders: ["registry.example.com/acme/example"],
   status: "succeeded",
   policy: {
@@ -231,6 +240,7 @@ export const DEPLOY_CONTROL_API_CONTRACT_FIXTURES = {
     source,
     runnerProfileId: runnerProfile.id,
     variables: { account_id: "acct_123" },
+    requiredProviderRequirements,
     requiredProviders: ["registry.example.com/acme/example"],
   } satisfies CreatePlanRunRequest,
 

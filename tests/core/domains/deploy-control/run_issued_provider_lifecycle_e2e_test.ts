@@ -189,6 +189,7 @@ test("generic run-issued credentials reach plan, apply, and destroy runner dispa
     bindings: [
       {
         provider: PROVIDER,
+        moduleLocalName: "runtime",
         connectionId: CONNECTION_ID,
         runCredentialSettings: RUN_CREDENTIAL_SETTINGS,
       },

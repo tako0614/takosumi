@@ -4,8 +4,16 @@
 //
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { constants as fsConstants, type Stats } from "node:fs";
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  writeFile,
+} from "node:fs/promises";
+import { join, relative, resolve } from "node:path";
 import type {
   JsonRecord,
   RunWorkspace,
@@ -17,9 +25,6 @@ import type {
   TerraformTreeProviderScan,
 } from "./types.ts";
 import {
-  CAPSULE_COMPATIBILITY_MAX_FILES,
-  CAPSULE_COMPATIBILITY_MAX_FILE_BYTES,
-  CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES,
   DEFAULT_PROVIDER_MIRROR_PATH,
   PROVIDER_PLUGIN_CACHE_DIR_ENV,
 } from "./constants.ts";
@@ -41,9 +46,18 @@ import {
   parseLegacySourcelessDestroyRecovery,
   parseSource,
   parseRequiredProviders,
+  parseRequiredProviderRequirements,
 } from "./parsing.ts";
 import { canonicalProviderSource } from "../../contract/provider-env-rules.ts";
 import { resourceTypeMatchesPattern } from "../../contract/plan-scope.ts";
+import {
+  compileOpenTofuConfigurationGraph,
+  compileOpenTofuConfigurationGraphFromLoader,
+  DEFAULT_OPENTOFU_CONFIGURATION_LIMITS,
+  openTofuConfigurationFileKind,
+  parseOpenTofuProviderLockObservation,
+  type OpenTofuModuleDirectory,
+} from "../../lib/opentofu-configuration/src/mod.ts";
 
 const providerCacheInitLocks = new Map<string, Promise<void>>();
 
@@ -63,85 +77,108 @@ export async function requiredProvidersForGeneratedRoot(
   rootDir: string,
 ): Promise<TerraformTreeProviderScan> {
   const declared = parseRequiredProviders(request);
+  const declaredRequirements = parseRequiredProviderRequirements(request);
   const observed = await requiredProviderSourcesFromTerraformTree(rootDir);
+  if (
+    declaredRequirements !== undefined &&
+    JSON.stringify(declaredRequirements) !==
+      JSON.stringify(observed.requirements)
+  ) {
+    throw new Error(
+      "runner-derived provider requirements do not match the compatibility-reviewed PlanRun requirements",
+    );
+  }
+  if (declaredRequirements !== undefined) {
+    const exactSources = normalizedProviderList(
+      declaredRequirements.map((requirement) => requirement.source),
+    );
+    if (
+      JSON.stringify(exactSources) !==
+      JSON.stringify(normalizedProviderList(declared))
+    ) {
+      throw new Error(
+        "PlanRun requiredProviders does not match requiredProviderRequirements",
+      );
+    }
+  }
   return {
     providers: normalizedProviderList([...declared, ...observed.providers]),
+    requirements: observed.requirements,
+    files: observed.files,
+    diagnostics: observed.diagnostics,
     complete: observed.complete,
   };
-}
-
-/**
- * OpenTofu loads `.tf` / `.tofu` (HCL) and `.tf.json` / `.tofu.json` (JSON)
- * config files. A scanner that only looks at `.tf` would let a provider
- * declared in any of the other three spellings reach `tofu init` unseen by the
- * runner provider policy.
- */
-function terraformConfigFileKind(name: string): "hcl" | "json" | undefined {
-  if (name.endsWith(".tf.json") || name.endsWith(".tofu.json")) return "json";
-  if (name.endsWith(".tf") || name.endsWith(".tofu")) return "hcl";
-  return undefined;
 }
 
 export async function requiredProviderSourcesFromTerraformTree(
   rootDir: string,
 ): Promise<TerraformTreeProviderScan> {
-  let files = 0;
-  let totalBytes = 0;
-  const providers: string[] = [];
-  const stack = [rootDir];
-  // A scan that stops early (unreadable directory, DoS caps, unparsable JSON)
-  // yields a provider list that looks exactly like a clean one. It is reported
-  // as incomplete so provider policy fails closed instead of enforcing itself
-  // against providers it never saw.
-  const incomplete = (): TerraformTreeProviderScan => ({
-    providers: normalizedProviderList(providers),
-    complete: false,
-  });
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    let entries;
-    try {
-      entries = await readdir(current, { withFileTypes: true });
-    } catch {
-      return incomplete();
-    }
-    for (const entry of entries) {
-      if (
-        entry.name === ".git" ||
-        entry.name === ".terraform" ||
-        entry.name === "node_modules"
-      ) {
-        continue;
-      }
-      const path = join(current, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(path);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      const kind = terraformConfigFileKind(entry.name);
-      if (!kind) continue;
-      files += 1;
-      if (files > CAPSULE_COMPATIBILITY_MAX_FILES) return incomplete();
-      const info = await stat(path);
-      if (info.size > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) {
-        return incomplete();
-      }
-      totalBytes += info.size;
-      if (totalBytes > CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES) {
-        return incomplete();
-      }
-      const text = await readFile(path, "utf8");
-      if (kind === "hcl") {
-        providers.push(...requiredProviderSourcesFromTerraformText(text));
-        continue;
-      }
-      const json = requiredProviderSourcesFromTerraformJson(text);
-      if (!json) return incomplete();
-      providers.push(...json);
-    }
+  let physicalRoot: string;
+  try {
+    physicalRoot = await realpath(rootDir);
+    const rootInfo = await lstat(physicalRoot);
+    if (!rootInfo.isDirectory()) throw new Error("not a directory");
+  } catch {
+    return incompleteProviderScan(rootDir, "OpenTofu root is unreadable.");
   }
-  return { providers: normalizedProviderList(providers), complete: true };
+  const graph = await compileOpenTofuConfigurationGraphFromLoader({
+    loadModuleDirectory: async (directory) =>
+      await loadOpenTofuModuleDirectory(physicalRoot, directory),
+  });
+  return {
+    providers: normalizedProviderList(
+      graph.requirements.map((requirement) => requirement.source),
+    ),
+    requirements: graph.requirements,
+    files: graph.files,
+    diagnostics: graph.diagnostics,
+    complete: graph.complete,
+  };
+}
+
+/**
+ * Bind the pre-init source derivation to both the exact source tree re-read
+ * and the provider package set that credential-free init wrote to the lock.
+ * Any growth, alias/local-name change, disappearance, or concurrent rewrite
+ * stops before Plan/apply can execute provider code.
+ */
+export function assertProviderSetStableAfterInit(
+  before: TerraformTreeProviderScan,
+  after: TerraformTreeProviderScan,
+  dependencyLockText: string | undefined,
+): void {
+  if (!before.complete || !after.complete) {
+    throw new Error(
+      "OpenTofu provider configuration scan did not complete before provider execution",
+    );
+  }
+  if (
+    JSON.stringify(before.requirements) !== JSON.stringify(after.requirements)
+  ) {
+    throw new Error(
+      "OpenTofu provider requirements changed after init and before provider execution",
+    );
+  }
+  const expectedSources = normalizedProviderList(before.providers);
+  if (dependencyLockText === undefined) {
+    if (expectedSources.length > 0) {
+      throw new Error(
+        "OpenTofu dependency lock is missing after init for required providers",
+      );
+    }
+    return;
+  }
+  const observed = parseOpenTofuProviderLockObservation(dependencyLockText);
+  if (!observed.complete) {
+    throw new Error(
+      "OpenTofu dependency lock provider set could not be parsed exactly",
+    );
+  }
+  if (JSON.stringify(expectedSources) !== JSON.stringify(observed.sources)) {
+    throw new Error(
+      "OpenTofu dependency lock provider set does not match the statically derived provider set",
+    );
+  }
 }
 
 /**
@@ -151,86 +188,160 @@ export async function requiredProviderSourcesFromTerraformTree(
 export function requiredProviderSourcesFromTerraformJson(
   text: string,
 ): readonly string[] | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-  const providers: string[] = [];
-  collectRequiredProviderSources(parsed, providers);
-  return normalizedProviderList(providers);
-}
-
-function collectRequiredProviderSources(
-  value: unknown,
-  providers: string[],
-): void {
-  if (Array.isArray(value)) {
-    for (const item of value) collectRequiredProviderSources(item, providers);
-    return;
-  }
-  if (!isRecord(value)) return;
-  for (const [key, child] of Object.entries(value)) {
-    if (key === "required_providers") {
-      collectProviderSourceStrings(child, providers);
-      continue;
-    }
-    collectRequiredProviderSources(child, providers);
-  }
-}
-
-function collectProviderSourceStrings(
-  value: unknown,
-  providers: string[],
-): void {
-  if (Array.isArray(value)) {
-    for (const item of value) collectProviderSourceStrings(item, providers);
-    return;
-  }
-  if (!isRecord(value)) return;
-  for (const [key, child] of Object.entries(value)) {
-    if (key === "source" && typeof child === "string") {
-      const source = child.trim();
-      if (source.includes("/")) providers.push(source);
-      continue;
-    }
-    collectProviderSourceStrings(child, providers);
-  }
+  const graph = compileOpenTofuConfigurationGraph({
+    files: [{ path: "providers.tf.json", text }],
+  });
+  return graph.complete
+    ? normalizedProviderList(
+        graph.requirements.map((requirement) => requirement.source),
+      )
+    : undefined;
 }
 
 export function requiredProviderSourcesFromTerraformText(
   text: string,
 ): readonly string[] {
-  const providers: string[] = [];
-  let searchFrom = 0;
-  while (true) {
-    const keyword = text.indexOf("required_providers", searchFrom);
-    if (keyword === -1) break;
-    const open = text.indexOf("{", keyword);
-    if (open === -1) break;
-    let depth = 0;
-    let close = -1;
-    for (let index = open; index < text.length; index += 1) {
-      const char = text[index];
-      if (char === "{") depth += 1;
-      if (char === "}") {
-        depth -= 1;
-        if (depth === 0) {
-          close = index;
-          break;
-        }
-      }
-    }
-    if (close === -1) break;
-    const body = text.slice(open + 1, close);
-    for (const match of body.matchAll(/\bsource\s*=\s*"([^"]+)"/gu)) {
-      const source = match[1]?.trim();
-      if (source && source.includes("/")) providers.push(source);
-    }
-    searchFrom = close + 1;
+  const graph = compileOpenTofuConfigurationGraph({
+    files: [{ path: "providers.tf", text }],
+  });
+  return normalizedProviderList(
+    graph.requirements.map((requirement) => requirement.source),
+  );
+}
+
+function incompleteProviderScan(
+  path: string,
+  message: string,
+): TerraformTreeProviderScan {
+  return {
+    providers: [],
+    requirements: [],
+    files: [],
+    diagnostics: [
+      {
+        code: "module_directory_unreadable",
+        path,
+        message,
+        fatal: true,
+      },
+    ],
+    complete: false,
+  };
+}
+
+async function loadOpenTofuModuleDirectory(
+  physicalRoot: string,
+  directory: string,
+): Promise<OpenTofuModuleDirectory> {
+  const absoluteDirectory = resolve(
+    physicalRoot,
+    directory === "." ? "" : directory,
+  );
+  assertPhysicalPathInsideRoot(physicalRoot, absoluteDirectory);
+  const before = await lstat(absoluteDirectory);
+  if (!before.isDirectory() || before.isSymbolicLink()) {
+    throw new Error("reachable OpenTofu module is not a physical directory");
   }
-  return normalizedProviderList(providers);
+  const resolvedDirectory = await realpath(absoluteDirectory);
+  if (resolvedDirectory !== absoluteDirectory) {
+    throw new Error("reachable OpenTofu module traverses a symbolic link");
+  }
+  const entries = await readdir(absoluteDirectory, { withFileTypes: true });
+  entries.sort((left, right) => compareCodePoints(left.name, right.name));
+  const files = [];
+  for (const entry of entries) {
+    if (openTofuConfigurationFileKind(entry.name) === undefined) continue;
+    if (!entry.isFile() || entry.isSymbolicLink()) {
+      throw new Error(
+        `OpenTofu configuration ${entry.name} is not a physical regular file`,
+      );
+    }
+    const absolutePath = resolve(absoluteDirectory, entry.name);
+    assertPhysicalPathInsideRoot(physicalRoot, absolutePath);
+    const file = await open(
+      absolutePath,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+    );
+    try {
+      const fileBefore = await file.stat();
+      if (!fileBefore.isFile() || fileBefore.nlink !== 1) {
+        throw new Error(
+          `OpenTofu configuration ${entry.name} is not an inode-stable file`,
+        );
+      }
+      if (
+        fileBefore.size >
+        DEFAULT_OPENTOFU_CONFIGURATION_LIMITS.maxFileBytes
+      ) {
+        throw new Error(`OpenTofu configuration ${entry.name} is too large`);
+      }
+      const bytes = await file.readFile();
+      const fileAfter = await file.stat();
+      if (!samePhysicalFile(fileBefore, fileAfter, bytes.byteLength)) {
+        throw new Error(
+          `OpenTofu configuration ${entry.name} changed while it was read`,
+        );
+      }
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      files.push({
+        path: directory === "." ? entry.name : `${directory}/${entry.name}`,
+        text,
+      });
+    } finally {
+      await file.close();
+    }
+  }
+  const after = await lstat(absoluteDirectory);
+  if (!sameDirectory(before, after)) {
+    throw new Error("reachable OpenTofu module changed while it was read");
+  }
+  return { exists: true, files };
+}
+
+function assertPhysicalPathInsideRoot(root: string, candidate: string): void {
+  const relativePath = relative(root, candidate);
+  if (
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    resolve(candidate) !== candidate
+  ) {
+    throw new Error("OpenTofu module path escapes the selected root");
+  }
+}
+
+function samePhysicalFile(
+  before: Stats,
+  after: Stats,
+  bytes: number,
+): boolean {
+  return (
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.size === bytes &&
+    after.size === bytes &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs &&
+    before.nlink === 1 &&
+    after.nlink === 1
+  );
+}
+
+function sameDirectory(
+  before: Stats,
+  after: Stats,
+): boolean {
+  return (
+    before.isDirectory() &&
+    after.isDirectory() &&
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs
+  );
+}
+
+function compareCodePoints(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export function assertRunnerPolicyBeforeInit(
@@ -295,48 +406,17 @@ export function assertRunnerPolicyBeforeInit(
 export async function generatedRootTreeHasNoProviderUsage(
   rootDir: string,
 ): Promise<boolean> {
-  let files = 0;
-  let totalBytes = 0;
-  const stack = [rootDir];
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    let entries;
-    try {
-      entries = await readdir(current, { withFileTypes: true });
-    } catch {
-      return false;
-    }
-    for (const entry of entries) {
-      if (
-        entry.name === ".git" ||
-        entry.name === ".terraform" ||
-        entry.name === "node_modules"
-      ) {
-        continue;
-      }
-      const path = join(current, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(path);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      const kind = terraformConfigFileKind(entry.name);
-      if (!kind) continue;
-      files += 1;
-      if (files > CAPSULE_COMPATIBILITY_MAX_FILES) return false;
-      const info = await stat(path);
-      if (info.size > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) return false;
-      totalBytes += info.size;
-      if (totalBytes > CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES) return false;
-      // A JSON config file is loaded by `tofu init` exactly like an HCL one.
-      // The HCL text probe cannot speak for it, so its mere presence means the
-      // root is not provably provider-free.
-      if (kind === "json") return false;
-      const text = await readFile(path, "utf8");
-      if (hasProviderUsageBeforeInit(text)) return false;
-    }
+  const scan = await requiredProviderSourcesFromTerraformTree(rootDir);
+  if (!scan.complete || scan.files.length === 0) return false;
+  for (const file of scan.files) {
+    // The provider graph is exact for JSON, but this helper additionally
+    // proves the absence of resource/data/backend/provider blocks. Until the
+    // JSON semantic classifier covers those blocks, JSON cannot prove a
+    // provider-free generated root.
+    if (openTofuConfigurationFileKind(file.path) === "json") return false;
+    if (hasProviderUsageBeforeInit(file.text)) return false;
   }
-  return files > 0;
+  return true;
 }
 
 export function hasProviderUsageBeforeInit(text: string): boolean {

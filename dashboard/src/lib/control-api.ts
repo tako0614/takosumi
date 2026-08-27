@@ -22,7 +22,6 @@ import type {
   CredentialRecipe as ContractCredentialRecipe,
   Dependency as ContractDependency,
   InstallConfig as ContractInstallConfig,
-  InstallConfigDeploymentProfile,
   InstallConfigVariableDefault as ContractInstallConfigVariableDefault,
   Capsule as ContractCapsule,
   JsonValue as ContractJsonValue,
@@ -40,6 +39,7 @@ import type {
   SourceBuildConfig,
   SourceSnapshot as ContractSourceSnapshot,
   SourceSnapshotFileResponse,
+  SourceSnapshotInstallModulesResponse as ContractSourceSnapshotInstallModulesResponse,
   StableSourceTagResolutionResponse,
   Workspace as ContractWorkspace,
   PublicWorkspaceListPage as ContractPublicWorkspaceListPage,
@@ -1612,7 +1612,8 @@ export interface CheckCapsuleCompatibilityInput {
   readonly sourceSnapshotId?: string;
   readonly gitUrl: string;
   readonly ref: string;
-  readonly path: string;
+  /** Explicit module selection; omitted for URL-only Store discovery. */
+  readonly path?: string;
   readonly name: string;
   readonly authConnectionId?: string;
   readonly installConfigId?: string;
@@ -1622,8 +1623,6 @@ export interface CheckCapsuleCompatibilityInput {
    * The repository document itself is never returned to this client.
    */
   readonly compileInstallUx?: boolean;
-  /** Opaque DB-owned profile choice; meaningful only with compileInstallUx. */
-  readonly deploymentProfileKey?: string;
   readonly signal?: AbortSignal;
   /**
    * Bounds the complete Source sync and compatibility response. The final
@@ -1705,14 +1704,6 @@ async function checkCapsuleCompatibilityRequest(
   signal: AbortSignal | undefined,
   deadlineAt?: number,
 ): Promise<CapsuleCompatibilityResult> {
-  if (
-    input.deploymentProfileKey !== undefined &&
-    input.compileInstallUx !== true
-  ) {
-    throw new TypeError(
-      "deploymentProfileKey requires repository install UX compilation",
-    );
-  }
   if (input.sourceSnapshotId !== undefined && input.sourceId === undefined) {
     throw new TypeError("sourceSnapshotId requires sourceId");
   }
@@ -1775,16 +1766,13 @@ async function checkCapsuleCompatibilityRequest(
     signal,
     body: {
       sourceSnapshotId,
-      // Gate the pre-install check against the selected InstallConfig's policy
-      // when one is supplied (the install view passes the Workspace's resolved
-      // profile), otherwise fall back to the instance-wide default policy.
+      // Gate the pre-install check against the generic host InstallConfig's
+      // policy. Repository URL metadata never selects a profile or policy.
       ...(input.compileInstallUx
         ? {
             compileInstallUx: true,
             capsuleName: input.name,
-            ...(input.deploymentProfileKey !== undefined
-              ? { deploymentProfileKey: input.deploymentProfileKey }
-              : {}),
+            ...(input.path !== undefined ? { modulePath: input.path } : {}),
           }
         : {
             ...(input.installConfigId
@@ -3007,21 +2995,22 @@ export async function prepareCapsuleSourceSnapshot(input: {
   return { sourceId, sourceSnapshotId: snapshot.id, snapshot };
 }
 
-export type SourceSnapshotDeploymentProfileCatalog =
-  | { readonly status: "none" | "legacy"; readonly profiles: readonly [] }
-  | { readonly status: "invalid"; readonly profiles: readonly [] }
-  | {
-      readonly status: "ready";
-      readonly profiles: readonly InstallConfigDeploymentProfile[];
-    };
+/** Bounded install-module directory projection for one immutable snapshot. */
+export type SourceSnapshotInstallModulesResponse =
+  ContractSourceSnapshotInstallModulesResponse;
 
-export async function listSourceSnapshotDeploymentProfiles(
+/**
+ * Read the bounded install-module directory projection for one immutable
+ * SourceSnapshot. The response intentionally contains no manifest document,
+ * inputs, provider requirements, or policy fields.
+ */
+export async function listSourceSnapshotInstallModules(
   sourceId: string,
   sourceSnapshotId: string,
   options: { readonly signal?: AbortSignal } = {},
-): Promise<SourceSnapshotDeploymentProfileCatalog> {
-  return await controlFetch<SourceSnapshotDeploymentProfileCatalog>(
-    `${BASE}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(sourceSnapshotId)}/deployment-profiles`,
+): Promise<SourceSnapshotInstallModulesResponse> {
+  return await controlFetch<SourceSnapshotInstallModulesResponse>(
+    `${BASE}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(sourceSnapshotId)}/install-modules`,
     { signal: options.signal },
   );
 }

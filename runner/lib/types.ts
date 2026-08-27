@@ -160,6 +160,8 @@ export interface PlanResponseOptions {
   readonly refreshOnly?: boolean;
   readonly commandContext: CommandContext;
   readonly requiredProviders: readonly string[];
+  /** Exact selected/reachable provider graph sealed before credentialed init. */
+  readonly providerScan: TerraformTreeProviderScan;
   /**
    * Explicit output projection requested by the control plane. The runner uses
    * only the `from` and `sensitive` fields to return fully-known, non-sensitive
@@ -226,6 +228,9 @@ export interface PreparedRuntimeSecretFiles {
  */
 export interface TerraformTreeProviderScan {
   readonly providers: readonly string[];
+  readonly requirements: readonly import("../../lib/opentofu-configuration/src/mod.ts").OpenTofuProviderRequirement[];
+  readonly files: readonly import("../../lib/opentofu-configuration/src/mod.ts").OpenTofuSourceFile[];
+  readonly diagnostics: readonly import("../../lib/opentofu-configuration/src/mod.ts").OpenTofuConfigurationDiagnostic[];
   readonly complete: boolean;
 }
 

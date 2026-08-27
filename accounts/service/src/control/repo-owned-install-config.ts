@@ -1,15 +1,12 @@
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 import {
-  compareInstallConfigDeploymentProfiles,
-  installConfigDeploymentProfileSetIsValid,
-  isInstallConfigDeploymentProfileKey,
-  normalizeInstallConfigSourceUrl,
   type InstallConfig,
   type InstallConfigDeploymentProfile,
 } from "takosumi-contract/install-configs";
 import {
   isRepositoryManifestInterfaceCapableApiVersion,
+  TAKOSUMI_INSTALL_UX_MAX_MODULES,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
@@ -174,15 +171,13 @@ export type RepoOwnedDeploymentProfileResolution =
       readonly ok: true;
       readonly kind: "profile";
       readonly installConfig: InstallConfig;
-      readonly modulePath: string;
     }
   | {
       readonly ok: false;
       readonly diagnostic: {
-        readonly code:
-          | "repository_install_ux_deployment_profile_invalid"
-          | "repository_install_ux_deployment_profile_ambiguous"
-          | "repository_install_ux_deployment_profile_module_invalid";
+      readonly code:
+        | "repository_install_ux_deployment_profile_invalid"
+        | "repository_install_ux_deployment_profile_ambiguous";
         readonly message: string;
       };
     };
@@ -195,83 +190,24 @@ export type RepoOwnedDeploymentProfileCatalog =
       readonly profiles: readonly InstallConfigDeploymentProfile[];
     };
 
-function matchingRepoOwnedDeploymentProfileConfigs(input: {
-  readonly source: Source;
-  readonly candidates: readonly InstallConfig[];
-}): readonly InstallConfig[] {
-  const sourceUrl = input.source.url.trim();
-  const canonicalSourceUrl = normalizeInstallConfigSourceUrl(sourceUrl);
-  return input.candidates.filter((config) => {
-    const selectorUrl = config.sourceSelector?.url.trim();
-    const listingUrl = config.store?.source?.url.trim();
-    return Boolean(
-      sourceUrl &&
-        selectorUrl &&
-        listingUrl &&
-        config.workspaceId === undefined &&
-        config.internal === undefined &&
-        normalizeInstallConfigSourceUrl(selectorUrl) === canonicalSourceUrl &&
-        normalizeInstallConfigSourceUrl(listingUrl) === canonicalSourceUrl,
-    );
-  });
-}
-
 /**
- * Project only DB-owned deployment profiles that the existing execution
- * resolver can prove against this exact immutable SourceSnapshot. Invalid or
- * missing module paths stay server-side and never become dashboard choices.
+ * Legacy deployment-profile rows are retained for historical records only.
+ * They are deliberately not projected as a source-URL catalog: repository
+ * module choice comes from the immutable SourceSnapshot manifest and host
+ * policy comes from the generic/operator-selected InstallConfig.
  */
-export function repoOwnedDeploymentProfileCatalog(input: {
+export function repoOwnedDeploymentProfileCatalog(_input: {
   readonly source: Source;
   readonly sourceSnapshot: SourceSnapshot;
   readonly candidates: readonly InstallConfig[];
 }): RepoOwnedDeploymentProfileCatalog {
-  const matches = matchingRepoOwnedDeploymentProfileConfigs(input);
-  if (matches.length === 0) return { status: "none", profiles: [] };
-
-  const profiles = matches.map((config) => config.store?.deploymentProfile);
-  const profileCount = profiles.filter(
-    (profile): profile is InstallConfigDeploymentProfile =>
-      profile !== undefined,
-  ).length;
-  if (profileCount === 0) {
-    return matches.length === 1
-      ? { status: "legacy", profiles: [] }
-      : { status: "invalid", profiles: [] };
-  }
-  const exactProfiles = profiles.filter(
-    (profile): profile is InstallConfigDeploymentProfile =>
-      profile !== undefined,
-  );
-  if (
-    profileCount !== matches.length ||
-    !installConfigDeploymentProfileSetIsValid(exactProfiles)
-  ) {
-    return { status: "invalid", profiles: [] };
-  }
-
-  const available = exactProfiles.filter((profile) => {
-    const resolution = resolveRepoOwnedDeploymentProfile({
-      source: input.source,
-      sourceSnapshot: input.sourceSnapshot,
-      candidates: input.candidates,
-      deploymentProfileKey: profile.key,
-    });
-    return resolution.ok && resolution.kind === "profile";
-  });
-  return available.length > 0
-    ? {
-        status: "ready",
-        profiles: [...available].sort(compareInstallConfigDeploymentProfiles),
-      }
-    : { status: "invalid", profiles: [] };
+  return { status: "none", profiles: [] };
 }
 
 /**
- * Select one DB-owned deployment profile without trusting Store presentation
- * fields as execution authority. Both the policy selector and Store listing
- * URL must independently match the authenticated Source. A profiled config's
- * exact module path must be an own key of the pinned manifest.
+ * Historical profile keys are never resolved. Keeping this narrow inert shim
+ * avoids treating old DB rows as source-specific policy/provider authority if a
+ * legacy caller still reaches the helper.
  */
 export function resolveRepoOwnedDeploymentProfile(input: {
   readonly source: Source;
@@ -279,86 +215,13 @@ export function resolveRepoOwnedDeploymentProfile(input: {
   readonly candidates: readonly InstallConfig[];
   readonly deploymentProfileKey?: string;
 }): RepoOwnedDeploymentProfileResolution {
-  const matches = matchingRepoOwnedDeploymentProfileConfigs(input);
-  if (matches.length === 0) {
-    return input.deploymentProfileKey === undefined
-      ? { ok: true, kind: "none" }
-      : invalidDeploymentProfileResolution(
-          "repository_install_ux_deployment_profile_invalid",
-          "The selected deployment profile is unavailable for this Source.",
-        );
-  }
-
-  const profiles = matches.map((config) => config.store?.deploymentProfile);
-  const profileCount = profiles.filter((profile) => profile !== undefined).length;
-  if (profileCount === 0) {
-    if (matches.length === 1 && input.deploymentProfileKey === undefined) {
-      return { ok: true, kind: "legacy", installConfig: matches[0]! };
-    }
-    return invalidDeploymentProfileResolution(
-      "repository_install_ux_deployment_profile_ambiguous",
-      "Takosumi could not prove one legacy Store InstallConfig for this Source.",
-    );
-  }
-  if (profileCount !== matches.length) {
-    return invalidDeploymentProfileResolution(
-      "repository_install_ux_deployment_profile_ambiguous",
-      "Profiled and legacy Store InstallConfigs cannot be mixed for one Source.",
-    );
-  }
-  const exactProfiles = profiles.filter(
-    (profile): profile is NonNullable<typeof profile> => profile !== undefined,
-  );
-  if (!installConfigDeploymentProfileSetIsValid(exactProfiles)) {
-    return invalidDeploymentProfileResolution(
-      "repository_install_ux_deployment_profile_ambiguous",
-      "The deployment profile set is ambiguous.",
-    );
-  }
-  if (!isInstallConfigDeploymentProfileKey(input.deploymentProfileKey)) {
+  if (input.deploymentProfileKey !== undefined) {
     return invalidDeploymentProfileResolution(
       "repository_install_ux_deployment_profile_invalid",
-      "Select and confirm an available deployment profile.",
+      "deploymentProfileKey is no longer a source or policy selector; use the generic host policy.",
     );
   }
-  const selected = matches.find(
-    (config) =>
-      config.store?.deploymentProfile?.key === input.deploymentProfileKey,
-  );
-  if (!selected) {
-    return invalidDeploymentProfileResolution(
-      "repository_install_ux_deployment_profile_invalid",
-      "The selected deployment profile is unavailable.",
-    );
-  }
-
-  const rawModulePath = selected.modulePath;
-  const parsedModulePath = modulePathValue(rawModulePath);
-  const canonicalModulePath =
-    parsedModulePath === "" ? "." : parsedModulePath;
-  const manifest = input.sourceSnapshot?.repositoryManifest;
-  if (
-    typeof rawModulePath !== "string" ||
-    canonicalModulePath === undefined ||
-    rawModulePath !== canonicalModulePath ||
-    !manifest ||
-    manifest.status !== "present" ||
-    !Object.prototype.hasOwnProperty.call(
-      manifest.document.install.modules,
-      canonicalModulePath,
-    )
-  ) {
-    return invalidDeploymentProfileResolution(
-      "repository_install_ux_deployment_profile_module_invalid",
-      "The selected deployment profile does not name an exact module in the pinned Source manifest.",
-    );
-  }
-  return {
-    ok: true,
-    kind: "profile",
-    installConfig: selected,
-    modulePath: canonicalModulePath,
-  };
+  return { ok: true, kind: "none" };
 }
 
 function invalidDeploymentProfileResolution(
@@ -891,6 +754,32 @@ function boundedMergeIdentifier(value: string): string {
   return JSON.stringify(value.replace(/[\0-\u001f\u007f]/gu, "").slice(0, 96));
 }
 
+/** Match the repository-manifest parser's canonical module-key spelling. */
+function isCanonicalRepositoryModulePath(value: string): boolean {
+  if (
+    !value ||
+    value.trim() !== value ||
+    value.length > 1_024 ||
+    value.startsWith("/") ||
+    value.startsWith("./") ||
+    value.endsWith("/") ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    /^[A-Za-z]:/u.test(value)
+  ) {
+    return false;
+  }
+  if (value === ".") return true;
+  return !value
+    .split("/")
+    .some((segment) => !segment || segment === "." || segment === "..");
+}
+
+/** Individual OpenTofu files are not install-module directory choices. */
+function isRepositoryModuleDirectoryPath(value: string): boolean {
+  return !/(?:\.tf|\.tofu)(?:\.json)?$/iu.test(value);
+}
+
 export type RepoOwnedInstallModulePathResolution =
   | { readonly ok: true; readonly modulePath: string }
   | {
@@ -900,8 +789,9 @@ export type RepoOwnedInstallModulePathResolution =
 
 /**
  * Select the repository-owned install module without consulting Store, Source,
- * or base InstallConfig paths. An explicit path remains available to the
- * ordinary manual Git flow; Store preflight calls this with no explicit path.
+ * or base InstallConfig paths. An explicit direct-Git/source-option path is
+ * accepted only when it is an exact key in the immutable manifest; Store
+ * preflight calls this with no explicit path.
  */
 export function resolveRepoOwnedInstallModulePath(input: {
   readonly sourceSnapshot: SourceSnapshot | undefined;
@@ -924,16 +814,80 @@ export function resolveRepoOwnedInstallModulePath(input: {
       diagnostic: invalidRepositoryManifestDiagnostic(observation.diagnostic),
     };
   }
-
-  if (input.modulePath !== undefined) {
+  if (!/^sha256:[0-9a-f]{64}$/u.test(observation.digest)) {
     return {
-      ok: true,
-      modulePath: input.modulePath === "" ? "." : input.modulePath,
+      ok: false,
+      diagnostic: {
+        code: "repository_install_ux_document_invalid",
+        message:
+          "The captured repository install UX manifest digest is invalid; sync and review the latest SourceSnapshot.",
+      },
     };
   }
 
   const document = observation.document;
-  const modulePaths = Object.keys(document.install.modules);
+  const modules = document?.install?.modules;
+  if (
+    !isPlainJsonObject(modules) ||
+    Object.keys(modules).length < 1 ||
+    Object.keys(modules).length > TAKOSUMI_INSTALL_UX_MAX_MODULES ||
+    Object.keys(modules).some(
+      (path) =>
+        !isCanonicalRepositoryModulePath(path) ||
+        !isRepositoryModuleDirectoryPath(path) ||
+        !isPlainJsonObject(modules[path]),
+    )
+  ) {
+    return {
+      ok: false,
+      diagnostic: {
+        code: "repository_install_ux_document_invalid",
+        message:
+          "The captured repository install UX module declaration is invalid; sync and review the latest SourceSnapshot.",
+      },
+    };
+  }
+  if (input.modulePath !== undefined) {
+    // An explicit client path is an authority-bearing selection only after it
+    // has been canonicalized and proven as an own key of the immutable
+    // repository manifest. Never consult Source/default/base InstallConfig
+    // paths as a fallback for an explicit request.
+    const parsedModulePath = modulePathValue(input.modulePath);
+    const canonicalModulePath =
+      parsedModulePath === "" ? "." : parsedModulePath;
+    if (
+      canonicalModulePath === undefined ||
+      (input.modulePath !== "." && input.modulePath !== canonicalModulePath) ||
+      !isCanonicalRepositoryModulePath(canonicalModulePath) ||
+      !isRepositoryModuleDirectoryPath(canonicalModulePath)
+    ) {
+      return {
+        ok: false,
+        diagnostic: {
+          code: "repository_install_ux_module_path_invalid",
+          message:
+            "The selected module path is not a canonical relative path.",
+        },
+      };
+    }
+    if (
+      !Object.prototype.hasOwnProperty.call(
+        modules,
+        canonicalModulePath,
+      )
+    ) {
+      return {
+        ok: false,
+        diagnostic: {
+          code: "repository_install_ux_module_missing",
+          message: `The repository install UX does not declare the selected module ${boundedMergeIdentifier(canonicalModulePath)}.`,
+        },
+      };
+    }
+    return { ok: true, modulePath: canonicalModulePath };
+  }
+
+  const modulePaths = Object.keys(modules);
   if (
     document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 ||
     document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 ||
@@ -943,7 +897,7 @@ export function resolveRepoOwnedInstallModulePath(input: {
     if (
       defaultModule !== undefined &&
       !Object.prototype.hasOwnProperty.call(
-        document.install.modules,
+        modules,
         defaultModule,
       )
     ) {
