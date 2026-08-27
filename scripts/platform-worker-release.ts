@@ -955,15 +955,32 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
   );
 }
 
+export function remoteBranchContainsCommit(
+  output: string,
+  branch: string,
+  commit: string,
+): boolean {
+  if (branch === "HEAD") return false;
+  const expectedRef = `refs/heads/${branch}`;
+  return output.split("\n").some((line) => {
+    const fields = line.trim().split(/\s+/u);
+    return fields.length === 2 && fields[0] === commit && fields[1] === expectedRef;
+  });
+}
+
 function assertCleanAndPushed(): void {
   if (git(["status", "--porcelain", "--untracked-files=all"]).trim() !== "") {
     throw new Error("platform_worker_release_source_dirty");
   }
-  if (
-    !git(["branch", "-r", "--contains", "HEAD"])
-      .split("\n")
-      .some((line) => line.trim().startsWith("origin/"))
-  ) {
+  const commit = git(["rev-parse", "HEAD"]).trim();
+  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+  const remote = git([
+    "ls-remote",
+    "--heads",
+    "origin",
+    `refs/heads/${branch}`,
+  ]);
+  if (!remoteBranchContainsCommit(remote, branch, commit)) {
     throw new Error("platform_worker_release_source_not_pushed");
   }
 }

@@ -8,6 +8,7 @@ import {
   parseServingVersion,
   platformDashboardBuildEnvironment,
   platformTargetForEnvironment,
+  remoteBranchContainsCommit,
   selectRecoveredVersion,
   secretNames,
 } from "../../scripts/platform-worker-release.ts";
@@ -242,6 +243,31 @@ test("platform release parser exposes only reviewed plan and execute actions", (
     reviewer: "operator:reviewer",
     evidence: "/private/recovered.json",
   });
+});
+
+test("platform release verifies the exact pushed branch without a remote-tracking ref", () => {
+  const commit = "4d7194f79cb7a03ce1f99f4d70856c3134aa61f3";
+  expect(
+    remoteBranchContainsCommit(
+      `${commit}\trefs/heads/fix/TASK-0032-generic-install-staging\n`,
+      "fix/TASK-0032-generic-install-staging",
+      commit,
+    ),
+  ).toBeTrue();
+  expect(
+    remoteBranchContainsCommit(
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/fix/TASK-0032-generic-install-staging\n",
+      "fix/TASK-0032-generic-install-staging",
+      commit,
+    ),
+  ).toBeFalse();
+  expect(
+    remoteBranchContainsCommit(
+      `${commit}\trefs/heads/other\n`,
+      "fix/TASK-0032-generic-install-staging",
+      commit,
+    ),
+  ).toBeFalse();
 });
 
 test("platform release selects exactly one 100 percent serving Version", () => {
