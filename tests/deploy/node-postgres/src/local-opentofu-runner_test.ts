@@ -197,7 +197,7 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
     });
     const profile = createLocalOpenTofuRunnerProfile();
     const generatedRoot = generateOpenTofuChildModuleRoot({
-      requiredProviders: [],
+      rootProviderRequirements: [],
       inputs: {},
       outputAllowlist: {
         message: { from: "message", type: "string" },

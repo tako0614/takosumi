@@ -14,12 +14,6 @@ export const en: Record<keyof typeof ja, string> = {
     "Choose from a store or enter a public Git repository.",
   "installStore.manual": "Add from a Git repository",
   "installStore.back": "Choose again",
-  "installStore.entryLoadTitle": "Review the available choices",
-  "installStore.entryLoadHint":
-    "Load the chooser document from the specified Git repository. This action creates the read-only Source and sync Run used to fetch it.",
-  "installStore.entryLoad": "Load choices",
-  "installStore.entryHint": "Choose one service to add.",
-  "installStore.select": "Choose this",
   "installStore.configureHint":
     "Confirm the name and add. Repository analysis happens next.",
   "installStore.moduleTitle": "Choose a module",
@@ -29,11 +23,21 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.moduleConfirm": "Continue with this module",
   "installStore.moduleUnavailable":
     "Takosumi could not safely determine this SourceSnapshot's modules.",
+  "installStore.moduleMissing":
+    "No installable root module was found in this repository revision.",
+  "installStore.moduleRequirements": "Detected provider requirements",
+  "installStore.moduleRequirement":
+    "{source} · module {module}{alias} {version}",
+  "installStore.stepsLabel": "Install steps",
+  "installStore.stepSource": "Source",
+  "installStore.stepConfigure": "Configure",
+  "installStore.stepReview": "Review",
   "installStore.name": "Service name",
   "installStore.sourceDetails": "Source details",
   "installStore.sourceUrl": "Git URL",
   "installStore.sourceRef": "Ref (optional)",
-  "installStore.sourcePath": "Module path",
+  "installStore.sourcePath": "Repository subtree (optional)",
+  "installStore.modulePath": "Module path hint",
   "installStore.sourceAuth": "Git connection",
   "installStore.publicSource": "Public repository",
   "installStore.add": "Add",

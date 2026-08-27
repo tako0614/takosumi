@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
-import { resolveRepoOwnedDeploymentProfile } from "../../../../accounts/service/src/control/repo-owned-install-config.ts";
 import { oidcClientActivationDigest } from "../../../../accounts/service/src/oidc-activation.ts";
 import { validateOidcLiveGrant } from "../../../../accounts/service/src/oidc-live-grant.ts";
 import {
@@ -15,6 +14,10 @@ import type {
   RepositoryManifestDocument,
 } from "takosumi-contract/repository-manifest";
 import type {
+  RepositoryModuleRootProviderRequirement,
+  SourceSnapshot,
+} from "takosumi-contract/sources";
+import type {
   InstallConfig,
   SourceBuildConfig,
 } from "takosumi-contract/install-configs";
@@ -27,7 +30,6 @@ import type {
   OpenTofuPlanResult,
   OpenTofuRunner,
   OpenTofuStableSourceTagResolutionJob,
-  OpenTofuSourceSnapshotPresentationFileJob,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import { applyExpectedGuardFromPlanRun } from "../../../../core/domains/deploy-control/mod.ts";
 import {
@@ -67,11 +69,25 @@ const LOCK_DIGEST =
 const STATE_DIGEST =
   "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 
+function repositoryModules(
+  paths: readonly string[],
+  rootProviderRequirements: readonly RepositoryModuleRootProviderRequirement[] = [],
+): NonNullable<SourceSnapshot["repositoryModules"]> {
+  return {
+    status: "ready",
+    scopePath: ".",
+    modules: paths.map((path) => ({
+      path,
+      providerPackages: [],
+      rootProviderRequirements,
+    })),
+  };
+}
+
 const REPOSITORY_INTERFACE_MANIFEST = {
   apiVersion: "takosumi.com/v2.1",
   kind: "Repository",
   install: {
-    defaultModule: ".",
     modules: {
       ".": {
         inputs: [],
@@ -131,7 +147,6 @@ interface RecordingRunner extends OpenTofuRunner {
   readonly applyJobs: OpenTofuApplyJob[];
   readonly destroyJobs: OpenTofuDestroyJob[];
   readonly stableTagJobs: OpenTofuStableSourceTagResolutionJob[];
-  readonly presentationFileJobs: OpenTofuSourceSnapshotPresentationFileJob[];
   readonly capsuleSourceFileJobs: OpenTofuCapsuleSourceFilesJob[];
 }
 
@@ -142,14 +157,12 @@ function recordingRunner(
   const applyJobs: OpenTofuApplyJob[] = [];
   const destroyJobs: OpenTofuDestroyJob[] = [];
   const stableTagJobs: OpenTofuStableSourceTagResolutionJob[] = [];
-  const presentationFileJobs: OpenTofuSourceSnapshotPresentationFileJob[] = [];
   const capsuleSourceFileJobs: OpenTofuCapsuleSourceFilesJob[] = [];
   return {
     planJobs,
     applyJobs,
     destroyJobs,
     stableTagJobs,
-    presentationFileJobs,
     capsuleSourceFileJobs,
     plan: (job) => {
       planJobs.push(job);
@@ -221,16 +234,6 @@ output "launch_url" {
       return Promise.resolve({
         tag: "v2.4.0",
         commit: "1234567890abcdef1234567890abcdef12345678",
-      });
-    },
-    readSourceSnapshotPresentationFile: (job) => {
-      presentationFileJobs.push(job);
-      return Promise.resolve({
-        path: job.path,
-        text: '{"kind":"CapsuleSourceOptions"}\n',
-        digest:
-          "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-        sizeBytes: 32,
       });
     },
   };
@@ -759,7 +762,7 @@ test("no-state Capsule DELETE rejects any runtime effect but permits pre-dispatc
   );
 });
 
-test("repository preflight resolves the default before exact compatibility while manual Git keeps explicit modulePath", async () => {
+test("repository preflight resolves the sole indexed module before exact compatibility while manual Git keeps explicit modulePath", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
@@ -830,6 +833,7 @@ test("repository preflight resolves the default before exact compatibility while
   const digest = `sha256:${"c".repeat(64)}`;
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules(["deploy/takoform"]),
     repositoryManifest: {
       status: "present",
       digest,
@@ -837,7 +841,6 @@ test("repository preflight resolves the default before exact compatibility while
         apiVersion: "takosumi.com/v2.1",
         kind: "Repository",
         install: {
-          defaultModule: "deploy/takoform",
           modules: {
             ".": { inputs: [] },
             "deploy/takoform": { inputs: [] },
@@ -981,6 +984,7 @@ test("repository preflight resolves the default before exact compatibility while
 
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules(["deploy/first", "deploy/second"]),
     repositoryManifest: {
       status: "present",
       digest,
@@ -996,7 +1000,7 @@ test("repository preflight resolves the default before exact compatibility while
       },
     },
   });
-  const missingDefault = await controlJson<{
+  const selectionRequired = await controlJson<{
     readonly error: {
       readonly code: string;
       readonly details?: { readonly diagnosticCode?: string };
@@ -1016,16 +1020,17 @@ test("repository preflight resolves the default before exact compatibility while
     },
     400,
   );
-  expect(missingDefault.error).toMatchObject({
+  expect(selectionRequired.error).toMatchObject({
     code: "repository_install_ux_invalid",
     details: {
-      diagnosticCode: "repository_install_ux_default_module_missing",
+      diagnosticCode: "repository_install_module_selection_required",
     },
   });
   expect(runner.capsuleSourceFileJobs).toHaveLength(1);
 
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules(["."]),
     repositoryManifest: {
       status: "present",
       digest,
@@ -1033,7 +1038,6 @@ test("repository preflight resolves the default before exact compatibility while
         apiVersion: "takosumi.com/v2.1",
         kind: "Repository",
         install: {
-          defaultModule: "deploy/takoform",
           modules: {
             ".": { inputs: [] },
             "deploy/takoform": { inputs: [] },
@@ -1070,7 +1074,7 @@ test("repository preflight resolves the default before exact compatibility while
   expect(historicalSharedRowsIgnored.repositoryInstallUx.status).toBe(
     "accepted",
   );
-  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
+  expect(runner.capsuleSourceFileJobs).toHaveLength(2);
 
   const missing = await seedCapsuleModel(deployStore, {
     workspaceId: seeded.workspace.id,
@@ -1083,6 +1087,7 @@ test("repository preflight resolves the default before exact compatibility while
   });
   await deployStore.putSourceSnapshot({
     ...missing.snapshot,
+    repositoryModules: repositoryModules(["deploy/only"]),
     repositoryManifest: {
       status: "present",
       digest,
@@ -1114,7 +1119,7 @@ test("repository preflight resolves the default before exact compatibility while
     201,
   );
   expect(genericBase.repositoryInstallUx.status).toBe("accepted");
-  expect(runner.capsuleSourceFileJobs).toHaveLength(2);
+  expect(runner.capsuleSourceFileJobs).toHaveLength(3);
 
   await controlJson(
     {
@@ -1131,7 +1136,7 @@ test("repository preflight resolves the default before exact compatibility while
     },
     201,
   );
-  expect(runner.capsuleSourceFileJobs[2]?.modulePath).toBe("deploy/manual");
+  expect(runner.capsuleSourceFileJobs[3]?.modulePath).toBe("deploy/manual");
 
   const manual = await seedCapsuleModel(deployStore, {
     workspaceId: "ws_manual_module_create",
@@ -1140,6 +1145,10 @@ test("repository preflight resolves the default before exact compatibility while
     installConfigId: "icfg_manual_module_base",
     sourceUrl: "https://git.example.com/example/manual-module.git",
     installConfig: { modulePath: "." },
+  });
+  await deployStore.putSourceSnapshot({
+    ...manual.snapshot,
+    repositoryModules: repositoryModules(["deploy/manual"]),
   });
   const manualCreated = await controlJson<{
     readonly capsule: { readonly id: string; readonly installConfigId: string };
@@ -1166,7 +1175,7 @@ test("repository preflight resolves the default before exact compatibility while
   expect(manualConfig.modulePath).toBe("deploy/manual");
 });
 
-test("historical Store deployment profiles are inert while manifest owns module choice", async () => {
+test("the repository module index owns module choice over historical Store profile rows", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
@@ -1246,6 +1255,7 @@ test("historical Store deployment profiles are inert while manifest owns module 
   });
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules(["deploy/managed", "deploy/byoc"]),
     repositoryManifest: {
       status: "present",
       digest: `sha256:${"9".repeat(64)}`,
@@ -1253,7 +1263,6 @@ test("historical Store deployment profiles are inert while manifest owns module 
         apiVersion: "takosumi.com/v2.1",
         kind: "Repository",
         install: {
-          defaultModule: "deploy/managed",
           modules: {
             "deploy/managed": { inputs: [] },
             "deploy/byoc": { inputs: [] },
@@ -1263,10 +1272,7 @@ test("historical Store deployment profiles are inert while manifest owns module 
     },
   });
 
-  const listed = await controlJson<{
-    readonly status: "none";
-    readonly profiles: readonly [];
-  }>(
+  await controlJson(
     {
       operations,
       store: accountStore,
@@ -1274,43 +1280,26 @@ test("historical Store deployment profiles are inert while manifest owns module 
       method: "GET",
       path: `/api/v1/sources/${seeded.source.id}/snapshots/${seeded.snapshot.id}/deployment-profiles`,
     },
-    200,
+    404,
   );
-  expect(listed).toEqual({
-    status: "none",
-    profiles: [],
-  });
   expect(runner.capsuleSourceFileJobs).toHaveLength(0);
 
-  for (const body of [
-    ...[" ", "bad\u0000key", "x".repeat(129)].map(
-      (deploymentProfileKey) => ({
-        sourceSnapshotId: seeded.snapshot.id,
-        capsuleName: "profiled-app",
-        compileInstallUx: true,
-        deploymentProfileKey,
-      }),
-    ),
+  await controlJson(
     {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
       sourceSnapshotId: seeded.snapshot.id,
       capsuleName: "profiled-app",
       compileInstallUx: true,
-      deploymentProfileKey: "byoc-v1",
-      installConfigId: byoc.id,
-    },
-  ]) {
-    await controlJson(
-      {
-        operations,
-        store: accountStore,
-        cookie,
-        method: "POST",
-        path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
-        body,
+        deploymentProfileKey: "retired-profile",
       },
-      400,
-    );
-  }
+    },
+    400,
+  );
   expect(runner.capsuleSourceFileJobs).toHaveLength(0);
 
   const accepted = await controlJson<{
@@ -1329,6 +1318,7 @@ test("historical Store deployment profiles are inert while manifest owns module 
         sourceSnapshotId: seeded.snapshot.id,
         capsuleName: "profiled-app",
         compileInstallUx: true,
+        modulePath: "deploy/managed",
       },
     },
     201,
@@ -1364,7 +1354,7 @@ test("historical Store deployment profiles are inert while manifest owns module 
     },
     201,
   );
-  // The explicit manifest module is a distinct compile selection; historical
+  // The explicit indexed module is a distinct compile selection; historical
   // profile rows are not consulted.
   expect(runner.capsuleSourceFileJobs).toHaveLength(2);
   expect(runner.capsuleSourceFileJobs[1]?.modulePath).toBe("deploy/byoc");
@@ -1397,12 +1387,12 @@ test("historical Store deployment profiles are inert while manifest owns module 
   expect(profileDoesNotOverrideManifest.repositoryInstallUx.status).toBe(
     "accepted",
   );
-  // Repeating the manifest-selected module converges on the same deterministic
+  // Repeating the indexed module converges on the same deterministic
   // preview identity; no profile row can create a third policy variant.
   expect(runner.capsuleSourceFileJobs).toHaveLength(2);
 });
 
-test("historical profile rows cannot override an explicit manifest module path", async () => {
+test("historical profile rows cannot override an explicit indexed module path", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
@@ -1453,6 +1443,7 @@ test("historical profile rows cannot override an explicit manifest module path",
   });
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules([".", "deploy/managed"]),
     repositoryManifest: {
       status: "present",
       digest: `sha256:${"8".repeat(64)}`,
@@ -1460,7 +1451,6 @@ test("historical profile rows cannot override an explicit manifest module path",
         apiVersion: "takosumi.com/v2.1",
         kind: "Repository",
         install: {
-          defaultModule: ".",
           modules: {
             ".": { inputs: [] },
             "deploy/managed": { inputs: [] },
@@ -1517,6 +1507,7 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
   const manifestDigest = `sha256:${"a".repeat(64)}`;
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules([".", "deploy/takoform"]),
     repositoryManifest: {
       status: "present",
       digest: manifestDigest,
@@ -1524,7 +1515,6 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
         apiVersion: "takosumi.com/v2.1",
         kind: "Repository",
         install: {
-          defaultModule: ".",
           // Deliberately insert non-root first: the public projection has a
           // deterministic path order independent of repository JSON order.
           modules: {
@@ -1539,9 +1529,12 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
   const listed = await controlJson<{
     readonly status: "ready";
     readonly sourceSnapshotId: string;
-    readonly manifestDigest: string;
-    readonly defaultModule: string;
-    readonly modules: readonly { readonly path: string; readonly default?: boolean }[];
+    readonly scopePath: string;
+    readonly modules: readonly {
+      readonly path: string;
+      readonly providerPackages: readonly unknown[];
+      readonly rootProviderRequirements: readonly unknown[];
+    }[];
   }>(
     {
       operations,
@@ -1555,17 +1548,21 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
   expect(listed).toEqual({
     status: "ready",
     sourceSnapshotId: seeded.snapshot.id,
-    manifestDigest,
-    defaultModule: ".",
+    scopePath: ".",
     modules: [
-      { path: ".", default: true },
-      { path: "deploy/takoform" },
+      { path: ".", providerPackages: [], rootProviderRequirements: [] },
+      {
+        path: "deploy/takoform",
+        providerPackages: [],
+        rootProviderRequirements: [],
+      },
     ],
   });
-  expect(JSON.stringify(listed)).not.toMatch(/document|inputs|provider|policy/u);
+  expect(JSON.stringify(listed)).not.toMatch(/document|inputs|policy/u);
 
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules([]),
     repositoryManifest: {
       status: "present",
       digest: manifestDigest,
@@ -1573,7 +1570,6 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
         apiVersion: "takosumi.com/v2.1",
         kind: "Repository",
         install: {
-          defaultModule: "deploy/main.tf",
           modules: {
             // The parser accepts a canonical key syntactically, but the
             // public module projection must never turn an individual file
@@ -1585,8 +1581,9 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
     },
   });
   const fileChoice = await controlJson<{
-    readonly status: "invalid";
+    readonly status: "ready";
     readonly sourceSnapshotId: string;
+    readonly scopePath: string;
     readonly modules: readonly [];
   }>(
     {
@@ -1599,9 +1596,9 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
     200,
   );
   expect(fileChoice).toEqual({
-    status: "invalid",
+    status: "ready",
     sourceSnapshotId: seeded.snapshot.id,
-    manifestDigest,
+    scopePath: ".",
     modules: [],
   });
 
@@ -1645,7 +1642,8 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
   const invalid = await controlJson<{
     readonly status: "invalid";
     readonly sourceSnapshotId: string;
-    readonly manifestDigest?: string;
+    readonly scopePath: string;
+    readonly reason: string;
     readonly modules: readonly [];
   }>(
     {
@@ -1660,7 +1658,8 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
   expect(invalid).toEqual({
     status: "invalid",
     sourceSnapshotId: unrelated.snapshot.id,
-    manifestDigest: `sha256:${"b".repeat(64)}`,
+    scopePath: ".",
+    reason: "scan_unavailable",
     modules: [],
   });
 
@@ -1670,8 +1669,10 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
     snapshotId: "snap_install_modules_absent",
   });
   const absentProjection = await controlJson<{
-    readonly status: "absent";
+    readonly status: "invalid";
     readonly sourceSnapshotId: string;
+    readonly scopePath: string;
+    readonly reason: string;
     readonly modules: readonly [];
   }>(
     {
@@ -1684,13 +1685,15 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
     200,
   );
   expect(absentProjection).toEqual({
-    status: "absent",
+    status: "invalid",
     sourceSnapshotId: absent.snapshot.id,
+    scopePath: ".",
+    reason: "scan_unavailable",
     modules: [],
   });
 });
 
-test("repository compilation accepts exact manifest module authority while manual compatibility keeps it", async () => {
+test("repository compilation accepts exact indexed module authority while manifest assistance remains optional", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
@@ -1714,6 +1717,7 @@ test("repository compilation accepts exact manifest module authority while manua
   const digest = `sha256:${"a".repeat(64)}`;
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules([".", "deploy/manual"]),
     repositoryManifest: {
       status: "present",
       digest,
@@ -1721,7 +1725,6 @@ test("repository compilation accepts exact manifest module authority while manua
         apiVersion: "takosumi.com/v2.1",
         kind: "Repository",
         install: {
-          defaultModule: "deploy/manual",
           modules: {
             ".": { inputs: [] },
             "deploy/manual": { inputs: [] },
@@ -1818,13 +1821,12 @@ test("repository compilation accepts exact manifest module authority while manua
 
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules([".", "deploy/takoform", "deploy/manual"]),
     repositoryManifest: { status: "absent" },
   });
   const explicitWithoutManifest = await controlJson<{
-    readonly error: {
-      readonly code: string;
-      readonly details?: { readonly diagnosticCode?: string };
-    };
+    readonly report: { readonly level: string };
+    readonly repositoryInstallUx: { readonly status: "absent" };
   }>(
     {
       operations,
@@ -1839,13 +1841,17 @@ test("repository compilation accepts exact manifest module authority while manua
         compileInstallUx: true,
       },
     },
-    400,
+    201,
   );
-  expect(explicitWithoutManifest.error).toMatchObject({
-    code: "repository_install_ux_invalid",
-    details: {
-      diagnosticCode: "repository_install_ux_default_module_missing",
-    },
+  expect(explicitWithoutManifest.report.level).toBe("ready");
+  expect(explicitWithoutManifest.repositoryInstallUx).toEqual({ status: "absent" });
+  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
+  expect(runner.capsuleSourceFileJobs[0]?.modulePath).toBe("deploy/manual");
+
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryModules: repositoryModules(["deploy/manual"]),
+    repositoryManifest: { status: "absent" },
   });
   expect(runner.capsuleSourceFileJobs).toHaveLength(1);
 
@@ -1869,8 +1875,14 @@ test("repository compilation accepts exact manifest module authority while manua
   );
   expect(result.report.level).toBe("ready");
   expect(result.repositoryInstallUx).toEqual({ status: "absent" });
-  expect(runner.capsuleSourceFileJobs).toHaveLength(2);
-  expect(runner.capsuleSourceFileJobs[1]?.modulePath).toBeUndefined();
+  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
+  expect(runner.capsuleSourceFileJobs[0]?.modulePath).toBe("deploy/manual");
+
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryModules: repositoryModules(["deploy/manual", "deploy/manual-legacy"]),
+    repositoryManifest: { status: "absent" },
+  });
 
   await controlJson(
     {
@@ -1887,8 +1899,8 @@ test("repository compilation accepts exact manifest module authority while manua
     },
     201,
   );
-  expect(runner.capsuleSourceFileJobs).toHaveLength(3);
-  expect(runner.capsuleSourceFileJobs[2]?.modulePath).toBe("deploy/manual-legacy");
+  expect(runner.capsuleSourceFileJobs).toHaveLength(2);
+  expect(runner.capsuleSourceFileJobs[1]?.modulePath).toBe("deploy/manual-legacy");
 });
 
 test("repository compilation retains every required provider across selected-module files", async () => {
@@ -1949,6 +1961,7 @@ terraform {
   });
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules(["deploy/selected"]),
     repositoryManifest: {
       status: "present",
       digest: `sha256:${"b".repeat(64)}`,
@@ -1956,7 +1969,6 @@ terraform {
         apiVersion: "takosumi.com/v2.1",
         kind: "Repository",
         install: {
-          defaultModule: "deploy/selected",
           modules: { "deploy/selected": { inputs: [] } },
         },
       },
@@ -1966,7 +1978,11 @@ terraform {
   const result = await controlJson<{
     readonly report: {
       readonly level: string;
-      readonly providers: readonly { readonly source: string }[];
+      readonly providerPackages: readonly { readonly source: string }[];
+      readonly rootProviderRequirements: readonly {
+        readonly source: string;
+        readonly moduleLocalName: string;
+      }[];
     };
     readonly repositoryInstallUx: { readonly status: "accepted" };
   }>(
@@ -1988,7 +2004,9 @@ terraform {
 
   expect(result.report.level).toBe("ready");
   expect(result.repositoryInstallUx.status).toBe("accepted");
-  expect(result.report.providers.map((provider) => provider.source)).toEqual([
+  expect(
+    result.report.providerPackages.map((provider) => provider.source),
+  ).toEqual([
     "registry.opentofu.org/cloudflare/cloudflare",
     "registry.opentofu.org/hashicorp/random",
   ]);
@@ -2032,7 +2050,6 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
       apiVersion: "takosumi.com/v2.3" as const,
       kind: "Repository" as const,
       install: {
-        defaultModule: ".",
         modules: {
           ".": {
             inputs: [],
@@ -2044,6 +2061,7 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
   });
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules(["."]),
     repositoryManifest: manifestWithSourceBuild(reviewedSourceBuild),
   });
 
@@ -2106,6 +2124,7 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
   // changed repository metadata.
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules(["."]),
     repositoryManifest: manifestWithSourceBuild(changedSourceBuild),
   });
   const planBody = await controlJson<{
@@ -2292,6 +2311,7 @@ test("account session control routes execute plan and apply through the real Ope
   const installUxDigest = `sha256:${"d".repeat(64)}`;
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules(["."]),
     repositoryManifest: {
       status: "present",
       digest: installUxDigest,
@@ -2342,40 +2362,6 @@ test("account session control routes execute plan and apply through the real Ope
     commit: "1234567890abcdef1234567890abcdef12345678",
   });
   expect(runner.stableTagJobs).toHaveLength(1);
-
-  const presentationFile = await controlJson<{
-    readonly sourceSnapshotId: string;
-    readonly path: string;
-    readonly digest: string;
-  }>(
-    {
-      operations,
-      store: accountStore,
-      cookie,
-      method: "GET",
-      path: `/api/v1/sources/${seeded.source.id}/snapshots/${seeded.snapshot.id}/file?path=install%2Foptions.json`,
-    },
-    200,
-  );
-  expect(presentationFile).toMatchObject({
-    sourceSnapshotId: seeded.snapshot.id,
-    path: "install/options.json",
-    digest:
-      "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-  });
-  expect(runner.presentationFileJobs).toHaveLength(1);
-
-  await controlJson(
-    {
-      operations,
-      store: accountStore,
-      cookie,
-      method: "GET",
-      path: `/api/v1/sources/${seeded.source.id}/snapshots/${seeded.snapshot.id}/file?path=.well-known%2Ftakosumi.json`,
-    },
-    400,
-  );
-  expect(runner.presentationFileJobs).toHaveLength(1);
 
   const installUxPreview = await controlJson<{
     readonly repositoryInstallUx: {
@@ -2453,6 +2439,7 @@ test("account session control routes execute plan and apply through the real Ope
 
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules(["."]),
     repositoryManifest: {
       status: "invalid",
       reason: "invalid_document",
@@ -2460,10 +2447,8 @@ test("account session control routes execute plan and apply through the real Ope
     },
   });
   const invalidInstallUxPreview = await controlJson<{
-    readonly error: {
-      readonly code: string;
-      readonly message: string;
-      readonly details?: { readonly diagnosticCode?: string };
+    readonly repositoryInstallUx: {
+      readonly status: "absent";
     };
   }>(
     {
@@ -2478,19 +2463,17 @@ test("account session control routes execute plan and apply through the real Ope
         compileInstallUx: true,
       },
     },
-    400,
+    201,
   );
-  expect(invalidInstallUxPreview.error).toMatchObject({
-    code: "repository_install_ux_invalid",
-    details: {
-      diagnosticCode: "repository_install_ux_document_invalid",
-    },
+  expect(invalidInstallUxPreview.repositoryInstallUx).toEqual({
+    status: "absent",
   });
   expect(JSON.stringify(invalidInstallUxPreview)).not.toContain(
     "bounded fixture diagnostic",
   );
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules(["."]),
     repositoryManifest: {
       status: "present",
       digest: installUxDigest,
@@ -2623,6 +2606,7 @@ test("authenticated repository Interface review persists exact proposals and app
   const repositoryManifestDigest = `sha256:${"e".repeat(64)}`;
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules(["."]),
     repositoryManifest: {
       status: "present",
       digest: repositoryManifestDigest,
@@ -3168,6 +3152,7 @@ output "launch_url" { value = var.public_url }
     : ".";
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    repositoryModules: repositoryModules([repositoryModulePath]),
     repositoryManifest: {
       status: "present",
       digest: `sha256:${"7".repeat(64)}`,
@@ -3175,7 +3160,6 @@ output "launch_url" { value = var.public_url }
         apiVersion: "takosumi.com/v2.2",
         kind: "Repository",
         install: {
-          defaultModule: repositoryModulePath,
           modules: {
             [repositoryModulePath]: {
               inputs: repositoryInputs,
@@ -3548,27 +3532,6 @@ test("re-adoption uses only the public guard, preserves Takos origin, and does n
       includeInternal: false,
     })).map((config) => config.id),
   ).toContain(fixture.baseInstallConfig.id);
-  const { source } = await fixture.operations.getSource(
-    fixture.seeded.source.id,
-  );
-  const snapshot = await fixture.operations.getSourceSnapshot(
-    fixture.seeded.snapshot.id,
-  );
-  expect(
-    resolveRepoOwnedDeploymentProfile({
-      source,
-      sourceSnapshot: snapshot,
-      candidates: await fixture.operations.capsules.listSharedInstallConfigs({
-        includeInternal: false,
-      }),
-      deploymentProfileKey: "cloudflare-direct-v1",
-    }),
-  ).toMatchObject({
-    ok: false,
-    diagnostic: {
-      code: "repository_install_ux_deployment_profile_invalid",
-    },
-  });
   const path = `/api/v1/capsules/${fixture.seeded.capsule.id}`;
   const unauthenticated = request("GET", path);
   expect(
@@ -3910,71 +3873,43 @@ test("re-adoption keeps undeclared reviewed values fail-closed", async () => {
   ).toBe(false);
 });
 
-test("re-adoption rejects present invalid deployment profile keys before durable mutation", async () => {
-  const invalidProfileKeys = [
-    { label: "number", value: 7 },
-    { label: "null", value: null },
-    { label: "empty", value: "" },
-    { label: "whitespace", value: " " },
-  ] as const;
+test("re-adoption rejects the retired deployment profile field before durable mutation", async () => {
+  const fixture = await reAdoptionRouteFixture("retired-profile-field");
+  const capsuleBefore = await fixture.operations.capsules.getCapsule(
+    fixture.seeded.capsule.id,
+  );
+  const configIdsBefore = (
+    await fixture.deployStore.listInstallConfigs(capsuleBefore.workspaceId)
+  ).map((config) => config.id).sort();
+  const authorityGuard = await readReAdoptionGuard(fixture);
 
-  for (const { label, value } of invalidProfileKeys) {
-    const fixture = await reAdoptionRouteFixture(`invalid-profile-${label}`);
-    const capsuleBefore = await fixture.operations.capsules.getCapsule(
-      fixture.seeded.capsule.id,
-    );
-    const configIdsBefore = (
+  await controlJson(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path: `/api/v1/capsules/${capsuleBefore.id}/install-config-re-adoptions`,
+      headers: { "idempotency-key": "re-adopt-retired-profile-field-v1" },
+      body: {
+        ...reAdoptionBody(fixture, authorityGuard),
+        deploymentProfileKey: "retired-profile",
+      },
+    },
+    400,
+  );
+
+  expect(
+    await fixture.operations.capsules.getCapsule(capsuleBefore.id),
+  ).toMatchObject({
+    installConfigId: capsuleBefore.installConfigId,
+    updatedAt: capsuleBefore.updatedAt,
+  });
+  expect(
+    (
       await fixture.deployStore.listInstallConfigs(capsuleBefore.workspaceId)
-    ).map((config) => config.id).sort();
-    const authorityGuard = await readReAdoptionGuard(fixture);
-
-    await controlJson(
-      {
-        operations: fixture.operations,
-        store: fixture.accountStore,
-        cookie: fixture.cookie,
-        method: "POST",
-        path:
-          `/api/v1/capsules/${capsuleBefore.id}/install-config-re-adoptions`,
-        headers: { "idempotency-key": `re-adopt-invalid-${label}-v1` },
-        body: {
-          ...reAdoptionBody(fixture, authorityGuard),
-          deploymentProfileKey: value,
-        },
-      },
-      400,
-    );
-
-    expect(
-      await fixture.operations.capsules.getCapsule(capsuleBefore.id),
-    ).toMatchObject({
-      installConfigId: capsuleBefore.installConfigId,
-      updatedAt: capsuleBefore.updatedAt,
-    });
-    expect(
-      (
-        await fixture.deployStore.listInstallConfigs(capsuleBefore.workspaceId)
-      ).map((config) => config.id).sort(),
-    ).toEqual(configIdsBefore);
-
-    const activity = await controlJson<{
-      readonly events: readonly { readonly action: string }[];
-    }>(
-      {
-        operations: fixture.operations,
-        store: fixture.accountStore,
-        cookie: fixture.cookie,
-        method: "GET",
-        path: `/api/v1/workspaces/${capsuleBefore.workspaceId}/activity`,
-      },
-      200,
-    );
-    expect(
-      activity.events.filter(
-        (event) => event.action === "capsule.install_config_rebound",
-      ),
-    ).toHaveLength(0);
-  }
+    ).map((config) => config.id).sort(),
+  ).toEqual(configIdsBefore);
 });
 
 test("re-adoption keeps the generic host default idempotent", async () => {
@@ -4074,46 +4009,6 @@ test("re-adoption resolves the generic host default without client selectors", a
     targetInstallConfigId:
       adopted.installConfigReAdoption.targetInstallConfigId,
   });
-});
-
-test("re-adoption does not treat an explicit profile selector as the generic default", async () => {
-  const fixture = await reAdoptionRouteFixture("explicit-profile-without-base", {
-    genericDefault: true,
-  });
-  const authorityGuard = await readReAdoptionGuard(fixture);
-  const path =
-    `/api/v1/capsules/${fixture.seeded.capsule.id}/install-config-re-adoptions`;
-  const rejected = await controlJson<{
-    readonly error: { readonly code: string };
-  }>(
-    {
-      operations: fixture.operations,
-      store: fixture.accountStore,
-      cookie: fixture.cookie,
-      method: "POST",
-      path,
-      headers: { "idempotency-key": "re-adopt-explicit-profile-v1" },
-      body: {
-        sourceSnapshotId: fixture.seeded.snapshot.id,
-        deploymentProfileKey: "cloudflare-direct-v1",
-        reason: "Do not fall back from an explicit profile",
-        expected: { authorityGuard },
-      },
-    },
-    400,
-  );
-  expect(rejected.error.code).toBe("invalid_request");
-  expect(
-    (
-      await fixture.deployStore.listInstallConfigs(
-        fixture.seeded.capsule.workspaceId,
-      )
-    ).some((config) => config.internal?.reAdoption !== undefined),
-  ).toBe(false);
-  expect(
-    (await fixture.operations.capsules.getCapsule(fixture.seeded.capsule.id))
-      .installConfigId,
-  ).toBe(fixture.seeded.capsule.installConfigId);
 });
 
 test("concurrent identical re-adoptions produce one audited winner and one canonical replay", async () => {

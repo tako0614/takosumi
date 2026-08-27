@@ -61,9 +61,8 @@ reconcile step.
    }
    ```
 
-   `deploymentProfileKey` may be included when the reviewed deployment profile
-   requires it. Unknown fields, secret-like reasons, malformed guards, and
-   missing idempotency keys fail before mutation.
+   Unknown fields, secret-like reasons, malformed guards, and missing
+   idempotency keys fail before mutation.
 
 3. On 200, re-read the Capsule and the returned target InstallConfig. The
    target is a new immutable derived row; the response is value-free and

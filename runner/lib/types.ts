@@ -228,7 +228,7 @@ export interface PreparedRuntimeSecretFiles {
  */
 export interface TerraformTreeProviderScan {
   readonly providers: readonly string[];
-  readonly requirements: readonly import("../../lib/opentofu-configuration/src/mod.ts").OpenTofuProviderRequirement[];
+  readonly requirements: readonly import("../../lib/opentofu-configuration/src/mod.ts").OpenTofuRootProviderRequirement[];
   readonly files: readonly import("../../lib/opentofu-configuration/src/mod.ts").OpenTofuSourceFile[];
   readonly diagnostics: readonly import("../../lib/opentofu-configuration/src/mod.ts").OpenTofuConfigurationDiagnostic[];
   readonly complete: boolean;

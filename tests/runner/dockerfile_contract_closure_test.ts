@@ -54,6 +54,7 @@ test("runner image copies every runtime contract import", async () => {
     "contract/provider-env-rules.ts",
     "contract/reference/host-blocklist.ts",
     "contract/repository-manifest.ts",
+    "contract/sources.ts",
   ]);
   for (const path of runtimeContractPaths) {
     expect(dockerfile).toContain(`COPY ${path} ./${path}`);

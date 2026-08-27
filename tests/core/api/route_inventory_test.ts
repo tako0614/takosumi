@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { createApiCapabilitiesDescription } from "../../../core/api/capabilities.ts";
 import {
   capsuleAndInstallConfigSchemas,
+  capsuleSchemas,
   createTakosumiOpenApiDocument,
+  sourceSchemas,
   TAKOSUMI_OPENAPI_VERSION,
   workspaceProjectAndCapsuleRequestSchemas,
 } from "../../../core/api/openapi.ts";
@@ -294,6 +296,73 @@ test("public Capsule schemas expose the closed sourceBuild contract", () => {
   });
   assert.equal(schemas.SourceBuildConfig.additionalProperties, false);
   assert.deepEqual(schemas.SourceBuildConfig.required, ["commands", "outputs"]);
+});
+
+test("compatibility providers separate reachable packages from root binding tuples", () => {
+  const schemas = capsuleSchemas();
+  const providerPackage = schemas.CapsuleProviderPackage;
+  assert.ok(providerPackage);
+  assert.deepEqual(providerPackage.required, ["source", "allowed"]);
+  assert.deepEqual(Object.keys(providerPackage.properties).sort(), [
+    "allowed",
+    "source",
+    "version",
+  ]);
+  assert.equal(providerPackage.additionalProperties, false);
+
+  const rootRequirement = schemas.CapsuleRootProviderRequirement;
+  assert.ok(rootRequirement);
+  assert.deepEqual(rootRequirement.required, ["source", "moduleLocalName"]);
+  assert.deepEqual(Object.keys(rootRequirement.properties).sort(), [
+    "childAlias",
+    "credentialRequired",
+    "moduleLocalName",
+    "source",
+    "version",
+  ]);
+  assert.equal(rootRequirement.additionalProperties, false);
+});
+
+test("install module projection separates reachable packages from root binding tuples", () => {
+  const schemas = sourceSchemas();
+  const module = schemas.SourceSnapshotInstallModule;
+  assert.ok(module);
+  assert.deepEqual(module.required, [
+    "path",
+    "providerPackages",
+    "rootProviderRequirements",
+  ]);
+  assert.deepEqual(Object.keys(module.properties).sort(), [
+    "path",
+    "providerPackages",
+    "rootProviderRequirements",
+  ]);
+  assert.deepEqual(module.properties.providerPackages.items, {
+    $ref: "#/components/schemas/RepositoryModuleProviderPackage",
+  });
+  assert.deepEqual(module.properties.rootProviderRequirements.items, {
+    $ref: "#/components/schemas/RepositoryModuleRootProviderRequirement",
+  });
+  assert.equal(module.additionalProperties, false);
+});
+
+test("source OpenAPI keeps Git scope and archive-relative module coordinates distinct", () => {
+  const schemas = sourceSchemas();
+  const sourceDescription =
+    schemas.Source.properties.defaultPath.description as string;
+  const snapshotDescription =
+    schemas.SourceSnapshot.properties.path.description as string;
+  const response = schemas.SourceSnapshotInstallModulesResponse;
+  const ready = response.oneOf[1];
+  const scopeDescription = ready.properties.scopePath.description as string;
+  const moduleDescription =
+    schemas.SourceSnapshotInstallModule.properties.path.description as string;
+
+  assert.match(sourceDescription, /Git repository subtree/u);
+  assert.match(sourceDescription, /never selects an OpenTofu module/u);
+  assert.match(snapshotDescription, /module paths are relative/u);
+  assert.match(scopeDescription, /never joined/u);
+  assert.match(moduleDescription, /relative to the SourceSnapshot archive/u);
 });
 
 test("public openapi component names do not expose internal deploy-control seams", () => {

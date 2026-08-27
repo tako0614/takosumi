@@ -11,10 +11,8 @@ import { redactionValuesFromRequest } from "./credentials.ts";
 import {
   isSourceSyncRequest,
   isStableSemverTagRequest,
-  isSourceSnapshotFileRequest,
   runSourceSync,
   runStableSemverTagResolution,
-  runSourceSnapshotFileRead,
   handleSourceArchiveArtifactRequest,
   handleSourceArchiveRestoreRequest,
   handleDepStateRestoreRequest,
@@ -142,18 +140,10 @@ export async function handleRunnerRequestWithDependencies(
       }
     }
 
-    if (
-      isStableSemverTagRequest(body.request) ||
-      isSourceSnapshotFileRequest(body.request)
-    ) {
-      const action = isStableSemverTagRequest(body.request)
-        ? "stable_semver_tag"
-        : "source_snapshot_file";
+    if (isStableSemverTagRequest(body.request)) {
+      const action = "stable_semver_tag";
       try {
-        const result =
-          action === "stable_semver_tag"
-            ? await runStableSemverTagResolution(runId, body.request)
-            : await runSourceSnapshotFileRead(runId, body.request);
+        const result = await runStableSemverTagResolution(runId, body.request);
         return Response.json(result, { status: 200 });
       } catch (error) {
         return Response.json(

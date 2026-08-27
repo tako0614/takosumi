@@ -22,8 +22,6 @@ import type {
   OpenTofuSourceSyncResult,
   OpenTofuStableSourceTagResolutionJob,
   OpenTofuStableSourceTagResolutionResult,
-  OpenTofuSourceSnapshotPresentationFileJob,
-  OpenTofuSourceSnapshotPresentationFile,
   ProviderInstallationEvidence,
   ReleaseCommandRunJob,
   ReleaseCommandRunResult,
@@ -36,7 +34,10 @@ import {
 } from "../../../core/domains/deploy-control/errors.ts";
 import type { SecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { normalizePlanResourceScope } from "takosumi-contract";
-import { parseRepositoryManifestSnapshot } from "takosumi-contract/sources";
+import {
+  parseRepositoryManifestSnapshot,
+  parseRepositoryModulesSnapshot,
+} from "takosumi-contract/sources";
 import type {
   DispatchPriorState,
   DispatchStateScope,
@@ -657,9 +658,12 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     const repositoryManifest = parseRepositoryManifestSnapshot(
       result.repositoryManifest,
     );
+    const repositoryModules = parseRepositoryModulesSnapshot(
+      result.repositoryModules,
+    );
     const resolvedCommit = requiredString(result, "resolvedCommit");
-    if (!archiveDigest || archiveSizeBytes === undefined) {
-      throw new Error(`source_sync ${job.runId} returned no archive metadata`);
+    if (!archiveDigest || archiveSizeBytes === undefined || !repositoryModules) {
+      throw new Error(`source_sync ${job.runId} returned incomplete metadata`);
     }
     if (archive && stringValue(archive, "kind") === "object-storage") {
       assertMatchingReusedSourceArchive(
@@ -684,6 +688,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       archiveSizeBytes,
       ...(repositoryInstallMetadata ? { repositoryInstallMetadata } : {}),
       ...(repositoryManifest ? { repositoryManifest } : {}),
+      repositoryModules,
       ...(archiveRef ? { archiveRef } : {}),
       ...(phaseTimings ? { phaseTimings } : {}),
     };
@@ -732,31 +737,6 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     return {
       tag: requiredString(result, "tag"),
       commit: requiredString(result, "commit"),
-    };
-  }
-
-  async readSourceSnapshotPresentationFile(
-    job: OpenTofuSourceSnapshotPresentationFileJob,
-  ): Promise<OpenTofuSourceSnapshotPresentationFile> {
-    await this.restoreSourceArchive(job.runId, {
-      ref: job.sourceSnapshot.archiveRef,
-      digest: job.sourceSnapshot.archiveDigest,
-    });
-    const result = await runRunner(
-      this.transport,
-      "source_snapshot_file",
-      job.runId,
-      { action: "source_snapshot_file", path: job.path },
-    );
-    const sizeBytes = result.sizeBytes;
-    if (typeof sizeBytes !== "number" || !Number.isSafeInteger(sizeBytes)) {
-      throw new Error("source_snapshot_file returned an invalid sizeBytes");
-    }
-    return {
-      path: requiredString(result, "path"),
-      text: requiredString(result, "text"),
-      digest: requiredString(result, "digest"),
-      sizeBytes,
     };
   }
 
@@ -1038,7 +1018,6 @@ async function runRunner(
     | "compatibility_check"
     | "source_sync"
     | "stable_semver_tag"
-    | "source_snapshot_file"
     | "release",
   runId: string,
   request: unknown,

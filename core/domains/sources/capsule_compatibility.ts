@@ -2,9 +2,10 @@ import type {
   CapsuleCompatibilityLevel,
   CapsuleDataSourceSummary,
   CapsuleGateFinding,
-  CapsuleProviderRequirement,
+  CapsuleProviderPackage,
   CapsuleProvisionerSummary,
   CapsuleResourceSummary,
+  CapsuleRootProviderRequirement,
   CapsuleRootModuleOutputDeclaration,
   CapsuleRootModuleVariableDeclaration,
 } from "takosumi-contract/capsules";
@@ -33,7 +34,8 @@ export interface CapsuleCompatibilityAnalysisInput {
 export interface CapsuleCompatibilityAnalysis {
   readonly level: CapsuleCompatibilityLevel;
   readonly findings: readonly CapsuleGateFinding[];
-  readonly providers: readonly CapsuleProviderRequirement[];
+  readonly providerPackages: readonly CapsuleProviderPackage[];
+  readonly rootProviderRequirements: readonly CapsuleRootProviderRequirement[];
   readonly resources: readonly CapsuleResourceSummary[];
   readonly dataSources: readonly CapsuleDataSourceSummary[];
   readonly provisioners: readonly CapsuleProvisionerSummary[];
@@ -92,7 +94,8 @@ export function analyzeOpenTofuCapsuleFiles(
             "Run compatibility_check through the Runner Container so the SourceSnapshot archive can be inspected before provider credential mint.",
         },
       ],
-      providers: [],
+      providerPackages: [],
+      rootProviderRequirements: [],
       resources: [],
       dataSources: [],
       provisioners: [],
@@ -152,24 +155,50 @@ export function analyzeOpenTofuCapsuleFiles(
   const provisionerAllowlist = new Set(
     input.policy?.allowedProvisionerTypes ?? [],
   );
-  const providers = configuration.requirements.map((requirement) => ({
-    ...requirement,
-    allowed: providerAllowed(requirement.source, providerAllowlist),
-    ...(credentialRequiredProviders.has("*") ||
-    providerInSet(requirement.source, credentialRequiredProviders)
-      ? { credentialRequired: true }
-      : {}),
+  const providerPackages = configuration.providerPackages.map((providerPackage) => ({
+    ...providerPackage,
+    allowed: providerAllowed(providerPackage.source, providerAllowlist),
   }));
+  const rootProviderRequirements = configuration.rootProviderRequirements.map(
+    (requirement) => ({
+      ...requirement,
+      ...(credentialRequiredProviders.has("*") ||
+      providerInSet(requirement.source, credentialRequiredProviders)
+        ? { credentialRequired: true }
+        : {}),
+    }),
+  );
+  const rootProviderSources = new Set(
+    rootProviderRequirements.map((requirement) => requirement.source),
+  );
+  for (const providerPackage of providerPackages) {
+    if (
+      !(credentialRequiredProviders.has("*") ||
+        providerInSet(providerPackage.source, credentialRequiredProviders)) ||
+      rootProviderSources.has(providerPackage.source)
+    ) {
+      continue;
+    }
+    findings.push({
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      code: "binding_boundary_incomplete",
+      message: `Provider ${providerPackage.source} needs host credentials but is declared only below the selected root provider boundary.`,
+      suggestion:
+        "Declare the provider in the selected root and pass its configuration explicitly to child modules before requesting host credential injection.",
+      context: { provider: providerPackage.source },
+    });
+  }
   collectHclConfigurationFindings(hclFiles, findings);
   const resources = collectResources(hclFiles, resourceAllowlist);
   const dataSources = collectDataSources(hclFiles, dataSourceAllowlist);
   const provisioners = collectProvisioners(hclFiles, provisionerAllowlist);
-  collectDependencyLockFindings(input.files, providers, findings);
+  collectDependencyLockFindings(input.files, providerPackages, findings);
   collectFilesystemSensitiveExpressionFindings(hclFiles, findings);
 
   const hasProviderBackedBlocks =
     resources.length > 0 || dataSources.length > 0 || provisioners.length > 0;
-  if (providers.length === 0 && hasProviderBackedBlocks) {
+  if (providerPackages.length === 0 && hasProviderBackedBlocks) {
     findings.push({
       severity: "warning",
       compatibilityImpact: "needs_patch",
@@ -191,13 +220,13 @@ export function analyzeOpenTofuCapsuleFiles(
     });
   }
 
-  for (const provider of providers) {
-    if (!provider.allowed) {
+  for (const providerPackage of providerPackages) {
+    if (!providerPackage.allowed) {
       findings.push({
         severity: "error",
         compatibilityImpact: "unsupported",
         code: "provider_not_allowed",
-        message: `Provider ${provider.source} is not allowed by policy.`,
+        message: `Provider ${providerPackage.source} is not allowed by policy.`,
         suggestion:
           "Use a qualified provider source such as namespace/name or registry-host/namespace/name.",
       });
@@ -246,7 +275,8 @@ export function analyzeOpenTofuCapsuleFiles(
   return {
     level,
     findings,
-    providers,
+    providerPackages,
+    rootProviderRequirements,
     resources,
     dataSources,
     provisioners,
@@ -273,7 +303,9 @@ function collectOpenTofuConfigurationDiagnostics(
               ? "local_module_source_escapes_capsule"
               : diagnostic.code === "local_module_source_missing"
                 ? "local_module_source_missing"
-                : `opentofu_configuration_${diagnostic.code}`;
+                : diagnostic.code === "remote_module_source_unresolved"
+                  ? "remote_module_source_unsupported"
+                  : `opentofu_configuration_${diagnostic.code}`;
     findings.push({
       severity: "error",
       compatibilityImpact: "unsupported",
@@ -283,7 +315,9 @@ function collectOpenTofuConfigurationDiagnostics(
       suggestion:
         diagnostic.code === "json_semantics_unsupported"
           ? "Use equivalent HCL until compatibility classification covers all OpenTofu JSON block semantics."
-          : "Make the selected OpenTofu module and every reachable local child statically readable before compatibility review.",
+          : diagnostic.code === "remote_module_source_unresolved"
+            ? "Vendor the dependency in the immutable repository tree and reference it with a static ./ or ../ source."
+            : "Make the selected OpenTofu module and every reachable local child statically readable before compatibility review.",
     });
   }
 }
@@ -327,20 +361,6 @@ function collectHclConfigurationFindings(
         message: `Backend ${backend.name} is not rewritten; Takosumi owns the Run state boundary outside the repository configuration.`,
         path: file.path,
       });
-    }
-    for (const moduleBlock of matchNamedBlocks(file.text, "module")) {
-      const source = stringAttribute(moduleBlock.body, "source");
-      if (source && isUnpinnedRemoteModule(source)) {
-        findings.push({
-          severity: "warning",
-          compatibilityImpact: "needs_patch",
-          code: "remote_module_unpinned",
-          message: `Module ${moduleBlock.name} uses an unpinned remote source.`,
-          path: file.path,
-          suggestion:
-            "Pin remote module sources with an immutable ref or vendor the dependency.",
-        });
-      }
     }
   }
 }
@@ -405,7 +425,7 @@ function collectProvisioners(
 
 function collectDependencyLockFindings(
   files: readonly CapsuleSourceFile[],
-  providers: readonly CapsuleProviderRequirement[],
+  providerPackages: readonly CapsuleProviderPackage[],
   findings: CapsuleGateFinding[],
 ): void {
   const lock = files.find((file) => file.path === ".terraform.lock.hcl");
@@ -419,7 +439,11 @@ function collectDependencyLockFindings(
     path: lock.path,
   });
   const staticallyDerived = Array.from(
-    new Set(providers.map((provider) => canonicalProviderSource(provider.source))),
+    new Set(
+      providerPackages.map((providerPackage) =>
+        canonicalProviderSource(providerPackage.source)
+      ),
+    ),
   ).sort(compareCodePoints);
   const observation = parseOpenTofuProviderLockObservation(
     lock.text,
@@ -777,18 +801,6 @@ function containsCredentialAttribute(body: string): boolean {
     const pattern = new RegExp(`(^|\\n)\\s*${attr}\\s*=`, "m");
     if (pattern.test(body)) return true;
   }
-  return false;
-}
-
-function stringAttribute(body: string, name: string): string | undefined {
-  const pattern = new RegExp(`(^|\\n)\\s*${name}\\s*=\\s*"([^"]+)"`, "m");
-  return pattern.exec(body)?.[2];
-}
-
-function isUnpinnedRemoteModule(source: string): boolean {
-  if (source.startsWith("./") || source.startsWith("../")) return false;
-  if (source.startsWith("git::")) return !source.includes("?ref=");
-  if (/^https?:\/\//.test(source)) return !source.includes("?ref=");
   return false;
 }
 

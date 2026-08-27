@@ -25,9 +25,15 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
 | フィールド         | 省略時        | 意味                                                |
 | ------------------ | ------------- | --------------------------------------------------- |
 | `defaultRef`       | Git の `HEAD` | 追跡する branch / tag / commit                      |
-| `defaultPath`      | `.`           | リポジトリ内の module ディレクトリ                  |
+| `defaultPath`      | `.`           | sync/archive/scan の対象にする repository subtree  |
 | `authConnectionId` | なし          | 非公開リポジトリを読むための Connection             |
 | `autoSync`         | `false`       | operator の scheduler が Git ref を定期的に確認する |
+
+Git URL、ref、source subtree が Source の取得座標です。専用の source catalog はありません。
+`defaultPath` は取得範囲を狭めますが、実行 module を選びません。Source sync は exact
+commit の source subtree 配下に
+ある tracked regular file を走査し、実在する OpenTofu root module と provider source を
+`SourceSnapshot` に固定します。この file-derived scan だけが module/provider 候補を作れます。
 
 作成の応答には `hookSecret` が含まれます。**これは作成時に 1 度だけ平文で返り、
 以降は取得できません。** Source レコードにはハッシュだけを保存します。Git ホストの
@@ -63,6 +69,10 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources/src_example/sync" \
 **古い snapshot を「最新」として流用してはいけません。** 確認した内容と適用する
 内容が一致しなくなります。
 
+dashboard はこの scan 結果を読み、利用者が実在する module を選びます。同じ path の
+`.well-known/takosumi.json` entry は input の表示 hint と generic Host API/service request
+を追加できますが、module path、provider、Connection、Plan、Run の authority ではありません。
+
 ## Capsule
 
 Capsule はデプロイされた 1 つのまとまりです。Source が「どこから」なら、Capsule は
@@ -88,16 +98,20 @@ apply まで続けられます。それ以外は Run 画面で停止します。
 
 ## 画面と外部リンク
 
-標準の入口は dashboard の `/new` です。Git URL を入れると module を読み、必要な
-変数と provider を提示します。
+標準の入口は dashboard の `/new` です。Git URL を入れると scan で実在 module を求め、
+必要な変数と provider を提示します。ref は必要に応じて指定できます。
 
 外部のアプリから利用者をこの画面へ送るためのリンクがあります。
 
 ```text
-https://takosumi.example.com/install?git=https://github.com/example/app.git&ref=v1.2.0&path=deploy/opentofu
+https://takosumi.example.com/install?git=https://github.com/example/app.git&ref=v1.2.0&sourcePath=infra&path=deploy/opentofu
 ```
 
-`/install` は `/new` の入力欄を埋めるだけです。**リンクを開いた時点では何も作られません。**
+`sourcePath` は sync/archive/scan する Git subtree で、省略時は `.` です。`path` はその
+subtree の Snapshot を scan した後に照合される archive-relative module 選択の初期値です。
+この 2 つを結合・推測せず、それぞれ Source の取得座標と module の選択座標として扱います。
+`path` を省略した場合は1候補だけを自動選択し、複数候補なら利用者が選びます。`/install` は
+`/new` の入力欄を埋めるだけです。**リンクを開いた時点では何も作られません。**
 利用者は互換性の確認結果、使う認証情報、計画の内容を見てから自分で承認します。
 
 戻り先 URI の規則など、組み立ての詳細は

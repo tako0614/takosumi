@@ -55,7 +55,6 @@ test("repository manifest v2.2 declares consumed Interfaces without ids or crede
       apiVersion: "takosumi.com/v2.2",
       kind: "Repository",
       install: {
-        defaultModule: ".",
         modules: {
           ".": {
             inputs: [],
@@ -131,7 +130,6 @@ test("repository manifest v2.3 accepts only the bounded credential-free sourceBu
     apiVersion: "takosumi.com/v2.3",
     kind: "Repository",
     install: {
-      defaultModule: ".",
       modules: {
         ".": {
           inputs: [],
@@ -449,8 +447,14 @@ test("repository manifest v2 accepts generic Capsule Interface declarations", as
   });
 });
 
-test("repository manifest v1 and v2 remain closed against defaultModule", async () => {
-  for (const apiVersion of ["takosumi.com/v1", "takosumi.com/v2"]) {
+test("every repository manifest version rejects defaultModule", async () => {
+  for (const apiVersion of [
+    "takosumi.com/v1",
+    "takosumi.com/v2",
+    "takosumi.com/v2.1",
+    "takosumi.com/v2.2",
+    "takosumi.com/v2.3",
+  ]) {
     const document = JSON.parse(await fixture("v2-launcher.json"));
     document.apiVersion = apiVersion;
     document.install.defaultModule = "deploy/takoform";
@@ -465,10 +469,9 @@ test("repository manifest v1 and v2 remain closed against defaultModule", async 
   }
 });
 
-test("repository manifest v2.1 selects an exact default and preserves v2 Interfaces", async () => {
+test("repository manifest v2.1 preserves v2 Interfaces without module default semantics", async () => {
   const document = JSON.parse(await fixture("v2-launcher.json"));
   document.apiVersion = "takosumi.com/v2.1";
-  document.install.defaultModule = "deploy/takoform";
   document.install.modules["."] = { inputs: [] };
 
   const parsed = parseRepositoryManifestText(JSON.stringify(document));
@@ -477,36 +480,9 @@ test("repository manifest v2.1 selects an exact default and preserves v2 Interfa
   if (!parsed.ok || parsed.document.apiVersion !== "takosumi.com/v2.1") {
     return;
   }
-  expect(parsed.document.install.defaultModule).toBe("deploy/takoform");
   expect(
     parsed.document.install.modules["deploy/takoform"]?.interfaces?.[0]?.key,
   ).toBe("launcher");
-});
-
-test("repository manifest v2.1 rejects a non-canonical or absent default module key", async () => {
-  for (const [defaultModule, error] of [
-    [
-      "./deploy/takoform",
-      "install.defaultModule must be a canonical safe relative module path",
-    ],
-    [
-      " deploy/takoform ",
-      "install.defaultModule must be a canonical safe relative module path",
-    ],
-    [
-      "deploy/missing",
-      "install.defaultModule must name an exact install.modules key",
-    ],
-  ] as const) {
-    const document = JSON.parse(await fixture("v2-launcher.json"));
-    document.apiVersion = "takosumi.com/v2.1";
-    document.install.defaultModule = defaultModule;
-
-    expect(parseRepositoryManifestText(JSON.stringify(document))).toEqual({
-      ok: false,
-      error,
-    });
-  }
 });
 
 test("the published v2.1 schema covers structure while the parser owns semantics", async () => {
@@ -515,7 +491,6 @@ test("the published v2.1 schema covers structure while the parser owns semantics
   );
   const full = JSON.parse(await fixture("v2-launcher.json"));
   full.apiVersion = "takosumi.com/v2.1";
-  full.install.defaultModule = "deploy/takoform";
   const minimal = {
     apiVersion: "takosumi.com/v2.1",
     kind: "Repository",
@@ -530,9 +505,6 @@ test("the published v2.1 schema covers structure while the parser owns semantics
   for (const mutate of [
     (document: Record<string, any>) => {
       document.install.unknown = true;
-    },
-    (document: Record<string, any>) => {
-      document.install.defaultModule = "./deploy/takoform";
     },
     (document: Record<string, any>) => {
       document.install.modules[
@@ -551,11 +523,6 @@ test("the published v2.1 schema covers structure while the parser owns semantics
   expect(
     repositoryManifestV2_1Schema["x-takosumi-semanticConstraints"],
   ).toContain(
-    "install.defaultModule, when present, equals an own canonical key of install.modules",
-  );
-  expect(
-    repositoryManifestV2_1Schema["x-takosumi-semanticConstraints"],
-  ).toContain(
     "each module may declare at most 8 requires entries whose kind is secret.generated",
   );
   expect(
@@ -563,25 +530,10 @@ test("the published v2.1 schema covers structure while the parser owns semantics
   ).toContain(
     "JSON values in Interface documents and literal inputs are limited to recursive depth 32",
   );
-  const missingKey = structuredClone(full);
-  missingKey.install.defaultModule = "deploy/missing";
-  expect(validate(missingKey)).toBe(true);
-  expect(parseRepositoryManifestText(JSON.stringify(missingKey)).ok).toBe(
-    false,
-  );
-
-  const whitespaceDefault = structuredClone(full);
-  whitespaceDefault.install.defaultModule = " deploy/takoform ";
-  expect(validate(whitespaceDefault)).toBe(false);
-  expect(
-    parseRepositoryManifestText(JSON.stringify(whitespaceDefault)).ok,
-  ).toBe(false);
-
   const whitespaceModuleKey = structuredClone(full);
   whitespaceModuleKey.install.modules[" deploy/takoform "] =
     whitespaceModuleKey.install.modules["deploy/takoform"];
   delete whitespaceModuleKey.install.modules["deploy/takoform"];
-  whitespaceModuleKey.install.defaultModule = " deploy/takoform ";
   expect(validate(whitespaceModuleKey)).toBe(false);
   expect(
     parseRepositoryManifestText(JSON.stringify(whitespaceModuleKey)).ok,
@@ -596,7 +548,6 @@ test("the published v2.2 schema adds only provider-neutral Interface consumption
     apiVersion: "takosumi.com/v2.2",
     kind: "Repository",
     install: {
-      defaultModule: ".",
       modules: {
         ".": {
           inputs: [],

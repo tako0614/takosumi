@@ -25,9 +25,16 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
 | Field              | When omitted | Meaning                                                  |
 | ------------------ | ------------ | -------------------------------------------------------- |
 | `defaultRef`       | Git `HEAD`   | The branch, tag, or commit to track                      |
-| `defaultPath`      | `.`          | The module directory inside the repository               |
+| `defaultPath`      | `.`          | Repository subtree captured, archived, and scanned       |
 | `authConnectionId` | none         | The Connection used to read a private repository         |
 | `autoSync`         | `false`      | The operator's scheduler checks the Git ref periodically |
+
+The Git URL, ref, and source subtree are the Source acquisition coordinate.
+There is no Takosumi-specific source catalog. `defaultPath` narrows the captured
+tree but does not select an executable module. Source sync scans tracked regular
+files under the source subtree at the exact commit and records the real OpenTofu
+root modules and provider sources in the `SourceSnapshot`. Only this file-derived scan
+creates module or provider candidates.
 
 The creation response carries a `hookSecret`. **It is returned in the clear exactly once,
 at creation, and cannot be retrieved afterwards.** The Source record stores only a hash.
@@ -63,6 +70,11 @@ under `/api/v1/sources/{sourceId}/snapshots`, then move on to the compatibility 
 the plan. **Do not reuse an older snapshot as if it were the latest one.** What you
 reviewed and what you apply would stop matching.
 
+The dashboard reads that scan result and lets the user select a real module. A matching
+entry in `.well-known/takosumi.json` may add input presentation hints and requests for
+generic Host APIs or services, but it is not authority for the module path, providers,
+Connections, Plans, or Runs.
+
 ## Capsule
 
 A Capsule is one deployed unit. Where a Source says where the code comes from, a Capsule
@@ -88,16 +100,22 @@ notification for an old snapshot never starts an apply unconditionally.
 
 ## The screen, and links from outside
 
-The standard entrance is `/new` in the dashboard. Give it a Git URL and it reads the
-module, then shows the variables and providers it needs.
+The standard entrance is `/new` in the dashboard. Give it a Git URL and it discovers
+real modules from the scan, then shows the variables and providers they need. A ref may
+be supplied when needed.
 
 There is a link form for sending users into that screen from another application.
 
 ```text
-https://takosumi.example.com/install?git=https://github.com/example/app.git&ref=v1.2.0&path=deploy/opentofu
+https://takosumi.example.com/install?git=https://github.com/example/app.git&ref=v1.2.0&sourcePath=infra&path=deploy/opentofu
 ```
 
-`/install` only fills in the fields of `/new`. **Opening the link creates nothing.** The
+`sourcePath` is the Git subtree captured, archived, and scanned; it defaults to `.`.
+`path` is an archive-relative module-selection hint checked against the resulting
+Snapshot scan. Takosumi does not join or guess between these coordinates: one scopes
+Source acquisition and the other selects a module. With no `path`, exactly one candidate
+is auto-selected and multiple candidates require a user choice. `/install` only fills in
+the fields of `/new`. **Opening the link creates nothing.** The
 user sees the compatibility result, the credentials that would be used, and the plan
 before approving anything.
 

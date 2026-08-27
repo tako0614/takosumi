@@ -5,11 +5,73 @@ import {
   RootgenValidationError,
 } from "../../../../lib/rootgen/src/mod.ts";
 
+test("rootgen keys provider declarations and mappings only from selected-root tuples", () => {
+  const { files } = generateOpenTofuChildModuleRoot({
+    rootProviderRequirements: [
+      {
+        source: "registry.opentofu.org/hashicorp/aws",
+        moduleLocalName: "aws",
+      },
+    ],
+    inputs: {},
+    outputAllowlist: {},
+    providerBindings: [
+      {
+        provider: "registry.opentofu.org/hashicorp/aws",
+        moduleLocalName: "aws",
+      },
+    ],
+  });
+
+  expect(files["versions.tf"]).toContain(
+    'source = "registry.opentofu.org/hashicorp/aws"',
+  );
+  expect(files["versions.tf"]).not.toContain("cloudflare");
+  expect(files["main.tf"]).toContain("aws = aws");
+  expect(files["main.tf"]).not.toContain("cloudflare");
+});
+
+test("rootgen rejects a binding that has no exact selected-root tuple", () => {
+  let thrown: unknown;
+  try {
+    generateOpenTofuChildModuleRoot({
+      rootProviderRequirements: [
+        {
+          source: "registry.opentofu.org/hashicorp/aws",
+          moduleLocalName: "aws",
+        },
+      ],
+      inputs: {},
+      outputAllowlist: {},
+      providerBindings: [
+        {
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
+          moduleLocalName: "cloudflare",
+        },
+      ],
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toMatchObject({
+    code: "invalid_argument",
+    details: {
+      reason: "rootgen_provider_binding_outside_root_requirements",
+    },
+  });
+});
+
 test("rootgen emits only an optional provider-wiring child wrapper", () => {
   const { files } = generateOpenTofuChildModuleRoot({
-    requiredProviders: [
-      "registry.opentofu.org/cloudflare/cloudflare",
-      "providers.example.test/acme/service",
+    rootProviderRequirements: [
+      {
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
+      },
+      {
+        source: "providers.example.test/acme/service",
+        moduleLocalName: "service",
+      },
     ],
     inputs: {
       enabled: true,
@@ -22,7 +84,8 @@ test("rootgen emits only an optional provider-wiring child wrapper", () => {
     providerBindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "managed",
+        moduleLocalName: "cloudflare",
+        rootAlias: "managed",
         configuration: {
           api_base_url: "https://provider.example.test/client/v4",
         },
@@ -61,18 +124,19 @@ test("rootgen emits only an optional provider-wiring child wrapper", () => {
 
 test("rootgen preserves module-local names and maps child/root aliases independently", () => {
   const { files } = generateOpenTofuChildModuleRoot({
-    requiredProviders: [
-      "registry.opentofu.org/acme/service",
-      "registry.opentofu.org/other/service",
-    ],
-    providerRequirements: [
+    rootProviderRequirements: [
       {
-        provider: "registry.opentofu.org/acme/service",
-        localName: "primary",
+        source: "registry.opentofu.org/acme/service",
+        moduleLocalName: "primary",
       },
       {
-        provider: "registry.opentofu.org/other/service",
-        localName: "secondary",
+        source: "registry.opentofu.org/acme/service",
+        moduleLocalName: "primary",
+        childAlias: "archive",
+      },
+      {
+        source: "registry.opentofu.org/other/service",
+        moduleLocalName: "secondary",
       },
     ],
     inputs: {},
@@ -104,23 +168,23 @@ test("rootgen preserves module-local names and maps child/root aliases independe
 
 test("rootgen keeps every default child provider mapped when one provider needs explicit configuration", () => {
   const { files } = generateOpenTofuChildModuleRoot({
-    requiredProviders: [
-      "registry.opentofu.org/cloudflare/cloudflare",
-      "registry.opentofu.org/hashicorp/random",
-      "registry.opentofu.org/hashicorp/tls",
-    ],
-    providerRequirements: [
+    rootProviderRequirements: [
       {
-        provider: "registry.opentofu.org/cloudflare/cloudflare",
-        localName: "cloudflare",
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
       },
       {
-        provider: "registry.opentofu.org/hashicorp/random",
-        localName: "random",
+        source: "registry.opentofu.org/hashicorp/random",
+        moduleLocalName: "random",
       },
       {
-        provider: "registry.opentofu.org/hashicorp/tls",
-        localName: "tls",
+        source: "registry.opentofu.org/hashicorp/random",
+        moduleLocalName: "random",
+        childAlias: "seeded",
+      },
+      {
+        source: "registry.opentofu.org/hashicorp/tls",
+        moduleLocalName: "tls",
       },
     ],
     inputs: {},
@@ -136,24 +200,21 @@ test("rootgen keeps every default child provider mapped when one provider needs 
 
   expect(files["main.tf"]).toContain("cloudflare = cloudflare");
   expect(files["main.tf"]).toContain("random = random");
+  expect(files["main.tf"]).toContain("random.seeded = random");
   expect(files["main.tf"]).toContain("tls = tls");
 });
 
 test("rootgen rejects two sources claiming the same explicit local name", () => {
   expect(() =>
     generateOpenTofuChildModuleRoot({
-      requiredProviders: [
-        "registry.opentofu.org/acme/service",
-        "registry.opentofu.org/other/service",
-      ],
-      providerRequirements: [
+      rootProviderRequirements: [
         {
-          provider: "registry.opentofu.org/acme/service",
-          localName: "service",
+          source: "registry.opentofu.org/acme/service",
+          moduleLocalName: "service",
         },
         {
-          provider: "registry.opentofu.org/other/service",
-          localName: "service",
+          source: "registry.opentofu.org/other/service",
+          moduleLocalName: "service",
         },
       ],
       inputs: {},
@@ -166,7 +227,7 @@ test("rootgen rejects two sources claiming the same explicit local name", () => 
 
 test("rootgen keeps an empty wrapper to the child module plus state migration", () => {
   const { files } = generateOpenTofuChildModuleRoot({
-    requiredProviders: [],
+    rootProviderRequirements: [],
     inputs: {},
     outputAllowlist: {},
   });
@@ -179,7 +240,12 @@ test("rootgen keeps an empty wrapper to the child module plus state migration", 
 
 test("rootgen preserves explicit custom registries and rejects bare providers", () => {
   const custom = generateOpenTofuChildModuleRoot({
-    requiredProviders: ["providers.example.test/acme/service"],
+    rootProviderRequirements: [
+      {
+        source: "providers.example.test/acme/service",
+        moduleLocalName: "service",
+      },
+    ],
     inputs: {},
     outputAllowlist: {},
   });
@@ -190,7 +256,9 @@ test("rootgen preserves explicit custom registries and rejects bare providers", 
   let thrown: unknown;
   try {
     generateOpenTofuChildModuleRoot({
-      requiredProviders: ["cloudflare"],
+      rootProviderRequirements: [
+        { source: "cloudflare", moduleLocalName: "cloudflare" },
+      ],
       inputs: {},
       outputAllowlist: {},
     });
@@ -209,7 +277,7 @@ test("rootgen preserves explicit custom registries and rejects bare providers", 
 
 test("rootgen escapes HCL interpolation in literal inputs", () => {
   const { files } = generateOpenTofuChildModuleRoot({
-    requiredProviders: [],
+    rootProviderRequirements: [],
     inputs: {
       value: 'evil"}\n${file("/etc/passwd")}%{ for x in y }',
     },
@@ -225,7 +293,7 @@ test("rootgen validation reasons are stable and layer-neutral", () => {
   const cases = [
     {
       input: {
-        requiredProviders: [],
+        rootProviderRequirements: [],
         inputs: { "invalid-name": true },
         outputAllowlist: {},
       },
@@ -233,12 +301,18 @@ test("rootgen validation reasons are stable and layer-neutral", () => {
     },
     {
       input: {
-        requiredProviders: ["cloudflare/cloudflare"],
+        rootProviderRequirements: [
+          {
+            source: "cloudflare/cloudflare",
+            moduleLocalName: "cloudflare",
+          },
+        ],
         inputs: {},
         outputAllowlist: {},
         providerBindings: [
           {
             provider: "cloudflare/cloudflare",
+            moduleLocalName: "cloudflare",
             configuration: { alias: "forbidden" },
           },
         ],
@@ -247,7 +321,7 @@ test("rootgen validation reasons are stable and layer-neutral", () => {
     },
     {
       input: {
-        requiredProviders: [],
+        rootProviderRequirements: [],
         inputs: { value: Number.POSITIVE_INFINITY },
         outputAllowlist: {},
       },

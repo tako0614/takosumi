@@ -98,6 +98,7 @@ import type {
   PatchSourceRequest,
   RepositoryInstallMetadataSnapshot,
   RepositoryManifestSnapshot,
+  RepositoryModulesSnapshot,
   Source,
   SourceResponse,
   SourceSnapshot,
@@ -710,10 +711,6 @@ export interface OpenTofuRunner {
   resolveStableSourceTag?(
     job: OpenTofuStableSourceTagResolutionJob,
   ): Promise<OpenTofuStableSourceTagResolutionResult>;
-  /** Reads one bounded presentation file from an immutable SourceSnapshot. */
-  readSourceSnapshotPresentationFile?(
-    job: OpenTofuSourceSnapshotPresentationFileJob,
-  ): Promise<OpenTofuSourceSnapshotPresentationFile>;
 }
 
 /**
@@ -747,19 +744,6 @@ export interface OpenTofuStableSourceTagResolutionResult {
   readonly commit: string;
 }
 
-export interface OpenTofuSourceSnapshotPresentationFileJob {
-  readonly runId: string;
-  readonly sourceSnapshot: SourceSnapshot;
-  readonly path: string;
-}
-
-export interface OpenTofuSourceSnapshotPresentationFile {
-  readonly path: string;
-  readonly text: string;
-  readonly digest: string;
-  readonly sizeBytes: number;
-}
-
 /**
  * Source-sync dispatch job. `credentials` carries the source-phase mint result
  * (git env + files); absent for a public repo. Never logged; threaded onto the
@@ -777,15 +761,15 @@ export interface OpenTofuSourceSyncJob {
   readonly archiveRef: string;
   /**
    * Previous immutable SourceSnapshot for the same Source/ref/path. The runner
-   * may resolve the ref with git ls-remote and, when it still points at this
-   * commit, return this archive metadata without cloning/archiving again.
+   * still clones the exact commit and recomputes repository observations; when
+   * the commit matches, only these immutable archive bytes may be reused.
    */
   readonly reuseSnapshot?: {
     readonly id: string;
     readonly resolvedCommit: string;
-    readonly archiveRef: string;
-    readonly archiveDigest: string;
-    readonly archiveSizeBytes: number;
+   readonly archiveRef: string;
+   readonly archiveDigest: string;
+   readonly archiveSizeBytes: number;
   };
   readonly credentials?: {
     readonly env: Readonly<Record<string, string>>;
@@ -805,6 +789,8 @@ export interface OpenTofuSourceSyncResult {
   readonly repositoryInstallMetadata?: RepositoryInstallMetadataSnapshot;
   /** Optional repository manifest captured from the same immutable Git commit. */
   readonly repositoryManifest?: RepositoryManifestSnapshot;
+  /** Bounded OpenTofu module index captured from the same immutable Git commit. */
+  readonly repositoryModules: RepositoryModulesSnapshot;
   /** Existing archive reference when an unchanged ref reused a SourceSnapshot. */
   readonly archiveRef?: string;
   readonly phaseTimings?: readonly SourceSyncPhaseTiming[];
@@ -2032,31 +2018,6 @@ export class OpenTofuController {
     }
   }
 
-  async readSourceSnapshotPresentationFile(
-    id: string,
-    path: string,
-  ): Promise<OpenTofuSourceSnapshotPresentationFile> {
-    if (!this.#runner?.readSourceSnapshotPresentationFile) {
-      throw new OpenTofuControllerError(
-        "not_implemented",
-        "SourceSnapshot presentation-file inspection is not configured",
-      );
-    }
-    const snapshot = await this.#sources.getSourceSnapshot(id);
-    const source = await this.#sources.getSource(snapshot.sourceId);
-    if (source.source.authConnectionId) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "presentation-file inspection is limited to credential-free public Sources",
-      );
-    }
-    return await this.#runner.readSourceSnapshotPresentationFile({
-      runId: `source_file_${crypto.randomUUID().replaceAll("-", "")}`,
-      sourceSnapshot: snapshot,
-      path,
-    });
-  }
-
   async createSourceCompatibilityCheck(
     sourceId: string,
     request: CreateSourceCompatibilityCheckRequest = {},
@@ -2433,9 +2394,9 @@ function isJsonValue(value: unknown): value is JsonValue {
  * Source + resolved SourceSnapshot (M2). The bytes are restored from the
  * snapshot archive via the `sourceArchive` dispatch field, so this descriptor is
  * identity/metadata only: a `git` source pinned to the resolved commit. The
- * source_sync archive already contains the SourceSnapshot module subtree at its
- * root, so the runner must not receive the original repo subdirectory as
- * `modulePath` again. SSH / scp-style Source URLs are normalized to their https
+ * selected module path is already relative to the restored SourceSnapshot
+ * archive, so `snapshot.path` is metadata only and must not be used to rewrite
+ * that coordinate. SSH / scp-style Source URLs are normalized to their https
  * form so the descriptor satisfies the HTTPS-only git source validation (the
  * real fetch never uses this URL).
  */
@@ -2444,36 +2405,17 @@ export function snapshotModuleSource(
   snapshot: SourceSnapshot,
   modulePath?: string,
 ): OpenTofuModuleSource {
-  const restoredArchiveModulePath = modulePathWithinSnapshotArchive(
-    snapshot,
-    modulePath,
-  );
+  const normalizedModulePath = normalizeRelativeModulePath(modulePath);
   return {
     kind: "git",
     url: normalizeGitUrlToHttps(source.url),
     ...(snapshot.resolvedCommit
       ? { commit: snapshot.resolvedCommit.toLowerCase() }
       : {}),
-    ...(restoredArchiveModulePath
-      ? { modulePath: restoredArchiveModulePath }
+    ...(normalizedModulePath
+      ? { modulePath: normalizedModulePath }
       : {}),
   };
-}
-
-function modulePathWithinSnapshotArchive(
-  snapshot: SourceSnapshot,
-  modulePath: string | undefined,
-): string | undefined {
-  const requested = normalizeRelativeModulePath(modulePath);
-  if (!requested) return undefined;
-  const snapshotPath = normalizeRelativeModulePath(snapshot.path);
-  if (!snapshotPath) return requested;
-  if (requested === snapshotPath) return undefined;
-  const prefix = `${snapshotPath}/`;
-  if (requested.startsWith(prefix)) {
-    return requested.slice(prefix.length) || undefined;
-  }
-  return requested;
 }
 
 function normalizeRelativeModulePath(

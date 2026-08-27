@@ -6,12 +6,14 @@ import {
   DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
   OpenTofuControllerError,
   OpenTofuController,
+  snapshotModuleSource,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import type {
   ProviderConnection,
   CreatePlanRunRequest,
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
+import type { SourceSnapshot } from "takosumi-contract/sources";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
@@ -809,6 +811,51 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
   ).rejects.toThrow(/source\.modulePath must stay inside/);
 });
 
+test("snapshotModuleSource preserves archive-relative module paths", () => {
+  const source = {
+    id: "source_module_path",
+    workspaceId: "workspace_test",
+    name: "module path",
+    url: "https://github.com/example/app.git",
+    defaultRef: "main",
+    defaultPath: "infra",
+    status: "active",
+    autoSync: false,
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  } as const;
+  const snapshot = (path: string): SourceSnapshot => ({
+    id: `snapshot_${path.replaceAll("/", "_") || "root"}`,
+    origin: "git",
+    workspaceId: source.workspaceId,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "A".repeat(40),
+    path,
+    archiveRef: "source-archive",
+    archiveDigest: `sha256:${"a".repeat(64)}`,
+    archiveSizeBytes: 1,
+    fetchedByRunId: "sync_1",
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  expect(snapshotModuleSource(source, snapshot("infra"), "infra").modulePath).toBe(
+    "infra",
+  );
+  expect(
+    snapshotModuleSource(source, snapshot("infra"), "infra/prod").modulePath,
+  ).toBe("infra/prod");
+  // A path that merely shares the snapshot prefix is still a distinct archive
+  // coordinate and must not be rewritten.
+  expect(
+    snapshotModuleSource(source, snapshot("infra"), "infrastructure").modulePath,
+  ).toBe("infrastructure");
+  expect(snapshotModuleSource(source, snapshot("infra"), ".")).not.toHaveProperty(
+    "modulePath",
+  );
+});
+
 test("runner diagnostics are redacted before PlanRun and ApplyRun persistence", async () => {
   const { store, request } = await seedUpdatableCapsule();
   const controller = new OpenTofuController({
@@ -992,7 +1039,7 @@ test("runner discovery cannot promote an explicit empty exact requirement set", 
   expect(planRun.requiredProviders).toEqual([]);
   expect(planRun.requiredProviderRequirements).toEqual([]);
   expect(planRun.diagnostics?.[0]?.message).toContain(
-    "required provider requirements do not match requiredProviders",
+    "runner requiredProviders do not match the compatibility-reviewed provider packages",
   );
 });
 

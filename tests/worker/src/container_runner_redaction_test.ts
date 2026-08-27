@@ -147,6 +147,13 @@ test("container runner returns sanitized source sync phase timings", async () =>
           install: { modules: { ".": { inputs: [] } } },
         },
       },
+      repositoryModules: {
+        status: "ready",
+        scopePath: ".",
+        modules: [
+          { path: ".", providerPackages: [], rootProviderRequirements: [] },
+        ],
+      },
       phaseTimings: [
         {
           phase: "source_ref_resolve",
@@ -197,6 +204,13 @@ test("container runner returns sanitized source sync phase timings", async () =>
       kind: "Repository",
       install: { modules: { ".": { inputs: [] } } },
     },
+  });
+  expect(result.repositoryModules).toEqual({
+    status: "ready",
+    scopePath: ".",
+    modules: [
+      { path: ".", providerPackages: [], rootProviderRequirements: [] },
+    ],
   });
 });
 

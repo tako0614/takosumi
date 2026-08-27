@@ -52,7 +52,7 @@ process-global success report; the Playwright exit status and retained failure
 artifacts are the evidence.
 
 The live journey opens the existing launcher/Workspace shell, `/new`, direct
-SPA deep links, and `/install?git=...&ref=...&path=...` and checks that the
+SPA deep links, and `/install?git=...&ref=...&sourcePath=...&path=...` and checks that the
 install link only pre-fills the form. It records any control-plane mutation
 request and fails if navigation or discovery creates a Source, Run, Capsule,
 ProviderConnection, or other control-plane object.

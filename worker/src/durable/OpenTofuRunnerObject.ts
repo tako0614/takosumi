@@ -68,7 +68,6 @@ type RunnerFailurePhase =
   | "backup"
   | "release"
   | "stable_semver_tag"
-  | "source_snapshot_file"
   | "compatibility_check";
 const RUNNER_R2_LOG_REASON = Object.freeze({
   putRetryable: "r2_put_retryable",
@@ -4812,7 +4811,6 @@ function runnerFailurePhase(phase: string | undefined): RunnerFailurePhase {
     case "backup":
     case "release":
     case "stable_semver_tag":
-    case "source_snapshot_file":
     case "compatibility_check":
       return phase;
     default:

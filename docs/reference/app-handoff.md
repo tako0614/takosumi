@@ -35,15 +35,16 @@ dashboard 内では `/new` に正規化されることがありますが、外�
 
 対応するクエリパラメータ:
 
-| パラメータ   | 意味                                                 |
-| ------------ | ---------------------------------------------------- |
-| `git`        | plain OpenTofu/Terraform module の HTTPS Git URL     |
-| `source`     | `git::...?...` 形式の packed module address          |
-| `ref`        | Git branch / tag / commit                            |
-| `path`       | リポジトリ内の module path                           |
-| `name`       | サービスの表示名                                     |
-| `product`    | `return_uri` とセットで使うクライアント product key  |
-| `return_uri` | `product` とセットで使う connection payload の返却先 |
+| パラメータ   | 意味                                                           |
+| ------------ | -------------------------------------------------------------- |
+| `git`        | plain OpenTofu/Terraform module の HTTPS Git URL               |
+| `source`     | `git::...?...` 形式の packed module address                    |
+| `ref`        | Git branch / tag / commit                                      |
+| `sourcePath` | sync/archive/scan する Git subtree。省略時は `.`               |
+| `path`       | Source subtree 内で scan 後に照合する archive-relative module |
+| `name`       | サービスの表示名                                               |
+| `product`    | `return_uri` とセットで使うクライアント product key            |
+| `return_uri` | `product` とセットで使う connection payload の返却先           |
 
 何を作るかは `git` または `source` が決めます。どちらか一方を必ず付けます。残りは
 任意です。Store はこの URL を事前入力するための探索・表示の入口で、作成対象や
@@ -71,6 +72,7 @@ release ref を決める権限は持ちません。`product` と `return_uri` �
 https://takosumi.example.com/install
   ?git=https%3A%2F%2Fgit.example.com%2Facme%2Fnotes.git
   &ref=v1.2.3
+  &sourcePath=infra
   &path=deploy%2Fopentofu
   &product=notes-app
   &return_uri=notesapp%3A%2F%2Fconnect
@@ -81,8 +83,8 @@ https://takosumi.example.com/install
 この URL が行うのは、dashboard フローの事前入力までです。作成そのものは、画面上の
 明示的な操作で進みます。
 
-1. Git URL / ref / path から Source を作る
-2. Source から Capsule を作る
+1. Git URL / ref / `sourcePath` から Source を作る
+2. Snapshot の tree scan で `path` を照合して Capsule を作る
 3. ProviderBinding を確認する
 4. plan の Run を実行する
 5. 内容を確認して apply の Run を実行する
@@ -91,8 +93,9 @@ https://takosumi.example.com/install
 source リポジトリは plain OpenTofu/Terraform module のままで足ります。Takosumi 専用の
 source metadata ファイルや製品固有の metadata ファイルを置く必要はありません。
 
-module input は URL では渡しません。`var.<name>` や `varjson.<name>` を付けた
-リンクを開いても、その値は読み捨てられます。入力は Takosumi dashboard の画面で
+`sourcePath` と `path` は `.` または正規化済みの relative directory だけを受け付け、
+未知・重複・不正なクエリフィールドがあるリンクは全体を拒否します。module input は URL
+では渡しません。`var.<name>` や `varjson.<name>` を付けたリンクも拒否されます。入力は Takosumi dashboard の画面で
 入れます。secret、token、provider credential、private key の渡し先はさらに別で、
 ProviderConnection、Credential Recipe、ProviderBinding、Secret、または製品側の
 setup フローを使います。

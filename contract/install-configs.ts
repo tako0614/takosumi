@@ -764,7 +764,6 @@ export interface InstallConfig {
       readonly derivedTargetDigest: string;
       readonly baseInstallConfigId: string;
       readonly sourceSnapshotId: string;
-      readonly deploymentProfileKey?: string;
     };
   };
   readonly variableMapping: Readonly<Record<string, unknown>>;

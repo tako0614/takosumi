@@ -53,7 +53,7 @@ capacity is not an OSS Core responsibility.
 | Workspace                        | Personal purpose, resource, and security boundary for sources, secrets, state, Runs, and audit; optional membership and sharing extend it |
 | Project                          | A service or infrastructure grouping                                                                                                      |
 | Capsule                          | One OpenTofu/Terraform module execution unit, with concrete environments such as `production` and `preview`                               |
-| Source                           | Git URL/ref/commit/path for a plain module                                                                                                |
+| Source                           | Git URL/ref/commit and optional captured repository subtree                                                                               |
 | Adopted Source revision          | SourceSnapshot ref/path/commit derived from a Capsule's current StateVersion apply provenance; never a mutable Capsule or Source field    |
 | GitInstallPlan / GitRevisionPlan | Durable idempotent coordinator evidence that stops at one reviewable Plan Run                                                             |
 | ProviderConnection               | Stored provider credential configuration                                                                                                  |
@@ -83,7 +83,9 @@ Per-Capsule Git tracking uses existing apply provenance:
 PlanRun.sourceSnapshotId`. Restore StateVersions follow their exact
 `restoredFromStateVersionId` edge. Normal plans and source observation use the
 derived SourceSnapshot ref/path lane after the first apply; only the initial
-plan uses its reviewed install pin or Source default. A revision plan cannot
+source sync uses its reviewed Git pin or Source default coordinate. Every plan
+uses a module path selected from the immutable snapshot scan; `Source.defaultPath`
+is never a module fallback. A revision plan cannot
 change tracking before apply, and no Capsule revision operation mutates the
 shared `Source.defaultRef` / `defaultPath`.
 
@@ -159,8 +161,8 @@ Idempotency-Key: <opaque-key>
 The caller first reads the Capsule and uses the returned opaque
 `installConfigReAdoption.authorityGuard`. The guard is usable as-is; it does
 not require the caller to know or submit the private InstallConfig digest. The
-closed request body is `baseInstallConfigId`, `sourceSnapshotId`, optional
-`deploymentProfileKey`, bounded non-secret `reason`, and
+closed request body is `baseInstallConfigId`, `sourceSnapshotId`, bounded
+non-secret `reason`, and
 `expected.authorityGuard`. The operation is not an InstallConfig patch and does
 not apply infrastructure.
 
@@ -253,8 +255,9 @@ The Takosumi-owned generic Accounts capability implementation owns final Apply
 activation; repository projections select its input/output contract without
 adding a second lifecycle owner.
 
-A selected manifest module may explicitly request the generic `identity.oidc`
-capability only when the same module declares exactly one paired
+A manifest may attach an explicit generic `identity.oidc` request to a module
+already selected from the SourceSnapshot tree scan, only when the same module
+declares exactly one paired
 `http.endpoint`. Compilation requires exactly one OIDC projection, exactly one
 endpoint projection, exact and distinct string-variable targets, a non-empty
 unique scope set containing `openid`, and an explicit operator scope allowlist.

@@ -179,7 +179,7 @@ test("runner caps raw plan JSON artifacts to keep review-only payloads out of th
   }
 });
 
-test("runner rejects provider-using generated roots that omit requiredProviders", async () => {
+test("runner rejects provider-using generated roots that omit reachable provider packages", async () => {
   const fixture = await createFakeTofuFixture(undefined, {
     moduleMain: 'resource "null_resource" "example" {}\n',
   });
@@ -191,17 +191,20 @@ test("runner rejects provider-using generated roots that omit requiredProviders"
           source: restoredGitSource(fixture.sourceDir),
           operation: "create",
           requiredProviders: [],
+          requiredProviderRequirements: [],
         },
         runnerProfile: {
           id: "opentofu-default",
-          allowedProviders: ["cloudflare/cloudflare"],
+          allowedProviders: ["hashicorp/null"],
         },
       }),
     );
 
     const payload = (await response.json()) as { stderr?: string };
     expect(response.status).toBe(500);
-    expect(payload.stderr ?? "").toContain("requires requiredProviders");
+    expect(payload.stderr ?? "").toContain(
+      "PlanRun requiredProviders does not match the reachable provider package set",
+    );
   });
 });
 

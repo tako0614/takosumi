@@ -211,6 +211,7 @@ test("deploy_control_internal_routes — scoped bearer enforces Workspace and re
       operation: "create",
       source: { kind: "git", url: "https://github.com/example/app.git" },
       runnerProfileId: "opentofu-default",
+      requiredProviders: [],
       requiredProviderRequirements: [],
     }),
   });
@@ -231,6 +232,7 @@ test("deploy_control_internal_routes — scoped bearer enforces Workspace and re
       operation: "create",
       source: { kind: "git", url: "https://github.com/example/app.git" },
       runnerProfileId: "opentofu-default",
+      requiredProviders: [],
       requiredProviderRequirements: [],
     }),
   });

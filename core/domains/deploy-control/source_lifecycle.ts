@@ -185,17 +185,6 @@ export class SourceLifecycleService {
         running,
         stored,
       );
-      if (
-        reuseSnapshot &&
-        canReusePinnedSourceSnapshotWithoutRunner(running, reuseSnapshot)
-      ) {
-        return await this.#succeedSourceSyncRun(
-          running,
-          leaseToken,
-          sourceSyncResultFromSnapshot(reuseSnapshot),
-          reuseSnapshot,
-        );
-      }
       const result = await this.#withSourceSyncRenewal(
         running,
         leaseToken,
@@ -311,6 +300,7 @@ export class SourceLifecycleService {
       (reuseSnapshot && archiveRef === reuseSnapshot.archiveRef
         ? reuseSnapshot.repositoryManifest
         : undefined);
+    const repositoryModules = result.repositoryModules;
     if (!repositoryInstallMetadata) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -321,6 +311,12 @@ export class SourceLifecycleService {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "source_sync did not observe the repository manifest",
+      );
+    }
+    if (!repositoryModules) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "source_sync did not observe repository OpenTofu modules",
       );
     }
     const snapshot: SourceSnapshot = {
@@ -337,6 +333,7 @@ export class SourceLifecycleService {
       archiveSizeBytes: result.archiveSizeBytes,
       repositoryInstallMetadata,
       repositoryManifest,
+      repositoryModules,
       fetchedByRunId: running.id,
       fetchedAt: finishedAtIso,
     };
@@ -354,14 +351,14 @@ export class SourceLifecycleService {
         ? { phaseTimings: result.phaseTimings }
         : {}),
     };
-    const terminal = await this.#persistTerminalSourceSyncRun(
-      succeeded,
+    const terminal = await this.#store.commitSourceSyncSuccess({
+      terminalRun: succeeded,
       leaseToken,
-    );
+      snapshot,
+    });
     if (!terminal.won) {
-      return terminal.run;
+      return terminal.run ?? succeeded;
     }
-    await this.#store.putSourceSnapshot(snapshot);
     // `lastSeenCommit` is the cursor for the shared Source default address only.
     // A per-Capsule tracked-lane sync must never rewrite that cursor.
     const stored = await this.#store.getSource(running.sourceId);
@@ -489,7 +486,8 @@ export class SourceLifecycleService {
       if (
         sourceSnapshotMatchesRun(snapshot, running) &&
         snapshot.repositoryInstallMetadata !== undefined &&
-        snapshot.repositoryManifest !== undefined
+        snapshot.repositoryManifest !== undefined &&
+        snapshot.repositoryModules !== undefined
       ) {
         return snapshot;
       }
@@ -514,7 +512,8 @@ export class SourceLifecycleService {
         (snapshot) =>
           sourceSnapshotMatchesRun(snapshot, running) &&
           snapshot.repositoryInstallMetadata !== undefined &&
-          snapshot.repositoryManifest !== undefined,
+          snapshot.repositoryManifest !== undefined &&
+          snapshot.repositoryModules !== undefined,
       )
       .sort((a, b) => compareIso(a.fetchedAt, b.fetchedAt));
     return reusable.at(-1);
@@ -660,35 +659,6 @@ function sourceSnapshotsRepresentSameGitCommit(
     a.path === b.path &&
     a.resolvedCommit === b.resolvedCommit
   );
-}
-
-function canReusePinnedSourceSnapshotWithoutRunner(
-  running: SourceSyncRun,
-  snapshot: SourceSnapshot,
-): boolean {
-  return (
-    sourceSnapshotMatchesRun(snapshot, running) &&
-    snapshot.repositoryInstallMetadata?.status !== "invalid" &&
-    snapshot.repositoryManifest?.status !== "invalid" &&
-    isPinnedGitCommit(running.ref) &&
-    normalizeGitObjectId(running.ref) ===
-      normalizeGitObjectId(snapshot.resolvedCommit)
-  );
-}
-
-function sourceSyncResultFromSnapshot(
-  snapshot: SourceSnapshot,
-): OpenTofuSourceSyncResult {
-  return {
-    resolvedCommit: snapshot.resolvedCommit,
-    archiveDigest: snapshot.archiveDigest,
-    archiveSizeBytes: snapshot.archiveSizeBytes,
-    archiveRef: snapshot.archiveRef,
-  };
-}
-
-function isPinnedGitCommit(value: string): boolean {
-  return /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(value);
 }
 
 function isExactImmutableGitCommit(value: string): boolean {

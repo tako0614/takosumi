@@ -2,20 +2,24 @@ import type {
   CreateGitInstallPlanRequest,
   GitInstallPlan,
   GitInstallPlanDiagnostic,
+  GitInstallPlanProviderBindingRequest,
   GitInstallPlanResponse,
   GitInstallPlanSourceRequest,
 } from "takosumi-contract";
 import {
   normalizeInstallConfigSourceUrl,
   type Capsule,
+  type InstallConfig,
 } from "takosumi-contract/install-configs";
 import type { ProviderBindings } from "takosumi-contract/connections";
+import { normalizeProviderSourceAddress } from "takosumi-contract/provider-env-rules";
 import {
   normalizeCompatibilityReportModulePath,
   type CapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { Run } from "takosumi-contract/runs";
 import type {
+  RepositoryModuleRootProviderRequirement,
   Source,
   SourceSnapshot,
   SourceSyncRun,
@@ -63,6 +67,10 @@ const MAX_DIAGNOSTIC_MESSAGE = 256;
 const MAX_DIAGNOSTIC_REASON = 128;
 const DIAGNOSTIC_TOKEN = /^[A-Za-z][A-Za-z0-9._:-]*$/u;
 const CONNECTION_REFERENCE_PATTERN = /^conn_[0-9A-Za-z]{8,64}$/u;
+const PROVIDER_SOURCE_PATTERN =
+  /^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?\/[a-z0-9_-]+\/[a-z0-9_-]+$/u;
+const PROVIDER_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+const MAX_PROVIDER_BINDINGS = 32;
 
 /** POST /api/v1/workspaces/:workspaceId/install-plans (Workspace auth is done by the parent handler). */
 export async function handleWorkspaceInstallPlans(
@@ -81,18 +89,6 @@ export async function handleWorkspaceInstallPlans(
     );
   }
   const body = await readJsonObject(ctx.request);
-  if (
-    body &&
-    isRecord(body.options) &&
-    Object.prototype.hasOwnProperty.call(body.options, "deploymentProfileKey")
-  ) {
-    return errorJson(
-      "invalid_request",
-      "deploymentProfileKey is no longer accepted; select a module from the immutable SourceSnapshot manifest and use the generic host policy.",
-      400,
-      ctx.request,
-    );
-  }
   const parsed = body ? parseCreateRequest(body) : undefined;
   if (!parsed) {
     return errorJson(
@@ -427,33 +423,58 @@ async function prepareInstallCompilation(
     source.id,
     plan.sourceSnapshotId!,
   );
-  const base = await resolveStoreBaseInstallConfig(
-    operations,
-    source,
-    snapshot,
-    undefined,
-  );
+  const base = await resolveStoreBaseInstallConfig(operations);
   if (!base.ok) {
     return failedPlan(plan, base.diagnostic);
   }
-  const manifest = snapshot.repositoryManifest;
-  if (!manifest || manifest.status === "absent") {
-    return progressed(plan, {
-      installConfigId: base.installConfig.id,
-      phase: "creating_capsule",
-    });
-  }
-  if (manifest.status === "invalid") {
-    return failedPlan(plan, {
-      code: "repository_install_manifest_invalid",
-      message: "The pinned repository install manifest is invalid.",
-    });
-  }
   const moduleSelection = resolveRepoOwnedInstallModulePath({
     sourceSnapshot: snapshot,
+    modulePath: plan.options.modulePath,
   });
   if (!moduleSelection.ok) {
-    return failedPlan(plan, moduleSelection.diagnostic);
+    return failedPlan(plan, {
+      code: moduleSelection.diagnostic.code,
+      message: moduleSelection.diagnostic.message,
+    });
+  }
+
+  const manifest = snapshot.repositoryManifest;
+  if (!manifest || manifest.status === "absent" || manifest.status === "invalid") {
+    const requiredManifestApiVersion =
+      base.installConfig.policy?.repositoryInstallUx
+        ?.requiredManifestApiVersion;
+    if (requiredManifestApiVersion) {
+      return failedPlan(plan, {
+        code: "repository_install_ux_manifest_api_version_required",
+        message:
+          "The generic host policy requires a valid repository install manifest before this plan can continue.",
+      });
+    }
+    // The repository manifest is optional assistance. A malformed optional
+    // document disables that assistance, but the exact scanner-selected
+    // OpenTofu root can still be installed through the generic host policy.
+    // Even a plain Git repository must execute the exact scanner-selected
+    // root; never let a missing InstallConfig.modulePath fall back to
+    // Source.defaultPath.
+    const installConfig = await materializeSelectedModuleInstallConfig({
+      operations,
+      plan,
+      source,
+      snapshot,
+      baseConfig: base.installConfig,
+      modulePath: moduleSelection.modulePath,
+      rootProviderRequirements: moduleSelection.rootProviderRequirements,
+    });
+    if (!installConfig.ok) {
+      return failedPlan(plan, installConfig.diagnostic);
+    }
+    return progressed(plan, {
+      installConfigId: installConfig.installConfig.id,
+      installConfigBaseId: base.installConfig.id,
+      installConfigBaseDigest: await stableJsonDigest(base.installConfig),
+      installModulePath: moduleSelection.modulePath,
+      phase: "creating_capsule",
+    });
   }
   const installConfigBaseDigest = await stableJsonDigest(base.installConfig);
   const evidence = await installPlanCompatibilityEvidence({
@@ -463,6 +484,7 @@ async function prepareInstallCompilation(
     installConfigBaseId: base.installConfig.id,
     installConfigBaseDigest,
     modulePath: moduleSelection.modulePath,
+    rootProviderRequirements: moduleSelection.rootProviderRequirements,
   });
   // Persist the full exact analysis identity before invoking the read-only
   // runner. A committed Run/report followed by a lost acknowledgement can then
@@ -488,22 +510,18 @@ async function analyzeAndCompileInstall(
     source.id,
     plan.sourceSnapshotId!,
   );
-  const base = await resolveStoreBaseInstallConfig(
-    operations,
-    source,
-    snapshot,
-    undefined,
-  );
+  const base = await resolveStoreBaseInstallConfig(operations);
   if (!base.ok) return failedPlan(plan, base.diagnostic);
   const manifest = snapshot.repositoryManifest;
   if (!manifest || manifest.status !== "present") {
     throw permanent(
       "install_compilation_identity_changed",
-      "The pinned repository install manifest changed after compilation was prepared.",
+      "The pinned repository source metadata changed after compilation was prepared.",
     );
   }
   const moduleSelection = resolveRepoOwnedInstallModulePath({
     sourceSnapshot: snapshot,
+    modulePath: plan.options.modulePath,
   });
   if (!moduleSelection.ok) {
     return failedPlan(plan, moduleSelection.diagnostic);
@@ -516,6 +534,7 @@ async function analyzeAndCompileInstall(
     installConfigBaseId: base.installConfig.id,
     installConfigBaseDigest,
     modulePath: moduleSelection.modulePath,
+    rootProviderRequirements: moduleSelection.rootProviderRequirements,
   });
   if (
     plan.installConfigBaseId !== base.installConfig.id ||
@@ -743,27 +762,38 @@ function parseCreateRequest(
     if (!isRecord(body.options)) return undefined;
     if (
       !hasOnlyKeys(body.options, [
-        "providerBindingConnectionIds",
+        "modulePath",
+        "providerBindings",
       ])
     ) {
       return undefined;
     }
-    const providerBindingConnectionIds = stringReferenceRecord(
-      body.options.providerBindingConnectionIds,
-    );
+    const rawModulePath = body.options.modulePath;
+    const parsedModulePath =
+      rawModulePath === undefined
+        ? undefined
+        : modulePathValue(rawModulePath);
+    const modulePath =
+      parsedModulePath === undefined
+        ? undefined
+        : parsedModulePath === ""
+          ? "."
+          : parsedModulePath;
     if (
-      body.options.providerBindingConnectionIds !== undefined &&
-      !providerBindingConnectionIds
+      rawModulePath !== undefined &&
+      (modulePath === undefined || rawModulePath !== modulePath)
     ) {
       return undefined;
     }
-    const hasProviderBindingReferences =
-      providerBindingConnectionIds !== undefined &&
-      Object.keys(providerBindingConnectionIds).length > 0;
+    const providerBindings = providerBindingRequests(
+      body.options.providerBindings,
+    );
+    if (body.options.providerBindings !== undefined && !providerBindings) {
+      return undefined;
+    }
     options = {
-      ...(hasProviderBindingReferences
-        ? { providerBindingConnectionIds }
-        : {}),
+      ...(modulePath !== undefined ? { modulePath } : {}),
+      ...(providerBindings !== undefined ? { providerBindings } : {}),
     };
   }
   return {
@@ -799,6 +829,119 @@ interface InstallPlanCompatibilityEvidence {
   readonly createdBy: string;
 }
 
+/**
+ * Materialize the scanner-selected module for a plain Git install. Generic
+ * InstallConfig rows intentionally do not carry a module path, so without a
+ * scoped row Core would infer Source.defaultPath at Plan time. The generated
+ * row is deterministic and strips Store/source-selector presentation fields;
+ * it carries no provider authority beyond the immutable module choice.
+ */
+async function materializeSelectedModuleInstallConfig(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly plan: StoredGitInstallPlan;
+  readonly source: Source;
+  readonly snapshot: SourceSnapshot;
+  readonly baseConfig: InstallConfig;
+  readonly modulePath: string;
+  readonly rootProviderRequirements: readonly RepositoryModuleRootProviderRequirement[];
+}): Promise<
+  | { readonly ok: true; readonly installConfig: InstallConfig }
+  | { readonly ok: false; readonly diagnostic: GitInstallPlanDiagnostic }
+> {
+  const baseModulePath = modulePathValue(input.baseConfig.modulePath);
+  if (
+    baseModulePath !== undefined &&
+    (baseModulePath === "" ? "." : baseModulePath) === input.modulePath &&
+    input.baseConfig.workspaceId === input.plan.workspaceId
+  ) {
+    return { ok: true, installConfig: input.baseConfig };
+  }
+  const {
+    id: _baseId,
+    name: _baseName,
+    workspaceId: _baseWorkspaceId,
+    internal: _baseInternal,
+    modulePath: _baseModulePath,
+    sourceSelector: _baseSourceSelector,
+    store: _baseStore,
+    createdAt: _baseCreatedAt,
+    updatedAt: _baseUpdatedAt,
+    ...baseMaterial
+  } = input.baseConfig;
+  const installConfigMaterial: Omit<
+    InstallConfig,
+    "id" | "createdAt" | "updatedAt"
+  > = {
+    ...baseMaterial,
+    workspaceId: input.plan.workspaceId,
+    name: `${input.plan.capsule.name}-repository-install`,
+    internal: { reason: "per_install_overrides" },
+    modulePath: input.modulePath,
+  };
+  const digest = await stableJsonDigest({
+    kind: "git-install-module-config-v1",
+    sourceId: input.source.id,
+    sourceSnapshotId: input.snapshot.id,
+    baseInstallConfigId: input.baseConfig.id,
+    installConfig: installConfigMaterial,
+    rootProviderRequirements: input.rootProviderRequirements,
+  });
+  const id = `icfg_${digest.replace(/^sha256:/u, "").slice(0, 16)}`;
+  const now = new Date().toISOString();
+  const expected: InstallConfig = {
+    id,
+    ...installConfigMaterial,
+    createdAt: now,
+    updatedAt: now,
+  };
+  try {
+    const existing = await input.operations.capsules.getInstallConfig(id);
+    if (
+      (await stableJsonDigest(stripInstallConfigTimestamps(existing))) !==
+      (await stableJsonDigest(stripInstallConfigTimestamps(expected)))
+    ) {
+      return {
+        ok: false,
+        diagnostic: {
+          code: "repository_install_module_config_identity_conflict",
+          message:
+            "The deterministic module InstallConfig identity conflicts with another configuration.",
+        },
+      };
+    }
+    return { ok: true, installConfig: existing };
+  } catch (error) {
+    if (
+      !(error instanceof OpenTofuControllerError) ||
+      error.code !== "not_found"
+    ) {
+      throw error;
+    }
+  }
+  const stored = await input.operations.capsules.putInstallConfig(expected);
+  if (
+    (await stableJsonDigest(stripInstallConfigTimestamps(stored))) !==
+    (await stableJsonDigest(stripInstallConfigTimestamps(expected)))
+  ) {
+    return {
+      ok: false,
+      diagnostic: {
+        code: "repository_install_module_config_identity_conflict",
+        message:
+          "The module InstallConfig did not persist its exact deterministic identity.",
+      },
+    };
+  }
+  return { ok: true, installConfig: stored };
+}
+
+function stripInstallConfigTimestamps(
+  config: InstallConfig,
+): Omit<InstallConfig, "createdAt" | "updatedAt"> {
+  const { createdAt: _createdAt, updatedAt: _updatedAt, ...material } = config;
+  return material;
+}
+
 async function installPlanCompatibilityEvidence(input: {
   readonly plan: StoredGitInstallPlan;
   readonly source: Source;
@@ -806,6 +949,7 @@ async function installPlanCompatibilityEvidence(input: {
   readonly installConfigBaseId: string;
   readonly installConfigBaseDigest: string;
   readonly modulePath: string;
+  readonly rootProviderRequirements: readonly RepositoryModuleRootProviderRequirement[];
 }): Promise<InstallPlanCompatibilityEvidence> {
   const requestDigest = await stableJsonDigest({
     kind: "git_install_plan_compatibility_v1",
@@ -817,6 +961,7 @@ async function installPlanCompatibilityEvidence(input: {
     installConfigBaseId: input.installConfigBaseId,
     installConfigBaseDigest: input.installConfigBaseDigest,
     modulePath: input.modulePath,
+    rootProviderRequirements: input.rootProviderRequirements,
   });
   const suffix = requestDigest.replace(/^sha256:/u, "").slice(0, 16);
   return {
@@ -964,9 +1109,15 @@ function assertRunMatches(
 function requestedProviderBindings(
   plan: StoredGitInstallPlan,
 ): ProviderBindings {
-  return Object.entries(plan.options.providerBindingConnectionIds ?? {})
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([provider, connectionId]) => ({ provider, connectionId }));
+  const requested = plan.options.providerBindings ?? [];
+  return requested.map((binding) => ({
+    provider: binding.provider,
+    moduleLocalName: binding.moduleLocalName,
+    ...(binding.childAlias !== undefined
+      ? { childAlias: binding.childAlias, rootAlias: binding.childAlias }
+      : {}),
+    connectionId: binding.connectionId,
+  }));
 }
 
 function sameProviderBindings(
@@ -977,9 +1128,18 @@ function sameProviderBindings(
     bindings
       .map((binding) => ({
         provider: binding.provider,
+        ...(binding.moduleLocalName !== undefined
+          ? { moduleLocalName: binding.moduleLocalName }
+          : {}),
+        ...(binding.childAlias !== undefined
+          ? { childAlias: binding.childAlias }
+          : {}),
+        ...(binding.rootAlias !== undefined
+          ? { rootAlias: binding.rootAlias }
+          : {}),
         connectionId: binding.connectionId,
       }))
-      .sort((a, b) => a.provider.localeCompare(b.provider));
+      .sort(compareProviderBindingTuple);
   return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
 }
 
@@ -1155,24 +1315,110 @@ function idempotencyKey(raw: string | null): string | undefined {
     : undefined;
 }
 
-function stringReferenceRecord(
+function providerBindingRequests(
   value: unknown,
-): Readonly<Record<string, string>> | undefined {
+): readonly GitInstallPlanProviderBindingRequest[] | undefined {
   if (value === undefined) return undefined;
-  if (!isRecord(value)) return undefined;
-  const entries = Object.entries(value);
-  if (entries.length > 32) return undefined;
-  const result: Record<string, string> = {};
-  for (const [provider, rawConnectionId] of entries.sort(([a], [b]) =>
-    a.localeCompare(b),
-  )) {
-    const connectionId = connectionReference(rawConnectionId);
-    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$/u.test(provider) || !connectionId) {
+  if (!Array.isArray(value) || value.length > MAX_PROVIDER_BINDINGS) {
+    return undefined;
+  }
+  const result: GitInstallPlanProviderBindingRequest[] = [];
+  const identities = new Set<string>();
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      !hasOnlyKeys(item, [
+        "provider",
+        "moduleLocalName",
+        "childAlias",
+        "connectionId",
+      ])
+    ) {
       return undefined;
     }
-    result[provider] = connectionId;
+    const provider = boundedPlainString(item.provider, 512);
+    const moduleLocalName = boundedPlainString(item.moduleLocalName, 128);
+    const childAlias =
+      item.childAlias === undefined
+        ? undefined
+        : boundedPlainString(item.childAlias, 128);
+    const connectionId = connectionReference(item.connectionId);
+    if (
+      !provider ||
+      item.provider !== provider ||
+      !PROVIDER_SOURCE_PATTERN.test(provider) ||
+      normalizeProviderSourceAddress(provider) !== provider ||
+      !moduleLocalName ||
+      item.moduleLocalName !== moduleLocalName ||
+      !PROVIDER_IDENTIFIER_PATTERN.test(moduleLocalName) ||
+      (item.childAlias !== undefined &&
+        (childAlias === undefined ||
+          item.childAlias !== childAlias ||
+          !PROVIDER_IDENTIFIER_PATTERN.test(childAlias))) ||
+      !connectionId ||
+      item.connectionId !== connectionId
+    ) {
+      return undefined;
+    }
+    // Core resolves one exact local/alias identity. Reject duplicates even if
+    // callers point the duplicate identity at different Provider Connections.
+    const identity = JSON.stringify([
+      provider,
+      moduleLocalName,
+      childAlias ?? null,
+    ]);
+    if (identities.has(identity)) return undefined;
+    identities.add(identity);
+    result.push({
+      provider,
+      moduleLocalName,
+      ...(childAlias !== undefined ? { childAlias } : {}),
+      connectionId,
+    });
   }
+  result.sort(compareProviderBindingRequest);
   return result;
+}
+
+function compareProviderBindingRequest(
+  left: GitInstallPlanProviderBindingRequest,
+  right: GitInstallPlanProviderBindingRequest,
+): number {
+  return (
+    compareString(left.provider, right.provider) ||
+    compareString(left.moduleLocalName, right.moduleLocalName) ||
+    compareString(left.childAlias ?? "", right.childAlias ?? "") ||
+    compareString(left.connectionId, right.connectionId)
+  );
+}
+
+function compareProviderBindingTuple(
+  left: {
+    readonly provider: string;
+    readonly moduleLocalName?: string;
+    readonly childAlias?: string;
+    readonly rootAlias?: string;
+    readonly connectionId: string;
+  },
+  right: {
+    readonly provider: string;
+    readonly moduleLocalName?: string;
+    readonly childAlias?: string;
+    readonly rootAlias?: string;
+    readonly connectionId: string;
+  },
+): number {
+  return (
+    compareString(left.provider, right.provider) ||
+    compareString(left.moduleLocalName ?? "", right.moduleLocalName ?? "") ||
+    compareString(left.childAlias ?? "", right.childAlias ?? "") ||
+    compareString(left.rootAlias ?? "", right.rootAlias ?? "") ||
+    compareString(left.connectionId, right.connectionId)
+  );
+}
+
+function compareString(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function boundedString(value: unknown, max: number): string | undefined {

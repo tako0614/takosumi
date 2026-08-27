@@ -11,7 +11,7 @@ test("legacy source-less destroy operator modules require the internal drain mar
   const workspace = workspaceForRun(runId);
   try {
     const generatedRoot = generateOpenTofuChildModuleRoot({
-      requiredProviders: [],
+      rootProviderRequirements: [],
       inputs: {},
       outputAllowlist: {
         message: { from: "message", type: "string" },

@@ -142,6 +142,12 @@ capability profile without using provider names as routing authority. Known
 providers only receive Credential Recipe, guided setup, and cache/mirror
 conveniences. Recipe presence is not an admission tier.
 
+The module graph follows only tracked regular files and vendored local sources
+(`./` and `../`) inside the immutable SourceSnapshot. V1 does not support remote
+module sources, including pinned ones, and never treats them as network-fetch
+authority for `tofu init`. Scan and compatibility fail closed instead of
+publishing a partial provider set; vendor dependencies in the repository tree.
+
 Operator-installed setup recipes are discovered through:
 
 ```http
@@ -160,7 +166,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 88
+`accounts/service/src/control-route-inventory.ts`; it currently contains 86
 public route descriptors. Representative operations from that inventory are:
 
 ```http
@@ -176,7 +182,7 @@ GET   /api/v1/sources/{sourceId}
 PATCH /api/v1/sources/{sourceId}
 POST  /api/v1/sources/{sourceId}/sync
 GET   /api/v1/sources/{sourceId}/snapshots
-GET   /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/deployment-profiles
+GET   /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules
 
 POST  /api/v1/workspaces/{workspaceId}/capsules
 GET   /api/v1/capsules/{capsuleId}
@@ -215,6 +221,37 @@ InstallConfig, Capsule, and canonical Plan Run. It rejects variable values,
 credentials, tokens, and Output values. Reconciliation stops at a reviewable
 Plan Run; approval and apply remain exclusively on the Run API, with no
 install-plan apply route.
+
+The create body selects provider connections by the exact module-local tuple
+from the scan, not by a provider-source-only map:
+
+```json
+{
+  "source": {
+    "name": "sample-app",
+    "url": "https://git.example.test/apps/sample-app.git",
+    "ref": "main",
+    "path": "infra"
+  },
+  "capsule": { "name": "sample-app", "environment": "production" },
+  "options": {
+    "modulePath": "deploy/selected",
+    "providerBindings": [
+      {
+        "provider": "registry.opentofu.org/tako0614/takoform",
+        "moduleLocalName": "takoform",
+        "connectionId": "conn_takoform"
+      }
+    ]
+  }
+}
+```
+
+`source.path` is the Git subtree to sync; `options.modulePath` is an
+archive-relative module discovered by that snapshot's tree scan. Each
+`providerBindings` `provider` / `moduleLocalName` / optional `childAlias` must
+exactly match a requirement tuple for the selected module. `connectionId` is
+only a reference to an existing Connection.
 
 Creating a Git revision plan also requires `Idempotency-Key` and accepts only
 `{ "ref": "<git-ref>" }`. Creation returns 201, replaying the same normalized

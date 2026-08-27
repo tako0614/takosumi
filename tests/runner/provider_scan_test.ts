@@ -141,16 +141,52 @@ test("canonical provider scan follows only reachable local modules across every 
         moduleLocalName: "edge",
         childAlias: "zone",
       },
+    ]);
+  });
+});
+
+test("runner allows reachable child packages without inventing selected-root bindings", async () => {
+  await withRoot(async (root) => {
+    await mkdir(join(root, "modules", "child"), { recursive: true });
+    await writeFile(
+      join(root, "main.tf"),
+      [
+        'terraform { required_providers { aws = { source = "hashicorp/aws" } } }',
+        'module "child" { source = "./modules/child" }',
+      ].join("\n"),
+    );
+    await writeFile(
+      join(root, "modules", "child", "providers.tf"),
+      'terraform { required_providers { edge = { source = "cloudflare/cloudflare" configuration_aliases = [edge.zone] } } }',
+    );
+
+    const scan = await requiredProviderSourcesFromTerraformTree(root);
+    expect(scan.providers).toEqual([
+      "registry.opentofu.org/cloudflare/cloudflare",
+      "registry.opentofu.org/hashicorp/aws",
+    ]);
+    expect(scan.requirements).toEqual([
       {
-        source: "registry.opentofu.org/hashicorp/random",
-        moduleLocalName: "random",
-        version: "3.7.2",
-      },
-      {
-        source: "registry.opentofu.org/hashicorp/time",
-        moduleLocalName: "clock",
+        source: "registry.opentofu.org/hashicorp/aws",
+        moduleLocalName: "aws",
       },
     ]);
+    await expect(
+      requiredProvidersForGeneratedRoot(
+        {
+          planRun: {
+            requiredProviders: scan.providers,
+            requiredProviderRequirements: scan.requirements.map(
+              (requirement) => ({ ...requirement, allowed: true }),
+            ),
+          },
+        },
+        root,
+      ),
+    ).resolves.toMatchObject({
+      providers: scan.providers,
+      requirements: scan.requirements,
+    });
   });
 });
 

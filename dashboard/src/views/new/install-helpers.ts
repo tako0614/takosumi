@@ -60,18 +60,38 @@ interface EnvVariableRow {
 type StoreMetadata = NonNullable<InstallConfig["store"]>;
 
 export type InstallModuleCatalog =
-  | { readonly status: "none" | "absent"; readonly modules: readonly [] }
+  | { readonly status: "none"; readonly modules: readonly [] }
   | { readonly status: "invalid"; readonly modules: readonly [] }
   | {
       readonly status: "ready";
       readonly sourceSnapshotId: string;
-      readonly manifestDigest: string;
-      readonly defaultModule?: string;
+      readonly scopePath: string;
       readonly modules: readonly {
         readonly path: string;
-        readonly default?: boolean;
+        readonly providerPackages: readonly {
+          readonly source: string;
+          readonly version?: string;
+        }[];
+        readonly rootProviderRequirements: readonly {
+          readonly source: string;
+          readonly moduleLocalName: string;
+          readonly childAlias?: string;
+          readonly version?: string;
+        }[];
       }[];
     };
+
+type InstallModuleRootProviderRequirement = {
+  readonly source: string;
+  readonly moduleLocalName: string;
+  readonly childAlias?: string;
+  readonly version?: string;
+};
+
+type InstallModuleProviderPackage = {
+  readonly source: string;
+  readonly version?: string;
+};
 
 const DEFAULT_STORE_BADGE = {
   ja: "追加候補",
@@ -409,6 +429,20 @@ function sameGitUrl(a: string, b: string): boolean {
 
 function normalizeSourcePath(value: string): string {
   return normalizeInstallConfigSourcePath(value);
+}
+
+function isPlainRecord(
+  value: unknown,
+): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(
+  value: Readonly<Record<string, unknown>>,
+  allowed: readonly string[],
+): boolean {
+  const keys = new Set(allowed);
+  return Object.keys(value).every((key) => keys.has(key));
 }
 
 function slugInputValue(value: string): string {
@@ -766,35 +800,183 @@ function storeInstallConfigsForSource(
 function installModuleCatalogFromSnapshot(
   catalog: SourceSnapshotInstallModulesResponse,
 ): InstallModuleCatalog {
-  if (catalog.status === "absent") return { status: "absent", modules: [] };
-  if (catalog.status === "invalid") return { status: "invalid", modules: [] };
+  const catalogRecord = catalog as unknown;
+  if (!isPlainRecord(catalogRecord)) return { status: "invalid", modules: [] };
+  if (catalogRecord.status === "invalid") {
+    return { status: "invalid", modules: [] };
+  }
   if (
+    !hasOnlyKeys(catalogRecord, [
+      "status",
+      "sourceSnapshotId",
+      "scopePath",
+      "modules",
+    ]) ||
     catalog.status !== "ready" ||
-    !catalog.sourceSnapshotId.trim() ||
-    !/^sha256:[0-9a-f]{64}$/u.test(catalog.manifestDigest) ||
+    typeof catalog.sourceSnapshotId !== "string" ||
+    catalog.sourceSnapshotId !== catalog.sourceSnapshotId.trim() ||
+    !catalog.sourceSnapshotId ||
+    typeof catalog.scopePath !== "string" ||
+    catalog.scopePath !== catalog.scopePath.trim() ||
+    !catalog.scopePath ||
+    catalog.scopePath !== normalizeSourcePath(catalog.scopePath) ||
     !Array.isArray(catalog.modules) ||
-    catalog.modules.length < 1 ||
     catalog.modules.length > 32
   ) {
     return { status: "invalid", modules: [] };
   }
   const seen = new Set<string>();
   const modules = catalog.modules.map((module) => {
-    if (!module || typeof module.path !== "string") return undefined;
-    const path = module.path.trim();
+    const moduleRecord = module as unknown;
+    if (
+      !isPlainRecord(moduleRecord) ||
+      !hasOnlyKeys(moduleRecord, [
+        "path",
+        "providerPackages",
+        "rootProviderRequirements",
+      ]) ||
+      typeof module.path !== "string" ||
+      module.path !== module.path.trim() ||
+      !Array.isArray(module.providerPackages) ||
+      module.providerPackages.length > 256 ||
+      !Array.isArray(module.rootProviderRequirements) ||
+      module.rootProviderRequirements.length > 256
+    ) {
+      return undefined;
+    }
+    const path = module.path;
     if (
       !path ||
       path !== normalizeSourcePath(path) ||
       /(?:\.tf|\.tofu)(?:\.json)?$/iu.test(path) ||
-      seen.has(path) ||
-      (module.default !== undefined && typeof module.default !== "boolean")
+      seen.has(path)
+    ) {
+      return undefined;
+    }
+    const packageSources = new Set<string>();
+    const packages = module.providerPackages.map((candidate: unknown) => {
+      if (
+        !isPlainRecord(candidate) ||
+        !hasOnlyKeys(candidate, ["source", "version"])
+      ) {
+        return undefined;
+      }
+      const providerPackage = candidate as InstallModuleProviderPackage;
+      if (
+        typeof providerPackage.source !== "string" ||
+        !/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?\/[a-z0-9_-]+\/[a-z0-9_-]+$/u.test(
+          providerPackage.source,
+        ) ||
+        providerPackage.source !== providerPackage.source.toLowerCase() ||
+        packageSources.has(providerPackage.source) ||
+        (providerPackage.version !== undefined &&
+          (typeof providerPackage.version !== "string" ||
+            !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(
+              providerPackage.version,
+            )))
+      ) {
+        return undefined;
+      }
+      packageSources.add(providerPackage.source);
+      return {
+        source: providerPackage.source,
+        ...(providerPackage.version !== undefined
+          ? { version: providerPackage.version }
+          : {}),
+      };
+    });
+    const requirementKeys = new Set<string>();
+    const requirements = module.rootProviderRequirements.map(
+      (candidate: unknown) => {
+        if (
+          !isPlainRecord(candidate) ||
+          !hasOnlyKeys(candidate, [
+            "source",
+            "moduleLocalName",
+            "childAlias",
+            "version",
+          ])
+        ) {
+          return undefined;
+        }
+        const requirement = candidate as InstallModuleRootProviderRequirement;
+        const providerPackage = packages.find(
+          (entry: InstallModuleProviderPackage | undefined) =>
+            entry?.source === requirement.source,
+        );
+        if (
+          typeof requirement.source !== "string" ||
+          !/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?\/[a-z0-9_-]+\/[a-z0-9_-]+$/u.test(
+          requirement.source,
+          ) ||
+          requirement.source !== requirement.source.toLowerCase() ||
+          !providerPackage ||
+          typeof requirement.moduleLocalName !== "string" ||
+          !/^[A-Za-z_][A-Za-z0-9_-]*$/u.test(requirement.moduleLocalName) ||
+          (requirement.childAlias !== undefined &&
+            (typeof requirement.childAlias !== "string" ||
+              !/^[A-Za-z_][A-Za-z0-9_-]*$/u.test(requirement.childAlias))) ||
+          (requirement.version !== undefined &&
+            (typeof requirement.version !== "string" ||
+              !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(
+                requirement.version,
+              ) ||
+              requirement.version !== providerPackage.version))
+        ) {
+          return undefined;
+        }
+        const key = `${requirement.source}\0${requirement.moduleLocalName}\0${requirement.childAlias ?? ""}`;
+        if (requirementKeys.has(key)) return undefined;
+        requirementKeys.add(key);
+        return {
+          source: requirement.source,
+          moduleLocalName: requirement.moduleLocalName,
+          ...(requirement.childAlias !== undefined
+            ? { childAlias: requirement.childAlias }
+            : {}),
+          ...(requirement.version !== undefined
+            ? { version: requirement.version }
+            : {}),
+        };
+      },
+    );
+    if (
+      packages.some(
+        (providerPackage: InstallModuleProviderPackage | undefined) =>
+          providerPackage === undefined,
+      ) ||
+      requirements.some(
+        (requirement: InstallModuleRootProviderRequirement | undefined) =>
+          requirement === undefined,
+      )
     ) {
       return undefined;
     }
     seen.add(path);
     return {
       path,
-      ...(module.default === true ? { default: true } : {}),
+      providerPackages: (
+        packages as {
+          readonly source: string;
+          readonly version?: string;
+        }[]
+      ).sort((left, right) =>
+        left.source.localeCompare(right.source) ||
+        (left.version ?? "").localeCompare(right.version ?? ""),
+      ),
+      rootProviderRequirements: (
+        requirements as {
+          readonly source: string;
+          readonly moduleLocalName: string;
+          readonly childAlias?: string;
+          readonly version?: string;
+        }[]
+      ).sort((left, right) =>
+        left.source.localeCompare(right.source) ||
+        left.moduleLocalName.localeCompare(right.moduleLocalName) ||
+        (left.childAlias ?? "").localeCompare(right.childAlias ?? "") ||
+        (left.version ?? "").localeCompare(right.version ?? ""),
+      ),
     };
   });
   if (modules.some((module) => module === undefined)) {
@@ -802,27 +984,23 @@ function installModuleCatalogFromSnapshot(
   }
   const sorted = (modules as {
     readonly path: string;
-    readonly default?: boolean;
+    readonly providerPackages: readonly {
+      readonly source: string;
+      readonly version?: string;
+    }[];
+    readonly rootProviderRequirements: readonly {
+      readonly source: string;
+      readonly moduleLocalName: string;
+      readonly childAlias?: string;
+      readonly version?: string;
+    }[];
   }[]).sort((left, right) =>
     left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
   );
-  const defaults = sorted.filter((module) => module.default === true);
-  if (defaults.length > 1) return { status: "invalid", modules: [] };
-  if (
-    catalog.defaultModule !== undefined &&
-    (!catalog.defaultModule.trim() ||
-      !sorted.some((module) => module.path === catalog.defaultModule) ||
-      (defaults[0] && defaults[0].path !== catalog.defaultModule))
-  ) {
-    return { status: "invalid", modules: [] };
-  }
   return {
     status: "ready",
     sourceSnapshotId: catalog.sourceSnapshotId,
-    manifestDigest: catalog.manifestDigest,
-    ...(catalog.defaultModule !== undefined
-      ? { defaultModule: catalog.defaultModule }
-      : {}),
+    scopePath: catalog.scopePath,
     modules: sorted,
   };
 }

@@ -129,6 +129,12 @@ schema、Workspace / Project / TargetPool を更新・bootstrap しません。
 Stack API は plain OpenTofu / Terraform module を Git から実行します。
 この flow では既存 provider をそのまま使います。
 
+module graph は immutable SourceSnapshot 内の tracked regular files と vendored local
+source（`./` / `../`）だけを辿ります。pinned を含む remote module source は v1 では
+未対応で、`tofu init` への network fetch authority にはなりません。scan / compatibility
+は部分的な provider set を公開せず fail closed するため、dependency は repository tree
+へ vendor してください。
+
 stock composition は、すべての正しい provider source に provider-neutral な
 `opentofu-default` 実行経路を使います。operator は別の capability profile を明示
 選択できます。Credential Recipe は env/file の設定を簡単にする補助情報です。Recipe が
@@ -148,7 +154,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 88 件です。
+次の 86 件です。
 
 **Account views**
 
@@ -224,17 +230,17 @@ Run は必ず計画の作成から始まります。
 
 **Source**
 
-| メソッド | パス                                                                          | 説明                                                                 |
-| -------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| GET      | `/api/v1/sources`                                                             | Source を一覧する                                                    |
-| POST     | `/api/v1/sources`                                                             | Source を作る                                                        |
-| GET      | `/api/v1/sources/{sourceId}`                                                  | Source を読む                                                        |
-| PATCH    | `/api/v1/sources/{sourceId}`                                                  | Source のメタ情報を更新する                                          |
-| POST     | `/api/v1/sources/{sourceId}/sync`                                             | 同期 Run を作る                                                      |
-| GET      | `/api/v1/sources/{sourceId}/snapshots`                                        | SourceSnapshot を一覧する                                            |
-| GET      | `/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/deployment-profiles` | その Snapshot で実在を確認できた DB 所有のデプロイ方法だけを一覧する |
-| POST     | `/api/v1/sources/{sourceId}/compatibility-check`                              | 互換性レポートを作る                                                 |
-| GET      | `/api/v1/compatibility-reports/{reportId}`                                    | 互換性レポートを読む                                                 |
+| メソッド | パス                                                                     | 説明                                                              |
+| -------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| GET      | `/api/v1/sources`                                                        | Source を一覧する                                                 |
+| POST     | `/api/v1/sources`                                                        | Source を作る                                                     |
+| GET      | `/api/v1/sources/{sourceId}`                                             | Source を読む                                                     |
+| PATCH    | `/api/v1/sources/{sourceId}`                                             | Source のメタ情報を更新する                                       |
+| POST     | `/api/v1/sources/{sourceId}/sync`                                        | 同期 Run を作る                                                   |
+| GET      | `/api/v1/sources/{sourceId}/snapshots`                                   | SourceSnapshot を一覧する                                         |
+| GET      | `/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules` | 同期時に tree から検出した module と provider 要求を一覧する      |
+| POST     | `/api/v1/sources/{sourceId}/compatibility-check`                         | 互換性レポートを作る                                              |
+| GET      | `/api/v1/compatibility-reports/{reportId}`                               | 互換性レポートを読む                                              |
 
 **Git install plan**
 
@@ -249,6 +255,36 @@ Run は必ず計画の作成から始まります。
 SourceSnapshot、InstallConfig、Capsule、Plan Run の参照と bounded diagnostic だけです。
 variable 値、credential、token、Output 値は受け付けません。`reviewable` になった後の
 承認と apply は `Run` API だけが所有し、install-plan 専用 apply route はありません。
+
+作成 body の provider 選択は provider source だけの map ではなく、scan で得た
+module-local tuple をそのまま指定します。
+
+```json
+{
+  "source": {
+    "name": "sample-app",
+    "url": "https://git.example.test/apps/sample-app.git",
+    "ref": "main",
+    "path": "infra"
+  },
+  "capsule": { "name": "sample-app", "environment": "production" },
+  "options": {
+    "modulePath": "deploy/selected",
+    "providerBindings": [
+      {
+        "provider": "registry.opentofu.org/tako0614/takoform",
+        "moduleLocalName": "takoform",
+        "connectionId": "conn_takoform"
+      }
+    ]
+  }
+}
+```
+
+`source.path` は同期する Git subtree、`options.modulePath` はその Snapshot の
+tree scan で検出された archive-relative module です。`providerBindings` の
+`provider` / `moduleLocalName` / optional `childAlias` は選択 module の requirement
+tuple と完全一致しなければならず、`connectionId` は既存 Connection の参照だけです。
 
 **Git revision plan**
 
@@ -290,14 +326,13 @@ Content-Type: application/json
 {
   "baseInstallConfigId": "<base-install-config-id>",
   "sourceSnapshotId": "<source-snapshot-id>",
-  "deploymentProfileKey": "<optional-profile-key>",
   "reason": "<bounded non-secret reason>",
   "expected": { "authorityGuard": "<guard-from-capsule-get>" }
 }
 ```
 
-`deploymentProfileKey` は省略可能です。body はこの閉じた shape だけを受け付け、
-`reason` は bounded かつ secret-like value を含めません。成功は 200 で、response は
+body はこの閉じた shape だけを受け付け、`reason` は bounded かつ secret-like value を
+含めません。成功は 200 で、response は
 次の value-free projection です。
 
 ```json

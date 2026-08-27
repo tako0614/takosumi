@@ -124,7 +124,147 @@ export function normalizeStoredCapsuleCompatibilityReport(
   normalizeStoredCapsuleCompatibilityLevel(
     (report as { readonly level: unknown }).level,
   );
+  storedCapsuleCompatibilityProviderGraph(report);
   return report;
+}
+
+/**
+ * Closed representation kept in the historical `providers_json` column.
+ *
+ * The physical column name is private storage history. Its current value is a
+ * two-layer graph: every reachable package for policy/supply-chain checks and
+ * the selected root's exact identities for bindings/root generation. An old
+ * provider array is deliberately not inferred as either layer.
+ */
+export interface StoredCapsuleCompatibilityProviderGraph {
+  readonly providerPackages: CapsuleCompatibilityReport["providerPackages"];
+  readonly rootProviderRequirements: CapsuleCompatibilityReport["rootProviderRequirements"];
+}
+
+export function storedCapsuleCompatibilityProviderGraph(
+  report: CapsuleCompatibilityReport,
+): StoredCapsuleCompatibilityProviderGraph {
+  return parseStoredCapsuleCompatibilityProviderGraph({
+    providerPackages: (report as { readonly providerPackages?: unknown })
+      .providerPackages,
+    rootProviderRequirements: (
+      report as { readonly rootProviderRequirements?: unknown }
+    ).rootProviderRequirements,
+  });
+}
+
+export function parseStoredCapsuleCompatibilityProviderGraph(
+  value: unknown,
+): StoredCapsuleCompatibilityProviderGraph {
+  const record = closedRecord(
+    value,
+    ["providerPackages", "rootProviderRequirements"],
+    "stored Capsule compatibility provider graph",
+  );
+  if (!Array.isArray(record.providerPackages)) {
+    throw new TypeError(
+      "stored Capsule compatibility provider graph.providerPackages must be an array",
+    );
+  }
+  if (!Array.isArray(record.rootProviderRequirements)) {
+    throw new TypeError(
+      "stored Capsule compatibility provider graph.rootProviderRequirements must be an array",
+    );
+  }
+  return {
+    providerPackages: record.providerPackages.map((entry, index) => {
+      const providerPackage = closedRecord(
+        entry,
+        ["source", "allowed"],
+        `stored Capsule compatibility providerPackages[${index}]`,
+        ["version"],
+      );
+      return {
+        source: requiredStoredString(providerPackage.source, "source"),
+        ...(providerPackage.version === undefined
+          ? {}
+          : {
+              version: requiredStoredString(
+                providerPackage.version,
+                "version",
+              ),
+            }),
+        allowed: requiredStoredBoolean(providerPackage.allowed, "allowed"),
+      };
+    }),
+    rootProviderRequirements: record.rootProviderRequirements.map(
+      (entry, index) => {
+        const requirement = closedRecord(
+          entry,
+          ["source", "moduleLocalName"],
+          `stored Capsule compatibility rootProviderRequirements[${index}]`,
+          ["childAlias", "version", "credentialRequired"],
+        );
+        return {
+          source: requiredStoredString(requirement.source, "source"),
+          moduleLocalName: requiredStoredString(
+            requirement.moduleLocalName,
+            "moduleLocalName",
+          ),
+          ...(requirement.childAlias === undefined
+            ? {}
+            : {
+                childAlias: requiredStoredString(
+                  requirement.childAlias,
+                  "childAlias",
+                ),
+              }),
+          ...(requirement.version === undefined
+            ? {}
+            : {
+                version: requiredStoredString(requirement.version, "version"),
+              }),
+          ...(requirement.credentialRequired === undefined
+            ? {}
+            : {
+                credentialRequired: requiredStoredBoolean(
+                  requirement.credentialRequired,
+                  "credentialRequired",
+                ),
+              }),
+        };
+      },
+    ),
+  };
+}
+
+function closedRecord(
+  value: unknown,
+  requiredKeys: readonly string[],
+  label: string,
+  optionalKeys: readonly string[] = [],
+): Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);
+  if (Object.keys(record).some((key) => !allowedKeys.has(key))) {
+    throw new TypeError(`${label} contains an unsupported field`);
+  }
+  if (requiredKeys.some((key) => !(key in record))) {
+    throw new TypeError(`${label} is missing a required field`);
+  }
+  return record;
+}
+
+function requiredStoredString(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new TypeError(`${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requiredStoredBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${field} must be a boolean`);
+  }
+  return value;
 }
 
 /**
@@ -478,6 +618,75 @@ export interface TransitionRunResult {
   readonly run?: PlanRun | ApplyRun | SourceSyncRun | Run;
 }
 
+/**
+ * One fenced storage commit for a successful Source sync. The terminal Run and
+ * the immutable snapshot it names are one authority unit: neither may become
+ * visible without the other.
+ */
+export interface CommitSourceSyncSuccessInput {
+  readonly terminalRun: SourceSyncRun;
+  readonly leaseToken: string;
+  readonly snapshot: SourceSnapshot;
+}
+
+export interface CommitSourceSyncSuccessResult {
+  readonly won: boolean;
+  /** Current SourceSyncRun on a lost lease race, when the row still exists. */
+  readonly run?: SourceSyncRun;
+}
+
+export class SourceSnapshotConflictError extends Error {
+  override readonly name = "SourceSnapshotConflictError";
+
+  constructor(readonly snapshotId: string) {
+    super(
+      `SourceSnapshot ${snapshotId} already exists with different canonical content`,
+    );
+  }
+}
+
+export function sourceSnapshotsExactlyMatch(
+  left: SourceSnapshot,
+  right: SourceSnapshot,
+): boolean {
+  return stableStringify(left) === stableStringify(right);
+}
+
+/**
+ * Rejects a caller that tries to atomically bind a succeeded Run to anything
+ * other than its exact canonical SourceSnapshot.
+ */
+export function assertSourceSyncSuccessCommit(
+  input: CommitSourceSyncSuccessInput,
+): void {
+  const { terminalRun: run, snapshot } = input;
+  // archiveRef is deliberately not an equality fence: an unchanged commit may
+  // reuse an older immutable archive while the Run retains its newly allocated
+  // publication target. The digest/size and exact Run/Snapshot identities still
+  // bind the canonical bytes.
+  if (
+    run.status !== "succeeded" ||
+    run.snapshotId !== snapshot.id ||
+    snapshot.fetchedByRunId !== run.id ||
+    snapshot.workspaceId !== run.workspaceId ||
+    snapshot.sourceId !== run.sourceId ||
+    snapshot.url !== run.url ||
+    snapshot.ref !== run.ref ||
+    snapshot.path !== run.path ||
+    snapshot.resolvedCommit !== run.resolvedCommit ||
+    snapshot.archiveDigest !== run.archiveDigest ||
+    snapshot.archiveSizeBytes !== run.archiveSizeBytes ||
+    snapshot.fetchedAt !== run.finishedAt ||
+    snapshot.repositoryInstallMetadata === undefined ||
+    snapshot.repositoryManifest === undefined ||
+    snapshot.repositoryModules === undefined
+  ) {
+    throw new TypeError(
+      "successful SourceSyncRun must reference its exact canonical SourceSnapshot",
+    );
+  }
+}
+
 export type StoredRunRecord = PlanRun | ApplyRun | SourceSyncRun | Run;
 
 /** Atomic insert-or-adopt result for an immutable ApplyRun creation row. */
@@ -602,6 +811,14 @@ export interface OpenTofuControlStore {
    * contract; a lost race re-reads and returns the current row with `won: false`.
    */
   transitionRun(input: TransitionRunInput): Promise<TransitionRunResult>;
+
+  /**
+   * Lease-fenced atomic commit of a succeeded SourceSyncRun and its canonical
+   * SourceSnapshot. A lost fence writes neither record.
+   */
+  commitSourceSyncSuccess(
+    input: CommitSourceSyncSuccessInput,
+  ): Promise<CommitSourceSyncSuccessResult>;
 
   // SourceSyncRun ledger records (rows of `runs` with kind source_sync).
   putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun>;
@@ -1297,6 +1514,39 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       this.#runLeases.set(input.id, input.setLeaseToken);
     }
     return Promise.resolve({ won: true, run: persisted });
+  }
+
+  commitSourceSyncSuccess(
+    input: CommitSourceSyncSuccessInput,
+  ): Promise<CommitSourceSyncSuccessResult> {
+    assertSourceSyncSuccessCommit(input);
+    const snapshot = normalizeSourceSnapshot(input.snapshot);
+    const current = this.#runs.get(input.terminalRun.id);
+    if (
+      !current ||
+      !isSourceSyncRunRecord(current) ||
+      current.status !== "running" ||
+      this.#runLeases.get(current.id) !== input.leaseToken
+    ) {
+      return Promise.resolve({
+        won: false,
+        ...(current && isSourceSyncRunRecord(current) ? { run: current } : {}),
+      });
+    }
+    const existingSnapshot = this.#sourceSnapshots.get(snapshot.id);
+    if (
+      existingSnapshot &&
+      !sourceSnapshotsExactlyMatch(existingSnapshot, snapshot)
+    ) {
+      return Promise.reject(new SourceSnapshotConflictError(snapshot.id));
+    }
+    // All validation/conflict checks happen before mutation. These synchronous
+    // Map writes form one in-process critical section with no await/interleaving
+    // point.
+    this.#runs.set(input.terminalRun.id, input.terminalRun);
+    if (!existingSnapshot) this.#sourceSnapshots.set(snapshot.id, snapshot);
+    this.#runLeases.delete(input.terminalRun.id);
+    return Promise.resolve({ won: true, run: input.terminalRun });
   }
 
   putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {

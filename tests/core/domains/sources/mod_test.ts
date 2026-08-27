@@ -715,7 +715,11 @@ output "public_url" {
     variableMapping: {},
     outputAllowlist: {},
     policy: {
-      allowedProviders: ["registry.opentofu.org/custom/provider"],
+      allowedProviders: [
+        "registry.opentofu.org/custom/provider",
+        "registry.opentofu.org/hashicorp/external",
+        "registry.opentofu.org/hashicorp/null",
+      ],
       allowedResourceTypes: ["custom_resource", "null_resource"],
       allowedDataSourceTypes: ["external"],
       allowedProvisionerTypes: ["local-exec"],
@@ -751,7 +755,7 @@ output "public_url" {
   ]);
   expect(report.level).toBe("ready");
   expect(report.findings).toEqual([]);
-  expect(report.providers[0]).toMatchObject({ allowed: true });
+  expect(report.providerPackages[0]).toMatchObject({ allowed: true });
   expect(report.resources.every((resource) => resource.allowed)).toBe(true);
   expect(report.dataSources).toEqual([{ type: "external", allowed: true }]);
   expect(report.provisioners).toEqual([{ type: "local-exec", allowed: true }]);
@@ -1068,11 +1072,17 @@ output "public_url" {
   });
 
   const providerBySource = new Map(
-    report.providers.map((provider) => [provider.source, provider]),
+    report.providerPackages.map((provider) => [provider.source, provider]),
   );
-  expect(providerBySource.get("hashicorp/aws")?.allowed).toBe(true);
-  expect(providerBySource.get("vercel/vercel")?.allowed).toBe(true);
-  expect(providerBySource.get("draft/provider")?.allowed).toBe(true);
+  expect(
+    providerBySource.get("registry.opentofu.org/hashicorp/aws")?.allowed,
+  ).toBe(true);
+  expect(
+    providerBySource.get("registry.opentofu.org/vercel/vercel")?.allowed,
+  ).toBe(true);
+  expect(
+    providerBySource.get("registry.opentofu.org/draft/provider")?.allowed,
+  ).toBe(true);
 
   expect(report.findings).toEqual([]);
 });
@@ -1113,7 +1123,8 @@ test("createCompatibilityCheck returns an unsupported report when analysis fails
     sourceId: source.id,
     sourceSnapshotId: run.snapshotId,
     level: "unsupported",
-    providers: [],
+    providerPackages: [],
+    rootProviderRequirements: [],
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -1147,7 +1158,7 @@ test("createCompatibilityCheck returns an unsupported report when analysis fails
   );
 });
 
-test("createCompatibilityCheck treats snapshot path as restored archive root", async () => {
+test("createCompatibilityCheck preserves archive-relative module paths", async () => {
   const observedOptions: unknown[] = [];
   const { store, service } = makeService({
     readCapsuleSourceFiles: async (_snapshot, options) => {
@@ -1205,7 +1216,9 @@ output "url" {
     modulePath: "deploy/opentofu",
   });
 
-  expect(observedOptions).toEqual([{ runId: "ccr_test00000004" }]);
+  expect(observedOptions).toEqual([
+    { modulePath: "deploy/opentofu", runId: "ccr_test00000004" },
+  ]);
   expect(report.level).toBe("ready");
   expect(report.findings).toEqual([]);
 });
@@ -1363,4 +1376,49 @@ output "url" {
     { modulePath: "deploy/opentofu", runId: "ccr_test00000004" },
   ]);
   expect(report.modulePath).toBe("deploy/opentofu");
+});
+
+test("readCapsuleSourceFiles keeps module paths relative to the snapshot archive", async () => {
+  const observedOptions: unknown[] = [];
+  const { service } = makeService({
+    readCapsuleSourceFiles: async (_snapshot, options) => {
+      observedOptions.push(options);
+      return [];
+    },
+  });
+  const snapshot = (id: string): SourceSnapshot => ({
+    id,
+    origin: "git",
+    workspaceId: "workspace_1",
+    sourceId: "source_1",
+    url: "https://github.com/example/app.git",
+    ref: "main",
+    resolvedCommit: "a".repeat(40),
+    path: "infra",
+    archiveRef: `archive-${id}`,
+    archiveDigest: `sha256:${"a".repeat(64)}`,
+    archiveSizeBytes: 1,
+    fetchedByRunId: "sync_1",
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  await service.readCapsuleSourceFiles(snapshot("snapshot_equal"), {
+    modulePath: "infra",
+  });
+  await service.readCapsuleSourceFiles(snapshot("snapshot_nested"), {
+    modulePath: "infra/prod",
+  });
+  await service.readCapsuleSourceFiles(snapshot("snapshot_prefix"), {
+    modulePath: "infrastructure",
+  });
+  await service.readCapsuleSourceFiles(snapshot("snapshot_root"), {
+    modulePath: ".",
+  });
+
+  expect(observedOptions).toEqual([
+    { modulePath: "infra" },
+    { modulePath: "infra/prod" },
+    { modulePath: "infrastructure" },
+    undefined,
+  ]);
 });

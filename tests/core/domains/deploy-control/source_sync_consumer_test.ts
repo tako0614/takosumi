@@ -45,6 +45,7 @@ class StubRunner {
     return {
       repositoryInstallMetadata: { status: "absent" },
       repositoryManifest: { status: "absent" },
+      repositoryModules: { status: "ready", scopePath: ".", modules: [] },
       ...this.result,
     };
   }
@@ -108,6 +109,7 @@ function sourceSnapshot(over: Partial<SourceSnapshot> = {}): SourceSnapshot {
     archiveSizeBytes: 1024,
     repositoryInstallMetadata: { status: "absent" },
     repositoryManifest: { status: "absent" },
+    repositoryModules: { status: "ready", scopePath: ".", modules: [] },
     fetchedByRunId: "ssr_prev",
     fetchedAt: TEST_TIME,
     ...over,
@@ -526,6 +528,7 @@ test("source_sync consumer reuses an unchanged SourceSnapshot archive", async ()
     archiveSizeBytes: 2048,
     repositoryInstallMetadata: { status: "absent" },
     repositoryManifest: { status: "absent" },
+    repositoryModules: { status: "ready", scopePath: ".", modules: [] },
     fetchedByRunId: "ssr_prev",
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
@@ -650,6 +653,50 @@ test("source_sync consumer does not reuse a snapshot that predates repository ma
   expect(snapshots.at(-1)?.archiveRef).toBe(run.archiveRef);
 });
 
+test("source_sync consumer does not reuse a snapshot that predates repository module discovery", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+  });
+  await store.putSourceSnapshot({
+    id: "snap_without_repository_modules",
+    origin: "git",
+    workspaceId: "workspace_1",
+    sourceId: source.id,
+    url: source.url,
+    ref: source.defaultRef,
+    resolvedCommit: runner.result.resolvedCommit,
+    path: source.defaultPath,
+    archiveRef:
+      "workspaces/workspace_1/sources/src_old/snapshots/snap_old/source.tar.zst",
+    archiveDigest: "sha256:" + "d".repeat(64),
+    archiveSizeBytes: 2048,
+    repositoryInstallMetadata: { status: "absent" },
+    repositoryManifest: { status: "absent" },
+    fetchedByRunId: "ssr_old",
+    fetchedAt: "1970-01-01T00:00:00.000Z",
+  });
+  runner.onSourceSync = async (job) => {
+    expect(job.reuseSnapshot).toBeUndefined();
+  };
+
+  const { run } = await controller.createSourceSync(source.id);
+  await controller.runQueuedSourceSync(run.id);
+
+  expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
+  const snapshots = await store.listSourceSnapshots(source.id);
+  expect(snapshots).toHaveLength(2);
+  expect(snapshots.at(-1)?.repositoryModules).toEqual({
+    status: "ready",
+    scopePath: ".",
+    modules: [],
+  });
+  expect(snapshots.at(-1)?.archiveRef).toBe(run.archiveRef);
+});
+
 test("source_sync consumer reuses an unchanged public Git archive from a sibling Source in the same Workspace", async () => {
   const { store, sourcesService, runner, controller } = build();
   const { source: firstSource } = await sourcesService.createSource({
@@ -682,6 +729,7 @@ test("source_sync consumer reuses an unchanged public Git archive from a sibling
     archiveSizeBytes: 2048,
     repositoryInstallMetadata: { status: "absent" },
     repositoryManifest: { status: "absent" },
+    repositoryModules: { status: "ready", scopePath: ".", modules: [] },
     fetchedByRunId: "ssr_prev",
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
@@ -714,21 +762,19 @@ test("source_sync consumer reuses an unchanged public Git archive from a sibling
   expect(snapshots[0]?.archiveDigest).toBe(previousDigest);
 });
 
-test("source_sync consumer fast-reuses a pinned commit SourceSnapshot without dispatching the runner", async () => {
+test("source_sync consumer recomputes modules before reusing a pinned commit archive", async () => {
   const { store, sourcesService, runner, controller } = build();
   const pinnedCommit = "ccee6dea39e0797148ec0061fc738a693073890d";
   const { source: firstSource } = await sourcesService.createSource({
     workspaceId: "workspace_1",
     name: "repo-a",
     url: "https://github.com/acme/repo.git",
-    defaultRef: "main",
     defaultRef: pinnedCommit,
   });
   const { source: secondSource } = await sourcesService.createSource({
     workspaceId: "workspace_1",
     name: "repo-b",
     url: "https://github.com/acme/repo.git",
-    defaultRef: "main",
     defaultRef: pinnedCommit,
   });
   const previousArchiveKey =
@@ -740,7 +786,7 @@ test("source_sync consumer fast-reuses a pinned commit SourceSnapshot without di
     workspaceId: "workspace_1",
     sourceId: firstSource.id,
     url: "https://github.com/acme/repo.git",
-    defaultRef: "main",
+    defaultRef: pinnedCommit,
     ref: pinnedCommit,
     resolvedCommit: pinnedCommit,
     path: ".",
@@ -749,9 +795,40 @@ test("source_sync consumer fast-reuses a pinned commit SourceSnapshot without di
     archiveSizeBytes: 2048,
     repositoryInstallMetadata: { status: "absent" },
     repositoryManifest: { status: "absent" },
+    repositoryModules: {
+      status: "invalid",
+      scopePath: ".",
+      reason: "scan_failed",
+    },
     fetchedByRunId: "ssr_prev",
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
+  runner.onSourceSync = async (job) => {
+    expect(job.reuseSnapshot).toEqual({
+      id: "snap_prev",
+      resolvedCommit: pinnedCommit,
+      archiveRef: previousArchiveKey,
+      archiveDigest: previousDigest,
+      archiveSizeBytes: 2048,
+    });
+    runner.result = {
+      resolvedCommit: pinnedCommit,
+      archiveDigest: previousDigest,
+      archiveSizeBytes: 2048,
+      archiveRef: previousArchiveKey,
+      repositoryModules: {
+        status: "ready",
+        scopePath: ".",
+        modules: [
+          {
+            path: ".",
+            providerPackages: [],
+            rootProviderRequirements: [],
+          },
+        ],
+      },
+    };
+  };
   const { run } = await controller.createSourceSync(secondSource.id);
 
   await controller.dispatchQueuedRun({
@@ -760,7 +837,7 @@ test("source_sync consumer fast-reuses a pinned commit SourceSnapshot without di
     workspaceId: "workspace_1",
   });
 
-  expect(runner.calls).toHaveLength(0);
+  expect(runner.calls).toHaveLength(1);
   const finished = await store.getSourceSyncRun(run.id);
   expect(finished?.status).toBe("succeeded");
   expect(finished?.resolvedCommit).toBe(pinnedCommit);
@@ -770,6 +847,17 @@ test("source_sync consumer fast-reuses a pinned commit SourceSnapshot without di
   expect(snapshots[0]?.archiveRef).toBe(previousArchiveKey);
   expect(snapshots[0]?.archiveDigest).toBe(previousDigest);
   expect(snapshots[0]?.resolvedCommit).toBe(pinnedCommit);
+  expect(snapshots[0]?.repositoryModules).toEqual({
+    status: "ready",
+    scopePath: ".",
+    modules: [
+      {
+        path: ".",
+        providerPackages: [],
+        rootProviderRequirements: [],
+      },
+    ],
+  });
 });
 
 test("source_sync consumer refreshes invalid manifest metadata before pinned archive reuse", async () => {
@@ -809,6 +897,7 @@ test("source_sync consumer refreshes invalid manifest metadata before pinned arc
       reason: "invalid_document",
       digest: "sha256:" + "c".repeat(64),
     },
+    repositoryModules: { status: "ready", scopePath: ".", modules: [] },
     fetchedByRunId: "ssr_prev",
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
@@ -991,6 +1080,7 @@ test("source_sync consumer rejects a reused archive outside the requested snapsh
     archiveSizeBytes: 2048,
     repositoryInstallMetadata: { status: "absent" },
     repositoryManifest: { status: "absent" },
+    repositoryModules: { status: "ready", scopePath: ".", modules: [] },
     fetchedByRunId: "ssr_prev",
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });

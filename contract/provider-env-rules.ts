@@ -15,11 +15,12 @@ export function isProviderEnvName(value: string): boolean {
 
 const RESERVED_PROVIDER_ENV_NAMES = new Set([
   "ALL_PROXY",
-  // `tofu init` fetches `git::`/`ssh://` module sources by spawning git, which
-  // inherits the run env. Every git knob below is a command or a config
-  // override that git executes through a shell, so a declared provider
-  // variable named after one of them would be arbitrary code execution in the
-  // credentialed plan/apply phase.
+  // The upstream `tofu init` binary can fetch `git::`/`ssh://` module sources
+  // by spawning git. Takosumi v1 does not grant that authority: its selected
+  // module graph must be tracked and vendored with only static ./ or ../ edges.
+  // These names stay reserved as defense in depth because every git knob below
+  // is a command/config override that would execute through a shell if such a
+  // fetch path were ever reached in the credentialed plan/apply phase.
   "GIT_ALLOW_PROTOCOL",
   "GIT_ASKPASS",
   "GIT_EDITOR",

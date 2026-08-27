@@ -24,6 +24,8 @@ import type {
   InstallConfig as ContractInstallConfig,
   InstallConfigVariableDefault as ContractInstallConfigVariableDefault,
   Capsule as ContractCapsule,
+  CapsuleProviderPackage as ContractCapsuleProviderPackage,
+  CapsuleRootProviderRequirement as ContractCapsuleRootProviderRequirement,
   JsonValue as ContractJsonValue,
   ProviderBinding as ContractProviderBinding,
   ProviderBindings as ContractProviderBindings,
@@ -38,7 +40,6 @@ import type {
   Source as ContractSource,
   SourceBuildConfig,
   SourceSnapshot as ContractSourceSnapshot,
-  SourceSnapshotFileResponse,
   SourceSnapshotInstallModulesResponse as ContractSourceSnapshotInstallModulesResponse,
   StableSourceTagResolutionResponse,
   Workspace as ContractWorkspace,
@@ -46,6 +47,7 @@ import type {
   UsageEvent as ContractUsageEvent,
   CapsuleCurrentResourceInventory as ContractCapsuleCurrentResourceInventory,
 } from "takosumi-contract";
+import { isCanonicalRepositoryDirectoryPath } from "takosumi-contract";
 
 // ===========================================================================
 // Transport — same-origin fetch with the session cookie (mirrors the account
@@ -832,14 +834,10 @@ export interface CapsuleCompatibilityDiagnostic {
   readonly context?: Readonly<Record<string, string>>;
 }
 
-export interface CapsuleCompatibilityProvider {
-  readonly source: string;
-  readonly localName?: string;
-  readonly versionConstraint?: string;
-  readonly aliases: readonly string[];
-  readonly allowed: boolean;
-  readonly credentialRequired?: boolean;
-}
+export type CapsuleCompatibilityProviderPackage =
+  ContractCapsuleProviderPackage;
+export type CapsuleCompatibilityRootProviderRequirement =
+  ContractCapsuleRootProviderRequirement;
 
 export interface CapsuleCompatibilityResource {
   readonly type: string;
@@ -856,7 +854,8 @@ export interface CapsuleCompatibilityResult {
   readonly level: CapsuleCompatibilityLevel;
   readonly summary: string;
   readonly diagnostics: readonly CapsuleCompatibilityDiagnostic[];
-  readonly providers: readonly CapsuleCompatibilityProvider[];
+  readonly providerPackages: readonly CapsuleCompatibilityProviderPackage[];
+  readonly rootProviderRequirements: readonly CapsuleCompatibilityRootProviderRequirement[];
   readonly resources: readonly CapsuleCompatibilityResource[];
   readonly rootModuleVariables: readonly string[];
   readonly installConfigId?: string;
@@ -1388,7 +1387,7 @@ export async function createCapsule(input: {
             : {}),
           sourceId: input.sourceId,
           installConfigId: input.installConfigId,
-          ...(input.modulePath && input.modulePath !== "."
+          ...(input.modulePath !== undefined
             ? { modulePath: input.modulePath }
             : {}),
           ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
@@ -1612,7 +1611,9 @@ export interface CheckCapsuleCompatibilityInput {
   readonly sourceSnapshotId?: string;
   readonly gitUrl: string;
   readonly ref: string;
-  /** Explicit module selection; omitted for URL-only Store discovery. */
+  /** Git subtree captured by Source sync. Defaults to repository root. */
+  readonly sourcePath?: string;
+  /** Exact module path selected from the immutable SourceSnapshot scan. */
   readonly path?: string;
   readonly name: string;
   readonly authConnectionId?: string;
@@ -1704,6 +1705,12 @@ async function checkCapsuleCompatibilityRequest(
   signal: AbortSignal | undefined,
   deadlineAt?: number,
 ): Promise<CapsuleCompatibilityResult> {
+  if (
+    input.sourcePath !== undefined &&
+    !isCanonicalRepositoryDirectoryPath(input.sourcePath)
+  ) {
+    throw new TypeError("compatibility sourcePath must be canonical");
+  }
   if (input.sourceSnapshotId !== undefined && input.sourceId === undefined) {
     throw new TypeError("sourceSnapshotId requires sourceId");
   }
@@ -1714,6 +1721,7 @@ async function checkCapsuleCompatibilityRequest(
         sourceId: input.sourceId,
         gitUrl: input.gitUrl,
         ref: input.ref,
+        sourcePath: input.sourcePath ?? ".",
         name: input.name,
         signal,
         ...(input.authConnectionId
@@ -1745,12 +1753,16 @@ async function checkCapsuleCompatibilityRequest(
         readonly suggestion?: string;
         readonly context?: Readonly<Record<string, string>>;
       }[];
-      readonly providers?: readonly {
+      readonly providerPackages?: readonly {
         readonly source?: string;
-        readonly localName?: string;
-        readonly versionConstraint?: string;
-        readonly aliases?: readonly string[];
+        readonly version?: string;
         readonly allowed?: boolean;
+      }[];
+      readonly rootProviderRequirements?: readonly {
+        readonly source?: string;
+        readonly moduleLocalName?: string;
+        readonly childAlias?: string;
+        readonly version?: string;
         readonly credentialRequired?: boolean;
       }[];
       readonly resources?: readonly {
@@ -1812,16 +1824,29 @@ async function checkCapsuleCompatibilityRequest(
       message: "The repository install setup declaration is invalid.",
     });
   }
-  const providers = (body.report.providers ?? [])
-    .filter((provider) => provider.source !== undefined)
+  const providerPackages = (body.report.providerPackages ?? [])
+    .filter(
+      (provider) =>
+        provider.source !== undefined,
+    )
     .map((provider) => ({
       source: provider.source!,
-      ...(provider.localName ? { localName: provider.localName } : {}),
-      ...(provider.versionConstraint
-        ? { versionConstraint: provider.versionConstraint }
-        : {}),
-      aliases: provider.aliases ?? [],
+      ...(provider.version !== undefined ? { version: provider.version } : {}),
       allowed: provider.allowed ?? true,
+    }));
+  const rootProviderRequirements = (body.report.rootProviderRequirements ?? [])
+    .filter(
+      (provider) =>
+        provider.source !== undefined &&
+        provider.moduleLocalName !== undefined,
+    )
+    .map((provider) => ({
+      source: provider.source!,
+      moduleLocalName: provider.moduleLocalName!,
+      ...(provider.childAlias !== undefined
+        ? { childAlias: provider.childAlias }
+        : {}),
+      ...(provider.version !== undefined ? { version: provider.version } : {}),
       ...(provider.credentialRequired === true
         ? { credentialRequired: true }
         : {}),
@@ -1844,7 +1869,8 @@ async function checkCapsuleCompatibilityRequest(
       diagnostics[0]?.message ??
       "Compatibility check completed for the synced SourceSnapshot.",
     diagnostics,
-    providers,
+    providerPackages,
+    rootProviderRequirements,
     resources,
     rootModuleVariables: body.report.rootModuleVariables ?? [],
     ...(body.repositoryInstallUx?.status === "accepted"
@@ -2908,6 +2934,8 @@ export async function prepareCapsuleSourceSnapshot(input: {
   readonly sourceId?: string;
   readonly gitUrl: string;
   readonly ref: string;
+  /** Exact Git subtree to archive and scan. Defaults to repository root. */
+  readonly sourcePath?: string;
   /**
    * Resolve an omitted ref through the authenticated Workspace stable-tag
    * endpoint before creating/syncing the Source. Ordinary Git installs leave
@@ -2925,6 +2953,10 @@ export async function prepareCapsuleSourceSnapshot(input: {
   ) => void;
   readonly onSourceSnapshot?: (snapshot: SourceSnapshot) => void;
 }): Promise<PreparedCapsuleSourceSnapshot> {
+  const sourcePath = input.sourcePath ?? ".";
+  if (!isCanonicalRepositoryDirectoryPath(sourcePath)) {
+    throw new TypeError("Source sourcePath must be canonical");
+  }
   const requestedRef = input.ref.trim();
   const resolved =
     input.resolveAbsentRefToStableSemver === true && requestedRef === ""
@@ -2946,7 +2978,7 @@ export async function prepareCapsuleSourceSnapshot(input: {
         name: input.name,
         url: input.gitUrl,
         defaultRef: exactRef,
-        defaultPath: ".",
+        defaultPath: sourcePath,
         autoSync: true,
         signal: input.signal,
         ...(input.deadlineAt !== undefined
@@ -2991,6 +3023,13 @@ export async function prepareCapsuleSourceSnapshot(input: {
       "Source sync returned a Snapshot for a different stable-tag commit.",
     );
   }
+  if (snapshot.path !== sourcePath) {
+    throw new ControlApiError(
+      409,
+      "source_scope_mismatch",
+      "Source sync returned a Snapshot for a different repository subtree.",
+    );
+  }
   input.onSourceSnapshot?.(snapshot);
   return { sourceId, sourceSnapshotId: snapshot.id, snapshot };
 }
@@ -3001,8 +3040,9 @@ export type SourceSnapshotInstallModulesResponse =
 
 /**
  * Read the bounded install-module directory projection for one immutable
- * SourceSnapshot. The response intentionally contains no manifest document,
- * inputs, provider requirements, or policy fields.
+ * SourceSnapshot. It carries only exact scanned module paths and their
+ * provider requirements; manifest, input, and policy documents remain outside
+ * this dashboard boundary.
  */
 export async function listSourceSnapshotInstallModules(
   sourceId: string,
@@ -3057,37 +3097,6 @@ export async function resolveStableSourceTag(
   return await controlFetch<StableSourceTagResolutionResponse>(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/source-ref-resolutions/stable-semver`,
     { method: "POST", body: { url } },
-  );
-}
-
-export async function readSourceSnapshotPresentationFile(
-  sourceId: string,
-  sourceSnapshotId: string,
-  path: string,
-): Promise<SourceSnapshotFileResponse> {
-  return await controlFetch<SourceSnapshotFileResponse>(
-    `${BASE}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(sourceSnapshotId)}/file?${new URLSearchParams({ path }).toString()}`,
-  );
-}
-
-/** Reads one bounded manifest file from a SourceSnapshot pinned by source_sync. */
-export async function readSourceSnapshotFile(
-  sourceId: string,
-  sourceSnapshotId: string,
-  path: string,
-  options: { readonly signal?: AbortSignal } = {},
-): Promise<{
-  readonly sourceSnapshotId: string;
-  readonly path: string;
-  readonly text: string;
-}> {
-  return await controlFetch<{
-    readonly sourceSnapshotId: string;
-    readonly path: string;
-    readonly text: string;
-  }>(
-    `${BASE}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(sourceSnapshotId)}/file${query({ path })}`,
-    { signal: options.signal },
   );
 }
 

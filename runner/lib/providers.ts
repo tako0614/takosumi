@@ -89,20 +89,17 @@ export async function requiredProvidersForGeneratedRoot(
     );
   }
   if (declaredRequirements !== undefined) {
-    const exactSources = normalizedProviderList(
-      declaredRequirements.map((requirement) => requirement.source),
-    );
     if (
-      JSON.stringify(exactSources) !==
-      JSON.stringify(normalizedProviderList(declared))
+      JSON.stringify(normalizedProviderList(declared)) !==
+      JSON.stringify(observed.providers)
     ) {
       throw new Error(
-        "PlanRun requiredProviders does not match requiredProviderRequirements",
+        "PlanRun requiredProviders does not match the reachable provider package set",
       );
     }
   }
   return {
-    providers: normalizedProviderList([...declared, ...observed.providers]),
+    providers: observed.providers,
     requirements: observed.requirements,
     files: observed.files,
     diagnostics: observed.diagnostics,
@@ -127,9 +124,9 @@ export async function requiredProviderSourcesFromTerraformTree(
   });
   return {
     providers: normalizedProviderList(
-      graph.requirements.map((requirement) => requirement.source),
+      graph.providerPackages.map((providerPackage) => providerPackage.source),
     ),
-    requirements: graph.requirements,
+    requirements: graph.rootProviderRequirements,
     files: graph.files,
     diagnostics: graph.diagnostics,
     complete: graph.complete,
@@ -157,6 +154,11 @@ export function assertProviderSetStableAfterInit(
   ) {
     throw new Error(
       "OpenTofu provider requirements changed after init and before provider execution",
+    );
+  }
+  if (JSON.stringify(before.providers) !== JSON.stringify(after.providers)) {
+    throw new Error(
+      "OpenTofu provider package set changed after init and before provider execution",
     );
   }
   const expectedSources = normalizedProviderList(before.providers);
@@ -193,7 +195,7 @@ export function requiredProviderSourcesFromTerraformJson(
   });
   return graph.complete
     ? normalizedProviderList(
-        graph.requirements.map((requirement) => requirement.source),
+        graph.providerPackages.map((providerPackage) => providerPackage.source),
       )
     : undefined;
 }
@@ -205,7 +207,7 @@ export function requiredProviderSourcesFromTerraformText(
     files: [{ path: "providers.tf", text }],
   });
   return normalizedProviderList(
-    graph.requirements.map((requirement) => requirement.source),
+    graph.providerPackages.map((providerPackage) => providerPackage.source),
   );
 }
 

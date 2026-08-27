@@ -21,8 +21,11 @@ import {
 import { RUN_ROOT } from "../../../runner/lib/constants.ts";
 import {
   resolveSourceCommit,
+  assertTrackedSourceSnapshotArchiveable,
+  createDeterministicArchive,
   readRepositoryInstallMetadata,
   readRepositoryManifest,
+  readRepositoryModules,
   runSourceSync,
   shellQuote,
   shallowCloneAtCommit,
@@ -411,7 +414,7 @@ test("parseSourceCredentials returns empty for an absent credentials field", () 
   });
 });
 
-test("runSourceSync reparses metadata and manifest while reusing an unchanged archive", async () => {
+test("runSourceSync recomputes module discovery while reusing an unchanged archive", async () => {
   const runId = `source_reuse_${crypto.randomUUID().replace(/-/g, "")}`;
   const workspaceRoot = join(RUN_ROOT, runId);
   const fixtureRoot = await mkdtemp(join(tmpdir(), "takosumi-source-reuse-"));
@@ -486,6 +489,13 @@ test("runSourceSync reparses metadata and manifest while reusing an unchanged ar
           "workspaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst",
         archiveDigest: `sha256:${"b".repeat(64)}`,
         archiveSizeBytes: 2048,
+        // This stale pre-scanner observation is intentionally ignored. The
+        // current cloned tree is scanned again before the archive is reused.
+        repositoryModules: {
+          status: "ready",
+          scopePath: ".",
+          modules: [],
+        },
       },
     });
     const sourceRoot = join(workspaceRoot, "source");
@@ -498,6 +508,17 @@ test("runSourceSync reparses metadata and manifest while reusing an unchanged ar
       resolvedCommit,
       archiveDigest: `sha256:${"b".repeat(64)}`,
       archiveSizeBytes: 2048,
+      repositoryModules: {
+        status: "ready",
+        scopePath: ".",
+        modules: [
+          {
+            path: ".",
+            providerPackages: [],
+            rootProviderRequirements: [],
+          },
+        ],
+      },
       sourceArchive: {
         kind: "object-storage",
         ref: "workspaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst",
@@ -530,6 +551,8 @@ test("runSourceSync reparses metadata and manifest while reusing an unchanged ar
       "source_clone",
       "source_repository_metadata",
       "source_repository_manifest",
+      "source_subtree",
+      "source_repository_modules",
       "source_snapshot_reuse",
     ]);
     expect(git(sourceRoot, ["rev-parse", "HEAD"])).toBe(resolvedCommit);
@@ -539,6 +562,195 @@ test("runSourceSync reparses metadata and manifest while reusing an unchanged ar
     else Bun.env.PATH = previousPath;
     await rm(workspaceRoot, { recursive: true, force: true });
     await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("runSourceSync rejects a tracked symlink before archive creation or reuse", async () => {
+  const runId = `source_symlink_${crypto.randomUUID().replace(/-/g, "")}`;
+  const workspaceRoot = join(RUN_ROOT, runId);
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "takosumi-source-symlink-"));
+  const previousPath = Bun.env.PATH;
+  const secretTarget = "tracked symlink target must not enter diagnostics";
+  try {
+    const repositoryRoot = join(fixtureRoot, "repo");
+    git(fixtureRoot, ["init", "-b", "main", "repo"]);
+    await writeFile(join(repositoryRoot, "main.tf"), "terraform {}\n");
+    await writeFile(join(repositoryRoot, "target.tf"), secretTarget);
+    await symlink("target.tf", join(repositoryRoot, "tracked-link.tf"));
+    git(repositoryRoot, ["add", "."]);
+    git(repositoryRoot, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Takosumi Test",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+    const resolvedCommit = git(repositoryRoot, ["rev-parse", "HEAD"]);
+
+    // Keep the source URL policy and runner clone path under test while
+    // rewriting the public-looking URL to this local fixture.
+    const fakeBin = join(fixtureRoot, "bin");
+    await mkdir(fakeBin, { recursive: true });
+    const gitWrapper = join(fakeBin, "git");
+    await writeFile(
+      gitWrapper,
+      [
+        "#!/bin/sh",
+        "set -eu",
+        'if [ "$1" = "fetch" ]; then',
+        `/usr/bin/git remote set-url origin ${shellQuote(repositoryRoot)}`,
+        "fi",
+        '/usr/bin/git "$@"',
+        "",
+      ].join("\n"),
+    );
+    await chmod(gitWrapper, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+
+    const request = {
+      action: "source_sync",
+      source: {
+        url: "https://github.com/acme/repo.git",
+        ref: resolvedCommit,
+        path: ".",
+      },
+      archiveRef:
+        "workspaces/space_1/sources/src_new/snapshots/snap_new/source.tar.zst",
+      // The rejection must also happen before an unchanged archive can be
+      // reused; a legacy snapshot may predate this invariant.
+      reuseSnapshot: {
+        id: "snap_prev",
+        resolvedCommit,
+        archiveRef:
+          "workspaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst",
+        archiveDigest: `sha256:${"b".repeat(64)}`,
+        archiveSizeBytes: 2048,
+      },
+    };
+
+    let failure: unknown;
+    try {
+      await runSourceSync(runId, request);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    const errorText = failure instanceof Error ? failure.message : String(failure);
+    expect(errorText).toBe(
+      "source snapshot contains unsupported tracked symlink",
+    );
+    await expect(stat(join(workspaceRoot, "source.tar.zst"))).rejects.toThrow();
+    expect(errorText).not.toContain(secretTarget);
+    expect(errorText).not.toContain("tracked-link.tf");
+  } finally {
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
+    await rm(workspaceRoot, { recursive: true, force: true });
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("assertTrackedSourceSnapshotArchiveable rejects Git tree symlink metadata without path details", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-source-tree-link-"));
+  try {
+    git(root, ["init", "-b", "main"]);
+    await writeFile(join(root, "target.tf"), "target contents");
+    await symlink("target.tf", join(root, "link-with-secret.tf"));
+    git(root, ["add", "."]);
+    git(root, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Takosumi Test",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+
+    await expect(
+      assertTrackedSourceSnapshotArchiveable({
+        repositoryRoot: root,
+        scopePath: ".",
+        git: { context: { env: commandEnv() } },
+      }),
+    ).rejects.toThrow("source snapshot contains unsupported tracked symlink");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("assertTrackedSourceSnapshotArchiveable rejects a tracked gitlink before archive reuse", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-source-tree-gitlink-"));
+  try {
+    const nested = join(root, "nested-module");
+    await mkdir(nested, { recursive: true });
+    git(nested, ["init", "-b", "main"]);
+    await writeFile(join(nested, "main.tf"), "terraform {}\n");
+    git(nested, ["add", "."]);
+    git(nested, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Takosumi Test",
+      "commit",
+      "-m",
+      "nested",
+    ]);
+
+    git(root, ["init", "-b", "main"]);
+    git(root, ["add", "nested-module"]);
+    git(root, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Takosumi Test",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+
+    await expect(
+      assertTrackedSourceSnapshotArchiveable({
+        repositoryRoot: root,
+        scopePath: ".",
+        git: { context: { env: commandEnv() } },
+      }),
+    ).rejects.toThrow("source snapshot contains unsupported tracked gitlink");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("createDeterministicArchive rejects symlink entries and archives regular files", async () => {
+  if (Bun.which("tar") === null || Bun.which("zstd") === null) return;
+  const root = await mkdtemp(join(tmpdir(), "takosumi-source-archive-tree-"));
+  try {
+    const subtree = join(root, "src");
+    await mkdir(join(subtree, "nested"), { recursive: true });
+    await writeFile(join(subtree, "main.tf"), "terraform {}\n");
+    await writeFile(join(subtree, "nested", "vars.tf"), "variable \"x\" {}\n");
+    const regularArchive = join(root, "regular.tar.zst");
+    await createDeterministicArchive(
+      subtree,
+      regularArchive,
+      { context: { env: commandEnv() } },
+    );
+    expect((await stat(regularArchive)).isFile()).toBe(true);
+
+    await symlink("main.tf", join(subtree, "tracked-link.tf"));
+    const symlinkArchive = join(root, "symlink.tar.zst");
+    await expect(
+      createDeterministicArchive(
+        subtree,
+        symlinkArchive,
+        { context: { env: commandEnv() } },
+      ),
+    ).rejects.toThrow("source snapshot contains unsupported tracked symlink");
+    await expect(stat(symlinkArchive)).rejects.toThrow();
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -636,6 +848,133 @@ test("readRepositoryManifest records absent, oversized, symlink, and invalid doc
     expect(invalid.status === "invalid" ? invalid.digest : "").toMatch(
       /^sha256:[0-9a-f]{64}$/u,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("readRepositoryModules indexes tracked real roots and exact provider tuples", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-module-index-"));
+  try {
+    git(root, ["init", "-b", "main"]);
+    await mkdir(join(root, "modules", "child"), { recursive: true });
+    await mkdir(join(root, "deploy", "takoform"), { recursive: true });
+    await writeFile(
+      join(root, "main.tf"),
+      `module "child" { source = "./modules/child" }`,
+    );
+    await writeFile(
+      join(root, "modules", "child", "providers.tf"),
+      `terraform { required_providers { random = { source = "hashicorp/random" } } }`,
+    );
+    await writeFile(
+      join(root, "deploy", "takoform", "providers.tf"),
+      `terraform { required_providers { takoform = { source = "takos/takoform" } } }`,
+    );
+    git(root, ["add", "."]);
+    await writeFile(
+      join(root, "untracked.tf"),
+      `terraform { required_providers { evil = { source = "attacker/evil" } } }`,
+    );
+    await mkdir(join(root, "untracked-noise"));
+    await Promise.all(
+      Array.from({ length: 300 }, (_, index) =>
+        writeFile(
+          join(root, "untracked-noise", `noise-${index}.tf`),
+          `resource "evil_noise" "n${index}" {}`,
+        )
+      ),
+    );
+
+    const result = await readRepositoryModules({
+      repositoryRoot: root,
+      subtree: root,
+      scopePath: ".",
+      git: { context: { env: commandEnv() } },
+    });
+
+    expect(result).toEqual({
+      status: "ready",
+      scopePath: ".",
+      modules: [
+        {
+          path: ".",
+          providerPackages: [
+            { source: "registry.opentofu.org/hashicorp/random" },
+          ],
+          // The root only reaches random through its child module; it does not
+          // declare a root provider requirement of its own.
+          rootProviderRequirements: [],
+        },
+        {
+          path: "deploy/takoform",
+          providerPackages: [
+            { source: "registry.opentofu.org/takos/takoform" },
+          ],
+          rootProviderRequirements: [
+            {
+              source: "registry.opentofu.org/takos/takoform",
+              moduleLocalName: "takoform",
+            },
+          ],
+        },
+      ],
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("readRepositoryModules keeps Source scope separate from subtree-relative module paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-module-scope-"));
+  try {
+    git(root, ["init", "-b", "main"]);
+    const subtree = join(root, "apps", "service");
+    await mkdir(join(subtree, "worker"), { recursive: true });
+    await writeFile(join(root, "main.tf"), `resource "root_only" "ignored" {}`);
+    await writeFile(
+      join(subtree, "main.tf"),
+      `resource "aws_s3_bucket" "app" {}`,
+    );
+    await writeFile(
+      join(subtree, "worker", "main.tf"),
+      `resource "random_id" "worker" { byte_length = 8 }`,
+    );
+    git(root, ["add", "."]);
+
+    const result = await readRepositoryModules({
+      repositoryRoot: root,
+      subtree,
+      scopePath: "apps/service",
+      git: { context: { env: commandEnv() } },
+    });
+
+    expect(result).toEqual({
+      status: "ready",
+      scopePath: "apps/service",
+      modules: [
+        {
+          path: ".",
+          providerPackages: [
+            { source: "registry.opentofu.org/hashicorp/aws" },
+          ],
+          rootProviderRequirements: [{
+            source: "registry.opentofu.org/hashicorp/aws",
+            moduleLocalName: "aws",
+          }],
+        },
+        {
+          path: "worker",
+          providerPackages: [
+            { source: "registry.opentofu.org/hashicorp/random" },
+          ],
+          rootProviderRequirements: [{
+            source: "registry.opentofu.org/hashicorp/random",
+            moduleLocalName: "random",
+          }],
+        },
+      ],
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

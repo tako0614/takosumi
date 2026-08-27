@@ -131,11 +131,18 @@ test("Capsule compatibility report shape", () => {
         path: "main.tf",
       },
     ],
-    providers: [
+    providerPackages: [
       {
         source: "registry.opentofu.org/hashicorp/aws",
-        aliases: ["storage"],
         allowed: true,
+      },
+    ],
+    rootProviderRequirements: [
+      {
+        source: "registry.opentofu.org/hashicorp/aws",
+        moduleLocalName: "aws",
+        childAlias: "storage",
+        credentialRequired: true,
       },
     ],
     resources: [{ type: "aws_s3_bucket", count: 1, allowed: true }],

@@ -166,6 +166,25 @@ export interface CapsuleProviderRequirement {
   readonly credentialRequired?: boolean;
 }
 
+/** Reachable provider package used only for policy and supply-chain checks. */
+export interface CapsuleProviderPackage {
+  /** Canonical provider source address, including registry host. */
+  readonly source: string;
+  /** Exact literal version only when graph analysis proved one. */
+  readonly version?: string;
+  readonly allowed: boolean;
+}
+
+/** Exact provider identity declared or implicitly used by the selected root. */
+export interface CapsuleRootProviderRequirement {
+  readonly source: string;
+  readonly moduleLocalName: string;
+  readonly childAlias?: string;
+  readonly version?: string;
+  /** Root binding needs run-scoped credential material when true. */
+  readonly credentialRequired?: boolean;
+}
+
 export interface CapsuleResourceSummary {
   readonly type: string;
   readonly count?: number;
@@ -225,7 +244,8 @@ export interface CapsuleCompatibilityReport {
   readonly modulePath?: string;
   readonly level: CapsuleCompatibilityLevel;
   readonly findings: readonly CapsuleGateFinding[];
-  readonly providers: readonly CapsuleProviderRequirement[];
+  readonly providerPackages: readonly CapsuleProviderPackage[];
+  readonly rootProviderRequirements: readonly CapsuleRootProviderRequirement[];
   readonly resources: readonly CapsuleResourceSummary[];
   readonly dataSources: readonly CapsuleDataSourceSummary[];
   readonly provisioners: readonly CapsuleProvisionerSummary[];
@@ -271,7 +291,8 @@ export function normalizeCompatibilityReportModulePath(
 export interface CapsuleGateResult {
   readonly level: CapsuleCompatibilityLevel;
   readonly findings: readonly CapsuleGateFinding[];
-  readonly providers: readonly CapsuleProviderRequirement[];
+  readonly providerPackages: readonly CapsuleProviderPackage[];
+  readonly rootProviderRequirements: readonly CapsuleRootProviderRequirement[];
   readonly resources: readonly CapsuleResourceSummary[];
   readonly dataSources: readonly CapsuleDataSourceSummary[];
   readonly provisioners: readonly CapsuleProvisionerSummary[];
@@ -297,11 +318,6 @@ export interface CreateSourceCompatibilityCheckRequest {
    * validated result after the exact report succeeds.
    */
   readonly compileInstallUx?: boolean;
-  /**
-   * Opaque DB-owned deployment-profile equality key consumed only by the
-   * authenticated Accounts compiler. It is never forwarded to Core analysis.
-   */
-  readonly deploymentProfileKey?: string;
   readonly capsuleName?: string;
 }
 

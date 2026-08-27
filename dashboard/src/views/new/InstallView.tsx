@@ -11,15 +11,12 @@ import { useLocation } from "@solidjs/router";
 import {
   ArrowLeft,
   CheckCircle2,
-  ChevronRight,
   PackagePlus,
   PlugZap,
 } from "lucide-solid";
 import {
-  parseCapsuleSourceOptionsInstallLink,
-  parseCapsuleSourceOptionsText,
+  isCanonicalRepositoryDirectoryPath,
   type JsonValue,
-  type CapsuleSourceOption,
 } from "takosumi-contract";
 import Page from "../account/components/auth/Page.tsx";
 import AppFace from "../../components/AppFace.tsx";
@@ -48,9 +45,6 @@ import {
   planCapsule,
   prepareCapsuleSourceSnapshot,
   putCapsuleProviderBindingSet,
-  readSourceSnapshotFile,
-  readSourceSnapshotPresentationFile,
-  resolveStableSourceTag,
   type CapsuleCompatibilityResult,
   type InstallConfig,
   type PolicyConfig,
@@ -65,6 +59,7 @@ import {
 import {
   capsuleNameFromUrl,
   hasInstallPrefillParams,
+  isSafeHttpsGitUrl,
   parseInstallPrefill,
 } from "../../lib/install-link.ts";
 import {
@@ -77,7 +72,6 @@ import {
   installReturnPathFromPrefill,
   providerConnectionsHrefForInstallReturn,
 } from "../../lib/install-return-context.ts";
-import { readSnapshotDocument } from "../../lib/snapshot-document.ts";
 import {
   currentWorkspaceId,
   selectAvailableWorkspaceId,
@@ -135,8 +129,6 @@ type Phase =
   | "browse"
   | "configure"
   | "module-select"
-  | "entry-confirm"
-  | "entry"
   | "preparing"
   | "connections"
   | "setup"
@@ -156,43 +148,9 @@ type PreparationStage =
   | "config"
   | "plan";
 
-interface EntryChoice {
-  readonly id: string;
-  readonly title: string;
-  readonly description?: string;
-  readonly source: {
-    readonly url: string;
-    readonly ref?: string;
-    readonly path: string;
-  };
-}
-
-interface EntryEvidence {
-  readonly kind: "source-options";
-  readonly url: string;
-  readonly requestedRef?: string;
-  readonly resolvedTag?: string;
-  readonly commit: string;
-  readonly path: string;
-  readonly digest: string;
-  readonly sizeBytes?: number;
-}
-
 type WorkspacePolicyState =
   | { readonly status: "unavailable" }
   | { readonly status: "ready"; readonly policy?: PolicyConfig };
-
-function canonicalProviderSource(provider: string): string {
-  const normalized = provider.toLowerCase().trim();
-  return normalized.split("/").length === 2
-    ? `registry.opentofu.org/${normalized}`
-    : normalized;
-}
-
-function providerTail(provider: string): string {
-  const normalized = canonicalProviderSource(provider);
-  return normalized.split("/").at(-1) ?? normalized;
-}
 
 function sameProviderSource(required: string, connected: string): boolean {
   return providerConnectionMatchesProviderSource(required, {
@@ -203,22 +161,19 @@ function sameProviderSource(required: string, connected: string): boolean {
 function rowsFromCompatibility(
   result: CapsuleCompatibilityResult,
 ): ProviderConnectionRow[] {
-  return result.providers
-    .filter(
-      (provider) => provider.allowed && provider.credentialRequired === true,
-    )
-    .flatMap((provider) =>
-      (provider.aliases.length > 0 ? provider.aliases : [""]).map(
-        (childAlias) => ({
-          provider: provider.source,
-          moduleLocalName: provider.localName ?? providerTail(provider.source),
-          childAlias,
-          rootAlias: childAlias,
-          connectionId: "",
-          credentialRequired: true,
-        }),
-      ),
-    );
+  return result.rootProviderRequirements
+    .filter((provider) => provider.credentialRequired === true)
+    .map((provider) => {
+      const childAlias = provider.childAlias ?? "";
+      return {
+        provider: provider.source,
+        moduleLocalName: provider.moduleLocalName,
+        childAlias,
+        rootAlias: childAlias,
+        connectionId: "",
+        credentialRequired: true,
+      };
+    });
 }
 
 export default function InstallView() {
@@ -232,21 +187,12 @@ export default function InstallView() {
 function Inner(props: { readonly installingPrincipalId: string }) {
   const location = useLocation();
   const initial = parseInstallPrefill(location.search);
-  // `.` is the UI's display fallback, not an authority-bearing selection.
-  // Preserve whether the incoming install link actually supplied a path so a
-  // plain Git/Store flow can leave module choice to the pinned manifest.
+  // A query path is only a user hint. It is accepted as install authority only
+  // after the exact SourceSnapshot module projection proves that path exists.
   const initialModulePathExplicit = Boolean(initial?.path);
   const appHandoff = appHandoffFromSearch(location.search);
-  const sourceOptionsEntry = () =>
-    parseCapsuleSourceOptionsInstallLink(location.search);
-  const externalDocument = sourceOptionsEntry;
-  const initialExternalDocument = externalDocument();
   const [phase, setPhase] = createSignal<Phase>(
-    initialExternalDocument
-      ? "entry-confirm"
-      : hasInstallPrefillParams(location.search)
-        ? "configure"
-        : "browse",
+    hasInstallPrefillParams(location.search) ? "configure" : "browse",
   );
   const [listing, setListing] = createSignal<TcsListing | null>(null);
   const [installModuleCatalog, setInstallModuleCatalog] =
@@ -260,6 +206,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   // immutable evidence; shortening them for an input display changes the
   // Source/compatibility request and can select a different commit.
   const [gitRef, setGitRef] = createSignal(initial?.ref ?? "");
+  const [sourcePath, setSourcePath] = createSignal(initial?.sourcePath ?? ".");
   const [modulePath, setModulePath] = createSignal(initial?.path || ".");
   const [modulePathExplicit, setModulePathExplicit] = createSignal(
     initialModulePathExplicit,
@@ -306,16 +253,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [capsuleId, setCapsuleId] = createSignal<string>();
   const [planRunId, setPlanRunId] = createSignal<string>();
   const [error, setError] = createSignal<string>();
-  const [entryChoices, setEntryChoices] = createSignal<readonly EntryChoice[]>(
-    [],
-  );
-  const [entryTitle, setEntryTitle] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [preparationStage, setPreparationStage] =
     createSignal<PreparationStage>("workspace");
   const [preparationController, setPreparationController] =
     createSignal<AbortController>();
-  const [entryEvidence, setEntryEvidence] = createSignal<EntryEvidence>();
   const [interfaceUrl, setInterfaceUrl] = createSignal<string>();
   let completionAttempt = 0;
   let activePreparationController: AbortController | undefined;
@@ -344,6 +286,94 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       ? localizedStoreText(selected.name, selected.suggestedName)[locale()]
       : name() || capsuleNameFromUrl(gitUrl());
   });
+
+  const selectedModule = createMemo(() => {
+    const catalog = installModuleCatalog();
+    if (catalog.status !== "ready") return undefined;
+    const path = modulePath().trim();
+    return catalog.modules.find((module) => module.path === path);
+  });
+
+  const selectedModuleProviderRequirements = createMemo(
+    () => selectedModule()?.rootProviderRequirements ?? [],
+  );
+
+  type InstallStep = "source" | "configure" | "review";
+  const activeInstallStep = (): InstallStep => {
+    switch (phase()) {
+      case "connections":
+      case "setup":
+        return "configure";
+      case "review":
+      case "finishing":
+      case "done":
+        return "review";
+      case "preparing":
+        return preparationStage() === "plan" ? "review" : "source";
+      default:
+        return "source";
+    }
+  };
+
+  const installStepProgress = () => {
+    const active = activeInstallStep();
+    const order: readonly InstallStep[] = ["source", "configure", "review"];
+    const activeIndex = order.indexOf(active);
+    return order.map((id, index) => ({
+      id,
+      state:
+        index < activeIndex ? "complete" : index === activeIndex ? "active" : "upcoming",
+    } as const));
+  };
+
+  const installStepLabel = (step: InstallStep): string => {
+    switch (step) {
+      case "source":
+        return t("installStore.stepSource");
+      case "configure":
+        return t("installStore.stepConfigure");
+      case "review":
+        return t("installStore.stepReview");
+    }
+  };
+
+  const selectedModuleDetails = () => {
+    const module = selectedModule();
+    if (!module) return undefined;
+    return (
+      <details
+        class="iv-module-details"
+        data-testid="install-module-requirements"
+      >
+        <summary>
+          {t("installStore.moduleRequirements")} · <code>{module.path}</code>
+        </summary>
+        <Show
+          when={module.rootProviderRequirements.length > 0}
+          fallback={<p>{t("common.none")}</p>}
+        >
+          <ul>
+            <For each={module.rootProviderRequirements}>
+              {(requirement) => (
+                <li>
+                  {t("installStore.moduleRequirement", {
+                    source: requirement.source,
+                    module: requirement.moduleLocalName,
+                    alias: requirement.childAlias
+                      ? ` (${requirement.childAlias})`
+                      : "",
+                    version: requirement.version
+                      ? `v${requirement.version}`
+                      : "",
+                  })}
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+      </details>
+    );
+  };
 
   const sourceCandidates = () =>
     sourceConnections().filter(
@@ -638,16 +668,14 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
   const validateBasic = (): string | undefined => {
     if (!gitUrl().trim()) return t("installStore.invalidSource");
-    try {
-      const parsed = new URL(gitUrl().trim());
-      if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
-        return t("installStore.invalidSource");
-      }
-    } catch {
+    if (!isSafeHttpsGitUrl(gitUrl().trim())) {
       return t("installStore.invalidSource");
     }
     if (!CAPSULE_NAME_PATTERN.test(name().trim())) {
       return t("installStore.invalidName");
+    }
+    if (!isCanonicalRepositoryDirectoryPath(sourcePath())) {
+      return t("installStore.invalidSource");
     }
     if (modulePathExplicit() && !modulePath().trim()) {
       return t("installStore.moduleUnavailable");
@@ -693,19 +721,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   // Source/Capsule/Plan continue writing under the old workspace.
   let observedWorkspaceId = workspaceId();
   createEffect(() => {
-    // Auth/session routing can hydrate the query after this lazy view is first
-    // constructed. Keep the chooser selector reactive, while never sending a
-    // user back after the exact document has already been loaded.
-    if (
-      externalDocument() &&
-      !entryEvidence() &&
-      !listing() &&
-      (phase() === "browse" || phase() === "configure")
-    ) {
-      setPhase("entry-confirm");
-    }
-  });
-  createEffect(() => {
     const selected = currentWorkspaceId();
     if (selected === observedWorkspaceId) return;
     observedWorkspaceId = selected;
@@ -715,8 +730,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setSourceConnections([]);
     setProviderConnections([]);
     // Hydrating the persisted Workspace must not erase a path explicitly
-    // supplied by a direct Git/CapsuleSourceOptions handoff. The Source and
-    // manifest catalog are discarded, but the user's module authority stays
+    // supplied by a direct Git handoff. The Source and module catalog are
+    // discarded, but the user's module hint stays
     // attached to this install attempt and is revalidated against the new
     // immutable snapshot below.
     resetPreparedSource({ preserveModuleSelection: true });
@@ -729,11 +744,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setListing(selected);
     setGitUrl(selected.source.url);
     setGitRef("");
+    setSourcePath(".");
     setModulePath(".");
     setModulePathExplicit(false);
     setName(slugInputValue(selected.suggestedName));
     setSourceAuthConnectionId("");
-    setEntryEvidence(undefined);
     setError(undefined);
     setPhase("configure");
   };
@@ -747,7 +762,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     // confirm another declared directory without refetching bytes.
     resetCompiledPreparation();
     setModulePath(path);
-    setModulePathExplicit(false);
+    setModulePathExplicit(true);
     setModuleSelectionConfirmed(false);
     setError(undefined);
   };
@@ -830,6 +845,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           sourceId: preparedSourceId,
           gitUrl: gitUrl().trim(),
           ref: gitRef().trim(),
+          sourcePath: sourcePath(),
           resolveAbsentRefToStableSemver: listing() !== null,
           name: name().trim(),
           ...(sourceAuthConnectionId()
@@ -869,8 +885,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       }
 
       // Module selection is sourced exclusively from the immutable repository
-      // manifest. Fetch it before compatibility so no source URL metadata can
-      // choose a module directory or policy branch.
+      // scan. Fetch it before compatibility so no Source default or Store
+      // metadata can choose a module directory or policy branch.
       if (
         preparedSourceId &&
         preparedSourceSnapshotId &&
@@ -897,19 +913,15 @@ function Inner(props: { readonly installingPrincipalId: string }) {
             setPhase("configure");
             return;
           }
-          if (catalog.status === "absent") {
-            // A URL-only plain Git flow keeps the historical Source default
-            // when no repository manifest exists. An explicit path has no
-            // manifest authority and is rejected before compatibility.
-            if (modulePathExplicit()) {
-              setError(t("installStore.moduleUnavailable"));
-              setPhase("configure");
-              return;
-            }
-            setModulePath(".");
-            setModuleSelectionConfirmed(true);
-          } else if (catalog.status !== "ready") {
+          if (catalog.status !== "ready") {
             setError(t("installStore.moduleUnavailable"));
+            setPhase("configure");
+            return;
+          }
+          if (catalog.modules.length === 0) {
+            // An empty ready scan is a valid observation, but there is no
+            // executable OpenTofu root to install from this revision.
+            setError(t("installStore.moduleMissing"));
             setPhase("configure");
             return;
           } else if (modulePathExplicit()) {
@@ -922,24 +934,24 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               setPhase("configure");
               return;
             }
-            // Preserve an explicit direct/CapsuleSourceOptions path exactly
-            // after canonical validation against the manifest own key.
+            // Preserve an explicit direct Git path exactly after canonical
+            // validation against the immutable scan.
             setModulePath(selected.path);
             setModuleSelectionConfirmed(true);
           } else if (catalog.modules.length === 1) {
             setModulePath(catalog.modules[0]!.path);
-            // A single manifest module is the noninteractive default; keep the
-            // omitted-path signal so Store URL-only compile stays implicit.
+            // A single scanned module is the only noninteractive choice. Keep
+            // its path as explicit authority for Store and direct Git alike.
+            setModulePathExplicit(true);
             setModuleSelectionConfirmed(true);
           } else {
-            const preselected =
-              catalog.defaultModule ??
-              catalog.modules.find((module) => module.default)?.path ??
-              catalog.modules[0]?.path;
-            if (preselected) setModulePath(preselected);
+            // There is no server-side default for a multi-root repository.
+            // Leave the select empty until the user chooses one exact path.
+            setModulePath("");
+            setModulePathExplicit(false);
             setModuleSelectionConfirmed(false);
-            // A multi-module manifest requires an explicit user confirmation
-            // before compatibility can derive any setup or provider rows.
+            // A multi-module scan requires an explicit user confirmation before
+            // compatibility can derive setup or provider rows.
             setPhase("module-select");
             return;
           }
@@ -962,37 +974,57 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         return;
       }
       const selectedModuleCatalog = installModuleCatalog();
-      if (
-        selectedModuleCatalog.status === "invalid" ||
-        (selectedModuleCatalog.status === "absent" && modulePathExplicit())
-      ) {
+      if (selectedModuleCatalog.status === "invalid") {
         setError(t("installStore.moduleUnavailable"));
         setPhase("configure");
         return;
       }
-      if (modulePathExplicit() && !modulePath().trim()) {
+      if (
+        selectedModuleCatalog.status !== "ready" ||
+        selectedModuleCatalog.modules.length === 0
+      ) {
+        setError(t("installStore.moduleMissing"));
+        setPhase("configure");
+        return;
+      }
+      if (
+        selectedModuleCatalog.modules.length > 1 &&
+        !moduleSelectionConfirmed()
+      ) {
+        setPhase("module-select");
+        return;
+      }
+      if (!moduleSelectionConfirmed() || !modulePath().trim()) {
         setError(t("installStore.moduleUnavailable"));
         setPhase("configure");
         return;
       }
 
       setPreparationStage("compatibility");
+      const selectedModulePath = modulePath().trim();
+      if (!selectedModulePath || !moduleSelectionConfirmed()) {
+        setError(t("installStore.moduleUnavailable"));
+        setPhase("configure");
+        return;
+      }
       const result = await checkCapsuleCompatibility({
         workspaceId: workspace,
         sourceId: preparedSourceId,
         sourceSnapshotId: preparedSourceSnapshotId,
         gitUrl: gitUrl().trim(),
         ref: gitRef().trim(),
-        ...(modulePathExplicit()
-          ? { path: modulePath().trim() }
-          : {}),
+        sourcePath: sourcePath(),
+        // The exact scanned directory is the authority for both Store and
+        // direct Git installs. Source.defaultPath remains only the archive
+        // capture root and is never used as a module selection fallback.
+        path: selectedModulePath,
         name: name().trim(),
         ...(sourceAuthConnectionId()
           ? { authConnectionId: sourceAuthConnectionId() }
           : {}),
-        // Store is URL/presentation discovery only. Every immutable repository
+        // Store metadata is presentation only. Every immutable repository
         // snapshot gets the same repo-owned install compilation, including
-        // direct Git and CapsuleSourceOptions handoffs.
+        // direct Git installs.
         compileInstallUx: true,
         signal: controller.signal,
         timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS,
@@ -1206,9 +1238,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           environment: "production",
           sourceId: sourceId() ?? checked.sourceId!,
           installConfigId: config.id,
-          ...(modulePathExplicit() && modulePath().trim()
-            ? { modulePath: modulePath().trim() }
-            : {}),
+          // The scanned module path is the same for Store and direct Git. Do
+          // not let Source.defaultPath silently switch the root during create.
+          modulePath: modulePath().trim(),
           ...(vars ? { vars } : {}),
           ...(Object.keys(config.outputAllowlist).length > 0
             ? { outputAllowlist: config.outputAllowlist }
@@ -1259,96 +1291,17 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     }
   };
 
-  const chooseEntry = async (choice: EntryChoice) => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      let ref = choice.source.ref ?? "";
-      if (!ref) {
-        const workspace = await ensureWorkspace();
-        if (!workspaceIsCurrent(workspace)) return;
-        const resolved = await resolveStableSourceTag(
-          workspace,
-          choice.source.url,
-        );
-        if (!workspaceIsCurrent(workspace)) return;
-        ref = resolved.commit;
-      }
-      // Selecting a component is the explicit action that may create a
-      // Workspace when the visitor has none. The chooser itself never does.
-      resetPreparedSource();
-      setListing(null);
-      setGitUrl(choice.source.url);
-      setGitRef(ref);
-      setModulePath(choice.source.path || ".");
-      setModulePathExplicit(true);
-      setName(slugInputValue(choice.id));
-      setSourceAuthConnectionId("");
-      setPhase("configure");
-    } catch (cause) {
-      setError(friendlyError(cause, t).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const loadExternalEntry = async () => {
+  const loadTcsListing = async () => {
     const tcs = parseInitialTcsHandoff(location.search);
-    const options = parseCapsuleSourceOptionsInstallLink(location.search);
-    if (!tcs && !options) return;
-    setPhase("preparing");
+    if (!tcs) return;
     setBusy(true);
     try {
-      if (tcs) {
-        const selected = await fetchTcsListing(tcs.base, tcs.listingId);
-        if (!selected) throw new Error(t("installStore.listingUnavailable"));
-        chooseListing(selected);
-        return;
-      }
-      // Reading the immutable chooser document may use the already selected
-      // Workspace, but opening the link must never create one. Creation is
-      // reserved for the explicit component/service Add action.
-      const workspace = currentWorkspaceId();
-      if (!workspace) {
-        throw new Error(t("workspace.selectMessage"));
-      }
-      setWorkspaceId(workspace);
-      if (options) {
-        const { file, commit, resolvedTag } = await readSnapshotDocument({
-          workspaceId: workspace,
-          namePrefix: "options",
-          git: options.git,
-          ref: options.ref,
-          path: options.path,
-          read: readSourceSnapshotPresentationFile,
-        });
-        if (!workspaceIsCurrent(workspace)) return;
-        const parsed = parseCapsuleSourceOptionsText(file.text);
-        if (!parsed.ok) throw new Error(parsed.error);
-        setEntryEvidence({
-          kind: "source-options",
-          url: options.git,
-          ...(options.ref ? { requestedRef: options.ref } : {}),
-          ...(resolvedTag ? { resolvedTag } : {}),
-          commit,
-          path: options.path,
-          digest: file.digest,
-          sizeBytes: file.sizeBytes,
-        });
-        setEntryTitle(parsed.document.metadata.title);
-        setEntryChoices(
-          parsed.document.options.map((option: CapsuleSourceOption) => ({
-            id: option.id,
-            title: option.title,
-            ...(option.description ? { description: option.description } : {}),
-            source: option.source,
-          })),
-        );
-      }
-      setPhase("entry");
+      const selected = await fetchTcsListing(tcs.base, tcs.listingId);
+      if (!selected) throw new Error(t("installStore.listingUnavailable"));
+      chooseListing(selected);
     } catch (cause) {
       setError(friendlyError(cause, t).message);
-      setPhase(options ? "entry-confirm" : "browse");
+      setPhase("browse");
     } finally {
       setBusy(false);
     }
@@ -1359,6 +1312,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setListing(null);
     setGitUrl("");
     setGitRef("");
+    setSourcePath(".");
     setModulePath(".");
     setModulePathExplicit(false);
     setName("");
@@ -1379,17 +1333,16 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setStoreFeatureSelections({});
     setSourceAuthConnectionId("");
     setAutoSelectedProviderRows(new Set<string>());
-    setEntryEvidence(undefined);
     setInterfaceUrl(undefined);
     setError(undefined);
     setPhase("browse");
   };
 
   onMount(() => {
-    // TCS discovery is a read-only listing lookup. Repository chooser
-    // documents are different: reading one creates a Source and sync Run, so
-    // that work is reserved for the explicit confirmation button below.
-    if (parseInitialTcsHandoff(location.search)) void loadExternalEntry();
+    // TCS discovery is a read-only listing lookup. Source preparation creates
+    // the Source and sync Run, so that work is reserved for the explicit Add
+    // action below.
+    if (parseInitialTcsHandoff(location.search)) void loadTcsListing();
   });
 
   const sourceReturnPath = () =>
@@ -1397,6 +1350,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       installReturnPathFromPrefill({
         git: gitUrl(),
         ref: gitRef(),
+        sourcePath: sourcePath(),
         ...(modulePathExplicit() ? { path: modulePath() } : {}),
         name: name(),
       }),
@@ -1428,9 +1382,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setCapsuleId(undefined);
     setPlanRunId(undefined);
   };
-
-  const evidenceRef = (evidence: EntryEvidence): string =>
-    evidence.requestedRef ?? evidence.resolvedTag ?? evidence.commit;
 
   const finishInstallation = async () => {
     const attempt = ++completionAttempt;
@@ -1503,7 +1454,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         <Show
           when={
             phase() !== "browse" &&
-            phase() !== "entry-confirm" &&
             phase() !== "done"
           }
         >
@@ -1530,6 +1480,26 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           </div>
         )}
       </Show>
+
+      <nav
+        class="iv-steps"
+        aria-label={t("installStore.stepsLabel")}
+        data-testid="install-steps"
+      >
+        <ol>
+          <For each={installStepProgress()}>
+            {(step) => (
+              <li
+                data-install-step={step.id}
+                data-state={step.state}
+                aria-current={step.state === "active" ? "step" : undefined}
+              >
+                <span>{installStepLabel(step.id)}</span>
+              </li>
+            )}
+          </For>
+        </ol>
+      </nav>
 
       <Show when={phase() === "browse"}>
         <section class="iv-catalogue" aria-labelledby="iv-catalogue-title">
@@ -1569,109 +1539,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         </section>
       </Show>
 
-      <Show when={phase() === "entry-confirm" && externalDocument()}>
-        <section class="iv-workbench">
-          <Button
-            type="button"
-            variant="ghost"
-            icon={<ArrowLeft size={16} />}
-            onClick={reset}
-          >
-            {t("installStore.back")}
-          </Button>
-          <div class="iv-section-head">
-            <h2>{t("installStore.entryLoadTitle")}</h2>
-            <p>{t("installStore.entryLoadHint")}</p>
-          </div>
-          <aside class="iv-source-evidence" role="note">
-            <strong>
-              CapsuleSourceOptions
-            </strong>
-            <p>
-              <code>{externalDocument()?.git}</code>
-            </p>
-            <p>
-              ref{" "}
-              <code>{externalDocument()?.ref ?? "latest stable SemVer"}</code> ·
-              file <code>{externalDocument()?.path}</code>
-            </p>
-          </aside>
-          <Button
-            type="button"
-            variant="primary"
-            size="lg"
-            busy={busy()}
-            onClick={() => void loadExternalEntry()}
-          >
-            {t("installStore.entryLoad")}
-          </Button>
-        </section>
-      </Show>
-
-      <Show when={phase() === "entry"}>
-        <section class="iv-workbench">
-          <Button
-            type="button"
-            variant="ghost"
-            icon={<ArrowLeft size={16} />}
-            onClick={reset}
-          >
-            {t("installStore.back")}
-          </Button>
-          <div class="iv-section-head">
-            <h2>{entryTitle()}</h2>
-            <p>{t("installStore.entryHint")}</p>
-          </div>
-          <Show when={entryEvidence()}>
-            {(evidence) => (
-              <aside class="iv-source-evidence" role="note">
-                <strong>Immutable source evidence</strong>
-                <p>
-                  <code>{evidence().url}</code> @{" "}
-                  <code>{evidenceRef(evidence())}</code>
-                </p>
-                <p>
-                  commit <code>{evidence().commit}</code> · file{" "}
-                  <code>{evidence().path}</code>
-                </p>
-                <p>
-                  digest <code>{evidence().digest}</code>
-                  <Show when={evidence().sizeBytes !== undefined}>
-                    {" "}
-                    ({evidence().sizeBytes} bytes)
-                  </Show>
-                </p>
-                <p>Only the explicitly selected source below will be added.</p>
-              </aside>
-            )}
-          </Show>
-          <div class="iv-entry-grid">
-            <For each={entryChoices()}>
-              {(choice) => (
-                <article class="iv-entry-card">
-                  <div>
-                    <h3>{choice.title}</h3>
-                    <Show when={choice.description}>
-                      <p>{choice.description}</p>
-                    </Show>
-                    <code>{choice.source.url}</code>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="primary"
-                    busy={busy()}
-                    icon={<ChevronRight size={16} />}
-                    onClick={() => void chooseEntry(choice)}
-                  >
-                    {t("installStore.select")}
-                  </Button>
-                </article>
-              )}
-            </For>
-          </div>
-        </section>
-      </Show>
-
       <Show when={phase() === "module-select"}>
         <section
           class="iv-workbench"
@@ -1704,6 +1571,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                   chooseInstallModule(event.currentTarget.value)
                 }
               >
+                <option value="">{t("installStore.moduleChoose")}</option>
                 <For each={
                   installModuleCatalog().status === "ready"
                     ? installModuleCatalog().modules
@@ -1715,7 +1583,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                       selected={module.path === modulePath()}
                     >
                       {module.path}
-                      {module.default ? " (default)" : ""}
                     </option>
                   )}
                 </For>
@@ -1751,26 +1618,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               <p>{t("installStore.configureHint")}</p>
             </div>
           </div>
+          {selectedModuleDetails()}
           <Show when={installModulesLoading()}>
             <aside class="iv-setup-note" role="status">
               {t("installStore.moduleHint")}
             </aside>
-          </Show>
-          <Show when={entryEvidence()}>
-            {(evidence) => (
-              <aside class="iv-source-evidence" role="note">
-                <strong>Source evidence retained from the chooser</strong>
-                <p>
-                  <code>{evidence().url}</code> @{" "}
-                  <code>{evidenceRef(evidence())}</code>
-                </p>
-                <p>
-                  immutable commit <code>{evidence().commit}</code> · path{" "}
-                  <code>{evidence().path}</code>
-                </p>
-                <p>Review this evidence before adding the selected service.</p>
-              </aside>
-            )}
           </Show>
           <Show when={compatibilityBlocker()}>
             {(result) => (
@@ -1810,7 +1662,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               />
             </FormField>
             <Show when={!listing()}>
-              <details class="iv-advanced" open>
+              <details class="iv-advanced">
                 <summary>{t("installStore.sourceDetails")}</summary>
                 <div class="iv-fields">
                   <FormField label={t("installStore.sourceUrl")} required>
@@ -1833,6 +1685,15 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                     />
                   </FormField>
                   <FormField label={t("installStore.sourcePath")}>
+                    <Input
+                      value={sourcePath()}
+                      onInput={(event) => {
+                        resetPreparedSource();
+                        setSourcePath(event.currentTarget.value);
+                      }}
+                    />
+                  </FormField>
+                  <FormField label={t("installStore.modulePath")}>
                     <Input
                       value={modulePath()}
                       onInput={(event) => {
@@ -1902,6 +1763,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
       <Show when={phase() === "connections"}>
         <section class="iv-workbench">
+          {selectedModuleDetails()}
           <div class="iv-section-head">
             <PlugZap size={24} aria-hidden="true" />
             <h2>
@@ -1985,6 +1847,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
       <Show when={phase() === "setup"}>
         <section class="iv-workbench">
+          {selectedModuleDetails()}
           {autoSelectedDestinationSummary()}
           <div class="iv-section-head">
             <h2>{t("installStore.setupTitle")}</h2>

@@ -102,7 +102,6 @@ describe("repository install UX compiler", () => {
       apiVersion: "takosumi.com/v2.2",
       kind: "Repository",
       install: {
-        defaultModule: ".",
         modules: {
           ".": {
             inputs: [
@@ -354,7 +353,6 @@ describe("repository install UX compiler", () => {
       apiVersion: "takosumi.com/v2.3",
       kind: "Repository",
       install: {
-        defaultModule: ".",
         modules: {
           ".": {
             inputs: [],
@@ -461,7 +459,6 @@ describe("repository install UX compiler", () => {
       apiVersion: "takosumi.com/v2.2",
       kind: "Repository",
       install: {
-        defaultModule: ".",
         modules: {
           ".": {
             inputs: [],
@@ -507,7 +504,6 @@ describe("repository install UX compiler", () => {
       apiVersion: "takosumi.com/v2.2",
       kind: "Repository",
       install: {
-        defaultModule: ".",
         modules: {
           ".": {
             inputs: [],
@@ -845,7 +841,6 @@ describe("repository install UX compiler", () => {
       apiVersion: "takosumi.com/v2.1",
       kind: "Repository",
       install: {
-        defaultModule: ".",
         modules: {
           ".": {
             inputs: [],

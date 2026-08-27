@@ -12,7 +12,6 @@
   },
   "additionalProperties": false,
   "x-takosumi-semanticConstraints": [
-    "install.defaultModule, when present, equals an own canonical key of install.modules",
     "each module may declare at most 8 requires entries whose kind is secret.generated",
     "JSON values in Interface documents and literal inputs are limited to recursive depth 32",
     "module input names, roles, requirement singleton kinds, delivery targets, feature ids, and feature input claims are unique within their documented scopes",
@@ -517,7 +516,6 @@
       "type": "object",
       "required": ["modules"],
       "properties": {
-        "defaultModule": { "$ref": "#/$defs/modulePath" },
         "modules": {
           "type": "object",
           "minProperties": 1,

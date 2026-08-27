@@ -120,16 +120,21 @@ export function providerBindingsFromResolved(
 ): readonly RootProviderBinding[] {
   const providers: RootProviderBinding[] = [];
   for (const entry of resolved) {
+    if (entry.alias !== undefined || entry.moduleLocalName === undefined) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        entry.alias !== undefined
+          ? `deprecated ambiguous ProviderBinding alias cannot compile an exact root provider binding: ${entry.alias}`
+          : `ProviderBinding ${entry.provider} must declare moduleLocalName before it can compile an exact root provider binding`,
+      );
+    }
     const provider = entry.provider;
     const configuration = entry.connection?.scopeHints?.providerConfig;
     providers.push({
       provider,
-      ...(entry.moduleLocalName
-        ? { moduleLocalName: entry.moduleLocalName }
-        : {}),
+      moduleLocalName: entry.moduleLocalName,
       ...(entry.childAlias ? { childAlias: entry.childAlias } : {}),
       ...(entry.rootAlias ? { rootAlias: entry.rootAlias } : {}),
-      ...(entry.alias ? { alias: entry.alias } : {}),
       ...(configuration && Object.keys(configuration).length > 0
         ? { configuration }
         : {}),

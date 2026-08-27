@@ -535,7 +535,8 @@ function revisionFixture(
         modulePath: "deploy/app",
         level: options.compatibilityLevel ?? "ready",
         findings: [],
-        providers: [],
+        providerPackages: [],
+        rootProviderRequirements: [],
         resources: [],
         dataSources: [],
         provisioners: [],
@@ -719,7 +720,19 @@ function revisionFixture(
         archiveRef: current.archiveRef,
         archiveDigest: `sha256:${"b".repeat(64)}`,
         archiveSizeBytes: 42,
+        repositoryInstallMetadata: { status: "absent" },
         repositoryManifest: { status: "absent" },
+        repositoryModules: {
+          status: "ready",
+          scopePath: current.path,
+          modules: [
+            {
+              path: ".",
+              providerPackages: [],
+              rootProviderRequirements: [],
+            },
+          ],
+        },
         fetchedByRunId: current.id,
         fetchedAt: new Date().toISOString(),
       });

@@ -5,7 +5,12 @@ export interface OpenTofuSourceFile {
   readonly text: string;
 }
 
-export interface OpenTofuProviderRequirement {
+export interface OpenTofuProviderPackage {
+  readonly source: string;
+  readonly version?: string;
+}
+
+export interface OpenTofuRootProviderRequirement {
   readonly source: string;
   readonly moduleLocalName: string;
   readonly childAlias?: string;
@@ -21,12 +26,18 @@ export type OpenTofuConfigurationDiagnosticCode =
   | "json_invalid"
   | "json_semantics_unsupported"
   | "provider_declaration_incomplete"
+  | "provider_version_constraints_conflict"
+  | "provider_usage_incomplete"
   | "local_module_source_incomplete"
+  | "remote_module_source_unresolved"
   | "local_module_source_escapes"
   | "local_module_source_missing"
   | "module_directory_unreadable"
   | "source_path_invalid"
   | "duplicate_source_file"
+  | "module_candidate_limit_exceeded"
+  | "module_execution_layout_unsupported"
+  | "module_topology_incomplete"
   | "dependency_lock_incomplete";
 
 export interface OpenTofuConfigurationDiagnostic {
@@ -40,7 +51,10 @@ export interface OpenTofuConfigurationDiagnostic {
 export interface OpenTofuConfigurationGraph {
   readonly complete: boolean;
   readonly files: readonly OpenTofuSourceFile[];
-  readonly requirements: readonly OpenTofuProviderRequirement[];
+  /** Reachable package set used only for install policy, mirrors, and locks. */
+  readonly providerPackages: readonly OpenTofuProviderPackage[];
+  /** Exact provider identities declared or used by the selected root directory. */
+  readonly rootProviderRequirements: readonly OpenTofuRootProviderRequirement[];
   readonly diagnostics: readonly OpenTofuConfigurationDiagnostic[];
 }
 
@@ -83,6 +97,26 @@ export interface OpenTofuConfigurationFilesInput {
   readonly directories?: readonly string[];
   readonly limits?: OpenTofuConfigurationLimits;
 }
+
+export interface OpenTofuModuleCandidate {
+  readonly path: string;
+  readonly providerPackages: readonly OpenTofuProviderPackage[];
+  readonly rootProviderRequirements: readonly OpenTofuRootProviderRequirement[];
+}
+
+export interface OpenTofuModuleDiscovery {
+  readonly complete: boolean;
+  readonly modules: readonly OpenTofuModuleCandidate[];
+  readonly diagnostics: readonly OpenTofuConfigurationDiagnostic[];
+}
+
+export interface OpenTofuModuleDiscoveryInput {
+  readonly files: readonly OpenTofuSourceFile[];
+  readonly limits?: OpenTofuConfigurationLimits;
+  readonly maxModules?: number;
+}
+
+export const DEFAULT_OPENTOFU_MODULE_CANDIDATE_LIMIT = 32;
 
 export function openTofuConfigurationFileKind(
   path: string,
@@ -180,6 +214,202 @@ export function compileOpenTofuConfigurationGraph(
   return compiler.finish();
 }
 
+/**
+ * Discover independently installable root modules from one bounded Git tree.
+ *
+ * A directory containing OpenTofu configuration is a candidate unless another
+ * configuration directory reaches it through a statically parsed local module
+ * edge. Provider requirements are then compiled from each candidate and all of
+ * its reachable local children. Dynamic/ambiguous module sources and any
+ * global scan cap fail the whole observation closed: a partial candidate list
+ * must never become install-path authority.
+ */
+export function discoverOpenTofuModules(
+  input: OpenTofuModuleDiscoveryInput,
+): OpenTofuModuleDiscovery {
+  const limits = input.limits ?? DEFAULT_OPENTOFU_CONFIGURATION_LIMITS;
+  assertLimits(limits);
+  const maxModules =
+    input.maxModules ?? DEFAULT_OPENTOFU_MODULE_CANDIDATE_LIMIT;
+  if (!Number.isSafeInteger(maxModules) || maxModules <= 0) {
+    throw new Error("OpenTofu module candidate limit must be a positive integer");
+  }
+
+  const normalized: OpenTofuSourceFile[] = [];
+  const diagnostics: OpenTofuConfigurationDiagnostic[] = [];
+  const seenPaths = new Set<string>();
+  let totalBytes = 0;
+  for (const file of input.files) {
+    if (openTofuConfigurationFileKind(file.path.replace(/\\/gu, "/")) === undefined) {
+      continue;
+    }
+    let path: string;
+    try {
+      path = normalizeFilePath(file.path);
+    } catch {
+      diagnostics.push({
+        code: "source_path_invalid",
+        path: file.path,
+        message: "OpenTofu source file path must stay relative to the source records.",
+        fatal: true,
+      });
+      continue;
+    }
+    if (seenPaths.has(path)) {
+      diagnostics.push({
+        code: "duplicate_source_file",
+        path,
+        message: `OpenTofu source file ${path} was observed more than once.`,
+        fatal: true,
+      });
+      continue;
+    }
+    seenPaths.add(path);
+    const bytes = new TextEncoder().encode(file.text).byteLength;
+    if (normalized.length >= limits.maxFiles) {
+      diagnostics.push({
+        code: "file_limit_exceeded",
+        path,
+        message: `OpenTofu module discovery exceeds ${limits.maxFiles} files.`,
+        fatal: true,
+      });
+      break;
+    }
+    if (bytes > limits.maxFileBytes) {
+      diagnostics.push({
+        code: "file_too_large",
+        path,
+        message: `OpenTofu configuration file ${path} exceeds ${limits.maxFileBytes} bytes.`,
+        fatal: true,
+      });
+      break;
+    }
+    if (totalBytes + bytes > limits.maxTotalBytes) {
+      diagnostics.push({
+        code: "total_bytes_exceeded",
+        path,
+        message: `OpenTofu module discovery exceeds ${limits.maxTotalBytes} bytes.`,
+        fatal: true,
+      });
+      break;
+    }
+    normalized.push({ path, text: file.text });
+    totalBytes += bytes;
+  }
+  if (diagnostics.some((diagnostic) => diagnostic.fatal)) {
+    return incompleteModuleDiscovery(diagnostics);
+  }
+  normalized.sort((left, right) => compareCodePoints(left.path, right.path));
+  const directories = [...new Set(normalized.map((file) => dirname(file.path)))]
+    .sort(compareCodePoints);
+  if (directories.length === 0) {
+    return { complete: true, modules: [], diagnostics: [] };
+  }
+
+  const directorySet = new Set(directories);
+  const childDirectories = new Set<string>();
+  const graphs = new Map<string, OpenTofuConfigurationGraph>();
+  for (const directory of directories) {
+    const graph = compileOpenTofuConfigurationGraph({
+      selectedModuleDirectory: directory,
+      files: normalized,
+      directories,
+      limits,
+    });
+    graphs.set(directory, graph);
+    diagnostics.push(...graph.diagnostics);
+    for (const file of graph.files) {
+      const reachableDirectory = dirname(file.path);
+      if (
+        reachableDirectory !== directory &&
+        directorySet.has(reachableDirectory)
+      ) {
+        childDirectories.add(reachableDirectory);
+      }
+    }
+  }
+  if (diagnostics.some((diagnostic) => diagnostic.fatal)) {
+    return incompleteModuleDiscovery(diagnostics);
+  }
+
+  const roots = directories.filter((directory) => !childDirectories.has(directory));
+  if (roots.length === 0) {
+    return incompleteModuleDiscovery([
+      ...diagnostics,
+      {
+        code: "module_topology_incomplete",
+        path: ".",
+        message: "OpenTofu module discovery found no unambiguous root module.",
+        fatal: true,
+      },
+    ]);
+  }
+  if (roots.length > maxModules) {
+    return incompleteModuleDiscovery([
+      ...diagnostics,
+      {
+        code: "module_candidate_limit_exceeded",
+        path: ".",
+        message: `OpenTofu module discovery exceeds ${maxModules} root modules.`,
+        fatal: true,
+      },
+    ]);
+  }
+  for (const root of roots) {
+    if (root === ".") continue;
+    const prefix = `${root}/`;
+    const outside = graphs
+      .get(root)!
+      .files.find((file) => {
+        const directory = dirname(file.path);
+        return directory !== root && !directory.startsWith(prefix);
+      });
+    if (outside) {
+      return incompleteModuleDiscovery([
+        ...diagnostics,
+        {
+          code: "module_execution_layout_unsupported",
+          path: outside.path,
+          message:
+            "A discovered module reaches a local child outside its directory and cannot be materialized by the current generated-root runner.",
+          fatal: true,
+        },
+      ]);
+    }
+  }
+  return {
+    complete: true,
+    modules: roots.map((path) => ({
+      path,
+      providerPackages: graphs.get(path)!.providerPackages,
+      rootProviderRequirements: graphs.get(path)!.rootProviderRequirements,
+    })),
+    diagnostics: [],
+  };
+}
+
+function incompleteModuleDiscovery(
+  diagnostics: readonly OpenTofuConfigurationDiagnostic[],
+): OpenTofuModuleDiscovery {
+  const unique = new Map<string, OpenTofuConfigurationDiagnostic>();
+  for (const diagnostic of diagnostics) {
+    unique.set(
+      `${diagnostic.path}\0${diagnostic.code}\0${diagnostic.message}`,
+      diagnostic,
+    );
+  }
+  return {
+    complete: false,
+    modules: [],
+    diagnostics: [...unique.values()].sort(
+      (left, right) =>
+        compareCodePoints(left.path, right.path) ||
+        compareCodePoints(left.code, right.code) ||
+        compareCodePoints(left.message, right.message),
+    ),
+  };
+}
+
 /** Same compiler with an injected directory loader for the runner filesystem. */
 export async function compileOpenTofuConfigurationGraphFromLoader(
   input: OpenTofuConfigurationLoaderInput,
@@ -211,6 +441,7 @@ export async function compileOpenTofuConfigurationGraphFromLoader(
 }
 
 interface ProviderDeclaration {
+  readonly path: string;
   readonly source: string;
   readonly moduleLocalName: string;
   readonly childAliases: readonly string[];
@@ -219,6 +450,7 @@ interface ProviderDeclaration {
 
 interface CompiledDirectory {
   readonly declarations: readonly ProviderDeclaration[];
+  readonly providerLocalNames: readonly string[];
   readonly localModuleSources: readonly Readonly<{
     source: string;
     path: string;
@@ -233,7 +465,7 @@ class ConfigurationGraphCompiler {
   readonly #queued = new Set<string>();
   readonly #visited = new Set<string>();
   readonly #files: OpenTofuSourceFile[] = [];
-  readonly #declarations: ProviderDeclaration[] = [];
+  readonly #compiledDirectories = new Map<string, CompiledDirectory>();
   readonly #diagnostics: OpenTofuConfigurationDiagnostic[] = [];
   #totalBytes = 0;
   currentDirectory: string | undefined;
@@ -355,7 +587,7 @@ class ConfigurationGraphCompiler {
       this.#totalBytes += bytes;
     }
     const compiled = compileModuleDirectory(files);
-    this.#declarations.push(...compiled.declarations);
+    this.#compiledDirectories.set(current, compiled);
     this.#diagnostics.push(...compiled.diagnostics);
     for (const local of compiled.localModuleSources) {
       const resolved = resolveLocalModuleDirectory(current, local.source);
@@ -377,13 +609,23 @@ class ConfigurationGraphCompiler {
   }
 
   finish(): OpenTofuConfigurationGraph {
+    const reachableDeclarations = [...this.#compiledDirectories.values()]
+      .flatMap((directory) => directory.declarations);
+    const selectedDeclarations =
+      this.#compiledDirectories.get(this.#selected)?.declarations ?? [];
+    const diagnostics = [
+      ...this.#diagnostics,
+      ...conflictingExactProviderVersionDiagnostics(reachableDeclarations),
+    ];
     return {
-      complete: !this.#diagnostics.some((diagnostic) => diagnostic.fatal),
+      complete: !diagnostics.some((diagnostic) => diagnostic.fatal),
       files: [...this.#files].sort((left, right) =>
         compareCodePoints(left.path, right.path),
       ),
-      requirements: mergeProviderDeclarations(this.#declarations),
-      diagnostics: [...this.#diagnostics].sort(
+      providerPackages: mergeProviderPackages(reachableDeclarations),
+      rootProviderRequirements:
+        mergeRootProviderRequirements(selectedDeclarations),
+      diagnostics: diagnostics.sort(
         (left, right) =>
           compareCodePoints(left.path, right.path) ||
           compareCodePoints(left.code, right.code) ||
@@ -397,6 +639,7 @@ function compileModuleDirectory(
   files: readonly OpenTofuSourceFile[],
 ): CompiledDirectory {
   const declarations: ProviderDeclaration[] = [];
+  const providerLocalNames = new Set<string>();
   const localModuleSources: Array<{ source: string; path: string }> = [];
   const diagnostics: OpenTofuConfigurationDiagnostic[] = [];
   for (const file of files) {
@@ -404,6 +647,9 @@ function compileModuleDirectory(
     if (kind === "json") {
       const compiled = compileJsonFile(file);
       declarations.push(...compiled.declarations);
+      for (const localName of compiled.providerLocalNames) {
+        providerLocalNames.add(localName);
+      }
       localModuleSources.push(...compiled.localModuleSources);
       diagnostics.push(...compiled.diagnostics);
       continue;
@@ -411,15 +657,46 @@ function compileModuleDirectory(
     if (kind === "hcl") {
       const compiled = compileHclFile(file);
       declarations.push(...compiled.declarations);
+      for (const localName of compiled.providerLocalNames) {
+        providerLocalNames.add(localName);
+      }
       localModuleSources.push(...compiled.localModuleSources);
       diagnostics.push(...compiled.diagnostics);
     }
   }
-  return { declarations, localModuleSources, diagnostics };
+  const declaredLocalNames = new Set(
+    declarations.map((declaration) => declaration.moduleLocalName),
+  );
+  for (const localName of [...providerLocalNames].sort(compareCodePoints)) {
+    if (declaredLocalNames.has(localName)) continue;
+    const source = implicitProviderSource(localName);
+    if (!source) {
+      diagnostics.push({
+        code: "provider_usage_incomplete",
+        path: files[0]?.path ?? ".",
+        message: `Implicit provider ${localName} could not be mapped to an exact source.`,
+        fatal: true,
+      });
+      continue;
+    }
+    declarations.push({
+      path: files[0]?.path ?? ".",
+      source,
+      moduleLocalName: localName,
+      childAliases: [],
+    });
+  }
+  return {
+    declarations,
+    providerLocalNames: [...providerLocalNames].sort(compareCodePoints),
+    localModuleSources,
+    diagnostics,
+  };
 }
 
 function compileHclFile(file: OpenTofuSourceFile): CompiledDirectory {
   const declarations: ProviderDeclaration[] = [];
+  const providerLocalNames = new Set<string>();
   const localModuleSources: Array<{ source: string; path: string }> = [];
   const diagnostics: OpenTofuConfigurationDiagnostic[] = [];
   const masked = maskHclCommentsAndHeredocs(file.text);
@@ -430,11 +707,28 @@ function compileHclFile(file: OpenTofuSourceFile): CompiledDirectory {
       message: "HCL comments, strings, heredocs, or delimiters are incomplete.",
       fatal: true,
     });
-    return { declarations, localModuleSources, diagnostics };
+    return {
+      declarations,
+      providerLocalNames: [],
+      localModuleSources,
+      diagnostics,
+    };
   }
   const terraform = topLevelBlocks(masked.text, "terraform", 0);
   const modules = topLevelBlocks(masked.text, "module", 1);
-  if (!terraform.complete || !modules.complete) {
+  const providerBlocks = topLevelBlocks(masked.text, "provider", 1);
+  const providerConsumers = ["resource", "data", "ephemeral"].map(
+    (blockType) => ({
+      blockType,
+      result: topLevelBlocks(masked.text, blockType, 2),
+    }),
+  );
+  if (
+    !terraform.complete ||
+    !modules.complete ||
+    !providerBlocks.complete ||
+    providerConsumers.some(({ result }) => !result.complete)
+  ) {
     diagnostics.push({
       code: "hcl_incomplete",
       path: file.path,
@@ -467,7 +761,10 @@ function compileHclFile(file: OpenTofuSourceFile): CompiledDirectory {
         });
       }
       for (const assignment of assignments.assignments) {
-        const declaration = providerDeclarationFromHclAssignment(assignment);
+        const declaration = providerDeclarationFromHclAssignment(
+          assignment,
+          file.path,
+        );
         if (!declaration) {
           diagnostics.push({
             code: "provider_declaration_incomplete",
@@ -481,9 +778,55 @@ function compileHclFile(file: OpenTofuSourceFile): CompiledDirectory {
       }
     }
   }
+  for (const block of providerBlocks.blocks) {
+    const localName = block.labels[0];
+    if (!localName || !PROVIDER_LOCAL_NAME.test(localName)) {
+      diagnostics.push({
+        code: "provider_usage_incomplete",
+        path: file.path,
+        message: "A provider configuration local name could not be parsed exactly.",
+        fatal: true,
+      });
+      continue;
+    }
+    providerLocalNames.add(localName);
+  }
+  for (const { blockType, result } of providerConsumers) {
+    for (const block of result.blocks) {
+      const resourceType = block.labels[0];
+      const implicitLocalName = resourceType
+        ? providerLocalNameFromResourceType(resourceType)
+        : undefined;
+      const explicit = topLevelProviderReference(block.body);
+      if (explicit.status === "invalid") {
+        diagnostics.push({
+          code: "provider_usage_incomplete",
+          path: file.path,
+          message: `${blockType} ${resourceType ?? "<unknown>"} has a provider reference that could not be parsed exactly.`,
+          fatal: true,
+        });
+        continue;
+      }
+      const localName =
+        explicit.status === "present" ? explicit.localName : implicitLocalName;
+      if (!localName) {
+        diagnostics.push({
+          code: "provider_usage_incomplete",
+          path: file.path,
+          message: `${blockType} ${resourceType ?? "<unknown>"} does not identify an exact provider local name.`,
+          fatal: true,
+        });
+        continue;
+      }
+      providerLocalNames.add(localName);
+    }
+  }
+  for (const localName of providerFunctionLocalNames(masked.text)) {
+    providerLocalNames.add(localName);
+  }
   for (const moduleBlock of modules.blocks) {
-    const assignments = topLevelAssignments(moduleBlock.body);
-    if (!assignments.complete) {
+    const source = topLevelAssignmentExpression(moduleBlock.body, "source");
+    if (source.status === "invalid") {
       diagnostics.push({
         code: "local_module_source_incomplete",
         path: file.path,
@@ -492,10 +835,7 @@ function compileHclFile(file: OpenTofuSourceFile): CompiledDirectory {
       });
       continue;
     }
-    const source = assignments.assignments.find(
-      (assignment) => assignment.name === "source",
-    );
-    if (!source) {
+    if (source.status === "absent") {
       diagnostics.push({
         code: "local_module_source_incomplete",
         path: file.path,
@@ -516,13 +856,26 @@ function compileHclFile(file: OpenTofuSourceFile): CompiledDirectory {
     }
     if (isLocalModuleSource(value)) {
       localModuleSources.push({ source: value, path: file.path });
+    } else {
+      diagnostics.push({
+        code: "remote_module_source_unresolved",
+        path: file.path,
+        message: `Module ${moduleBlock.labels[0] ?? "<unknown>"} uses a non-local source whose provider requirements were not observed.`,
+        fatal: true,
+      });
     }
   }
-  return { declarations, localModuleSources, diagnostics };
+  return {
+    declarations,
+    providerLocalNames: [...providerLocalNames].sort(compareCodePoints),
+    localModuleSources,
+    diagnostics,
+  };
 }
 
 function providerDeclarationFromHclAssignment(
   assignment: Assignment,
+  path: string,
 ): ProviderDeclaration | undefined {
   const localName = assignment.name;
   if (!PROVIDER_LOCAL_NAME.test(localName)) return undefined;
@@ -575,6 +928,7 @@ function providerDeclarationFromHclAssignment(
   const canonical = canonicalProviderAddress(source);
   if (!canonical) return undefined;
   return {
+    path,
     source: canonical,
     moduleLocalName: localName,
     childAliases,
@@ -584,6 +938,7 @@ function providerDeclarationFromHclAssignment(
 
 function compileJsonFile(file: OpenTofuSourceFile): CompiledDirectory {
   const declarations: ProviderDeclaration[] = [];
+  const providerLocalNames = new Set<string>();
   const localModuleSources: Array<{ source: string; path: string }> = [];
   const diagnostics: OpenTofuConfigurationDiagnostic[] = [];
   let value: unknown;
@@ -596,7 +951,12 @@ function compileJsonFile(file: OpenTofuSourceFile): CompiledDirectory {
       message: "OpenTofu JSON configuration is not valid JSON.",
       fatal: true,
     });
-    return { declarations, localModuleSources, diagnostics };
+    return {
+      declarations,
+      providerLocalNames: [],
+      localModuleSources,
+      diagnostics,
+    };
   }
   if (!isRecord(value)) {
     diagnostics.push({
@@ -605,7 +965,12 @@ function compileJsonFile(file: OpenTofuSourceFile): CompiledDirectory {
       message: "OpenTofu JSON configuration root must be an object.",
       fatal: true,
     });
-    return { declarations, localModuleSources, diagnostics };
+    return {
+      declarations,
+      providerLocalNames: [],
+      localModuleSources,
+      diagnostics,
+    };
   }
   diagnostics.push({
     code: "json_semantics_unsupported",
@@ -620,6 +985,7 @@ function compileJsonFile(file: OpenTofuSourceFile): CompiledDirectory {
         const declaration = providerDeclarationFromJson(
           localName,
           specification,
+          file.path,
         );
         if (!declaration) {
           diagnostics.push({
@@ -633,6 +999,58 @@ function compileJsonFile(file: OpenTofuSourceFile): CompiledDirectory {
         declarations.push(declaration);
       }
     }
+  }
+  for (const providers of blockObjects(value.provider)) {
+    for (const localName of Object.keys(providers)) {
+      if (!PROVIDER_LOCAL_NAME.test(localName)) {
+        diagnostics.push({
+          code: "provider_usage_incomplete",
+          path: file.path,
+          message: "A JSON provider configuration local name could not be parsed exactly.",
+          fatal: true,
+        });
+        continue;
+      }
+      providerLocalNames.add(localName);
+    }
+  }
+  for (const blockType of ["resource", "data", "ephemeral"] as const) {
+    for (const collections of blockObjects(value[blockType])) {
+      for (const [resourceType, rawInstances] of Object.entries(collections)) {
+        const implicitLocalName = providerLocalNameFromResourceType(resourceType);
+        for (const instances of blockObjects(rawInstances)) {
+          for (const body of Object.values(instances).flatMap(blockObjects)) {
+            const explicit = jsonProviderReference(body.provider);
+            if (explicit.status === "invalid") {
+              diagnostics.push({
+                code: "provider_usage_incomplete",
+                path: file.path,
+                message: `${blockType} ${resourceType} has a JSON provider reference that could not be parsed exactly.`,
+                fatal: true,
+              });
+              continue;
+            }
+            const localName =
+              explicit.status === "present"
+                ? explicit.localName
+                : implicitLocalName;
+            if (!localName) {
+              diagnostics.push({
+                code: "provider_usage_incomplete",
+                path: file.path,
+                message: `${blockType} ${resourceType} does not identify an exact provider local name.`,
+                fatal: true,
+              });
+              continue;
+            }
+            providerLocalNames.add(localName);
+          }
+        }
+      }
+    }
+  }
+  for (const localName of jsonProviderFunctionLocalNames(value)) {
+    providerLocalNames.add(localName);
   }
   for (const modules of blockObjects(value.module)) {
     for (const [name, body] of Object.entries(modules)) {
@@ -657,16 +1075,29 @@ function compileJsonFile(file: OpenTofuSourceFile): CompiledDirectory {
         }
         if (isLocalModuleSource(moduleBody.source)) {
           localModuleSources.push({ source: moduleBody.source, path: file.path });
+        } else {
+          diagnostics.push({
+            code: "remote_module_source_unresolved",
+            path: file.path,
+            message: `Module ${name} uses a non-local source whose provider requirements were not observed.`,
+            fatal: true,
+          });
         }
       }
     }
   }
-  return { declarations, localModuleSources, diagnostics };
+  return {
+    declarations,
+    providerLocalNames: [...providerLocalNames].sort(compareCodePoints),
+    localModuleSources,
+    diagnostics,
+  };
 }
 
 function providerDeclarationFromJson(
   localName: string,
   specification: unknown,
+  path: string,
 ): ProviderDeclaration | undefined {
   if (!PROVIDER_LOCAL_NAME.test(localName)) return undefined;
   let source = `hashicorp/${localName}`;
@@ -720,6 +1151,7 @@ function providerDeclarationFromJson(
   const canonical = canonicalProviderAddress(source);
   if (!canonical) return undefined;
   return {
+    path,
     source: canonical,
     moduleLocalName: localName,
     childAliases,
@@ -727,17 +1159,256 @@ function providerDeclarationFromJson(
   };
 }
 
-function mergeProviderDeclarations(
+type ProviderReferenceObservation =
+  | { readonly status: "absent" }
+  | { readonly status: "present"; readonly localName: string }
+  | { readonly status: "invalid" };
+
+type AssignmentExpressionObservation =
+  | { readonly status: "absent" }
+  | { readonly status: "present"; readonly expression: string }
+  | { readonly status: "invalid" };
+
+function topLevelAssignmentExpression(
+  source: string,
+  target: string,
+): AssignmentExpressionObservation {
+  let expression: string | undefined;
+  let braces = 0;
+  let brackets = 0;
+  let parentheses = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === '"') {
+      const end = quotedStringEnd(source, index);
+      if (end === undefined) return { status: "invalid" };
+      index = end - 1;
+      continue;
+    }
+    if (source[index] === "{") braces += 1;
+    else if (source[index] === "}") braces -= 1;
+    else if (source[index] === "[") brackets += 1;
+    else if (source[index] === "]") brackets -= 1;
+    else if (source[index] === "(") parentheses += 1;
+    else if (source[index] === ")") parentheses -= 1;
+    if (braces < 0 || brackets < 0 || parentheses < 0) {
+      return { status: "invalid" };
+    }
+    if (braces !== 0 || brackets !== 0 || parentheses !== 0) continue;
+    const identifier = /^[A-Za-z_][A-Za-z0-9_-]*/u.exec(
+      source.slice(index),
+    );
+    if (!identifier) continue;
+    const name = identifier[0];
+    let cursor = skipWhitespace(source, index + name.length);
+    if (name !== target || source[cursor] !== "=") {
+      index += name.length - 1;
+      continue;
+    }
+    if (expression !== undefined) return { status: "invalid" };
+    cursor = skipWhitespace(source, cursor + 1);
+    const end = expressionEnd(source, cursor);
+    if (end === undefined) return { status: "invalid" };
+    expression = source.slice(cursor, end).trim().replace(/,+$/u, "").trim();
+    if (!expression) return { status: "invalid" };
+    index = end - 1;
+  }
+  if (braces !== 0 || brackets !== 0 || parentheses !== 0) {
+    return { status: "invalid" };
+  }
+  return expression === undefined
+    ? { status: "absent" }
+    : { status: "present", expression };
+}
+
+function topLevelProviderReference(
+  source: string,
+): ProviderReferenceObservation {
+  let observed: ProviderReferenceObservation = { status: "absent" };
+  let braces = 0;
+  let brackets = 0;
+  let parentheses = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === '"') {
+      const end = quotedStringEnd(source, index);
+      if (end === undefined) return { status: "invalid" };
+      index = end - 1;
+      continue;
+    }
+    if (source[index] === "{") braces += 1;
+    else if (source[index] === "}") braces -= 1;
+    else if (source[index] === "[") brackets += 1;
+    else if (source[index] === "]") brackets -= 1;
+    else if (source[index] === "(") parentheses += 1;
+    else if (source[index] === ")") parentheses -= 1;
+    if (braces < 0 || brackets < 0 || parentheses < 0) {
+      return { status: "invalid" };
+    }
+    if (braces !== 0 || brackets !== 0 || parentheses !== 0) continue;
+    const identifier = /^[A-Za-z_][A-Za-z0-9_-]*/u.exec(
+      source.slice(index),
+    );
+    if (!identifier) continue;
+    const name = identifier[0];
+    let cursor = skipWhitespace(source, index + name.length);
+    if (name !== "provider" || source[cursor] !== "=") {
+      index += name.length - 1;
+      continue;
+    }
+    cursor = skipWhitespace(source, cursor + 1);
+    const end = expressionEnd(source, cursor);
+    if (end === undefined) return { status: "invalid" };
+    const expression = source
+      .slice(cursor, end)
+      .trim()
+      .replace(/,+$/u, "")
+      .trim();
+    const reference = /^([A-Za-z_][A-Za-z0-9_-]*)(?:\.[A-Za-z_][A-Za-z0-9_-]*)?$/u.exec(
+      expression,
+    );
+    if (!reference || observed.status !== "absent") {
+      return { status: "invalid" };
+    }
+    observed = { status: "present", localName: reference[1]! };
+    index = end - 1;
+  }
+  return braces === 0 && brackets === 0 && parentheses === 0
+    ? observed
+    : { status: "invalid" };
+}
+
+function jsonProviderReference(value: unknown): ProviderReferenceObservation {
+  if (value === undefined) return { status: "absent" };
+  if (typeof value !== "string") return { status: "invalid" };
+  const trimmed = value.trim();
+  const expression =
+    trimmed.startsWith("${") && trimmed.endsWith("}")
+      ? trimmed.slice(2, -1).trim()
+      : trimmed;
+  const reference = /^([A-Za-z_][A-Za-z0-9_-]*)(?:\.[A-Za-z_][A-Za-z0-9_-]*)?$/u.exec(
+    expression,
+  );
+  return reference
+    ? { status: "present", localName: reference[1]! }
+    : { status: "invalid" };
+}
+
+function providerLocalNameFromResourceType(
+  resourceType: string,
+): string | undefined {
+  const separator = resourceType.indexOf("_");
+  const localName = separator > 0 ? resourceType.slice(0, separator) : resourceType;
+  return PROVIDER_LOCAL_NAME.test(localName) ? localName : undefined;
+}
+
+function implicitProviderSource(localName: string): string | undefined {
+  return canonicalProviderAddress(
+    localName === "terraform"
+      ? "terraform.io/builtin/terraform"
+      : `hashicorp/${localName}`,
+  );
+}
+
+function providerFunctionLocalNames(source: string): readonly string[] {
+  const code = maskHclQuotedStrings(source);
+  const names = new Set<string>();
+  const pattern = /\bprovider::([A-Za-z_][A-Za-z0-9_-]*)::/gu;
+  for (const match of code.matchAll(pattern)) names.add(match[1]!);
+  return [...names].sort(compareCodePoints);
+}
+
+function maskHclQuotedStrings(source: string): string {
+  const output = source.split("");
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] !== '"') continue;
+    const end = quotedStringEnd(source, index);
+    if (end === undefined) return "";
+    for (let cursor = index; cursor < end; cursor += 1) {
+      if (output[cursor] !== "\n") output[cursor] = " ";
+    }
+    index = end - 1;
+  }
+  return output.join("");
+}
+
+function jsonProviderFunctionLocalNames(value: unknown): readonly string[] {
+  const names = new Set<string>();
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (typeof current === "string") {
+      if (!current.includes("${")) continue;
+      for (const match of current.matchAll(
+        /\bprovider::([A-Za-z_][A-Za-z0-9_-]*)::/gu,
+      )) {
+        names.add(match[1]!);
+      }
+      continue;
+    }
+    if (Array.isArray(current)) {
+      pending.push(...current);
+      continue;
+    }
+    if (isRecord(current)) pending.push(...Object.values(current));
+  }
+  return [...names].sort(compareCodePoints);
+}
+
+function conflictingExactProviderVersionDiagnostics(
   declarations: readonly ProviderDeclaration[],
-): readonly OpenTofuProviderRequirement[] {
-  const exactVersionsBySource = new Map<string, Set<string>>();
+): readonly OpenTofuConfigurationDiagnostic[] {
+  const bySource = new Map<string, ProviderDeclaration[]>();
   for (const declaration of declarations) {
     if (declaration.version === undefined) continue;
-    const versions = exactVersionsBySource.get(declaration.source) ?? new Set();
-    versions.add(declaration.version);
-    exactVersionsBySource.set(declaration.source, versions);
+    bySource.set(declaration.source, [
+      ...(bySource.get(declaration.source) ?? []),
+      declaration,
+    ]);
   }
-  const requirements = new Map<string, OpenTofuProviderRequirement>();
+  const diagnostics: OpenTofuConfigurationDiagnostic[] = [];
+  for (const [source, entries] of bySource) {
+    const versions = [...new Set(entries.map((entry) => entry.version!))]
+      .sort(compareCodePoints);
+    if (versions.length < 2) continue;
+    const paths = [...new Set(entries.map((entry) => entry.path))]
+      .sort(compareCodePoints);
+    diagnostics.push({
+      code: "provider_version_constraints_conflict",
+      path: paths[0] ?? ".",
+      message: `Provider ${source} has conflicting exact versions ${versions.join(", ")} across reachable configuration (${paths.join(", ")}).`,
+      fatal: true,
+    });
+  }
+  return diagnostics.sort(
+    (left, right) =>
+      compareCodePoints(left.path, right.path) ||
+      compareCodePoints(left.message, right.message),
+  );
+}
+
+function mergeProviderPackages(
+  declarations: readonly ProviderDeclaration[],
+): readonly OpenTofuProviderPackage[] {
+  const exactVersionsBySource = exactProviderVersionsBySource(declarations);
+  const sources = new Set(
+    declarations.map((declaration) => declaration.source),
+  );
+  return [...sources]
+    .sort(compareCodePoints)
+    .map((source) => {
+      const exactVersions = exactVersionsBySource.get(source);
+      const version =
+        exactVersions?.size === 1 ? exactVersions.values().next().value : undefined;
+      return {
+        source,
+        ...(version === undefined ? {} : { version }),
+      };
+    });
+}
+
+function mergeRootProviderRequirements(
+  declarations: readonly ProviderDeclaration[],
+): readonly OpenTofuRootProviderRequirement[] {
+  const requirements = new Map<string, OpenTofuRootProviderRequirement>();
   for (const declaration of declarations) {
     for (const childAlias of [undefined, ...declaration.childAliases]) {
       const key = JSON.stringify([
@@ -745,14 +1416,13 @@ function mergeProviderDeclarations(
         declaration.moduleLocalName,
         childAlias ?? null,
       ]);
-      const exactVersions = exactVersionsBySource.get(declaration.source);
-      const version =
-        exactVersions?.size === 1 ? exactVersions.values().next().value : undefined;
       const requirement = {
         source: declaration.source,
         moduleLocalName: declaration.moduleLocalName,
         ...(childAlias === undefined ? {} : { childAlias }),
-        ...(version === undefined ? {} : { version }),
+        ...(declaration.version === undefined
+          ? {}
+          : { version: declaration.version }),
       };
       const existing = requirements.get(key);
       if (!existing || existing.version === undefined) {
@@ -760,7 +1430,20 @@ function mergeProviderDeclarations(
       }
     }
   }
-  return [...requirements.values()].sort(compareRequirements);
+  return [...requirements.values()].sort(compareRootProviderRequirements);
+}
+
+function exactProviderVersionsBySource(
+  declarations: readonly ProviderDeclaration[],
+): ReadonlyMap<string, Set<string>> {
+  const exactVersionsBySource = new Map<string, Set<string>>();
+  for (const declaration of declarations) {
+    if (declaration.version === undefined) continue;
+    const versions = exactVersionsBySource.get(declaration.source) ?? new Set();
+    versions.add(declaration.version);
+    exactVersionsBySource.set(declaration.source, versions);
+  }
+  return exactVersionsBySource;
 }
 
 interface HclMask {
@@ -1156,9 +1839,9 @@ function compareCodePoints(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function compareRequirements(
-  left: OpenTofuProviderRequirement,
-  right: OpenTofuProviderRequirement,
+function compareRootProviderRequirements(
+  left: OpenTofuRootProviderRequirement,
+  right: OpenTofuRootProviderRequirement,
 ): number {
   return (
     compareCodePoints(left.source, right.source) ||

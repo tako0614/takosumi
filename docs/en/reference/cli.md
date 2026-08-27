@@ -9,7 +9,7 @@ plan / apply. The CLI can target any Takosumi endpoint.
 export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com
 export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
 
-open "$TAKOSUMI_DEPLOY_CONTROL_URL/install?git=https://git.example.com/example/photo-blog.git&path=deploy/opentofu&ref=v1.0.0"
+open "$TAKOSUMI_DEPLOY_CONTROL_URL/install?git=https://git.example.com/example/photo-blog.git&ref=v1.0.0&sourcePath=infra&path=deploy/opentofu"
 
 takosumi status <run-id>
 takosumi logs   <run-id>
@@ -18,8 +18,9 @@ takosumi logs   <run-id>
 When using the Takosumi hosted service, the endpoint is `https://app.takosumi.com`.
 
 The CLI does not run OpenTofu directly. The normal creation flow is dashboard
-Git URL install, which creates Source / Capsule / Run records and pins the Git
-commit / ref / path as the Run source identity. Execution happens in the runner
+Git URL install, which creates Source / Capsule / Run records. `sourcePath` is
+the Git subtree acquired by the Source; `path` is the scanned module inside that
+Snapshot. The Run pins the Git commit / ref and both path coordinates. Execution happens in the runner
 sandbox, and credentials are injected at run time from ProviderConnections and
 CredentialRecipes. Source authoring is Git-only; immutable source archives are
 internal runner transport and are not accepted as a CLI creation input. The

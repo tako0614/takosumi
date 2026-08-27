@@ -8,6 +8,7 @@ import { appendAppHandoff, appHandoffFromSearch } from "./app-handoff.ts";
 export interface InstallReturnContext {
   readonly git: string;
   readonly ref: string;
+  readonly sourcePath: string;
   readonly path: string;
   readonly name?: string;
   readonly label: string;
@@ -50,12 +51,14 @@ export function installReturnContext(
 
 export function installReturnPathFromPrefill(
   prefill: Pick<InstallPrefill, "git"> &
-    Partial<Pick<InstallPrefill, "ref" | "path" | "name">>,
+    Partial<Pick<InstallPrefill, "ref" | "sourcePath" | "path" | "name">>,
 ): string | undefined {
   const params = new URLSearchParams();
   params.set("git", prefill.git.trim());
   const ref = prefill.ref?.trim() ?? "";
   if (ref) params.set("ref", ref);
+  const sourcePath = prefill.sourcePath?.trim() ?? ".";
+  if (sourcePath !== ".") params.set("sourcePath", sourcePath);
   const path = prefill.path?.trim() ?? "";
   if (path) params.set("path", path);
   const name = prefill.name?.trim();
@@ -66,13 +69,17 @@ export function installReturnPathFromPrefill(
   const canonical = new URLSearchParams();
   canonical.set("git", safe.git);
   if (safe.ref) canonical.set("ref", safe.ref);
+  if (safe.sourcePath !== ".") canonical.set("sourcePath", safe.sourcePath);
   if (safe.path) canonical.set("path", safe.path);
   if (safe.name) canonical.set("name", safe.name);
   return `/new?${canonical.toString()}`;
 }
 
 export function installReturnPathFromContext(
-  context: Pick<InstallReturnContext, "git" | "ref" | "path" | "name">,
+  context: Pick<
+    InstallReturnContext,
+    "git" | "ref" | "sourcePath" | "path" | "name"
+  >,
 ): string | undefined {
   return installReturnPathFromPrefill(context);
 }

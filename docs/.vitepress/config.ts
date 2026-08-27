@@ -55,10 +55,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "CLI", link: "/reference/cli" },
         { text: "設定", link: "/reference/configuration" },
         {
-          text: "Capsule source options",
-          link: "/reference/capsule-source-options",
-        },
-        {
           text: "Repository manifest",
           link: "/reference/repository-manifest",
         },
@@ -115,10 +111,6 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "API", link: "/en/reference/api" },
         { text: "CLI", link: "/en/reference/cli" },
-        {
-          text: "Capsule source options",
-          link: "/en/reference/capsule-source-options",
-        },
         {
           text: "Repository manifest",
           link: "/en/reference/repository-manifest",

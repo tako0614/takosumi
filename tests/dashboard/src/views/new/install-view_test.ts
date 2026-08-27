@@ -9,55 +9,115 @@ const read = (path: string): string =>
 
 describe("single-screen install surface", () => {
   test("normalizes the bounded module projection without exposing files", () => {
-    const digest = `sha256:${"d".repeat(64)}`;
     expect(
       installModuleCatalogFromSnapshot({
         status: "ready",
         sourceSnapshotId: "snap_modules",
-        manifestDigest: digest,
-        defaultModule: ".",
+        scopePath: ".",
         modules: [
-          { path: "deploy/takoform" },
-          { path: ".", default: true },
+          {
+            path: "deploy/takoform",
+            providerPackages: [
+              {
+                source: "registry.opentofu.org/cloudflare/cloudflare",
+                version: "4.0.0",
+              },
+            ],
+            rootProviderRequirements: [
+              {
+                source: "registry.opentofu.org/cloudflare/cloudflare",
+                moduleLocalName: "cloudflare",
+                childAlias: "default",
+                version: "4.0.0",
+              },
+            ],
+          },
+          {
+            path: ".",
+            providerPackages: [],
+            rootProviderRequirements: [],
+          },
         ],
       }),
     ).toEqual({
       status: "ready",
       sourceSnapshotId: "snap_modules",
-      manifestDigest: digest,
-      defaultModule: ".",
-      modules: [{ path: ".", default: true }, { path: "deploy/takoform" }],
+      scopePath: ".",
+      modules: [
+        {
+          path: ".",
+          providerPackages: [],
+          rootProviderRequirements: [],
+        },
+        {
+          path: "deploy/takoform",
+          providerPackages: [
+            {
+              source: "registry.opentofu.org/cloudflare/cloudflare",
+              version: "4.0.0",
+            },
+          ],
+          rootProviderRequirements: [
+            {
+              source: "registry.opentofu.org/cloudflare/cloudflare",
+              moduleLocalName: "cloudflare",
+              childAlias: "default",
+              version: "4.0.0",
+            },
+          ],
+        },
+      ],
     });
     expect(
       installModuleCatalogFromSnapshot({
         status: "ready",
         sourceSnapshotId: "snap_one",
-        manifestDigest: digest,
-        modules: [{ path: "deploy/takoform" }],
+        scopePath: ".",
+        modules: [
+          {
+            path: "deploy/takoform",
+            providerPackages: [],
+            rootProviderRequirements: [],
+          },
+        ],
       }),
     ).toMatchObject({ status: "ready", modules: [{ path: "deploy/takoform" }] });
     expect(
       installModuleCatalogFromSnapshot({
         status: "ready",
         sourceSnapshotId: "snap_file",
-        manifestDigest: digest,
-        modules: [{ path: "main.tf" }],
+        scopePath: ".",
+        modules: [
+          {
+            path: "main.tf",
+            providerPackages: [],
+            rootProviderRequirements: [],
+          },
+        ],
       }),
     ).toEqual({ status: "invalid", modules: [] });
   });
 
-  test("keeps absent and invalid manifests fail-closed", () => {
+  test("distinguishes an empty scan from an invalid scan", () => {
     expect(
       installModuleCatalogFromSnapshot({
-        status: "absent",
-        sourceSnapshotId: "snap_absent",
+        status: "ready",
+        sourceSnapshotId: "snap_empty",
+        scopePath: ".",
         modules: [],
       }),
-    ).toEqual({ status: "absent", modules: [] });
+    ).toEqual({
+      status: "ready",
+      sourceSnapshotId: "snap_empty",
+      scopePath: ".",
+      modules: [],
+    });
     expect(
       installModuleCatalogFromSnapshot({
         status: "invalid",
         sourceSnapshotId: "snap_invalid",
+        scopePath: ".",
+        reason: "scan_unavailable",
         modules: [],
       }),
     ).toEqual({ status: "invalid", modules: [] });
@@ -138,7 +198,7 @@ describe("single-screen install surface", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).not.toContain("refInputValue(");
     expect(view).toContain('createSignal(initial?.ref ?? "")');
-    expect(view).toContain("setGitRef(ref);");
+    expect(view).toContain("setGitRef(prepared.snapshot.resolvedCommit);");
     expect(view).toContain("ref: gitRef().trim()");
     expect(view).toContain("setCapsuleId(undefined)");
     expect(view).toContain("setPlanRunId(undefined)");
@@ -149,8 +209,7 @@ describe("single-screen install surface", () => {
   test("workspace and provider discovery stay lazy until an explicit action", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain("const workspace = currentWorkspaceId();");
-    expect(view).toContain("if (!workspace) {");
-    expect(view).toContain('throw new Error(t("workspace.selectMessage"));');
+    expect(view).toContain("const workspace = await ensureWorkspace();");
     expect(view).not.toContain('phase() !== "configure" && connectionsLoaded()');
     expect(view).toContain("const prepareInstall = async () =>");
     expect(view).toContain("const providersResult = loadConnections(");
@@ -205,7 +264,7 @@ describe("single-screen install surface", () => {
     );
   });
 
-  test("tracks explicit module authority separately from the UI root fallback", () => {
+  test("validates a query module hint against the scan before using its path", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain(
       "const initialModulePathExplicit = Boolean(initial?.path);",
@@ -213,23 +272,41 @@ describe("single-screen install surface", () => {
     expect(view).toContain(
       "const [modulePathExplicit, setModulePathExplicit] = createSignal(",
     );
-    expect(view).toContain("...(modulePathExplicit()\n          ? { path:");
     expect(view).toContain("setModulePathExplicit(false);");
     expect(view).toContain("setModulePathExplicit(true);");
     expect(view).toContain(
       "...(modulePathExplicit() ? { path: modulePath() } : {}),",
     );
+    expect(view).toContain("path: selectedModulePath,");
+    expect(view).toContain("modulePath: modulePath().trim(),");
+  });
+
+  test("keeps the Source subtree separate from the scanned module selection", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain(
+      'const [sourcePath, setSourcePath] = createSignal(initial?.sourcePath ?? ".")',
+    );
+    expect(view).toContain("sourcePath: sourcePath(),");
+    expect(view).toContain('setSourcePath(".");');
+    expect(view).toContain('t("installStore.sourcePath")');
+    expect(view).not.toContain("join(sourcePath(), modulePath())");
+    expect(view).not.toContain("`${sourcePath()}/${modulePath()}`");
+  });
+
+  test("uses the strict shared Git URL guard before Source creation", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("isSafeHttpsGitUrl,");
+    expect(view).toContain("if (!isSafeHttpsGitUrl(gitUrl().trim()))");
   });
 
   test("does not consult source-URL deployment profiles", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).not.toContain("listSourceSnapshotDeploymentProfiles");
-    expect(view).not.toContain("deploymentProfileKey");
     expect(view).not.toContain("selectedDeploymentProfile");
     expect(view).not.toContain("deploymentProfileConfirmed");
   });
 
-  test("chooses manifest module directories before compatibility", () => {
+  test("chooses scanned module directories before compatibility", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain("listSourceSnapshotInstallModules(");
     expect(view).toContain("installModuleCatalogFromSnapshot");
@@ -282,24 +359,37 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("sourceBuild.env");
   });
 
-  test("retains typed Store setup and immutable chooser evidence", () => {
+  test("retains typed Store setup and displays scanned provider requirements", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     for (const token of [
       "storeInitialSecretField",
       "storeInstallFeatures",
       "storeFeatureSelections",
       "setupProjectionInvalid",
-      "entryEvidence",
-      "readSnapshotDocument",
-      "commit",
-      "digest",
+      "selectedModuleProviderRequirements",
+      'data-testid="install-module-requirements"',
+      't("installStore.moduleRequirement"',
     ]) {
       expect(view).toContain(token);
     }
+    expect(view).not.toContain("CapsuleSourceOptions");
+    expect(view).not.toContain("readSnapshotDocument");
+    expect(view).not.toContain("entryEvidence");
     expect(view).not.toContain("managedPublicHostname");
     expect(view).not.toContain("storePublicEndpoint");
     expect(view).not.toContain("storeSupportsOidc");
     expect(view).not.toContain("disabled={field.secret}");
+  });
+
+  test("uses three conceptual steps and no external document chooser", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain('data-testid="install-steps"');
+    expect(view).toContain('t("installStore.stepSource")');
+    expect(view).toContain('t("installStore.stepConfigure")');
+    expect(view).toContain('t("installStore.stepReview")');
+    expect(view).not.toContain("entry-confirm");
+    expect(view).not.toContain("entryChoices");
+    expect(view).not.toContain("parseCapsuleSourceOptions");
   });
 
   test("preserves app handoff and Interface-first completion", () => {

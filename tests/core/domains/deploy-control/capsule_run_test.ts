@@ -128,6 +128,24 @@ const AWS_MIRROR_EVIDENCE = {
   attestationMethod: "forced_filesystem_mirror_init",
   mirrorPath: "/opt/opentofu/provider-mirror/registry.opentofu.org/hashicorp/aws",
 } as const;
+const PROVIDER_FREE_COMPATIBILITY_GRAPH = {
+  providerPackages: [],
+  rootProviderRequirements: [],
+} as const;
+const CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH = {
+  providerPackages: [
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      allowed: true,
+    },
+  ],
+  rootProviderRequirements: [
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "cloudflare",
+    },
+  ],
+} as const;
 
 function deterministicIds(): (prefix: string) => string {
   let next = 1;
@@ -2353,13 +2371,7 @@ test("generic Capsule setup variables are filtered to the declared OpenTofu modu
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "registry.opentofu.org/cloudflare/cloudflare",
-        moduleLocalName: "cloudflare",
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -2433,13 +2445,7 @@ test("generic Capsule with known empty module interface receives no setup variab
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "registry.opentofu.org/cloudflare/cloudflare",
-        moduleLocalName: "cloudflare",
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -2907,13 +2913,7 @@ test("capsule destroy remains runnable when its applied CompatibilityReport is n
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "registry.opentofu.org/cloudflare/cloudflare",
-        moduleLocalName: "cloudflare",
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -3069,7 +3069,7 @@ test("capsule plan verifies CompatibilityReport before provider credential mint"
         message: "provider credentials are configured in source",
       },
     ],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -3126,13 +3126,7 @@ test("capsule CompatibilityReport gate honors InstallConfig resource policy", as
         message: "Provisioner local-exec is not allowed by default policy.",
       },
     ],
-    providers: [
-      {
-        source: "registry.opentofu.org/cloudflare/cloudflare",
-        moduleLocalName: "cloudflare",
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -3278,13 +3272,7 @@ test("capsule plan reuses a preflight CompatibilityReport hint without recheckin
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "registry.opentofu.org/cloudflare/cloudflare",
-        moduleLocalName: "cloudflare",
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -3363,13 +3351,7 @@ test("capsule plan reuses the latest matching preflight CompatibilityReport when
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "registry.opentofu.org/cloudflare/cloudflare",
-        moduleLocalName: "cloudflare",
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -3426,7 +3408,7 @@ test("capsule plan ignores a stale cached CompatibilityReport when a matching pr
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -3444,13 +3426,7 @@ test("capsule plan ignores a stale cached CompatibilityReport when a matching pr
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "registry.opentofu.org/cloudflare/cloudflare",
-        moduleLocalName: "cloudflare",
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -3503,7 +3479,7 @@ test("failed compatibility analysis does not replace the Capsule current report"
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -3625,13 +3601,7 @@ test("capsule plan records runnable CompatibilityReport in policy audit", async 
         message: "No output blocks were detected.",
       },
     ],
-    providers: [
-      {
-        source: "registry.opentofu.org/cloudflare/cloudflare",
-        moduleLocalName: "cloudflare",
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -3686,11 +3656,11 @@ test("generic Capsule capsule plan derives pre-init requiredProviders from Compa
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
+    providerPackages: [{ source: awsProvider, allowed: true }],
+    rootProviderRequirements: [
       {
         source: awsProvider,
         moduleLocalName: "aws",
-        allowed: true,
       },
     ],
     resources: [],
@@ -3743,7 +3713,10 @@ test("Capsule plan persists every exact default and child alias provider require
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: requiredProviderRequirements,
+    providerPackages: [{ source: provider, allowed: true }],
+    rootProviderRequirements: requiredProviderRequirements.map(
+      ({ allowed: _allowed, ...requirement }) => requirement,
+    ),
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -3900,11 +3873,11 @@ test("compatibility-declared arbitrary provider credentials require an explicit 
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
+    providerPackages: [{ source: provider, allowed: true }],
+    rootProviderRequirements: [
       {
         source: provider,
         moduleLocalName: "service_api",
-        allowed: true,
         credentialRequired: true,
       },
     ],
@@ -4072,7 +4045,7 @@ test("an explicit empty compiler requirement set never falls back to ProviderBin
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -4223,7 +4196,10 @@ test("low-level plan does not infer requiredProviders from ProviderBinding alone
 
 test("low-level plan never treats allowedProviders as discovered requirements", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
+  const runner = recordingRunner({
+    requiredProviders: [],
+    providerInstallation: [],
+  });
   const seeded = await seedCapsuleModel(store, {
     environment: "preview",
   });
@@ -4271,6 +4247,7 @@ test("low-level plan never treats allowedProviders as discovered requirements", 
       modulePath: seeded.source.defaultPath,
     },
     runnerProfileId: strictProfile.id,
+    requiredProviders: [],
     requiredProviderRequirements: [],
   });
 
@@ -4312,7 +4289,7 @@ test("generic Capsule plan creation blocks stale CompatibilityReport as policy",
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -4350,7 +4327,7 @@ test("capsule plan rejects a CompatibilityReport hint from another module path",
     modulePath: "examples/hello",
     level: "ready",
     findings: [],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -4380,7 +4357,7 @@ test("capsule plan rejects a CompatibilityReport hint with no recorded module pa
     sourceSnapshotId: seeded.snapshot.id,
     level: "ready",
     findings: [],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -4416,7 +4393,7 @@ test("capsule plan re-checks instead of reusing a preflight report for another m
     modulePath: "examples/hello",
     level: "ready",
     findings: [],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -4490,13 +4467,7 @@ test("capsule apply revalidates CompatibilityReport before provider credential m
     modulePath: ".",
     level: "ready" as const,
     findings: [],
-    providers: [
-      {
-        source: "registry.opentofu.org/cloudflare/cloudflare",
-        moduleLocalName: "cloudflare",
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -4589,13 +4560,7 @@ test("capsule apply rejects a CompatibilityReport scoped to another Capsule befo
     modulePath: ".",
     level: "ready" as const,
     findings: [],
-    providers: [
-      {
-        source: "registry.opentofu.org/cloudflare/cloudflare",
-        moduleLocalName: "cloudflare",
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -9222,13 +9187,7 @@ test("generic Capsule captures ordinary root Outputs without publishing unallowl
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "registry.opentofu.org/cloudflare/cloudflare",
-        moduleLocalName: "cloudflare",
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [{ type: "cloudflare_workers_script", count: 1, allowed: true }],
     dataSources: [],
     provisioners: [],
@@ -9306,13 +9265,7 @@ test("generic Capsule retains explicit public source Outputs before applying the
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "registry.opentofu.org/cloudflare/cloudflare",
-        moduleLocalName: "cloudflare",
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [{ type: "cloudflare_workers_script", count: 1, allowed: true }],
     dataSources: [],
     provisioners: [],

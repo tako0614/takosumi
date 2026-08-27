@@ -26,16 +26,36 @@ export interface GitInstallPlanSourceRequest {
   readonly authConnectionId?: string;
 }
 
+/** Value-free, exact identity used to select one Provider Connection. */
+export interface GitInstallPlanProviderBindingRequest {
+  /** Exact canonical provider source address. */
+  readonly provider: string;
+  /** Exact child-module local provider name from the scanned module tuple. */
+  readonly moduleLocalName: string;
+  /** Exact child-module configuration alias; absent means the default. */
+  readonly childAlias?: string;
+  /** Existing Provider Connection id; credential values never enter this record. */
+  readonly connectionId: string;
+}
+
 export interface GitInstallPlanCapsuleRequest {
   readonly name: string;
   readonly environment: string;
 }
 
 export interface GitInstallPlanOptions {
-  /** Opaque key of a pre-existing, server-owned deployment profile. */
-  readonly deploymentProfileKey?: string;
-  /** Provider name to pre-existing ProviderConnection id. Values are forbidden. */
-  readonly providerBindingConnectionIds?: Readonly<Record<string, string>>;
+  /**
+   * Optional exact OpenTofu module path, relative to the SourceSnapshot
+   * subtree. It is a selection hint only until matched against the immutable
+   * SourceSnapshot module index.
+   */
+  readonly modulePath?: string;
+  /**
+   * Exact child-module provider identities to pre-existing Provider Connection
+   * ids. The list is canonicalized and may contain distinct local/alias
+   * tuples for the same provider source.
+   */
+  readonly providerBindings?: readonly GitInstallPlanProviderBindingRequest[];
 }
 
 export interface CreateGitInstallPlanRequest {

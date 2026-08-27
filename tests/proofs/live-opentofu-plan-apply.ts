@@ -80,11 +80,16 @@ export async function runLiveOpenTofuPlanApplyProof(
       modulePath: ".",
       level: "ready",
       findings: [],
-      providers: [
+      providerPackages: [
+        {
+          source: "registry.opentofu.org/hashicorp/local",
+          allowed: true,
+        },
+      ],
+      rootProviderRequirements: [
         {
           source: "registry.opentofu.org/hashicorp/local",
           moduleLocalName: "local",
-          allowed: true,
         },
       ],
       resources: [

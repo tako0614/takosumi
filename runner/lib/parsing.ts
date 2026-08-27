@@ -28,7 +28,7 @@ import {
   assertSafeRelativePath,
 } from "./policy.ts";
 import { canonicalProviderSource } from "../../contract/provider-env-rules.ts";
-import type { OpenTofuProviderRequirement } from "../../lib/opentofu-configuration/src/mod.ts";
+import type { OpenTofuRootProviderRequirement } from "../../lib/opentofu-configuration/src/mod.ts";
 
 export function parseOperation(request: unknown): OpenTofuOperation {
   const planRun = recordField(request, "planRun");
@@ -292,7 +292,7 @@ export function parseRequiredProviders(request: unknown): readonly string[] {
 
 export function parseRequiredProviderRequirements(
   request: unknown,
-): readonly OpenTofuProviderRequirement[] | undefined {
+): readonly OpenTofuRootProviderRequirement[] | undefined {
   const planRun = recordField(request, "planRun");
   const value = planRun
     ? recordField(planRun, "requiredProviderRequirements")
@@ -365,8 +365,8 @@ export function parseRequiredProviderRequirements(
 }
 
 function compareProviderRequirements(
-  left: OpenTofuProviderRequirement,
-  right: OpenTofuProviderRequirement,
+  left: OpenTofuRootProviderRequirement,
+  right: OpenTofuRootProviderRequirement,
 ): number {
   return (
     compareCodePoints(left.source, right.source) ||

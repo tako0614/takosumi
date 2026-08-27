@@ -96,6 +96,8 @@ WORKDIR /app
 # repo source (or the Worker browser bundle) is copied into the image.
 COPY contract/provider-env-rules.ts ./contract/provider-env-rules.ts
 COPY contract/provider-configurations.ts ./contract/provider-configurations.ts
+COPY contract/api-surface.ts ./contract/api-surface.ts
+COPY contract/sources.ts ./contract/sources.ts
 COPY contract/repository-manifest.ts ./contract/repository-manifest.ts
 COPY contract/plan-scope.ts ./contract/plan-scope.ts
 COPY contract/redaction.ts ./contract/redaction.ts

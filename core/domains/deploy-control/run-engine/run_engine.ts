@@ -39,6 +39,7 @@ import type { CreateRestoreRequest } from "takosumi-contract/backups";
 import type {
   CapsuleCompatibilityReport,
   CapsuleProviderRequirement,
+  CapsuleRootProviderRequirement,
 } from "takosumi-contract/capsules";
 import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
 import { usesDeclaredEnvCredentialRecipe } from "takosumi-contract/connections";
@@ -679,13 +680,10 @@ function requiredProviderRequirementsForNewPlan(
   const requiredSourceSet = new Set(
     requiredProviders.map(canonicalProviderAddress),
   );
-  if (
-    sourceSet.size !== requiredSourceSet.size ||
-    [...requiredSourceSet].some((source) => !sourceSet.has(source))
-  ) {
+  if ([...sourceSet].some((source) => !requiredSourceSet.has(source))) {
     throw new OpenTofuControllerError(
       "failed_precondition",
-      "required provider requirements do not match requiredProviders",
+      "root provider requirements contain a source outside requiredProviders",
     );
   }
   return validated;
@@ -713,11 +711,19 @@ function providerRequirementsFromCompatibilityReport(
 ): readonly CapsuleProviderRequirement[] {
   if (!report) return [];
   const required = new Set(requiredProviders.map(canonicalProviderAddress));
-  const requirements = report.providers.filter(
-    (provider) =>
-      provider.allowed &&
-      required.has(canonicalProviderAddress(provider.source)),
+  const allowedPackages = new Set(
+    report.providerPackages
+      .filter((providerPackage) => providerPackage.allowed)
+      .map((providerPackage) =>
+        canonicalProviderAddress(providerPackage.source)
+      ),
   );
+  const requirements = report.rootProviderRequirements
+    .filter((requirement) => {
+      const source = canonicalProviderAddress(requirement.source);
+      return required.has(source) && allowedPackages.has(source);
+    })
+    .map((requirement) => ({ ...requirement, allowed: true }));
   return validateRequiredProviderBindingIdentities(requirements);
 }
 
@@ -751,24 +757,20 @@ function providerTypeLocalName(source: string): string {
   return canonical.split("/").at(-1) ?? canonical;
 }
 
-function rootProviderRequirementsFromCompatibilityReport(
-  report: CapsuleCompatibilityReport | undefined,
-  requiredProviders: readonly string[],
-): readonly RootProviderRequirement[] | undefined {
-  if (!report) return undefined;
-  const requirements = providerRequirementsFromCompatibilityReport(
-    report,
-    requiredProviders,
-  ).flatMap((provider, index, all) =>
-    all.findIndex(
-      (candidate) =>
-        candidate.source === provider.source &&
-        candidate.moduleLocalName === provider.moduleLocalName,
-    ) === index
-      ? [{ provider: provider.source, localName: provider.moduleLocalName }]
-      : [],
-  );
-  return requirements.length > 0 ? requirements : undefined;
+function rootProviderRequirementsForGeneratedRoot(
+  requirements: readonly Pick<
+    CapsuleRootProviderRequirement,
+    "source" | "moduleLocalName" | "childAlias" | "version"
+  >[],
+): readonly RootProviderRequirement[] {
+  return requirements.map((requirement) => ({
+    source: requirement.source,
+    moduleLocalName: requirement.moduleLocalName,
+    ...(requirement.childAlias
+      ? { childAlias: requirement.childAlias }
+      : {}),
+    ...(requirement.version ? { version: requirement.version } : {}),
+  }));
 }
 
 const MAX_AUTO_CAPTURED_ROOT_OUTPUTS = 128;
@@ -1417,10 +1419,13 @@ export class RunEngine {
         "requiredProviderRequirements must be present for every new Plan, including an explicit empty array",
       );
     }
-    const declaredProviders = normalizeProviders(
-      request.requiredProviders ??
-        request.requiredProviderRequirements.map((entry) => entry.source),
-    );
+    if (!Array.isArray(request.requiredProviders)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "requiredProviders must be present for every new Plan, including an explicit empty array",
+      );
+    }
+    const declaredProviders = normalizeProviders(request.requiredProviders);
     const requiredProviderRequirements = requiredProviderRequirementsForNewPlan(
       declaredProviders,
       request.requiredProviderRequirements,
@@ -2942,9 +2947,6 @@ export class RunEngine {
         context.moduleVariableMaterialization,
       );
     }
-    const requiredProviders = normalizeProviders(
-      request.requiredProviders ?? [],
-    );
     const interfaceWorkspaceId = request.workspaceId;
     const interfaceCapsuleId = request.capsuleId;
     const interfaceSources =
@@ -2969,25 +2971,16 @@ export class RunEngine {
           interfaceSources,
         );
     const outputAllowlist = destroy ? {} : context.outputAllowlist;
-    const wrapperProviderBindings = context.providerBindings.filter(
-      (binding) =>
-        binding.moduleLocalName !== undefined ||
-        binding.childAlias !== undefined ||
-        binding.rootAlias !== undefined ||
-        binding.alias !== undefined ||
-        Object.keys(binding.configuration ?? {}).length > 0,
-    );
-    const providerRequirements =
-      rootProviderRequirementsFromCompatibilityReport(
-        compatibilityReport,
-        requiredProviders,
+    const wrapperProviderBindings = context.providerBindings;
+    const rootProviderRequirements =
+      rootProviderRequirementsForGeneratedRoot(
+        request.requiredProviderRequirements ?? [],
       );
     let generatedRoot: DispatchGeneratedRoot | undefined;
     if (wrapperProviderBindings.length > 0) {
       try {
         generatedRoot = generateOpenTofuChildModuleRoot({
-          requiredProviders,
-          ...(providerRequirements ? { providerRequirements } : {}),
+          rootProviderRequirements,
           inputs: normalizeVariables(request.variables),
           outputAllowlist: workspaceOutputAllowlist,
           providerBindings: wrapperProviderBindings,
@@ -3034,9 +3027,9 @@ export class RunEngine {
       : undefined;
     const requiredProviders = normalizeProviders(
       request.requiredProviders ??
-        (compatibilityReport?.providers ?? [])
-          .filter((provider) => provider.allowed)
-          .map((provider) => provider.source),
+        (compatibilityReport?.providerPackages ?? [])
+          .filter((providerPackage) => providerPackage.allowed)
+          .map((providerPackage) => providerPackage.source),
     );
     const profile = await this.#requireRunnerProfile(
       request.runnerProfileId ?? this.#defaultRunnerProfileId,
@@ -3050,7 +3043,7 @@ export class RunEngine {
       ),
     );
     return await this.#genericRootDispatchForRequest(
-      { ...request, requiredProviders },
+      { ...request, requiredProviders, requiredProviderRequirements },
       {
         providerBindings: providerBindingsFromResolved(resolved),
         outputAllowlist: installConfig.outputAllowlist,
@@ -3185,7 +3178,9 @@ export class RunEngine {
             bindingRequirements,
           );
     const generatedRoot = generateOpenTofuChildModuleRoot({
-      requiredProviders,
+      rootProviderRequirements: rootProviderRequirementsForGeneratedRoot(
+        requiredProviderRequirements,
+      ),
       inputs: {},
       outputAllowlist: {},
       providerBindings: providerBindingsFromResolved(resolvedBindings),
@@ -4728,11 +4723,11 @@ export class RunEngine {
               planRun.requiredProviders,
             ).map((requirement) => ({
               ...requirement,
-              ...(compatibilityReport?.providers.some(
-                (provider) =>
-                  canonicalProviderAddress(provider.source) ===
+              ...(compatibilityReport?.rootProviderRequirements.some(
+                (candidate) =>
+                  canonicalProviderAddress(candidate.source) ===
                     requirement.source &&
-                  provider.credentialRequired === true,
+                  candidate.credentialRequired === true,
               )
                 ? { credentialRequired: true }
                 : {}),
@@ -6220,6 +6215,16 @@ export class RunEngine {
     const requiredProviders = normalizeProviders(
       result.requiredProviders ?? running.requiredProviders,
     );
+    if (
+      result.requiredProviders !== undefined &&
+      JSON.stringify(requiredProviders) !==
+        JSON.stringify(normalizeProviders(running.requiredProviders))
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "runner requiredProviders do not match the compatibility-reviewed provider packages",
+      );
+    }
     if (running.requiredProviderRequirements !== undefined) {
       requiredProviderRequirementsForNewPlan(
         requiredProviders,

@@ -9,8 +9,7 @@ import { containsSecretLikeString, isSecretKey } from "./redaction.ts";
  * The manifest is an extensible envelope, but every API version is a closed
  * object. Version 1 carries only install presentation. Version 2 adds generic
  * Capsule-owned Interface proposals. Version 2.1 retains that exact module
- * vocabulary and adds only an optional repository-owned default module key.
- * Version 2.2 adds provider-neutral requests to consume a host Interface.
+ * vocabulary. Version 2.2 adds provider-neutral requests to consume a host Interface.
  * Version 2.3 adds an optional credential-free sourceBuild proposal per
  * module. Earlier versions remain closed and reject that field.
  * Every declaration is still only a proposal until Takosumi validates and
@@ -212,14 +211,10 @@ export interface RepositoryManifestInstallV2 {
 
 export interface RepositoryManifestInstallV2_1 {
   readonly modules: Readonly<Record<string, RepositoryInstallUxModule>>;
-  /** Exact canonical key of `modules`; optional only for one-module inference. */
-  readonly defaultModule?: string;
 }
 
 export interface RepositoryManifestInstallV2_2 {
   readonly modules: Readonly<Record<string, RepositoryInstallUxModule>>;
-  /** Exact canonical key of `modules`; optional only for one-module inference. */
-  readonly defaultModule?: string;
 }
 
 export interface RepositoryInstallUxModuleV2_3 extends RepositoryInstallUxModule {
@@ -229,8 +224,6 @@ export interface RepositoryInstallUxModuleV2_3 extends RepositoryInstallUxModule
 
 export interface RepositoryManifestInstallV2_3 {
   readonly modules: Readonly<Record<string, RepositoryInstallUxModuleV2_3>>;
-  /** Exact canonical key of `modules`; optional only for one-module inference. */
-  readonly defaultModule?: string;
 }
 
 /** Compatibility alias for callers that only need the install envelope. */
@@ -343,14 +336,7 @@ export function parseRepositoryManifestText(
   if (!isPlainRecord(value.install)) {
     return invalid("install must be an object");
   }
-  const installKeys = exactKeys(value.install, [
-    "modules",
-    ...(apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 ||
-    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 ||
-    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3
-      ? ["defaultModule"]
-      : []),
-  ]);
+  const installKeys = exactKeys(value.install, ["modules"]);
   if (installKeys) return invalid(`install.${installKeys}`);
   if (!isPlainRecord(value.install.modules)) {
     return invalid("install.modules must be an object");
@@ -381,27 +367,6 @@ export function parseRepositoryManifestText(
     if (typeof parsed === "string") return invalid(parsed);
     modules[modulePath] = parsed;
   }
-  const defaultModule =
-    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 ||
-    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 ||
-    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3
-      ? value.install.defaultModule
-      : undefined;
-  if (defaultModule !== undefined) {
-    if (
-      typeof defaultModule !== "string" ||
-      !isCanonicalModulePath(defaultModule)
-    ) {
-      return invalid(
-        "install.defaultModule must be a canonical safe relative module path",
-      );
-    }
-    if (!Object.prototype.hasOwnProperty.call(modules, defaultModule)) {
-      return invalid(
-        "install.defaultModule must name an exact install.modules key",
-      );
-    }
-  }
   return {
     ok: true,
     document: {
@@ -409,7 +374,6 @@ export function parseRepositoryManifestText(
       kind: TAKOSUMI_REPOSITORY_MANIFEST_KIND,
       install: {
         modules,
-        ...(defaultModule !== undefined ? { defaultModule } : {}),
       },
     } as RepositoryManifestDocument,
   };

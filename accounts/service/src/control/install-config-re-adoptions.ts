@@ -22,7 +22,7 @@ import {
   publicCapsule,
   type ControlDispatchContext,
 } from "./shared.ts";
-import { isPlainJsonObject } from "./parse.ts";
+import { isPlainJsonObject, modulePathValue } from "./parse.ts";
 import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/capsules/default_install_config.ts";
 import {
   adoptRepoOwnedInstallConfig,
@@ -37,7 +37,6 @@ const EMPTY_DERIVED_TARGET_DIGEST = `sha256:${"0".repeat(64)}`;
 interface ReAdoptionRequest {
   readonly baseInstallConfigId?: string;
   readonly sourceSnapshotId: string;
-  readonly deploymentProfileKey?: string;
   readonly reason: string;
   readonly expected: {
     readonly authorityGuard: string;
@@ -62,7 +61,6 @@ interface ReAdoptionReceipt {
   readonly derivedTargetDigest: string;
   readonly baseInstallConfigId: string;
   readonly sourceSnapshotId: string;
-  readonly deploymentProfileKey?: string;
 }
 
 interface ReAdoptionAuthoritySnapshot {
@@ -120,17 +118,6 @@ export async function handleCapsuleInstallConfigReAdoption(
     );
   }
   const body = await readJsonObject(ctx.request);
-  if (
-    body &&
-    Object.prototype.hasOwnProperty.call(body, "deploymentProfileKey")
-  ) {
-    return errorJson(
-      "invalid_request",
-      "deploymentProfileKey is no longer accepted; module choice comes from the immutable SourceSnapshot manifest and host policy is generic or operator-explicit.",
-      400,
-      ctx.request,
-    );
-  }
   const request = body ? parseRequest(body) : undefined;
   if (!request) {
     return errorJson(
@@ -260,7 +247,6 @@ export async function handleCapsuleInstallConfigReAdoption(
     source,
     sourceSnapshot,
     baseInstallConfigId: request.baseInstallConfigId,
-    deploymentProfileKey: request.deploymentProfileKey,
   });
   if (!resolved.ok) {
     return errorJson(
@@ -291,7 +277,11 @@ export async function handleCapsuleInstallConfigReAdoption(
       sourceSnapshot.repositoryManifest?.status === "present"
         ? sourceSnapshot.repositoryManifest.document
         : undefined,
-    modulePath,
+    // The scanner/compatibility modulePath is relative to Source.path, while
+    // repository manifest keys are repository-root-relative. Translate only
+    // for this optional input-assistance lookup; execution keeps `modulePath`.
+    modulePath: repositoryManifestModulePath(sourceSnapshot, modulePath) ??
+      modulePath,
     values: reviewedVariables,
   });
   const adoption = await adoptRepoOwnedInstallConfig({
@@ -352,9 +342,6 @@ export async function handleCapsuleInstallConfigReAdoption(
       : {}),
     baseInstallConfigId: baseConfig.id,
     sourceSnapshotId: sourceSnapshot.id,
-    ...(request.deploymentProfileKey
-      ? { deploymentProfileKey: request.deploymentProfileKey }
-      : {}),
   };
   const provisionalTarget = derivedTarget({
     id: targetInstallConfigId,
@@ -585,15 +572,7 @@ async function resolveReAdoptionBaseInstallConfig(input: {
   readonly source: Source;
   readonly sourceSnapshot: SourceSnapshot;
   readonly baseInstallConfigId: string | undefined;
-  readonly deploymentProfileKey: string | undefined;
 }): Promise<ReAdoptionBaseInstallConfigResolution> {
-  if (input.deploymentProfileKey !== undefined) {
-    return {
-      ok: false,
-      message:
-        "deploymentProfileKey is no longer a source or policy selector; use the generic host policy.",
-    };
-  }
   const configId = input.baseInstallConfigId ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID;
   let baseConfig: InstallConfig;
   try {
@@ -631,7 +610,10 @@ async function resolveReAdoptionBaseInstallConfig(input: {
   const moduleSelection = resolveRepoOwnedInstallModulePath({
     sourceSnapshot: input.sourceSnapshot,
   });
-  if (!moduleSelection.ok && input.sourceSnapshot.repositoryManifest) {
+  // Re-adoption must never recover a module from Source.defaultPath or any
+  // legacy InstallConfig/manifest key. A missing, malformed, stale, or
+  // ambiguous source-sync index is a hard fail-closed condition.
+  if (!moduleSelection.ok) {
     return {
       ok: false,
       message: moduleSelection.diagnostic.message,
@@ -640,9 +622,7 @@ async function resolveReAdoptionBaseInstallConfig(input: {
   return {
     ok: true,
     baseConfig,
-    modulePath: moduleSelection.ok
-      ? moduleSelection.modulePath
-      : input.source.defaultPath,
+    modulePath: moduleSelection.modulePath,
   };
 }
 
@@ -707,7 +687,6 @@ function parseRequest(
   const allowed = new Set([
     "baseInstallConfigId",
     "sourceSnapshotId",
-    "deploymentProfileKey",
     "reason",
     "expected",
   ]);
@@ -729,17 +708,6 @@ function parseRequest(
     return undefined;
   }
   const sourceSnapshotId = exactString(value.sourceSnapshotId);
-  const deploymentProfileKey = optionalString(value.deploymentProfileKey);
-  if (
-    value.deploymentProfileKey !== undefined &&
-    deploymentProfileKey === undefined
-  ) {
-    return undefined;
-  }
-  // Legacy deployment-profile rows are inert history. Re-adoption accepts
-  // only the generic host policy or an explicitly named generic config; a
-  // profile key would otherwise invite source-URL policy selection.
-  if (deploymentProfileKey !== undefined) return undefined;
   const reason = exactString(value.reason);
   const authorityGuard = exactString(expected.authorityGuard);
   if (
@@ -756,7 +724,6 @@ function parseRequest(
   return {
     ...(baseInstallConfigId ? { baseInstallConfigId } : {}),
     sourceSnapshotId,
-    ...(deploymentProfileKey ? { deploymentProfileKey } : {}),
     reason,
     expected: {
       authorityGuard,
@@ -811,6 +778,17 @@ function reAdoptionReviewedUserVariables(input: {
       return inputOwnership === undefined || inputOwnership === "user";
     }),
   );
+}
+
+function repositoryManifestModulePath(
+  snapshot: SourceSnapshot,
+  modulePath: string,
+): string | undefined {
+  const parsedScopePath = modulePathValue(snapshot.path);
+  const scopePath = parsedScopePath === "" ? "." : parsedScopePath;
+  if (!scopePath) return undefined;
+  if (scopePath === ".") return modulePath;
+  return modulePath === "." ? scopePath : `${scopePath}/${modulePath}`;
 }
 
 function exactString(value: unknown): string | undefined {

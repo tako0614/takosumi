@@ -49,6 +49,24 @@ class FullStubRunner implements OpenTofuRunner {
     archiveSizeBytes: 2048,
     repositoryInstallMetadata: { status: "absent" },
     repositoryManifest: { status: "absent" },
+    repositoryModules: {
+      status: "ready",
+      scopePath: ".",
+      modules: [
+        {
+          path: ".",
+          providerPackages: [
+            { source: FIXTURE_CLOUDFLARE_PROVIDER },
+          ],
+          rootProviderRequirements: [
+            {
+              source: FIXTURE_CLOUDFLARE_PROVIDER,
+              moduleLocalName: "cloudflare",
+            },
+          ],
+        },
+      ],
+    },
   };
   planCalls = 0;
 

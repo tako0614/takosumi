@@ -176,6 +176,17 @@ test("HTTP OpenTofu runner preserves source sync reuse and repository metadata",
               install: { modules: { ".": { inputs: [] } } },
             },
           },
+          repositoryModules: {
+            status: "ready",
+            scopePath: ".",
+            modules: [
+              {
+                path: ".",
+                providerPackages: [],
+                rootProviderRequirements: [],
+              },
+            ],
+          },
           phaseTimings: [
             {
               phase: "archive",
@@ -213,6 +224,11 @@ test("HTTP OpenTofu runner preserves source sync reuse and repository metadata",
       archiveRef: "workspaces/workspace_1/sources/source_1/old.tar.zst",
       archiveDigest,
       archiveSizeBytes: archiveBytes.byteLength,
+      repositoryModules: {
+        status: "ready",
+        scopePath: ".",
+        modules: [],
+      },
     };
 
     const result = await runner.sourceSync({
@@ -250,6 +266,13 @@ test("HTTP OpenTofu runner preserves source sync reuse and repository metadata",
           install: { modules: { ".": { inputs: [] } } },
         },
       },
+      repositoryModules: {
+        status: "ready",
+        scopePath: ".",
+        modules: [
+          { path: ".", providerPackages: [], rootProviderRequirements: [] },
+        ],
+      },
       phaseTimings: [
         {
           phase: "archive",
@@ -280,6 +303,11 @@ test("HTTP OpenTofu runner keeps an unchanged object-storage source archive with
     archiveRef,
     archiveDigest,
     archiveSizeBytes: archiveBytes.byteLength,
+    repositoryModules: {
+      status: "ready",
+      scopePath: ".",
+      modules: [],
+    },
   };
   const requests: string[] = [];
   const writes: Array<{ key: string; bytes: Uint8Array }> = [];
@@ -300,6 +328,7 @@ test("HTTP OpenTofu runner keeps an unchanged object-storage source archive with
             sizeBytes: archiveBytes.byteLength,
             reusedFromSnapshotId: reuseSnapshot.id,
           },
+          repositoryModules: reuseSnapshot.repositoryModules,
         });
       }
       return new Response("not found", { status: 404 });
@@ -336,6 +365,7 @@ test("HTTP OpenTofu runner keeps an unchanged object-storage source archive with
       archiveDigest,
       archiveSizeBytes: archiveBytes.byteLength,
       archiveRef,
+      repositoryModules: reuseSnapshot.repositoryModules,
     });
     expect(requests).toEqual(["POST /runs/sync_reuse"]);
     expect(writes).toHaveLength(0);
