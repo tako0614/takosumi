@@ -832,6 +832,7 @@ function matchesHostedAiRoute(value: unknown): boolean {
           "ownsPathSubtree",
           "requestScopeRules",
           "selfServicePatScopes",
+          "workspaceContext",
         ].sort(),
       ) &&
     value.id === "takosumi-ai" &&
@@ -839,6 +840,7 @@ function matchesHostedAiRoute(value: unknown): boolean {
     value.handlerKey === "HOSTED" &&
     value.authDelivery === "context" &&
     value.ownsPathSubtree === true &&
+    value.workspaceContext === "query-required" &&
     JSON.stringify(value.selfServicePatScopes) ===
       JSON.stringify(["ai.models.read", "ai.chat"]) &&
     JSON.stringify(value.requestScopeRules) ===

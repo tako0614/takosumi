@@ -119,6 +119,7 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
       handlerKey: "HOSTED",
       authDelivery: "context",
       ownsPathSubtree: true,
+      workspaceContext: "query-required",
       selfServicePatScopes: ["ai.models.read", "ai.chat"],
       requestScopeRules: [
         {
