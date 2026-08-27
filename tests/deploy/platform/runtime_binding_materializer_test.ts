@@ -3,8 +3,11 @@ import type { Capsule } from "takosumi-contract/capsules";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { OidcClientRecord } from "../../../accounts/service/src/store.ts";
 import { InMemoryAccountsStore } from "../../../accounts/service/src/store.ts";
+import type { ControlPlaneOperations } from "../../../accounts/service/src/control-operations.ts";
+import { validateOidcLiveGrant } from "../../../accounts/service/src/oidc-live-grant.ts";
 import {
   createTakosumiRuntimeBindingMaterializer,
+  type RuntimeBindingAccountsLedger,
   type RuntimeBindingControlLedger,
 } from "../../../deploy/platform/runtime_binding_materializer.ts";
 import {
@@ -15,9 +18,20 @@ import {
 
 const NOW = new Date("2026-08-25T12:00:00.000Z");
 const PAIRWISE_SECRET = "pairwise-secret-with-at-least-32-bytes";
+const DERIVATION_KEY = "runtime-secret-with-at-least-32-bytes";
+const PROFILE_V1 = "takosumi.runtime-binding-profile/v1";
+const PROFILE_V2 = "takosumi.runtime-binding-profile/v2";
+const RUNTIME_BINDINGS = [
+  "ENCRYPTION_KEY",
+  "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+  "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+  "TAKOSUMI_ACCOUNTS_OWNER_SUB",
+  "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
+] as const;
 
 function runtimeBindingInstallConfig(
   overrides: Partial<InstallConfig> = {},
+  profileContract: typeof PROFILE_V1 | typeof PROFILE_V2 = PROFILE_V1,
 ): InstallConfig {
   return {
     id: "icfg_legacy_runtime_binding",
@@ -33,7 +47,7 @@ function runtimeBindingInstallConfig(
       }],
     },
     runtimeBindingMaterialization: {
-      contract: "takosumi.runtime-binding-profile/v1",
+      contract: profileContract,
       generatedSecrets: [{
         binding: "ENCRYPTION_KEY",
         bytes: 32,
@@ -58,6 +72,10 @@ function runtimeBindingInstallConfig(
 
 function runtimeBindingControl(
   config: InstallConfig = runtimeBindingInstallConfig(),
+  input: {
+    readonly epoch?: number;
+    readonly currentConfig?: () => InstallConfig | undefined;
+  } = {},
 ): RuntimeBindingControlLedger {
   return {
     async resolveContext(request) {
@@ -79,54 +97,118 @@ function runtimeBindingControl(
       return {
         id: "cap_1",
         workspaceId: "ws_1",
+        projectId: "project_1",
         name: "Legacy private app",
+        slug: "legacy-private-app",
+        sourceId: "source_1",
         installConfigId: config.id,
+        installingPrincipalId: "tsub_owner",
+        environment: "staging",
+        currentStateGeneration: 0,
+        status: "active",
+        createdAt: NOW.toISOString(),
+        updatedAt: NOW.toISOString(),
       };
     },
     async getInstallConfig() {
-      return config;
+      return input.currentConfig?.() ?? config;
+    },
+    async getCapsuleExecutionAuthorityEpoch() {
+      return input.epoch ?? 7;
     },
   };
+}
+
+function noAccountsAccess(): RuntimeBindingAccountsLedger {
+  return {
+    async findOidcClient() {
+      throw new Error("read-only materialization must not read Accounts");
+    },
+    async findOidcClientForCapsule() {
+      throw new Error("read-only materialization must not read Accounts");
+    },
+    async saveOidcClient() {
+      throw new Error("read-only materialization must not write Accounts");
+    },
+  };
+}
+
+function recordingAccountsStore(input: { readonly loseFirstAck?: boolean } = {}) {
+  const store = new InMemoryAccountsStore();
+  let writes = 0;
+  let loseFirstAck = input.loseFirstAck ?? false;
+  const accounts: RuntimeBindingAccountsLedger = {
+    async findOidcClient(clientId) {
+      return store.findOidcClient(clientId);
+    },
+    async findOidcClientForCapsule(capsuleId) {
+      return store.findOidcClientForCapsule(capsuleId);
+    },
+    async saveOidcClient(record) {
+      store.saveOidcClient(record);
+      writes += 1;
+      if (loseFirstAck) {
+        loseFirstAck = false;
+        throw new Error("simulated lost Accounts acknowledgement");
+      }
+    },
+  };
+  return { accounts, store, writes: () => writes };
+}
+
+function runtimeBindingCall(
+  phase: "plan" | "apply" | "destroy" = "apply",
+  overrides: Partial<{
+    readonly publicOrigin: string;
+    readonly bindings: readonly string[];
+  }> = {},
+) {
+  return {
+    request: {
+      contract: "takosumi.runtime-bindings/v1",
+      workspaceId: "ws_1",
+      capsuleId: "cap_1",
+      runId: "run_1",
+      phase,
+    },
+    resourceName: "external_worker_version.app",
+    scriptName: "legacy-app",
+    publicOrigin: "https://legacy-app.example.test",
+    bindings: RUNTIME_BINDINGS,
+    ...overrides,
+  } as const;
+}
+
+function createRuntimeBindingMaterializer(input: {
+  readonly control?: RuntimeBindingControlLedger;
+  readonly accounts?: RuntimeBindingAccountsLedger;
+} = {}) {
+  return createTakosumiRuntimeBindingMaterializer({
+    control: input.control ?? runtimeBindingControl(),
+    accounts: input.accounts ?? noAccountsAccess(),
+    issuer: "https://app.takosumi.com",
+    pairwiseSubjectSecret: PAIRWISE_SECRET,
+    derivationKey: DERIVATION_KEY,
+    clock: () => NOW,
+  });
 }
 
 describe("Takosumi runtime binding materializer", () => {
   test("derives the exact DB-owned values read-only in every provider phase", async () => {
     const config = runtimeBindingInstallConfig();
     const original = structuredClone(config);
-    const materializer = createTakosumiRuntimeBindingMaterializer({
+    const materializer = createRuntimeBindingMaterializer({
       control: runtimeBindingControl(config),
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: PAIRWISE_SECRET,
-      derivationKey: "runtime-secret-with-at-least-32-bytes",
     });
-    const bindings = [
-      "ENCRYPTION_KEY",
-      "TAKOSUMI_ACCOUNTS_ISSUER_URL",
-      "TAKOSUMI_ACCOUNTS_CLIENT_ID",
-      "TAKOSUMI_ACCOUNTS_OWNER_SUB",
-      "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
-    ] as const;
 
     const outcomes = await Promise.all(
       (["plan", "apply", "destroy"] as const).map((phase) =>
-        materializer.materializeRuntimeBindings({
-          request: {
-            contract: "takosumi.runtime-bindings/v1",
-            workspaceId: "ws_1",
-            capsuleId: "cap_1",
-            runId: "run_1",
-            phase,
-          },
-          resourceName: "external_worker_version.app",
-          scriptName: "legacy-app",
-          publicOrigin: "https://legacy-app.example.test",
-          bindings,
-        })
+        materializer.materializeRuntimeBindings(runtimeBindingCall(phase))
       ),
     );
 
     expect(Object.keys(outcomes[0]!.values).sort()).toEqual(
-      [...bindings].sort(),
+      [...RUNTIME_BINDINGS].sort(),
     );
     expect(outcomes[0]!.values.ENCRYPTION_KEY).toMatch(/^[a-f0-9]{64}$/u);
     expect(outcomes.slice(1).every((outcome) =>
@@ -140,11 +222,8 @@ describe("Takosumi runtime binding materializer", () => {
 
   test("refuses a missing or drifted DB-owned runtime grant", async () => {
     const materializer = (config: InstallConfig) =>
-      createTakosumiRuntimeBindingMaterializer({
+      createRuntimeBindingMaterializer({
         control: runtimeBindingControl(config),
-        issuer: "https://app.takosumi.com",
-        pairwiseSubjectSecret: PAIRWISE_SECRET,
-        derivationKey: "runtime-secret-with-at-least-32-bytes",
       });
     const call = {
       request: {
@@ -182,6 +261,285 @@ describe("Takosumi runtime binding materializer", () => {
         },
       })).materializeRuntimeBindings(call),
     ).rejects.toThrow(/grant/i);
+  });
+
+  test("commits the exact OIDC registration only after an explicit Apply commit", async () => {
+    const config = runtimeBindingInstallConfig({}, PROFILE_V2);
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config),
+      accounts: recorded.accounts,
+    });
+    const call = runtimeBindingCall("apply");
+
+    const materialized = await materializer.materializeRuntimeBindings(call);
+    expect(materialized.values.TAKOSUMI_ACCOUNTS_CLIENT_ID).toMatch(
+      /^tko_[A-Za-z0-9_-]{43}$/u,
+    );
+    expect(recorded.writes()).toBe(0);
+    expect(
+      recorded.store.findOidcClient(
+        materialized.values.TAKOSUMI_ACCOUNTS_CLIENT_ID!,
+      ),
+    ).toBeUndefined();
+
+    await materializer.commitRuntimeBindings(call);
+
+    expect(recorded.writes()).toBe(1);
+    expect(
+      recorded.store.findOidcClient(
+        materialized.values.TAKOSUMI_ACCOUNTS_CLIENT_ID!,
+      ),
+    ).toMatchObject({
+      capsuleId: "cap_1",
+      issuerUrl: "https://app.takosumi.com",
+      redirectUris: [
+        "https://legacy-app.example.test/auth/legacy/callback",
+      ],
+      allowedScopes: ["openid", "profile", "email"],
+      subjectMode: "pairwise",
+      tokenEndpointAuthMethod: "none",
+      activationDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+    });
+  });
+
+  test("keeps upload-failure rollback read-only before explicit commit", async () => {
+    const config = runtimeBindingInstallConfig({}, PROFILE_V2);
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config),
+      accounts: recorded.accounts,
+    });
+    const call = runtimeBindingCall("apply");
+
+    await materializer.materializeRuntimeBindings(call);
+    await materializer.rollbackRuntimeBindings({
+      request: call.request,
+      rollbackReceipt: "worker-version-upload-failed",
+    });
+
+    expect(recorded.writes()).toBe(0);
+  });
+
+  test("retries an Apply commit idempotently after a duplicate or lost acknowledgement", async () => {
+    const config = runtimeBindingInstallConfig({}, PROFILE_V2);
+    const recorded = recordingAccountsStore({ loseFirstAck: true });
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config),
+      accounts: recorded.accounts,
+    });
+    const call = runtimeBindingCall("apply");
+
+    await expect(materializer.commitRuntimeBindings(call)).rejects.toThrow(
+      /lost Accounts acknowledgement/i,
+    );
+    expect(recorded.writes()).toBe(1);
+
+    await materializer.commitRuntimeBindings(call);
+    await materializer.commitRuntimeBindings(call);
+    expect(recorded.writes()).toBe(1);
+  });
+
+  test("refuses non-Apply commit and current profile drift without Accounts mutation", async () => {
+    let current = runtimeBindingInstallConfig({}, PROFILE_V2);
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(current, {
+        currentConfig: () => current,
+      }),
+      accounts: recorded.accounts,
+    });
+
+    await expect(
+      materializer.commitRuntimeBindings(runtimeBindingCall("plan")),
+    ).rejects.toThrow(/Apply/i);
+    await expect(
+      materializer.commitRuntimeBindings(runtimeBindingCall("destroy")),
+    ).rejects.toThrow(/Apply/i);
+
+    await materializer.materializeRuntimeBindings(runtimeBindingCall("apply"));
+    current = runtimeBindingInstallConfig({
+      runtimeBindingMaterialization: {
+        contract: PROFILE_V2,
+        generatedSecrets: [{
+          binding: "DIFFERENT_KEY",
+          bytes: 32,
+          encoding: "hex",
+        }],
+      },
+      updatedAt: "2026-08-25T12:00:01.000Z",
+    }, PROFILE_V2);
+    await expect(
+      materializer.commitRuntimeBindings(runtimeBindingCall("apply")),
+    ).rejects.toThrow(/DB-owned profile/i);
+    expect(recorded.writes()).toBe(0);
+  });
+
+  test("refuses authority drift between commit confirmation reads", async () => {
+    const config = runtimeBindingInstallConfig({}, PROFILE_V2);
+    const drifted = runtimeBindingInstallConfig({
+      updatedAt: "2026-08-25T12:00:01.000Z",
+    }, PROFILE_V2);
+    let configReads = 0;
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config, {
+        currentConfig: () => configReads++ === 0 ? config : drifted,
+      }),
+      accounts: recorded.accounts,
+    });
+
+    await expect(
+      materializer.commitRuntimeBindings(runtimeBindingCall("apply")),
+    ).rejects.toThrow(/authority changed during confirmation/i);
+    expect(recorded.writes()).toBe(0);
+  });
+
+  test("commits no Accounts mutation for a generated-secret-only profile", async () => {
+    const config = runtimeBindingInstallConfig({
+      installExperience: undefined,
+      runtimeBindingMaterialization: {
+        contract: PROFILE_V2,
+        generatedSecrets: [{
+          binding: "ENCRYPTION_KEY",
+          bytes: 32,
+          encoding: "hex",
+        }],
+      },
+    }, PROFILE_V2);
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config),
+      accounts: recorded.accounts,
+    });
+    const call = runtimeBindingCall("apply", {
+      bindings: ["ENCRYPTION_KEY"],
+    });
+
+    await expect(materializer.commitRuntimeBindings(call)).resolves.toBeUndefined();
+    expect(recorded.writes()).toBe(0);
+  });
+
+  test("saves the current epoch digest accepted by live-grant validation", async () => {
+    const config = runtimeBindingInstallConfig({}, PROFILE_V2);
+    const capsule = {
+      id: "cap_1",
+      workspaceId: "ws_1",
+      name: "Legacy private app",
+      installConfigId: config.id,
+      status: "active",
+    } as const;
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config, { epoch: 7 }),
+      accounts: recorded.accounts,
+    });
+    const call = runtimeBindingCall("apply");
+    const materialized = await materializer.materializeRuntimeBindings(call);
+    await materializer.commitRuntimeBindings(call);
+    const clientId = materialized.values.TAKOSUMI_ACCOUNTS_CLIENT_ID!;
+    const client = recorded.store.findOidcClient(clientId)!;
+    const operations = {
+      capsules: {
+        getCapsule: async () => capsule,
+        getInstallConfig: async () => config,
+        getCapsuleExecutionAuthorityEpoch: async () => 7,
+      },
+      workspaces: {
+        getWorkspace: async () => ({
+          id: "ws_1",
+          ownerUserId: "tsub_owner",
+        }),
+      },
+      members: { listMembers: async () => [] },
+    } as unknown as ControlPlaneOperations;
+
+    await expect(validateOidcLiveGrant({
+      store: recorded.store,
+      operations,
+      client,
+      scope: "openid profile email",
+      takosumiSubject: "tsub_owner",
+      capsuleId: "cap_1",
+      workspaceId: "ws_1",
+    })).resolves.toEqual({
+      ok: true,
+      capsuleId: "cap_1",
+      capsuleName: "Legacy private app",
+      workspaceId: "ws_1",
+      role: "owner",
+    });
+  });
+
+  test("keeps v1 commit read-only for compatibility", async () => {
+    const config = runtimeBindingInstallConfig({}, PROFILE_V1);
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config),
+      accounts: recorded.accounts,
+    });
+
+    await materializer.commitRuntimeBindings(runtimeBindingCall("apply"));
+
+    expect(recorded.writes()).toBe(0);
+  });
+
+  test("derives v2 secret and OIDC identity Capsule-stably across InstallConfig replacement", async () => {
+    const firstConfig = runtimeBindingInstallConfig({
+      id: "icfg_runtime_binding_first",
+    }, PROFILE_V2);
+    const secondConfig = runtimeBindingInstallConfig({
+      id: "icfg_runtime_binding_second",
+    }, PROFILE_V2);
+    const call = runtimeBindingCall("plan");
+
+    const first = await createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(firstConfig),
+    }).materializeRuntimeBindings(call);
+    const second = await createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(secondConfig),
+    }).materializeRuntimeBindings(call);
+
+    expect(second.values.ENCRYPTION_KEY).toBe(first.values.ENCRYPTION_KEY);
+    expect(second.values.TAKOSUMI_ACCOUNTS_CLIENT_ID).toBe(
+      first.values.TAKOSUMI_ACCOUNTS_CLIENT_ID,
+    );
+    expect(second.values.TAKOSUMI_ACCOUNTS_OWNER_SUB).toBe(
+      first.values.TAKOSUMI_ACCOUNTS_OWNER_SUB,
+    );
+  });
+
+  test("preserves the exact v1 config-scoped derivation", async () => {
+    const firstConfig = runtimeBindingInstallConfig({
+      id: "icfg_runtime_binding_first",
+    }, PROFILE_V1);
+    const secondConfig = runtimeBindingInstallConfig({
+      id: "icfg_runtime_binding_second",
+    }, PROFILE_V1);
+    const call = runtimeBindingCall("plan");
+
+    const first = await createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(firstConfig),
+    }).materializeRuntimeBindings(call);
+    const second = await createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(secondConfig),
+    }).materializeRuntimeBindings(call);
+
+    expect(first.values).toMatchObject({
+      ENCRYPTION_KEY:
+        "ea8ed4859d0e3c2c6ce9bf09849e10641f62710109287ec39eb9fa128b9557be",
+      TAKOSUMI_ACCOUNTS_CLIENT_ID:
+        "tko_724UIrZAPne2bHZdrbQv3MeI5l1oYqY1KVuocPeTqPs",
+      TAKOSUMI_ACCOUNTS_OWNER_SUB:
+        "tsub_ySEHgIbTe99wY8NWtBxaRJJ868Sz4GZq",
+    });
+    expect(second.values.ENCRYPTION_KEY).not.toBe(first.values.ENCRYPTION_KEY);
+    expect(second.values.TAKOSUMI_ACCOUNTS_CLIENT_ID).not.toBe(
+      first.values.TAKOSUMI_ACCOUNTS_CLIENT_ID,
+    );
+    expect(second.values.TAKOSUMI_ACCOUNTS_OWNER_SUB).not.toBe(
+      first.values.TAKOSUMI_ACCOUNTS_OWNER_SUB,
+    );
   });
 });
 

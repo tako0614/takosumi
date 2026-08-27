@@ -15,6 +15,7 @@ import {
   type RepoOwnedInstallConfigAdoptionInput,
 } from "../../../../accounts/service/src/control/repo-owned-install-config.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
+import { DEFAULT_REPOSITORY_INSTALL_UX_ALLOWED_REQUIREMENT_KINDS } from "../../../../core/domains/capsules/repository_install_ux_compiler.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 
 const NOW = "2026-08-02T00:00:00.000Z";
@@ -123,6 +124,21 @@ const compatibilityReport: CapsuleCompatibilityReport = {
   createdAt: NOW,
 };
 
+const runtimeProfile = {
+  contract: "takosumi.runtime-binding-profile/v2" as const,
+  generatedSecrets: [
+    { binding: "APP_SESSION_SECRET", bytes: 32 as const, encoding: "hex" as const },
+  ],
+  oidcClient: {
+    issuerBinding: "OIDC_ISSUER_URL",
+    clientIdBinding: "OIDC_CLIENT_ID",
+    ownerSubjectBinding: "OIDC_OWNER_SUBJECT",
+    redirectUriBinding: "OIDC_REDIRECT_URI",
+    callbackPath: "/auth/oidc/callback",
+    scopes: ["openid", "profile"],
+  },
+} satisfies NonNullable<InstallConfig["runtimeBindingMaterialization"]>;
+
 const compiledLauncher = {
   key: "launcher",
   name: "app.launcher",
@@ -157,19 +173,27 @@ const operatorHealthBlueprint = {
 };
 
 function baseConfig(overrides: Partial<InstallConfig> = {}): InstallConfig {
+  const overrideRepositoryPolicy = overrides.policy?.repositoryInstallUx;
+  const repositoryInstallUx = {
+    allowedRequirementKinds:
+      DEFAULT_REPOSITORY_INSTALL_UX_ALLOWED_REQUIREMENT_KINDS,
+    ...(overrides.policy === undefined
+      ? { allowedInterfacePermissions: ["ui.open", "ui.inspect"] }
+      : {}),
+    ...overrideRepositoryPolicy,
+  };
   return {
     id: "icfg_repo_interface_base",
     name: "repo-interface-base",
     variableMapping: {},
     outputAllowlist: {},
-    policy: {
-      repositoryInstallUx: {
-        allowedInterfacePermissions: ["ui.open", "ui.inspect"],
-      },
-    },
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
+    policy: {
+      ...overrides.policy,
+      repositoryInstallUx,
+    },
   };
 }
 
@@ -516,6 +540,143 @@ test("repository install preview recovers only its full deterministic config ide
     status: "invalid",
     diagnostic: {
       code: "repository_install_ux_compatibility_report_mismatch",
+    },
+  });
+});
+
+test("repository runtime profile is carried into the deterministic preview", async () => {
+  const runtimeDocument = {
+    apiVersion: "takosumi.com/v2.4",
+    kind: "Repository",
+    install: {
+      modules: {
+        ".": {
+          inputs: [],
+          requires: [
+            {
+              kind: "secret.generated" as const,
+              bytes: 32,
+              encoding: "hex" as const,
+              deliver: { bindings: { value: "APP_SESSION_SECRET" } },
+            },
+            {
+              kind: "identity.oidc" as const,
+              callbackPath: "/auth/oidc/callback",
+              scopes: ["openid", "profile"],
+              deliver: {
+                bindings: {
+                  issuerUrl: "OIDC_ISSUER_URL",
+                  clientId: "OIDC_CLIENT_ID",
+                  ownerSubject: "OIDC_OWNER_SUBJECT",
+                  redirectUri: "OIDC_REDIRECT_URI",
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+  } satisfies RepositoryManifestDocument;
+  const runtimeSnapshot = snapshotWithManifest({
+    status: "present",
+    digest: MANIFEST_DIGEST,
+    document: runtimeDocument,
+  });
+  const base = baseConfig({
+    id: "cfg_runtime_profile_base",
+    policy: {
+      repositoryInstallUx: {
+        allowedRequirementKinds: ["secret.generated", "identity.oidc"],
+        allowedInterfacePermissions: [],
+        allowedOidcScopes: ["openid", "profile"],
+      },
+    },
+  });
+  const input = {
+    operations: {
+      capsules: {
+        getInstallConfig: async () => {
+          throw new OpenTofuControllerError("not_found", "missing");
+        },
+        putInstallConfig: async (config: InstallConfig) => config,
+      },
+    } as unknown as ControlPlaneOperations,
+    source,
+    sourceSnapshot: runtimeSnapshot,
+    baseConfig: base,
+    modulePath: ".",
+    capsuleName: "runtime-profile",
+    workspaceId: source.workspaceId,
+    installingPrincipalId: "tsub_runtime_profile",
+    compatibilityReport,
+  } as const;
+
+  const adopted = await adoptRepoOwnedInstallConfig(input);
+  expect(adopted.status).toBe("accepted");
+  if (adopted.status !== "accepted") return;
+  expect(adopted.runtimeBindingMaterialization).toEqual(runtimeProfile);
+
+  const preview = await previewRepoOwnedInstallConfig(input);
+  expect(preview.status).toBe("accepted");
+  if (preview.status !== "accepted") return;
+  expect(preview.installConfig.runtimeBindingMaterialization).toEqual(
+    runtimeProfile,
+  );
+});
+
+test("repository runtime profile collisions fail closed and absent proposals preserve base", async () => {
+  const base = baseConfig({ runtimeBindingMaterialization: runtimeProfile });
+  const absent = await adopt(base);
+  expect(absent.status).toBe("accepted");
+  if (absent.status !== "accepted") return;
+  expect(absent.runtimeBindingMaterialization).toEqual(runtimeProfile);
+
+  const conflicting = await adopt(
+    baseConfig({
+      runtimeBindingMaterialization: {
+        ...runtimeProfile,
+        generatedSecrets: [
+          { binding: "OTHER_SECRET", bytes: 32, encoding: "hex" },
+        ],
+      },
+      policy: {
+        repositoryInstallUx: {
+          allowedRequirementKinds: ["secret.generated", "identity.oidc"],
+          allowedInterfacePermissions: [],
+          allowedOidcScopes: ["openid", "profile"],
+        },
+      },
+    }),
+    {
+      sourceSnapshot: snapshotWithManifest({
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document: {
+          apiVersion: "takosumi.com/v2.4",
+          kind: "Repository",
+          install: {
+            modules: {
+              ".": {
+                inputs: [],
+                requires: [
+                  {
+                    kind: "secret.generated" as const,
+                    bytes: 32,
+                    encoding: "hex" as const,
+                    deliver: { bindings: { value: "APP_SESSION_SECRET" } },
+                  },
+                ],
+              },
+            },
+          },
+        } satisfies RepositoryManifestDocument,
+      }),
+    },
+  );
+  expect(conflicting).toMatchObject({
+    status: "invalid",
+    diagnostic: {
+      code: "repository_install_ux_runtime_binding_profile_conflict",
     },
   });
 });

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import repositoryManifestV2_1Schema from "../../docs/public/schemas/repository-manifest-v2.1.schema.json" with { type: "json" };
 import repositoryManifestV2_2Schema from "../../docs/public/schemas/repository-manifest-v2.2.schema.json" with { type: "json" };
 import repositoryManifestV2_3Schema from "../../docs/public/schemas/repository-manifest-v2.3.schema.json" with { type: "json" };
+import repositoryManifestV2_4Schema from "../../docs/public/schemas/repository-manifest-v2.4.schema.json" with { type: "json" };
 
 import {
   parseRepositoryManifestText,
@@ -107,7 +108,7 @@ test("repository manifest rejects unknown authority, fields, and versions", asyn
   ).toEqual({
     ok: false,
     error:
-      "apiVersion must be takosumi.com/v1, takosumi.com/v2, takosumi.com/v2.1, takosumi.com/v2.2, or takosumi.com/v2.3",
+      "apiVersion must be takosumi.com/v1, takosumi.com/v2, takosumi.com/v2.1, takosumi.com/v2.2, takosumi.com/v2.3, or takosumi.com/v2.4",
   });
   expect(
     parseRepositoryManifestText(
@@ -454,6 +455,7 @@ test("every repository manifest version rejects defaultModule", async () => {
     "takosumi.com/v2.1",
     "takosumi.com/v2.2",
     "takosumi.com/v2.3",
+    "takosumi.com/v2.4",
   ]) {
     const document = JSON.parse(await fixture("v2-launcher.json"));
     document.apiVersion = apiVersion;
@@ -843,4 +845,49 @@ test("the published v2.3 schema and parser agree on closed sourceBuild paths", (
       pathCase.output,
     );
   }
+});
+
+test("the published v2.4 schema and parser agree on binding-delivered OIDC ownerSubject", () => {
+  const ajv = new Ajv2020({ allErrors: true, strict: false });
+  ajv.addSchema(repositoryManifestV2_1Schema);
+  const validate = ajv.compile(repositoryManifestV2_4Schema);
+  const document = {
+    apiVersion: "takosumi.com/v2.4",
+    kind: "Repository",
+    install: {
+      modules: {
+        ".": {
+          inputs: [],
+          requires: [
+            {
+              kind: "identity.oidc",
+              callbackPath: "/auth/oidc/callback",
+              scopes: ["openid"],
+              deliver: {
+                bindings: {
+                  issuerUrl: "OIDC_ISSUER",
+                  clientId: "OIDC_CLIENT_ID",
+                  ownerSubject: "OIDC_OWNER_SUBJECT",
+                  redirectUri: "OIDC_REDIRECT_URI",
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+  };
+  expect(validate(document), JSON.stringify(validate.errors)).toBe(true);
+  expect(parseRepositoryManifestText(JSON.stringify(document))).toEqual({
+    ok: true,
+    document,
+  });
+
+  const v23 = structuredClone(document);
+  v23.apiVersion = "takosumi.com/v2.3";
+  expect(parseRepositoryManifestText(JSON.stringify(v23))).toEqual({
+    ok: false,
+    error:
+      'install.modules.".".requires[0].deliver.bindings.contains unsupported field ownerSubject',
+  });
 });

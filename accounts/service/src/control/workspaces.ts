@@ -1563,6 +1563,13 @@ async function createCapsule(
       ...(resolvedStoreMetadata ? { store: resolvedStoreMetadata } : {}),
       ...(runnerProfileId ? { runnerId: runnerProfileId } : {}),
       ...(resolvedModulePath ? { modulePath: resolvedModulePath } : {}),
+      ...(repoInstallUx.status === "accepted" &&
+      repoInstallUx.runtimeBindingMaterialization !== undefined
+        ? {
+            runtimeBindingMaterialization:
+              repoInstallUx.runtimeBindingMaterialization,
+          }
+        : {}),
       ...(sourceBuild
         ? { sourceBuild }
         : repoInstallUx.status === "accepted" &&

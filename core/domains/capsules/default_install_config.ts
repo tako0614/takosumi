@@ -32,6 +32,14 @@ export function defaultCapsuleInstallConfig(
     outputAllowlist: defaultCapsuleOutputAllowlist(),
     policy: {
       repositoryInstallUx: {
+        // Runtime requirements are opt-in: repository metadata is rejected
+        // unless the operator names every generic kind this config accepts.
+        allowedRequirementKinds: [
+          "secret.generated",
+          "http.endpoint",
+          "identity.oidc",
+          "interface.consume",
+        ],
         allowedOidcScopes: [
           "openid",
           "profile",

@@ -498,6 +498,12 @@ function derivedTarget(input: {
     ...(input.adoption.requiredInterfaces
       ? { requiredInterfaces: input.adoption.requiredInterfaces }
       : {}),
+    ...(input.adoption.runtimeBindingMaterialization !== undefined
+      ? {
+          runtimeBindingMaterialization:
+            input.adoption.runtimeBindingMaterialization,
+        }
+      : {}),
     outputAllowlist: input.adoption.outputAllowlist,
     ...(input.adoption.sourceBuild
       ? { sourceBuild: input.adoption.sourceBuild }

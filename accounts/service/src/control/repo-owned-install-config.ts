@@ -73,6 +73,7 @@ export type RepoOwnedInstallConfigAdoptionDiagnostic =
         | "repository_install_ux_oidc_endpoint_conflict"
         | "repository_install_ux_interface_blueprint_conflict"
         | "repository_install_ux_output_allowlist_conflict"
+        | "repository_install_ux_runtime_binding_profile_conflict"
         | "repository_install_ux_installing_principal_invalid"
         | "repository_install_ux_manifest_api_version_required";
       readonly message: string;
@@ -94,6 +95,13 @@ export type RepoOwnedInstallConfigAdoptionResult =
       readonly outputAllowlist: InstallConfig["outputAllowlist"];
       /** Repository sourceBuild is a proposal; an existing base value wins. */
       readonly sourceBuild?: InstallConfig["sourceBuild"];
+      /**
+       * Private runtime binding materialization. An absent repository proposal
+       * preserves the operator/base profile; a differing proposal is rejected
+       * rather than merged field-by-field.
+       */
+      readonly runtimeBindingMaterialization?:
+        InstallConfig["runtimeBindingMaterialization"];
       /** Exact repository module compiled into the derived InstallConfig. */
       readonly modulePath: string;
       /**
@@ -299,6 +307,14 @@ export async function adoptRepoOwnedInstallConfig(
       ? { requireReviewedValues: input.requireReviewedValues }
       : {}),
     policy: {
+      ...(input.baseConfig.policy?.repositoryInstallUx
+        ?.allowedRequirementKinds
+        ? {
+            allowedRequirementKinds:
+              input.baseConfig.policy.repositoryInstallUx
+                .allowedRequirementKinds,
+          }
+        : {}),
       ...(input.baseConfig.policy?.repositoryInstallUx?.allowedOidcScopes
         ? {
             allowedOidcScopes:
@@ -373,6 +389,16 @@ export async function adoptRepoOwnedInstallConfig(
   if (!installExperience.ok) {
     return { status: "invalid", diagnostic: installExperience.diagnostic };
   }
+  const runtimeBindingMaterialization = mergeRuntimeBindingMaterialization(
+    input.baseConfig.runtimeBindingMaterialization,
+    compiled.compiled.runtimeBindingMaterialization,
+  );
+  if (!runtimeBindingMaterialization.ok) {
+    return {
+      status: "invalid",
+      diagnostic: runtimeBindingMaterialization.diagnostic,
+    };
+  }
 
   return {
     status: "accepted",
@@ -393,6 +419,9 @@ export async function adoptRepoOwnedInstallConfig(
       : {}),
     outputAllowlist: outputAllowlist.value,
     ...(sourceBuild ? { sourceBuild } : {}),
+    ...(runtimeBindingMaterialization.value
+      ? { runtimeBindingMaterialization: runtimeBindingMaterialization.value }
+      : {}),
     sourceSnapshotId: input.sourceSnapshot!.id,
     digest: observation.digest,
     repositoryManifestApiVersion,
@@ -472,6 +501,9 @@ export async function previewRepoOwnedInstallConfig(
       : {}),
     ...(adoption.requiredInterfaces !== undefined
       ? { requiredInterfaces: adoption.requiredInterfaces }
+      : {}),
+    ...(adoption.runtimeBindingMaterialization !== undefined
+      ? { runtimeBindingMaterialization: adoption.runtimeBindingMaterialization }
       : {}),
     sourceSelector,
     modulePath: selectedPath,
@@ -958,6 +990,31 @@ function mergeRecords(
   operator: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
   return { ...proposed, ...operator };
+}
+
+/**
+ * Runtime materialization is a private host profile, not a set of independent
+ * repository fields. Keep an operator profile when the repository is silent;
+ * accept a repository proposal only when it is byte-for-byte compatible with
+ * the existing profile, and fail closed on any collision.
+ */
+function mergeRuntimeBindingMaterialization(
+  base: InstallConfig["runtimeBindingMaterialization"],
+  proposed: InstallConfig["runtimeBindingMaterialization"],
+): DeclarationMergeResult<InstallConfig["runtimeBindingMaterialization"]> {
+  if (proposed === undefined) return { ok: true, value: base };
+  if (base === undefined) return { ok: true, value: proposed };
+  if (normalizedDeclarationEqual(base, proposed)) {
+    return { ok: true, value: base };
+  }
+  return {
+    ok: false,
+    diagnostic: {
+      code: "repository_install_ux_runtime_binding_profile_conflict",
+      message:
+        "The repository runtime binding profile conflicts with the operator profile.",
+    },
+  };
 }
 
 function repoPresentationStoreMetadata(input: {

@@ -3418,6 +3418,9 @@ test("re-adoption uses a sealed exact post-apply receipt without promoting runti
   const target = await fixture.operations.capsules.getInstallConfig(
     adopted.installConfigReAdoption.targetInstallConfigId,
   );
+  expect(target.runtimeBindingMaterialization).toEqual(
+    fixture.baseInstallConfig.runtimeBindingMaterialization,
+  );
   // Lost-ack replay is sealed by the immutable target receipt. Once the pointer
   // moved, later row drift cannot cause another authority transition.
   await fixture.deployStore.putOutput({

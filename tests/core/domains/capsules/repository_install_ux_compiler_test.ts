@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
-import { compileRepositoryInstallUx } from "../../../../core/domains/capsules/repository_install_ux_compiler.ts";
+import {
+  compileRepositoryInstallUx,
+  DEFAULT_REPOSITORY_INSTALL_UX_ALLOWED_REQUIREMENT_KINDS,
+} from "../../../../core/domains/capsules/repository_install_ux_compiler.ts";
 
 const document: RepositoryManifestDocument = {
   apiVersion: "takosumi.com/v1",
@@ -85,6 +88,13 @@ function report(
 function compile(
   overrides: Partial<Parameters<typeof compileRepositoryInstallUx>[0]> = {},
 ) {
+  const policy =
+    "policy" in overrides
+      ? overrides.policy
+      : {
+          allowedRequirementKinds:
+            DEFAULT_REPOSITORY_INSTALL_UX_ALLOWED_REQUIREMENT_KINDS,
+        };
   return compileRepositoryInstallUx({
     document,
     sourceSnapshotId: "snap_1",
@@ -93,6 +103,15 @@ function compile(
     capsuleName: "Yuru Commu",
     workspaceId: "workspace_abcdef123456",
     ...overrides,
+    ...(policy
+      ? {
+          policy: {
+            allowedRequirementKinds:
+              DEFAULT_REPOSITORY_INSTALL_UX_ALLOWED_REQUIREMENT_KINDS,
+            ...policy,
+          },
+        }
+      : { policy }),
   });
 }
 
@@ -411,7 +430,75 @@ describe("repository install UX compiler", () => {
     });
   });
 
-  test("rejects binding-delivered repository OIDC materialization", () => {
+  test("compiles v2.4 binding-delivered OIDC and generated secret profile", () => {
+    const runtimeDocument = {
+      apiVersion: "takosumi.com/v2.4",
+      kind: "Repository",
+      install: {
+        modules: {
+          ".": {
+            inputs: [],
+            requires: [
+              {
+                kind: "secret.generated",
+                bytes: 32,
+                encoding: "hex",
+                deliver: { bindings: { value: "APP_SESSION_SECRET" } },
+              },
+              {
+                kind: "identity.oidc",
+                callbackPath: "/api/auth/callback/takos",
+                scopes: ["openid", "profile", "email"],
+                deliver: {
+                  bindings: {
+                    issuerUrl: "OIDC_ISSUER_URL",
+                    clientId: "OIDC_CLIENT_ID",
+                    ownerSubject: "OIDC_OWNER_SUBJECT",
+                    redirectUri: "OIDC_REDIRECT_URI",
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    } satisfies RepositoryManifestDocument;
+    const result = compile({
+      document: runtimeDocument,
+      compatibilityReport: report({
+        rootModuleVariables: [],
+        rootModuleVariableDeclarations: [],
+      }),
+      policy: { allowedOidcScopes: ["openid", "profile", "email"] },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.compiled.runtimeBindingMaterialization).toEqual({
+      contract: "takosumi.runtime-binding-profile/v2",
+      generatedSecrets: [
+        { binding: "APP_SESSION_SECRET", bytes: 32, encoding: "hex" },
+      ],
+      oidcClient: {
+        issuerBinding: "OIDC_ISSUER_URL",
+        clientIdBinding: "OIDC_CLIENT_ID",
+        ownerSubjectBinding: "OIDC_OWNER_SUBJECT",
+        redirectUriBinding: "OIDC_REDIRECT_URI",
+        callbackPath: "/api/auth/callback/takos",
+        scopes: ["openid", "profile", "email"],
+      },
+    });
+    expect(result.compiled.installExperience.projections).toEqual([
+      {
+        kind: "oidc_client",
+        variables: {},
+        callbackPath: "/api/auth/callback/takos",
+        scopes: ["openid", "profile", "email"],
+      },
+    ]);
+  });
+
+  test("rejects binding-delivered repository OIDC outside the closed v2.4 API", () => {
     const runtimeDocument = {
       apiVersion: "takosumi.com/v1",
       kind: "Repository",
@@ -423,7 +510,7 @@ describe("repository install UX compiler", () => {
               {
                 kind: "identity.oidc",
                 callbackPath: "/api/auth/callback/takos",
-                scopes: ["openid", "profile", "email", "profile"],
+                scopes: ["openid", "profile", "email"],
                 deliver: {
                   bindings: {
                     accountsUrl: "TAKOSUMI_ACCOUNTS_URL",
@@ -449,8 +536,54 @@ describe("repository install UX compiler", () => {
     expect(result).toMatchObject({
       ok: false,
       diagnostic: {
-        code: "repository_install_ux_requirement_target_invalid",
+        code: "repository_install_ux_requirement_version_unsupported",
       },
+    });
+  });
+
+  test("rejects runtime binding collisions before profile materialization", () => {
+    const result = compile({
+      document: {
+        apiVersion: "takosumi.com/v2.4",
+        kind: "Repository",
+        install: {
+          modules: {
+            ".": {
+              inputs: [],
+              requires: [
+                {
+                  kind: "secret.generated",
+                  bytes: 32,
+                  encoding: "hex",
+                  deliver: { bindings: { value: "OIDC_CLIENT_ID" } },
+                },
+                {
+                  kind: "identity.oidc",
+                  callbackPath: "/callback",
+                  scopes: ["openid"],
+                  deliver: {
+                    bindings: {
+                      issuerUrl: "OIDC_ISSUER",
+                      clientId: "OIDC_CLIENT_ID",
+                      ownerSubject: "OIDC_OWNER",
+                      redirectUri: "OIDC_REDIRECT",
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } satisfies RepositoryManifestDocument,
+      compatibilityReport: report({
+        rootModuleVariables: [],
+        rootModuleVariableDeclarations: [],
+      }),
+      policy: { allowedOidcScopes: ["openid"] },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostic: { code: "repository_install_ux_requirement_target_invalid" },
     });
   });
 
@@ -746,6 +879,26 @@ describe("repository install UX compiler", () => {
         "repository_install_ux_plain_env_unsupported",
       );
     }
+  });
+
+  test("fails closed when runtime requirements have no operator allowlist", () => {
+    const result = compileRepositoryInstallUx({
+      document,
+      sourceSnapshotId: "snap_1",
+      modulePath: ".",
+      compatibilityReport: report(),
+      capsuleName: "Yuru Commu",
+      workspaceId: "workspace_abcdef123456",
+      policy: { allowedOidcScopes: ["openid"] },
+    });
+    expect(result).toEqual({
+      ok: false,
+      diagnostic: {
+        code: "repository_install_ux_requirement_disallowed",
+        message:
+          "Repository runtime requirements require an explicit operator allowlist.",
+      },
+    });
   });
 
   test("compiles a generic v2 launcher declaration into existing blueprint and Output shapes", () => {

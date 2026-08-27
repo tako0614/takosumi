@@ -15,7 +15,10 @@ import type {
   CapsuleRequiredInterface,
 } from "./interfaces.ts";
 import type { ScopeBoundaryPolicy } from "./plan-scope.ts";
-import type { RepositoryManifestInterfaceApiVersion } from "./repository-manifest.ts";
+import type {
+  RepositoryManifestInterfaceApiVersion,
+  RepositoryRuntimeRequirement,
+} from "./repository-manifest.ts";
 import type { JsonValue } from "./types.ts";
 import type { ConnectionScopeKind } from "./connections.ts";
 import type { CapsuleStatus } from "./capsules.ts";
@@ -237,6 +240,8 @@ export interface PolicyConfig {
    * binding permissions; repository metadata can never widen this policy.
    */
   readonly repositoryInstallUx?: {
+    /** Exact generic runtime requirement kinds accepted from a repository. */
+    readonly allowedRequirementKinds?: readonly RepositoryRuntimeRequirement["kind"][];
     /**
      * Exact Takosumi Accounts scopes repository-owned `identity.oidc` may
      * request. Absence grants no dynamic Capsule client capability.
@@ -685,12 +690,28 @@ export interface RuntimeSecretFileMaterialization {
  * a runtime secret file, when declared, is kept only as opaque sealed host
  * material and opened only on the runner dispatch path.
  */
-export interface InstallConfigRuntimeBindingMaterialization {
+export interface InstallConfigRuntimeBindingMaterializationV1 {
   readonly contract: "takosumi.runtime-binding-profile/v1";
   readonly generatedSecrets?: readonly RuntimeGeneratedSecretBinding[];
   readonly oidcClient?: RuntimeOidcClientBindings;
   readonly runtimeSecretFile?: RuntimeSecretFileMaterialization;
 }
+
+/**
+ * v2 keeps the value-free wire shape while defining Capsule-stable generated
+ * secret derivation and post-upload activation semantics. Existing v1 rows
+ * remain on their original derivation contract.
+ */
+export interface InstallConfigRuntimeBindingMaterializationV2 {
+  readonly contract: "takosumi.runtime-binding-profile/v2";
+  readonly generatedSecrets?: readonly RuntimeGeneratedSecretBinding[];
+  readonly oidcClient?: RuntimeOidcClientBindings;
+  readonly runtimeSecretFile?: RuntimeSecretFileMaterialization;
+}
+
+export type InstallConfigRuntimeBindingMaterialization =
+  | InstallConfigRuntimeBindingMaterializationV1
+  | InstallConfigRuntimeBindingMaterializationV2;
 
 /**
  * Value-free proof that one exact failed create/update Apply committed the

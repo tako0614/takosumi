@@ -625,6 +625,18 @@ function policySchemas(): Record<string, Record<string, unknown>> {
           type: "object",
           required: ["allowedInterfacePermissions"],
           properties: {
+            allowedRequirementKinds: {
+              type: "array",
+              uniqueItems: true,
+              items: {
+                enum: [
+                  "secret.generated",
+                  "http.endpoint",
+                  "identity.oidc",
+                  "interface.consume",
+                ],
+              },
+            },
             allowedOidcScopes: {
               type: "array",
               minItems: 1,
@@ -674,6 +686,7 @@ function policySchemas(): Record<string, Record<string, unknown>> {
                 "takosumi.com/v2.1",
                 "takosumi.com/v2.2",
                 "takosumi.com/v2.3",
+                "takosumi.com/v2.4",
               ],
             },
           },
