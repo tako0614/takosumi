@@ -7,6 +7,7 @@ import {
   parsePlatformWorkerReleaseArgs,
   parsePlatformContainerDetail,
   parseServingVersion,
+  platformCommandFailureDiagnostic,
   platformDashboardBuildEnvironment,
   platformTargetForEnvironment,
   remoteBranchContainsCommit,
@@ -264,6 +265,36 @@ test("platform release parser exposes reviewed plan, execute, recovery, and rest
     reviewer: "operator:reviewer",
     evidence: "/private/restored.json",
   });
+});
+
+test("platform command diagnostics normalize ArrayBuffer output before bounded redaction", () => {
+  const encoder = new TextEncoder();
+  const stdout = encoder.encode(
+    `stdout secret=super-secret ${"x".repeat(3_000)}`,
+  ).buffer;
+  const stderr = encoder.encode(
+    `stderr bearer=super-token ${"y".repeat(3_000)}`,
+  ).buffer;
+
+  const diagnostic = platformCommandFailureDiagnostic(
+    ["sealed-command", "--config", "/private/config.toml"],
+    17,
+    false,
+    stdout,
+    stderr,
+  );
+
+  expect(diagnostic).toMatchObject({
+    code: "PlatformCommandError",
+    message: "sealed-command --config /private/config.toml failed with exit 17",
+    command: "sealed-command --config /private/config.toml",
+    exitCode: 17,
+    timedOut: false,
+  });
+  expect(diagnostic.stdout.startsWith("stdout [REDACTED] ")).toBeTrue();
+  expect(diagnostic.stderr.startsWith("stderr [REDACTED] ")).toBeTrue();
+  expect(diagnostic.stdout.length).toBeLessThanOrEqual(2_048);
+  expect(diagnostic.stderr.length).toBeLessThanOrEqual(2_048);
 });
 
 test("platform release verifies the exact pushed branch without a remote-tracking ref", () => {

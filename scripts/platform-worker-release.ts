@@ -3838,23 +3838,25 @@ async function requiredCommand(
     timedOut = true;
     child.kill("SIGKILL");
   }, COMMAND_TIMEOUT_MS);
-  const [exitCode, stdoutBytes, stderrBytes] = await Promise.all([
+  const [exitCode, stdoutBuffer, stderrBuffer] = await Promise.all([
     child.exited,
-    new Response(child.stdout).bytes(),
-    new Response(child.stderr).bytes(),
+    new Response(child.stdout).arrayBuffer(),
+    new Response(child.stderr).arrayBuffer(),
   ]).finally(() => clearTimeout(timer));
+  const stdoutBytes = new Uint8Array(stdoutBuffer);
+  const stderrBytes = new Uint8Array(stderrBuffer);
   if (
     stdoutBytes.byteLength > MAX_OUTPUT ||
     stderrBytes.byteLength > MAX_OUTPUT ||
     timedOut ||
     exitCode !== 0
   ) {
-    throw new PlatformCommandError(
-      argv.slice(0, 4).join(" ").slice(0, 256),
+    throw platformCommandErrorFromBytes(
+      argv,
       exitCode,
       timedOut,
-      new TextDecoder("utf-8").decode(stdoutBytes.subarray(0, 2_048)),
-      new TextDecoder("utf-8").decode(stderrBytes.subarray(0, 2_048)),
+      stdoutBytes,
+      stderrBytes,
     );
   }
   return {
@@ -3879,6 +3881,62 @@ class PlatformCommandError extends Error {
     );
     this.name = "PlatformCommandError";
   }
+}
+
+/**
+ * Build the bounded diagnostic used for a failed platform command.
+ *
+ * The release runner receives byte buffers from Bun, whose Response helpers
+ * have returned both ArrayBuffer and Uint8Array across supported versions.
+ * Keeping this seam byte-oriented makes that runtime variation observable in
+ * tests without exposing the command runner itself.
+ */
+export function platformCommandFailureDiagnostic(
+  argv: readonly string[],
+  exitCode: number,
+  timedOut: boolean,
+  stdout: ArrayBuffer | Uint8Array,
+  stderr: ArrayBuffer | Uint8Array,
+): Readonly<{
+  code: string;
+  message: string;
+  command: string | null;
+  exitCode: number | null;
+  timedOut: boolean;
+  stdout: string;
+  stderr: string;
+}> {
+  return platformFailureDiagnostic(
+    platformCommandErrorFromBytes(
+      argv,
+      exitCode,
+      timedOut,
+      normalizePlatformCommandBytes(stdout),
+      normalizePlatformCommandBytes(stderr),
+    ),
+  );
+}
+
+function platformCommandErrorFromBytes(
+  argv: readonly string[],
+  exitCode: number,
+  timedOut: boolean,
+  stdoutBytes: Uint8Array,
+  stderrBytes: Uint8Array,
+): PlatformCommandError {
+  return new PlatformCommandError(
+    argv.slice(0, 4).join(" ").slice(0, 256),
+    exitCode,
+    timedOut,
+    new TextDecoder("utf-8").decode(stdoutBytes.subarray(0, 2_048)),
+    new TextDecoder("utf-8").decode(stderrBytes.subarray(0, 2_048)),
+  );
+}
+
+function normalizePlatformCommandBytes(
+  value: ArrayBuffer | Uint8Array,
+): Uint8Array {
+  return value instanceof Uint8Array ? value : new Uint8Array(value);
 }
 
 function platformFailureDiagnostic(error: unknown): Readonly<{
