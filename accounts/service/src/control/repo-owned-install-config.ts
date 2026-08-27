@@ -75,6 +75,7 @@ export type RepoOwnedInstallConfigAdoptionDiagnostic =
       readonly code:
         | "repository_install_ux_default_module_invalid"
         | "repository_install_ux_default_module_missing"
+        | "repository_install_ux_oidc_endpoint_conflict"
         | "repository_install_ux_interface_blueprint_conflict"
         | "repository_install_ux_output_allowlist_conflict"
         | "repository_install_ux_installing_principal_invalid"
@@ -471,6 +472,12 @@ export async function adoptRepoOwnedInstallConfig(
       ? { requireReviewedValues: input.requireReviewedValues }
       : {}),
     policy: {
+      ...(input.baseConfig.policy?.repositoryInstallUx?.allowedOidcScopes
+        ? {
+            allowedOidcScopes:
+              input.baseConfig.policy.repositoryInstallUx.allowedOidcScopes,
+          }
+        : {}),
       allowedInterfacePermissions:
         input.baseConfig.policy?.repositoryInstallUx
           ?.allowedInterfacePermissions ?? [],
@@ -532,6 +539,13 @@ export async function adoptRepoOwnedInstallConfig(
   }
   const sourceBuild =
     input.baseConfig.sourceBuild ?? compiled.compiled.sourceBuild;
+  const installExperience = mergeInstallExperience(
+    compiled.compiled.installExperience,
+    input.baseConfig.installExperience,
+  );
+  if (!installExperience.ok) {
+    return { status: "invalid", diagnostic: installExperience.diagnostic };
+  }
 
   return {
     status: "accepted",
@@ -539,10 +553,7 @@ export async function adoptRepoOwnedInstallConfig(
       compiled.compiled.variablePresentation,
       input.baseConfig.variablePresentation,
     ),
-    installExperience: mergeInstallExperience(
-      compiled.compiled.installExperience,
-      input.baseConfig.installExperience,
-    ),
+    installExperience: installExperience.value,
     // Repository-derived and reviewed values are proposals. Existing
     // service/operator values retain final authority on collisions.
     variableMapping: mergeRecords(
@@ -993,21 +1004,56 @@ function mergeVariablePresentation(
 function mergeInstallExperience(
   proposed: NonNullable<InstallConfig["installExperience"]>,
   operator: InstallConfig["installExperience"],
-): InstallConfig["installExperience"] {
-  if (!operator) return proposed;
+):
+  | { readonly ok: true; readonly value: InstallConfig["installExperience"] }
+  | {
+      readonly ok: false;
+      readonly diagnostic: RepoOwnedInstallConfigAdoptionDiagnostic;
+    } {
+  if (!operator) return { ok: true, value: proposed };
   const projections = new Map(
     (proposed.projections ?? []).map((projection) => [
       projection.kind,
       projection,
     ]),
   );
+  const repositoryOidcRequested = (proposed.projections ?? []).some(
+    (projection) => projection.kind === "oidc_client",
+  );
+  if (
+    repositoryOidcRequested &&
+    (operator.projections ?? []).some(
+      (projection) => projection.kind === "public_endpoint",
+    )
+  ) {
+    return {
+      ok: false,
+      diagnostic: {
+        code: "repository_install_ux_oidc_endpoint_conflict",
+        message:
+          "The repository OIDC capability and its public endpoint are one reviewed manifest pair; remove the base public endpoint before adoption.",
+      },
+    };
+  }
   for (const projection of operator.projections ?? []) {
+    if (projection.kind === "oidc_client") {
+      // Dynamic Capsule registration is available only when this exact
+      // repository snapshot requested and compiled identity.oidc. A catalog
+      // or manual presentation projection must not be promoted merely because
+      // another repository declaration caused a derived InstallConfig row.
+      continue;
+    }
     projections.set(projection.kind, projection);
   }
   return {
-    ...(projections.size > 0 ? { projections: [...projections.values()] } : {}),
-    ...(proposed.features ? { features: proposed.features } : {}),
-    repositoryInstallUx: { status: "accepted" },
+    ok: true,
+    value: {
+      ...(projections.size > 0
+        ? { projections: [...projections.values()] }
+        : {}),
+      ...(proposed.features ? { features: proposed.features } : {}),
+      repositoryInstallUx: { status: "accepted" },
+    },
   };
 }
 

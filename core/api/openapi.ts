@@ -625,6 +625,18 @@ function policySchemas(): Record<string, Record<string, unknown>> {
           type: "object",
           required: ["allowedInterfacePermissions"],
           properties: {
+            allowedOidcScopes: {
+              type: "array",
+              minItems: 1,
+              maxItems: 16,
+              uniqueItems: true,
+              items: {
+                type: "string",
+                minLength: 1,
+                maxLength: 128,
+                pattern: "^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$",
+              },
+            },
             allowedInterfacePermissions: {
               type: "array",
               uniqueItems: true,

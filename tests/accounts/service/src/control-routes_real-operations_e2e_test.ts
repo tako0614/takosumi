@@ -36,7 +36,10 @@ import {
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
-import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/capsules/default_install_config.ts";
+import {
+  DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+  defaultCapsuleInstallConfig,
+} from "../../../../core/domains/capsules/default_install_config.ts";
 import {
   fakeProviderVault,
   FIXTURE_ARCHIVE_DIGEST,
@@ -2461,6 +2464,7 @@ async function reAdoptionRouteFixture(
   suffix: string,
   options: {
     readonly legacyProfile?: boolean;
+    readonly genericDefault?: boolean;
     readonly currentVariableMapping?: Readonly<Record<string, unknown>>;
     readonly repositoryInputs?: readonly RepositoryInstallUxInput[];
   } = {},
@@ -2469,20 +2473,20 @@ async function reAdoptionRouteFixture(
   const cookie = seedSession(accountStore);
   const foreignCookie = seedSession(accountStore, `foreign_${suffix}`);
   const deployStore = new InMemoryOpenTofuControlStore();
+  const repositoryInputs = options.repositoryInputs ?? [
+    {
+      name: "public_url",
+      source: { kind: "user" },
+      type: "string",
+      required: true,
+      label: { ja: "公開URL", en: "Public URL" },
+    },
+  ];
   const baseRunner = recordingRunner();
   const runner: RecordingRunner = {
     ...baseRunner,
     readCapsuleSourceFiles: (job) => {
       baseRunner.capsuleSourceFileJobs.push(job);
-      const repositoryInputs = options.repositoryInputs ?? [
-        {
-          name: "public_url",
-          source: { kind: "user" },
-          type: "string",
-          required: true,
-          label: { ja: "公開URL", en: "Public URL" },
-        },
-      ];
       const variableBlocks = repositoryInputs
         .map((input) => {
           const type =
@@ -2515,7 +2519,9 @@ output "launch_url" { value = var.public_url }
     },
   };
   const repositoryUrl = `https://git.example.com/takos/${suffix}.git`;
-  const baseInstallConfig: InstallConfig = {
+  const baseInstallConfig: InstallConfig = options.genericDefault
+    ? defaultCapsuleInstallConfig()
+    : {
     id: `cfg_takos_profile_${suffix}`,
     name: `takos-profile-${suffix}`,
     sourceSelector: { url: repositoryUrl, path: "." },
@@ -2530,17 +2536,6 @@ output "launch_url" { value = var.public_url }
           scopes: TAKOS_SCOPES,
         },
       ],
-    },
-    accountsOidcModuleVariableMaterialization: {
-      contract: "takosumi.accounts-oidc-module-variables/v2",
-      resourceNameVariable: "project_name",
-      publicUrlVariable: "public_url",
-      accountsUrlVariable: "takosumi_accounts_url",
-      issuerUrlVariable: "takosumi_accounts_issuer_url",
-      clientIdVariable: "takosumi_accounts_client_id",
-      redirectUriVariable: "takosumi_accounts_redirect_uri",
-      callbackPath: TAKOS_CALLBACK_PATH,
-      scopes: TAKOS_SCOPES,
     },
     runtimeBindingMaterialization: {
       contract: "takosumi.runtime-binding-profile/v1",
@@ -2612,14 +2607,14 @@ output "launch_url" { value = var.public_url }
     },
     createdAt: "2026-08-25T00:00:00.000Z",
     updatedAt: "2026-08-25T00:00:00.000Z",
-  };
+    };
   const { operations } = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
     opentofuRunner: runner,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
-    operatorInstallConfigs: [baseInstallConfig],
+    operatorInstallConfigs: options.genericDefault ? [] : [baseInstallConfig],
   });
   const snapshotId = `snap_re_adoption_${suffix}`;
   const workspaceId = `ws_re_adoption_${suffix}`;
@@ -2650,6 +2645,9 @@ output "launch_url" { value = var.public_url }
     installingPrincipalId: "user_test",
     status: "active",
   });
+  const repositoryModulePath = options.genericDefault
+    ? "deploy/opentofu/cloudflare"
+    : ".";
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
     repositoryManifest: {
@@ -2659,18 +2657,10 @@ output "launch_url" { value = var.public_url }
         apiVersion: "takosumi.com/v2.2",
         kind: "Repository",
         install: {
-          defaultModule: ".",
+          defaultModule: repositoryModulePath,
           modules: {
-            ".": {
-              inputs: options.repositoryInputs ?? [
-                {
-                  name: "public_url",
-                  source: { kind: "user" },
-                  type: "string",
-                  required: true,
-                  label: { ja: "公開URL", en: "Public URL" },
-                },
-              ],
+            [repositoryModulePath]: {
+              inputs: repositoryInputs,
             },
           },
         },
@@ -3124,14 +3114,9 @@ test("re-adoption uses only the public guard, preserves Takos origin, and does n
   expect(publicTarget.installConfig.variableMapping.public_url).toBe(
     TAKOS_PUBLIC_ORIGIN,
   );
-  expect(publicTarget.installConfig.installExperience?.projections).toEqual([
-    {
-      kind: "oidc_client",
-      variables: {},
-      callbackPath: TAKOS_CALLBACK_PATH,
-      scopes: TAKOS_SCOPES,
-    },
-  ]);
+  expect(
+    publicTarget.installConfig.installExperience?.projections,
+  ).toBeUndefined();
   expect(Date.parse(publicTarget.installConfig.updatedAt)).toBe(
     Date.parse(fixture.baseInstallConfig.updatedAt) + 1,
   );
@@ -3515,6 +3500,110 @@ test("re-adoption keeps the omitted deployment profile default idempotent", asyn
   });
 });
 
+test("re-adoption resolves the generic host default without client selectors", async () => {
+  const fixture = await reAdoptionRouteFixture("generic-default", {
+    genericDefault: true,
+  });
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const path =
+    `/api/v1/capsules/${fixture.seeded.capsule.id}/install-config-re-adoptions`;
+  const body = {
+    sourceSnapshotId: fixture.seeded.snapshot.id,
+    reason: "Adopt the reviewed generic repository setup",
+    expected: { authorityGuard },
+  };
+
+  const adopted = await controlJson<{
+    readonly capsule: { readonly installConfigId: string };
+    readonly installConfigReAdoption: {
+      readonly replayed: boolean;
+      readonly targetInstallConfigId: string;
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-generic-default-v1" },
+      body,
+    },
+    200,
+  );
+  expect(adopted.installConfigReAdoption.replayed).toBe(false);
+
+  const target = await fixture.operations.capsules.getInstallConfig(
+    adopted.installConfigReAdoption.targetInstallConfigId,
+  );
+  expect(fixture.runner.capsuleSourceFileJobs[0]?.modulePath).toBe(
+    "deploy/opentofu/cloudflare",
+  );
+  expect(target.modulePath).toBe("deploy/opentofu/cloudflare");
+  expect(target.internal?.reAdoption?.baseInstallConfigId).toBe(
+    DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+  );
+  expect(adopted.capsule.installConfigId).toBe(target.id);
+
+  const replay = await controlJson<typeof adopted>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-generic-default-v1" },
+      body,
+    },
+    200,
+  );
+  expect(replay.installConfigReAdoption).toMatchObject({
+    replayed: true,
+    targetInstallConfigId:
+      adopted.installConfigReAdoption.targetInstallConfigId,
+  });
+});
+
+test("re-adoption does not treat an explicit profile selector as the generic default", async () => {
+  const fixture = await reAdoptionRouteFixture("explicit-profile-without-base", {
+    genericDefault: true,
+  });
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const path =
+    `/api/v1/capsules/${fixture.seeded.capsule.id}/install-config-re-adoptions`;
+  const rejected = await controlJson<{
+    readonly error: { readonly code: string };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-explicit-profile-v1" },
+      body: {
+        sourceSnapshotId: fixture.seeded.snapshot.id,
+        deploymentProfileKey: "cloudflare-direct-v1",
+        reason: "Do not fall back from an explicit profile",
+        expected: { authorityGuard },
+      },
+    },
+    400,
+  );
+  expect(rejected.error.code).toBe("invalid_request");
+  expect(
+    (
+      await fixture.deployStore.listInstallConfigs(
+        fixture.seeded.capsule.workspaceId,
+      )
+    ).some((config) => config.internal?.reAdoption !== undefined),
+  ).toBe(false);
+  expect(
+    (await fixture.operations.capsules.getCapsule(fixture.seeded.capsule.id))
+      .installConfigId,
+  ).toBe(fixture.seeded.capsule.installConfigId);
+});
+
 test("concurrent identical re-adoptions produce one audited winner and one canonical replay", async () => {
   const fixture = await reAdoptionRouteFixture("race");
   const authorityGuard = await readReAdoptionGuard(fixture);
@@ -3705,8 +3794,6 @@ test("busy old Apply cannot carry an orphan target OIDC grant across re-adoption
       scope: TAKOS_SCOPES.join(" "),
       takosumiSubject: "user_test",
     }),
-  ).toEqual({ ok: false, reason: "install_grant_stale" });
-  expect(fixture.accountStore.findOidcClient(clientId)?.updatedAt).toBe(
-    oldClient.updatedAt + 120_000,
-  );
+  ).toEqual({ ok: false, reason: "install_grant_missing" });
+  expect(fixture.accountStore.findOidcClient(clientId)).toBeUndefined();
 });

@@ -32,8 +32,6 @@ export function publicInstallConfigRecord(
     internal: _internal,
     requiredInterfaces: _requiredInterfaces,
     runtimeBindingMaterialization: _runtimeBindingMaterialization,
-    accountsOidcModuleVariableMaterialization:
-      _accountsOidcModuleVariableMaterialization,
     ...publicRecord
   } = config;
   const store = config.store;

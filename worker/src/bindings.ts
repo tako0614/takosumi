@@ -112,9 +112,10 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_CREDENTIAL_RECIPE_HOST_COMPOSITION?: CredentialRecipeHostComposition;
   /**
-   * Complete host-code InstallConfig composition. This runtime object replaces
-   * the shipped reference app set (an empty array disables it); it is not a
-   * JSON/text var, Store listing, repository manifest, or OpenTofu Output.
+   * Complete host-code InstallConfig composition. The stock hosted worker
+   * supplies no application profiles; an empty array is the normal default.
+   * This runtime object is not a JSON/text var, Store listing, repository
+   * manifest, or OpenTofu Output.
    */
   readonly TAKOSUMI_INSTALL_CONFIG_COMPOSITION?: readonly import("takosumi-contract/install-configs").InstallConfig[];
   /**

@@ -46,6 +46,7 @@ const SUPPORTED_SOURCE_KINDS = [
 const SUPPORTED_REQUIREMENT_KINDS = [
   "secret.generated",
   "http.endpoint",
+  "identity.oidc",
   "interface.consume",
 ] as const;
 
@@ -114,6 +115,8 @@ export interface RepositoryInstallUxDiagnostic {
 export interface RepositoryInstallUxCompilerPolicy {
   readonly allowedSourceKinds?: readonly RepositoryInstallUxInputSource["kind"][];
   readonly allowedRequirementKinds?: readonly RepositoryRuntimeRequirement["kind"][];
+  /** Exact Takosumi Accounts scopes a reviewed repository may request. */
+  readonly allowedOidcScopes?: readonly string[];
   /** Permission tokens accepted from repository-owned binding requests. */
   readonly allowedInterfacePermissions?: readonly string[];
   /** Delivery tokens accepted from repository-owned binding requests. */
@@ -274,12 +277,15 @@ export function compileRepositoryInstallUx(
       requirement,
       declarationByName,
       requirementKinds,
+      input.policy?.allowedOidcScopes,
       input.policy?.allowedInterfacePermissions,
       input.policy?.allowedInterfaceDeliveryTypes,
       input.policy?.allowedInterfaceBindingProfiles,
     );
     if (validation) return validation;
   }
+  const oidcEndpointValidation = validateOidcEndpointPair(requirements);
+  if (oidcEndpointValidation) return oidcEndpointValidation;
   const roleValidation = validateRoles(module.inputs, declarationByName);
   if (roleValidation) return roleValidation;
 
@@ -875,18 +881,13 @@ function validateRequirement(
   requirement: RepositoryRuntimeRequirement,
   declarations: ReadonlyMap<string, CapsuleRootModuleVariableDeclaration>,
   allowedKinds: ReadonlySet<RepositoryRuntimeRequirement["kind"]>,
+  allowedOidcScopes: readonly string[] | undefined,
   allowedInterfacePermissions: readonly string[] | undefined,
   allowedInterfaceDeliveryTypes: readonly string[] | undefined,
   allowedInterfaceBindingProfiles:
     | RepositoryInstallUxCompilerPolicy["allowedInterfaceBindingProfiles"]
     | undefined,
 ): CompileRepositoryInstallUxResult | undefined {
-  if (requirement.kind === "identity.oidc") {
-    return invalid(
-      "repository_install_ux_requirement_disallowed",
-      "Capsule-specific OIDC client materialization is not part of the Git-owned install flow.",
-    );
-  }
   if (!allowedKinds.has(requirement.kind)) {
     return invalid(
       "repository_install_ux_requirement_disallowed",
@@ -898,6 +899,40 @@ function validateRequirement(
       "repository_install_ux_requirement_disallowed",
       "Generated runtime secrets are not supported by the generic Capsule install flow.",
     );
+  }
+  if (requirement.kind === "identity.oidc") {
+    const targets = deliveryTargets(requirement.deliver);
+    const targetNames = Object.keys(targets).sort();
+    const targetVariables = Object.values(targets);
+    const requestedScopes = requirement.scopes ?? [];
+    if (
+      !deliversToVariables(requirement.deliver) ||
+      targetNames.length !== 4 ||
+      !sameStrings(targetNames, [
+        "accountsUrl",
+        "clientId",
+        "issuerUrl",
+        "redirectUri",
+      ]) ||
+      new Set(targetVariables).size !== targetVariables.length
+    ) {
+      return invalid(
+        "repository_install_ux_requirement_target_invalid",
+        "An identity.oidc requirement must deliver accountsUrl, issuerUrl, clientId, and redirectUri to module variables.",
+      );
+    }
+    if (
+      !allowedOidcScopes?.length ||
+      requestedScopes.length === 0 ||
+      !requestedScopes.includes("openid") ||
+      new Set(requestedScopes).size !== requestedScopes.length ||
+      requestedScopes.some((scope) => !allowedOidcScopes.includes(scope))
+    ) {
+      return invalid(
+        "repository_install_ux_requirement_disallowed",
+        "The identity.oidc scopes are not allowed by explicit operator policy.",
+      );
+    }
   }
   if (requirement.kind === "interface.consume") {
     if (!allowedInterfacePermissions?.length) {
@@ -1003,6 +1038,44 @@ function validateFeatures(
       }
       claimed.add(name);
     }
+  }
+  return undefined;
+}
+
+function validateOidcEndpointPair(
+  requirements: readonly RepositoryRuntimeRequirement[],
+): CompileRepositoryInstallUxResult | undefined {
+  const oidcRequirements = requirements.filter(
+    (requirement) => requirement.kind === "identity.oidc",
+  );
+  if (oidcRequirements.length === 0) return undefined;
+  const endpointRequirements = requirements.filter(
+    (requirement) => requirement.kind === "http.endpoint",
+  );
+  if (oidcRequirements.length !== 1 || endpointRequirements.length !== 1) {
+    return invalid(
+      "repository_install_ux_requirement_target_invalid",
+      "An identity.oidc capability request must contain exactly one identity.oidc requirement and one same-module http.endpoint requirement.",
+    );
+  }
+  const oidc = oidcRequirements[0]!;
+  const endpoint = endpointRequirements[0]!;
+  if (
+    !deliversToVariables(endpoint.deliver) ||
+    !deliveryTargets(endpoint.deliver).url
+  ) {
+    return invalid(
+      "repository_install_ux_requirement_target_invalid",
+      "An identity.oidc requirement needs a same-module http.endpoint URL variable for its reviewed public origin.",
+    );
+  }
+  const endpointUrl = deliveryTargets(endpoint.deliver).url!;
+  const oidcTargets = Object.values(deliveryTargets(oidc.deliver));
+  if (oidcTargets.includes(endpointUrl)) {
+    return invalid(
+      "repository_install_ux_requirement_target_invalid",
+      "The identity.oidc and http.endpoint requirements must use distinct module variables.",
+    );
   }
   return undefined;
 }
@@ -1117,6 +1190,15 @@ function compileVariableProjections(
       projections.push({ kind: "public_endpoint", variables: { ...variables } });
       continue;
     }
+    if (requirement.kind === "identity.oidc") {
+      projections.push({
+        kind: "oidc_client",
+        variables: { ...variables },
+        callbackPath: requirement.callbackPath,
+        ...(requirement.scopes ? { scopes: [...requirement.scopes] } : {}),
+      });
+      continue;
+    }
     // A generated secret has no variable form: the host never writes a secret
     // into portable module state.
   }
@@ -1159,6 +1241,16 @@ function jsonValueMatchesType(
     case "boolean":
       return typeof value === "boolean";
   }
+}
+
+function sameStrings(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 function canonicalModulePath(value: string): string | undefined {

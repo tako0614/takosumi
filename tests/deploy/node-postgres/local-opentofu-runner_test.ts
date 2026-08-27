@@ -479,7 +479,7 @@ function sourceSnapshot(archiveDigest: string): SourceSnapshot {
     workspaceId: "workspace_1",
     spaceId: "workspace_1",
     sourceId: "src_1",
-    url: "https://github.com/tako0614/takos.git",
+    url: "https://git.example.test/apps/sample-app.git",
     ref: "main",
     resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
     path: "deploy/opentofu",

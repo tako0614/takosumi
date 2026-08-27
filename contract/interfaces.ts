@@ -1,68 +1,33 @@
-import type { Condition, JsonObject, JsonValue } from "./types.ts";
-import { TAKOSUMI_API_VERSION } from "./capabilities.ts";
+import type { Condition, JsonValue } from "./types.ts";
+import type {
+  Interface as PublicInterface,
+  InterfaceBinding as PublicInterfaceBinding,
+  InterfaceBindingDelivery,
+  InterfaceMetadata as PublicInterfaceMetadata,
+  InterfaceOwnerRef,
+  InterfaceSpec as PublicInterfaceSpec,
+  InterfaceStatus as PublicInterfaceStatus,
+  InterfaceSubjectRef,
+} from "./runtime-interfaces.ts";
+
 export { TAKOSUMI_INTERFACES_CAPABILITY } from "./capabilities.ts";
+export * from "./runtime-interfaces.ts";
 
-export type InterfaceOwnerKind = "Workspace" | "Capsule";
-
-/**
- * Immutable declaration/materialization owner. Capsule declarations converge
- * from service-owned blueprints or portable IaC.
- */
 export type InterfaceMaterializedFrom =
   | { readonly source: "capsule_blueprint"; readonly key: string }
   | {
-      /** Standalone generic declaration owned by portable IaC. */
       readonly source: "portable_iac";
       readonly descriptorName: string;
       readonly descriptorVersion: string;
     };
 
-/** Stable lexical contract shared by Interface producers and consumers. */
-export const INTERFACE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u;
-/** RFC 6749 scope-token (`NQCHAR`): printable ASCII except `"` and `\\`. */
-export const INTERFACE_PERMISSION_TOKEN_PATTERN =
-  /^[\x21\x23-\x5b\x5d-\x7e]+$/u;
-export const INTERFACE_PERMISSION_TOKEN_MAX_LENGTH = 256;
-
-export function isValidInterfaceName(value: unknown): value is string {
-  return typeof value === "string" && INTERFACE_NAME_PATTERN.test(value);
-}
-
-export function isValidInterfacePermissionToken(
-  value: unknown,
-): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= INTERFACE_PERMISSION_TOKEN_MAX_LENGTH &&
-    INTERFACE_PERMISSION_TOKEN_PATTERN.test(value)
-  );
-}
-
-export interface InterfaceOwnerRef {
-  readonly kind: InterfaceOwnerKind;
-  readonly id: string;
-}
-
-export interface InterfaceMetadata {
-  readonly id: string;
-  readonly workspaceId: string;
-  readonly name: string;
-  readonly ownerRef: InterfaceOwnerRef;
-  readonly generation: number;
-  readonly labels?: Readonly<Record<string, string>>;
-  /**
-   * Immutable declaration-source marker. A Capsule blueprint and a module
-   * resource never adopt or rewrite each other's record.
-   */
+/** Source-tree metadata retained for host reconciliation only. */
+export interface InterfaceMetadata extends PublicInterfaceMetadata {
   readonly materializedFrom?: InterfaceMaterializedFrom;
-  readonly createdAt: string;
-  readonly updatedAt: string;
 }
 
 export interface InterfaceLiteralInput {
   readonly source: "literal";
-  /** Public, non-secret runtime material. */
   readonly value: JsonValue;
 }
 
@@ -70,7 +35,6 @@ export interface InterfaceCapsuleOutputInput {
   readonly source: "capsule_output";
   readonly capsuleId: string;
   readonly outputName: string;
-  /** Optional RFC 6901 pointer into the ordinary root Output value. */
   readonly pointer?: string;
 }
 
@@ -78,31 +42,10 @@ export type InterfaceInput =
   | InterfaceLiteralInput
   | InterfaceCapsuleOutputInput;
 
-export type InterfaceVisibility = "private" | "workspace" | "public";
-
-export interface InterfaceAccessSpec {
-  readonly visibility: InterfaceVisibility;
-  readonly policyRef?: string;
-  /** Input whose resolved value is the token audience/resource URI. */
-  readonly resourceUriInput?: string;
-}
-
-/**
- * Desired runtime declaration. `document` is deliberately opaque to Core;
- * protocol consumers interpret it together with `status.resolvedInputs`.
- */
-export interface InterfaceSpec {
-  readonly type: string;
-  readonly version: string;
-  readonly document: JsonValue;
-  /** Optional portable schema for the opaque document. */
-  readonly documentSchema?: JsonObject;
+/** Source-tree desired declaration with host input resolution. */
+export interface InterfaceSpec extends PublicInterfaceSpec {
   readonly inputs?: Readonly<Record<string, InterfaceInput>>;
-  readonly access: InterfaceAccessSpec;
 }
-
-export type InterfacePhase =
-  "Pending" | "Resolved" | "NotReady" | "Unknown" | "Terminating" | "Retired";
 
 export interface InterfaceCapsuleOutputProvenance {
   readonly source: "capsule_output";
@@ -123,70 +66,21 @@ export type InterfaceInputProvenance =
   | InterfaceCapsuleOutputProvenance
   | InterfaceLiteralProvenance;
 
-export interface InterfaceStatus {
-  readonly phase: InterfacePhase;
-  readonly observedGeneration: number;
-  readonly resolvedRevision: number;
-  readonly resolvedInputs?: Readonly<Record<string, JsonValue>>;
-  /**
-   * Canonical credential-free HTTPS audience resolved by the host. It is
-   * discovery metadata, not a grant.
-   */
-  readonly resourceUri?: string;
+/** Source-tree status with host reconciliation provenance. */
+export interface InterfaceStatus extends PublicInterfaceStatus {
   readonly provenance?: Readonly<Record<string, InterfaceInputProvenance>>;
-  readonly conditions?: readonly Condition[];
 }
 
-export interface Interface {
-  readonly apiVersion: typeof TAKOSUMI_API_VERSION;
-  readonly kind: "Interface";
+export interface Interface
+  extends Omit<PublicInterface, "metadata" | "spec" | "status"> {
   readonly metadata: InterfaceMetadata;
   readonly spec: InterfaceSpec;
   readonly status: InterfaceStatus;
 }
 
-export type InterfaceSubjectKind = "Principal" | "ServiceAccount" | "Capsule";
-
-export interface InterfaceSubjectRef {
-  readonly kind: InterfaceSubjectKind;
-  readonly id: string;
-}
-
-export interface InterfaceBindingDelivery {
-  /**
-   * Open capability token. Core implements `none` and `oauth2`;
-   * `workload_token` is reserved and remains NotReady in v1alpha1.
-   */
-  readonly type: string;
-  /** `secret/...` or `credential/...` reference; never the credential value. */
-  readonly credentialRef?: string;
-  readonly options?: JsonObject;
-}
-
-export type InterfaceBindingPhase =
-  "Pending" | "Ready" | "NotReady" | "Revoked";
-
-export interface InterfaceBindingSpec {
-  readonly interfaceId: string;
-  readonly subjectRef: InterfaceSubjectRef;
-  readonly permissions: readonly string[];
-  readonly delivery: InterfaceBindingDelivery;
-}
-
-export interface InterfaceBindingStatus {
-  readonly phase: InterfaceBindingPhase;
-  readonly observedInterfaceRevision: number;
-  readonly conditions?: readonly Condition[];
-}
-
-export interface InterfaceBinding {
-  readonly apiVersion: typeof TAKOSUMI_API_VERSION;
-  readonly kind: "InterfaceBinding";
-  readonly metadata: {
-    readonly id: string;
-    readonly workspaceId: string;
-    readonly generation: number;
-    /** Immutable service-side one-shot materialization marker. */
+export interface InterfaceBinding
+  extends Omit<PublicInterfaceBinding, "metadata"> {
+  readonly metadata: PublicInterfaceBinding["metadata"] & {
     readonly materializedFrom?:
       | {
           readonly source: "capsule_blueprint";
@@ -194,19 +88,13 @@ export interface InterfaceBinding {
           readonly key: string;
         }
       | {
-          /** Runtime grant for a host Interface required by one Capsule. */
           readonly source: "capsule_required_interface";
           readonly capsuleId: string;
           readonly requirementKey: string;
           readonly interfaceType: string;
           readonly interfaceVersion: string;
-        }
-      ;
-    readonly createdAt: string;
-    readonly updatedAt: string;
+        };
   };
-  readonly spec: InterfaceBindingSpec;
-  readonly status: InterfaceBindingStatus;
 }
 
 /**

@@ -172,15 +172,15 @@ test("Git install-plan tools forward only the bounded public API contract and pr
     request("tools/call", {
       name: "takosumi_install_plan_create",
       arguments: {
-        idempotencyKey: "agent-run-1:yurucommu",
+        idempotencyKey: "agent-run-1:sample-app",
         source: {
-          name: "yurucommu-source",
-          url: "https://github.com/tako0614/yurucommu.git",
+          name: "sample-app-source",
+          url: "https://git.example.test/apps/sample-app.git",
           ref: "main",
           path: ".",
         },
-        capsule: { name: "yurucommu", environment: "production" },
-        options: { deploymentProfileKey: "takoform-v2" },
+        capsule: { name: "sample-app", environment: "production" },
+        options: { deploymentProfileKey: "generic-profile" },
       },
     }),
     env(),
@@ -195,17 +195,17 @@ test("Git install-plan tools forward only the bounded public API contract and pr
     "/api/v1/workspaces/workspace_a/install-plans",
   );
   expect(dispatched[0]!.headers.get("idempotency-key")).toBe(
-    "agent-run-1:yurucommu",
+    "agent-run-1:sample-app",
   );
   expect(await dispatched[0]!.json()).toEqual({
     source: {
-      name: "yurucommu-source",
-      url: "https://github.com/tako0614/yurucommu.git",
+      name: "sample-app-source",
+      url: "https://git.example.test/apps/sample-app.git",
       ref: "main",
       path: ".",
     },
-    capsule: { name: "yurucommu", environment: "production" },
-    options: { deploymentProfileKey: "takoform-v2" },
+    capsule: { name: "sample-app", environment: "production" },
+    options: { deploymentProfileKey: "generic-profile" },
   });
 
   const reconciled = await handlePlatformOperatorControlMcpRequest(

@@ -1,17 +1,28 @@
+import {
+  TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH,
+  TAKOSUMI_ACCOUNTS_INTROSPECT_PATH,
+  TAKOSUMI_ACCOUNTS_JWKS_PATH,
+  TAKOSUMI_ACCOUNTS_OIDC_DISCOVERY_PATH,
+  TAKOSUMI_ACCOUNTS_REVOKE_PATH,
+  TAKOSUMI_ACCOUNTS_TOKEN_PATH,
+  TAKOSUMI_ACCOUNTS_USERINFO_PATH,
+} from "../../../contract/identity-oidc.ts";
+
 /**
  * Accounts OIDC is a same-origin identity-material surface for installed
  * services and operator-managed sign-in flows. Do not present it as a generic
  * public login/consent platform unless a full client registry and consent UX
  * are wired.
  */
-export const TAKOSUMI_ACCOUNTS_OIDC_DISCOVERY_PATH =
-  "/.well-known/openid-configuration";
-export const TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH = "/oauth/authorize";
-export const TAKOSUMI_ACCOUNTS_TOKEN_PATH = "/oauth/token";
-export const TAKOSUMI_ACCOUNTS_JWKS_PATH = "/oauth/jwks";
-export const TAKOSUMI_ACCOUNTS_USERINFO_PATH = "/oauth/userinfo";
-export const TAKOSUMI_ACCOUNTS_REVOKE_PATH = "/oauth/revoke";
-export const TAKOSUMI_ACCOUNTS_INTROSPECT_PATH = "/oauth/introspect";
+export {
+  TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH,
+  TAKOSUMI_ACCOUNTS_INTROSPECT_PATH,
+  TAKOSUMI_ACCOUNTS_JWKS_PATH,
+  TAKOSUMI_ACCOUNTS_OIDC_DISCOVERY_PATH,
+  TAKOSUMI_ACCOUNTS_REVOKE_PATH,
+  TAKOSUMI_ACCOUNTS_TOKEN_PATH,
+  TAKOSUMI_ACCOUNTS_USERINFO_PATH,
+};
 export const TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH = "/api/v1/account/tokens";
 export const TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH =
   `${TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH}/scopes`;

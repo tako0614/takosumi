@@ -1,90 +1,16 @@
 import { expect, test } from "bun:test";
-import {
-  TAKOSERVER_HOSTED_INSTALL_CONFIGS,
-  TAKOSERVER_TAKOFORM_CONNECTION_ID,
-  TAKOSERVER_TAKOFORM_PROVIDER_SOURCE,
-} from "../../../deploy/platform/takoserver_hosted_install_configs.ts";
+
+import { OPERATOR_CONTROL_MCP_INSTALL_CONFIG } from "../../../deploy/operator-control-mcp.ts";
 import * as hostedWorker from "../../../deploy/platform/takoserver_hosted_worker.ts";
 import { composeTakoserverHostedWorkerEnv } from "../../../deploy/platform/takoserver_hosted_worker.ts";
-import { OPERATOR_CONTROL_MCP_INSTALL_CONFIG } from "../../../deploy/operator-control-mcp.ts";
-import { CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY } from "../../../providers/cloudflare/credentials.ts";
 
-test("Takosumi Hosted exposes only the direct Cloudflare Yurucommu profile", () => {
-  expect(TAKOSERVER_HOSTED_INSTALL_CONFIGS).toHaveLength(1);
-  expect(
-    TAKOSERVER_HOSTED_INSTALL_CONFIGS.some(
-      (config) => config.id === "cfg-hosted-yurucommu-takoform-v2",
-    ),
-  ).toBe(false);
-  const [cloudflare] = TAKOSERVER_HOSTED_INSTALL_CONFIGS;
-  expect(cloudflare?.store?.deploymentProfile).toEqual({
-    key: "cloudflare-v1",
-    label: { ja: "Cloudflare", en: "Cloudflare" },
-    description: {
-      ja: "Cloudflareで配置します。接続済みのCloudflareアカウントを使用します。",
-      en: "Deploy with Cloudflare using a connected Cloudflare account.",
-    },
-    order: 20,
-    recommended: false,
-    management: {
-      kind: "external_console",
-      href: "https://dash.cloudflare.com",
-      label: { ja: "Cloudflareダッシュボード", en: "Cloudflare dashboard" },
-    },
-  });
-  expect(cloudflare?.sourceSelector).toEqual({
-    url: "https://github.com/tako0614/yurucommu.git",
-    path: ".",
-  });
-  expect(cloudflare?.modulePath).toBe(".");
-  expect(cloudflare?.variableMapping).toEqual({
-    enable_cloudflare_resources: true,
-    enable_cloudflare_worker_script: true,
-    enable_workers_dev_subdomain: true,
-    app_url: "",
-    cloudflare_account_id: null,
-    cloudflare_workers_subdomain: null,
-  });
-  expect(cloudflare?.policy.allowedProviders).toEqual([
-    "registry.opentofu.org/cloudflare/cloudflare",
-    "registry.opentofu.org/hashicorp/http",
-    "registry.opentofu.org/hashicorp/random",
-  ]);
-  expect(cloudflare?.policy.providerCredentials).toEqual({
-    requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-    requiredCredentialCapabilities: [
-      CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY,
-    ],
-  });
-  expect(cloudflare?.installExperience).toEqual({
-    projections: [
-      {
-        kind: "oidc_client",
-        variables: {},
-        callbackPath: "/api/auth/callback/takos",
-        scopes: ["openid", "profile", "email"],
-      },
-    ],
-  });
-  expect(cloudflare?.accountsOidcModuleVariableMaterialization).toEqual({
-    contract: "takosumi.accounts-oidc-module-variables/v1",
-    workerNameVariable: "worker_name",
-    projectNameVariable: "project_name",
-    additionalInputVariables: [
-      "cloudflare_account_id",
-      "cloudflare_workers_subdomain",
-    ],
-    forbiddenNonEmptyInputVariables: [
-      "auth_password_hash",
-      "notification_push_gateway_token",
-    ],
-    issuerUrlVariable: "takosumi_accounts_issuer_url",
-    clientIdVariable: "takosumi_accounts_client_id",
-    ownerSubjectVariable: "oidc_owner_sub",
-    allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-  });
-  expect(cloudflare?.runtimeBindingMaterialization).toBeUndefined();
-  expect(cloudflare?.variablePresentation).toBeUndefined();
+const HOSTED_PROVIDER_CONNECTION_ID = "conn_hostedProvider01";
+const HOSTED_PROVIDER_SOURCE = "registry.terraform.io/tako0614/takoform";
+
+test("Takosumi Hosted composes no application InstallConfigs by default", () => {
+  const composed = composeTakoserverHostedWorkerEnv({} as never);
+
+  expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toEqual([]);
 });
 
 test("Takoserver Hosted wrapper preserves every Worker Durable Object export", () => {
@@ -96,7 +22,7 @@ test("Takoserver Hosted wrapper preserves every Worker Durable Object export", (
   expect(typeof hostedWorker.OpenTofuRunnerObject).toBe("function");
 });
 
-test("Takoserver Hosted wrapper keeps Worker variables enumerable for runtime composition", () => {
+test("Takoserver Hosted wrapper keeps Worker variables enumerable", () => {
   const controlDb = Object.freeze({ binding: "control" });
   const env = {
     TAKOSUMI_CONTROL_DB: controlDb,
@@ -112,9 +38,7 @@ test("Takoserver Hosted wrapper keeps Worker variables enumerable for runtime co
     "sealed-runtime-key",
   ]);
   expect(composed.TAKOSUMI_CONTROL_DB).toBe(controlDb);
-  expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toBe(
-    TAKOSERVER_HOSTED_INSTALL_CONFIGS,
-  );
+  expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toEqual([]);
   expect(composeTakoserverHostedWorkerEnv(env)).toBe(composed);
 });
 
@@ -155,14 +79,13 @@ test("Takoserver Hosted proves only the exact Capsule-scoped OAuth resource", as
   expect(calls).toHaveLength(1);
 });
 
-test("Takoserver Hosted composes the optional operator MCP InstallConfig when its route is enabled", () => {
+test("Takoserver Hosted composes only the optional operator MCP declaration", () => {
   const composed = composeTakoserverHostedWorkerEnv({
     TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED: "1",
     TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.test",
   } as never);
 
   expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toEqual([
-    ...TAKOSERVER_HOSTED_INSTALL_CONFIGS,
     {
       ...OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
       variableMapping: { takosumi_origin: "https://app.takosumi.test" },
@@ -170,7 +93,7 @@ test("Takoserver Hosted composes the optional operator MCP InstallConfig when it
   ]);
 });
 
-test("Takoserver Hosted connection descriptor is accepted and publicly discoverable", async () => {
+test("Takoserver Hosted connection descriptor remains publicly discoverable", async () => {
   const response = await hostedWorker.default.fetch(
     new Request("https://app-staging.takosumi.com/.well-known/takosumi"),
     {
@@ -189,9 +112,9 @@ test("Takoserver Hosted connection descriptor is accepted and publicly discovera
             requiredScopes: ["takoform.run"],
           },
           providerCredentialBroker: {
-            connectionId: TAKOSERVER_TAKOFORM_CONNECTION_ID,
+            connectionId: HOSTED_PROVIDER_CONNECTION_ID,
             recipeId: "takoserver-takoform-run-v1",
-            providerSource: TAKOSERVER_TAKOFORM_PROVIDER_SOURCE,
+            providerSource: HOSTED_PROVIDER_SOURCE,
             displayName: "Takoserver",
             exchangePath: "/provider-credentials/takoform",
             envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],

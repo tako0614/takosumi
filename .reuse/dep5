@@ -9,6 +9,7 @@ License: AGPL-3.0-only
 Files:
  accounts/contract/*
  cli/*
+ contract/*
  examples/*
 Copyright: 2026 Takos Contributors
 License: MIT

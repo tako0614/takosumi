@@ -88,7 +88,7 @@ export type RepositoryRuntimeDelivery<K extends string> =
   | { readonly bindings: Readonly<Partial<Record<K, string>>> };
 
 export type RepositoryOidcSlot =
-  "issuerUrl" | "accountsUrl" | "clientId" | "redirectUri" | "ownerSubject";
+  "issuerUrl" | "accountsUrl" | "clientId" | "redirectUri";
 export type RepositoryEndpointSlot = "url" | "subdomain" | "routePattern";
 export type RepositorySecretSlot = "value";
 
@@ -1093,7 +1093,6 @@ function parseRequirement(
         "accountsUrl",
         "clientId",
         "redirectUri",
-        "ownerSubject",
       ] as const);
       if (typeof deliver === "string") return deliver;
       const callbackPath = rootRelativePath(value.callbackPath);

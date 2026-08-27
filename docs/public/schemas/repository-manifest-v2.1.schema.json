@@ -197,8 +197,7 @@
                       "issuerUrl",
                       "accountsUrl",
                       "clientId",
-                      "redirectUri",
-                      "ownerSubject"
+                      "redirectUri"
                     ]
                   }
                 }
@@ -220,8 +219,7 @@
                       "issuerUrl",
                       "accountsUrl",
                       "clientId",
-                      "redirectUri",
-                      "ownerSubject"
+                      "redirectUri"
                     ]
                   }
                 }

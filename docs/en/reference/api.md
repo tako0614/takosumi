@@ -388,11 +388,18 @@ Operator/hosted service may add Enterprise SSO, SCIM, and commercial audit expor
 that generic seam.
 
 Takosumi does not infer or register an Accounts OIDC client from Git metadata,
-provider output, or an arbitrary provider call. A Host may explicitly opt a
-DB-owned InstallConfig into private OIDC materialization; Plan derives and pins
-only its non-secret values, and the exact client may be registered idempotently
-only during final Apply revalidation. Already-registered Capsule clients
-revalidate the current Capsule, InstallConfig, Workspace membership, and scopes
+provider output, product identity, hostname convention, or an arbitrary provider
+call. Provider runtime-binding remains read-only and has no registration
+authority; the Takosumi-owned generic Accounts capability implementation owns
+final Apply activation. A reviewed repository manifest may request the generic `identity.oidc`
+capability only with exactly one paired `http.endpoint`. Read-only Plan requires
+the exact Plan-known canonical HTTPS endpoint and pins exactly four non-secret
+delivery values: `accountsUrl`, `issuerUrl`, `clientId`, and `redirectUri`.
+Takosumi may register the Capsule-bound client idempotently only during final
+Apply revalidation; no ProviderBinding, private descriptor, owner-subject
+variable, provider fallback, or client secret belongs to this lane.
+Already-registered Capsule clients revalidate the current Capsule,
+InstallConfig, accepted repository provenance, Workspace membership, and scopes
 on every use; invalid terminal bindings are revoked best-effort. Accounts tokens
 and Interface invocations continue to validate both scope and Workspace.
 Consumers must encrypt token material in their secret store and never place it

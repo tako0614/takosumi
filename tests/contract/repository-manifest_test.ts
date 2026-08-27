@@ -241,6 +241,22 @@ test("repository manifest rejects secret env maps and unsupported requirements",
     ok: false,
     error: 'install.modules.".".inputs[0].source.kind is unsupported',
   });
+
+  const legacyOwnerSubject = JSON.parse(await fixture("valid.json"));
+  legacyOwnerSubject.install.modules["."].requires[1].deliver.variables = {
+    accountsUrl: "accounts_url",
+    issuerUrl: "issuer_url",
+    clientId: "client_id",
+    redirectUri: "redirect_uri",
+    ownerSubject: "owner_subject",
+  };
+  expect(
+    parseRepositoryManifestText(JSON.stringify(legacyOwnerSubject)),
+  ).toEqual({
+    ok: false,
+    error:
+      'install.modules.".".requires[1].deliver.variables.contains unsupported field ownerSubject',
+  });
 });
 
 test("repository manifest enforces the UTF-8 byte limit", () => {

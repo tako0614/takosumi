@@ -6,6 +6,7 @@ import type {
   PublicCapsule,
 } from "takosumi-contract/install-configs";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
+import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { containsSecretLikeString } from "../../../../contract/redaction.ts";
@@ -22,8 +23,10 @@ import {
   type ControlDispatchContext,
 } from "./shared.ts";
 import { isPlainJsonObject } from "./parse.ts";
+import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/capsules/default_install_config.ts";
 import {
   adoptRepoOwnedInstallConfig,
+  resolveRepoOwnedInstallModulePath,
   resolveRepoOwnedDeploymentProfile,
 } from "./repo-owned-install-config.ts";
 
@@ -33,7 +36,7 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const EMPTY_DERIVED_TARGET_DIGEST = `sha256:${"0".repeat(64)}`;
 
 interface ReAdoptionRequest {
-  readonly baseInstallConfigId: string;
+  readonly baseInstallConfigId?: string;
   readonly sourceSnapshotId: string;
   readonly deploymentProfileKey?: string;
   readonly reason: string;
@@ -122,7 +125,7 @@ export async function handleCapsuleInstallConfigReAdoption(
   if (!request) {
     return errorJson(
       "invalid_request",
-      "Re-adoption requires one base InstallConfig, SourceSnapshot, bounded reason, and exact current Capsule authority guard.",
+      "Re-adoption requires a SourceSnapshot, bounded reason, and exact current Capsule authority guard.",
       400,
       ctx.request,
     );
@@ -237,34 +240,30 @@ export async function handleCapsuleInstallConfigReAdoption(
       ctx.request,
     );
   }
-  const sharedConfigs = await ctx.operations.capsules.listSharedInstallConfigs({
-    includeInternal: false,
-  });
-  const profile = resolveRepoOwnedDeploymentProfile({
+  const sharedConfigs =
+    request.baseInstallConfigId !== undefined ||
+      request.deploymentProfileKey !== undefined
+      ? await ctx.operations.capsules.listSharedInstallConfigs({
+        includeInternal: false,
+      })
+      : [];
+  const resolved = await resolveReAdoptionBaseInstallConfig({
+    operations: ctx.operations,
     source,
     sourceSnapshot,
-    candidates: sharedConfigs,
-    ...(request.deploymentProfileKey
-      ? { deploymentProfileKey: request.deploymentProfileKey }
-      : {}),
+    sharedConfigs,
+    baseInstallConfigId: request.baseInstallConfigId,
+    deploymentProfileKey: request.deploymentProfileKey,
   });
-  if (
-    !profile.ok ||
-    (profile.kind !== "profile" && profile.kind !== "legacy") ||
-    profile.installConfig.id !== request.baseInstallConfigId
-  ) {
+  if (!resolved.ok) {
     return errorJson(
       "failed_precondition",
-      "The requested DB-owned deployment profile is unavailable for this SourceSnapshot.",
+      resolved.message,
       409,
       ctx.request,
     );
   }
-  const baseConfig = profile.installConfig;
-  const modulePath =
-    profile.kind === "profile"
-      ? profile.modulePath
-      : (baseConfig.modulePath ?? sourceSnapshot.path);
+  const { baseConfig, modulePath } = resolved;
   const compatibility = await ctx.operations.createSourceCompatibilityCheck(
     source.id,
     {
@@ -563,6 +562,101 @@ async function existingTarget(
   }
 }
 
+type ReAdoptionBaseInstallConfigResolution =
+  | {
+      readonly ok: true;
+      readonly baseConfig: InstallConfig;
+      readonly modulePath: string;
+    }
+  | {
+      readonly ok: false;
+      readonly message: string;
+    };
+
+async function resolveReAdoptionBaseInstallConfig(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly source: Source;
+  readonly sourceSnapshot: SourceSnapshot;
+  readonly sharedConfigs: readonly InstallConfig[];
+  readonly baseInstallConfigId: string | undefined;
+  readonly deploymentProfileKey: string | undefined;
+}): Promise<ReAdoptionBaseInstallConfigResolution> {
+  if (
+    input.baseInstallConfigId === undefined &&
+    input.deploymentProfileKey === undefined
+  ) {
+    try {
+      const baseConfig = await input.operations.capsules.getInstallConfig(
+        DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+      );
+      if (
+        baseConfig.workspaceId === undefined &&
+        baseConfig.internal === undefined
+      ) {
+        const moduleSelection = resolveRepoOwnedInstallModulePath({
+          sourceSnapshot: input.sourceSnapshot,
+          ...(baseConfig.modulePath !== undefined
+            ? { modulePath: baseConfig.modulePath }
+            : {}),
+        });
+        if (!moduleSelection.ok) {
+          return {
+            ok: false,
+            message: moduleSelection.diagnostic.message,
+          };
+        }
+        return {
+          ok: true,
+          baseConfig,
+          modulePath: moduleSelection.modulePath,
+        };
+      }
+    } catch (error) {
+      if (
+        !(error instanceof OpenTofuControllerError) ||
+        error.code !== "not_found"
+      ) {
+        throw error;
+      }
+      // A missing generic default is exposed through the typed fail-closed
+      // diagnostic below. Operational failures must remain observable.
+    }
+    return {
+      ok: false,
+      message: "The generic host InstallConfig is unavailable.",
+    };
+  }
+
+  const profile = resolveRepoOwnedDeploymentProfile({
+    source: input.source,
+    sourceSnapshot: input.sourceSnapshot,
+    candidates: input.sharedConfigs,
+    ...(input.deploymentProfileKey !== undefined
+      ? { deploymentProfileKey: input.deploymentProfileKey }
+      : {}),
+  });
+  if (
+    !profile.ok ||
+    (profile.kind !== "profile" && profile.kind !== "legacy") ||
+    input.baseInstallConfigId === undefined ||
+    profile.installConfig.id !== input.baseInstallConfigId
+  ) {
+    return {
+      ok: false,
+      message:
+        "The requested DB-owned deployment profile is unavailable for this SourceSnapshot.",
+    };
+  }
+  return {
+    ok: true,
+    baseConfig: profile.installConfig,
+    modulePath:
+      profile.kind === "profile"
+        ? profile.modulePath
+        : (profile.installConfig.modulePath ?? input.sourceSnapshot.path),
+  };
+}
+
 async function reAdoptionAuthoritySnapshot(
   operations: ControlPlaneOperations,
   capsuleId: string,
@@ -635,7 +729,16 @@ function parseRequest(
   if (Object.keys(expected).some((key) => !expectedAllowed.has(key))) {
     return undefined;
   }
-  const baseInstallConfigId = exactString(value.baseInstallConfigId);
+  const baseInstallConfigId =
+    value.baseInstallConfigId === undefined
+      ? undefined
+      : exactString(value.baseInstallConfigId);
+  if (
+    value.baseInstallConfigId !== undefined &&
+    baseInstallConfigId === undefined
+  ) {
+    return undefined;
+  }
   const sourceSnapshotId = exactString(value.sourceSnapshotId);
   const deploymentProfileKey = optionalString(value.deploymentProfileKey);
   if (
@@ -644,10 +747,12 @@ function parseRequest(
   ) {
     return undefined;
   }
+  if (baseInstallConfigId === undefined && deploymentProfileKey !== undefined) {
+    return undefined;
+  }
   const reason = exactString(value.reason);
   const authorityGuard = exactString(expected.authorityGuard);
   if (
-    !baseInstallConfigId ||
     !sourceSnapshotId ||
     !reason ||
     new TextEncoder().encode(reason).byteLength > MAX_REASON_BYTES ||
@@ -659,7 +764,7 @@ function parseRequest(
     return undefined;
   }
   return {
-    baseInstallConfigId,
+    ...(baseInstallConfigId ? { baseInstallConfigId } : {}),
     sourceSnapshotId,
     ...(deploymentProfileKey ? { deploymentProfileKey } : {}),
     reason,

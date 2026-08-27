@@ -1,11 +1,16 @@
 # Repository manifest
 
-`.well-known/takosumi.json` は、Git repository が同じ commit に固定された
-install metadata を Takosumi に提案するための任意文書です。repository が所有しますが、
-実行権限ではありません。Source sync は repository root の文書を最大 128 KiB の
-UTF-8 JSON として検証し、結果と digest を immutable
-`SourceSnapshot.repositoryManifest` に保存します。raw document は public API に
-返しません。
+`.well-known/takosumi.json` は任意の repository manifest です。install input
+assistance を提供し、Takosumi が提供する generic API/capability の request と exact
+delivery target を宣言します。Git repository が executable source と同じ commit に
+固定して所有しますが、source、provider、resource、deployment、lifecycle の実行権限ではありません。文書がない plain
+Git/OpenTofu app も通常どおり install できます。Source sync は repository root の文書を
+最大 128 KiB の UTF-8 JSON として検証し、結果と digest を immutable
+`SourceSnapshot.repositoryManifest` に保存します。raw document は public API に返しません。
+
+app-owned Git/OpenTofu configuration が infrastructure/lifecycle authority であり続けます。
+Takosumi は accepted generic API/capability の実装を所有し、manifest はその request と
+app-owned module への delivered value mapping だけを宣言します。
 
 Takosumi は exact SourceSnapshot の宣言を compatibility report と照合し、operator
 policy の範囲内で DB-owned `InstallConfig` に compile します。Plan/Run が読むのは
@@ -122,6 +127,8 @@ delivery 名だけを提案します。
 - `secret.generated`: `kind`, optional `bytes` (16〜64), optional
   `encoding` (`hex` / `base64url`), `deliver`。module ごとに最大8件。
 - `http.endpoint`: `kind`, `deliver`。
+- `identity.oidc`: `kind`, root-relative `callbackPath`, 1〜16件の `scopes`,
+  `deliver`。
 - `interface.consume` (v2.2): `kind`, module 内で一意な `key`, exact
   `interface.type` / `interface.version`, 1〜16件の `permissions`,
   `{ "type": token }` だけを持つ `delivery`。
@@ -130,8 +137,26 @@ delivery 名だけを提案します。
 ごとに closed で、値は exact OpenTofu variable name または runtime binding name
 です。別 requirement と同じ delivery 名を共有できません。endpoint は module ごとに
 1件までです。host-reserved binding、存在しない/non-string variable、operator が
-許可しない requirement kind は compiler が拒否します。Capsule 固有の
-`identity.oidc` materialization は current Git-owned install flow では拒否されます。
+許可しない requirement kind は compiler が拒否します。
+
+`identity.oidc` は reviewed Git/OpenTofu app が product/provider に依存せず要求できる
+Takosumi Accounts capability です。選択 module はちょうど1件の `identity.oidc` と
+ちょうど1件の `http.endpoint` を持たなければなりません。OIDC の `deliver` は
+`variables` だけで、slot は `accountsUrl`、`issuerUrl`、`clientId`、`redirectUri` の
+exact 4件です。endpoint は `url` を別の string variable に届けます。OIDC scopes は
+重複なしで `openid` を含み、DB-owned `InstallConfig.policy.repositoryInstallUx`
+の明示的な `allowedOidcScopes` 内でなければなりません。allowlist がない場合は
+capability を許可しません。
+
+Plan は endpoint の `url` variable から、path、query、fragment、credential のない
+canonical な exact HTTPS origin を読めなければ fail closed です。その origin と
+review 済み `callbackPath` から redirect URI を導出し、exact 4 variables と authority
+digest を Plan sidecar に固定します。Plan と `apply_check` は Accounts を変更せず、
+final Apply だけが Capsule-bound public client を idempotent に登録できます。terminal
+destroy 後の retirement も idempotent です。Accounts capability が利用できない、
+origin/variable/callback/scope/digest が drift した場合は runner 実行前に失敗します。
+ProviderBinding、provider output、製品名、hostname 規則からの fallback/inference はなく、
+この request は provider/resource/deployment/lifecycle authority を追加しません。
 
 `interface.consume` は provider、製品名、Interface ID、endpoint、credential を宣言
 しません。host は Plan 後の DB-owned InstallConfig から exact type/version を読み、同じ

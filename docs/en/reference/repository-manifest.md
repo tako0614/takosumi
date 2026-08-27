@@ -1,10 +1,20 @@
 # Repository manifest
 
-`.well-known/takosumi.json` is an optional install-metadata proposal owned by a
-Git repository and pinned to the same commit as the executable source. It is
-never execution authority. Source sync validates the repository-root file as
-UTF-8 JSON of at most 128 KiB and records its status and digest in the immutable
-`SourceSnapshot.repositoryManifest`. Public APIs never return the raw document.
+`.well-known/takosumi.json` is the optional repository manifest for
+install-input assistance. It also declares requests for generic
+Takosumi-provided APIs/capabilities and their exact delivery targets. It is
+owned by a Git repository and pinned to the same commit as the executable
+source, but it is never source, provider, resource,
+deployment, or lifecycle authority. A plain Git/OpenTofu app remains
+installable without this file. Source sync validates the repository-root file
+as UTF-8 JSON of at most 128 KiB and records its status and digest in the
+immutable `SourceSnapshot.repositoryManifest`. Public APIs never return the raw
+document.
+
+The app-owned Git/OpenTofu configuration remains the infrastructure and
+lifecycle authority. Takosumi owns the implementation of each accepted generic
+API/capability; the manifest only requests it and maps its delivered values to
+the app-owned module.
 
 Takosumi checks the exact SourceSnapshot declaration against an exact
 compatibility report and compiles it within operator policy into a DB-owned
@@ -130,6 +140,8 @@ delivery names, never a value or credential.
 - `secret.generated`: `kind`, optional `bytes` (16–64), optional `encoding`
   (`hex` / `base64url`), and `deliver`; at most eight per module.
 - `http.endpoint`: `kind` and `deliver`.
+- `identity.oidc`: `kind`, a root-relative `callbackPath`, 1–16 `scopes`, and
+  `deliver`.
 - `interface.consume` (v2.2): `kind`, a module-unique `key`, exact
   `interface.type` / `interface.version`, 1–16 `permissions`, and a `delivery`
   object containing only `{ "type": token }`.
@@ -139,8 +151,28 @@ closed per requirement kind, and values are exact OpenTofu variable or runtime
 binding names. Requirements cannot claim the same delivery name. Endpoint is a
 singleton per module. The compiler rejects host-reserved bindings,
 absent/non-string variables, and requirement kinds outside operator policy.
-Capsule-specific `identity.oidc` materialization is rejected by the current
-Git-owned install flow.
+
+`identity.oidc` is a Takosumi Accounts capability that any reviewed
+Git/OpenTofu app may request without naming a product or provider. The selected
+module must contain exactly one `identity.oidc` and exactly one
+`http.endpoint`. OIDC delivery is variables-only and has exactly four slots:
+`accountsUrl`, `issuerUrl`, `clientId`, and `redirectUri`. The endpoint delivers
+`url` to a distinct string variable. OIDC scopes must be unique, include
+`openid`, and remain within the explicit
+`InstallConfig.policy.repositoryInstallUx.allowedOidcScopes`; no allowlist
+grants no capability.
+
+At Plan, the endpoint `url` variable must resolve to a canonical exact HTTPS
+origin with no path, query, fragment, or credentials. Takosumi derives the
+redirect URI from that origin and the reviewed `callbackPath`, then pins the
+exact four variables and authority digest in the private Plan sidecar. Plan and
+`apply_check` do not mutate Accounts. Only final Apply may idempotently register
+the Capsule-bound public client, and retirement after terminal destroy is also
+idempotent. An unavailable Accounts capability or drift in origin, variable,
+callback, scope, or digest fails before runner execution. There is no fallback
+or inference from ProviderBinding, provider output, product identity, or
+hostname convention, and the request adds no provider, resource, deployment,
+or lifecycle authority.
 
 `interface.consume` never declares a provider, product name, Interface ID,
 endpoint, or credential. After Plan, the host reads the DB-owned InstallConfig

@@ -7,6 +7,7 @@ import type {
 } from "./control-operations.ts";
 import type { AccountsStore } from "./store.ts";
 import { oidcClientActivationDigest } from "./oidc-activation.ts";
+import { accountsOidcModuleVariableProfile } from "../../../core/domains/deploy-control/accounts_oidc_module_variable_profile.ts";
 
 export interface OidcLiveGrantClient {
   readonly clientId: string;
@@ -155,7 +156,15 @@ export async function validateOidcLiveGrant(input: {
     await revokeOidcClientBestEffort(input.store, input.client.clientId);
     return { ok: false, reason: "install_grant_missing" };
   }
-  if (experience.clientIdVariable) {
+  let repositoryMaterialized = false;
+  try {
+    repositoryMaterialized =
+      accountsOidcModuleVariableProfile(installConfig)?.source ===
+        "repository_install_ux";
+  } catch {
+    return { ok: false, reason: "install_grant_stale" };
+  }
+  if (experience.clientIdVariable && !repositoryMaterialized) {
     const mappedClientId = installConfig.variableMapping[
       experience.clientIdVariable
     ];

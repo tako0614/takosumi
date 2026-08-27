@@ -181,6 +181,217 @@ async function adopt(
   });
 }
 
+test("repository adoption carries an explicitly allowed generic OIDC capability", async () => {
+  const variableNames = [
+    "public_url",
+    "takosumi_accounts_url",
+    "takosumi_accounts_issuer_url",
+    "takosumi_accounts_client_id",
+    "takosumi_accounts_redirect_uri",
+  ];
+  const oidcDocument = {
+    apiVersion: "takosumi.com/v2.2",
+    kind: "Repository",
+    install: {
+      modules: {
+        ".": {
+          inputs: variableNames.map((name) => ({
+            name,
+            source: {
+              kind: name === "public_url" ? "user" as const : "module_default" as const,
+            },
+            type: "string" as const,
+            ...(name === "public_url" ? { required: true } : {}),
+            label: { ja: name, en: name },
+          })),
+          requires: [
+            {
+              kind: "http.endpoint" as const,
+              deliver: { variables: { url: "public_url" } },
+            },
+            {
+              kind: "identity.oidc" as const,
+              callbackPath: "/auth/oidc/callback",
+              scopes: ["openid", "profile"],
+              deliver: {
+                variables: {
+                  accountsUrl: "takosumi_accounts_url",
+                  issuerUrl: "takosumi_accounts_issuer_url",
+                  clientId: "takosumi_accounts_client_id",
+                  redirectUri: "takosumi_accounts_redirect_uri",
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+  } satisfies RepositoryManifestDocument;
+  const result = await adopt(
+    baseConfig({
+      policy: {
+        repositoryInstallUx: {
+          allowedInterfacePermissions: [],
+          allowedOidcScopes: ["openid", "profile"],
+        },
+      },
+    }),
+    {
+      sourceSnapshot: snapshotWithManifest({
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document: oidcDocument,
+      }),
+      compatibilityReport: {
+        ...compatibilityReport,
+        rootModuleVariables: variableNames,
+        rootModuleVariableDeclarations: variableNames.map((name) => ({
+          name,
+          type: "string",
+          hasDefault: name !== "public_url",
+        })),
+        rootModuleOutputs: [],
+      },
+      reviewedVariables: { public_url: "https://staging.example.test" },
+    },
+  );
+
+  expect(result.status).toBe("accepted");
+  if (result.status !== "accepted") return;
+  expect(result.installExperience?.projections).toEqual([
+    { kind: "public_endpoint", variables: { url: "public_url" } },
+    {
+      kind: "oidc_client",
+      variables: {
+        accountsUrl: "takosumi_accounts_url",
+        issuerUrl: "takosumi_accounts_issuer_url",
+        clientId: "takosumi_accounts_client_id",
+        redirectUri: "takosumi_accounts_redirect_uri",
+      },
+      callbackPath: "/auth/oidc/callback",
+      scopes: ["openid", "profile"],
+    },
+  ]);
+});
+
+test("repository OIDC rejects a base public endpoint collision instead of splitting manifest provenance", async () => {
+  const variableNames = [
+    "public_url",
+    "takosumi_accounts_url",
+    "takosumi_accounts_issuer_url",
+    "takosumi_accounts_client_id",
+    "takosumi_accounts_redirect_uri",
+  ];
+  const oidcDocument = {
+    apiVersion: "takosumi.com/v2.2",
+    kind: "Repository",
+    install: {
+      modules: {
+        ".": {
+          inputs: variableNames.map((name) => ({
+            name,
+            source: {
+              kind: name === "public_url"
+                ? "user" as const
+                : "module_default" as const,
+            },
+            type: "string" as const,
+            ...(name === "public_url" ? { required: true } : {}),
+            label: { ja: name, en: name },
+          })),
+          requires: [
+            {
+              kind: "http.endpoint" as const,
+              deliver: { variables: { url: "public_url" } },
+            },
+            {
+              kind: "identity.oidc" as const,
+              callbackPath: "/auth/oidc/callback",
+              scopes: ["openid", "profile"],
+              deliver: {
+                variables: {
+                  accountsUrl: "takosumi_accounts_url",
+                  issuerUrl: "takosumi_accounts_issuer_url",
+                  clientId: "takosumi_accounts_client_id",
+                  redirectUri: "takosumi_accounts_redirect_uri",
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+  } satisfies RepositoryManifestDocument;
+  const result = await adopt(
+    baseConfig({
+      installExperience: {
+        projections: [{
+          kind: "public_endpoint",
+          variables: { url: "operator_public_url" },
+        }],
+      },
+      policy: {
+        repositoryInstallUx: {
+          allowedInterfacePermissions: [],
+          allowedOidcScopes: ["openid", "profile"],
+        },
+      },
+    }),
+    {
+      sourceSnapshot: snapshotWithManifest({
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document: oidcDocument,
+      }),
+      compatibilityReport: {
+        ...compatibilityReport,
+        rootModuleVariables: variableNames,
+        rootModuleVariableDeclarations: variableNames.map((name) => ({
+          name,
+          type: "string",
+          hasDefault: name !== "public_url",
+        })),
+        rootModuleOutputs: [],
+      },
+      reviewedVariables: { public_url: "https://staging.example.test" },
+    },
+  );
+
+  expect(result).toMatchObject({
+    status: "invalid",
+    diagnostic: {
+      code: "repository_install_ux_oidc_endpoint_conflict",
+    },
+  });
+});
+
+test("repository adoption does not promote an operator-only OIDC projection", async () => {
+  const result = await adopt(baseConfig({
+    installExperience: {
+      projections: [
+        { kind: "public_endpoint", variables: { url: "public_url" } },
+        {
+          kind: "oidc_client",
+          variables: {
+            accountsUrl: "takosumi_accounts_url",
+            issuerUrl: "takosumi_accounts_issuer_url",
+            clientId: "takosumi_accounts_client_id",
+            redirectUri: "takosumi_accounts_redirect_uri",
+          },
+          callbackPath: "/operator/callback",
+          scopes: ["openid"],
+        },
+      ],
+    },
+  }), { installingPrincipalId: "principal_operator_projection" });
+
+  expect(result.status).toBe("accepted");
+  if (result.status !== "accepted") return;
+  expect(result.installExperience?.projections).toEqual([
+    { kind: "public_endpoint", variables: { url: "public_url" } },
+  ]);
+});
+
 function snapshotWithManifest(
   repositoryManifest: SourceSnapshot["repositoryManifest"],
 ): SourceSnapshot {

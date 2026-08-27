@@ -97,6 +97,219 @@ function compile(
 }
 
 describe("repository install UX compiler", () => {
+  test("compiles reviewed generic Accounts OIDC delivery into existing InstallConfig projections", () => {
+    const oidcDocument = {
+      apiVersion: "takosumi.com/v2.2",
+      kind: "Repository",
+      install: {
+        defaultModule: ".",
+        modules: {
+          ".": {
+            inputs: [
+              {
+                name: "public_url",
+                source: { kind: "user" },
+                type: "string",
+                required: true,
+                label: { ja: "公開 URL", en: "Public URL" },
+              },
+              ...[
+                "takosumi_accounts_url",
+                "takosumi_accounts_issuer_url",
+                "takosumi_accounts_client_id",
+                "takosumi_accounts_redirect_uri",
+              ].map((name) => ({
+                name,
+                source: { kind: "module_default" as const },
+                type: "string" as const,
+                label: { ja: name, en: name },
+              })),
+            ],
+            requires: [
+              {
+                kind: "http.endpoint" as const,
+                deliver: { variables: { url: "public_url" } },
+              },
+              {
+                kind: "identity.oidc" as const,
+                callbackPath: "/auth/oidc/callback",
+                scopes: ["openid", "profile", "email"],
+                deliver: {
+                  variables: {
+                    accountsUrl: "takosumi_accounts_url",
+                    issuerUrl: "takosumi_accounts_issuer_url",
+                    clientId: "takosumi_accounts_client_id",
+                    redirectUri: "takosumi_accounts_redirect_uri",
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    } satisfies RepositoryManifestDocument;
+    const variableNames = oidcDocument.install.modules["."].inputs.map(
+      (input) => input.name,
+    );
+    const result = compile({
+      document: oidcDocument,
+      reviewedVariables: { public_url: "https://staging.example.test" },
+      compatibilityReport: report({
+        rootModuleVariables: variableNames,
+        rootModuleVariableDeclarations: variableNames.map((name) => ({
+          name,
+          type: "string" as const,
+          hasDefault: name !== "public_url",
+        })),
+      }),
+      policy: {
+        allowedOidcScopes: ["openid", "profile", "email"],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.compiled.installExperience).toEqual({
+      projections: [
+        { kind: "public_endpoint", variables: { url: "public_url" } },
+        {
+          kind: "oidc_client",
+          variables: {
+            accountsUrl: "takosumi_accounts_url",
+            issuerUrl: "takosumi_accounts_issuer_url",
+            clientId: "takosumi_accounts_client_id",
+            redirectUri: "takosumi_accounts_redirect_uri",
+          },
+          callbackPath: "/auth/oidc/callback",
+          scopes: ["openid", "profile", "email"],
+        },
+      ],
+      repositoryInstallUx: { status: "accepted" },
+    });
+  });
+
+  test("rejects generic Accounts OIDC without a same-module public URL delivery", () => {
+    const names = [
+      "takosumi_accounts_url",
+      "takosumi_accounts_issuer_url",
+      "takosumi_accounts_client_id",
+      "takosumi_accounts_redirect_uri",
+    ];
+    const result = compile({
+      document: {
+        apiVersion: "takosumi.com/v2.2",
+        kind: "Repository",
+        install: {
+          modules: {
+            ".": {
+              inputs: names.map((name) => ({
+                name,
+                source: { kind: "module_default" as const },
+                type: "string" as const,
+                label: { ja: name, en: name },
+              })),
+              requires: [{
+                kind: "identity.oidc",
+                callbackPath: "/auth/oidc/callback",
+                scopes: ["openid"],
+                deliver: {
+                  variables: {
+                    accountsUrl: names[0]!,
+                    issuerUrl: names[1]!,
+                    clientId: names[2]!,
+                    redirectUri: names[3]!,
+                  },
+                },
+              }],
+            },
+          },
+        },
+      },
+      compatibilityReport: report({
+        rootModuleVariables: names,
+        rootModuleVariableDeclarations: names.map((name) => ({
+          name,
+          type: "string",
+          hasDefault: true,
+        })),
+      }),
+      policy: { allowedOidcScopes: ["openid"] },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostic: { code: "repository_install_ux_requirement_target_invalid" },
+    });
+  });
+
+  test.each(["identity.oidc", "http.endpoint"] as const)(
+    "rejects duplicate %s requirements before generic Accounts OIDC materialization",
+    (duplicateKind) => {
+      const names = [
+        "public_url",
+        "takosumi_accounts_url",
+        "takosumi_accounts_issuer_url",
+        "takosumi_accounts_client_id",
+        "takosumi_accounts_redirect_uri",
+      ];
+      const endpoint = {
+        kind: "http.endpoint" as const,
+        deliver: { variables: { url: "public_url" } },
+      };
+      const oidc = {
+        kind: "identity.oidc" as const,
+        callbackPath: "/auth/oidc/callback",
+        scopes: ["openid"],
+        deliver: {
+          variables: {
+            accountsUrl: "takosumi_accounts_url",
+            issuerUrl: "takosumi_accounts_issuer_url",
+            clientId: "takosumi_accounts_client_id",
+            redirectUri: "takosumi_accounts_redirect_uri",
+          },
+        },
+      };
+      const requirements = duplicateKind === "identity.oidc"
+        ? [endpoint, oidc, oidc]
+        : [endpoint, endpoint, oidc];
+      const result = compile({
+        document: {
+          apiVersion: "takosumi.com/v2.2",
+          kind: "Repository",
+          install: {
+            modules: {
+              ".": {
+                inputs: names.map((name) => ({
+                  name,
+                  source: { kind: "module_default" as const },
+                  type: "string" as const,
+                  label: { ja: name, en: name },
+                })),
+                requires: requirements,
+              },
+            },
+          },
+        },
+        compatibilityReport: report({
+          rootModuleVariables: names,
+          rootModuleVariableDeclarations: names.map((name) => ({
+            name,
+            type: "string",
+            hasDefault: true,
+          })),
+        }),
+        policy: { allowedOidcScopes: ["openid"] },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        diagnostic: {
+          code: "repository_install_ux_requirement_target_invalid",
+        },
+      });
+    },
+  );
+
   test("compiles the exact module into DB-owned presentation, mappings, projections, and features", () => {
     const result = compile({ reviewedVariables: { app_url: "" } });
     expect(result.ok).toBe(true);
@@ -215,9 +428,9 @@ describe("repository install UX compiler", () => {
                 scopes: ["openid", "profile", "email", "profile"],
                 deliver: {
                   bindings: {
+                    accountsUrl: "TAKOSUMI_ACCOUNTS_URL",
                     issuerUrl: "OIDC_ISSUER_URL",
                     clientId: "OIDC_CLIENT_ID",
-                    ownerSubject: "OIDC_OWNER_SUB",
                     redirectUri: "OIDC_REDIRECT_URI",
                   },
                 },
@@ -238,7 +451,7 @@ describe("repository install UX compiler", () => {
     expect(result).toMatchObject({
       ok: false,
       diagnostic: {
-        code: "repository_install_ux_requirement_disallowed",
+        code: "repository_install_ux_requirement_target_invalid",
       },
     });
   });
@@ -420,7 +633,7 @@ describe("repository install UX compiler", () => {
     expect(JSON.stringify(result)).not.toContain(secret);
   });
 
-  test("rejects Capsule-specific OIDC materialization and still validates ordinary targets", () => {
+  test("rejects incomplete OIDC delivery and still validates ordinary targets", () => {
     const oidcDocument: RepositoryManifestDocument = {
       apiVersion: "takosumi.com/v1",
       kind: "Repository",
@@ -458,7 +671,7 @@ describe("repository install UX compiler", () => {
     });
     expect(oidc).toMatchObject({
       ok: false,
-      diagnostic: { code: "repository_install_ux_requirement_disallowed" },
+      diagnostic: { code: "repository_install_ux_requirement_target_invalid" },
     });
 
     const projection = compile({

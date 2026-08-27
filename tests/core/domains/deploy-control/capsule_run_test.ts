@@ -82,6 +82,7 @@ import {
   seedCapsuleModel,
   seedProviderConnections,
   type SeedCapsuleModelOptions,
+  type SeededCapsuleModel,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import type { CapsuleModuleVariableMaterializer } from "../../../../core/domains/deploy-control/module_variable_materializer.ts";
@@ -654,6 +655,13 @@ async function seedRunnableCapsuleModel(
     capsuleId: options.capsuleId ?? "cap_fixture1",
     ...options,
   });
+  if (
+    options.installConfig?.installExperience?.projections?.some(
+      (projection) => projection.kind === "oidc_client",
+    )
+  ) {
+    await pinOidcRepositoryManifest(store, seeded.snapshot);
+  }
   await seedProviderConnections(store, seeded.capsule);
   return seeded;
 }
@@ -720,21 +728,57 @@ function runtimeSecretLifecycleInstallConfig(): Partial<InstallConfig> {
   };
 }
 
+const OIDC_REPOSITORY_INSTALL_UX_DIGEST = `sha256:${"a".repeat(64)}`;
+
+async function pinOidcRepositoryManifest(
+  store: OpenTofuControlStore,
+  snapshot: SeededCapsuleModel["snapshot"],
+): Promise<void> {
+  await store.putSourceSnapshot({
+    ...snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest: OIDC_REPOSITORY_INSTALL_UX_DIGEST,
+      document: {
+        apiVersion: "takosumi.com/v2.2",
+        kind: "Repository",
+        install: { modules: { ".": { inputs: [] } } },
+      },
+    },
+  });
+}
+
 function oidcMaterializedInstallConfig(): Partial<InstallConfig> {
   return {
     workspaceId: "ws_test001",
-    variableMapping: {
-      project_name: "yuru-main",
-      worker_name: "",
+    internal: {
+      reason: "per_install_overrides",
+      sourceSnapshotId: "snap_fixture",
+      repositoryInstallUxDigest: OIDC_REPOSITORY_INSTALL_UX_DIGEST,
     },
-    accountsOidcModuleVariableMaterialization: {
-      contract: "takosumi.accounts-oidc-module-variables/v1",
-      workerNameVariable: "worker_name",
-      projectNameVariable: "project_name",
-      issuerUrlVariable: "takosumi_accounts_issuer_url",
-      clientIdVariable: "takosumi_accounts_client_id",
-      ownerSubjectVariable: "oidc_owner_sub",
-      allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
+    variableMapping: { public_url: "https://staging.example.test" },
+    installExperience: {
+      projections: [
+        { kind: "public_endpoint", variables: { url: "public_url" } },
+        {
+          kind: "oidc_client",
+          variables: {
+            accountsUrl: "takosumi_accounts_url",
+            issuerUrl: "takosumi_accounts_issuer_url",
+            clientId: "takosumi_accounts_client_id",
+            redirectUri: "takosumi_accounts_redirect_uri",
+          },
+          callbackPath: "/auth/oidc/callback",
+          scopes: ["openid", "profile"],
+        },
+      ],
+      repositoryInstallUx: { status: "accepted" },
+    },
+    policy: {
+      repositoryInstallUx: {
+        allowedInterfacePermissions: [],
+        allowedOidcScopes: ["openid", "profile"],
+      },
     },
   };
 }
@@ -761,10 +805,11 @@ function fixtureAuthorityBoundModuleVariableMaterializer(
   } = {},
 ): CapsuleModuleVariableMaterializer {
   const variables = {
+    takosumi_accounts_url: "https://app.takosumi.com",
     takosumi_accounts_issuer_url: "https://app.takosumi.com",
     takosumi_accounts_client_id: "tko_public_client",
-    oidc_owner_sub: "tsub_pairwise_owner",
-    allow_unpinned_owner_claim: false,
+    takosumi_accounts_redirect_uri:
+      "https://staging.example.test/auth/oidc/callback",
   } as const;
   return {
     async materialize(input) {
@@ -776,7 +821,7 @@ function fixtureAuthorityBoundModuleVariableMaterializer(
       }
       return {
         digest: await stableJsonDigest({
-          contract: "fixture.accounts-oidc-module-variables/v1",
+          contract: "fixture.repository-accounts-oidc-variables/v1",
           activationDigest,
           variables,
         }),
@@ -1615,88 +1660,18 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
 
 test("Capsule OIDC materialization registers only on provision Apply and retires best-effort after terminal destroy", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
+  const runner = recordingRunner({ requiredProviders: [] });
   const seeded = await seedCapsuleModel(store, {
     workspaceId: "ws_test001",
     capsuleId: "cap_fixture1",
     environment: "preview",
-    name: "yuru-main",
-    installConfig: {
-      workspaceId: "ws_test001",
-      variableMapping: {
-        project_name: "yuru-main",
-        worker_name: "",
-        tenant_slug: "yuru-community",
-        cloudflare_account_id: null,
-        cloudflare_workers_subdomain: null,
-      },
-      accountsOidcModuleVariableMaterialization: {
-        contract: "takosumi.accounts-oidc-module-variables/v1",
-        workerNameVariable: "worker_name",
-        projectNameVariable: "project_name",
-        additionalInputVariables: ["tenant_slug"],
-        forbiddenNonEmptyInputVariables: [
-          "auth_password_hash",
-          "notification_push_gateway_token",
-        ],
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        ownerSubjectVariable: "oidc_owner_sub",
-        allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-      },
-      policy: {
-        allowedProviders: [
-          "registry.opentofu.org/cloudflare/cloudflare",
-        ],
-        providerCredentials: {
-          requiredProviders: [
-            "registry.opentofu.org/cloudflare/cloudflare",
-          ],
-          allowedConnectionScopes: ["workspace"],
-          allowedCredentialRecipes: [
-            { id: "cloudflare", authMode: "api_token" },
-          ],
-        },
-      },
-    },
+    name: "generic-git-app",
+    installConfig: oidcMaterializedInstallConfig(),
   });
+  await pinOidcRepositoryManifest(store, seeded.snapshot);
   await store.putCapsule({
     ...seeded.capsule,
     installingPrincipalId: "tsub_owner",
-  });
-  await putConnectionWithProviderEnv(store, {
-    ...cloudflareConnection("conn_cloudflare_oidc", "ws_test001"),
-    credentialRecipe: {
-      id: "cloudflare",
-      authMode: "api_token",
-      secretPartition: "provider-credentials",
-    },
-    secretPartition: "provider-credentials",
-    verifiedAt: "2026-06-07T00:00:00.000Z",
-    scopeHints: {
-      providerSettings: {
-        accountId: "acct_verified",
-        workersSubdomain: "team-workers",
-      },
-      moduleInputDefaults: {
-        cloudflare_account_id: "acct_verified",
-        cloudflare_workers_subdomain: "team-workers",
-      },
-    },
-  });
-  await store.putProviderBindingSet({
-    id: "bindings_cloudflare_oidc",
-    workspaceId: seeded.capsule.workspaceId,
-    capsuleId: seeded.capsule.id,
-    environment: seeded.capsule.environment,
-    bindings: [
-      {
-        provider: "registry.opentofu.org/cloudflare/cloudflare",
-        connectionId: "conn_cloudflare_oidc",
-      },
-    ],
-    createdAt: "2026-06-07T00:00:00.000Z",
-    updatedAt: "2026-06-07T00:00:00.000Z",
   });
   const phases: string[] = [];
   const retirementStatuses: string[] = [];
@@ -1709,28 +1684,27 @@ test("Capsule OIDC materialization registers only on provision Apply and retires
       if (input.phase === "apply") applyWrites += 1;
       materializerInputs.push(input.variables);
       expect(input.capsule.installingPrincipalId).toBe("tsub_owner");
-      expect(input.resolvedProviderBindings).toHaveLength(1);
-      if (!input.installConfig.accountsOidcModuleVariableMaterialization) {
-        return undefined;
-      }
+      expect(input.resolvedProviderBindings).toEqual([]);
       if (input.expectedDigest !== undefined) {
         expect(input.expectedDigest).toBe(digest);
       }
       if (input.phase !== "plan") {
         expect(input.plannedVariables).toEqual({
+          takosumi_accounts_url: "https://app.takosumi.com",
           takosumi_accounts_issuer_url: "https://app.takosumi.com",
           takosumi_accounts_client_id: "tko_public_client",
-          oidc_owner_sub: "tsub_pairwise_owner",
-          allow_unpinned_owner_claim: false,
+          takosumi_accounts_redirect_uri:
+            "https://staging.example.test/auth/oidc/callback",
         });
       }
       return {
         digest,
         variables: {
+          takosumi_accounts_url: "https://app.takosumi.com",
           takosumi_accounts_issuer_url: "https://app.takosumi.com",
           takosumi_accounts_client_id: "tko_public_client",
-          oidc_owner_sub: "tsub_pairwise_owner",
-          allow_unpinned_owner_claim: false,
+          takosumi_accounts_redirect_uri:
+            "https://staging.example.test/auth/oidc/callback",
         },
       };
     },
@@ -1750,15 +1724,14 @@ test("Capsule OIDC materialization registers only on provision Apply and retires
 
   expect(planRun.status).toBe("succeeded");
   expect(materializerInputs[0]).toEqual({
-    project_name: "yuru-main",
-    worker_name: "",
-    tenant_slug: "yuru-community",
+    public_url: "https://staging.example.test",
   });
   expect(runner.planJobs[0]?.variables).toMatchObject({
+    takosumi_accounts_url: "https://app.takosumi.com",
     takosumi_accounts_issuer_url: "https://app.takosumi.com",
     takosumi_accounts_client_id: "tko_public_client",
-    oidc_owner_sub: "tsub_pairwise_owner",
-    allow_unpinned_owner_claim: false,
+    takosumi_accounts_redirect_uri:
+      "https://staging.example.test/auth/oidc/callback",
   });
   const serializedVariables = JSON.stringify(runner.planJobs[0]?.variables);
   expect(serializedVariables).not.toContain("ENCRYPTION_KEY");
@@ -1803,6 +1776,117 @@ test("Capsule OIDC materialization registers only on provision Apply and retires
   );
 });
 
+test("Capsule Run pins generic repository OIDC variables before Apply mutation", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "ws_test001",
+    capsuleId: "cap_fixture1",
+    environment: "preview",
+    name: "generic-git-app",
+    installConfig: {
+      workspaceId: "ws_test001",
+      internal: {
+        reason: "per_install_overrides",
+        sourceSnapshotId: "snap_fixture",
+        repositoryInstallUxDigest: `sha256:${"a".repeat(64)}`,
+      },
+      variableMapping: {
+        public_url: "https://staging.example.test",
+      },
+      installExperience: {
+        projections: [
+          { kind: "public_endpoint", variables: { url: "public_url" } },
+          {
+            kind: "oidc_client",
+            variables: {
+              accountsUrl: "takosumi_accounts_url",
+              issuerUrl: "takosumi_accounts_issuer_url",
+              clientId: "takosumi_accounts_client_id",
+              redirectUri: "takosumi_accounts_redirect_uri",
+            },
+            callbackPath: "/auth/oidc/callback",
+            scopes: ["openid", "profile"],
+          },
+        ],
+        repositoryInstallUx: { status: "accepted" },
+      },
+      policy: {
+        repositoryInstallUx: {
+          allowedInterfacePermissions: [],
+          allowedOidcScopes: ["openid", "profile"],
+        },
+      },
+    },
+  });
+  await store.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest: `sha256:${"a".repeat(64)}`,
+      document: {
+        apiVersion: "takosumi.com/v2.2",
+        kind: "Repository",
+        install: { modules: { ".": { inputs: [] } } },
+      },
+    },
+  });
+  await store.putCapsule({
+    ...seeded.capsule,
+    installingPrincipalId: "tsub_owner",
+  });
+  const unavailableController = controllerWith(store, runner);
+  await expect(
+    unavailableController.createCapsulePlan(seeded.capsule.id),
+  ).rejects.toThrow(/host materializer is unavailable/i);
+  expect(runner.planJobs).toHaveLength(0);
+  const phases: string[] = [];
+  let writes = 0;
+  const digest = `sha256:${"7".repeat(64)}`;
+  const variables = {
+    takosumi_accounts_url: "https://app.takosumi.com",
+    takosumi_accounts_issuer_url: "https://app.takosumi.com",
+    takosumi_accounts_client_id: "tko_public_client",
+    takosumi_accounts_redirect_uri:
+      "https://staging.example.test/auth/oidc/callback",
+  } as const;
+  const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
+    async materialize(input) {
+      phases.push(input.phase);
+      if (input.phase === "apply") writes += 1;
+      expect(input.variables).toEqual({
+        public_url: "https://staging.example.test",
+      });
+      expect(input.resolvedProviderBindings).toEqual([]);
+      if (input.phase !== "plan") {
+        expect(input.expectedDigest).toBe(digest);
+        expect(input.plannedVariables).toEqual(variables);
+      }
+      return { digest, variables };
+    },
+    async retire() {},
+  };
+  const controller = controllerWith(store, runner, {
+    moduleVariableMaterializer,
+  });
+
+  const { planRun } = await controller.createCapsulePlan(seeded.capsule.id);
+  expect(planRun.status).toBe("succeeded");
+  expect(phases).toEqual(["plan", "plan"]);
+  expect(writes).toBe(0);
+  expect(runner.planJobs[0]?.variables).toMatchObject(variables);
+  expect(JSON.stringify(planRun)).not.toContain("tko_public_client");
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(applyRun.status).toBe("succeeded");
+  expect(phases).toEqual(["plan", "plan", "apply_check", "apply"]);
+  expect(writes).toBe(1);
+  expect(runner.applyJobs).toHaveLength(1);
+});
+
 test("failed provider destroy retains the current OIDC client without re-entering registration", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
@@ -1810,23 +1894,8 @@ test("failed provider destroy retains the current OIDC client without re-enterin
     workspaceId: "ws_test001",
     capsuleId: "cap_fixture1",
     environment: "preview",
-    name: "yuru-main",
-    installConfig: {
-      workspaceId: "ws_test001",
-      variableMapping: {
-        project_name: "yuru-main",
-        worker_name: "",
-      },
-      accountsOidcModuleVariableMaterialization: {
-        contract: "takosumi.accounts-oidc-module-variables/v1",
-        workerNameVariable: "worker_name",
-        projectNameVariable: "project_name",
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        ownerSubjectVariable: "oidc_owner_sub",
-        allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-      },
-    },
+    name: "generic-git-app",
+    installConfig: oidcMaterializedInstallConfig(),
   });
   await store.putCapsule({
     ...seeded.capsule,
@@ -1847,10 +1916,11 @@ test("failed provider destroy retains the current OIDC client without re-enterin
       return {
         digest,
         variables: {
+          takosumi_accounts_url: "https://app.takosumi.com",
           takosumi_accounts_issuer_url: "https://app.takosumi.com",
           takosumi_accounts_client_id: "tko_public_client",
-          oidc_owner_sub: "tsub_pairwise_owner",
-          allow_unpinned_owner_claim: false,
+          takosumi_accounts_redirect_uri:
+            "https://staging.example.test/auth/oidc/callback",
         },
       };
     },
@@ -1903,19 +1973,7 @@ test("Capsule Apply fails closed when the OIDC module materialization declaratio
   const runner = recordingRunner();
   const seeded = await seedRunnableCapsuleModel(store, {
     environment: "preview",
-    installConfig: {
-      workspaceId: "ws_test001",
-      variableMapping: { project_name: "yuru-main" },
-      accountsOidcModuleVariableMaterialization: {
-        contract: "takosumi.accounts-oidc-module-variables/v1",
-        workerNameVariable: "worker_name",
-        projectNameVariable: "project_name",
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        ownerSubjectVariable: "oidc_owner_sub",
-        allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-      },
-    },
+    installConfig: oidcMaterializedInstallConfig(),
   });
   await store.putCapsule({
     ...seeded.capsule,
@@ -1924,16 +1982,17 @@ test("Capsule Apply fails closed when the OIDC module materialization declaratio
   const digest = `sha256:${"c".repeat(64)}`;
   const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
     async materialize(input) {
-      if (!input.installConfig.accountsOidcModuleVariableMaterialization) {
+      if (!input.installConfig.installExperience?.repositoryInstallUx) {
         return undefined;
       }
       return {
         digest,
         variables: {
+          takosumi_accounts_url: "https://app.takosumi.com",
           takosumi_accounts_issuer_url: "https://app.takosumi.com",
           takosumi_accounts_client_id: "tko_public_client",
-          oidc_owner_sub: "tsub_pairwise_owner",
-          allow_unpinned_owner_claim: false,
+          takosumi_accounts_redirect_uri:
+            "https://staging.example.test/auth/oidc/callback",
         },
       };
     },
@@ -1945,10 +2004,7 @@ test("Capsule Apply fails closed when the OIDC module materialization declaratio
   const { planRun } = await controller.createCapsulePlan(seeded.capsule.id);
   expect(planRun.status).toBe("succeeded");
   const current = (await store.getInstallConfig(seeded.installConfig.id))!;
-  const {
-    accountsOidcModuleVariableMaterialization: _removed,
-    ...withoutMaterialization
-  } = current;
+  const { installExperience: _removed, ...withoutMaterialization } = current;
   await store.putInstallConfig({
     ...withoutMaterialization,
     updatedAt: "2026-08-25T12:00:01.000Z",
@@ -1967,19 +2023,7 @@ test("Capsule Plan fails closed when its OIDC module materializer is unavailable
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   const seeded = await seedRunnableCapsuleModel(store, {
-    installConfig: {
-      workspaceId: "ws_test001",
-      variableMapping: { project_name: "yuru-main" },
-      accountsOidcModuleVariableMaterialization: {
-        contract: "takosumi.accounts-oidc-module-variables/v1",
-        workerNameVariable: "worker_name",
-        projectNameVariable: "project_name",
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        ownerSubjectVariable: "oidc_owner_sub",
-        allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-      },
-    },
+    installConfig: oidcMaterializedInstallConfig(),
   });
   const controller = controllerWith(store, runner);
 
@@ -1993,29 +2037,18 @@ test("Capsule Plan rejects secret or undeclared module values returned by its ho
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   const seeded = await seedRunnableCapsuleModel(store, {
-    installConfig: {
-      workspaceId: "ws_test001",
-      variableMapping: { project_name: "yuru-main" },
-      accountsOidcModuleVariableMaterialization: {
-        contract: "takosumi.accounts-oidc-module-variables/v1",
-        workerNameVariable: "worker_name",
-        projectNameVariable: "project_name",
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        ownerSubjectVariable: "oidc_owner_sub",
-        allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-      },
-    },
+    installConfig: oidcMaterializedInstallConfig(),
   });
   const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
     async materialize() {
       return {
         digest: `sha256:${"d".repeat(64)}`,
         variables: {
+          takosumi_accounts_url: "https://app.takosumi.com",
           takosumi_accounts_issuer_url: "https://app.takosumi.com",
           takosumi_accounts_client_id: "tko_public_client",
-          oidc_owner_sub: "tsub_pairwise_owner",
-          allow_unpinned_owner_claim: false,
+          takosumi_accounts_redirect_uri:
+            "https://staging.example.test/auth/oidc/callback",
           ENCRYPTION_KEY: "must-never-cross-this-port",
         },
       };
@@ -2030,118 +2063,6 @@ test("Capsule Plan rejects secret or undeclared module values returned by its ho
     controller.createCapsulePlan(seeded.capsule.id),
   ).rejects.toThrow(/exact declared target set/i);
   expect(runner.planJobs).toHaveLength(0);
-});
-
-test("Capsule Plan rejects declared forbidden module inputs before the OIDC materializer", async () => {
-  for (const [name, value] of [
-    ["auth_password_hash", "$argon2id$unsealed"],
-    ["notification_push_gateway_token", "push-gateway-secret"],
-  ] as const) {
-    const store = new InMemoryOpenTofuControlStore();
-    const runner = recordingRunner();
-    const seeded = await seedRunnableCapsuleModel(store, {
-      installConfig: {
-        workspaceId: "ws_test001",
-        variableMapping: { project_name: "yuru-main", [name]: value },
-        accountsOidcModuleVariableMaterialization: {
-          contract: "takosumi.accounts-oidc-module-variables/v1",
-          workerNameVariable: "worker_name",
-          projectNameVariable: "project_name",
-          forbiddenNonEmptyInputVariables: [
-            "auth_password_hash",
-            "notification_push_gateway_token",
-          ],
-          issuerUrlVariable: "takosumi_accounts_issuer_url",
-          clientIdVariable: "takosumi_accounts_client_id",
-          ownerSubjectVariable: "oidc_owner_sub",
-          allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-        },
-      },
-    });
-    let calls = 0;
-    const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
-      async materialize() {
-        calls += 1;
-        return {
-          digest: `sha256:${"e".repeat(64)}`,
-          variables: {
-            takosumi_accounts_issuer_url: "https://app.takosumi.com",
-            takosumi_accounts_client_id: "tko_public_client",
-            oidc_owner_sub: "tsub_pairwise_owner",
-            allow_unpinned_owner_claim: false,
-          },
-        };
-      },
-      async retire() {},
-    };
-    const controller = controllerWith(store, runner, {
-      moduleVariableMaterializer,
-    });
-
-    await expect(
-      controller.createCapsulePlan(seeded.capsule.id),
-    ).rejects.toThrow(/unsealed module secret input/i);
-    expect(calls).toBe(0);
-    expect(runner.planJobs).toHaveLength(0);
-  }
-});
-
-test("Capsule Plan rejects malformed module-variable declarations before host calls", async () => {
-  for (const declaration of [
-    { additionalInputVariables: ["invalid-name"] },
-    { additionalInputVariables: ["project_name"] },
-    { forbiddenNonEmptyInputVariables: ["project_name"] },
-    {
-      additionalInputVariables: Array.from(
-        { length: 33 },
-        (_, index) => `metadata_${index}`,
-      ),
-    },
-  ]) {
-    const store = new InMemoryOpenTofuControlStore();
-    const runner = recordingRunner();
-    const seeded = await seedRunnableCapsuleModel(store, {
-      installConfig: {
-        workspaceId: "ws_test001",
-        variableMapping: { project_name: "yuru-main" },
-        accountsOidcModuleVariableMaterialization: {
-          contract: "takosumi.accounts-oidc-module-variables/v1",
-          workerNameVariable: "worker_name",
-          projectNameVariable: "project_name",
-          issuerUrlVariable: "takosumi_accounts_issuer_url",
-          clientIdVariable: "takosumi_accounts_client_id",
-          ownerSubjectVariable: "oidc_owner_sub",
-          allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-          ...declaration,
-        },
-      },
-    });
-    let calls = 0;
-    const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
-      async materialize() {
-        calls += 1;
-        return {
-          digest: `sha256:${"f".repeat(64)}`,
-          variables: {
-            takosumi_accounts_issuer_url: "https://app.takosumi.com",
-            takosumi_accounts_client_id: "tko_public_client",
-            oidc_owner_sub: "tsub_pairwise_owner",
-            allow_unpinned_owner_claim: false,
-          },
-        };
-      },
-      async retire() {},
-    };
-    const controller = controllerWith(store, runner, {
-      moduleVariableMaterializer,
-    });
-
-    await expect(
-      controller.createCapsulePlan(seeded.capsule.id),
-    ).rejects.toThrow(/declaration/i);
-    expect(calls).toBe(0);
-    expect(runner.planJobs).toHaveLength(0);
-  }
 });
 
 test("declared generic Capsule Cloudflare inputs and outputs are wired from source shape", async () => {
@@ -8853,39 +8774,22 @@ test("capsule destroy: a D1 ledger-tail failure requeues the same ApplyRun witho
   const runner = recordingRunner();
   await seedRunnableCapsuleModel(inner, {
     environment: "preview",
-    name: "yuru-main",
-    installConfig: {
-      workspaceId: "ws_test001",
-      variableMapping: {
-        project_name: "yuru-main",
-        worker_name: "",
-      },
-      accountsOidcModuleVariableMaterialization: {
-        contract: "takosumi.accounts-oidc-module-variables/v1",
-        workerNameVariable: "worker_name",
-        projectNameVariable: "project_name",
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        ownerSubjectVariable: "oidc_owner_sub",
-        allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-      },
-    },
+    name: "generic-git-app",
+    installConfig: oidcMaterializedInstallConfig(),
   });
   let oidcClientPresent = false;
   let retirementCalls = 0;
   const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
     async materialize(input) {
-      if (!input.installConfig.accountsOidcModuleVariableMaterialization) {
-        return undefined;
-      }
       if (input.phase === "apply") oidcClientPresent = true;
       return {
         digest: `sha256:${"9".repeat(64)}`,
         variables: {
+          takosumi_accounts_url: "https://app.takosumi.com",
           takosumi_accounts_issuer_url: "https://app.takosumi.com",
           takosumi_accounts_client_id: "tko_public_client",
-          oidc_owner_sub: "tsub_pairwise_owner",
-          allow_unpinned_owner_claim: false,
+          takosumi_accounts_redirect_uri:
+            "https://staging.example.test/auth/oidc/callback",
         },
       };
     },

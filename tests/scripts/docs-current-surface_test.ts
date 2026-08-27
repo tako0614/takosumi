@@ -636,8 +636,8 @@ test("activation-digest docs keep PostgreSQL and D1 promotion order separate", a
     );
     assert.match(
       normalized,
-      /provider runtime-binding.*?read-only.*?(?:no registration authority|registration authority を持ちません).*?(?:direct|DB-owned).*?(?:final-Apply activation|final Apply)/i,
-      `${path} must keep provider runtime binding read-only and direct DB-owned activation authoritative`,
+      /provider runtime-binding.*?read-only.*?(?:has no registration authority|no registration authority|registration authority を持ちません).*?Takosumi-owned generic Accounts capability implementation.*?(?:owns final(?:-| )Apply activation|final-Apply activation を所有)/i,
+      `${path} must keep provider runtime binding read-only and Takosumi-owned generic activation authoritative`,
     );
     assert.match(
       normalized,

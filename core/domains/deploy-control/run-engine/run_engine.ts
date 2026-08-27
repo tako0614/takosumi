@@ -93,6 +93,10 @@ import type { ObservabilitySink } from "../../observability/mod.ts";
 import { CapsuleQuery, requireCapsule } from "../capsule_query.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "../capsule_source_revision.ts";
 import {
+  accountsOidcModuleVariableProfile,
+  type AccountsOidcModuleVariableProfile,
+} from "../accounts_oidc_module_variable_profile.ts";
+import {
   isRunnerInfrastructureRequeueError,
   OpenTofuControllerError,
   OpenTofuRunnerExecutionError,
@@ -1347,8 +1351,8 @@ export class RunEngine {
     const materializationDigest =
       internal.genericRootDispatch?.moduleVariableMaterializationDigest;
     const currentMaterialization =
-      currentInstallConfig.accountsOidcModuleVariableMaterialization;
-    if (Boolean(materializationDigest) !== Boolean(currentMaterialization)) {
+      hasModuleVariableMaterialization(currentInstallConfig);
+    if (Boolean(materializationDigest) !== currentMaterialization) {
       throw moduleVariableMaterializationError(
         "declaration changed before the Plan variable digest",
       );
@@ -2642,12 +2646,6 @@ export class RunEngine {
         capsuleId: input.capsule.id,
       },
     );
-    if (input.installConfig.accountsOidcModuleVariableMaterialization) {
-      assertNoForbiddenModuleVariableInputs(
-        input.installConfig,
-        explicitVariables,
-      );
-    }
     const baseVariables = normalizeVariables(
       mergeJsonVariableDefaults(
         capsulePlan.providerInputDefaults,
@@ -2720,7 +2718,7 @@ export class RunEngine {
     readonly resolvedProviderBindings: readonly ResolvedCapsuleProviderBinding[];
     readonly variables: Readonly<Record<string, JsonValue>>;
   }): Promise<CapsuleModuleVariableMaterialization | undefined> {
-    if (!input.installConfig.accountsOidcModuleVariableMaterialization) {
+    if (!hasModuleVariableMaterialization(input.installConfig)) {
       return undefined;
     }
     if (!this.#moduleVariableMaterializer) {
@@ -2775,8 +2773,7 @@ export class RunEngine {
         `InstallConfig ${capsule.installConfigId} is missing`,
       );
     }
-    const declared =
-      installConfig.accountsOidcModuleVariableMaterialization !== undefined;
+    const declared = hasModuleVariableMaterialization(installConfig);
     if (!expectedDigest && !declared) return;
     if (!expectedDigest) {
       throw moduleVariableMaterializationError(
@@ -9012,7 +9009,16 @@ export class RunEngine {
 
 const MODULE_VARIABLE_MATERIALIZATION_DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const OPENTOFU_MODULE_VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
-const MAX_MODULE_VARIABLE_DECLARATION_NAMES = 32;
+
+function hasModuleVariableMaterialization(
+  installConfig: InstallConfig,
+): boolean {
+  try {
+    return accountsOidcModuleVariableProfile(installConfig) !== undefined;
+  } catch (error) {
+    throw moduleVariableMaterializationError(errorMessage(error));
+  }
+}
 
 function moduleVariableMaterializerInputVariables(
   installConfig: InstallConfig,
@@ -9020,7 +9026,6 @@ function moduleVariableMaterializerInputVariables(
 ): Readonly<Record<string, JsonValue>> {
   const { sourceNames, additionalInputNames } =
     requireValidModuleVariableProfile(installConfig);
-  assertNoForbiddenModuleVariableInputs(installConfig, variables);
   const selected: Record<string, JsonValue> = {};
   const allowedNames = new Set([...sourceNames, ...additionalInputNames]);
   for (const name of allowedNames) {
@@ -9037,23 +9042,6 @@ function moduleVariableMaterializerInputVariables(
     selected[name] = value;
   }
   return selected;
-}
-
-function assertNoForbiddenModuleVariableInputs(
-  installConfig: InstallConfig,
-  variables: Readonly<Record<string, unknown>>,
-): void {
-  const { forbiddenInputNames } = requireValidModuleVariableProfile(
-    installConfig,
-  );
-  for (const name of forbiddenInputNames) {
-    const value = variables[name];
-    if (value !== undefined && value !== null && value !== "") {
-      throw moduleVariableMaterializationError(
-        `unsealed module secret input ${name} must be disabled or omitted`,
-      );
-    }
-  }
 }
 
 function moduleVariableMaterializerPlannedVariables(
@@ -9075,46 +9063,31 @@ function moduleVariableMaterializerPlannedVariables(
 }
 
 function requireValidModuleVariableProfile(installConfig: InstallConfig): {
-  readonly profile: NonNullable<
-    InstallConfig["accountsOidcModuleVariableMaterialization"]
-  >;
+  readonly profile: AccountsOidcModuleVariableProfile;
   readonly sourceNames: readonly string[];
   readonly targetNames: readonly string[];
   readonly additionalInputNames: readonly string[];
-  readonly forbiddenInputNames: readonly string[];
 } {
-  const profile = installConfig.accountsOidcModuleVariableMaterialization;
+  let profile: AccountsOidcModuleVariableProfile | undefined;
+  try {
+    profile = accountsOidcModuleVariableProfile(installConfig);
+  } catch (error) {
+    throw moduleVariableMaterializationError(errorMessage(error));
+  }
   if (!profile) {
     throw moduleVariableMaterializationError("declaration is missing");
   }
-  const sourceNames = profile.contract ===
-      "takosumi.accounts-oidc-module-variables/v1"
-    ? [profile.workerNameVariable, profile.projectNameVariable]
-    : [profile.resourceNameVariable, profile.publicUrlVariable];
-  const targetNames = profile.contract ===
-      "takosumi.accounts-oidc-module-variables/v1"
-    ? [
-        profile.issuerUrlVariable,
-        profile.clientIdVariable,
-        profile.ownerSubjectVariable,
-        profile.allowUnpinnedOwnerClaimVariable,
-      ]
-    : [
-        profile.accountsUrlVariable,
-        profile.issuerUrlVariable,
-        profile.clientIdVariable,
-        profile.redirectUriVariable,
-      ];
-  const additionalInputNames = boundedModuleVariableNameList(
-    profile.additionalInputVariables,
-  );
-  const forbiddenInputNames = boundedModuleVariableNameList(
-    profile.forbiddenNonEmptyInputVariables,
-  );
+  const sourceNames = [profile.publicUrlVariable];
+  const targetNames = [
+    profile.accountsUrlVariable,
+    profile.issuerUrlVariable,
+    profile.clientIdVariable,
+    profile.redirectUriVariable,
+  ];
+  const additionalInputNames: readonly string[] = [];
   const publicNames = [...sourceNames, ...targetNames, ...additionalInputNames];
-  const allNames = [...publicNames, ...forbiddenInputNames];
   if (
-    allNames.some(
+    publicNames.some(
       (name) =>
         typeof name !== "string" || !OPENTOFU_MODULE_VARIABLE_NAME.test(name),
     ) ||
@@ -9124,7 +9097,7 @@ function requireValidModuleVariableProfile(installConfig: InstallConfig): {
         isSecretKey(name) ||
         name.toUpperCase() === "ENCRYPTION_KEY",
     ) ||
-    new Set(allNames).size !== allNames.length
+    new Set(publicNames).size !== publicNames.length
   ) {
     throw moduleVariableMaterializationError(
       "declaration contains an invalid, duplicate, or secret-shaped variable name",
@@ -9135,24 +9108,7 @@ function requireValidModuleVariableProfile(installConfig: InstallConfig): {
     sourceNames,
     targetNames,
     additionalInputNames,
-    forbiddenInputNames,
   };
-}
-
-function boundedModuleVariableNameList(
-  value: readonly string[] | undefined,
-): readonly string[] {
-  if (value === undefined) return [];
-  if (
-    !Array.isArray(value) ||
-    value.length > MAX_MODULE_VARIABLE_DECLARATION_NAMES ||
-    value.some((name) => typeof name !== "string")
-  ) {
-    throw moduleVariableMaterializationError(
-      "declaration contains too many or malformed variable names",
-    );
-  }
-  return value;
 }
 
 function isPublicModuleVariableScalar(value: JsonValue): boolean {
@@ -9185,24 +9141,19 @@ function requireValidModuleVariableMaterialization(
       "host returned variables outside the exact declared target set",
     );
   }
-  const issuer = result.variables[profile.issuerUrlVariable];
-  const clientId = result.variables[profile.clientIdVariable];
-  const valid = profile.contract ===
-      "takosumi.accounts-oidc-module-variables/v1"
-    ? isBoundedNonSecretString(issuer) &&
-      isBoundedNonSecretString(clientId) &&
-      isBoundedNonSecretString(
-        result.variables[profile.ownerSubjectVariable],
-      ) &&
-      result.variables[profile.allowUnpinnedOwnerClaimVariable] === false
-    : isBoundedNonSecretString(issuer) &&
-      isBoundedNonSecretString(clientId) &&
-      isBoundedNonSecretString(
-        result.variables[profile.accountsUrlVariable],
-      ) &&
-      isBoundedNonSecretString(
-        result.variables[profile.redirectUriVariable],
-      );
+  const valid =
+    isBoundedNonSecretString(
+      result.variables[profile.issuerUrlVariable],
+    ) &&
+    isBoundedNonSecretString(
+      result.variables[profile.clientIdVariable],
+    ) &&
+    isBoundedNonSecretString(
+      result.variables[profile.accountsUrlVariable],
+    ) &&
+    isBoundedNonSecretString(
+      result.variables[profile.redirectUriVariable],
+    );
   if (!valid) {
     throw moduleVariableMaterializationError(
       "host returned an invalid or secret-shaped public OIDC value",
