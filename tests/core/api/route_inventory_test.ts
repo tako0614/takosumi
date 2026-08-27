@@ -120,6 +120,94 @@ test("public OpenAPI excludes retired managed-host and legacy source-less inputs
   assert.equal(serialized.includes("operator_module"), false);
 });
 
+test("Interface OpenAPI schemas match current runtime and source-tree variants", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  const schemas = openapi.components.schemas;
+
+  assert.deepEqual(
+    schemas.InterfaceOwnerRef.properties.kind.enum,
+    ["Workspace", "Capsule"],
+  );
+  assert.deepEqual(
+    schemas.InterfaceSubjectRef.properties.kind.enum,
+    ["Principal", "ServiceAccount", "Capsule"],
+  );
+
+  assert.deepEqual(schemas.InterfaceInput.oneOf, [
+    { $ref: "#/components/schemas/InterfaceLiteralInput" },
+    { $ref: "#/components/schemas/InterfaceCapsuleOutputInput" },
+  ]);
+  assert.equal(schemas.CapsuleInterfaceBlueprintInput, undefined);
+  assert.deepEqual(
+    schemas.InterfaceMetadata.properties.materializedFrom.oneOf,
+    [
+      {
+        type: "object",
+        required: ["source", "key"],
+        properties: {
+          source: { const: "capsule_blueprint" },
+          key: { type: "string", minLength: 1 },
+        },
+        additionalProperties: false,
+      },
+      {
+        type: "object",
+        required: ["source", "descriptorName", "descriptorVersion"],
+        properties: {
+          source: { const: "portable_iac" },
+          descriptorName: { type: "string", minLength: 1 },
+          descriptorVersion: { type: "string", minLength: 1 },
+        },
+        additionalProperties: false,
+      },
+    ],
+  );
+
+  const bindingMetadata = schemas.InterfaceBinding.properties.metadata;
+  assert.deepEqual(bindingMetadata.properties.materializedFrom.oneOf, [
+    {
+      type: "object",
+      required: ["source", "interfaceKey", "key"],
+      properties: {
+        source: { const: "capsule_blueprint" },
+        interfaceKey: { type: "string", minLength: 1 },
+        key: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      required: [
+        "source",
+        "capsuleId",
+        "requirementKey",
+        "interfaceType",
+        "interfaceVersion",
+      ],
+      properties: {
+        source: { const: "capsule_required_interface" },
+        capsuleId: { type: "string", minLength: 1 },
+        requirementKey: { type: "string", minLength: 1 },
+        interfaceType: { type: "string", minLength: 1 },
+        interfaceVersion: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+  ]);
+
+  for (const retired of [
+    "InterfaceResourceOutputInput",
+    "resource_output",
+    "capsule_resource",
+    "compatibility_profile",
+  ]) {
+    assert.equal(schemas[retired], undefined, retired);
+    assert.equal(JSON.stringify(schemas).includes(retired), false, retired);
+    assert.equal(JSON.stringify(openapi).includes(retired), false, retired);
+  }
+  assert.equal(openapi.components.schemas.InterfaceResourceOutputInput, undefined);
+});
+
 test("legacy Resource Shape response schemas are not part of discovery", () => {
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
   for (const schemaName of [

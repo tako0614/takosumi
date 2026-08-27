@@ -746,7 +746,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: ["kind", "id"],
       properties: {
-        kind: { enum: ["Workspace", "Capsule", "Resource"] },
+        kind: { enum: ["Workspace", "Capsule"] },
         id: { type: "string", minLength: 1 },
       },
       additionalProperties: false,
@@ -768,22 +768,10 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    InterfaceResourceOutputInput: {
-      type: "object",
-      required: ["source", "resourceId", "outputName"],
-      properties: {
-        source: { const: "resource_output" },
-        resourceId: { type: "string", minLength: 1 },
-        outputName: { type: "string", minLength: 1 },
-        pointer: { type: "string", pattern: "^(|/)" },
-      },
-      additionalProperties: false,
-    },
     InterfaceInput: {
       oneOf: [
         ref("InterfaceLiteralInput"),
         ref("InterfaceCapsuleOutputInput"),
-        ref("InterfaceResourceOutputInput"),
       ],
     },
     CapsuleInterfaceBlueprintCapsuleOutputInput: {
@@ -800,7 +788,6 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       oneOf: [
         ref("InterfaceLiteralInput"),
         ref("CapsuleInterfaceBlueprintCapsuleOutputInput"),
-        ref("InterfaceResourceOutputInput"),
       ],
     },
     CapsuleInterfaceBlueprintSpec: {
@@ -820,6 +807,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
           pattern: "^\\S+$",
         },
         document: {},
+        documentSchema: { type: "object", additionalProperties: true },
         inputs: {
           type: "object",
           maxProperties: 64,
@@ -905,6 +893,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
         type: { type: "string", minLength: 1 },
         version: { type: "string", minLength: 1 },
         document: {},
+        documentSchema: { type: "object", additionalProperties: true },
         inputs: {
           type: "object",
           maxProperties: 64,
@@ -945,19 +934,11 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
             },
             {
               type: "object",
-              required: ["source"],
+              required: ["source", "descriptorName", "descriptorVersion"],
               properties: {
-                source: { const: "capsule_resource" },
-              },
-              additionalProperties: false,
-            },
-            {
-              type: "object",
-              required: ["source", "profile", "key"],
-              properties: {
-                source: { const: "compatibility_profile" },
-                profile: { type: "string", minLength: 1 },
-                key: { type: "string", minLength: 1 },
+                source: { const: "portable_iac" },
+                descriptorName: { type: "string", minLength: 1 },
+                descriptorVersion: { type: "string", minLength: 1 },
               },
               additionalProperties: false,
             },
@@ -1051,7 +1032,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       required: ["kind", "id"],
       properties: {
         kind: {
-          enum: ["Principal", "ServiceAccount", "Capsule", "Resource"],
+          enum: ["Principal", "ServiceAccount", "Capsule"],
         },
         id: { type: "string", minLength: 1 },
       },
@@ -1131,11 +1112,19 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
                 },
                 {
                   type: "object",
-                  required: ["source", "profile", "key"],
+                  required: [
+                    "source",
+                    "capsuleId",
+                    "requirementKey",
+                    "interfaceType",
+                    "interfaceVersion",
+                  ],
                   properties: {
-                    source: { const: "compatibility_profile" },
-                    profile: { type: "string", minLength: 1 },
-                    key: { type: "string", minLength: 1 },
+                    source: { const: "capsule_required_interface" },
+                    capsuleId: { type: "string", minLength: 1 },
+                    requirementKey: { type: "string", minLength: 1 },
+                    interfaceType: { type: "string", minLength: 1 },
+                    interfaceVersion: { type: "string", minLength: 1 },
                   },
                   additionalProperties: false,
                 },
