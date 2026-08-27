@@ -990,16 +990,10 @@ function isPlatformLegacyInterfaceApiPath(pathname: string): boolean {
   );
 }
 
-const RETIRED_TAKOFORM_HOST_API_PATHS = [
-  "/apis/forms.takoform.com/v1alpha1",
-  "/apis/forms.takoform.com/v1alpha2",
-  "/apis/forms.takoform.com/v1alpha3",
-] as const;
+const RETIRED_TAKOFORM_HOST_API_PREFIX = "/apis/forms.takoform.com";
 
 function isRetiredTakoformHostApiPath(pathname: string): boolean {
-  return RETIRED_TAKOFORM_HOST_API_PATHS.some((path) =>
-    isPathOrSubpath(pathname, path),
-  );
+  return isPathOrSubpath(pathname, RETIRED_TAKOFORM_HOST_API_PREFIX);
 }
 
 function isPathOrSubpath(pathname: string, prefix: string): boolean {
