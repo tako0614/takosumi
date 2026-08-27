@@ -1,6 +1,6 @@
 # Takosumi Core Spec
 
-Last updated: 2026-08-25
+Last updated: 2026-08-27
 
 This document is the present Takosumi OSS contract. It supersedes historical
 planning notes such as [`final-plan.md`](./final-plan.md); those notes cannot
@@ -53,7 +53,7 @@ capacity is not an OSS Core responsibility.
 | Workspace                        | Personal purpose, resource, and security boundary for sources, secrets, state, Runs, and audit; optional membership and sharing extend it |
 | Project                          | A service or infrastructure grouping                                                                                                      |
 | Capsule                          | One OpenTofu/Terraform module execution unit, with concrete environments such as `production` and `preview`                               |
-| Source                           | Git URL/ref/commit/path for a plain module                                                                                                |
+| Source                           | Git URL/ref/commit and optional captured repository subtree                                                                               |
 | Adopted Source revision          | SourceSnapshot ref/path/commit derived from a Capsule's current StateVersion apply provenance; never a mutable Capsule or Source field    |
 | GitInstallPlan / GitRevisionPlan | Durable idempotent coordinator evidence that stops at one reviewable Plan Run                                                             |
 | ProviderConnection               | Stored provider credential configuration                                                                                                  |
@@ -83,7 +83,9 @@ Per-Capsule Git tracking uses existing apply provenance:
 PlanRun.sourceSnapshotId`. Restore StateVersions follow their exact
 `restoredFromStateVersionId` edge. Normal plans and source observation use the
 derived SourceSnapshot ref/path lane after the first apply; only the initial
-plan uses its reviewed install pin or Source default. A revision plan cannot
+source sync uses its reviewed Git pin or Source default coordinate. Every plan
+uses a module path selected from the immutable snapshot scan; `Source.defaultPath`
+is never a module fallback. A revision plan cannot
 change tracking before apply, and no Capsule revision operation mutates the
 shared `Source.defaultRef` / `defaultPath`.
 
@@ -100,26 +102,48 @@ infrastructure and must be removed after operator inventory reaches zero.
 
 Public hostname, DNS, and application endpoint ownership stays inside the Git
 module and its provider. Takosumi does not synthesize or reserve Capsule
-hostnames, and `public_endpoint` is an ordinary applied-Output projection.
-Takosumi does not infer or auto-register an Accounts OIDC client from Git
-metadata, provider output, or a provider-boundary call. Provider runtime-binding
-is read-only derivation and has no registration authority. A Host may explicitly
-opt a DB-owned InstallConfig into the direct Accounts OIDC module-variable
-materializer, which owns final-Apply activation. That port derives only its four
-declared non-secret values during read-only Plan, pins their authority digest in
-the private Plan sidecar, and may idempotently register the exact client only
-during the final Apply revalidation after re-reading the current Capsule,
-InstallConfig, and verified ProviderBinding.
+hostnames. The optional `.well-known/takosumi.json` owns only install-input
+assistance and reviewed requests and exact module-variable delivery targets for
+Takosumi-provided generic APIs/capabilities. It does not select a source,
+provider, resource, deployment, or lifecycle, and its absence does not prevent
+an ordinary Git/OpenTofu install.
+
+The app-owned Git/OpenTofu configuration remains the infrastructure and
+lifecycle authority. Takosumi owns the implementation of each generic
+API/capability it accepts. The repository manifest can only request that
+capability and map its delivered values to the app-owned module; it cannot
+declare provider or product internals.
+
+An accepted repository `identity.oidc` request compiles into the existing
+`oidc_client` and paired `public_endpoint` InstallConfig projections; it creates
+no second public or private descriptor. Exactly one of each projection is
+required and is usable only with immutable accepted repository provenance.
+Manual/operator presentation projections do not opt a Capsule into dynamic
+registration. The OIDC projection names exactly the four non-secret string
+variables `accountsUrl`, `issuerUrl`, `clientId`, and `redirectUri`; the endpoint
+projection names one distinct public-origin variable. Scopes must include
+`openid` and remain within an explicit operator allowlist.
+
+Takosumi does not infer or auto-register an Accounts OIDC client from a product
+name, provider, ProviderBinding, hostname convention, Git metadata, or provider
+output. Read-only Plan must receive a Plan-known canonical HTTPS origin from the
+exact endpoint variable; there is no fallback. It derives the redirect URI from
+that origin and the reviewed callback, derives the Capsule-bound client
+identity, and pins the value-free authority digest and exact four delivered
+variables in the private Plan sidecar. Plan and `apply_check` never write
+Accounts. Final Apply alone may idempotently register the client after re-reading
+the current Capsule, InstallConfig, projections, scope policy, execution epoch,
+and digest. Missing Accounts capability and any origin, callback, scope,
+variable, provenance, or digest drift fail before runner execution.
+
 Destroy Plan and destroy admission remain read-only. Only after provider
 destroy and the atomic Capsule `destroyed` transition have committed may Core
-ask the Host to idempotently delete that exact DB-owned client, with the current
-Capsule, InstallConfig, reviewed variables, ProviderBinding metadata, and pinned
-digest revalidated again. This deletion is best-effort because Accounts live
-grant validation already denies a terminal Capsule and retries physical
-revocation; a cleanup outage cannot make a successful infrastructure destroy
-retryable or recreate the client. The port never carries provider credentials,
-passwords, generated encryption keys, or the runtime-binding entrypoint.
-Generic Accounts OIDC and Interface/InterfaceBinding authorization remain.
+ask the Host to idempotently delete that exact client. Accounts live-grant
+validation already denies a terminal Capsule, so a cleanup outage cannot make a
+successful infrastructure destroy retryable or recreate the client. The port
+never carries provider credentials, passwords, generated encryption keys, or
+the runtime-binding entrypoint. There is no private hosted-profile descriptor or
+provider-specific fallback for this capability.
 Current Capsule lifecycle code does not release historical public-host
 reservation rows or perform unrelated bulk OIDC-client cleanup; physical
 retirement of those historical rows waits for operator inventory.
@@ -137,8 +161,8 @@ Idempotency-Key: <opaque-key>
 The caller first reads the Capsule and uses the returned opaque
 `installConfigReAdoption.authorityGuard`. The guard is usable as-is; it does
 not require the caller to know or submit the private InstallConfig digest. The
-closed request body is `baseInstallConfigId`, `sourceSnapshotId`, optional
-`deploymentProfileKey`, bounded non-secret `reason`, and
+closed request body is `baseInstallConfigId`, `sourceSnapshotId`, bounded
+non-secret `reason`, and
 `expected.authorityGuard`. The operation is not an InstallConfig patch and does
 not apply infrastructure.
 
@@ -191,34 +215,29 @@ different request under the same key is rejected. The response contains only
 Capsule and target identifiers/digests plus the SourceSnapshot identifier.
 Plan remains a separate reviewable Run boundary.
 
-## Takos hosted runtime secret file profile
+## Operator runtime-secret file capability
 
-Takos has one narrow hosted exception to the ordinary operator-owned secret
-boundary: a DB-owned per-Capsule runtime-binding profile may declare an opaque
-runtime secret file. It is not a bulk secret registry and does not transfer
-operator or Workspace provider secrets to the database-owned profile.
+An operator-supplied, DB-owned per-Capsule runtime-binding profile may declare
+one opaque runtime-secret file. The stock hosted Worker composes no
+application-specific InstallConfig or runtime-secret profile. The declaration
+is value-free and product-neutral: it names the exact random values or RSA key
+pairs, environment variable, file name, and `0600` mode. It is not a bulk secret
+registry, a repository-manifest capability, or authority to select a provider,
+resource, deployment, or lifecycle.
 
-The current profile generates exactly these five names:
-
-- `PLATFORM_PRIVATE_KEY`: RSA-2048 private key (SHA-256 profile);
-- `PLATFORM_PUBLIC_KEY`: the corresponding RSA-2048 public key;
-- `ENCRYPTION_KEY`: 32 random bytes encoded as base64;
-- `TAKOS_AGENT_START_TOKEN`: 32 random bytes encoded as hex; and
-- `TAKOS_INTERNAL_API_SECRET`: 32 random bytes encoded as hex.
-
-The generated material is sealed in the Takos secret boundary, keyed to the
-Capsule and profile, and is absent from `ProviderConnection`, InstallConfig
-public projections, state, Outputs, Run/audit records, diagnostics, and logs.
-The same Capsule and unchanged profile reopen the same sealed material across
-InstallConfig replacement; a profile-digest change is a fence, not an
-implicit rotation.
+Generated material is sealed in the host secret boundary, keyed to the Capsule
+and exact profile, and is absent from `ProviderConnection`, public InstallConfig
+projections, state, Outputs, Run/audit records, diagnostics, and logs. The same
+Capsule and unchanged profile reopen the same sealed material across
+InstallConfig replacement; a profile-digest change is a fence, not an implicit
+rotation.
 
 Only a successful `post_apply` runner activation may receive the material. The
-runner writes one `takos-runtime-secrets.json` file, exposed through
-`TAKOS_RUNTIME_SECRETS_FILE`, under a temporary directory with mode `0700` and
-file mode `0600`. The file contains the exact JSON names and is removed with
-fail-closed cleanup; a truncate, fsync, unlink, or directory-removal failure
-fails the cleanup rather than silently retaining an active runner file.
+runner writes the exactly declared JSON file, exports only its declared path
+environment variable, and uses a temporary directory with mode `0700` and file
+mode `0600`. The file is removed with fail-closed cleanup; a truncate, fsync,
+unlink, or directory-removal failure fails cleanup rather than silently
+retaining an active runner file.
 
 Provider destroy commits first. The terminal Capsule transition then records a
 value-free `runtime_secret.retirement.pending` intent and attempts sealed-blob
@@ -229,30 +248,39 @@ so archived Workspaces and rows beyond the active prefix are included. Deferred
 attempt timestamps are rotated into oldest-attempt-first bounded scans on later
 sweeps, providing eventual coverage without a second lifecycle ledger.
 
-## Takos Accounts OIDC module-variable profile
+## Repository-manifest Accounts OIDC capability
 
-The same explicit DB-owned hosted profile may opt a Capsule into Takos Accounts
-OIDC module-variable materialization. Plan and `apply_check` are read-only:
-they derive the non-secret variables, validate the current Capsule,
-InstallConfig, reviewed ProviderBinding metadata, and exact authority digest,
-but do not write Accounts. Final Apply is the only registration path; it is
-idempotent and saves the exact current value-free `activationDigest`. The
-digest binds contract `takosumi.accounts-oidc-activation/v1`, Workspace and
-Capsule identity, `executionAuthorityEpoch`, the full InstallConfig digest, and
-the OIDC profile digest. Live-grant validation requires an exact match to the
-current values; a legacy null or mismatched digest is stale/denied without
-deleting the Apply-repairable client. `updatedAt` is ordinary audit time only,
-not activation authority.
+Provider runtime-binding remains read-only and has no registration authority.
+The Takosumi-owned generic Accounts capability implementation owns final Apply
+activation; repository projections select its input/output contract without
+adding a second lifecycle owner.
 
-The browser profile uses the exact six scopes
-`openid`, `profile`, `email`, `offline_access`, `capsules:read`, and
-`capsules:write`, and the callback path `/auth/oidc/callback`. Its redirect URI
-is derived from the exact reviewed HTTPS `public_url` origin (a profile-defined
-derived origin is used only when that input is intentionally empty); paths,
-queries, credentials, and non-HTTPS origins are rejected. The client identity
-is stable per Capsule and profile across replacement of the InstallConfig row.
-The registration is public/pairwise and carries no client secret in Takosumi
-state or Outputs.
+A manifest may attach an explicit generic `identity.oidc` request to a module
+already selected from the SourceSnapshot tree scan, only when the same module
+declares exactly one paired
+`http.endpoint`. Compilation requires exactly one OIDC projection, exactly one
+endpoint projection, exact and distinct string-variable targets, a non-empty
+unique scope set containing `openid`, and an explicit operator scope allowlist.
+The generic default policy bounds that allowlist to `openid`, `profile`,
+`email`, `offline_access`, `capsules:read`, and `capsules:write`; a reviewed app
+may request a subset. `callbackPath` is a bounded root-relative path and its
+exact reviewed value is retained in the projection.
+
+At Plan, the endpoint variable must be the only source value consumed by the
+OIDC materializer and must already equal its canonical HTTPS origin. A missing,
+empty, non-HTTPS, credential-bearing, path-bearing, query-bearing, fragment-bearing,
+or non-canonical value is rejected; neither Cloudflare metadata nor another
+provider or hostname supplies a fallback. The materializer derives the public
+Capsule-bound client and returns only `accountsUrl`, `issuerUrl`, `clientId`, and
+`redirectUri`. Plan and `apply_check` are read-only. Final Apply is the only
+registration path; it is idempotent and saves the exact current value-free
+`activationDigest`. The digest binds contract
+`takosumi.accounts-oidc-activation/v1`, Workspace and Capsule identity,
+`executionAuthorityEpoch`, and the full InstallConfig digest. Live-grant
+validation requires an exact current match; a legacy null or mismatched digest
+is stale/denied without deleting the Apply-repairable client. `updatedAt` is
+ordinary audit time only, not activation authority. The registration carries
+no client secret in InstallConfig, state, Outputs, or the Run sidecar.
 
 The Accounts schema change is additive and protected, but its promotion order
 is substrate-specific. For PostgreSQL, apply migration 043, then migration 044,
@@ -268,9 +296,11 @@ the bridge is the compatible rollback floor. Both lanes are forward-only. A
 legacy null remains stored for migration compatibility but cannot authorize a
 live grant until Apply saves the exact current digest.
 
-This narrow DB-owned hosted profile does not change the ownership rule for
-bulk/operator secrets, generic ProviderConnections, or generic Accounts OIDC
-clients; those remain operator- or Accounts-owned.
+No second materialization descriptor or private compatibility branch remains.
+Accepted repository provenance and the existing `oidc_client` plus
+`public_endpoint` projections are the only materialization authority. This
+capability does not change ownership of bulk/operator secrets, generic
+ProviderConnections, app infrastructure, or lifecycle.
 
 Apply and Destroy are at-most-once provider dispatches. Before either request
 can reach the runner container, the runner Durable Object durably records the

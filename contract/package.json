@@ -1,8 +1,8 @@
 {
   "name": "@takosjp/takosumi-contract",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Public provider-neutral runtime contracts for Takosumi hosts and portable applications.",
-  "license": "AGPL-3.0-only",
+  "license": "MIT",
   "type": "module",
   "sideEffects": false,
   "files": [
@@ -11,13 +11,27 @@
     "background-events.ts",
     "managed-runtime-connections.ts",
     "managed-relational-runtime.ts",
+    "discovery.ts",
+    "api-surface.ts",
+    "capabilities.ts",
+    "interface-types.ts",
+    "runtime-interfaces.ts",
+    "notification-pushers.ts",
+    "identity-oidc.ts",
+    "types.ts",
+    "LICENSE",
     "README.md"
   ],
   "exports": {
     ".": "./runtime.ts",
     "./background-events": "./background-events.ts",
     "./managed-runtime-connections": "./managed-runtime-connections.ts",
-    "./managed-relational-runtime": "./managed-relational-runtime.ts"
+    "./managed-relational-runtime": "./managed-relational-runtime.ts",
+    "./discovery": "./discovery.ts",
+    "./interface-types": "./interface-types.ts",
+    "./runtime-interfaces": "./runtime-interfaces.ts",
+    "./notification-pushers": "./notification-pushers.ts",
+    "./identity-oidc": "./identity-oidc.ts"
   },
   "publishConfig": {
     "access": "public"

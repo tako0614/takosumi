@@ -14,6 +14,7 @@ import { composeTakoserverHostedWorkerEnv } from "./takoserver_hosted_worker.ts"
 import { WorkerEntrypoint } from "cloudflare:workers";
 import {
   createCloudflareTakosumiRuntimeBindingMaterializer,
+  type RuntimeBindingMaterializerInput,
   type RuntimeBindingMaterializerCloudflareEnv,
 } from "./runtime_binding_materializer.ts";
 
@@ -28,13 +29,7 @@ export {
 export class TakosumiRuntimeBindingMaterializerEntrypoint extends WorkerEntrypoint<
   VersionedPlatformEnv & RuntimeBindingMaterializerCloudflareEnv
 > {
-  async materializeRuntimeBindings(input: {
-    readonly request: unknown;
-    readonly resourceName: string;
-    readonly scriptName: string;
-    readonly publicOrigin: string;
-    readonly bindings: readonly string[];
-  }) {
+  async materializeRuntimeBindings(input: RuntimeBindingMaterializerInput) {
     try {
       return await createCloudflareTakosumiRuntimeBindingMaterializer(
         this.env,
@@ -43,6 +38,24 @@ export class TakosumiRuntimeBindingMaterializerEntrypoint extends WorkerEntrypoi
       console.error(
         JSON.stringify({
           event: "takosumi.runtime_binding_materialization_failed",
+          reason: runtimeBindingFailureReason(error),
+        }),
+      );
+      throw error;
+    }
+  }
+
+  async commitRuntimeBindings(
+    input: RuntimeBindingMaterializerInput,
+  ): Promise<void> {
+    try {
+      await createCloudflareTakosumiRuntimeBindingMaterializer(
+        this.env,
+      ).commitRuntimeBindings(input);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "takosumi.runtime_binding_commit_failed",
           reason: runtimeBindingFailureReason(error),
         }),
       );
@@ -64,20 +77,30 @@ const RUNTIME_BINDING_FAILURE_REASONS = new Set([
   "Capsule is already bound to another OIDC client",
   "HTTPS origin is invalid",
   "OIDC binding profile is invalid",
+  "OIDC activation authority is invalid",
+  "OIDC activation profile is unavailable",
   "OIDC callback path is invalid",
   "OIDC client is already bound to another Capsule",
+  "OIDC client activation authority is invalid",
   "clock is invalid",
+  "current Accounts OIDC client indexes drifted",
+  "current Accounts OIDC client metadata drift is not allowed",
   "generated secret profile is invalid",
   "runtime binding Capsule is not current",
+  "runtime binding Capsule execution authority is not current",
   "runtime binding InstallConfig is not current",
   "runtime binding authority contract is invalid",
   "runtime binding authority is invalid",
   "runtime binding authority is not current",
+  "runtime binding commit authority changed during confirmation",
+  "runtime binding commit requires Apply phase",
   "runtime binding name is invalid",
   "runtime binding phase is invalid",
   "runtime binding profile is invalid",
   "runtime binding profile is missing",
+  "runtime binding OIDC grant differs from the DB-owned profile",
   "runtime binding request differs from the DB-owned profile",
+  "runtime binding Accounts registration differs from derived values",
   "runtime binding set contains duplicates",
   "runtime binding set is invalid",
   "runtime materialization did not produce the exact binding set",

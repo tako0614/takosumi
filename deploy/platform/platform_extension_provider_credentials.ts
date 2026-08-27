@@ -2,7 +2,10 @@ import type {
   CredentialRecipeDriverContext,
   CredentialRecipeHostComposition,
 } from "takosumi-contract/credential-recipe-host";
-import { platformExtensionRoutes } from "./platform_extensions.ts";
+import {
+  platformExtensionRoutes,
+  type PlatformExtensionRoute,
+} from "./platform_extensions.ts";
 
 const AUTH_MODE = "broker";
 const MAX_RESPONSE_BYTES = 64 * 1024;
@@ -21,6 +24,7 @@ export function platformExtensionProviderCredentialComposition(env: {
     (route) => route.providerCredentialBroker !== undefined,
   );
   if (routes.length === 0) return undefined;
+  const credentialRequiredProviderSources = sortedProviderSources(routes);
   const origin = exactHttpsOrigin(env.TAKOSUMI_ACCOUNTS_ISSUER);
   const credentialRecipes: CredentialRecipeHostComposition["credentialRecipes"] =
     routes.map((route) => {
@@ -78,6 +82,7 @@ export function platformExtensionProviderCredentialComposition(env: {
   return Object.freeze({
     credentialRecipes: Object.freeze([...credentialRecipes]),
     credentialRecipeDrivers: Object.freeze(credentialRecipeDrivers),
+    credentialRequiredProviderSources,
     operatorProviderConnections: Object.freeze(
       routes.map((route) => {
         const broker = route.providerCredentialBroker!;
@@ -96,6 +101,22 @@ export function platformExtensionProviderCredentialComposition(env: {
       }),
     ),
   });
+}
+
+function sortedProviderSources(
+  routes: readonly PlatformExtensionRoute[],
+): readonly string[] {
+  return Object.freeze(
+    Array.from(
+      new Set(
+        routes.flatMap((route) =>
+          route.providerCredentialBroker
+            ? [route.providerCredentialBroker.providerSource]
+            : [],
+        ),
+      ),
+    ).sort(),
+  );
 }
 
 async function mintPlatformExtensionProviderCredential(

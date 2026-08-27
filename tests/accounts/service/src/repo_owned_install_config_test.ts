@@ -3,14 +3,19 @@ import { describe, expect, test } from "bun:test";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
-import type { Source, SourceSnapshot } from "takosumi-contract/sources";
+import type {
+  RepositoryModuleRootProviderRequirement,
+  Source,
+  SourceSnapshot,
+} from "takosumi-contract/sources";
 import {
   adoptRepoOwnedInstallConfig,
   previewRepoOwnedInstallConfig,
-  resolveRepoOwnedDeploymentProfile,
+  resolveRepoOwnedInstallModulePath,
   type RepoOwnedInstallConfigAdoptionInput,
 } from "../../../../accounts/service/src/control/repo-owned-install-config.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
+import { DEFAULT_REPOSITORY_INSTALL_UX_ALLOWED_REQUIREMENT_KINDS } from "../../../../core/domains/capsules/repository_install_ux_compiler.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 
 const NOW = "2026-08-02T00:00:00.000Z";
@@ -91,6 +96,11 @@ const sourceSnapshot: SourceSnapshot = {
     digest: MANIFEST_DIGEST,
     document: repositoryDocument,
   },
+  repositoryModules: {
+    status: "ready",
+    scopePath: ".",
+    modules: [{ path: ".", providerPackages: [], rootProviderRequirements: [] }],
+  },
   fetchedByRunId: "run_repo_interface_sync",
   fetchedAt: NOW,
 };
@@ -113,6 +123,21 @@ const compatibilityReport: CapsuleCompatibilityReport = {
   ],
   createdAt: NOW,
 };
+
+const runtimeProfile = {
+  contract: "takosumi.runtime-binding-profile/v2" as const,
+  generatedSecrets: [
+    { binding: "APP_SESSION_SECRET", bytes: 32 as const, encoding: "hex" as const },
+  ],
+  oidcClient: {
+    issuerBinding: "OIDC_ISSUER_URL",
+    clientIdBinding: "OIDC_CLIENT_ID",
+    ownerSubjectBinding: "OIDC_OWNER_SUBJECT",
+    redirectUriBinding: "OIDC_REDIRECT_URI",
+    callbackPath: "/auth/oidc/callback",
+    scopes: ["openid", "profile"],
+  },
+} satisfies NonNullable<InstallConfig["runtimeBindingMaterialization"]>;
 
 const compiledLauncher = {
   key: "launcher",
@@ -148,19 +173,27 @@ const operatorHealthBlueprint = {
 };
 
 function baseConfig(overrides: Partial<InstallConfig> = {}): InstallConfig {
+  const overrideRepositoryPolicy = overrides.policy?.repositoryInstallUx;
+  const repositoryInstallUx = {
+    allowedRequirementKinds:
+      DEFAULT_REPOSITORY_INSTALL_UX_ALLOWED_REQUIREMENT_KINDS,
+    ...(overrides.policy === undefined
+      ? { allowedInterfacePermissions: ["ui.open", "ui.inspect"] }
+      : {}),
+    ...overrideRepositoryPolicy,
+  };
   return {
     id: "icfg_repo_interface_base",
     name: "repo-interface-base",
     variableMapping: {},
     outputAllowlist: {},
-    policy: {
-      repositoryInstallUx: {
-        allowedInterfacePermissions: ["ui.open", "ui.inspect"],
-      },
-    },
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
+    policy: {
+      ...overrides.policy,
+      repositoryInstallUx,
+    },
   };
 }
 
@@ -181,10 +214,283 @@ async function adopt(
   });
 }
 
+test("repository adoption carries an explicitly allowed generic OIDC capability", async () => {
+  const variableNames = [
+    "public_url",
+    "takosumi_accounts_url",
+    "takosumi_accounts_issuer_url",
+    "takosumi_accounts_client_id",
+    "takosumi_accounts_redirect_uri",
+  ];
+  const oidcDocument = {
+    apiVersion: "takosumi.com/v2.2",
+    kind: "Repository",
+    install: {
+      modules: {
+        ".": {
+          inputs: variableNames.map((name) => ({
+            name,
+            source: {
+              kind: name === "public_url" ? "user" as const : "module_default" as const,
+            },
+            type: "string" as const,
+            ...(name === "public_url" ? { required: true } : {}),
+            label: { ja: name, en: name },
+          })),
+          requires: [
+            {
+              kind: "http.endpoint" as const,
+              deliver: { variables: { url: "public_url" } },
+            },
+            {
+              kind: "identity.oidc" as const,
+              callbackPath: "/auth/oidc/callback",
+              scopes: ["openid", "profile"],
+              deliver: {
+                variables: {
+                  accountsUrl: "takosumi_accounts_url",
+                  issuerUrl: "takosumi_accounts_issuer_url",
+                  clientId: "takosumi_accounts_client_id",
+                  redirectUri: "takosumi_accounts_redirect_uri",
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+  } satisfies RepositoryManifestDocument;
+  const result = await adopt(
+    baseConfig({
+      policy: {
+        repositoryInstallUx: {
+          allowedInterfacePermissions: [],
+          allowedOidcScopes: ["openid", "profile"],
+        },
+      },
+    }),
+    {
+      sourceSnapshot: snapshotWithManifest({
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document: oidcDocument,
+      }),
+      compatibilityReport: {
+        ...compatibilityReport,
+        rootModuleVariables: variableNames,
+        rootModuleVariableDeclarations: variableNames.map((name) => ({
+          name,
+          type: "string",
+          hasDefault: name !== "public_url",
+        })),
+        rootModuleOutputs: [],
+      },
+      reviewedVariables: { public_url: "https://staging.example.test" },
+    },
+  );
+
+  expect(result.status).toBe("accepted");
+  if (result.status !== "accepted") return;
+  expect(result.installExperience?.projections).toEqual([
+    { kind: "public_endpoint", variables: { url: "public_url" } },
+    {
+      kind: "oidc_client",
+      variables: {
+        accountsUrl: "takosumi_accounts_url",
+        issuerUrl: "takosumi_accounts_issuer_url",
+        clientId: "takosumi_accounts_client_id",
+        redirectUri: "takosumi_accounts_redirect_uri",
+      },
+      callbackPath: "/auth/oidc/callback",
+      scopes: ["openid", "profile"],
+    },
+  ]);
+});
+
+test("repository OIDC rejects a base public endpoint collision instead of splitting manifest provenance", async () => {
+  const variableNames = [
+    "public_url",
+    "takosumi_accounts_url",
+    "takosumi_accounts_issuer_url",
+    "takosumi_accounts_client_id",
+    "takosumi_accounts_redirect_uri",
+  ];
+  const oidcDocument = {
+    apiVersion: "takosumi.com/v2.2",
+    kind: "Repository",
+    install: {
+      modules: {
+        ".": {
+          inputs: variableNames.map((name) => ({
+            name,
+            source: {
+              kind: name === "public_url"
+                ? "user" as const
+                : "module_default" as const,
+            },
+            type: "string" as const,
+            ...(name === "public_url" ? { required: true } : {}),
+            label: { ja: name, en: name },
+          })),
+          requires: [
+            {
+              kind: "http.endpoint" as const,
+              deliver: { variables: { url: "public_url" } },
+            },
+            {
+              kind: "identity.oidc" as const,
+              callbackPath: "/auth/oidc/callback",
+              scopes: ["openid", "profile"],
+              deliver: {
+                variables: {
+                  accountsUrl: "takosumi_accounts_url",
+                  issuerUrl: "takosumi_accounts_issuer_url",
+                  clientId: "takosumi_accounts_client_id",
+                  redirectUri: "takosumi_accounts_redirect_uri",
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+  } satisfies RepositoryManifestDocument;
+  const result = await adopt(
+    baseConfig({
+      installExperience: {
+        projections: [{
+          kind: "public_endpoint",
+          variables: { url: "operator_public_url" },
+        }],
+      },
+      policy: {
+        repositoryInstallUx: {
+          allowedInterfacePermissions: [],
+          allowedOidcScopes: ["openid", "profile"],
+        },
+      },
+    }),
+    {
+      sourceSnapshot: snapshotWithManifest({
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document: oidcDocument,
+      }),
+      compatibilityReport: {
+        ...compatibilityReport,
+        rootModuleVariables: variableNames,
+        rootModuleVariableDeclarations: variableNames.map((name) => ({
+          name,
+          type: "string",
+          hasDefault: name !== "public_url",
+        })),
+        rootModuleOutputs: [],
+      },
+      reviewedVariables: { public_url: "https://staging.example.test" },
+    },
+  );
+
+  expect(result).toMatchObject({
+    status: "invalid",
+    diagnostic: {
+      code: "repository_install_ux_oidc_endpoint_conflict",
+    },
+  });
+});
+
+test("repository adoption does not promote an operator-only OIDC projection", async () => {
+  const result = await adopt(baseConfig({
+    installExperience: {
+      projections: [
+        { kind: "public_endpoint", variables: { url: "public_url" } },
+        {
+          kind: "oidc_client",
+          variables: {
+            accountsUrl: "takosumi_accounts_url",
+            issuerUrl: "takosumi_accounts_issuer_url",
+            clientId: "takosumi_accounts_client_id",
+            redirectUri: "takosumi_accounts_redirect_uri",
+          },
+          callbackPath: "/operator/callback",
+          scopes: ["openid"],
+        },
+      ],
+    },
+  }), { installingPrincipalId: "principal_operator_projection" });
+
+  expect(result.status).toBe("accepted");
+  if (result.status !== "accepted") return;
+  expect(result.installExperience?.projections).toEqual([
+    { kind: "public_endpoint", variables: { url: "public_url" } },
+  ]);
+});
+
+test("invalid optional manifest disables assistance but an explicit host requirement still fails closed", async () => {
+  const invalidSnapshot: SourceSnapshot = {
+    ...sourceSnapshot,
+    repositoryManifest: {
+      status: "invalid",
+      reason: "invalid_document",
+      diagnostic: "never expose parser details",
+    },
+  };
+  const optional = await adopt(baseConfig(), {
+    sourceSnapshot: invalidSnapshot,
+  });
+  expect(optional).toEqual({ status: "absent" });
+
+  const required = await adopt(
+    baseConfig({
+      policy: {
+        repositoryInstallUx: {
+          requiredManifestApiVersion: "takosumi.com/v2.2",
+        },
+      },
+    }),
+    { sourceSnapshot: invalidSnapshot },
+  );
+  expect(required).toMatchObject({
+    status: "invalid",
+    diagnostic: {
+      code: "repository_install_ux_manifest_api_version_required",
+    },
+  });
+  expect(JSON.stringify(required)).not.toContain("never expose parser details");
+});
+
 function snapshotWithManifest(
   repositoryManifest: SourceSnapshot["repositoryManifest"],
+  repositoryModules: SourceSnapshot["repositoryModules"] =
+    sourceSnapshot.repositoryModules,
 ): SourceSnapshot {
-  return { ...sourceSnapshot, repositoryManifest };
+  return { ...sourceSnapshot, repositoryManifest, repositoryModules };
+}
+
+function repositoryModules(
+  paths: readonly string[],
+  rootProviderRequirements: readonly RepositoryModuleRootProviderRequirement[] = [],
+): NonNullable<SourceSnapshot["repositoryModules"]> {
+  return {
+    status: "ready",
+    scopePath: ".",
+    modules: paths.map((path) => ({
+      path,
+      providerPackages: [
+        ...new Map(
+          rootProviderRequirements.map((requirement) => [
+            requirement.source,
+            {
+              source: requirement.source,
+              ...(requirement.version !== undefined
+                ? { version: requirement.version }
+                : {}),
+            },
+          ]),
+        ).values(),
+      ],
+      rootProviderRequirements,
+    })),
+  };
 }
 
 function reportForModule(modulePath: string): CapsuleCompatibilityReport {
@@ -238,8 +544,263 @@ test("repository install preview recovers only its full deterministic config ide
   });
 });
 
-describe("repository-owned default module selection", () => {
-  test("infers the only declared module without consulting Source or base InstallConfig paths", async () => {
+test("repository runtime profile is carried into the deterministic preview", async () => {
+  const runtimeDocument = {
+    apiVersion: "takosumi.com/v2.4",
+    kind: "Repository",
+    install: {
+      modules: {
+        ".": {
+          inputs: [],
+          requires: [
+            {
+              kind: "secret.generated" as const,
+              bytes: 32,
+              encoding: "hex" as const,
+              deliver: { bindings: { value: "APP_SESSION_SECRET" } },
+            },
+            {
+              kind: "identity.oidc" as const,
+              callbackPath: "/auth/oidc/callback",
+              scopes: ["openid", "profile"],
+              deliver: {
+                bindings: {
+                  issuerUrl: "OIDC_ISSUER_URL",
+                  clientId: "OIDC_CLIENT_ID",
+                  ownerSubject: "OIDC_OWNER_SUBJECT",
+                  redirectUri: "OIDC_REDIRECT_URI",
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+  } satisfies RepositoryManifestDocument;
+  const runtimeSnapshot = snapshotWithManifest({
+    status: "present",
+    digest: MANIFEST_DIGEST,
+    document: runtimeDocument,
+  });
+  const base = baseConfig({
+    id: "cfg_runtime_profile_base",
+    policy: {
+      repositoryInstallUx: {
+        allowedRequirementKinds: ["secret.generated", "identity.oidc"],
+        allowedInterfacePermissions: [],
+        allowedOidcScopes: ["openid", "profile"],
+      },
+    },
+  });
+  const input = {
+    operations: {
+      capsules: {
+        getInstallConfig: async () => {
+          throw new OpenTofuControllerError("not_found", "missing");
+        },
+        putInstallConfig: async (config: InstallConfig) => config,
+      },
+    } as unknown as ControlPlaneOperations,
+    source,
+    sourceSnapshot: runtimeSnapshot,
+    baseConfig: base,
+    modulePath: ".",
+    capsuleName: "runtime-profile",
+    workspaceId: source.workspaceId,
+    installingPrincipalId: "tsub_runtime_profile",
+    compatibilityReport,
+  } as const;
+
+  const adopted = await adoptRepoOwnedInstallConfig(input);
+  expect(adopted.status).toBe("accepted");
+  if (adopted.status !== "accepted") return;
+  expect(adopted.runtimeBindingMaterialization).toEqual(runtimeProfile);
+
+  const preview = await previewRepoOwnedInstallConfig(input);
+  expect(preview.status).toBe("accepted");
+  if (preview.status !== "accepted") return;
+  expect(preview.installConfig.runtimeBindingMaterialization).toEqual(
+    runtimeProfile,
+  );
+});
+
+test("repository runtime profile collisions fail closed and absent proposals preserve base", async () => {
+  const base = baseConfig({ runtimeBindingMaterialization: runtimeProfile });
+  const absent = await adopt(base);
+  expect(absent.status).toBe("accepted");
+  if (absent.status !== "accepted") return;
+  expect(absent.runtimeBindingMaterialization).toEqual(runtimeProfile);
+
+  const conflicting = await adopt(
+    baseConfig({
+      runtimeBindingMaterialization: {
+        ...runtimeProfile,
+        generatedSecrets: [
+          { binding: "OTHER_SECRET", bytes: 32, encoding: "hex" },
+        ],
+      },
+      policy: {
+        repositoryInstallUx: {
+          allowedRequirementKinds: ["secret.generated", "identity.oidc"],
+          allowedInterfacePermissions: [],
+          allowedOidcScopes: ["openid", "profile"],
+        },
+      },
+    }),
+    {
+      sourceSnapshot: snapshotWithManifest({
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document: {
+          apiVersion: "takosumi.com/v2.4",
+          kind: "Repository",
+          install: {
+            modules: {
+              ".": {
+                inputs: [],
+                requires: [
+                  {
+                    kind: "secret.generated" as const,
+                    bytes: 32,
+                    encoding: "hex" as const,
+                    deliver: { bindings: { value: "APP_SESSION_SECRET" } },
+                  },
+                ],
+              },
+            },
+          },
+        } satisfies RepositoryManifestDocument,
+      }),
+    },
+  );
+  expect(conflicting).toMatchObject({
+    status: "invalid",
+    diagnostic: {
+      code: "repository_install_ux_runtime_binding_profile_conflict",
+    },
+  });
+});
+
+describe("repository-owned source module selection", () => {
+  test("accepts explicit paths only when they are exact scanned candidates", async () => {
+    const document = {
+      apiVersion: "takosumi.com/v2.1",
+      kind: "Repository",
+      install: {
+        modules: {
+          ".": { inputs: [] },
+          "deploy/default": { inputs: [] },
+          "deploy/selected": { inputs: [] },
+        },
+      },
+    } satisfies RepositoryManifestDocument;
+    const snapshot = snapshotWithManifest({
+      status: "present",
+      digest: MANIFEST_DIGEST,
+      document,
+    }, repositoryModules([
+      ".",
+      "deploy/default",
+      "deploy/selected",
+    ]));
+
+    const rootProviderRequirements = [
+      {
+        source: "registry.terraform.io/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
+        childAlias: "primary",
+        version: "4.0.0",
+      },
+    ] as const;
+    const providerSnapshot = snapshotWithManifest(
+      {
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document,
+      },
+      repositoryModules(["deploy/selected"], rootProviderRequirements),
+    );
+
+    expect(
+      resolveRepoOwnedInstallModulePath({
+        sourceSnapshot: providerSnapshot,
+        modulePath: "deploy/selected",
+      }),
+    ).toEqual({
+      ok: true,
+      modulePath: "deploy/selected",
+      rootProviderRequirements,
+    });
+    const adopted = await adopt(baseConfig(), {
+      sourceSnapshot: providerSnapshot,
+      modulePath: "deploy/selected",
+      compatibilityReport: reportForModule("deploy/selected"),
+    });
+    expect(adopted.status).toBe("accepted");
+    if (adopted.status === "accepted") {
+      expect(adopted.rootProviderRequirements).toEqual(rootProviderRequirements);
+    }
+    expect(
+      resolveRepoOwnedInstallModulePath({
+        sourceSnapshot: snapshot,
+        modulePath: ".",
+      }),
+    ).toEqual({ ok: true, modulePath: ".", rootProviderRequirements: [] });
+    expect(
+      resolveRepoOwnedInstallModulePath({
+        sourceSnapshot: snapshot,
+        modulePath: "deploy/undeclared",
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostic: { code: "repository_install_ux_module_missing" },
+    });
+    for (const alias of ["./deploy/selected", "deploy/selected/", " deploy/selected"]) {
+      expect(
+        resolveRepoOwnedInstallModulePath({
+          sourceSnapshot: snapshot,
+          modulePath: alias,
+        }),
+      ).toMatchObject({
+        ok: false,
+        diagnostic: { code: "repository_install_ux_module_path_invalid" },
+      });
+    }
+  });
+
+  test("fails closed when the source module index is missing or invalid", () => {
+    expect(
+      resolveRepoOwnedInstallModulePath({
+        sourceSnapshot: {
+          ...sourceSnapshot,
+          repositoryManifest: { status: "absent" },
+          repositoryModules: undefined,
+        },
+        modulePath: "deploy/selected",
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostic: { code: "repository_install_module_index_unavailable" },
+    });
+    expect(
+      resolveRepoOwnedInstallModulePath({
+        sourceSnapshot: snapshotWithManifest(
+          { status: "absent" },
+          {
+            status: "invalid",
+            scopePath: ".",
+            reason: "scan_failed",
+          },
+        ),
+        modulePath: "deploy/selected",
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostic: { code: "repository_install_module_index_unavailable" },
+    });
+  });
+
+  test("infers the only scanned module without consulting Source or base InstallConfig paths", async () => {
     const document = {
       apiVersion: "takosumi.com/v1",
       kind: "Repository",
@@ -251,7 +812,7 @@ describe("repository-owned default module selection", () => {
         status: "present",
         digest: MANIFEST_DIGEST,
         document,
-      }),
+      }, repositoryModules(["deploy/only"])),
       modulePath: undefined,
       compatibilityReport: reportForModule("deploy/only"),
     });
@@ -261,12 +822,11 @@ describe("repository-owned default module selection", () => {
     expect(result.modulePath).toBe("deploy/only");
   });
 
-  test("uses the v2.1 exact default for multiple modules and ignores the base InstallConfig path", async () => {
+  test("fails closed for multiple scanned modules and ignores the base InstallConfig path", async () => {
     const document = {
       apiVersion: "takosumi.com/v2.1",
       kind: "Repository",
       install: {
-        defaultModule: "deploy/selected",
         modules: {
           ".": { inputs: [] },
           "deploy/selected": { inputs: [] },
@@ -279,17 +839,18 @@ describe("repository-owned default module selection", () => {
         status: "present",
         digest: MANIFEST_DIGEST,
         document,
-      }),
+      }, repositoryModules([".", "deploy/selected"])),
       modulePath: undefined,
       compatibilityReport: reportForModule("deploy/selected"),
     });
 
-    expect(result.status).toBe("accepted");
-    if (result.status !== "accepted") return;
-    expect(result.modulePath).toBe("deploy/selected");
+    expect(result).toMatchObject({
+      status: "invalid",
+      diagnostic: { code: "repository_install_module_selection_required" },
+    });
   });
 
-  test("fails closed when multiple modules have no v2.1 exact default", async () => {
+  test("accepts an explicit candidate when multiple modules are discovered", async () => {
     const document = {
       apiVersion: "takosumi.com/v2",
       kind: "Repository",
@@ -306,255 +867,55 @@ describe("repository-owned default module selection", () => {
         status: "present",
         digest: MANIFEST_DIGEST,
         document,
-      }),
-      modulePath: undefined,
+      }, repositoryModules(["deploy/first", "deploy/second"])),
+      modulePath: "deploy/first",
       compatibilityReport: reportForModule("deploy/first"),
     });
 
-    expect(result).toEqual({
-      status: "invalid",
-      diagnostic: {
-        code: "repository_install_ux_default_module_missing",
-        message:
-          "Repository install UX declares multiple modules; takosumi.com/v2.1 install.defaultModule is required.",
-      },
-    });
+    expect(result.status).toBe("accepted");
+    if (result.status !== "accepted") return;
+    expect(result.modulePath).toBe("deploy/first");
   });
 
-  test("returns the typed default diagnostic for an invalid captured declaration", async () => {
-    const result = await adopt(baseConfig(), {
-      sourceSnapshot: snapshotWithManifest({
-        status: "invalid",
-        reason: "invalid_document",
+  test("maps nested Source paths only for manifest assistance while keeping execution relative", async () => {
+    const nestedSnapshot: SourceSnapshot = {
+      ...sourceSnapshot,
+      path: "infra",
+      repositoryManifest: {
+        status: "present",
         digest: MANIFEST_DIGEST,
-        diagnostic:
-          "install.defaultModule must name an exact install.modules key",
-      }),
-      modulePath: undefined,
-    });
-
-    expect(result).toEqual({
-      status: "invalid",
-      diagnostic: {
-        code: "repository_install_ux_default_module_invalid",
-        message:
-          "The repository install UX default module declaration is invalid; update the pinned repository metadata and sync the Source again.",
-      },
-    });
-  });
-});
-
-describe("DB-owned deployment profile resolution", () => {
-  const profile = (input: {
-    readonly id: string;
-    readonly key: string;
-    readonly modulePath: string;
-    readonly recommended: boolean;
-  }): InstallConfig =>
-    baseConfig({
-      id: input.id,
-      sourceSelector: { url: source.url, path: "." },
-      modulePath: input.modulePath,
-      store: {
-        source: { url: source.url, path: "." },
-        order: 1,
-        surface: "service",
-        kind: "app",
-        provider: "opaque-to-selection",
-        suggestedName: "repo-interface",
-        badge: { ja: "追加", en: "Install" },
-        name: { ja: "App", en: "App" },
-        description: { ja: "App", en: "App" },
-        deploymentProfile: {
-          key: input.key,
-          label: { ja: input.key, en: input.key },
-          description: { ja: input.key, en: input.key },
-          order: 1,
-          recommended: input.recommended,
+        document: {
+          apiVersion: "takosumi.com/v2",
+          kind: "Repository",
+          install: {
+            modules: {
+              infra: { inputs: [] },
+            },
+          },
         },
       },
-    });
-
-  const profiledSnapshot = snapshotWithManifest({
-    status: "present",
-    digest: MANIFEST_DIGEST,
-    document: {
-      apiVersion: "takosumi.com/v2.1",
-      kind: "Repository",
-      install: {
-        defaultModule: ".",
-        modules: {
-          ".": { inputs: [] },
-          "deploy/managed": { inputs: [] },
-          "deploy/byoc": { inputs: [] },
-        },
+      repositoryModules: {
+      status: "ready",
+      scopePath: "infra",
+        modules: [
+          { path: ".", providerPackages: [], rootProviderRequirements: [] },
+        ],
       },
-    },
-  });
+    };
 
-  test("selects only the exact key and proves its config module in the pinned manifest", () => {
-    const managed = profile({
-      id: "icfg-managed",
-      key: "managed-v1",
-      modulePath: "deploy/managed",
-      recommended: true,
-    });
-    const byoc = profile({
-      id: "icfg-byoc",
-      key: "byoc-v1",
-      modulePath: "deploy/byoc",
-      recommended: false,
-    });
-
-    expect(
-      resolveRepoOwnedDeploymentProfile({
-        source,
-        sourceSnapshot: profiledSnapshot,
-        candidates: [managed, byoc],
-        deploymentProfileKey: "byoc-v1",
-      }),
-    ).toEqual({
-      ok: true,
-      kind: "profile",
-      installConfig: byoc,
-      modulePath: "deploy/byoc",
-    });
-    expect(
-      resolveRepoOwnedDeploymentProfile({
-        source,
-        sourceSnapshot: profiledSnapshot,
-        candidates: [managed, { ...byoc, modulePath: "deploy/missing" }],
-        deploymentProfileKey: "byoc-v1",
-      }),
-    ).toMatchObject({
-      ok: false,
-      diagnostic: { code: "repository_install_ux_deployment_profile_module_invalid" },
-    });
-  });
-
-  test("blocks missing, duplicate, mixed, and recommendation-drifted profile groups", () => {
-    const managed = profile({
-      id: "icfg-managed",
-      key: "managed-v1",
-      modulePath: "deploy/managed",
-      recommended: true,
-    });
-    const byoc = profile({
-      id: "icfg-byoc",
-      key: "byoc-v1",
-      modulePath: "deploy/byoc",
-      recommended: false,
-    });
-    const legacy = baseConfig({
-      id: "icfg-legacy",
-      sourceSelector: { url: source.url, path: "." },
-      store: { ...managed.store!, deploymentProfile: undefined },
-    });
-
-    for (const input of [
-      { candidates: [managed, byoc], deploymentProfileKey: undefined },
-      {
-        candidates: [managed, byoc],
-        deploymentProfileKey: "missing-v1",
-      },
-      {
-        candidates: [managed, { ...byoc, store: { ...byoc.store!, deploymentProfile: {
-          ...byoc.store!.deploymentProfile!,
-          key: "managed-v1",
-        } } }],
-        deploymentProfileKey: "managed-v1",
-      },
-      {
-        candidates: [managed, { ...byoc, store: { ...byoc.store!, deploymentProfile: {
-          ...byoc.store!.deploymentProfile!,
-          recommended: true,
-        } } }],
-        deploymentProfileKey: "managed-v1",
-      },
-      {
-        candidates: [managed, legacy],
-        deploymentProfileKey: "managed-v1",
-      },
-    ]) {
-      expect(
-        resolveRepoOwnedDeploymentProfile({
-          source,
-          sourceSnapshot: profiledSnapshot,
-          candidates: input.candidates,
-          ...(input.deploymentProfileKey === undefined
-            ? {}
-            : { deploymentProfileKey: input.deploymentProfileKey }),
-        }).ok,
-      ).toBe(false);
-    }
-  });
-
-  test("preserves exactly one unprofiled legacy config for defaultModule selection", () => {
-    const legacy = baseConfig({
-      id: "icfg-legacy",
-      sourceSelector: { url: source.url, path: "." },
-      store: {
-        source: { url: source.url, path: "." },
-        order: 1,
-        surface: "service",
-        kind: "app",
-        provider: "legacy",
-        suggestedName: "legacy",
-        badge: { ja: "追加", en: "Install" },
-        name: { ja: "Legacy", en: "Legacy" },
-        description: { ja: "Legacy", en: "Legacy" },
+    const result = await adopt(baseConfig(), {
+      sourceSnapshot: nestedSnapshot,
+      modulePath: ".",
+      compatibilityReport: {
+        ...compatibilityReport,
+        sourceSnapshotId: nestedSnapshot.id,
+        modulePath: ".",
       },
     });
-    expect(
-      resolveRepoOwnedDeploymentProfile({
-        source,
-        sourceSnapshot: profiledSnapshot,
-        candidates: [legacy],
-      }),
-    ).toEqual({ ok: true, kind: "legacy", installConfig: legacy });
-  });
 
-  test("ignores scoped, internal, and independently URL-mismatched rows", () => {
-    const selected = profile({
-      id: "icfg-selected",
-      key: "managed-v1",
-      modulePath: "deploy/managed",
-      recommended: true,
-    });
-    const candidates = [
-      { ...selected, workspaceId: "workspace_other" },
-      { ...selected, internal: { reason: "per_install_overrides" as const } },
-      {
-        ...selected,
-        sourceSelector: { url: "https://example.test/other.git", path: "." },
-      },
-      {
-        ...selected,
-        store: {
-          ...selected.store!,
-          source: { url: "https://example.test/other.git", path: "." },
-        },
-      },
-    ];
-
-    expect(
-      resolveRepoOwnedDeploymentProfile({
-        source,
-        sourceSnapshot: profiledSnapshot,
-        candidates,
-      }),
-    ).toEqual({ ok: true, kind: "none" });
-    expect(
-      resolveRepoOwnedDeploymentProfile({
-        source,
-        sourceSnapshot: profiledSnapshot,
-        candidates,
-        deploymentProfileKey: "managed-v1",
-      }),
-    ).toMatchObject({
-      ok: false,
-      diagnostic: { code: "repository_install_ux_deployment_profile_invalid" },
-    });
+    expect(result.status).toBe("accepted");
+    if (result.status !== "accepted") return;
+    expect(result.modulePath).toBe(".");
   });
 });
 
@@ -564,7 +925,6 @@ describe("repository-owned sourceBuild adoption", () => {
     apiVersion: "takosumi.com/v2.3",
     install: {
       ...repositoryDocument.install,
-      defaultModule: ".",
       modules: {
         ".": {
           ...repositoryDocument.install.modules["."]!,
@@ -624,7 +984,7 @@ describe("repository-owned Interface InstallConfig adoption", () => {
     const v2_1Document = {
       ...repositoryDocument,
       apiVersion: "takosumi.com/v2.1",
-      install: { ...repositoryDocument.install, defaultModule: "." },
+      install: { ...repositoryDocument.install },
     } satisfies RepositoryManifestDocument;
 
     const result = await adopt(baseConfig(), {

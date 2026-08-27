@@ -36,7 +36,11 @@ import type {
   RunnerSecretExposurePolicy,
 } from "@takosumi/internal/deploy-control-api";
 import type { CreateRestoreRequest } from "takosumi-contract/backups";
-import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import type {
+  CapsuleCompatibilityReport,
+  CapsuleProviderRequirement,
+  CapsuleRootProviderRequirement,
+} from "takosumi-contract/capsules";
 import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
 import { usesDeclaredEnvCredentialRecipe } from "takosumi-contract/connections";
 import type {
@@ -81,6 +85,7 @@ import {
   ConnectionsService,
   resolvedProviderBindingsDigest,
   type ResolvedCapsuleProviderBinding,
+  validateRequiredProviderBindingIdentities,
 } from "../../connections/mod.ts";
 import type { ActivityRecorder } from "../../activity/mod.ts";
 import type { RecordActivityInput } from "../../activity/mod.ts";
@@ -93,10 +98,15 @@ import type { ObservabilitySink } from "../../observability/mod.ts";
 import { CapsuleQuery, requireCapsule } from "../capsule_query.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "../capsule_source_revision.ts";
 import {
+  accountsOidcModuleVariableProfile,
+  type AccountsOidcModuleVariableProfile,
+} from "../accounts_oidc_module_variable_profile.ts";
+import {
   isRunnerInfrastructureRequeueError,
   OpenTofuControllerError,
   OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
+  PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
   RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
   requireNonEmptyString,
   runErrorCode,
@@ -197,7 +207,6 @@ import {
   newId,
   NON_TERMINAL_RUN_STATUSES,
   providerInstallationAuditEvents,
-  providersRequiringProviderBindings,
   publicCapsule,
   publicPlanRun,
   redactRunApproval,
@@ -256,6 +265,7 @@ import type {
   GenericRootPlanContext,
   OpenTofuApplyResult,
   OpenTofuCapsuleSourceFile,
+  OpenTofuDestroyResult,
   OpenTofuPlanResult,
   OpenTofuRunDispatch,
   OpenTofuRunner,
@@ -635,48 +645,132 @@ function requestedGenericCapsuleVariables(
   return requested;
 }
 
-function providerBindingResolutionProviders(
-  providers: readonly string[],
+function providerBindingResolutionRequirements(
+  requirements: readonly CapsuleProviderRequirement[],
   runnerProfile?: Pick<RunnerProfile, "requireProviderBindings">,
-  credentialRequiredProviders: readonly string[] = [],
-): readonly string[] {
+): readonly CapsuleProviderRequirement[] {
   return runnerProfile?.requireProviderBindings === true
-    ? providersRequiringProviderBindings(providers, runnerProfile)
-    : normalizeProviders(credentialRequiredProviders);
+    ? requirements.map((requirement) => ({
+        ...requirement,
+        credentialRequired: true,
+      }))
+    : requirements;
 }
 
-function credentialRequiredProvidersFromCompatibilityReport(
-  report: CapsuleCompatibilityReport | undefined,
-): readonly string[] {
-  return normalizeProviders(
-    (report?.providers ?? [])
-      .filter(
-        (provider) => provider.allowed && provider.credentialRequired === true,
-      )
-      .map((provider) => provider.source),
+function requiredProviderRequirementsForNewPlan(
+  requiredProviders: readonly string[],
+  exact: readonly CapsuleProviderRequirement[],
+  defaultCredentialRequired = false,
+): readonly CapsuleProviderRequirement[] {
+  const requirements = exact.map((requirement) =>
+    defaultCredentialRequired
+      ? { ...requirement, credentialRequired: true }
+      : requirement,
   );
+  const validated = validateRequiredProviderBindingIdentities(requirements);
+  if (requirements.some((requirement) => requirement.allowed !== true)) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "required provider requirements must contain only allowed providers",
+    );
+  }
+  const sourceSet = new Set(
+    requirements.map((requirement) => requirement.source),
+  );
+  const requiredSourceSet = new Set(
+    requiredProviders.map(canonicalProviderAddress),
+  );
+  if ([...sourceSet].some((source) => !requiredSourceSet.has(source))) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "root provider requirements contain a source outside requiredProviders",
+    );
+  }
+  return validated;
 }
 
-function rootProviderRequirementsFromCompatibilityReport(
+/**
+ * Decode only a genuinely pre-field stored PlanRun. The legacy source mirror
+ * cannot recover aliases or module-local names, so its conservative identity
+ * is usable only for the historical default-name path and never for a new
+ * request that omitted exact rows.
+ */
+function legacyProviderRequirementsForStoredPlan(
+  requiredProviders: readonly string[],
+): readonly CapsuleProviderRequirement[] {
+  return requiredProviders.map((source) => ({
+    source: canonicalProviderAddress(source),
+    moduleLocalName: providerTypeLocalName(source),
+    allowed: true,
+  }));
+}
+
+function providerRequirementsFromCompatibilityReport(
   report: CapsuleCompatibilityReport | undefined,
   requiredProviders: readonly string[],
-): readonly RootProviderRequirement[] | undefined {
-  if (!report) return undefined;
+): readonly CapsuleProviderRequirement[] {
+  if (!report) return [];
   const required = new Set(requiredProviders.map(canonicalProviderAddress));
-  const requirements = report.providers
-    .filter(
-      (provider) =>
-        provider.allowed &&
-        required.has(canonicalProviderAddress(provider.source)),
-    )
-    .map((provider) => ({
-      provider: provider.source,
-      localName:
-        provider.localName ??
-        canonicalProviderAddress(provider.source).split("/").at(-1) ??
-        provider.source,
-    }));
-  return requirements.length > 0 ? requirements : undefined;
+  const allowedPackages = new Set(
+    report.providerPackages
+      .filter((providerPackage) => providerPackage.allowed)
+      .map((providerPackage) =>
+        canonicalProviderAddress(providerPackage.source)
+      ),
+  );
+  const requirements = report.rootProviderRequirements
+    .filter((requirement) => {
+      const source = canonicalProviderAddress(requirement.source);
+      return required.has(source) && allowedPackages.has(source);
+    })
+    .map((requirement) => ({ ...requirement, allowed: true }));
+  return validateRequiredProviderBindingIdentities(requirements);
+}
+
+function providerRequirementsFromResolvedBindings(
+  resolved: readonly ResolvedCapsuleProviderBinding[],
+): readonly CapsuleProviderRequirement[] {
+  const ambiguous = resolved.find(
+    (entry) => entry.alias !== undefined || entry.moduleLocalName === undefined,
+  );
+  if (ambiguous) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      ambiguous.alias !== undefined
+        ? `deprecated ambiguous ProviderBinding alias cannot compile an exact provider identity: ${ambiguous.alias}`
+        : `ProviderBinding ${ambiguous.provider} must declare moduleLocalName before it can compile an exact provider identity`,
+      { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+    );
+  }
+  const requirements = resolved.map((entry) => ({
+    source: canonicalProviderAddress(entry.provider),
+    moduleLocalName: entry.moduleLocalName!,
+    ...(entry.childAlias ? { childAlias: entry.childAlias } : {}),
+    allowed: true,
+    credentialRequired: true,
+  }));
+  return validateRequiredProviderBindingIdentities(requirements);
+}
+
+function providerTypeLocalName(source: string): string {
+  const canonical = canonicalProviderAddress(source);
+  return canonical.split("/").at(-1) ?? canonical;
+}
+
+function rootProviderRequirementsForGeneratedRoot(
+  requirements: readonly Pick<
+    CapsuleRootProviderRequirement,
+    "source" | "moduleLocalName" | "childAlias" | "version"
+  >[],
+): readonly RootProviderRequirement[] {
+  return requirements.map((requirement) => ({
+    source: requirement.source,
+    moduleLocalName: requirement.moduleLocalName,
+    ...(requirement.childAlias
+      ? { childAlias: requirement.childAlias }
+      : {}),
+    ...(requirement.version ? { version: requirement.version } : {}),
+  }));
 }
 
 const MAX_AUTO_CAPTURED_ROOT_OUTPUTS = 128;
@@ -1186,7 +1280,7 @@ export class RunEngine {
 
   resolveCapsuleProviderBindingsForRun(
     capsule: Capsule,
-    requiredProviders: readonly string[],
+    requiredProviders: readonly CapsuleProviderRequirement[],
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     return this.#resolveCapsuleProviderBindingsForRun(
       capsule,
@@ -1319,8 +1413,23 @@ export class RunEngine {
       };
     const now = this.#now();
     const variables = normalizeVariables(request.variables);
-    const declaredProviders = normalizeProviders(
-      request.requiredProviders ?? [],
+    if (!Array.isArray(request.requiredProviderRequirements)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "requiredProviderRequirements must be present for every new Plan, including an explicit empty array",
+      );
+    }
+    if (!Array.isArray(request.requiredProviders)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "requiredProviders must be present for every new Plan, including an explicit empty array",
+      );
+    }
+    const declaredProviders = normalizeProviders(request.requiredProviders);
+    const requiredProviderRequirements = requiredProviderRequirementsForNewPlan(
+      declaredProviders,
+      request.requiredProviderRequirements,
+      profile.requireProviderBindings === true,
     );
     const currentInstallConfig = await this.#store.getInstallConfig(
       capsule.installConfigId,
@@ -1347,8 +1456,8 @@ export class RunEngine {
     const materializationDigest =
       internal.genericRootDispatch?.moduleVariableMaterializationDigest;
     const currentMaterialization =
-      currentInstallConfig.accountsOidcModuleVariableMaterialization;
-    if (Boolean(materializationDigest) !== Boolean(currentMaterialization)) {
+      hasModuleVariableMaterialization(currentInstallConfig);
+    if (Boolean(materializationDigest) !== currentMaterialization) {
       throw moduleVariableMaterializationError(
         "declaration changed before the Plan variable digest",
       );
@@ -1367,20 +1476,12 @@ export class RunEngine {
         currentInstallConfig,
         variables,
       );
-      const compatibilityReport = internal.compatibilityReportId
-        ? await this.#store.getCapsuleCompatibilityReport(
-            internal.compatibilityReportId,
-          )
-        : undefined;
       const resolvedProviderBindings =
         await this.#resolveCapsuleProviderBindingsForRun(
           capsule,
-          providerBindingResolutionProviders(
-            declaredProviders,
+          providerBindingResolutionRequirements(
+            requiredProviderRequirements,
             profile,
-            credentialRequiredProvidersFromCompatibilityReport(
-              compatibilityReport,
-            ),
           ),
         );
       let rematerialized: CapsuleModuleVariableMaterialization | undefined;
@@ -1471,6 +1572,7 @@ export class RunEngine {
       runnerProfileId: profile.id,
       variablesDigest,
       requiredProviders: declaredProviders,
+      requiredProviderRequirements,
       baseStateGeneration,
       ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
       ...(internal.compatibilityReportId
@@ -1553,6 +1655,7 @@ export class RunEngine {
             { ...request, source: request.source },
             capsule,
             internal.compatibilityReportId,
+            requiredProviderRequirements,
           )
         : undefined);
     const generatedRoot = genericRootDispatch?.generatedRoot;
@@ -2552,6 +2655,7 @@ export class RunEngine {
   }): Promise<{
     readonly request: CreatePlanRunRequest;
     readonly capsulePlan: CapsulePlanContext;
+    readonly requiredProviderRequirements: readonly CapsuleProviderRequirement[];
     readonly genericRootPlan?: GenericRootPlanContext;
     readonly capsulePlanExecutionAuthority: CapsulePlanExecutionAuthority;
   }> {
@@ -2564,6 +2668,7 @@ export class RunEngine {
     return {
       request: generic.request,
       capsulePlan: generic.capsulePlan,
+      requiredProviderRequirements: generic.requiredProviderRequirements,
       genericRootPlan: generic.genericRootPlan,
       capsulePlanExecutionAuthority: generic.capsulePlanExecutionAuthority,
     };
@@ -2589,6 +2694,7 @@ export class RunEngine {
   ): Promise<{
     readonly request: CreatePlanRunRequest;
     readonly capsulePlan: CapsulePlanContext;
+    readonly requiredProviderRequirements: readonly CapsuleProviderRequirement[];
     readonly genericRootPlan: GenericRootPlanContext;
     readonly capsulePlanExecutionAuthority: CapsulePlanExecutionAuthority;
   }> {
@@ -2600,30 +2706,34 @@ export class RunEngine {
       profile.allowedProviders,
     );
     let requiredProviders = compatibilityProviders;
-    let capsulePlan = await this.#planResolution.resolveCapsulePlan(
-      input.capsule,
-      providerBindingResolutionProviders(
+    let requiredProviderRequirements =
+      providerRequirementsFromCompatibilityReport(
+        input.compatibilityReport,
         requiredProviders,
+      );
+    if (
+      input.compatibilityReport === undefined &&
+      requiredProviderRequirements.length === 0
+    ) {
+      const resolvedBindings = await this.#resolveCapsuleProviderBindings(
+        input.capsule,
+      );
+      if (resolvedBindings.length > 0) {
+        requiredProviderRequirements = providerRequirementsFromResolvedBindings(
+          resolvedBindings,
+        );
+        requiredProviders = normalizeProviders(
+          requiredProviderRequirements.map((requirement) => requirement.source),
+        );
+      }
+    }
+    const capsulePlan = await this.#planResolution.resolveCapsulePlan(
+      input.capsule,
+      providerBindingResolutionRequirements(
+        requiredProviderRequirements,
         profile,
-        credentialRequiredProvidersFromCompatibilityReport(
-          input.compatibilityReport,
-        ),
       ),
     );
-    const bindingProviders = capsulePlan.requiredProvidersFromBindings;
-    if (requiredProviders.length === 0 && bindingProviders.length > 0) {
-      requiredProviders = bindingProviders;
-      capsulePlan = await this.#planResolution.resolveCapsulePlan(
-        input.capsule,
-        providerBindingResolutionProviders(
-          requiredProviders,
-          profile,
-          credentialRequiredProvidersFromCompatibilityReport(
-            input.compatibilityReport,
-          ),
-        ),
-      );
-    }
     const sourceFiles = await this.#sourceModuleFilesForGenericCapsule(
       input.compatibilityReport,
       input.snapshot,
@@ -2642,12 +2752,6 @@ export class RunEngine {
         capsuleId: input.capsule.id,
       },
     );
-    if (input.installConfig.accountsOidcModuleVariableMaterialization) {
-      assertNoForbiddenModuleVariableInputs(
-        input.installConfig,
-        explicitVariables,
-      );
-    }
     const baseVariables = normalizeVariables(
       mergeJsonVariableDefaults(
         capsulePlan.providerInputDefaults,
@@ -2684,6 +2788,7 @@ export class RunEngine {
     });
     return {
       capsulePlan,
+      requiredProviderRequirements,
       capsulePlanExecutionAuthority: {
         workspaceId: input.capsule.workspaceId,
         capsuleId: input.capsule.id,
@@ -2697,6 +2802,7 @@ export class RunEngine {
         source: moduleSource,
         operation: input.operation,
         runnerProfileId: profile.id,
+        requiredProviderRequirements,
         requiredProviders,
         ...(Object.keys(variables).length > 0 ? { variables } : {}),
       },
@@ -2720,7 +2826,7 @@ export class RunEngine {
     readonly resolvedProviderBindings: readonly ResolvedCapsuleProviderBinding[];
     readonly variables: Readonly<Record<string, JsonValue>>;
   }): Promise<CapsuleModuleVariableMaterialization | undefined> {
-    if (!input.installConfig.accountsOidcModuleVariableMaterialization) {
+    if (!hasModuleVariableMaterialization(input.installConfig)) {
       return undefined;
     }
     if (!this.#moduleVariableMaterializer) {
@@ -2775,8 +2881,7 @@ export class RunEngine {
         `InstallConfig ${capsule.installConfigId} is missing`,
       );
     }
-    const declared =
-      installConfig.accountsOidcModuleVariableMaterialization !== undefined;
+    const declared = hasModuleVariableMaterialization(installConfig);
     if (!expectedDigest && !declared) return;
     if (!expectedDigest) {
       throw moduleVariableMaterializationError(
@@ -2842,9 +2947,6 @@ export class RunEngine {
         context.moduleVariableMaterialization,
       );
     }
-    const requiredProviders = normalizeProviders(
-      request.requiredProviders ?? [],
-    );
     const interfaceWorkspaceId = request.workspaceId;
     const interfaceCapsuleId = request.capsuleId;
     const interfaceSources =
@@ -2869,25 +2971,16 @@ export class RunEngine {
           interfaceSources,
         );
     const outputAllowlist = destroy ? {} : context.outputAllowlist;
-    const wrapperProviderBindings = context.providerBindings.filter(
-      (binding) =>
-        binding.moduleLocalName !== undefined ||
-        binding.childAlias !== undefined ||
-        binding.rootAlias !== undefined ||
-        binding.alias !== undefined ||
-        Object.keys(binding.configuration ?? {}).length > 0,
-    );
-    const providerRequirements =
-      rootProviderRequirementsFromCompatibilityReport(
-        compatibilityReport,
-        requiredProviders,
+    const wrapperProviderBindings = context.providerBindings;
+    const rootProviderRequirements =
+      rootProviderRequirementsForGeneratedRoot(
+        request.requiredProviderRequirements ?? [],
       );
     let generatedRoot: DispatchGeneratedRoot | undefined;
     if (wrapperProviderBindings.length > 0) {
       try {
         generatedRoot = generateOpenTofuChildModuleRoot({
-          requiredProviders,
-          ...(providerRequirements ? { providerRequirements } : {}),
+          rootProviderRequirements,
           inputs: normalizeVariables(request.variables),
           outputAllowlist: workspaceOutputAllowlist,
           providerBindings: wrapperProviderBindings,
@@ -2917,6 +3010,7 @@ export class RunEngine {
     request: CreatePlanRunRequest,
     capsule: Capsule,
     compatibilityReportId: string | undefined,
+    requiredProviderRequirements: readonly CapsuleProviderRequirement[],
   ): Promise<GenericRootDispatchContext> {
     const installConfig = await this.#store.getInstallConfig(
       capsule.installConfigId,
@@ -2933,9 +3027,9 @@ export class RunEngine {
       : undefined;
     const requiredProviders = normalizeProviders(
       request.requiredProviders ??
-        (compatibilityReport?.providers ?? [])
-          .filter((provider) => provider.allowed)
-          .map((provider) => provider.source),
+        (compatibilityReport?.providerPackages ?? [])
+          .filter((providerPackage) => providerPackage.allowed)
+          .map((providerPackage) => providerPackage.source),
     );
     const profile = await this.#requireRunnerProfile(
       request.runnerProfileId ?? this.#defaultRunnerProfileId,
@@ -2943,14 +3037,13 @@ export class RunEngine {
     const lifecycleActions = lifecycleActionsForPlan(installConfig, profile);
     const resolved = await this.#resolveCapsuleProviderBindingsForRun(
       capsule,
-      providerBindingResolutionProviders(
-        requiredProviders,
+      providerBindingResolutionRequirements(
+        requiredProviderRequirements,
         profile,
-        credentialRequiredProvidersFromCompatibilityReport(compatibilityReport),
       ),
     );
     return await this.#genericRootDispatchForRequest(
-      { ...request, requiredProviders },
+      { ...request, requiredProviders, requiredProviderRequirements },
       {
         providerBindings: providerBindingsFromResolved(resolved),
         outputAllowlist: installConfig.outputAllowlist,
@@ -2993,7 +3086,7 @@ export class RunEngine {
    */
   #resolveCapsuleProviderBindingsForRun(
     capsule: Capsule,
-    requiredProviders: readonly string[],
+    requiredProviders: readonly CapsuleProviderRequirement[],
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
@@ -3002,6 +3095,34 @@ export class RunEngine {
         this.#allowOperatorScopedProviderConnections,
     });
     return this.#connectionsService.resolveProviderBindingsForRun(
+      capsule,
+      requiredProviders,
+    );
+  }
+
+  #resolveCapsuleProviderBindings(
+    capsule: Capsule,
+  ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    this.#connectionsService ??= new ConnectionsService({
+      store: this.#store,
+      operatorProviderConnections: this.#operatorProviderConnections,
+      allowOperatorScopedProviderConnections:
+        this.#allowOperatorScopedProviderConnections,
+    });
+    return this.#connectionsService.resolveProviderBindings(capsule);
+  }
+
+  #resolveCapsuleProviderBindingsForLegacyStoredRun(
+    capsule: Capsule,
+    requiredProviders: readonly CapsuleProviderRequirement[],
+  ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    this.#connectionsService ??= new ConnectionsService({
+      store: this.#store,
+      operatorProviderConnections: this.#operatorProviderConnections,
+      allowOperatorScopedProviderConnections:
+        this.#allowOperatorScopedProviderConnections,
+    });
+    return this.#connectionsService.resolveProviderBindingsForLegacyStoredRun(
       capsule,
       requiredProviders,
     );
@@ -3036,12 +3157,30 @@ export class RunEngine {
         { reason: "legacy_sourceless_destroy_ineligible" },
       );
     }
-    const resolvedBindings = await this.#resolveCapsuleProviderBindingsForRun(
-      capsule,
-      providersRequiringProviderBindings(requiredProviders, runnerProfile),
-    );
-    const generatedRoot = generateOpenTofuChildModuleRoot({
+    const requiredProviderRequirements = requiredProviderRequirementsForNewPlan(
       requiredProviders,
+      appliedPlan.requiredProviderRequirements ??
+        legacyProviderRequirementsForStoredPlan(requiredProviders),
+      runnerProfile.requireProviderBindings === true,
+    );
+    const bindingRequirements = providerBindingResolutionRequirements(
+      requiredProviderRequirements,
+      runnerProfile,
+    );
+    const resolvedBindings =
+      appliedPlan.requiredProviderRequirements === undefined
+        ? await this.#resolveCapsuleProviderBindingsForLegacyStoredRun(
+            capsule,
+            bindingRequirements,
+          )
+        : await this.#resolveCapsuleProviderBindingsForRun(
+            capsule,
+            bindingRequirements,
+          );
+    const generatedRoot = generateOpenTofuChildModuleRoot({
+      rootProviderRequirements: rootProviderRequirementsForGeneratedRoot(
+        requiredProviderRequirements,
+      ),
       inputs: {},
       outputAllowlist: {},
       providerBindings: providerBindingsFromResolved(resolvedBindings),
@@ -3054,6 +3193,7 @@ export class RunEngine {
       appliedPlanRunId: appliedPlan.id,
       sourceSnapshotId: appliedPlan.sourceSnapshotId,
       requiredProviders,
+      requiredProviderRequirements,
     });
     return await this.createPlanRun(
       {
@@ -3064,6 +3204,7 @@ export class RunEngine {
           digest: sourceDigest,
         },
         operation: "destroy",
+        requiredProviderRequirements,
         requiredProviders,
         runnerProfileId: runnerProfile.id,
       },
@@ -4570,17 +4711,45 @@ export class RunEngine {
           planRun.compatibilityReportId,
         )
       : undefined;
+    const requiredProviderRequirements =
+      planRun.requiredProviderRequirements !== undefined
+        ? requiredProviderRequirementsForNewPlan(
+            planRun.requiredProviders,
+            planRun.requiredProviderRequirements,
+          )
+        : requiredProviderRequirementsForNewPlan(
+            planRun.requiredProviders,
+            legacyProviderRequirementsForStoredPlan(
+              planRun.requiredProviders,
+            ).map((requirement) => ({
+              ...requirement,
+              ...(compatibilityReport?.rootProviderRequirements.some(
+                (candidate) =>
+                  canonicalProviderAddress(candidate.source) ===
+                    requirement.source &&
+                  candidate.credentialRequired === true,
+              )
+                ? { credentialRequired: true }
+                : {}),
+            })),
+          );
     // Run-scoped: exact ProviderBindings required by this plan and its
     // CompatibilityReport. This keeps minted credentials aligned with the
     // generated provider blocks without inferring requirements from allowlists.
-    return await this.#connectionsService.resolveProviderBindingsForRun(
-      capsule,
-      providerBindingResolutionProviders(
-        planRun.requiredProviders,
-        profile,
-        credentialRequiredProvidersFromCompatibilityReport(compatibilityReport),
-      ),
+    const bindingRequirements = providerBindingResolutionRequirements(
+      requiredProviderRequirements,
+      profile,
     );
+    return planRun.requiredProviderRequirements === undefined ||
+        planRun.source.kind === "operator_module"
+      ? await this.#connectionsService.resolveProviderBindingsForLegacyStoredRun(
+          capsule,
+          bindingRequirements,
+        )
+      : await this.#connectionsService.resolveProviderBindingsForRun(
+          capsule,
+          bindingRequirements,
+        );
   }
 
   /**
@@ -6046,6 +6215,22 @@ export class RunEngine {
     const requiredProviders = normalizeProviders(
       result.requiredProviders ?? running.requiredProviders,
     );
+    if (
+      result.requiredProviders !== undefined &&
+      JSON.stringify(requiredProviders) !==
+        JSON.stringify(normalizeProviders(running.requiredProviders))
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "runner requiredProviders do not match the compatibility-reviewed provider packages",
+      );
+    }
+    if (running.requiredProviderRequirements !== undefined) {
+      requiredProviderRequirementsForNewPlan(
+        requiredProviders,
+        running.requiredProviderRequirements,
+      );
+    }
     // Re-evaluate against the SAME provider-free allowance as the create gate:
     // a provider-free Capsule that observes zero providers at
     // plan time stays passed instead of tripping the "providers before init"
@@ -6576,7 +6761,8 @@ export class RunEngine {
       const now = this.#now();
       if (result.providerExecutionFailure) {
         const committedFailure =
-          await this.#commitFailedProviderApplyWithState({
+          await this.#commitFailedProviderMutationWithState({
+            action: "apply",
             running: runningWithEnv,
             applyRun,
             planRun,
@@ -6594,7 +6780,8 @@ export class RunEngine {
           return { applyRun: (await this.getApplyRun(applyRun.id)).applyRun };
         }
         ledgerCommitted = true;
-        return await this.#completeFailedProviderApply({
+        return await this.#completeFailedProviderMutation({
+          action: "apply",
           ...committedFailure,
           planRun,
           startedAt,
@@ -7198,13 +7385,14 @@ export class RunEngine {
     return committed.capsule;
   }
 
-  async #commitFailedProviderApplyWithState(input: {
+  async #commitFailedProviderMutationWithState(input: {
+    readonly action: "apply" | "destroy";
     readonly running: ApplyRun;
     readonly applyRun: ApplyRun;
     readonly planRun: PlanRun;
     readonly profile: RunnerProfile;
     readonly plannedCapsule: Capsule | undefined;
-    readonly result: OpenTofuApplyResult;
+    readonly result: OpenTofuApplyResult | OpenTofuDestroyResult;
     readonly envDispatch: RunExecutionDispatch;
     readonly persistGeneration: number;
     readonly providerInstallationPolicy:
@@ -7222,6 +7410,7 @@ export class RunEngine {
       }
     | "lease_lost"
   > {
+    const action = input.action;
     const failure = input.result.providerExecutionFailure;
     if (!failure) {
       throw new OpenTofuControllerError(
@@ -7245,7 +7434,7 @@ export class RunEngine {
     if (failure.statePersistence === "persisted" && !stateVersion) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "failed provider apply returned state without a durable Capsule state scope",
+        `failed provider ${action} returned state without a durable Capsule state scope`,
       );
     }
     const nextStateGeneration = stateVersion
@@ -7253,6 +7442,8 @@ export class RunEngine {
       : capsule.currentStateGeneration;
     const errorCode = failure.errorCode ?? "apply_failed";
     const diagnostics = redactRunDiagnostics(input.result.diagnostics) ?? [];
+    const stateLock =
+      "stateLock" in input.result ? input.result.stateLock : undefined;
     const failed: ApplyRun = {
       ...input.running,
       capsuleId: capsule.id,
@@ -7260,7 +7451,7 @@ export class RunEngine {
       outputId: undefined,
       status: "failed",
       stateLock:
-        input.result.stateLock ??
+        stateLock ??
         stateLockEvidence(
           input.profile.stateBackend,
           input.startedAt,
@@ -7279,15 +7470,17 @@ export class RunEngine {
         ...input.running.auditEvents,
         ...providerInstallationAuditEvents(
           input.applyRun.id,
-          "apply",
+          action,
           input.now,
           input.result.providerInstallation,
           input.providerInstallationPolicy,
         ),
-        auditEvent(input.applyRun.id, "apply.failed", input.now, {
+        auditEvent(input.applyRun.id, `${action}.failed`, input.now, {
           message: "OpenTofu provider execution failed after dispatch",
           providerDispatched: true,
-          providerApplySucceeded: false,
+          ...(action === "destroy"
+            ? { providerDestroySucceeded: false }
+            : { providerApplySucceeded: false }),
           statePersistence: failure.statePersistence,
           ...(stateVersion ? { stateVersionId: stateVersion.id } : {}),
         }),
@@ -7343,7 +7536,8 @@ export class RunEngine {
     };
   }
 
-  async #completeFailedProviderApply(input: {
+  async #completeFailedProviderMutation(input: {
+    readonly action: "apply" | "destroy";
     readonly failed: ApplyRun;
     readonly capsule: Capsule;
     readonly stateVersion: StateVersion | undefined;
@@ -7363,7 +7557,7 @@ export class RunEngine {
       });
       await this.#recordDeployOperationMetric({
         run: input.failed,
-        operationKind: "apply",
+        operationKind: input.action === "destroy" ? "destroy_apply" : "apply",
         status: "failed",
         startedAt: input.startedAt,
         finishedAt: input.now,
@@ -7371,16 +7565,21 @@ export class RunEngine {
       });
       await this.#store.deletePlanRunInputs(input.planRun.id);
     } catch (error) {
-      log.warn("deploy_control.failed_apply_post_commit_cleanup_failed", {
-        planRunId: input.planRun.id,
-        applyRunId: input.failed.id,
-        message: errorMessage(error),
-      });
+      log.warn(
+        input.action === "destroy"
+          ? "deploy_control.destroy_post_commit_cleanup_failed"
+          : "deploy_control.failed_apply_post_commit_cleanup_failed",
+        {
+          planRunId: input.planRun.id,
+          applyRunId: input.failed.id,
+          message: errorMessage(error),
+        },
+      );
     }
     const errorCode =
       input.failed.diagnostics?.find(
         (diagnostic) => diagnostic.severity === "error" && diagnostic.code,
-      )?.code ?? "apply_failed";
+      )?.code ?? (input.action === "destroy" ? "destroy_failed" : "apply_failed");
     await this.#recordActivity({
       workspaceId: input.failed.workspaceId,
       action: "run.failed",
@@ -7388,7 +7587,7 @@ export class RunEngine {
       targetId: input.failed.id,
       runId: input.failed.id,
       metadata: {
-        phase: "apply",
+        phase: input.action === "destroy" ? "destroy_apply" : "apply",
         operation: input.failed.operation,
         errorCode,
         capsuleId: input.capsule.id,
@@ -8562,6 +8761,43 @@ export class RunEngine {
           ),
       );
       const now = this.#now();
+      if (result.providerExecutionFailure) {
+        const stateWasPersisted =
+          result.providerExecutionFailure.statePersistence === "persisted";
+        if (stateWasPersisted !== Boolean(result.stateDigest?.trim())) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `runner returned inconsistent failed-state persistence evidence for destroy apply run ${running.id}`,
+          );
+        }
+        const committedFailure =
+          await this.#commitFailedProviderMutationWithState({
+            action: "destroy",
+            running: effectiveRunning,
+            applyRun: running,
+            planRun,
+            profile,
+            plannedCapsule: capsule,
+            result,
+            envDispatch,
+            persistGeneration,
+            providerInstallationPolicy,
+            leaseToken,
+            startedAt,
+            now,
+          });
+        if (committedFailure === "lease_lost") {
+          return { applyRun: (await this.getApplyRun(running.id)).applyRun };
+        }
+        ledgerCommitted = true;
+        return await this.#completeFailedProviderMutation({
+          action: "destroy",
+          ...committedFailure,
+          planRun,
+          startedAt,
+          now,
+        });
+      }
       // Build the post-teardown StateVersion at the generation persisted by the
       // runner, then atomically advance the Capsule and terminal Run.
       const stateVersion = await this.#buildStateVersion({
@@ -9012,7 +9248,16 @@ export class RunEngine {
 
 const MODULE_VARIABLE_MATERIALIZATION_DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const OPENTOFU_MODULE_VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
-const MAX_MODULE_VARIABLE_DECLARATION_NAMES = 32;
+
+function hasModuleVariableMaterialization(
+  installConfig: InstallConfig,
+): boolean {
+  try {
+    return accountsOidcModuleVariableProfile(installConfig) !== undefined;
+  } catch (error) {
+    throw moduleVariableMaterializationError(errorMessage(error));
+  }
+}
 
 function moduleVariableMaterializerInputVariables(
   installConfig: InstallConfig,
@@ -9020,7 +9265,6 @@ function moduleVariableMaterializerInputVariables(
 ): Readonly<Record<string, JsonValue>> {
   const { sourceNames, additionalInputNames } =
     requireValidModuleVariableProfile(installConfig);
-  assertNoForbiddenModuleVariableInputs(installConfig, variables);
   const selected: Record<string, JsonValue> = {};
   const allowedNames = new Set([...sourceNames, ...additionalInputNames]);
   for (const name of allowedNames) {
@@ -9037,23 +9281,6 @@ function moduleVariableMaterializerInputVariables(
     selected[name] = value;
   }
   return selected;
-}
-
-function assertNoForbiddenModuleVariableInputs(
-  installConfig: InstallConfig,
-  variables: Readonly<Record<string, unknown>>,
-): void {
-  const { forbiddenInputNames } = requireValidModuleVariableProfile(
-    installConfig,
-  );
-  for (const name of forbiddenInputNames) {
-    const value = variables[name];
-    if (value !== undefined && value !== null && value !== "") {
-      throw moduleVariableMaterializationError(
-        `unsealed module secret input ${name} must be disabled or omitted`,
-      );
-    }
-  }
 }
 
 function moduleVariableMaterializerPlannedVariables(
@@ -9075,46 +9302,31 @@ function moduleVariableMaterializerPlannedVariables(
 }
 
 function requireValidModuleVariableProfile(installConfig: InstallConfig): {
-  readonly profile: NonNullable<
-    InstallConfig["accountsOidcModuleVariableMaterialization"]
-  >;
+  readonly profile: AccountsOidcModuleVariableProfile;
   readonly sourceNames: readonly string[];
   readonly targetNames: readonly string[];
   readonly additionalInputNames: readonly string[];
-  readonly forbiddenInputNames: readonly string[];
 } {
-  const profile = installConfig.accountsOidcModuleVariableMaterialization;
+  let profile: AccountsOidcModuleVariableProfile | undefined;
+  try {
+    profile = accountsOidcModuleVariableProfile(installConfig);
+  } catch (error) {
+    throw moduleVariableMaterializationError(errorMessage(error));
+  }
   if (!profile) {
     throw moduleVariableMaterializationError("declaration is missing");
   }
-  const sourceNames = profile.contract ===
-      "takosumi.accounts-oidc-module-variables/v1"
-    ? [profile.workerNameVariable, profile.projectNameVariable]
-    : [profile.resourceNameVariable, profile.publicUrlVariable];
-  const targetNames = profile.contract ===
-      "takosumi.accounts-oidc-module-variables/v1"
-    ? [
-        profile.issuerUrlVariable,
-        profile.clientIdVariable,
-        profile.ownerSubjectVariable,
-        profile.allowUnpinnedOwnerClaimVariable,
-      ]
-    : [
-        profile.accountsUrlVariable,
-        profile.issuerUrlVariable,
-        profile.clientIdVariable,
-        profile.redirectUriVariable,
-      ];
-  const additionalInputNames = boundedModuleVariableNameList(
-    profile.additionalInputVariables,
-  );
-  const forbiddenInputNames = boundedModuleVariableNameList(
-    profile.forbiddenNonEmptyInputVariables,
-  );
+  const sourceNames = [profile.publicUrlVariable];
+  const targetNames = [
+    profile.accountsUrlVariable,
+    profile.issuerUrlVariable,
+    profile.clientIdVariable,
+    profile.redirectUriVariable,
+  ];
+  const additionalInputNames: readonly string[] = [];
   const publicNames = [...sourceNames, ...targetNames, ...additionalInputNames];
-  const allNames = [...publicNames, ...forbiddenInputNames];
   if (
-    allNames.some(
+    publicNames.some(
       (name) =>
         typeof name !== "string" || !OPENTOFU_MODULE_VARIABLE_NAME.test(name),
     ) ||
@@ -9124,7 +9336,7 @@ function requireValidModuleVariableProfile(installConfig: InstallConfig): {
         isSecretKey(name) ||
         name.toUpperCase() === "ENCRYPTION_KEY",
     ) ||
-    new Set(allNames).size !== allNames.length
+    new Set(publicNames).size !== publicNames.length
   ) {
     throw moduleVariableMaterializationError(
       "declaration contains an invalid, duplicate, or secret-shaped variable name",
@@ -9135,24 +9347,7 @@ function requireValidModuleVariableProfile(installConfig: InstallConfig): {
     sourceNames,
     targetNames,
     additionalInputNames,
-    forbiddenInputNames,
   };
-}
-
-function boundedModuleVariableNameList(
-  value: readonly string[] | undefined,
-): readonly string[] {
-  if (value === undefined) return [];
-  if (
-    !Array.isArray(value) ||
-    value.length > MAX_MODULE_VARIABLE_DECLARATION_NAMES ||
-    value.some((name) => typeof name !== "string")
-  ) {
-    throw moduleVariableMaterializationError(
-      "declaration contains too many or malformed variable names",
-    );
-  }
-  return value;
 }
 
 function isPublicModuleVariableScalar(value: JsonValue): boolean {
@@ -9185,24 +9380,19 @@ function requireValidModuleVariableMaterialization(
       "host returned variables outside the exact declared target set",
     );
   }
-  const issuer = result.variables[profile.issuerUrlVariable];
-  const clientId = result.variables[profile.clientIdVariable];
-  const valid = profile.contract ===
-      "takosumi.accounts-oidc-module-variables/v1"
-    ? isBoundedNonSecretString(issuer) &&
-      isBoundedNonSecretString(clientId) &&
-      isBoundedNonSecretString(
-        result.variables[profile.ownerSubjectVariable],
-      ) &&
-      result.variables[profile.allowUnpinnedOwnerClaimVariable] === false
-    : isBoundedNonSecretString(issuer) &&
-      isBoundedNonSecretString(clientId) &&
-      isBoundedNonSecretString(
-        result.variables[profile.accountsUrlVariable],
-      ) &&
-      isBoundedNonSecretString(
-        result.variables[profile.redirectUriVariable],
-      );
+  const valid =
+    isBoundedNonSecretString(
+      result.variables[profile.issuerUrlVariable],
+    ) &&
+    isBoundedNonSecretString(
+      result.variables[profile.clientIdVariable],
+    ) &&
+    isBoundedNonSecretString(
+      result.variables[profile.accountsUrlVariable],
+    ) &&
+    isBoundedNonSecretString(
+      result.variables[profile.redirectUriVariable],
+    );
   if (!valid) {
     throw moduleVariableMaterializationError(
       "host returned an invalid or secret-shaped public OIDC value",

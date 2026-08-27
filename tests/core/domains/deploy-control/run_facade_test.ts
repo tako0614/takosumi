@@ -12,6 +12,7 @@ import {
   FIXTURE_CLOUDFLARE_PROVIDER,
   fakeProviderVault,
   fixtureStateCommit,
+  providerRequirementsForFixture,
   seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -85,6 +86,9 @@ async function seedUpdatableCapsule(
     capsuleId: capsule.id,
     operation: "update" as const,
     source: SOURCE,
+    requiredProviderRequirements: providerRequirementsForFixture([
+      "registry.opentofu.org/cloudflare/cloudflare",
+    ]),
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   };
 }

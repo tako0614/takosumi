@@ -19,7 +19,6 @@ export * from "./interface-display.ts";
 export * from "./sources.ts";
 export * from "./install-plans.ts";
 export * from "./repository-manifest.ts";
-export * from "./capsule-source-options.ts";
 export * from "./redaction.ts";
 export * from "./provider-configurations.ts";
 export * from "./workspaces.ts";
@@ -48,6 +47,11 @@ export type {
   InstallConfigInstallExperience,
   InstallConfigInstallProjection,
   InstallConfigRepositoryInstallUxState,
+  InstallConfigRuntimeBindingMaterialization,
+  InstallConfigRuntimeBindingMaterializationV1,
+  InstallConfigRuntimeBindingMaterializationV2,
+  RuntimeGeneratedSecretBinding,
+  RuntimeOidcClientBindings,
   OutputAllowlistEntry,
   OutputValueType,
   PolicyConfig,
@@ -78,8 +82,10 @@ export type {
   CapsuleFindingSeverity,
   CapsuleGateFinding,
   CapsuleGateResult,
+  CapsuleProviderPackage,
   CapsuleProviderRequirement,
   CapsuleProvisionerSummary,
+  CapsuleRootProviderRequirement,
   CapsuleRootModuleVariableDeclaration,
   PublicCapsuleCompatibilityReport as CapsuleCompatibilityReport,
   PublicCapsuleCompatibilityReportResponse as CapsuleCompatibilityReportResponse,

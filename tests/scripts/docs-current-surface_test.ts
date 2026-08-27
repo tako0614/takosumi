@@ -21,7 +21,6 @@ const REQUIRED_PUBLIC_DOCS = [
   "docs/reference/cli.md",
   "docs/reference/takoform-host.md",
   "docs/reference/configuration.md",
-  "docs/reference/capsule-source-options.md",
   "docs/reference/operator-control-mcp.md",
   "docs/reference/app-handoff.md",
   "docs/reference/glossary.md",
@@ -39,7 +38,6 @@ const REQUIRED_PUBLIC_DOCS = [
   "docs/en/concepts/boundaries.md",
   "docs/en/reference/api.md",
   "docs/en/reference/cli.md",
-  "docs/en/reference/capsule-source-options.md",
   "docs/en/reference/operator-control-mcp.md",
   "docs/en/reference/app-handoff.md",
   "docs/en/reference/glossary.md",
@@ -636,8 +634,8 @@ test("activation-digest docs keep PostgreSQL and D1 promotion order separate", a
     );
     assert.match(
       normalized,
-      /provider runtime-binding.*?read-only.*?(?:no registration authority|registration authority を持ちません).*?(?:direct|DB-owned).*?(?:final-Apply activation|final Apply)/i,
-      `${path} must keep provider runtime binding read-only and direct DB-owned activation authoritative`,
+      /provider runtime-binding.*?read-only.*?(?:has no registration authority|no registration authority|registration authority を持ちません).*?Takosumi-owned generic Accounts capability implementation.*?(?:owns final(?:-| )Apply activation|final-Apply activation を所有)/i,
+      `${path} must keep provider runtime binding read-only and Takosumi-owned generic activation authoritative`,
     );
     assert.match(
       normalized,
@@ -747,7 +745,7 @@ test("public pricing and OSS readiness use prepaid-credit and quota-policy vocab
   assert.doesNotMatch(readinessFixtures, /policy:\/\/[^"\s]*lite/);
 });
 
-test("repository manifest uses the general closed envelope and keeps install options separate", async () => {
+test("repository manifest remains hints and Host requests over scanned OpenTofu modules", async () => {
   const contract = await readText(
     new URL("contract/repository-manifest.ts", ROOT),
   );
@@ -775,14 +773,22 @@ test("repository manifest uses the general closed envelope and keeps install opt
   );
   assert.match(sourceSnapshotSchema, /repositoryManifest:/);
   assert.doesNotMatch(sourceSnapshotSchema, /repositoryInstallUx:/);
+  assert.match(openapi, /SourceSnapshotInstallModulesResponse:/);
+  assert.match(openapi, /status: \{ const: "ready" \}/);
+  assert.match(openapi, /status: \{ const: "invalid" \}/);
+  assert.match(openapi, /scopePath:/);
+  assert.match(openapi, /providerPackages:/);
+  assert.match(openapi, /rootProviderRequirements:/);
+  assert.doesNotMatch(openapi, /required: \["path", "providerRequirements"\]/);
+  assert.doesNotMatch(openapi, /manifestDigest/);
 
   for (const path of [
     "docs/reference/repository-manifest.md",
     "docs/en/reference/repository-manifest.md",
   ]) {
     const doc = await readText(new URL(path, ROOT));
-    assert.match(doc, /takosumi\.com\/v1alpha1/);
-    assert.match(doc, /CapsuleSourceOptions/);
+    assert.match(doc, /takosumi\.com\/v2\.3/);
+    assert.match(doc, /OpenTofu/);
     assert.match(doc, /InstallConfig/);
     assert.match(doc, /\$schema/);
   }

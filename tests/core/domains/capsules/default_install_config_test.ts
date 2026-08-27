@@ -21,6 +21,20 @@ test("the default InstallConfig is generic service-side DB configuration", () =>
     outputAllowlist: {},
     policy: {
       repositoryInstallUx: {
+        allowedRequirementKinds: [
+          "secret.generated",
+          "http.endpoint",
+          "identity.oidc",
+          "interface.consume",
+        ],
+        allowedOidcScopes: [
+          "openid",
+          "profile",
+          "email",
+          "offline_access",
+          "capsules:read",
+          "capsules:write",
+        ],
         allowedInterfacePermissions: ["ui.open", "mcp.invoke"],
         allowedInterfaceDeliveryTypes: ["none", "oauth2"],
         allowedInterfaceBindingProfiles: [

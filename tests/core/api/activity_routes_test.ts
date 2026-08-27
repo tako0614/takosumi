@@ -156,6 +156,13 @@ async function createCapsule(
     archiveRef: `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_${name}/source.tar.zst`,
     archiveDigest: ARCHIVE_DIGEST,
     archiveSizeBytes: 1024,
+    repositoryInstallMetadata: { status: "absent" },
+    repositoryManifest: { status: "absent" },
+    repositoryModules: {
+      status: "ready",
+      scopePath: ".",
+      modules: [{ path: ".", providerPackages: [], rootProviderRequirements: [] }],
+    },
     fetchedByRunId: `ssr_${name}00001`,
     fetchedAt: nowIso,
   };
@@ -167,7 +174,8 @@ async function createCapsule(
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [],
+    providerPackages: [],
+    rootProviderRequirements: [],
     resources: [],
     dataSources: [],
     provisioners: [],

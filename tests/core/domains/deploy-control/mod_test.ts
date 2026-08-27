@@ -6,17 +6,20 @@ import {
   DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
   OpenTofuControllerError,
   OpenTofuController,
+  snapshotModuleSource,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import type {
   ProviderConnection,
   CreatePlanRunRequest,
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
+import type { SourceSnapshot } from "takosumi-contract/sources";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   fakeProviderVault,
   fixtureStateCommit,
+  providerRequirementsForFixture,
   seedCapsuleModel,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 
@@ -31,6 +34,10 @@ const SOURCE = {
   url: "https://github.com/example/app.git",
   ref: "main",
 } as const;
+const CLOUDFLARE_PROVIDER =
+  "registry.opentofu.org/cloudflare/cloudflare";
+const CLOUDFLARE_REQUIREMENTS =
+  providerRequirementsForFixture([CLOUDFLARE_PROVIDER]);
 
 /**
  * Capsule-first model setup (spec §5). Seeds Workspace + Source + Snapshot +
@@ -49,6 +56,7 @@ async function seedUpdatableCapsule(
     readonly source?: CreatePlanRunRequest["source"];
     readonly runnerProfileId?: string;
     readonly requiredProviders?: readonly string[];
+    readonly credentialRequired?: boolean;
     readonly seedProviderConnections?: boolean;
   } = {},
 ): Promise<{
@@ -80,6 +88,12 @@ async function seedUpdatableCapsule(
     capsuleId: capsule.id,
     operation: "update",
     source: options.source ?? SOURCE,
+    requiredProviderRequirements:
+      options.credentialRequired === undefined
+        ? providerRequirementsForFixture(requiredProviders)
+        : providerRequirementsForFixture(requiredProviders, {
+            credentialRequired: options.credentialRequired,
+          }),
     requiredProviders,
     ...(options.runnerProfileId
       ? { runnerProfileId: options.runnerProfileId }
@@ -126,7 +140,8 @@ async function seedProviderConnections(
       connection,
       binding: {
         provider,
-        alias: "main",
+        moduleLocalName: shortName,
+        rootAlias: "main",
         connectionId,
       },
     };
@@ -555,6 +570,7 @@ test("PlanRun rejects capsule operations outside the requested space", async () 
       capsuleId,
       operation: "update",
       source: SOURCE,
+      requiredProviderRequirements: CLOUDFLARE_REQUIREMENTS,
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     }),
   ).rejects.toThrow(/capsule is not available to this workspace/);
@@ -578,6 +594,7 @@ test("PlanRun requires an existing Capsule regardless of operation", async () =>
       workspaceId: "workspace_test",
       operation: "update",
       source: SOURCE,
+      requiredProviderRequirements: CLOUDFLARE_REQUIREMENTS,
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     }),
   ).rejects.toThrow(/plan requires an existing capsuleId/);
@@ -587,6 +604,7 @@ test("PlanRun requires an existing Capsule regardless of operation", async () =>
       workspaceId: "workspace_test",
       operation: "destroy",
       source: SOURCE,
+      requiredProviderRequirements: CLOUDFLARE_REQUIREMENTS,
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     }),
   ).rejects.toThrow(/plan requires an existing capsuleId/);
@@ -599,6 +617,7 @@ test("PlanRun requires an existing Capsule regardless of operation", async () =>
       capsuleId: "inst_missing",
       operation: "update",
       source: SOURCE,
+      requiredProviderRequirements: CLOUDFLARE_REQUIREMENTS,
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     }),
   ).rejects.toMatchObject({
@@ -629,6 +648,7 @@ test("update and destroy PlanRuns stay bound to the targeted Capsule", async () 
     capsuleId,
     operation: "update",
     source: { ...SOURCE, ref: "release-2" },
+    requiredProviderRequirements: CLOUDFLARE_REQUIREMENTS,
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
   expect(updatePlan.status).toEqual("succeeded");
@@ -643,6 +663,7 @@ test("update and destroy PlanRuns stay bound to the targeted Capsule", async () 
     capsuleId,
     operation: "destroy",
     source: SOURCE,
+    requiredProviderRequirements: CLOUDFLARE_REQUIREMENTS,
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
   expect(destroyPlan.status).toEqual("waiting_approval");
@@ -669,6 +690,7 @@ test("apply rejects a stale update PlanRun after the current StateVersion change
     capsuleId,
     operation: "update",
     source: { ...SOURCE, ref: "release-2" },
+    requiredProviderRequirements: CLOUDFLARE_REQUIREMENTS,
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
   const { planRun: freshUpdate } = await controller.createPlanRun({
@@ -676,6 +698,7 @@ test("apply rejects a stale update PlanRun after the current StateVersion change
     capsuleId,
     operation: "update",
     source: { ...SOURCE, ref: "release-3" },
+    requiredProviderRequirements: CLOUDFLARE_REQUIREMENTS,
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
   // Applying the fresh plan moves the Capsule's StateVersion cursor forward.
@@ -711,6 +734,8 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
         url: "file:///etc/passwd",
         ref: "main",
       },
+      requiredProviderRequirements:
+        providerRequirementsForFixture(requiredProviders),
       requiredProviders,
     }),
   ).rejects.toThrow(/git source url must use https/);
@@ -723,6 +748,8 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
         url: "https://token@example.com/private.git",
         ref: "main",
       },
+      requiredProviderRequirements:
+        providerRequirementsForFixture(requiredProviders),
       requiredProviders,
     }),
   ).rejects.toThrow(/must not embed credentials/);
@@ -735,6 +762,8 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
         url: "https://127.0.0.1/private.git",
         ref: "main",
       },
+      requiredProviderRequirements:
+        providerRequirementsForFixture(requiredProviders),
       requiredProviders,
     }),
   ).rejects.toThrow(/git source url host is not allowed/);
@@ -747,6 +776,8 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
         url: "https://github.com/example/app.git",
         ref: "--upload-pack=/bin/sh",
       },
+      requiredProviderRequirements:
+        providerRequirementsForFixture(requiredProviders),
       requiredProviders,
     }),
   ).rejects.toThrow(/source\.ref must not start/);
@@ -759,6 +790,8 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
         url: "https://github.com/example/app.git",
         commit: "main",
       },
+      requiredProviderRequirements:
+        providerRequirementsForFixture(requiredProviders),
       requiredProviders,
     }),
   ).rejects.toThrow(/source\.commit must be a full git object id/);
@@ -771,9 +804,56 @@ test("git source is restricted to safe HTTPS source URLs", async () => {
         url: "https://github.com/example/app.git",
         modulePath: "../other",
       },
+      requiredProviderRequirements:
+        providerRequirementsForFixture(requiredProviders),
       requiredProviders,
     }),
   ).rejects.toThrow(/source\.modulePath must stay inside/);
+});
+
+test("snapshotModuleSource preserves archive-relative module paths", () => {
+  const source = {
+    id: "source_module_path",
+    workspaceId: "workspace_test",
+    name: "module path",
+    url: "https://github.com/example/app.git",
+    defaultRef: "main",
+    defaultPath: "infra",
+    status: "active",
+    autoSync: false,
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  } as const;
+  const snapshot = (path: string): SourceSnapshot => ({
+    id: `snapshot_${path.replaceAll("/", "_") || "root"}`,
+    origin: "git",
+    workspaceId: source.workspaceId,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "A".repeat(40),
+    path,
+    archiveRef: "source-archive",
+    archiveDigest: `sha256:${"a".repeat(64)}`,
+    archiveSizeBytes: 1,
+    fetchedByRunId: "sync_1",
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  expect(snapshotModuleSource(source, snapshot("infra"), "infra").modulePath).toBe(
+    "infra",
+  );
+  expect(
+    snapshotModuleSource(source, snapshot("infra"), "infra/prod").modulePath,
+  ).toBe("infra/prod");
+  // A path that merely shares the snapshot prefix is still a distinct archive
+  // coordinate and must not be rewritten.
+  expect(
+    snapshotModuleSource(source, snapshot("infra"), "infrastructure").modulePath,
+  ).toBe("infrastructure");
+  expect(snapshotModuleSource(source, snapshot("infra"), ".")).not.toHaveProperty(
+    "modulePath",
+  );
 });
 
 test("runner diagnostics are redacted before PlanRun and ApplyRun persistence", async () => {
@@ -927,7 +1007,7 @@ test("default runner admits arbitrary valid provider sources", async () => {
   expect(runnerCalled).toEqual(true);
 });
 
-test("default runner records providers discovered during OpenTofu init", async () => {
+test("runner discovery cannot promote an explicit empty exact requirement set", async () => {
   let runnerCalled = false;
   const { store, request } = await seedUpdatableCapsule({
     requiredProviders: [],
@@ -954,11 +1034,13 @@ test("default runner records providers discovered during OpenTofu init", async (
 
   const { planRun } = await controller.createPlanRun(request);
 
-  expect(planRun.status).toEqual("succeeded");
+  expect(planRun.status).toEqual("failed");
   expect(runnerCalled).toEqual(true);
-  expect(planRun.requiredProviders).toEqual([
-    "registry.opentofu.org/hashicorp/aws",
-  ]);
+  expect(planRun.requiredProviders).toEqual([]);
+  expect(planRun.requiredProviderRequirements).toEqual([]);
+  expect(planRun.diagnostics?.[0]?.message).toContain(
+    "runner requiredProviders do not match the compatibility-reviewed provider packages",
+  );
 });
 
 test("runner profile policy blocks denied providers", async () => {
@@ -1042,6 +1124,7 @@ test("generic runner allows optional provider declarations without Provider Conn
   if (!genericProfile) throw new Error("generic profile fixture missing");
   const { store, request } = await seedUpdatableCapsule({
     runnerProfileId: genericProfile.id,
+    credentialRequired: false,
     seedProviderConnections: false,
   });
   const controller = new OpenTofuController({
@@ -1470,7 +1553,8 @@ test("generic-env providers run on an ordinary runner profile when the provider 
     bindings: [
       {
         provider,
-        alias: "main",
+        moduleLocalName: "vercel",
+        rootAlias: "main",
         connectionId: "conn_vercel",
       },
     ],
@@ -1562,7 +1646,8 @@ test("generic-env provider policy uses the profile's explicitly registered execu
     bindings: [
       {
         provider,
-        alias: "main",
+        moduleLocalName: "vercel",
+        rootAlias: "main",
         connectionId: "conn_vercel",
       },
     ],
@@ -1682,6 +1767,7 @@ test("destroy is recorded as an ApplyRun when the runner succeeds", async () => 
     capsuleId,
     source: SOURCE,
     operation: "destroy",
+    requiredProviderRequirements: CLOUDFLARE_REQUIREMENTS,
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
   // A destroy is always two-stage (spec §10.6): it must be approved before apply.
@@ -1718,6 +1804,7 @@ test("destroy apply is rejected until the plan is approved (always two-stage, sp
     capsuleId,
     source: SOURCE,
     operation: "destroy",
+    requiredProviderRequirements: CLOUDFLARE_REQUIREMENTS,
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   });
   expect(destroyPlan.status).toEqual("waiting_approval");

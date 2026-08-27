@@ -17,6 +17,7 @@ import {
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   fixtureStateCommit,
+  providerRequirementsForFixture,
   seedCapsuleModel,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import {
@@ -96,7 +97,8 @@ async function seedUpdatable(
     bindings: [
       {
         provider: CLOUDFLARE,
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: `conn_${options.capsuleId}`,
       },
     ],
@@ -114,6 +116,8 @@ async function seedUpdatable(
     capsuleId: capsule.id,
     operation: "update",
     source: SOURCE,
+    requiredProviderRequirements:
+      providerRequirementsForFixture([CLOUDFLARE]),
     requiredProviders: [CLOUDFLARE],
   };
 }
@@ -1705,6 +1709,8 @@ test("state generation: a stale plan is rejected at apply (state_generation_mism
       capsuleId,
       operation: "update",
       source: { ...SOURCE, ref: "release-2" },
+      requiredProviderRequirements:
+        providerRequirementsForFixture([CLOUDFLARE]),
       requiredProviders: [CLOUDFLARE],
     })
   ).planRun;

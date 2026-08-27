@@ -159,6 +159,20 @@ async function seedCapsule(
     archiveRef: `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_${name}/source.tar.zst`,
     archiveDigest: ARCHIVE_DIGEST,
     archiveSizeBytes: 1024,
+    repositoryInstallMetadata: { status: "absent" },
+    repositoryManifest: { status: "absent" },
+    repositoryModules: {
+      status: "ready",
+      scopePath: ".",
+      modules: [{
+        path: ".",
+        providerPackages: [{ source: FIXTURE_CLOUDFLARE_PROVIDER }],
+        rootProviderRequirements: [{
+          source: FIXTURE_CLOUDFLARE_PROVIDER,
+          moduleLocalName: "cloudflare",
+        }],
+      }],
+    },
     fetchedByRunId: `ssr_${name}00001`,
     fetchedAt: nowIso,
   };
@@ -171,7 +185,11 @@ async function seedCapsule(
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [],
+    providerPackages: [{ source: FIXTURE_CLOUDFLARE_PROVIDER, allowed: true }],
+    rootProviderRequirements: [{
+      source: FIXTURE_CLOUDFLARE_PROVIDER,
+      moduleLocalName: "cloudflare",
+    }],
     resources: [],
     dataSources: [],
     provisioners: [],

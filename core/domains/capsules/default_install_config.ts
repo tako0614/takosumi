@@ -32,6 +32,22 @@ export function defaultCapsuleInstallConfig(
     outputAllowlist: defaultCapsuleOutputAllowlist(),
     policy: {
       repositoryInstallUx: {
+        // Runtime requirements are opt-in: repository metadata is rejected
+        // unless the operator names every generic kind this config accepts.
+        allowedRequirementKinds: [
+          "secret.generated",
+          "http.endpoint",
+          "identity.oidc",
+          "interface.consume",
+        ],
+        allowedOidcScopes: [
+          "openid",
+          "profile",
+          "email",
+          "offline_access",
+          "capsules:read",
+          "capsules:write",
+        ],
         // A repository may propose an installer-scoped launcher or MCP binding,
         // but the proposal is still compiled into the reviewed InstallConfig;
         // it never grants a Workspace-wide or operator credential.

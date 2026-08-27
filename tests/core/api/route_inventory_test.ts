@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { createApiCapabilitiesDescription } from "../../../core/api/capabilities.ts";
 import {
   capsuleAndInstallConfigSchemas,
+  capsuleSchemas,
   createTakosumiOpenApiDocument,
+  sourceSchemas,
   TAKOSUMI_OPENAPI_VERSION,
   workspaceProjectAndCapsuleRequestSchemas,
 } from "../../../core/api/openapi.ts";
@@ -116,6 +118,94 @@ test("public OpenAPI excludes retired managed-host and legacy source-less inputs
   assert.equal(serialized.includes("managedPublicHostname"), false);
   assert.equal(serialized.includes("managedPublicBaseDomain"), false);
   assert.equal(serialized.includes("operator_module"), false);
+});
+
+test("Interface OpenAPI schemas match current runtime and source-tree variants", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  const schemas = openapi.components.schemas;
+
+  assert.deepEqual(
+    schemas.InterfaceOwnerRef.properties.kind.enum,
+    ["Workspace", "Capsule"],
+  );
+  assert.deepEqual(
+    schemas.InterfaceSubjectRef.properties.kind.enum,
+    ["Principal", "ServiceAccount", "Capsule"],
+  );
+
+  assert.deepEqual(schemas.InterfaceInput.oneOf, [
+    { $ref: "#/components/schemas/InterfaceLiteralInput" },
+    { $ref: "#/components/schemas/InterfaceCapsuleOutputInput" },
+  ]);
+  assert.equal(schemas.CapsuleInterfaceBlueprintInput, undefined);
+  assert.deepEqual(
+    schemas.InterfaceMetadata.properties.materializedFrom.oneOf,
+    [
+      {
+        type: "object",
+        required: ["source", "key"],
+        properties: {
+          source: { const: "capsule_blueprint" },
+          key: { type: "string", minLength: 1 },
+        },
+        additionalProperties: false,
+      },
+      {
+        type: "object",
+        required: ["source", "descriptorName", "descriptorVersion"],
+        properties: {
+          source: { const: "portable_iac" },
+          descriptorName: { type: "string", minLength: 1 },
+          descriptorVersion: { type: "string", minLength: 1 },
+        },
+        additionalProperties: false,
+      },
+    ],
+  );
+
+  const bindingMetadata = schemas.InterfaceBinding.properties.metadata;
+  assert.deepEqual(bindingMetadata.properties.materializedFrom.oneOf, [
+    {
+      type: "object",
+      required: ["source", "interfaceKey", "key"],
+      properties: {
+        source: { const: "capsule_blueprint" },
+        interfaceKey: { type: "string", minLength: 1 },
+        key: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      required: [
+        "source",
+        "capsuleId",
+        "requirementKey",
+        "interfaceType",
+        "interfaceVersion",
+      ],
+      properties: {
+        source: { const: "capsule_required_interface" },
+        capsuleId: { type: "string", minLength: 1 },
+        requirementKey: { type: "string", minLength: 1 },
+        interfaceType: { type: "string", minLength: 1 },
+        interfaceVersion: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+  ]);
+
+  for (const retired of [
+    "InterfaceResourceOutputInput",
+    "resource_output",
+    "capsule_resource",
+    "compatibility_profile",
+  ]) {
+    assert.equal(schemas[retired], undefined, retired);
+    assert.equal(JSON.stringify(schemas).includes(retired), false, retired);
+    assert.equal(JSON.stringify(openapi).includes(retired), false, retired);
+  }
+  assert.equal(openapi.components.schemas.InterfaceResourceOutputInput, undefined);
 });
 
 test("legacy Resource Shape response schemas are not part of discovery", () => {
@@ -294,6 +384,73 @@ test("public Capsule schemas expose the closed sourceBuild contract", () => {
   });
   assert.equal(schemas.SourceBuildConfig.additionalProperties, false);
   assert.deepEqual(schemas.SourceBuildConfig.required, ["commands", "outputs"]);
+});
+
+test("compatibility providers separate reachable packages from root binding tuples", () => {
+  const schemas = capsuleSchemas();
+  const providerPackage = schemas.CapsuleProviderPackage;
+  assert.ok(providerPackage);
+  assert.deepEqual(providerPackage.required, ["source", "allowed"]);
+  assert.deepEqual(Object.keys(providerPackage.properties).sort(), [
+    "allowed",
+    "source",
+    "version",
+  ]);
+  assert.equal(providerPackage.additionalProperties, false);
+
+  const rootRequirement = schemas.CapsuleRootProviderRequirement;
+  assert.ok(rootRequirement);
+  assert.deepEqual(rootRequirement.required, ["source", "moduleLocalName"]);
+  assert.deepEqual(Object.keys(rootRequirement.properties).sort(), [
+    "childAlias",
+    "credentialRequired",
+    "moduleLocalName",
+    "source",
+    "version",
+  ]);
+  assert.equal(rootRequirement.additionalProperties, false);
+});
+
+test("install module projection separates reachable packages from root binding tuples", () => {
+  const schemas = sourceSchemas();
+  const module = schemas.SourceSnapshotInstallModule;
+  assert.ok(module);
+  assert.deepEqual(module.required, [
+    "path",
+    "providerPackages",
+    "rootProviderRequirements",
+  ]);
+  assert.deepEqual(Object.keys(module.properties).sort(), [
+    "path",
+    "providerPackages",
+    "rootProviderRequirements",
+  ]);
+  assert.deepEqual(module.properties.providerPackages.items, {
+    $ref: "#/components/schemas/RepositoryModuleProviderPackage",
+  });
+  assert.deepEqual(module.properties.rootProviderRequirements.items, {
+    $ref: "#/components/schemas/RepositoryModuleRootProviderRequirement",
+  });
+  assert.equal(module.additionalProperties, false);
+});
+
+test("source OpenAPI keeps Git scope and archive-relative module coordinates distinct", () => {
+  const schemas = sourceSchemas();
+  const sourceDescription =
+    schemas.Source.properties.defaultPath.description as string;
+  const snapshotDescription =
+    schemas.SourceSnapshot.properties.path.description as string;
+  const response = schemas.SourceSnapshotInstallModulesResponse;
+  const ready = response.oneOf[1];
+  const scopeDescription = ready.properties.scopePath.description as string;
+  const moduleDescription =
+    schemas.SourceSnapshotInstallModule.properties.path.description as string;
+
+  assert.match(sourceDescription, /Git repository subtree/u);
+  assert.match(sourceDescription, /never selects an OpenTofu module/u);
+  assert.match(snapshotDescription, /module paths are relative/u);
+  assert.match(scopeDescription, /never joined/u);
+  assert.match(moduleDescription, /relative to the SourceSnapshot archive/u);
 });
 
 test("public openapi component names do not expose internal deploy-control seams", () => {

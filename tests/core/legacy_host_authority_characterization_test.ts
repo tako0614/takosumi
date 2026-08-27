@@ -333,7 +333,7 @@ test("D1 and PostgreSQL retirement inventories preserve mixed-state guards", () 
     assert.match(idempotencySchema, new RegExp(`\\b${column}\\b`));
   }
 
-  const interfaceContract = source("contract/interfaces.ts");
+  const interfaceContract = source("contract/runtime-interfaces.ts");
   assert.match(
     interfaceContract,
     /export type InterfaceOwnerKind = "Workspace" \| "Capsule";/u,

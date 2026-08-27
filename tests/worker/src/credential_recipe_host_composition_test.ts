@@ -4,6 +4,8 @@ import {
   resolveCredentialRecipeHostComposition,
   type CredentialRecipeHostComposition,
 } from "takosumi-contract/credential-recipe-host";
+import { applyCredentialRequiredProviderSources } from "../../../deploy/platform/host_install_config_composition.ts";
+import { defaultCapsuleInstallConfig } from "../../../core/domains/capsules/default_install_config.ts";
 
 const BASE: CredentialRecipeHostComposition = {
   credentialRecipes: [
@@ -104,6 +106,108 @@ describe("Credential Recipe host composition", () => {
     expect(Object.isFrozen(resolved)).toBe(true);
     expect(Object.isFrozen(resolved.credentialRecipes)).toBe(true);
     expect(Object.isFrozen(resolved.credentialRecipeDrivers)).toBe(true);
+  });
+
+  test("merges explicit credential-required provider sources exactly once and sorted", () => {
+    const host = {
+      ...contribution(),
+      credentialRequiredProviderSources: [
+        "registry.example.com/acme/zeta",
+        "registry.example.com/acme/alpha",
+      ],
+    };
+    const resolved = resolveCredentialRecipeHostComposition(
+      host,
+      {
+        ...BASE,
+        credentialRequiredProviderSources: [
+          "registry.example.com/acme/zeta",
+          "registry.opentofu.org/hashicorp/aws",
+        ],
+      },
+    );
+
+    expect(resolved.credentialRequiredProviderSources).toEqual([
+      "registry.example.com/acme/alpha",
+      "registry.example.com/acme/zeta",
+      "registry.opentofu.org/hashicorp/aws",
+    ]);
+  });
+
+  test("rejects wildcard or non-canonical credential-required provider sources", () => {
+    for (const value of [
+      ["*"],
+      ["registry.example.com/acme/provider/extra"],
+      ["Registry.example.com/acme/provider"],
+      ["acme/provider"],
+    ]) {
+      expect(() =>
+        resolveCredentialRecipeHostComposition(
+          {
+            ...contribution(),
+            credentialRequiredProviderSources: value,
+          } as never,
+          BASE,
+        ),
+      ).toThrow(/credentialRequiredProviderSources/);
+    }
+  });
+
+  test("does not infer credential requirements from recipes or connections", () => {
+    const resolved = resolveCredentialRecipeHostComposition(
+      contribution(),
+      BASE,
+    );
+
+    expect(resolved.credentialRequiredProviderSources).toBeUndefined();
+  });
+
+  test("overlays explicit sources on the generic default while preserving host policy", () => {
+    const base = defaultCapsuleInstallConfig();
+    const existing = {
+      ...base,
+      policy: {
+        ...base.policy,
+        allowedProvisionerTypes: ["local-exec"],
+        providerCredentials: {
+          requiredProviders: ["registry.example.com/acme/existing"],
+        },
+      },
+    };
+    const composed = applyCredentialRequiredProviderSources(
+      [existing],
+      [
+        "registry.opentofu.org/cloudflare/cloudflare",
+        "registry.example.com/acme/new",
+        "registry.opentofu.org/cloudflare/cloudflare",
+      ],
+    );
+
+    expect(composed[0]).toMatchObject({
+      id: "cfg-default-opentofu-capsule",
+      policy: {
+        allowedProvisionerTypes: ["local-exec"],
+        providerCredentials: {
+          requiredProviders: [
+            "registry.example.com/acme/existing",
+            "registry.example.com/acme/new",
+            "registry.opentofu.org/cloudflare/cloudflare",
+          ],
+        },
+        repositoryInstallUx: base.policy.repositoryInstallUx,
+      },
+    });
+  });
+
+  test("adds the generic default only for an explicit source authority", () => {
+    const composed = applyCredentialRequiredProviderSources([], [
+      "registry.example.com/acme/provider",
+    ]);
+
+    expect(composed).toHaveLength(1);
+    expect(composed[0]?.policy.providerCredentials).toEqual({
+      requiredProviders: ["registry.example.com/acme/provider"],
+    });
   });
 
   test("fails closed on recipe/driver collisions", () => {

@@ -96,12 +96,15 @@ WORKDIR /app
 # repo source (or the Worker browser bundle) is copied into the image.
 COPY contract/provider-env-rules.ts ./contract/provider-env-rules.ts
 COPY contract/provider-configurations.ts ./contract/provider-configurations.ts
+COPY contract/api-surface.ts ./contract/api-surface.ts
+COPY contract/sources.ts ./contract/sources.ts
 COPY contract/repository-manifest.ts ./contract/repository-manifest.ts
 COPY contract/plan-scope.ts ./contract/plan-scope.ts
 COPY contract/redaction.ts ./contract/redaction.ts
 COPY contract/types.ts ./contract/types.ts
 COPY contract/reference/ip-classification.ts ./contract/reference/ip-classification.ts
 COPY contract/reference/host-blocklist.ts ./contract/reference/host-blocklist.ts
+COPY lib/opentofu-configuration/src/mod.ts ./lib/opentofu-configuration/src/mod.ts
 COPY runner/entrypoint.ts ./runner/entrypoint.ts
 # entrypoint.ts is a thin re-export/server shell; the runner implementation
 # lives in runner/lib/*.ts (P3 god-file split). These MUST be copied or the
@@ -110,7 +113,7 @@ COPY runner/lib/ ./runner/lib/
 COPY runner/start.sh ./runner/start.sh
 # Sealed/private source checkouts may have owner-only source modes. COPY keeps
 # those modes, so normalize only the immutable runtime closure before USER bun.
-RUN chmod -R a+rX ./contract ./runner \
+RUN chmod -R a+rX ./contract ./lib ./runner \
     && chmod 0755 ./runner/start.sh
 
 # Provider/module code is untrusted workload input. The reference runner must

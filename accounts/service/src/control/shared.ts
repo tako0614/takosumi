@@ -311,7 +311,6 @@ export async function publicCompatibilityReportResponse(
   return {
     report: {
       ...report,
-      providers: report.providers,
       ...(providerResolutions ? { providerResolutions } : {}),
     },
     ...(response.run ? { run: await publicRun(operations, response.run) } : {}),

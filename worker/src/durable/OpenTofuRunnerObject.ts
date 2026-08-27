@@ -68,7 +68,6 @@ type RunnerFailurePhase =
   | "backup"
   | "release"
   | "stable_semver_tag"
-  | "source_snapshot_file"
   | "compatibility_check";
 const RUNNER_R2_LOG_REASON = Object.freeze({
   putRetryable: "r2_put_retryable",
@@ -1344,7 +1343,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
     }
     const providerExecutionFailed =
-      envelope.action === "apply" &&
+      (envelope.action === "apply" || envelope.action === "destroy") &&
       !runnerResponse.ok &&
       runnerProviderExecutionFailed(
         await readJsonObject(
@@ -1783,7 +1782,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           this.#artifactLimits.runnerResponse,
         );
         return jsonResponse(
-          failedProviderExecutionPayload(payload, "unavailable"),
+          failedProviderExecutionPayload(
+            payload,
+            action,
+            "unavailable",
+          ),
           runnerResponse.status,
         );
       }
@@ -1887,7 +1890,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     };
     return jsonResponse(
       providerExecutionFailed
-        ? failedProviderExecutionPayload(payload, "persisted", persistedState)
+        ? failedProviderExecutionPayload(
+            payload,
+            action,
+            "persisted",
+            persistedState,
+          )
         : {
             ...payload,
             ...(action === "apply" ? { outputs: payload.outputs ?? {} } : {}),
@@ -2026,11 +2034,6 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       object.customMetadata?.["takosumi-raw-output-ref"];
     const providerExecutionFailed =
       object.customMetadata?.["takosumi-provider-execution"] === "failed";
-    if (providerExecutionFailed && action !== "apply") {
-      throw new Error(
-        "completed failed provider state belongs to an unsupported action",
-      );
-    }
     if (action === "destroy" && recordedRawOutputRef) {
       throw new Error(
         "completed destroy target unexpectedly records raw output authority",
@@ -2089,6 +2092,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
                 }
               : {}),
           },
+          action,
           "persisted",
           state,
         ),
@@ -4575,6 +4579,7 @@ function providerFailureErrorCode(
 
 function failedProviderExecutionPayload(
   payload: Record<string, unknown>,
+  action: "apply" | "destroy",
   statePersistence: "persisted" | "unavailable",
   state?: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -4583,7 +4588,7 @@ function failedProviderExecutionPayload(
   const detail = normalizedRunnerExecutionFailureDetail(payload, errorCode);
   return {
     status: "failed",
-    phase: "apply",
+    phase: action,
     errorCode,
     providerExecutionFailure: {
       kind: "provider_execution_failed",
@@ -4806,7 +4811,6 @@ function runnerFailurePhase(phase: string | undefined): RunnerFailurePhase {
     case "backup":
     case "release":
     case "stable_semver_tag":
-    case "source_snapshot_file":
     case "compatibility_check":
       return phase;
     default:

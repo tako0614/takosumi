@@ -30,9 +30,10 @@ describe("/new Provider Connections return context", () => {
 
   test("Provider choices come only from the compatibility report", () => {
     expect(install).toContain("rowsFromCompatibility(result)");
-    expect(install).toContain("result.providers");
+    expect(install).toContain("result.rootProviderRequirements");
+    expect(install).not.toContain("result.providerPackages");
     expect(install).toContain(
-      "provider.allowed && provider.credentialRequired === true",
+      "provider.credentialRequired === true",
     );
     expect(install).not.toContain("rootModuleVariables.map");
     expect(install).not.toContain("resources.map");

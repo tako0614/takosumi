@@ -77,6 +77,8 @@ import type {
   SecurityFinding,
 } from "takosumi-contract/security";
 import type {
+  CommitSourceSyncSuccessInput,
+  CommitSourceSyncSuccessResult,
   CommitRunStateInput,
   CommitRunStateResult,
   CommitRestoredStateInput,
@@ -102,6 +104,7 @@ import type {
   TransitionRunResult,
 } from "./store.ts";
 import {
+  assertSourceSyncSuccessCommit,
   boundedActivityWorkspaceIds,
   clampActivityLimit,
   clampRecoverableOpenTofuRunListLimit,
@@ -114,8 +117,12 @@ import {
   isRecoverableOpenTofuRunRecord,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
+  parseStoredCapsuleCompatibilityProviderGraph,
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
   runtimeSecretRetirementDispatchAttempt,
+  sourceSnapshotsExactlyMatch,
+  storedCapsuleCompatibilityProviderGraph,
+  SourceSnapshotConflictError,
 } from "./store.ts";
 import {
   artifactRecordFromRow,
@@ -923,6 +930,31 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           : input.kind === "source_sync"
             ? await this.getSourceSyncRun(input.id)
             : await this.getBackupRun(input.id);
+    return { won: false, ...(current ? { run: current } : {}) };
+  }
+
+  async commitSourceSyncSuccess(
+    input: CommitSourceSyncSuccessInput,
+  ): Promise<CommitSourceSyncSuccessResult> {
+    assertSourceSyncSuccessCommit(input);
+    const snapshot = normalizeSourceSnapshotRecord(input.snapshot);
+    const won = await this.#client.transaction(
+      async (transaction: SqlTransaction) => {
+        const db = this.#drizzleForClient(transaction);
+        const terminalCommitted = await pgUpdateTerminalRunWithLease(
+          db,
+          RUN_KIND_SOURCE_SYNC,
+          [RUN_KIND_SOURCE_SYNC],
+          input.terminalRun,
+          input.leaseToken,
+        );
+        if (!terminalCommitted) return false;
+        await pgInsertOrAdoptSourceSnapshot(db, snapshot);
+        return true;
+      },
+    );
+    if (won) return { won: true, run: input.terminalRun };
+    const current = await this.getSourceSyncRun(input.terminalRun.id);
     return { won: false, ...(current ? { run: current } : {}) };
   }
 
@@ -3035,7 +3067,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       modulePath: normalized.modulePath ?? null,
       level: normalized.level,
       findingsJson: normalized.findings,
-      providersJson: normalized.providers,
+      providersJson: storedCapsuleCompatibilityProviderGraph(normalized),
       resourcesJson: normalized.resources,
       dataSourcesJson: normalized.dataSources,
       provisionersJson: normalized.provisioners,
@@ -3056,6 +3088,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       .limit(1);
     const row = rows[0];
     if (!row) return undefined;
+    const providerGraph = parseStoredCapsuleCompatibilityProviderGraph(
+      parseJson(row.providersJson),
+    );
     return {
       id: row.id,
       sourceId: compatibilityReportSourceId(row.sourceId),
@@ -3066,9 +3101,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       findings: parseJson(
         row.findingsJson,
       ) as CapsuleCompatibilityReport["findings"],
-      providers: parseJson(
-        row.providersJson,
-      ) as CapsuleCompatibilityReport["providers"],
+      ...providerGraph,
       resources: parseJson(
         row.resourcesJson,
       ) as CapsuleCompatibilityReport["resources"],
@@ -3125,6 +3158,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       .limit(1);
     const row = rows[0];
     if (!row) return undefined;
+    const providerGraph = parseStoredCapsuleCompatibilityProviderGraph(
+      parseJson(row.providersJson),
+    );
     return {
       id: row.id,
       sourceId: compatibilityReportSourceId(row.sourceId),
@@ -3135,9 +3171,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       findings: parseJson(
         row.findingsJson,
       ) as CapsuleCompatibilityReport["findings"],
-      providers: parseJson(
-        row.providersJson,
-      ) as CapsuleCompatibilityReport["providers"],
+      ...providerGraph,
       resources: parseJson(
         row.resourcesJson,
       ) as CapsuleCompatibilityReport["resources"],
@@ -4102,6 +4136,34 @@ async function pgUpdateTerminalRunWithLease(
     )
     .returning({ id: pgSchema.runs.id });
   return rows.length > 0;
+}
+
+async function pgInsertOrAdoptSourceSnapshot(
+  db: PgRemoteDatabase<typeof pgSchema>,
+  snapshot: SourceSnapshot,
+): Promise<void> {
+  const inserted = await db
+    .insert(pgSchema.sourceSnapshots)
+    .values({
+      id: snapshot.id,
+      sourceId: snapshot.sourceId,
+      snapshotJson: snapshot,
+      fetchedAt: snapshot.fetchedAt,
+    })
+    .onConflictDoNothing({ target: pgSchema.sourceSnapshots.id })
+    .returning({ id: pgSchema.sourceSnapshots.id });
+  if (inserted.length > 0) return;
+  const rows = await db
+    .select({ json: pgSchema.sourceSnapshots.snapshotJson })
+    .from(pgSchema.sourceSnapshots)
+    .where(eq(pgSchema.sourceSnapshots.id, snapshot.id))
+    .limit(1);
+  const existing = normalizeOptionalSourceSnapshotRecord(
+    parseRow(rows[0]) as SourceSnapshot | undefined,
+  );
+  if (!existing || !sourceSnapshotsExactlyMatch(existing, snapshot)) {
+    throw new SourceSnapshotConflictError(snapshot.id);
+  }
 }
 
 async function pgUpsertStateVersion(

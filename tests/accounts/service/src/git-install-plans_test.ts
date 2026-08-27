@@ -7,8 +7,13 @@ import { defaultCapsuleInstallConfig } from "../../../../core/domains/capsules/d
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { InMemoryGitInstallPlanStore } from "../../../../core/domains/install-plans/store.ts";
 import type { CapsuleCompatibilityReport } from "../../../../contract/capsules.ts";
+import type {
+  ProviderBindingSet,
+  ProviderConnection,
+} from "../../../../contract/connections.ts";
 import type { Run } from "../../../../contract/runs.ts";
 import type {
+  RepositoryModuleRootProviderRequirement,
   Source,
   SourceSnapshot,
   SourceSyncRun,
@@ -17,6 +22,7 @@ import type {
   Capsule,
   InstallConfig,
 } from "../../../../contract/install-configs.ts";
+import type { GitInstallPlanProviderBindingRequest } from "../../../../contract/install-plans.ts";
 
 const WORKSPACE = {
   id: "ws_install",
@@ -33,7 +39,7 @@ test("Accounts Git install plan explicitly reconciles to one reviewable canonica
   const first = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans",
     "POST",
-    createBody(),
+    createBody({ providerBindings: [] }),
     { "idempotency-key": "install-exactly-once" },
   );
   expect(first.status).toBe(201);
@@ -52,23 +58,14 @@ test("Accounts Git install plan explicitly reconciles to one reviewable canonica
   const replay = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans",
     "POST",
-    { ...createBody(), options: {} },
+    createBody({ providerBindings: [] }),
     { "idempotency-key": "install-exactly-once" },
   );
   expect(replay.status).toBe(200);
   expect((await replay.json()).installPlan.id).toBe(planId);
-
-  const emptyBindingReplay = await fixture.request(
-    "/api/v1/workspaces/ws_install/install-plans",
-    "POST",
-    {
-      ...createBody(),
-      options: { providerBindingConnectionIds: {} },
-    },
-    { "idempotency-key": "install-exactly-once" },
-  );
-  expect(emptyBindingReplay.status).toBe(200);
-  expect((await emptyBindingReplay.json()).installPlan.id).toBe(planId);
+  expect((await fixture.planStore.get(planId))?.options).toEqual({
+    providerBindings: [],
+  });
 
   const conflict = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans",
@@ -107,7 +104,7 @@ test("Accounts Git install plan explicitly reconciles to one reviewable canonica
       sourceId: "src_one",
       sourceSyncRunId: "ssr_one",
       sourceSnapshotId: "snap_one",
-      installConfigId: "cfg-default-opentofu-capsule",
+      installConfigId: expect.stringMatching(/^icfg_[0-9a-f]{16}$/u),
       capsuleId: "cap_one",
       planRunId: expect.stringMatching(/^plan_[A-Za-z0-9]{16}$/u),
     },
@@ -117,6 +114,7 @@ test("Accounts Git install plan explicitly reconciles to one reviewable canonica
       run: expect.stringMatching(/^\/api\/v1\/runs\/plan_/u),
     },
   });
+  expect(reviewable.installPlan.installModulePath).toBe(".");
   expect(reviewable.links.reconcile).toBeUndefined();
   expect(reviewable.links.apply).toBeUndefined();
   expect(fixture.counts).toEqual({ source: 1, sync: 1, capsule: 1, plan: 1 });
@@ -153,7 +151,43 @@ test("Git install plan rejects variable values and secret-shaped Git URLs", asyn
     {
       ...createBody(),
       options: {
-        providerBindingConnectionIds: { aws: "raw-super-secret" },
+        providerBindings: [
+          {
+            provider: "registry.opentofu.org/hashicorp/aws",
+            moduleLocalName: "aws",
+            connectionId: "raw-super-secret",
+          },
+        ],
+      },
+    },
+    {
+      ...createBody(),
+      options: {
+        providerBindings: [
+          {
+            provider: "registry.opentofu.org/hashicorp/aws",
+            moduleLocalName: "aws",
+            connectionId: "conn_aaaaaaaa",
+          },
+          {
+            provider: "registry.opentofu.org/hashicorp/aws",
+            moduleLocalName: "aws",
+            connectionId: "conn_aaaaaaaa",
+          },
+        ],
+      },
+    },
+    {
+      ...createBody(),
+      options: {
+        providerBindings: [
+          {
+            provider: "registry.opentofu.org/hashicorp/aws",
+            moduleLocalName: "aws",
+            alias: "legacy",
+            connectionId: "conn_aaaaaaaa",
+          },
+        ],
       },
     },
     createBody({ sourceUrl: "https://github.com/takos/example?token=secret" }),
@@ -173,6 +207,349 @@ test("Git install plan rejects variable values and secret-shaped Git URLs", asyn
     expect(payload).not.toContain("raw-super-secret");
   }
   expect(await fixture.planStore.get("missing")).toBeUndefined();
+});
+
+test("Git install plan keeps Source subtree and exact module selection distinct", async () => {
+  const rootProviderRequirements: readonly RepositoryModuleRootProviderRequirement[] = [
+    {
+      source: "registry.opentofu.org/hashicorp/aws",
+      moduleLocalName: "aws",
+    },
+  ];
+  const fixture = installFixture({
+    repositoryModules: {
+      status: "ready",
+      scopePath: "infra",
+      modules: [
+        {
+          path: "deploy/selected",
+          providerPackages: [
+            { source: "registry.opentofu.org/hashicorp/aws" },
+          ],
+          rootProviderRequirements,
+        },
+        { path: "deploy/other", providerPackages: [], rootProviderRequirements: [] },
+      ],
+    },
+  });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody({ sourcePath: "infra", modulePath: "deploy/selected" }),
+    { "idempotency-key": "nested-module-selection" },
+  );
+  expect(created.status).toBe(201);
+  const planId = (await created.json()).installPlan.id as string;
+  expect((await fixture.planStore.get(planId))?.options).toEqual({
+    modulePath: "deploy/selected",
+  });
+
+  await fixture.reconcile(planId); // Source
+  await fixture.reconcile(planId); // Source sync
+  fixture.succeedSourceSync();
+  await fixture.reconcile(planId); // snapshot -> compiling
+  await fixture.reconcile(planId); // materialized selected module config
+  await fixture.reconcile(planId); // Capsule created
+  await fixture.reconcile(planId); // Capsule -> planning
+  const reviewable = await fixture.reconcile(planId); // canonical Plan Run
+  expect((await reviewable.json()).installPlan).toMatchObject({
+    phase: "reviewable",
+    installModulePath: "deploy/selected",
+  });
+  const persisted = await fixture.planStore.get(planId);
+  expect(persisted?.source.path).toBe("infra");
+  expect(
+    fixture.getInstallConfig(persisted?.installConfigId ?? "")?.modulePath,
+  ).toBe("deploy/selected");
+});
+
+test("Git install plan requires an explicit module for multiple scanned roots", async () => {
+  const fixture = installFixture({
+    repositoryModules: {
+      status: "ready",
+      scopePath: "infra",
+      modules: [
+        {
+          path: "deploy/selected",
+          providerPackages: [],
+          rootProviderRequirements: [],
+        },
+        {
+          path: "deploy/other",
+          providerPackages: [],
+          rootProviderRequirements: [],
+        },
+      ],
+    },
+  });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody({ sourcePath: "infra" }),
+    { "idempotency-key": "nested-module-selection-required" },
+  );
+  expect(created.status).toBe(201);
+  const planId = (await created.json()).installPlan.id as string;
+  await fixture.reconcile(planId); // Source
+  await fixture.reconcile(planId); // Source sync
+  fixture.succeedSourceSync();
+  await fixture.reconcile(planId); // snapshot -> compiling
+  const failed = await fixture.reconcile(planId); // module resolution
+  expect((await failed.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: {
+      code: "repository_install_module_selection_required",
+    },
+  });
+});
+
+test("Git install plan rejects non-canonical and undiscovered module hints", async () => {
+  const malformedFixture = installFixture({
+    repositoryModules: {
+      status: "ready",
+      scopePath: ".",
+      modules: [
+        {
+          path: "deploy/selected",
+          providerPackages: [],
+          rootProviderRequirements: [],
+        },
+      ],
+    },
+  });
+  const malformed = await malformedFixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody({ modulePath: "./deploy/selected" }),
+    { "idempotency-key": "malformed-module-selection" },
+  );
+  expect(malformed.status).toBe(400);
+  expect(malformedFixture.mutationCount()).toBe(0);
+
+  const unknownFixture = installFixture({
+    repositoryModules: {
+      status: "ready",
+      scopePath: ".",
+      modules: [
+        {
+          path: "deploy/selected",
+          providerPackages: [],
+          rootProviderRequirements: [],
+        },
+      ],
+    },
+  });
+  const unknown = await unknownFixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody({ modulePath: "deploy/missing" }),
+    { "idempotency-key": "unknown-module-selection" },
+  );
+  expect(unknown.status).toBe(201);
+  const unknownPlanId = (await unknown.json()).installPlan.id as string;
+  await unknownFixture.reconcile(unknownPlanId); // Source
+  await unknownFixture.reconcile(unknownPlanId); // Source sync
+  unknownFixture.succeedSourceSync();
+  await unknownFixture.reconcile(unknownPlanId); // snapshot -> compiling
+  const failed = await unknownFixture.reconcile(unknownPlanId);
+  expect((await failed.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: { code: "repository_install_ux_module_missing" },
+  });
+});
+
+test("Git install plan continues with a scanner-selected module when optional manifest is invalid", async () => {
+  const fixture = installFixture({
+    repositoryManifest: {
+      status: "invalid",
+      reason: "invalid_document",
+      diagnostic: "never expose parser details",
+    },
+    repositoryModules: {
+      status: "ready",
+      scopePath: ".",
+      modules: [{ path: ".", providerPackages: [], rootProviderRequirements: [] }],
+    },
+  });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "invalid-optional-manifest" },
+  );
+  expect(created.status).toBe(201);
+  const planId = (await created.json()).installPlan.id as string;
+  await fixture.reconcile(planId); // Source
+  await fixture.reconcile(planId); // Source sync
+  fixture.succeedSourceSync();
+  for (let step = 0; step < 5; step += 1) {
+    await fixture.reconcile(planId);
+  }
+  const reviewable = await fixture.planStore.get(planId);
+  expect(reviewable?.phase).toBe("reviewable");
+  expect(reviewable?.diagnostic).toBeUndefined();
+  expect(reviewable?.installModulePath).toBe(".");
+});
+
+test("Git install plan fails closed when host policy requires an invalid manifest", async () => {
+  const fixture = installFixture({
+    installConfigs: [
+      {
+        ...defaultCapsuleInstallConfig(),
+        policy: {
+          repositoryInstallUx: {
+            requiredManifestApiVersion: "takosumi.com/v2.2",
+          },
+        },
+      },
+    ],
+    repositoryManifest: {
+      status: "invalid",
+      reason: "invalid_document",
+    },
+    repositoryModules: {
+      status: "ready",
+      scopePath: ".",
+      modules: [{ path: ".", providerPackages: [], rootProviderRequirements: [] }],
+    },
+  });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "required-invalid-manifest" },
+  );
+  expect(created.status).toBe(201);
+  const planId = (await created.json()).installPlan.id as string;
+  await fixture.reconcile(planId); // Source
+  await fixture.reconcile(planId); // Source sync
+  fixture.succeedSourceSync();
+  await fixture.reconcile(planId); // snapshot -> compiling
+  const failed = await fixture.reconcile(planId);
+  expect((await failed.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: {
+      code: "repository_install_ux_manifest_api_version_required",
+    },
+  });
+});
+
+test("Git install plan preserves exact provider local and alias tuples through reconcile", async () => {
+  const provider = "registry.opentofu.org/hashicorp/aws";
+  const providerBindings: readonly GitInstallPlanProviderBindingRequest[] = [
+    {
+      provider,
+      moduleLocalName: "aws",
+      childAlias: "secondary",
+      connectionId: "conn_secondary01",
+    },
+    {
+      provider,
+      moduleLocalName: "alternate",
+      childAlias: "secondary",
+      connectionId: "conn_alternate01",
+    },
+    {
+      provider,
+      moduleLocalName: "aws",
+      connectionId: "conn_default01",
+    },
+  ];
+  const fixture = installFixture({
+    providerConnections: [
+      providerConnection(provider, "conn_default01"),
+      providerConnection(provider, "conn_secondary01"),
+      providerConnection(provider, "conn_alternate01"),
+    ],
+  });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody({ providerBindings }),
+    { "idempotency-key": "provider-binding-tuples" },
+  );
+  expect(created.status).toBe(201);
+  const planId = (await created.json()).installPlan.id as string;
+  expect((await fixture.planStore.get(planId))?.options).toEqual({
+    providerBindings: [
+      {
+        provider,
+        moduleLocalName: "alternate",
+        childAlias: "secondary",
+        connectionId: "conn_alternate01",
+      },
+      {
+        provider,
+        moduleLocalName: "aws",
+        connectionId: "conn_default01",
+      },
+      {
+        provider,
+        moduleLocalName: "aws",
+        childAlias: "secondary",
+        connectionId: "conn_secondary01",
+      },
+    ],
+  });
+
+  await fixture.reconcile(planId); // Source
+  await fixture.reconcile(planId); // Source sync
+  fixture.succeedSourceSync();
+  for (let step = 0; step < 6; step += 1) {
+    await fixture.reconcile(planId);
+  }
+  const reviewable = await fixture.planStore.get(planId);
+  expect(reviewable?.phase).toBe("reviewable");
+  expect(
+    fixture.getProviderBindingSet("cap_one", "production")?.bindings,
+  ).toEqual([
+    {
+      provider,
+      moduleLocalName: "alternate",
+      childAlias: "secondary",
+      rootAlias: "secondary",
+      connectionId: "conn_alternate01",
+    },
+    {
+      provider,
+      moduleLocalName: "aws",
+      connectionId: "conn_default01",
+    },
+    {
+      provider,
+      moduleLocalName: "aws",
+      childAlias: "secondary",
+      rootAlias: "secondary",
+      connectionId: "conn_secondary01",
+    },
+  ]);
+
+  // Canonical request ordering makes an order-only retry the same immutable
+  // request, while a changed alias is a distinct request identity.
+  const reordered = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody({ providerBindings: [...providerBindings].reverse() }),
+    { "idempotency-key": "provider-binding-tuples" },
+  );
+  expect(reordered.status).toBe(200);
+  expect((await reordered.json()).installPlan.id).toBe(planId);
+  const changedAlias = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody({
+      providerBindings: providerBindings.map((binding) =>
+        binding.childAlias === "secondary"
+          ? { ...binding, childAlias: "tertiary" }
+          : binding,
+      ),
+    }),
+    { "idempotency-key": "provider-binding-tuples-alias-change" },
+  );
+  expect(changedAlias.status).toBe(201);
+  expect((await changedAlias.json()).installPlan.requestDigest).not.toBe(
+    reviewable?.requestDigest,
+  );
 });
 
 test("lost acknowledgements recover exact Source, sync, Capsule, and Plan Run without duplicates", async () => {
@@ -313,143 +690,25 @@ test("lost compatibility acknowledgement adopts the exact persisted Run and repo
   expect(fixture.installConfigMutationCount).toBe(1);
 });
 
-test("requested deployment profile cannot adopt a derived config from another profile", async () => {
-  const managed = deploymentProfileConfig({
-    id: "icfg_profile_managed",
-    key: "managed-v1",
-    modulePath: "deploy/managed",
-    recommended: true,
-  });
-  const byoc = deploymentProfileConfig({
-    id: "icfg_profile_byoc",
-    key: "byoc-v1",
-    modulePath: "deploy/byoc",
-    recommended: false,
-  });
-  const wrongDerived: InstallConfig = {
-    ...managed,
-    id: "icfg_wrong_profile",
-    workspaceId: WORKSPACE.id,
-    name: "example-repository-install",
-    internal: {
-      reason: "per_install_overrides",
-      sourceSnapshotId: "snap_one",
-      repositoryInstallUxDigest: `sha256:${"d".repeat(64)}`,
-    },
-  };
-  const fixture = installFixture({
-    repositoryManifest: repositoryManifest([
-      "deploy/managed",
-      "deploy/byoc",
-    ]),
-    installConfigs: [managed, byoc, wrongDerived],
-  });
-  const created = await fixture.request(
+test("Git install plans reject source-specific deployment profile selectors", async () => {
+  const fixture = installFixture();
+  const response = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans",
     "POST",
     {
       ...createBody(),
       options: { deploymentProfileKey: "byoc-v1" },
     },
-    { "idempotency-key": "profile-isolated-recovery" },
+    { "idempotency-key": "profile-selector-rejected" },
   );
-  const planId = (await created.json()).installPlan.id as string;
-
-  await fixture.reconcile(planId);
-  await fixture.reconcile(planId);
-  fixture.succeedSourceSync();
-  await fixture.reconcile(planId);
-  const prepared = await fixture.reconcile(planId);
-  expect((await prepared.json()).installPlan).toMatchObject({
-    phase: "analyzing_compatibility",
-    installConfigBaseId: byoc.id,
-    installModulePath: "deploy/byoc",
-  });
-
-  const compiled = await fixture.reconcile(planId);
-  const compiledPlan = (await compiled.json()).installPlan;
-  expect(compiledPlan.phase).toBe("creating_capsule");
-  expect(compiledPlan.installConfigId).not.toBe(wrongDerived.id);
-  expect(fixture.getInstallConfig(compiledPlan.installConfigId)).toMatchObject({
-    modulePath: "deploy/byoc",
-    workspaceId: WORKSPACE.id,
-  });
-});
-
-test("unavailable deployment profile fails before any near-match config recovery", async () => {
-  const managed = deploymentProfileConfig({
-    id: "icfg_only_managed",
-    key: "managed-v1",
-    modulePath: "deploy/managed",
-    recommended: true,
-  });
-  const wrongDerived: InstallConfig = {
-    ...managed,
-    id: "icfg_near_match",
-    workspaceId: WORKSPACE.id,
-    name: "example-repository-install",
-    internal: {
-      reason: "per_install_overrides",
-      sourceSnapshotId: "snap_one",
-      repositoryInstallUxDigest: `sha256:${"d".repeat(64)}`,
-    },
-  };
-  const fixture = installFixture({
-    repositoryManifest: repositoryManifest(["deploy/managed"]),
-    installConfigs: [managed, wrongDerived],
-  });
-  const created = await fixture.request(
-    "/api/v1/workspaces/ws_install/install-plans",
-    "POST",
-    {
-      ...createBody(),
-      options: { deploymentProfileKey: "unavailable-v1" },
-    },
-    { "idempotency-key": "profile-unavailable-near-match" },
-  );
-  const planId = (await created.json()).installPlan.id as string;
-
-  await fixture.reconcile(planId);
-  await fixture.reconcile(planId);
-  fixture.succeedSourceSync();
-  await fixture.reconcile(planId);
-  const failed = await fixture.reconcile(planId);
-  expect((await failed.json()).installPlan).toMatchObject({
-    phase: "failed",
-    diagnostic: {
-      code: "repository_install_ux_deployment_profile_invalid",
+  expect(response.status).toBe(400);
+  const payload = await response.json();
+  expect(payload).toMatchObject({
+    error: {
+      code: "invalid_request",
     },
   });
-  expect(fixture.counts.capsule).toBe(0);
-  expect(fixture.compatibilityMutationCount).toBe(0);
-});
-
-test("terminal install-plan diagnostics are bounded and secret-free", async () => {
-  const fixture = installFixture();
-  const created = await fixture.request(
-    "/api/v1/workspaces/ws_install/install-plans",
-    "POST",
-    {
-      ...createBody(),
-      options: { deploymentProfileKey: "unavailable-profile" },
-    },
-    { "idempotency-key": "bounded-diagnostic" },
-  );
-  const planId = (await created.json()).installPlan.id as string;
-  await fixture.reconcile(planId); // Source
-  await fixture.reconcile(planId); // sync
-  fixture.succeedSourceSync();
-  await fixture.reconcile(planId); // snapshot
-  const failed = await fixture.reconcile(planId); // profile validation
-  const payload = await failed.json();
-  expect(payload.installPlan.phase).toBe("failed");
-  expect(payload.nextAction).toBe("none");
-  expect(payload.links.reconcile).toBeUndefined();
-  expect(payload.installPlan.diagnostic.code.length).toBeLessThanOrEqual(64);
-  expect(payload.installPlan.diagnostic.message.length).toBeLessThanOrEqual(
-    256,
-  );
-  expect(JSON.stringify(payload)).not.toContain("never-record-this-hook-secret");
+  expect(fixture.mutationCount()).toBe(0);
 });
 
 type LostAckMutation =
@@ -464,7 +723,9 @@ function installFixture(
     readonly loseAckOnce?: readonly LostAckMutation[];
     readonly retryablePlanErrorOnce?: boolean;
     readonly repositoryManifest?: SourceSnapshot["repositoryManifest"];
+    readonly repositoryModules?: SourceSnapshot["repositoryModules"];
     readonly installConfigs?: readonly InstallConfig[];
+    readonly providerConnections?: readonly ProviderConnection[];
   } = {},
 ) {
   const planStore = new InMemoryGitInstallPlanStore();
@@ -476,6 +737,7 @@ function installFixture(
   const capsules: Capsule[] = [];
   const runs = new Map<string, Run>();
   const compatibilityReports = new Map<string, CapsuleCompatibilityReport>();
+  const providerBindingSets = new Map<string, ProviderBindingSet>();
   const installConfigs = new Map<string, InstallConfig>([
     ["cfg-default-opentofu-capsule", defaultCapsuleInstallConfig()],
     ...(options.installConfigs ?? []).map(
@@ -500,6 +762,9 @@ function installFixture(
     members: {
       getMember: async () => undefined,
       listMembers: async () => [],
+    },
+    connections: {
+      listProviderConnections: async () => options.providerConnections ?? [],
     },
     listSources: async () => ({ sources }),
     createSource: async (input: {
@@ -691,8 +956,18 @@ function installFixture(
         lose("capsule");
         return capsule;
       },
-      getProviderBindingSetByCapsule: async () => undefined,
-      putProviderBindingSet: async (value: unknown) => value,
+      getProviderBindingSetByCapsule: async (
+        capsuleId: string,
+        environment: string,
+      ) => providerBindingSets.get(`${capsuleId}:${environment}`),
+      putProviderBindingSet: async (value: unknown) => {
+        const providerBindingSet = value as ProviderBindingSet;
+        providerBindingSets.set(
+          `${providerBindingSet.capsuleId}:${providerBindingSet.environment}`,
+          providerBindingSet,
+        );
+        return providerBindingSet;
+      },
     },
     getRun: async (id: string) => {
       const run = runs.get(id);
@@ -766,6 +1041,8 @@ function installFixture(
         )!,
       })),
     getInstallConfig: (id: string) => installConfigs.get(id),
+    getProviderBindingSet: (capsuleId: string, environment: string) =>
+      providerBindingSets.get(`${capsuleId}:${environment}`),
     get approvalCalls() {
       return approvalCalls;
     },
@@ -776,6 +1053,7 @@ function installFixture(
       counts.source + counts.sync + counts.capsule + counts.plan,
     succeedSourceSync() {
       const current = syncRuns.get("ssr_one")!;
+      const sourcePath = sources[0]?.defaultPath ?? ".";
       syncRuns.set("ssr_one", {
         ...current,
         status: "succeeded",
@@ -794,12 +1072,23 @@ function installFixture(
           url: "https://github.com/takos/example",
           ref: "main",
           resolvedCommit: "a".repeat(40),
-          path: ".",
+          path: sourcePath,
           archiveRef: "source-archive/snap_one",
           archiveDigest: `sha256:${"b".repeat(64)}`,
           archiveSizeBytes: 42,
           repositoryManifest: options.repositoryManifest ?? {
             status: "absent",
+          },
+          repositoryModules: options.repositoryModules ?? {
+            status: "ready",
+            scopePath: sourcePath,
+            modules: [
+              {
+                path: ".",
+                providerPackages: [],
+                rootProviderRequirements: [],
+              },
+            ],
           },
           fetchedByRunId: "ssr_one",
           fetchedAt: new Date().toISOString(),
@@ -861,19 +1150,56 @@ function projectSyncRun(run: SourceSyncRun): Run {
 }
 
 function createBody(
-  input: { readonly capsuleName?: string; readonly sourceUrl?: string } = {},
+  input: {
+    readonly capsuleName?: string;
+    readonly sourceUrl?: string;
+    readonly sourcePath?: string;
+    readonly modulePath?: string;
+    readonly providerBindings?: readonly GitInstallPlanProviderBindingRequest[];
+  } = {},
 ) {
   return {
     source: {
       name: "example",
       url: input.sourceUrl ?? "https://github.com/takos/example.git",
       ref: "main",
-      path: ".",
+      path: input.sourcePath ?? ".",
     },
     capsule: {
       name: input.capsuleName ?? "example",
       environment: "production",
     },
+    ...(input.modulePath !== undefined || input.providerBindings !== undefined
+      ? {
+          options: {
+            ...(input.modulePath !== undefined
+              ? { modulePath: input.modulePath }
+              : {}),
+            ...(input.providerBindings !== undefined
+              ? { providerBindings: input.providerBindings }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function providerConnection(
+  provider: string,
+  id: string,
+): ProviderConnection {
+  const now = new Date().toISOString();
+  return {
+    id,
+    workspaceId: WORKSPACE.id,
+    provider,
+    providerSource: provider,
+    scope: "workspace",
+    status: "verified",
+    materialization: "secret",
+    envNames: [],
+    createdAt: now,
+    updatedAt: now,
   };
 }
 
@@ -887,50 +1213,10 @@ function repositoryManifest(
       apiVersion: "takosumi.com/v2.1",
       kind: "Repository",
       install: {
-        defaultModule: modulePaths[0]!,
         modules: Object.fromEntries(
           modulePaths.map((modulePath) => [modulePath, { inputs: [] }]),
         ),
       },
     },
   } as NonNullable<SourceSnapshot["repositoryManifest"]>;
-}
-
-function deploymentProfileConfig(input: {
-  readonly id: string;
-  readonly key: string;
-  readonly modulePath: string;
-  readonly recommended: boolean;
-}): InstallConfig {
-  return {
-    ...defaultCapsuleInstallConfig(),
-    id: input.id,
-    name: input.key,
-    sourceSelector: {
-      url: "https://github.com/takos/example.git",
-      path: ".",
-    },
-    modulePath: input.modulePath,
-    store: {
-      source: {
-        url: "https://github.com/takos/example.git",
-        path: ".",
-      },
-      order: input.recommended ? 1 : 2,
-      surface: "service",
-      kind: "app",
-      provider: "test-profile",
-      suggestedName: "example",
-      badge: { ja: "追加", en: "Install" },
-      name: { ja: input.key, en: input.key },
-      description: { ja: input.key, en: input.key },
-      deploymentProfile: {
-        key: input.key,
-        label: { ja: input.key, en: input.key },
-        description: { ja: input.key, en: input.key },
-        order: input.recommended ? 1 : 2,
-        recommended: input.recommended,
-      },
-    },
-  };
 }

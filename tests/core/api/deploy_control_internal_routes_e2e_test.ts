@@ -491,7 +491,8 @@ async function seedCapsuleViaRoutes(
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: providerConnection.id,
       },
     ],
@@ -514,6 +515,26 @@ async function seedCapsuleViaRoutes(
     archiveRef: `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_e2e000001/source.tar.zst`,
     archiveDigest: ARCHIVE_DIGEST,
     archiveSizeBytes: 1024,
+    repositoryInstallMetadata: { status: "absent" },
+    repositoryManifest: { status: "absent" },
+    repositoryModules: {
+      status: "ready",
+      scopePath: ".",
+      modules: [
+        {
+          path: ".",
+          providerPackages: [
+            { source: "registry.opentofu.org/cloudflare/cloudflare" },
+          ],
+          rootProviderRequirements: [
+            {
+              source: "registry.opentofu.org/cloudflare/cloudflare",
+              moduleLocalName: "cloudflare",
+            },
+          ],
+        },
+      ],
+    },
     fetchedByRunId: "ssr_e2e000001",
     fetchedAt: nowIso,
   };
@@ -526,7 +547,18 @@ async function seedCapsuleViaRoutes(
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [],
+    providerPackages: [
+      {
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        allowed: true,
+      },
+    ],
+    rootProviderRequirements: [
+      {
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
+      },
+    ],
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -615,7 +647,18 @@ test("capsule plan route honors a compatibilityReportId body hint", async () => 
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [],
+    providerPackages: [
+      {
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        allowed: true,
+      },
+    ],
+    rootProviderRequirements: [
+      {
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
+      },
+    ],
     resources: [],
     dataSources: [],
     provisioners: [],

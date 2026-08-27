@@ -5,6 +5,7 @@ import { join } from "node:path";
 import repositoryManifestV2_1Schema from "../../docs/public/schemas/repository-manifest-v2.1.schema.json" with { type: "json" };
 import repositoryManifestV2_2Schema from "../../docs/public/schemas/repository-manifest-v2.2.schema.json" with { type: "json" };
 import repositoryManifestV2_3Schema from "../../docs/public/schemas/repository-manifest-v2.3.schema.json" with { type: "json" };
+import repositoryManifestV2_4Schema from "../../docs/public/schemas/repository-manifest-v2.4.schema.json" with { type: "json" };
 
 import {
   parseRepositoryManifestText,
@@ -55,7 +56,6 @@ test("repository manifest v2.2 declares consumed Interfaces without ids or crede
       apiVersion: "takosumi.com/v2.2",
       kind: "Repository",
       install: {
-        defaultModule: ".",
         modules: {
           ".": {
             inputs: [],
@@ -108,7 +108,7 @@ test("repository manifest rejects unknown authority, fields, and versions", asyn
   ).toEqual({
     ok: false,
     error:
-      "apiVersion must be takosumi.com/v1, takosumi.com/v2, takosumi.com/v2.1, takosumi.com/v2.2, or takosumi.com/v2.3",
+      "apiVersion must be takosumi.com/v1, takosumi.com/v2, takosumi.com/v2.1, takosumi.com/v2.2, takosumi.com/v2.3, or takosumi.com/v2.4",
   });
   expect(
     parseRepositoryManifestText(
@@ -131,7 +131,6 @@ test("repository manifest v2.3 accepts only the bounded credential-free sourceBu
     apiVersion: "takosumi.com/v2.3",
     kind: "Repository",
     install: {
-      defaultModule: ".",
       modules: {
         ".": {
           inputs: [],
@@ -240,6 +239,22 @@ test("repository manifest rejects secret env maps and unsupported requirements",
   expect(parseRepositoryManifestText(JSON.stringify(unknownSource))).toEqual({
     ok: false,
     error: 'install.modules.".".inputs[0].source.kind is unsupported',
+  });
+
+  const legacyOwnerSubject = JSON.parse(await fixture("valid.json"));
+  legacyOwnerSubject.install.modules["."].requires[1].deliver.variables = {
+    accountsUrl: "accounts_url",
+    issuerUrl: "issuer_url",
+    clientId: "client_id",
+    redirectUri: "redirect_uri",
+    ownerSubject: "owner_subject",
+  };
+  expect(
+    parseRepositoryManifestText(JSON.stringify(legacyOwnerSubject)),
+  ).toEqual({
+    ok: false,
+    error:
+      'install.modules.".".requires[1].deliver.variables.contains unsupported field ownerSubject',
   });
 });
 
@@ -433,8 +448,15 @@ test("repository manifest v2 accepts generic Capsule Interface declarations", as
   });
 });
 
-test("repository manifest v1 and v2 remain closed against defaultModule", async () => {
-  for (const apiVersion of ["takosumi.com/v1", "takosumi.com/v2"]) {
+test("every repository manifest version rejects defaultModule", async () => {
+  for (const apiVersion of [
+    "takosumi.com/v1",
+    "takosumi.com/v2",
+    "takosumi.com/v2.1",
+    "takosumi.com/v2.2",
+    "takosumi.com/v2.3",
+    "takosumi.com/v2.4",
+  ]) {
     const document = JSON.parse(await fixture("v2-launcher.json"));
     document.apiVersion = apiVersion;
     document.install.defaultModule = "deploy/takoform";
@@ -449,10 +471,9 @@ test("repository manifest v1 and v2 remain closed against defaultModule", async 
   }
 });
 
-test("repository manifest v2.1 selects an exact default and preserves v2 Interfaces", async () => {
+test("repository manifest v2.1 preserves v2 Interfaces without module default semantics", async () => {
   const document = JSON.parse(await fixture("v2-launcher.json"));
   document.apiVersion = "takosumi.com/v2.1";
-  document.install.defaultModule = "deploy/takoform";
   document.install.modules["."] = { inputs: [] };
 
   const parsed = parseRepositoryManifestText(JSON.stringify(document));
@@ -461,36 +482,9 @@ test("repository manifest v2.1 selects an exact default and preserves v2 Interfa
   if (!parsed.ok || parsed.document.apiVersion !== "takosumi.com/v2.1") {
     return;
   }
-  expect(parsed.document.install.defaultModule).toBe("deploy/takoform");
   expect(
     parsed.document.install.modules["deploy/takoform"]?.interfaces?.[0]?.key,
   ).toBe("launcher");
-});
-
-test("repository manifest v2.1 rejects a non-canonical or absent default module key", async () => {
-  for (const [defaultModule, error] of [
-    [
-      "./deploy/takoform",
-      "install.defaultModule must be a canonical safe relative module path",
-    ],
-    [
-      " deploy/takoform ",
-      "install.defaultModule must be a canonical safe relative module path",
-    ],
-    [
-      "deploy/missing",
-      "install.defaultModule must name an exact install.modules key",
-    ],
-  ] as const) {
-    const document = JSON.parse(await fixture("v2-launcher.json"));
-    document.apiVersion = "takosumi.com/v2.1";
-    document.install.defaultModule = defaultModule;
-
-    expect(parseRepositoryManifestText(JSON.stringify(document))).toEqual({
-      ok: false,
-      error,
-    });
-  }
 });
 
 test("the published v2.1 schema covers structure while the parser owns semantics", async () => {
@@ -499,7 +493,6 @@ test("the published v2.1 schema covers structure while the parser owns semantics
   );
   const full = JSON.parse(await fixture("v2-launcher.json"));
   full.apiVersion = "takosumi.com/v2.1";
-  full.install.defaultModule = "deploy/takoform";
   const minimal = {
     apiVersion: "takosumi.com/v2.1",
     kind: "Repository",
@@ -514,9 +507,6 @@ test("the published v2.1 schema covers structure while the parser owns semantics
   for (const mutate of [
     (document: Record<string, any>) => {
       document.install.unknown = true;
-    },
-    (document: Record<string, any>) => {
-      document.install.defaultModule = "./deploy/takoform";
     },
     (document: Record<string, any>) => {
       document.install.modules[
@@ -535,11 +525,6 @@ test("the published v2.1 schema covers structure while the parser owns semantics
   expect(
     repositoryManifestV2_1Schema["x-takosumi-semanticConstraints"],
   ).toContain(
-    "install.defaultModule, when present, equals an own canonical key of install.modules",
-  );
-  expect(
-    repositoryManifestV2_1Schema["x-takosumi-semanticConstraints"],
-  ).toContain(
     "each module may declare at most 8 requires entries whose kind is secret.generated",
   );
   expect(
@@ -547,25 +532,10 @@ test("the published v2.1 schema covers structure while the parser owns semantics
   ).toContain(
     "JSON values in Interface documents and literal inputs are limited to recursive depth 32",
   );
-  const missingKey = structuredClone(full);
-  missingKey.install.defaultModule = "deploy/missing";
-  expect(validate(missingKey)).toBe(true);
-  expect(parseRepositoryManifestText(JSON.stringify(missingKey)).ok).toBe(
-    false,
-  );
-
-  const whitespaceDefault = structuredClone(full);
-  whitespaceDefault.install.defaultModule = " deploy/takoform ";
-  expect(validate(whitespaceDefault)).toBe(false);
-  expect(
-    parseRepositoryManifestText(JSON.stringify(whitespaceDefault)).ok,
-  ).toBe(false);
-
   const whitespaceModuleKey = structuredClone(full);
   whitespaceModuleKey.install.modules[" deploy/takoform "] =
     whitespaceModuleKey.install.modules["deploy/takoform"];
   delete whitespaceModuleKey.install.modules["deploy/takoform"];
-  whitespaceModuleKey.install.defaultModule = " deploy/takoform ";
   expect(validate(whitespaceModuleKey)).toBe(false);
   expect(
     parseRepositoryManifestText(JSON.stringify(whitespaceModuleKey)).ok,
@@ -580,7 +550,6 @@ test("the published v2.2 schema adds only provider-neutral Interface consumption
     apiVersion: "takosumi.com/v2.2",
     kind: "Repository",
     install: {
-      defaultModule: ".",
       modules: {
         ".": {
           inputs: [],
@@ -876,4 +845,49 @@ test("the published v2.3 schema and parser agree on closed sourceBuild paths", (
       pathCase.output,
     );
   }
+});
+
+test("the published v2.4 schema and parser agree on binding-delivered OIDC ownerSubject", () => {
+  const ajv = new Ajv2020({ allErrors: true, strict: false });
+  ajv.addSchema(repositoryManifestV2_1Schema);
+  const validate = ajv.compile(repositoryManifestV2_4Schema);
+  const document = {
+    apiVersion: "takosumi.com/v2.4",
+    kind: "Repository",
+    install: {
+      modules: {
+        ".": {
+          inputs: [],
+          requires: [
+            {
+              kind: "identity.oidc",
+              callbackPath: "/auth/oidc/callback",
+              scopes: ["openid"],
+              deliver: {
+                bindings: {
+                  issuerUrl: "OIDC_ISSUER",
+                  clientId: "OIDC_CLIENT_ID",
+                  ownerSubject: "OIDC_OWNER_SUBJECT",
+                  redirectUri: "OIDC_REDIRECT_URI",
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+  };
+  expect(validate(document), JSON.stringify(validate.errors)).toBe(true);
+  expect(parseRepositoryManifestText(JSON.stringify(document))).toEqual({
+    ok: true,
+    document,
+  });
+
+  const v23 = structuredClone(document);
+  v23.apiVersion = "takosumi.com/v2.3";
+  expect(parseRepositoryManifestText(JSON.stringify(v23))).toEqual({
+    ok: false,
+    error:
+      'install.modules.".".requires[0].deliver.bindings.contains unsupported field ownerSubject',
+  });
 });

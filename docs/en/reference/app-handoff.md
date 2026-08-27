@@ -37,15 +37,16 @@ link `/install`.
 
 Supported query parameters:
 
-| Parameter    | Required | Meaning                                             |
-| ------------ | -------- | --------------------------------------------------- |
-| `git`        | no       | HTTPS Git URL for a plain OpenTofu/Terraform module |
-| `source`     | no       | Packed module address, for example `git::...?...`   |
-| `ref`        | no       | Git branch, tag, or commit                          |
-| `path`       | no       | Module path inside the repository                   |
-| `name`       | no       | Display name for the service                        |
-| `product`    | no       | Client product key, only with `return_uri`          |
-| `return_uri` | no       | Connection payload target, only with `product`      |
+| Parameter    | Required | Meaning                                                       |
+| ------------ | -------- | ------------------------------------------------------------- |
+| `git`        | no       | HTTPS Git URL for a plain OpenTofu/Terraform module           |
+| `source`     | no       | Packed module address, for example `git::...?...`             |
+| `ref`        | no       | Git branch, tag, or commit                                    |
+| `sourcePath` | no       | Git subtree captured, archived, and scanned; defaults to `.`  |
+| `path`       | no       | Archive-relative module matched inside the Source subtree     |
+| `name`       | no       | Display name for the service                                  |
+| `product`    | no       | Client product key, only with `return_uri`                    |
+| `return_uri` | no       | Connection payload target, only with `product`                |
 
 `git` or `source` selects what Takosumi should create. Store nodes are
 discovery / presentation entrypoints that prefill this URL; they are not the
@@ -74,6 +75,7 @@ Example:
 https://takosumi.example.com/install
   ?git=https%3A%2F%2Fgit.example.com%2Facme%2Fnotes.git
   &ref=v1.2.3
+  &sourcePath=infra
   &path=deploy%2Fopentofu
   &product=notes-app
   &return_uri=notesapp%3A%2F%2Fconnect
@@ -85,8 +87,9 @@ The URL does not install anything by itself. It only pre-fills an explicit
 dashboard flow:
 
 ```text
-Git URL / ref / path
+Git URL / ref / sourcePath
   -> Source
+  -> tree scan / path selection
   -> Capsule
   -> ProviderBinding review
   -> Run(plan)
@@ -98,9 +101,11 @@ The source repository stays a plain OpenTofu/Terraform module. Takosumi does not
 require a Takosumi-specific source metadata file or product-specific metadata
 file.
 
-Module inputs do not travel in the URL. A link carrying `var.<name>` or
-`varjson.<name>` is accepted, but those values are discarded; inputs are entered
-in the the Takosumi dashboard screen. Secrets, tokens, provider credentials, and private
+`sourcePath` and `path` accept only `.` or canonical relative directories. The
+whole link is rejected when it contains unknown, duplicate, or invalid query fields.
+Module inputs do not travel in the URL; links carrying `var.<name>` or
+`varjson.<name>` are rejected. Inputs are entered in the Takosumi dashboard screen.
+Secrets, tokens, provider credentials, and private
 keys are separate again, and must come from Provider Connections, Credential
 Recipes, Provider Bindings, Secrets, or product-owned setup flows.
 

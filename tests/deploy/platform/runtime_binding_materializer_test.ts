@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Capsule } from "takosumi-contract/capsules";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { OidcClientRecord } from "../../../accounts/service/src/store.ts";
 import { InMemoryAccountsStore } from "../../../accounts/service/src/store.ts";
@@ -6,56 +7,58 @@ import type { ControlPlaneOperations } from "../../../accounts/service/src/contr
 import { validateOidcLiveGrant } from "../../../accounts/service/src/oidc-live-grant.ts";
 import {
   createTakosumiRuntimeBindingMaterializer,
+  type RuntimeBindingAccountsLedger,
   type RuntimeBindingControlLedger,
 } from "../../../deploy/platform/runtime_binding_materializer.ts";
 import {
   createTakosumiAccountsOidcModuleVariableMaterializer,
+  type AccountsOidcModuleVariableAccountsLedger,
   type AccountsOidcModuleVariableControlLedger,
 } from "../../../deploy/platform/accounts_oidc_module_variable_materializer.ts";
-import { TAKOSERVER_HOSTED_INSTALL_CONFIGS } from "../../../deploy/platform/takoserver_hosted_install_configs.ts";
-import { composeTakosInstallConfig } from "../../../deploy/platform/takos_install_config.ts";
-import type { ResolvedCapsuleProviderBinding } from "../../../core/domains/connections/mod.ts";
-import {
-  CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY,
-  CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID,
-} from "../../../providers/cloudflare/credentials.ts";
 
 const NOW = new Date("2026-08-25T12:00:00.000Z");
-const CLOUDFLARE_ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
+const PAIRWISE_SECRET = "pairwise-secret-with-at-least-32-bytes";
+const DERIVATION_KEY = "runtime-secret-with-at-least-32-bytes";
+const PROFILE_V1 = "takosumi.runtime-binding-profile/v1";
+const PROFILE_V2 = "takosumi.runtime-binding-profile/v2";
+const RUNTIME_BINDINGS = [
+  "ENCRYPTION_KEY",
+  "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+  "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+  "TAKOSUMI_ACCOUNTS_OWNER_SUB",
+  "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
+] as const;
 
-function installConfig(
+function runtimeBindingInstallConfig(
   overrides: Partial<InstallConfig> = {},
+  profileContract: typeof PROFILE_V1 | typeof PROFILE_V2 = PROFILE_V1,
 ): InstallConfig {
   return {
-    id: "icfg_yurucommu",
+    id: "icfg_legacy_runtime_binding",
     workspaceId: "ws_1",
-    name: "Yurucommu",
+    name: "Legacy private runtime binding fixture",
     variableMapping: {},
     installExperience: {
-      projections: [
-        {
-          kind: "oidc_client",
-          variables: {},
-          callbackPath: "/api/auth/callback/takos",
-          scopes: ["openid", "profile", "email"],
-        },
-      ],
+      projections: [{
+        kind: "oidc_client",
+        variables: {},
+        callbackPath: "/auth/legacy/callback",
+        scopes: ["openid", "profile", "email"],
+      }],
     },
     runtimeBindingMaterialization: {
-      contract: "takosumi.runtime-binding-profile/v1",
-      generatedSecrets: [
-        {
-          binding: "ENCRYPTION_KEY",
-          bytes: 32,
-          encoding: "hex",
-        },
-      ],
+      contract: profileContract,
+      generatedSecrets: [{
+        binding: "ENCRYPTION_KEY",
+        bytes: 32,
+        encoding: "hex",
+      }],
       oidcClient: {
         issuerBinding: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
         clientIdBinding: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
         ownerSubjectBinding: "TAKOSUMI_ACCOUNTS_OWNER_SUB",
         redirectUriBinding: "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
-        callbackPath: "/api/auth/callback/takos",
+        callbackPath: "/auth/legacy/callback",
         scopes: ["openid", "profile", "email"],
       },
     },
@@ -64,11 +67,15 @@ function installConfig(
     createdAt: NOW.toISOString(),
     updatedAt: NOW.toISOString(),
     ...overrides,
-  } as InstallConfig;
+  };
 }
 
-function control(
-  config: InstallConfig = installConfig(),
+function runtimeBindingControl(
+  config: InstallConfig = runtimeBindingInstallConfig(),
+  input: {
+    readonly epoch?: number;
+    readonly currentConfig?: () => InstallConfig | undefined;
+  } = {},
 ): RuntimeBindingControlLedger {
   return {
     async resolveContext(request) {
@@ -90,81 +97,133 @@ function control(
       return {
         id: "cap_1",
         workspaceId: "ws_1",
-        name: "Yurucommu",
-        installConfigId: "icfg_yurucommu",
+        projectId: "project_1",
+        name: "Legacy private app",
+        slug: "legacy-private-app",
+        sourceId: "source_1",
+        installConfigId: config.id,
+        installingPrincipalId: "tsub_owner",
+        environment: "staging",
+        currentStateGeneration: 0,
+        status: "active",
+        createdAt: NOW.toISOString(),
+        updatedAt: NOW.toISOString(),
       };
     },
     async getInstallConfig() {
-      return config;
+      return input.currentConfig?.() ?? config;
+    },
+    async getCapsuleExecutionAuthorityEpoch() {
+      return input.epoch ?? 7;
     },
   };
 }
 
+function noAccountsAccess(): RuntimeBindingAccountsLedger {
+  return {
+    async findOidcClient() {
+      throw new Error("read-only materialization must not read Accounts");
+    },
+    async findOidcClientForCapsule() {
+      throw new Error("read-only materialization must not read Accounts");
+    },
+    async saveOidcClient() {
+      throw new Error("read-only materialization must not write Accounts");
+    },
+  };
+}
+
+function recordingAccountsStore(input: { readonly loseFirstAck?: boolean } = {}) {
+  const store = new InMemoryAccountsStore();
+  let writes = 0;
+  let loseFirstAck = input.loseFirstAck ?? false;
+  const accounts: RuntimeBindingAccountsLedger = {
+    async findOidcClient(clientId) {
+      return store.findOidcClient(clientId);
+    },
+    async findOidcClientForCapsule(capsuleId) {
+      return store.findOidcClientForCapsule(capsuleId);
+    },
+    async saveOidcClient(record) {
+      store.saveOidcClient(record);
+      writes += 1;
+      if (loseFirstAck) {
+        loseFirstAck = false;
+        throw new Error("simulated lost Accounts acknowledgement");
+      }
+    },
+  };
+  return { accounts, store, writes: () => writes };
+}
+
+function runtimeBindingCall(
+  phase: "plan" | "apply" | "destroy" = "apply",
+  overrides: Partial<{
+    readonly publicOrigin: string;
+    readonly bindings: readonly string[];
+  }> = {},
+) {
+  return {
+    request: {
+      contract: "takosumi.runtime-bindings/v1",
+      workspaceId: "ws_1",
+      capsuleId: "cap_1",
+      runId: "run_1",
+      phase,
+    },
+    resourceName: "external_worker_version.app",
+    scriptName: "legacy-app",
+    publicOrigin: "https://legacy-app.example.test",
+    bindings: RUNTIME_BINDINGS,
+    ...overrides,
+  } as const;
+}
+
+function createRuntimeBindingMaterializer(input: {
+  readonly control?: RuntimeBindingControlLedger;
+  readonly accounts?: RuntimeBindingAccountsLedger;
+} = {}) {
+  return createTakosumiRuntimeBindingMaterializer({
+    control: input.control ?? runtimeBindingControl(),
+    accounts: input.accounts ?? noAccountsAccess(),
+    issuer: "https://app.takosumi.com",
+    pairwiseSubjectSecret: PAIRWISE_SECRET,
+    derivationKey: DERIVATION_KEY,
+    clock: () => NOW,
+  });
+}
+
 describe("Takosumi runtime binding materializer", () => {
-  test("derives the exact DB-owned binding values without a write-capable port in every provider phase", async () => {
-    const config = installConfig();
+  test("derives the exact DB-owned values read-only in every provider phase", async () => {
+    const config = runtimeBindingInstallConfig();
     const original = structuredClone(config);
-    const materializer = createTakosumiRuntimeBindingMaterializer({
-      control: control(config),
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      derivationKey: "runtime-secret-with-at-least-32-bytes",
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config),
     });
 
-    const bindings = [
-      "ENCRYPTION_KEY",
-      "TAKOSUMI_ACCOUNTS_ISSUER_URL",
-      "TAKOSUMI_ACCOUNTS_CLIENT_ID",
-      "TAKOSUMI_ACCOUNTS_OWNER_SUB",
-      "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
-    ] as const;
     const outcomes = await Promise.all(
       (["plan", "apply", "destroy"] as const).map((phase) =>
-        materializer.materializeRuntimeBindings({
-          request: {
-            contract: "takosumi.runtime-bindings/v1",
-            workspaceId: "ws_1",
-            capsuleId: "cap_1",
-            runId: "run_1",
-            phase,
-          },
-          resourceName: "takoform_worker_version.yurucommu",
-          scriptName: "yurucommu",
-          publicOrigin: "https://yurucommu.example.test",
-          bindings,
-        })
+        materializer.materializeRuntimeBindings(runtimeBindingCall(phase))
       ),
     );
-    const first = outcomes[0]!;
-    const replays = outcomes.slice(1);
 
-    expect(Object.keys(first.values).sort()).toEqual([...bindings].sort());
-    expect(first.values.ENCRYPTION_KEY).toMatch(/^[a-f0-9]{64}$/u);
-    expect(replays.every((result) =>
-      JSON.stringify(result.values) === JSON.stringify(first.values)
+    expect(Object.keys(outcomes[0]!.values).sort()).toEqual(
+      [...RUNTIME_BINDINGS].sort(),
+    );
+    expect(outcomes[0]!.values.ENCRYPTION_KEY).toMatch(/^[a-f0-9]{64}$/u);
+    expect(outcomes.slice(1).every((outcome) =>
+      JSON.stringify(outcome.values) === JSON.stringify(outcomes[0]!.values)
     )).toBe(true);
-    expect(first.values.TAKOSUMI_ACCOUNTS_ISSUER_URL).toBe(
-      "https://app.takosumi.com",
-    );
-    expect(first.values.TAKOSUMI_ACCOUNTS_REDIRECT_URI).toBe(
-      "https://yurucommu.example.test/api/auth/callback/takos",
-    );
-    expect(first.values.TAKOSUMI_ACCOUNTS_CLIENT_ID).toMatch(
-      /^tko_[A-Za-z0-9_-]{43}$/u,
-    );
-    expect(first.values.TAKOSUMI_ACCOUNTS_OWNER_SUB).toMatch(
-      /^tsub_[A-Za-z0-9_-]{32}$/u,
+    expect(outcomes[0]!.values.TAKOSUMI_ACCOUNTS_REDIRECT_URI).toBe(
+      "https://legacy-app.example.test/auth/legacy/callback",
     );
     expect(config).toEqual(original);
   });
 
-  test("refuses a missing, drifted, or undeclared DB-owned OIDC grant", async () => {
+  test("refuses a missing or drifted DB-owned runtime grant", async () => {
     const materializer = (config: InstallConfig) =>
-      createTakosumiRuntimeBindingMaterializer({
-        control: control(config),
-        issuer: "https://app.takosumi.com",
-        pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-        derivationKey: "runtime-secret-with-at-least-32-bytes",
+      createRuntimeBindingMaterializer({
+        control: runtimeBindingControl(config),
       });
     const call = {
       request: {
@@ -175,8 +234,8 @@ describe("Takosumi runtime binding materializer", () => {
         phase: "apply",
       },
       resourceName: "worker",
-      scriptName: "yurucommu",
-      publicOrigin: "https://yurucommu.example.test",
+      scriptName: "legacy-app",
+      publicOrigin: "https://legacy-app.example.test",
       bindings: [
         "ENCRYPTION_KEY",
         "TAKOSUMI_ACCOUNTS_ISSUER_URL",
@@ -187,11 +246,11 @@ describe("Takosumi runtime binding materializer", () => {
     } as const;
 
     await expect(
-      materializer(installConfig({ installExperience: undefined }))
+      materializer(runtimeBindingInstallConfig({ installExperience: undefined }))
         .materializeRuntimeBindings(call),
     ).rejects.toThrow(/grant/i);
     await expect(
-      materializer(installConfig({
+      materializer(runtimeBindingInstallConfig({
         installExperience: {
           projections: [{
             kind: "oidc_client",
@@ -202,582 +261,401 @@ describe("Takosumi runtime binding materializer", () => {
         },
       })).materializeRuntimeBindings(call),
     ).rejects.toThrow(/grant/i);
-    await expect(
-      materializer(installConfig({
-        installExperience: {
-          projections: [{
-            kind: "oidc_client",
-            variables: { clientId: "provider_owned_client_id" },
-            callbackPath: "/api/auth/callback/takos",
-            scopes: ["openid", "profile", "email"],
-          }],
-        },
-      })).materializeRuntimeBindings(call),
-    ).rejects.toThrow(/grant/i);
-    await expect(
-      materializer(installConfig()).materializeRuntimeBindings({
-        ...call,
-        bindings: ["ENCRYPTION_KEY"],
-      }),
-    ).rejects.toThrow(/binding/i);
-  });
-});
-
-describe("Takos Accounts OIDC module-variable profile", () => {
-  test("plans exactly four public values and honors an exact reviewed custom origin", async () => {
-    const config = takosOidcInstallConfig({
-      publicUrl: "https://takos.example.test",
-    });
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: {
-        async getCapsule() {
-          return takosOidcCapsule(config.id);
-        },
-        async getInstallConfig() {
-          return config;
-        },
-      },
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => new Date("2026-08-25T12:01:00.000Z"),
-    });
-
-    const planned = await materializer.materialize({
-      phase: "plan",
-      capsule: takosOidcCapsule(config.id),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: takosOidcVariables("https://takos.example.test"),
-    });
-
-    expect(planned?.variables).toEqual({
-      takosumi_accounts_url: "https://app.takosumi.com",
-      takosumi_accounts_issuer_url: "https://app.takosumi.com",
-      takosumi_accounts_client_id: expect.stringMatching(
-        /^tko_[A-Za-z0-9_-]{43}$/u,
-      ),
-      takosumi_accounts_redirect_uri:
-        "https://takos.example.test/auth/oidc/callback",
-    });
-    expect(writes).toBe(0);
   });
 
-  test("uses workers.dev only when public_url is empty and rejects a non-origin override", async () => {
-    let config = takosOidcInstallConfig();
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: {
-        async getCapsule() {
-          return takosOidcCapsule(config.id);
-        },
-        async getInstallConfig() {
-          return config;
-        },
-      },
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          throw new Error("Plan must not write");
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
+  test("commits the exact OIDC registration only after an explicit Apply commit", async () => {
+    const config = runtimeBindingInstallConfig({}, PROFILE_V2);
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config),
+      accounts: recorded.accounts,
     });
-    const fallback = await materializer.materialize({
-      phase: "plan",
-      capsule: takosOidcCapsule(config.id),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: takosOidcVariables(),
-    });
-    expect(fallback?.variables.takosumi_accounts_redirect_uri).toBe(
-      "https://takos-main.team-workers.workers.dev/auth/oidc/callback",
+    const call = runtimeBindingCall("apply");
+
+    const materialized = await materializer.materializeRuntimeBindings(call);
+    expect(materialized.values.TAKOSUMI_ACCOUNTS_CLIENT_ID).toMatch(
+      /^tko_[A-Za-z0-9_-]{43}$/u,
     );
+    expect(recorded.writes()).toBe(0);
+    expect(
+      recorded.store.findOidcClient(
+        materialized.values.TAKOSUMI_ACCOUNTS_CLIENT_ID!,
+      ),
+    ).toBeUndefined();
 
-    config = takosOidcInstallConfig({
-      publicUrl: "https://takos.example.test/path",
+    await materializer.commitRuntimeBindings(call);
+
+    expect(recorded.writes()).toBe(1);
+    expect(
+      recorded.store.findOidcClient(
+        materialized.values.TAKOSUMI_ACCOUNTS_CLIENT_ID!,
+      ),
+    ).toMatchObject({
+      capsuleId: "cap_1",
+      issuerUrl: "https://app.takosumi.com",
+      redirectUris: [
+        "https://legacy-app.example.test/auth/legacy/callback",
+      ],
+      allowedScopes: ["openid", "profile", "email"],
+      subjectMode: "pairwise",
+      tokenEndpointAuthMethod: "none",
+      activationDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
     });
-    await expect(materializer.materialize({
-      phase: "plan",
-      capsule: takosOidcCapsule(config.id),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: takosOidcVariables("https://takos.example.test/path"),
-    })).rejects.toThrow(/HTTPS origin/i);
   });
 
-  test("keeps the client stable across immutable config replacement and refreshes the live grant only on Apply", async () => {
-    const accounts = new InMemoryAccountsStore();
-    let config = takosOidcInstallConfig({
-      id: "icfg_takos_old",
-      updatedAt: "2026-08-25T12:00:00.000Z",
+  test("keeps upload-failure rollback read-only before explicit commit", async () => {
+    const config = runtimeBindingInstallConfig({}, PROFILE_V2);
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config),
+      accounts: recorded.accounts,
     });
-    let capsule = takosOidcCapsule(config.id);
-    let executionAuthorityEpoch = 1;
-    let clock = new Date("2026-08-25T12:01:00.000Z");
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: {
-        async getCapsule() {
-          return capsule;
-        },
-        async getInstallConfig() {
-          return config;
-        },
-      },
-      accounts,
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => clock,
-    });
-    const call = () => ({
-      capsule,
-      installConfig: config,
-      capsuleExecutionAuthorityEpoch: executionAuthorityEpoch,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: takosOidcVariables(),
-    });
-    const firstPlan = await materializer.materialize({
-      phase: "plan",
-      ...call(),
-    });
-    await materializer.materialize({
-      phase: "apply",
-      expectedDigest: firstPlan!.digest,
-      plannedVariables: firstPlan!.variables,
-      ...call(),
-    });
-    const clientId = firstPlan!.variables.takosumi_accounts_client_id as string;
-    expect(accounts.findOidcClient(clientId)?.updatedAt).toBe(clock.getTime());
-    const oldActivationDigest = accounts.findOidcClient(clientId)!
-      .activationDigest;
-    // Models the old Apply winning after an orphan re-adoption target was
-    // created but before its Capsule CAS could proceed.
-    accounts.saveOidcClient({
-      ...accounts.findOidcClient(clientId)!,
-      updatedAt: Date.parse("2026-08-25T12:04:00.000Z"),
+    const call = runtimeBindingCall("apply");
+
+    await materializer.materializeRuntimeBindings(call);
+    await materializer.rollbackRuntimeBindings({
+      request: call.request,
+      rollbackReceipt: "worker-version-upload-failed",
     });
 
-    config = takosOidcInstallConfig({
-      id: "icfg_takos_re_adopted",
-      updatedAt: "2026-08-25T12:02:00.000Z",
+    expect(recorded.writes()).toBe(0);
+  });
+
+  test("retries an Apply commit idempotently after a duplicate or lost acknowledgement", async () => {
+    const config = runtimeBindingInstallConfig({}, PROFILE_V2);
+    const recorded = recordingAccountsStore({ loseFirstAck: true });
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config),
+      accounts: recorded.accounts,
     });
-    capsule = takosOidcCapsule(config.id);
-    executionAuthorityEpoch = 2;
-    clock = new Date("2026-08-25T12:03:00.000Z");
+    const call = runtimeBindingCall("apply");
+
+    await expect(materializer.commitRuntimeBindings(call)).rejects.toThrow(
+      /lost Accounts acknowledgement/i,
+    );
+    expect(recorded.writes()).toBe(1);
+
+    await materializer.commitRuntimeBindings(call);
+    await materializer.commitRuntimeBindings(call);
+    expect(recorded.writes()).toBe(1);
+  });
+
+  test("refuses non-Apply commit and current profile drift without Accounts mutation", async () => {
+    let current = runtimeBindingInstallConfig({}, PROFILE_V2);
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(current, {
+        currentConfig: () => current,
+      }),
+      accounts: recorded.accounts,
+    });
+
+    await expect(
+      materializer.commitRuntimeBindings(runtimeBindingCall("plan")),
+    ).rejects.toThrow(/Apply/i);
+    await expect(
+      materializer.commitRuntimeBindings(runtimeBindingCall("destroy")),
+    ).rejects.toThrow(/Apply/i);
+
+    await materializer.materializeRuntimeBindings(runtimeBindingCall("apply"));
+    current = runtimeBindingInstallConfig({
+      runtimeBindingMaterialization: {
+        contract: PROFILE_V2,
+        generatedSecrets: [{
+          binding: "DIFFERENT_KEY",
+          bytes: 32,
+          encoding: "hex",
+        }],
+      },
+      updatedAt: "2026-08-25T12:00:01.000Z",
+    }, PROFILE_V2);
+    await expect(
+      materializer.commitRuntimeBindings(runtimeBindingCall("apply")),
+    ).rejects.toThrow(/DB-owned profile/i);
+    expect(recorded.writes()).toBe(0);
+  });
+
+  test("refuses authority drift between commit confirmation reads", async () => {
+    const config = runtimeBindingInstallConfig({}, PROFILE_V2);
+    const drifted = runtimeBindingInstallConfig({
+      updatedAt: "2026-08-25T12:00:01.000Z",
+    }, PROFILE_V2);
+    let configReads = 0;
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config, {
+        currentConfig: () => configReads++ === 0 ? config : drifted,
+      }),
+      accounts: recorded.accounts,
+    });
+
+    await expect(
+      materializer.commitRuntimeBindings(runtimeBindingCall("apply")),
+    ).rejects.toThrow(/authority changed during confirmation/i);
+    expect(recorded.writes()).toBe(0);
+  });
+
+  test("commits no Accounts mutation for a generated-secret-only profile", async () => {
+    const config = runtimeBindingInstallConfig({
+      installExperience: undefined,
+      runtimeBindingMaterialization: {
+        contract: PROFILE_V2,
+        generatedSecrets: [{
+          binding: "ENCRYPTION_KEY",
+          bytes: 32,
+          encoding: "hex",
+        }],
+      },
+    }, PROFILE_V2);
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config),
+      accounts: recorded.accounts,
+    });
+    const call = runtimeBindingCall("apply", {
+      bindings: ["ENCRYPTION_KEY"],
+    });
+
+    await expect(materializer.commitRuntimeBindings(call)).resolves.toBeUndefined();
+    expect(recorded.writes()).toBe(0);
+  });
+
+  test("saves the current epoch digest accepted by live-grant validation", async () => {
+    const config = runtimeBindingInstallConfig({}, PROFILE_V2);
+    const capsule = {
+      id: "cap_1",
+      workspaceId: "ws_1",
+      name: "Legacy private app",
+      installConfigId: config.id,
+      status: "active",
+    } as const;
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config, { epoch: 7 }),
+      accounts: recorded.accounts,
+    });
+    const call = runtimeBindingCall("apply");
+    const materialized = await materializer.materializeRuntimeBindings(call);
+    await materializer.commitRuntimeBindings(call);
+    const clientId = materialized.values.TAKOSUMI_ACCOUNTS_CLIENT_ID!;
+    const client = recorded.store.findOidcClient(clientId)!;
     const operations = {
       capsules: {
-        async getCapsule() {
-          return capsule;
-        },
-        async getInstallConfig() {
-          return config;
-        },
-        async getCapsuleExecutionAuthorityEpoch() {
-          return executionAuthorityEpoch;
-        },
+        getCapsule: async () => capsule,
+        getInstallConfig: async () => config,
+        getCapsuleExecutionAuthorityEpoch: async () => 7,
       },
       workspaces: {
-        async getWorkspace() {
-          return { id: "ws_1", ownerUserId: "tsub_owner" };
-        },
+        getWorkspace: async () => ({
+          id: "ws_1",
+          ownerUserId: "tsub_owner",
+        }),
       },
-      members: {
-        async listMembers() {
-          return [];
-        },
-      },
+      members: { listMembers: async () => [] },
     } as unknown as ControlPlaneOperations;
-    const grant = () => validateOidcLiveGrant({
-      store: accounts,
-      operations,
-      client: { clientId, capsuleId: capsule.id, allowedScopes: TAKOS_SCOPES },
-      scope: "openid capsules:read",
-      takosumiSubject: "tsub_owner",
-      capsuleId: capsule.id,
-      workspaceId: capsule.workspaceId,
-    });
 
-    await expect(grant()).resolves.toEqual({
-      ok: false,
-      reason: "install_grant_stale",
-    });
-    const secondPlan = await materializer.materialize({
-      phase: "plan",
-      ...call(),
-    });
-    expect(secondPlan!.variables.takosumi_accounts_client_id).toBe(clientId);
-    await materializer.materialize({
-      phase: "apply_check",
-      expectedDigest: secondPlan!.digest,
-      plannedVariables: secondPlan!.variables,
-      ...call(),
-    });
-    expect(accounts.findOidcClient(clientId)?.activationDigest).toBe(
-      oldActivationDigest,
-    );
-    await expect(grant()).resolves.toMatchObject({
-      ok: false,
-      reason: "install_grant_stale",
-    });
-    await materializer.materialize({
-      phase: "apply",
-      expectedDigest: secondPlan!.digest,
-      plannedVariables: secondPlan!.variables,
-      ...call(),
-    });
-    expect(accounts.findOidcClient(clientId)?.updatedAt).toBe(
-      Date.parse("2026-08-25T12:04:00.000Z"),
-    );
-    expect(accounts.findOidcClient(clientId)?.activationDigest).not.toBe(
-      oldActivationDigest,
-    );
-    await expect(grant()).resolves.toMatchObject({
+    await expect(validateOidcLiveGrant({
+      store: recorded.store,
+      operations,
+      client,
+      scope: "openid profile email",
+      takosumiSubject: "tsub_owner",
+      capsuleId: "cap_1",
+      workspaceId: "ws_1",
+    })).resolves.toEqual({
       ok: true,
-      capsuleId: capsule.id,
-      workspaceId: capsule.workspaceId,
+      capsuleId: "cap_1",
+      capsuleName: "Legacy private app",
+      workspaceId: "ws_1",
       role: "owner",
     });
   });
 
-  test("isolates deterministic public clients between Capsules", async () => {
-    const configs = new Map([
-      ["icfg_takos_a", takosOidcInstallConfig({ id: "icfg_takos_a" })],
-      ["icfg_takos_b", takosOidcInstallConfig({ id: "icfg_takos_b" })],
-    ]);
-    const capsules = new Map([
-      ["cap_takos_a", takosOidcCapsule("icfg_takos_a", "cap_takos_a")],
-      ["cap_takos_b", takosOidcCapsule("icfg_takos_b", "cap_takos_b")],
-    ]);
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: {
-        async getCapsule(id) {
-          return capsules.get(id);
-        },
-        async getInstallConfig(id) {
-          return configs.get(id);
-        },
-      },
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          throw new Error("Plan must not write");
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
+  test("keeps v1 commit read-only for compatibility", async () => {
+    const config = runtimeBindingInstallConfig({}, PROFILE_V1);
+    const recorded = recordingAccountsStore();
+    const materializer = createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(config),
+      accounts: recorded.accounts,
     });
-    const planned = await Promise.all([...capsules.values()].map((capsule) =>
-      materializer.materialize({
-        phase: "plan",
-        capsule,
-        installConfig: configs.get(capsule.installConfigId)!,
-        resolvedProviderBindings: [directCloudflareBinding()],
-        variables: takosOidcVariables(),
-      })
-    ));
-    expect(planned[0]!.variables.takosumi_accounts_client_id).not.toBe(
-      planned[1]!.variables.takosumi_accounts_client_id,
+
+    await materializer.commitRuntimeBindings(runtimeBindingCall("apply"));
+
+    expect(recorded.writes()).toBe(0);
+  });
+
+  test("derives v2 secret and OIDC identity Capsule-stably across InstallConfig replacement", async () => {
+    const firstConfig = runtimeBindingInstallConfig({
+      id: "icfg_runtime_binding_first",
+    }, PROFILE_V2);
+    const secondConfig = runtimeBindingInstallConfig({
+      id: "icfg_runtime_binding_second",
+    }, PROFILE_V2);
+    const call = runtimeBindingCall("plan");
+
+    const first = await createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(firstConfig),
+    }).materializeRuntimeBindings(call);
+    const second = await createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(secondConfig),
+    }).materializeRuntimeBindings(call);
+
+    expect(second.values.ENCRYPTION_KEY).toBe(first.values.ENCRYPTION_KEY);
+    expect(second.values.TAKOSUMI_ACCOUNTS_CLIENT_ID).toBe(
+      first.values.TAKOSUMI_ACCOUNTS_CLIENT_ID,
+    );
+    expect(second.values.TAKOSUMI_ACCOUNTS_OWNER_SUB).toBe(
+      first.values.TAKOSUMI_ACCOUNTS_OWNER_SUB,
     );
   });
 
-  test("validates the actual nested Cloudflare module target and accepts sealed legacy v2 metadata", async () => {
-    let config = takosOidcInstallConfig();
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: {
-        async getCapsule() {
-          return takosOidcCapsule(config.id);
-        },
-        async getInstallConfig() {
-          return config;
-        },
-      },
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          throw new Error("Plan must not write");
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-    });
+  test("preserves the exact v1 config-scoped derivation", async () => {
+    const firstConfig = runtimeBindingInstallConfig({
+      id: "icfg_runtime_binding_first",
+    }, PROFILE_V1);
+    const secondConfig = runtimeBindingInstallConfig({
+      id: "icfg_runtime_binding_second",
+    }, PROFILE_V1);
+    const call = runtimeBindingCall("plan");
 
-    const legacyProfile = config.accountsOidcModuleVariableMaterialization!;
-    config = {
-      ...config,
-      accountsOidcModuleVariableMaterialization: {
-        ...legacyProfile,
-        additionalInputVariables: [
-          "cloudflare_account_id",
-          "cloudflare_workers_subdomain",
-        ],
-      },
-    };
-    await expect(materializer.materialize({
-      phase: "plan",
-      capsule: takosOidcCapsule(config.id),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      // Mirrors RunEngine after it filters provider defaults against the real
-      // Takos root module, which declares `cloudflare` rather than flat names.
-      variables: takosOidcVariables(),
-    })).resolves.toMatchObject({
-      digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
-    });
+    const first = await createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(firstConfig),
+    }).materializeRuntimeBindings(call);
+    const second = await createRuntimeBindingMaterializer({
+      control: runtimeBindingControl(secondConfig),
+    }).materializeRuntimeBindings(call);
 
-    const base = takosOidcInstallConfig();
-    for (const cloudflare of [
-      {
-        account_id: "0".repeat(32),
-        workers_subdomain: "team-workers",
-      },
-      {
-        account_id: CLOUDFLARE_ACCOUNT_ID,
-        workers_subdomain: "other-team",
-      },
-      {
-        account_id: CLOUDFLARE_ACCOUNT_ID,
-        workers_subdomain: "team-workers",
-        ignored_override: "not-closed",
-      },
-    ]) {
-      config = {
-        ...base,
-        variableMapping: { ...base.variableMapping, cloudflare },
-      };
-      await expect(materializer.materialize({
-        phase: "plan",
-        capsule: takosOidcCapsule(config.id),
-        installConfig: config,
-        resolvedProviderBindings: [directCloudflareBinding()],
-        variables: takosOidcVariables(),
-      })).rejects.toThrow(/verified metadata/i);
-    }
+    expect(first.values).toMatchObject({
+      ENCRYPTION_KEY:
+        "ea8ed4859d0e3c2c6ce9bf09849e10641f62710109287ec39eb9fa128b9557be",
+      TAKOSUMI_ACCOUNTS_CLIENT_ID:
+        "tko_724UIrZAPne2bHZdrbQv3MeI5l1oYqY1KVuocPeTqPs",
+      TAKOSUMI_ACCOUNTS_OWNER_SUB:
+        "tsub_ySEHgIbTe99wY8NWtBxaRJJ868Sz4GZq",
+    });
+    expect(second.values.ENCRYPTION_KEY).not.toBe(first.values.ENCRYPTION_KEY);
+    expect(second.values.TAKOSUMI_ACCOUNTS_CLIENT_ID).not.toBe(
+      first.values.TAKOSUMI_ACCOUNTS_CLIENT_ID,
+    );
+    expect(second.values.TAKOSUMI_ACCOUNTS_OWNER_SUB).not.toBe(
+      first.values.TAKOSUMI_ACCOUNTS_OWNER_SUB,
+    );
   });
 });
 
-const CLOUDFLARE_PROVIDER =
-  "registry.opentofu.org/cloudflare/cloudflare" as const;
-const HTTP_PROVIDER = "registry.opentofu.org/hashicorp/http" as const;
-
-function directOidcInstallConfig(): InstallConfig {
-  const hosted = TAKOSERVER_HOSTED_INSTALL_CONFIGS.find(
-    (config) => config.store?.deploymentProfile?.key === "cloudflare-v1",
-  );
-  if (!hosted) throw new Error("Cloudflare Host profile is missing");
+function repositoryOidcInstallConfig(input: {
+  readonly publicUrl?: string | null;
+  readonly allowedScopes?: readonly string[];
+  readonly grantScopes?: readonly string[];
+} = {}): InstallConfig {
+  const publicUrl = input.publicUrl === undefined
+    ? "https://staging.example.test"
+    : input.publicUrl;
+  const grantScopes = input.grantScopes ?? ["openid", "profile"];
   return {
-    ...hosted,
-    id: "icfg_yurucommu_direct",
+    id: "icfg_repository_oidc",
     workspaceId: "ws_1",
-    name: "Yurucommu direct Cloudflare",
-    variableMapping: {
-      ...hosted.variableMapping,
-      project_name: "yuru-main",
-      worker_name: "",
+    name: "Generic reviewed Git app",
+    internal: {
+      reason: "per_install_overrides",
+      sourceSnapshotId: "snap_generic_oidc",
+      repositoryInstallUxDigest: `sha256:${"b".repeat(64)}`,
+    },
+    variableMapping: { public_url: publicUrl },
+    installExperience: {
+      projections: [
+        { kind: "public_endpoint", variables: { url: "public_url" } },
+        {
+          kind: "oidc_client",
+          variables: {
+            accountsUrl: "takosumi_accounts_url",
+            issuerUrl: "takosumi_accounts_issuer_url",
+            clientId: "takosumi_accounts_client_id",
+            redirectUri: "takosumi_accounts_redirect_uri",
+          },
+          callbackPath: "/auth/oidc/callback",
+          scopes: grantScopes,
+        },
+      ],
+      repositoryInstallUx: { status: "accepted" },
+    },
+    outputAllowlist: {},
+    policy: {
+      repositoryInstallUx: {
+        allowedInterfacePermissions: [],
+        allowedOidcScopes: input.allowedScopes ?? ["openid", "profile"],
+      },
     },
     createdAt: NOW.toISOString(),
     updatedAt: NOW.toISOString(),
   };
 }
 
-function directOidcCapsule(status: "active" | "destroyed" = "active") {
+function oidcCapsule(
+  status: Capsule["status"] = "active",
+  installingPrincipalId: string | undefined = "tsub_owner",
+): Capsule {
   return {
     id: "cap_1",
     workspaceId: "ws_1",
-    name: "Yurucommu",
-    installConfigId: "icfg_yurucommu_direct",
-    installingPrincipalId: "tsub_owner",
+    projectId: "project_1",
+    name: "Generic reviewed Git app",
+    slug: "generic-reviewed-git-app",
+    sourceId: "source_1",
+    installConfigId: "icfg_repository_oidc",
+    ...(installingPrincipalId ? { installingPrincipalId } : {}),
+    environment: "staging",
+    currentStateGeneration: 0,
     status,
-  } as const;
-}
-
-function directCloudflareBinding(
-  overrides: Partial<ResolvedCapsuleProviderBinding["connection"]> = {},
-): ResolvedCapsuleProviderBinding {
-  const connection = {
-    id: "conn_cloudflare_workspace",
-    workspaceId: "ws_1",
-    provider: CLOUDFLARE_PROVIDER,
-    providerSource: CLOUDFLARE_PROVIDER,
-    credentialRecipe: {
-      id: "cloudflare",
-      authMode: "api_token",
-      secretPartition: "provider-credentials",
-    },
-    secretPartition: "provider-credentials",
-    scope: "workspace" as const,
-    status: "verified" as const,
-    materialization: "secret",
-    envNames: ["CLOUDFLARE_API_TOKEN"],
-    scopeHints: {
-      providerSettings: {
-        accountId: CLOUDFLARE_ACCOUNT_ID,
-        workersSubdomain: "team-workers",
-      },
-      moduleInputDefaults: {
-        cloudflare_account_id: CLOUDFLARE_ACCOUNT_ID,
-        cloudflare_workers_subdomain: "team-workers",
-      },
-    },
     createdAt: NOW.toISOString(),
     updatedAt: NOW.toISOString(),
-    verifiedAt: NOW.toISOString(),
-    credentialVerification: {
-      kind: "takosumi.credential-verification@v1" as const,
-      verifierId: CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID,
-      capabilities: [CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY],
-    },
-    ...overrides,
-  };
-  return {
-    provider: CLOUDFLARE_PROVIDER,
-    connection,
-    materialization: connection.materialization,
   };
 }
 
-function unrelatedHttpBinding(): ResolvedCapsuleProviderBinding {
-  return {
-    provider: HTTP_PROVIDER,
-    connection: {
-      id: "conn_http_workspace",
-      workspaceId: "ws_1",
-      provider: HTTP_PROVIDER,
-      providerSource: HTTP_PROVIDER,
-      credentialRecipe: {
-        id: "generic-env",
-        authMode: "env",
-        secretPartition: "provider-credentials",
-      },
-      secretPartition: "provider-credentials",
-      scope: "workspace",
-      status: "verified",
-      materialization: "secret",
-      envNames: ["HTTP_BEARER_TOKEN"],
-      createdAt: NOW.toISOString(),
-      updatedAt: NOW.toISOString(),
-      verifiedAt: NOW.toISOString(),
-    },
-    materialization: "secret",
-  };
-}
-
-function directOidcVariables() {
-  return {
-    project_name: "yuru-main",
-    worker_name: "",
-    cloudflare_account_id: CLOUDFLARE_ACCOUNT_ID,
-    cloudflare_workers_subdomain: "team-workers",
-  } as const;
-}
-
-function directOidcControl(
-  current: () => InstallConfig | undefined,
-  currentCapsule: () => ReturnType<typeof directOidcCapsule> = () =>
-    directOidcCapsule(),
+function oidcControl(
+  currentConfig: () => InstallConfig | undefined,
+  currentCapsule: () => Capsule = () => oidcCapsule(),
 ): AccountsOidcModuleVariableControlLedger {
   return {
     async getCapsule() {
       return currentCapsule();
     },
     async getInstallConfig() {
-      return current();
+      return currentConfig();
     },
   };
 }
 
-const TAKOS_SCOPES = [
-  "openid",
-  "profile",
-  "email",
-  "offline_access",
-  "capsules:read",
-  "capsules:write",
-] as const;
-
-function takosOidcInstallConfig(input: {
-  readonly id?: string;
-  readonly updatedAt?: string;
-  readonly publicUrl?: string | null;
-} = {}): InstallConfig {
-  const hosted = composeTakosInstallConfig({
-    TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL:
-      "https://github.com/tako0614/takos/releases/download/v0.12.6/takosumi-artifact.json",
-    TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256:
-      `sha256:${"a".repeat(64)}`,
+function createOidcMaterializer(input: {
+  readonly config: () => InstallConfig | undefined;
+  readonly capsule?: () => Capsule;
+  readonly accounts: AccountsOidcModuleVariableAccountsLedger;
+}) {
+  return createTakosumiAccountsOidcModuleVariableMaterializer({
+    control: oidcControl(input.config, input.capsule),
+    accounts: input.accounts,
+    issuer: "https://app.takosumi.com",
+    pairwiseSubjectSecret: PAIRWISE_SECRET,
+    clock: () => NOW,
   });
-  if (!hosted) throw new Error("Takos hosted profile is missing");
-  return {
-    ...hosted,
-    id: input.id ?? "icfg_takos_1",
-    workspaceId: "ws_1",
-    name: "Takos direct Cloudflare",
-    variableMapping: {
-      project_name: "takos-main",
-      public_url: input.publicUrl ?? null,
-      cloudflare: {
-        account_id: CLOUDFLARE_ACCOUNT_ID,
-        workers_subdomain: "team-workers",
-      },
-    },
-    createdAt: NOW.toISOString(),
-    updatedAt: input.updatedAt ?? NOW.toISOString(),
-  };
 }
 
-function takosOidcCapsule(
-  installConfigId = "icfg_takos_1",
-  capsuleId = "cap_takos_1",
-) {
+function call(config: InstallConfig, capsule: Capsule = oidcCapsule()) {
   return {
-    id: capsuleId,
-    workspaceId: "ws_1",
-    name: `Takos ${capsuleId}`,
-    installConfigId,
-    installingPrincipalId: "tsub_owner",
-    status: "active" as const,
-  };
-}
-
-function takosOidcVariables(publicUrl: string | null = null) {
-  return {
-    project_name: "takos-main",
-    public_url: publicUrl,
+    capsule,
+    installConfig: config,
+    resolvedProviderBindings: [],
+    variables: { public_url: config.variableMapping.public_url },
   } as const;
 }
 
-describe("Takosumi Accounts OIDC module-variable materializer", () => {
-  test("keeps Plan pure, then registers one Capsule client during guarded Apply", async () => {
-    const config = directOidcInstallConfig();
-    const saved: OidcClientRecord[] = [];
+describe("Takosumi repository Accounts OIDC materializer", () => {
+  test("keeps Plan read-only and registers one Capsule client only on Apply", async () => {
+    const config = repositoryOidcInstallConfig();
     let current: OidcClientRecord | undefined;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
+    let writes = 0;
+    const materializer = createOidcMaterializer({
+      config: () => config,
       accounts: {
         async findOidcClient(clientId) {
           return current?.clientId === clientId ? current : undefined;
@@ -787,1204 +665,331 @@ describe("Takosumi Accounts OIDC module-variable materializer", () => {
         },
         async saveOidcClient(record) {
           current = record;
-          saved.push(record);
+          writes += 1;
         },
       },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
     });
 
-    const first = await materializer.materialize({
+    const planned = await materializer.materialize({
       phase: "plan",
-      capsule: directOidcCapsule(),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
+      ...call(config),
     });
-    expect(first?.digest).toMatch(/^sha256:[a-f0-9]{64}$/u);
-    expect(first?.variables).toEqual({
-      takosumi_accounts_issuer_url: "https://app.takosumi.com",
-      takosumi_accounts_client_id: expect.stringMatching(
-        /^tko_[A-Za-z0-9_-]{43}$/u,
-      ),
-      oidc_owner_sub: expect.stringMatching(/^tsub_[A-Za-z0-9_-]{32}$/u),
-      allow_unpinned_owner_claim: false,
+    expect(writes).toBe(0);
+    expect(planned).toEqual({
+      digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+      variables: {
+        takosumi_accounts_url: "https://app.takosumi.com",
+        takosumi_accounts_issuer_url: "https://app.takosumi.com",
+        takosumi_accounts_client_id: expect.stringMatching(
+          /^tko_[A-Za-z0-9_-]{43}$/u,
+        ),
+        takosumi_accounts_redirect_uri:
+          "https://staging.example.test/auth/oidc/callback",
+      },
     });
-    expect(JSON.stringify(first)).not.toContain("ENCRYPTION_KEY");
-    expect(JSON.stringify(first)).not.toContain("pairwise-secret");
-    expect(saved).toHaveLength(0);
 
-    const checked = await materializer.materialize({
-      phase: "apply_check",
-      expectedDigest: first!.digest,
-      plannedVariables: first!.variables,
-      capsule: directOidcCapsule(),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
-    });
-    expect(checked).toEqual(first);
-    expect(saved).toHaveLength(0);
-
-    const second = await materializer.materialize({
+    const applied = await materializer.materialize({
       phase: "apply",
-      expectedDigest: first!.digest,
-      plannedVariables: first!.variables,
-      capsule: directOidcCapsule(),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
+      expectedDigest: planned!.digest,
+      plannedVariables: planned!.variables,
+      ...call(config),
     });
-    expect(second).toEqual(first);
-    expect(saved).toHaveLength(1);
-    expect(saved[0]).toMatchObject({
+    expect(applied).toEqual(planned);
+    expect(writes).toBe(1);
+    expect(current).toMatchObject({
       capsuleId: "cap_1",
-      issuerUrl: "https://app.takosumi.com",
-      redirectUris: [
-        "https://yuru-main.team-workers.workers.dev/api/auth/callback/takos",
-      ],
-      allowedScopes: ["openid", "profile", "email"],
-      subjectMode: "pairwise",
-      tokenEndpointAuthMethod: "none",
+      redirectUris: ["https://staging.example.test/auth/oidc/callback"],
+      allowedScopes: ["openid", "profile"],
     });
-
-    const repeated = await materializer.materialize({
-      phase: "apply",
-      expectedDigest: first!.digest,
-      plannedVariables: first!.variables,
-      capsule: directOidcCapsule(),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
-    });
-    expect(repeated).toEqual(first);
-    expect(saved).toHaveLength(1);
   });
 
-  test("retires only the exact DB-owned client after the current Capsule is terminal", async () => {
-    const config = directOidcInstallConfig();
-    let capsuleStatus: "active" | "destroyed" = "active";
-    let current: OidcClientRecord | undefined;
-    let saves = 0;
-    const revoked: string[] = [];
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(
-        () => config,
-        () => directOidcCapsule(capsuleStatus),
-      ),
+  test("requires an exact Plan-known HTTPS public origin", async () => {
+    for (const publicUrl of [
+      null,
+      "",
+      "http://staging.example.test",
+      "https://staging.example.test/path",
+    ]) {
+      const config = repositoryOidcInstallConfig({ publicUrl });
+      let writes = 0;
+      const materializer = createOidcMaterializer({
+        config: () => config,
+        accounts: {
+          async findOidcClient() {
+            return undefined;
+          },
+          async findOidcClientForCapsule() {
+            return undefined;
+          },
+          async saveOidcClient() {
+            writes += 1;
+          },
+        },
+      });
+
+      await expect(materializer.materialize({
+        phase: "plan",
+        ...call(config),
+      })).rejects.toThrow(/public URL|HTTPS origin/i);
+      expect(writes).toBe(0);
+    }
+  });
+
+  test("does not materialize a manual or operator-only OIDC projection", async () => {
+    const repository = repositoryOidcInstallConfig();
+    const config: InstallConfig = {
+      ...repository,
+      internal: undefined,
+      installExperience: {
+        ...repository.installExperience,
+        repositoryInstallUx: undefined,
+      },
+    };
+    const materializer = createOidcMaterializer({
+      config: () => config,
       accounts: {
-        async findOidcClient(clientId) {
-          return current?.clientId === clientId ? current : undefined;
+        async findOidcClient() {
+          throw new Error("manual projection must not read Accounts");
         },
-        async findOidcClientForCapsule(capsuleId) {
-          return current?.capsuleId === capsuleId ? current : undefined;
+        async findOidcClientForCapsule() {
+          throw new Error("manual projection must not read Accounts");
         },
-        async saveOidcClient(record) {
-          current = record;
-          saves += 1;
-        },
-        async revokeOidcClient(clientId) {
-          revoked.push(clientId);
-          if (current?.clientId === clientId) current = undefined;
+        async saveOidcClient() {
+          throw new Error("manual projection must not write Accounts");
         },
       },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
+    });
+
+    await expect(materializer.materialize({
+      phase: "plan",
+      ...call(config),
+    })).resolves.toBeUndefined();
+  });
+
+  test("rejects scope policy and exact delivery drift before Accounts mutation", async () => {
+    const base = repositoryOidcInstallConfig();
+    const oidc = base.installExperience!.projections!.find(
+      (projection) => projection.kind === "oidc_client",
+    )!;
+    const drifted = [
+      repositoryOidcInstallConfig({ allowedScopes: ["openid"] }),
+      {
+        ...base,
+        installExperience: {
+          ...base.installExperience,
+          projections: base.installExperience!.projections!.map((projection) =>
+            projection.kind === "oidc_client"
+              ? {
+                  ...oidc,
+                  variables: {
+                    ...oidc.variables,
+                    clientId: oidc.variables.issuerUrl,
+                  },
+                }
+              : projection
+          ),
+        },
+      } satisfies InstallConfig,
+    ];
+
+    for (const config of drifted) {
+      let writes = 0;
+      const materializer = createOidcMaterializer({
+        config: () => config,
+        accounts: {
+          async findOidcClient() {
+            return undefined;
+          },
+          async findOidcClientForCapsule() {
+            return undefined;
+          },
+          async saveOidcClient() {
+            writes += 1;
+          },
+        },
+      });
+      await expect(materializer.materialize({
+        phase: "plan",
+        ...call(config),
+      })).rejects.toThrow(/scope|variable/i);
+      expect(writes).toBe(0);
+    }
+  });
+
+  test("rejects callback drift between Plan and Apply", async () => {
+    let config = repositoryOidcInstallConfig();
+    let writes = 0;
+    const materializer = createOidcMaterializer({
+      config: () => config,
+      accounts: {
+        async findOidcClient() {
+          return undefined;
+        },
+        async findOidcClientForCapsule() {
+          return undefined;
+        },
+        async saveOidcClient() {
+          writes += 1;
+        },
+      },
     });
     const planned = await materializer.materialize({
       phase: "plan",
-      capsule: directOidcCapsule(),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
+      ...call(config),
+    });
+    config = {
+      ...config,
+      installExperience: {
+        ...config.installExperience,
+        projections: config.installExperience!.projections!.map((projection) =>
+          projection.kind === "oidc_client"
+            ? { ...projection, callbackPath: "/changed/callback" }
+            : projection
+        ),
+      },
+      updatedAt: "2026-08-25T12:00:01.000Z",
+    };
+
+    await expect(materializer.materialize({
+      phase: "apply",
+      expectedDigest: planned!.digest,
+      plannedVariables: planned!.variables,
+      ...call(config),
+    })).rejects.toThrow(/changed since Plan/i);
+    expect(writes).toBe(0);
+  });
+
+  test("fails closed when the Accounts read capability is unavailable", async () => {
+    const config = repositoryOidcInstallConfig();
+    let writes = 0;
+    const materializer = createOidcMaterializer({
+      config: () => config,
+      accounts: {
+        async findOidcClient() {
+          throw new Error("Accounts unavailable");
+        },
+        async findOidcClientForCapsule() {
+          throw new Error("Accounts unavailable");
+        },
+        async saveOidcClient() {
+          writes += 1;
+        },
+      },
+    });
+
+    await expect(materializer.materialize({
+      phase: "plan",
+      ...call(config),
+    })).rejects.toThrow(/Accounts unavailable/i);
+    expect(writes).toBe(0);
+  });
+
+  test("rejects planned-variable drift before Apply mutation", async () => {
+    const config = repositoryOidcInstallConfig();
+    let writes = 0;
+    const materializer = createOidcMaterializer({
+      config: () => config,
+      accounts: {
+        async findOidcClient() {
+          return undefined;
+        },
+        async findOidcClientForCapsule() {
+          return undefined;
+        },
+        async saveOidcClient() {
+          writes += 1;
+        },
+      },
+    });
+    const planned = await materializer.materialize({
+      phase: "plan",
+      ...call(config),
+    });
+
+    await expect(materializer.materialize({
+      phase: "apply",
+      expectedDigest: planned!.digest,
+      plannedVariables: {
+        ...planned!.variables,
+        takosumi_accounts_redirect_uri:
+          "https://attacker.example.test/auth/oidc/callback",
+      },
+      ...call(config),
+    })).rejects.toThrow(/planned module variable values changed/i);
+    expect(writes).toBe(0);
+  });
+
+  test("requires the Capsule installing Principal", async () => {
+    const config = repositoryOidcInstallConfig();
+    const capsule = oidcCapsule("active", "");
+    const materializer = createOidcMaterializer({
+      config: () => config,
+      capsule: () => capsule,
+      accounts: {
+        async findOidcClient() {
+          return undefined;
+        },
+        async findOidcClientForCapsule() {
+          return undefined;
+        },
+        async saveOidcClient() {
+          throw new Error("must not write");
+        },
+      },
+    });
+
+    await expect(materializer.materialize({
+      phase: "plan",
+      ...call(config, capsule),
+    })).rejects.toThrow(/installing Principal is missing/i);
+  });
+
+  test("retires the exact client idempotently only after terminal destroy", async () => {
+    const config = repositoryOidcInstallConfig();
+    const accounts = new InMemoryAccountsStore();
+    let capsule = oidcCapsule();
+    const revoked: string[] = [];
+    const materializer = createOidcMaterializer({
+      config: () => config,
+      capsule: () => capsule,
+      accounts: {
+        async findOidcClient(clientId) {
+          return accounts.findOidcClient(clientId);
+        },
+        async findOidcClientForCapsule(capsuleId) {
+          return accounts.findOidcClientForCapsule(capsuleId);
+        },
+        async saveOidcClient(record) {
+          accounts.saveOidcClient(record);
+        },
+        async revokeOidcClient(clientId) {
+          revoked.push(clientId);
+          accounts.revokeOidcClient(clientId);
+        },
+      },
+    });
+    const planned = await materializer.materialize({
+      phase: "plan",
+      ...call(config, capsule),
     });
     await materializer.materialize({
       phase: "apply",
       expectedDigest: planned!.digest,
       plannedVariables: planned!.variables,
-      capsule: directOidcCapsule(),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
+      ...call(config, capsule),
     });
-    const clientId = current!.clientId;
-    expect(saves).toBe(1);
-
-    capsuleStatus = "destroyed";
-    expect(materializer.retire).toBeFunction();
-    await materializer.retire({
+    const clientId = planned!.variables.takosumi_accounts_client_id as string;
+    const retirement = () => ({
       expectedDigest: planned!.digest,
       plannedVariables: planned!.variables,
-      capsule: directOidcCapsule("destroyed"),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
+      ...call(config, capsule),
     });
 
-    expect(saves).toBe(1);
-    expect(revoked).toEqual([clientId]);
-    expect(current).toBeUndefined();
-  });
-
-  test("treats an absent terminal Capsule client as an idempotent retirement", async () => {
-    const config = directOidcInstallConfig();
-    let capsuleStatus: "active" | "destroyed" = "active";
-    let saves = 0;
-    const revoked: string[] = [];
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(
-        () => config,
-        () => directOidcCapsule(capsuleStatus),
-      ),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          saves += 1;
-        },
-        async revokeOidcClient(clientId) {
-          revoked.push(clientId);
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-    const planned = await materializer.materialize({
-      phase: "plan",
-      capsule: directOidcCapsule(),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
-    });
-    capsuleStatus = "destroyed";
-    const retirement = {
-      expectedDigest: planned!.digest,
-      plannedVariables: planned!.variables,
-      capsule: directOidcCapsule("destroyed"),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
-    } as const;
-
-    await materializer.retire(retirement);
-    await materializer.retire(retirement);
-
-    expect(saves).toBe(0);
-    expect(revoked).toEqual([
-      planned!.variables.takosumi_accounts_client_id,
-      planned!.variables.takosumi_accounts_client_id,
-    ]);
-  });
-
-  test("rejects OIDC client retirement before the current Capsule is terminal", async () => {
-    const config = directOidcInstallConfig();
-    let saves = 0;
-    let revocations = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          saves += 1;
-        },
-        async revokeOidcClient() {
-          revocations += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-    const planned = await materializer.materialize({
-      phase: "plan",
-      capsule: directOidcCapsule(),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
-    });
-
-    await expect(
-      materializer.retire({
-        expectedDigest: planned!.digest,
-        plannedVariables: planned!.variables,
-        capsule: directOidcCapsule(),
-        installConfig: config,
-        resolvedProviderBindings: [directCloudflareBinding()],
-        variables: directOidcVariables(),
-      }),
-    ).rejects.toThrow(/terminal Capsule/i);
-    expect(saves).toBe(0);
-    expect(revocations).toBe(0);
-  });
-
-  test("rejects planned OIDC variable drift before Accounts mutation", async () => {
-    const config = directOidcInstallConfig();
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-    const planned = await materializer.materialize({
-      phase: "plan",
-      capsule: directOidcCapsule(),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
-    });
-
-    await expect(
-      materializer.materialize({
-        phase: "apply",
-        expectedDigest: planned!.digest,
-        plannedVariables: {
-          ...planned!.variables,
-          takosumi_accounts_client_id: "tko_reviewed_different_client",
-        },
-        capsule: directOidcCapsule(),
-        installConfig: config,
-        resolvedProviderBindings: [directCloudflareBinding()],
-        variables: directOidcVariables(),
-      }),
-    ).rejects.toThrow(/planned.*variable/i);
-    expect(writes).toBe(0);
-  });
-
-  test("rejects current Accounts client metadata drift before rewriting it", async () => {
-    const config = directOidcInstallConfig();
-    const deriving = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          throw new Error("Plan must not write");
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-    const planned = await deriving.materialize({
-      phase: "plan",
-      capsule: directOidcCapsule(),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
-    });
-    const current: OidcClientRecord = {
-      clientId: planned!.variables.takosumi_accounts_client_id as string,
-      capsuleId: "cap_1",
-      namespacePath: "identity.oidc",
-      issuerUrl: "https://stale-issuer.example.test",
-      redirectUris: [
-        "https://yuru-main.team-workers.workers.dev/api/auth/callback/takos",
-      ],
-      allowedScopes: ["openid", "profile", "email"],
-      subjectMode: "pairwise",
-      tokenEndpointAuthMethod: "none",
-      createdAt: NOW.getTime(),
-      updatedAt: NOW.getTime(),
-    };
-    let writes = 0;
-    const checking = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return current;
-        },
-        async findOidcClientForCapsule() {
-          return current;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-
-    await expect(
-      checking.materialize({
-        phase: "apply_check",
-        expectedDigest: planned!.digest,
-        plannedVariables: planned!.variables,
-        capsule: directOidcCapsule(),
-        installConfig: config,
-        resolvedProviderBindings: [directCloudflareBinding()],
-        variables: directOidcVariables(),
-      }),
-    ).rejects.toThrow(/current Accounts OIDC client.*drift/i);
-    expect(writes).toBe(0);
-  });
-
-  test("rejects an existing Capsule client collision before Accounts mutation", async () => {
-    const config = directOidcInstallConfig();
-    const emptyAccounts = {
-      async findOidcClient() {
-        return undefined;
-      },
-      async findOidcClientForCapsule() {
-        return undefined;
-      },
-      async saveOidcClient() {
-        throw new Error("Plan must not write");
-      },
-    };
-    const deriving = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: emptyAccounts,
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-    const planned = await deriving.materialize({
-      phase: "plan",
-      capsule: directOidcCapsule(),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
-    });
-    const collision: OidcClientRecord = {
-      clientId: "tko_another_capsule_client",
-      capsuleId: "cap_1",
-      namespacePath: "identity.oidc",
-      issuerUrl: "https://app.takosumi.com",
-      redirectUris: [
-        "https://yuru-main.team-workers.workers.dev/api/auth/callback/takos",
-      ],
-      allowedScopes: ["openid", "profile", "email"],
-      subjectMode: "pairwise",
-      tokenEndpointAuthMethod: "none",
-      createdAt: NOW.getTime(),
-      updatedAt: NOW.getTime(),
-    };
-    let writes = 0;
-    const checking = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return collision;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-
-    await expect(
-      checking.materialize({
-        phase: "apply_check",
-        expectedDigest: planned!.digest,
-        plannedVariables: planned!.variables,
-        capsule: directOidcCapsule(),
-        installConfig: config,
-        resolvedProviderBindings: [directCloudflareBinding()],
-        variables: directOidcVariables(),
-      }),
-    ).rejects.toThrow(/already bound to another OIDC client/i);
-    expect(writes).toBe(0);
-  });
-
-  test("accepts capability-authorized OAuth and workspace-bindable operator Cloudflare bindings", async () => {
-    const config = directOidcInstallConfig();
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-
-    for (const binding of [
-      directCloudflareBinding({
-        credentialRecipe: {
-          id: "cloudflare",
-          authMode: "oauth",
-          secretPartition: "provider-credentials",
-        },
-      }),
-      directCloudflareBinding({
-        id: "conn_cloudflare_operator",
-        scope: "operator",
-        workspaceId: undefined,
-        secretPartition: undefined,
-        materialization: "run-issued",
-        credentialRecipe: {
-          id: "operator-cloudflare",
-          authMode: "broker",
-          runIssuance: {
-            context: "capsule-run.v1",
-            operatorConnection: "workspace-bindable",
-            storedMaterial: "none",
-            audience: "cloudflare.operator.v1",
-            scopes: ["cloudflare:workers"],
-          },
-        },
-      }),
-    ]) {
-      const materialized = await materializer.materialize(
-        {
-          phase: "plan",
-          capsule: directOidcCapsule(),
-          installConfig: config,
-          resolvedProviderBindings: [binding],
-          variables: directOidcVariables(),
-        },
-      );
-      expect(materialized?.digest).toMatch(/^sha256:[a-f0-9]{64}$/u);
-    }
-    expect(writes).toBe(0);
-  });
-
-  test("accepts the production Cloudflare binding when the resolved source is canonical and the recipe label is opaque", async () => {
-    const config = directOidcInstallConfig();
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-
-    await expect(
-      materializer.materialize({
-        phase: "plan",
-        capsule: directOidcCapsule(),
-        installConfig: config,
-        resolvedProviderBindings: [
-          directCloudflareBinding({ provider: "cloudflare/cloudflare" }),
-        ],
-        variables: directOidcVariables(),
-      }),
-    ).resolves.toMatchObject({
-      digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
-    });
-    expect(writes).toBe(0);
-  });
-
-  test("accepts unrelated authorized bindings and a widened provider policy", async () => {
-    const base = directOidcInstallConfig();
-    const credentialPolicy = base.policy.providerCredentials!;
-    const config: InstallConfig = {
-      ...base,
-      policy: {
-        ...base.policy,
-        allowedProviders: [
-          ...(base.policy.allowedProviders ?? []),
-          "registry.opentofu.org/hashicorp/null",
-        ],
-        providerCredentials: {
-          ...credentialPolicy,
-          allowedConnectionScopes: ["workspace", "operator"],
-          allowedCredentialRecipes: [
-            ...(credentialPolicy.allowedCredentialRecipes ?? []),
-            { id: "cloudflare", authMode: "oauth" },
-          ],
-        },
-      },
-    };
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-
-    await expect(
-      materializer.materialize({
-        phase: "plan",
-        capsule: directOidcCapsule(),
-        installConfig: config,
-        resolvedProviderBindings: [
-          directCloudflareBinding(),
-          unrelatedHttpBinding(),
-        ],
-        variables: directOidcVariables(),
-      }),
-    ).resolves.toMatchObject({
-      digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
-    });
-    expect(writes).toBe(0);
-  });
-
-  test("requires one current Cloudflare binding with valid scope authority", async () => {
-    const config = directOidcInstallConfig();
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-
-    for (const bindings of [
-      [] as ResolvedCapsuleProviderBinding[],
-      [
-        directCloudflareBinding(),
-        directCloudflareBinding({ id: "conn_cloudflare_duplicate" }),
-      ],
-      [directCloudflareBinding({ status: "pending", verifiedAt: undefined })],
-      [
-        directCloudflareBinding({
-          providerSource: "registry.opentofu.org/hashicorp/null",
-        }),
-      ],
-      [directCloudflareBinding({ workspaceId: "ws_other" })],
-      [
-        directCloudflareBinding({
-          scope: "operator",
-          workspaceId: undefined,
-          credentialRecipe: {
-            id: "cloudflare",
-            authMode: "oauth",
-            secretPartition: "provider-credentials",
-          },
-        }),
-      ],
-    ]) {
-      await expect(
-        materializer.materialize({
-          phase: "plan",
-          capsule: directOidcCapsule(),
-          installConfig: config,
-          resolvedProviderBindings: bindings,
-          variables: directOidcVariables(),
-        }),
-      ).rejects.toThrow();
-    }
-    expect(writes).toBe(0);
-  });
-
-  test("uses the verification capability instead of verifier or recipe identity", async () => {
-    const config = directOidcInstallConfig();
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-
-    const rejectedOverrides: Partial<
-      ResolvedCapsuleProviderBinding["connection"]
-    >[] = [
-      {
-        credentialVerification: undefined,
-      },
-      {
-        credentialRecipe: {
-          id: "generic-env",
-          authMode: "env",
-          secretPartition: "provider-credentials",
-        },
-        credentialVerification: {
-          kind: "takosumi.credential-verification@v1" as const,
-          verifierId: "declared-env@v1",
-        },
-      },
-      {
-        credentialVerification: {
-          kind: "takosumi.credential-verification@v1",
-          verifierId: "cloudflare/legacy-account-only@v1",
-        },
-      },
-    ];
-    for (const connectionOverrides of rejectedOverrides) {
-      await expect(
-        materializer.materialize({
-          phase: "plan",
-          capsule: directOidcCapsule(),
-          installConfig: config,
-          resolvedProviderBindings: [
-            directCloudflareBinding(connectionOverrides),
-          ],
-          variables: directOidcVariables(),
-        }),
-      ).rejects.toThrow(/verification capability/i);
-    }
-
-    await expect(
-      materializer.materialize({
-        phase: "plan",
-        capsule: directOidcCapsule(),
-        installConfig: config,
-        resolvedProviderBindings: [
-          directCloudflareBinding({
-            credentialRecipe: {
-              id: "cloudflare",
-              authMode: "oauth",
-              secretPartition: "provider-credentials",
-            },
-            credentialVerification: {
-              kind: "takosumi.credential-verification@v1",
-              verifierId: "example/replacement-cloudflare-verifier@v2",
-              capabilities: [
-                CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_CAPABILITY,
-              ],
-            },
-          }),
-        ],
-        variables: directOidcVariables(),
-      }),
-    ).resolves.toMatchObject({
-      digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
-    });
-    expect(writes).toBe(0);
-  });
-
-  test("requires the exact OIDC callback and scope declaration before Accounts mutation", async () => {
-    const base = directOidcInstallConfig();
-    let writes = 0;
-    const accounts = {
-      async findOidcClient() {
-        return undefined;
-      },
-      async findOidcClientForCapsule() {
-        return undefined;
-      },
-      async saveOidcClient() {
-        writes += 1;
-      },
-    };
-
-    for (const projection of [
-      {
-        kind: "oidc_client" as const,
-        variables: {},
-        callbackPath: "/api/auth/callback/other",
-        scopes: ["openid", "profile", "email"],
-      },
-      {
-        kind: "oidc_client" as const,
-        variables: {},
-        callbackPath: "/api/auth/callback/takos",
-        scopes: ["openid", "profile", "email", "email"],
-      },
-    ]) {
-      const config: InstallConfig = {
-        ...base,
-        installExperience: { projections: [projection] },
-      };
-      const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-        control: directOidcControl(() => config),
-        accounts,
-        issuer: "https://app.takosumi.com",
-        pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-        clock: () => NOW,
-      });
-
-      await expect(
-        materializer.materialize({
-          phase: "plan",
-          capsule: directOidcCapsule(),
-          installConfig: config,
-          resolvedProviderBindings: [directCloudflareBinding()],
-          variables: directOidcVariables(),
-        }),
-      ).rejects.toThrow(/grant is not exact/i);
-    }
-    expect(writes).toBe(0);
-  });
-
-  test("requires the Capsule installing Principal before Accounts mutation", async () => {
-    const config = directOidcInstallConfig();
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: {
-        async getCapsule() {
-          return { ...directOidcCapsule(), installingPrincipalId: undefined };
-        },
-        async getInstallConfig() {
-          return config;
-        },
-      },
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-
-    await expect(
-      materializer.materialize({
-        phase: "plan",
-        capsule: { ...directOidcCapsule(), installingPrincipalId: undefined },
-        installConfig: config,
-        resolvedProviderBindings: [directCloudflareBinding()],
-        variables: directOidcVariables(),
-      }),
-    ).rejects.toThrow(/installing Principal/i);
-    expect(writes).toBe(0);
-  });
-
-  test("rejects missing verified account or workers-subdomain metadata", async () => {
-    const config = directOidcInstallConfig();
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-
-    await expect(
-      materializer.materialize({
-        phase: "plan",
-        capsule: directOidcCapsule(),
-        installConfig: config,
-        resolvedProviderBindings: [
-          directCloudflareBinding({
-            scopeHints: {
-              providerSettings: { accountId: CLOUDFLARE_ACCOUNT_ID },
-              moduleInputDefaults: {
-                cloudflare_account_id: CLOUDFLARE_ACCOUNT_ID,
-              },
-            },
-          }),
-        ],
-        variables: directOidcVariables(),
-      }),
-    ).rejects.toThrow();
-    expect(writes).toBe(0);
-  });
-
-  test("rejects a legacy malformed Cloudflare account id despite matching attested defaults", async () => {
-    const config = directOidcInstallConfig();
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-    const malformedAccountId = "acct_verified";
-
-    await expect(
-      materializer.materialize({
-        phase: "plan",
-        capsule: directOidcCapsule(),
-        installConfig: config,
-        resolvedProviderBindings: [
-          directCloudflareBinding({
-            scopeHints: {
-              providerSettings: {
-                accountId: malformedAccountId,
-                workersSubdomain: "team-workers",
-              },
-              moduleInputDefaults: {
-                cloudflare_account_id: malformedAccountId,
-                cloudflare_workers_subdomain: "team-workers",
-              },
-            },
-          }),
-        ],
-        variables: {
-          ...directOidcVariables(),
-          cloudflare_account_id: malformedAccountId,
-        },
-      }),
-    ).rejects.toThrow(/verified metadata is incomplete/i);
-    expect(writes).toBe(0);
-  });
-
-  test("rejects module account or workers-subdomain overrides that differ from verified metadata", async () => {
-    const config = directOidcInstallConfig();
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-
-    for (const variables of [
-      { ...directOidcVariables(), cloudflare_account_id: "acct_override" },
-      {
-        ...directOidcVariables(),
-        cloudflare_workers_subdomain: "other-team",
-      },
-    ]) {
-      await expect(
-        materializer.materialize({
-          phase: "plan",
-          capsule: directOidcCapsule(),
-          installConfig: config,
-          resolvedProviderBindings: [directCloudflareBinding()],
-          variables,
-        }),
-      ).rejects.toThrow(/verified metadata/i);
-    }
-    expect(writes).toBe(0);
-  });
-
-  test("rejects a secret-shaped module target before Accounts mutation", async () => {
-    const base = directOidcInstallConfig();
-    const config: InstallConfig = {
-      ...base,
-      accountsOidcModuleVariableMaterialization: {
-        ...base.accountsOidcModuleVariableMaterialization!,
-        ownerSubjectVariable: "encryption_key",
-      },
-    };
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-
-    await expect(
-      materializer.materialize({
-        phase: "plan",
-        capsule: directOidcCapsule(),
-        installConfig: config,
-        resolvedProviderBindings: [directCloudflareBinding()],
-        variables: directOidcVariables(),
-      }),
-    ).rejects.toThrow(/target/i);
-    expect(writes).toBe(0);
-  });
-
-  test("rejects raw user secret inputs at the private materializer boundary", async () => {
-    const config = directOidcInstallConfig();
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-
-    await expect(
-      materializer.materialize({
-        phase: "plan",
-        capsule: directOidcCapsule(),
-        installConfig: config,
-        resolvedProviderBindings: [directCloudflareBinding()],
-        variables: {
-          ...directOidcVariables(),
-          auth_password_hash: "$argon2id$must-not-cross",
-        },
-      }),
-    ).rejects.toThrow(/exact non-secret metadata/i);
-    expect(writes).toBe(0);
-  });
-
-  test("requires the exact Cloudflare/Yuru declaration metadata names", async () => {
-    const base = directOidcInstallConfig();
-    let current = base;
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => current),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-
-    for (const declaration of [
-      { additionalInputVariables: ["tenant_slug"] },
-      {
-        forbiddenNonEmptyInputVariables: [
-          "auth_password_hash",
-          "another_secret_token",
-        ],
-      },
-    ]) {
-      current = {
-        ...base,
-        accountsOidcModuleVariableMaterialization: {
-          ...base.accountsOidcModuleVariableMaterialization!,
-          ...declaration,
-        },
-      };
-      await expect(
-        materializer.materialize({
-          phase: "plan",
-          capsule: directOidcCapsule(),
-          installConfig: current,
-          resolvedProviderBindings: [directCloudflareBinding()],
-          variables: directOidcVariables(),
-        }),
-      ).rejects.toThrow(/metadata inputs are not exact/i);
-    }
-    expect(writes).toBe(0);
-  });
-
-  test("rejects InstallConfig materialization drift before rewriting the OIDC client", async () => {
-    let current = directOidcInstallConfig();
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => current),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-    const planned = await materializer.materialize({
-      phase: "plan",
-      capsule: directOidcCapsule(),
-      installConfig: current,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
-    });
-    expect(writes).toBe(0);
-
-    current = {
-      ...current,
-      accountsOidcModuleVariableMaterialization: {
-        ...current.accountsOidcModuleVariableMaterialization!,
-        clientIdVariable: "changed_client_id",
-      },
-      updatedAt: "2026-08-25T12:00:01.000Z",
-    };
-    await expect(
-      materializer.materialize({
-        phase: "apply",
-        expectedDigest: planned!.digest,
-        capsule: directOidcCapsule(),
-        installConfig: current,
-        resolvedProviderBindings: [directCloudflareBinding()],
-        variables: directOidcVariables(),
-      }),
-    ).rejects.toThrow();
-    expect(writes).toBe(0);
-  });
-
-  test("rejects verified Cloudflare metadata drift against the Plan digest", async () => {
-    const config = directOidcInstallConfig();
-    let writes = 0;
-    const materializer = createTakosumiAccountsOidcModuleVariableMaterializer({
-      control: directOidcControl(() => config),
-      accounts: {
-        async findOidcClient() {
-          return undefined;
-        },
-        async findOidcClientForCapsule() {
-          return undefined;
-        },
-        async saveOidcClient() {
-          writes += 1;
-        },
-      },
-      issuer: "https://app.takosumi.com",
-      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
-      clock: () => NOW,
-    });
-    const planned = await materializer.materialize({
-      phase: "plan",
-      capsule: directOidcCapsule(),
-      installConfig: config,
-      resolvedProviderBindings: [directCloudflareBinding()],
-      variables: directOidcVariables(),
-    });
-    expect(writes).toBe(0);
-    const changedBinding = directCloudflareBinding({
-      scopeHints: {
-        providerSettings: {
-          accountId: CLOUDFLARE_ACCOUNT_ID,
-          workersSubdomain: "new-team",
-        },
-        moduleInputDefaults: {
-          cloudflare_account_id: CLOUDFLARE_ACCOUNT_ID,
-          cloudflare_workers_subdomain: "new-team",
-        },
-      },
-      verifiedAt: "2026-08-25T12:00:01.000Z",
-    });
-
-    for (const phase of ["plan", "apply"] as const) {
-      await expect(
-        materializer.materialize({
-          phase,
-          expectedDigest: planned!.digest,
-          capsule: directOidcCapsule(),
-          installConfig: config,
-          resolvedProviderBindings: [changedBinding],
-          variables: {
-            ...directOidcVariables(),
-            cloudflare_workers_subdomain: "new-team",
-          },
-        }),
-      ).rejects.toThrow(/changed since Plan/i);
-    }
-    expect(writes).toBe(0);
+    await expect(materializer.retire(retirement())).rejects.toThrow(/terminal/i);
+    capsule = oidcCapsule("destroyed");
+    await materializer.retire(retirement());
+    await materializer.retire(retirement());
+    expect(revoked).toEqual([clientId, clientId]);
+    expect(accounts.findOidcClient(clientId)).toBeUndefined();
   });
 });

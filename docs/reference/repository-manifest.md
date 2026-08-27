@@ -1,11 +1,19 @@
 # Repository manifest
 
-`.well-known/takosumi.json` は、Git repository が同じ commit に固定された
-install metadata を Takosumi に提案するための任意文書です。repository が所有しますが、
-実行権限ではありません。Source sync は repository root の文書を最大 128 KiB の
-UTF-8 JSON として検証し、結果と digest を immutable
-`SourceSnapshot.repositoryManifest` に保存します。raw document は public API に
-返しません。
+`.well-known/takosumi.json` は任意の repository manifest です。scan で発見された実在の
+OpenTofu module に input 表示 hint を追加し、Takosumi が提供する generic API/service の
+request と exact delivery target を宣言します。Git repository が executable source と同じ
+commit に固定して所有しますが、module path、provider、Connection、resource、deployment、
+lifecycle の実行権限ではありません。文書がない plain Git/OpenTofu app も通常どおり
+install できます。Source sync は repository root の文書を
+最大 128 KiB の UTF-8 JSON として検証し、結果と digest を immutable
+`SourceSnapshot.repositoryManifest` に保存します。raw document は public API に返しません。
+
+Git URL、ref、Source subtree と exact commit の tracked regular file scan が
+module/provider 候補の正本です。app-owned Git/OpenTofu configuration が
+infrastructure/lifecycle authority であり続けます。
+Takosumi は accepted generic API/capability の実装を所有し、manifest はその request と
+app-owned module への delivered value mapping だけを宣言します。
 
 Takosumi は exact SourceSnapshot の宣言を compatibility report と照合し、operator
 policy の範囲内で DB-owned `InstallConfig` に compile します。Plan/Run が読むのは
@@ -23,52 +31,57 @@ persist 済み InstallConfig であり、manifest を実行時に再読込しま
 }
 ```
 
-| `apiVersion`        | `install` の field          | module の field                             |
-| ------------------- | --------------------------- | ------------------------------------------- |
-| `takosumi.com/v1`   | `modules`                   | `inputs`, `requires`, `features`            |
-| `takosumi.com/v2`   | `modules`                   | v1 + `interfaces`                           |
-| `takosumi.com/v2.1` | `modules`, `defaultModule`? | v2 と同一                                   |
-| `takosumi.com/v2.2` | `modules`, `defaultModule`? | v2.1 + `requires[].kind: interface.consume` |
-| `takosumi.com/v2.3` | `modules`, `defaultModule`? | v2.2 + optional `sourceBuild`               |
+| `apiVersion`        | `install` の field | module の field                             |
+| ------------------- | ------------------ | ------------------------------------------- |
+| `takosumi.com/v1`   | `modules`          | `inputs`, `requires`, `features`            |
+| `takosumi.com/v2`   | `modules`          | v1 + `interfaces`                           |
+| `takosumi.com/v2.1` | `modules`          | v2 と同一                                   |
+| `takosumi.com/v2.2` | `modules`          | v2.1 + `requires[].kind: interface.consume` |
+| `takosumi.com/v2.3` | `modules`          | v2.2 + optional `sourceBuild`               |
 
 各 object は closed です。表や各 section にない field、`$schema`、旧
-`schemaVersion: takosumi.install-ux/v1` は拒否されます。v1/v2 に
-`defaultModule` を追加しても v2.1 として解釈されません。
+`schemaVersion: takosumi.install-ux/v1` は拒否されます。
 
 公開 JSON Schema は
 [`repository-manifest-v2.1.schema.json`](/schemas/repository-manifest-v2.1.schema.json) と
 [`repository-manifest-v2.2.schema.json`](/schemas/repository-manifest-v2.2.schema.json) と
 [`repository-manifest-v2.3.schema.json`](/schemas/repository-manifest-v2.3.schema.json)
 です。これは structural schema であり、JSON Schema と parser の完全な同値性を
-意味しません。cross-field uniqueness、`defaultModule` と動的 key の一致、JSON
-recursive depth（最大32）、下記の secret/authority vocabulary 検査は canonical
-parser が追加で fail closed に検査します。
+意味しません。cross-field uniqueness、JSON recursive depth（最大32）、下記の
+secret/authority vocabulary 検査は canonical parser が追加で fail closed に検査します。
 
-## Module path と default 選択
+## Scanned module と manifest entry
 
 `install.modules` は1〜32件です。key は `.` または最大 1,024 文字の canonical な
 repository-relative path です。absolute path、`./` prefix、drive prefix、末尾 `/`、
-backslash、NUL、空 segment、`.` / `..` segment は使えません。
+backslash、NUL、空 segment、`.` / `..` segment は使えません。ただし、entry は exact
+`SourceSnapshot` の scan が同じ path に module を発見した場合だけ hint/request として
+採用されます。manifest は module を作成、選択、上書きできません。
 
-Store install の `compileInstallUx` では client や Store は `modulePath` を送りません。
-Source sync 後、server が exact SourceSnapshot の manifest だけから次の規則で選び、
-その path の compatibility check を実行してから derived InstallConfig に同じ値を
-保存します。
+認証済みの
+`GET /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules` projection は
+`status`、exact `sourceSnapshotId`、`scopePath`、scan 由来の
+`modules: [{ path, providerPackages, rootProviderRequirements }]` を返します。
+`providerPackages` は到達可能な provider package 全体（policy / lock / mirror 用）、
+`rootProviderRequirements` は選択 root が直接要求する exact local-name / alias tuple
+（binding / root generation 用）です。dashboard はこの候補から module を選び、
+compatibility を実行します。直接 Git と Store は同じ Git URL/ref と optional module path
+hint の flow を使い、Store metadata や DB-owned deployment profile は module、provider、
+policy を選びません。
 
-直接 Git と repository-owned source option は `compileInstallUx` を同じく使用し、
-選択済みの `modulePath` を送れます。その path は exact SourceSnapshot manifest の
-`install.modules` key として検証され、Store metadata は実行選択に関与しません。
+候補が1件なら dashboard が自動選択し、複数なら利用者が選択します。manifest にだけある
+path は候補にならず、URL で明示された `path` も immutable scan result に存在しなければ
+typed 4xx で fail closed します。manifest が absent でも scan された module は利用できます。
+任意の manifest が malformed/invalid な場合も、その内容を推測・部分採用せず assistance を
+無効化し、scan 由来の generic install を続行します。operator の Host policy が exact manifest
+API version を明示的に必須化した場合だけ、absent/invalid/version mismatch を fail closed に
+します。この endpoint は account-session 認証、Source Workspace access、SourceSnapshot と
+Source の exact relation を検証します。
 
-1. `modules` が1件なら、その唯一の key を選ぶ。
-2. 複数なら `takosumi.com/v2.1`、`takosumi.com/v2.2`、または `takosumi.com/v2.3` の
-   `install.defaultModule` が必須。
-3. `defaultModule` は canonical path かつ `modules` の own key と byte-for-byte で
-   一致しなければならない。
-
-`.`、JSON object の先頭 key、`.well-known/tcs.json` の path、`Source.defaultPath`、
-base `InstallConfig.modulePath` を fallback として推測しません。missing/invalid default
-は typed diagnostic で compatibility 実行前に失敗します。manifest がない通常の
-plain Git repository も、利用者が明示した `modulePath` を引き続き使用できます。
+v1 の scan は immutable archive 内の tracked regular files と vendored local module edge
+（`./` / `../`）だけを辿ります。remote module source は pinned/unpinned を問わず network
+fetch authority を持たず、候補を部分的に公開せず `invalid` になります。利用する dependency
+は repository tree に vendor してください。
 
 ### 有効な v2.1 multi-module 例
 
@@ -77,7 +90,6 @@ plain Git repository も、利用者が明示した `modulePath` を引き続き
   "apiVersion": "takosumi.com/v2.1",
   "kind": "Repository",
   "install": {
-    "defaultModule": "deploy/takoform",
     "modules": {
       ".": { "inputs": [] },
       "deploy/takoform": { "inputs": [] }
@@ -122,6 +134,8 @@ delivery 名だけを提案します。
 - `secret.generated`: `kind`, optional `bytes` (16〜64), optional
   `encoding` (`hex` / `base64url`), `deliver`。module ごとに最大8件。
 - `http.endpoint`: `kind`, `deliver`。
+- `identity.oidc`: `kind`, root-relative `callbackPath`, 1〜16件の `scopes`,
+  `deliver`。
 - `interface.consume` (v2.2): `kind`, module 内で一意な `key`, exact
   `interface.type` / `interface.version`, 1〜16件の `permissions`,
   `{ "type": token }` だけを持つ `delivery`。
@@ -130,8 +144,26 @@ delivery 名だけを提案します。
 ごとに closed で、値は exact OpenTofu variable name または runtime binding name
 です。別 requirement と同じ delivery 名を共有できません。endpoint は module ごとに
 1件までです。host-reserved binding、存在しない/non-string variable、operator が
-許可しない requirement kind は compiler が拒否します。Capsule 固有の
-`identity.oidc` materialization は current Git-owned install flow では拒否されます。
+許可しない requirement kind は compiler が拒否します。
+
+`identity.oidc` は reviewed Git/OpenTofu app が product/provider に依存せず要求できる
+Takosumi Accounts capability です。選択 module はちょうど1件の `identity.oidc` と
+ちょうど1件の `http.endpoint` を持たなければなりません。OIDC の `deliver` は
+`variables` だけで、slot は `accountsUrl`、`issuerUrl`、`clientId`、`redirectUri` の
+exact 4件です。endpoint は `url` を別の string variable に届けます。OIDC scopes は
+重複なしで `openid` を含み、DB-owned `InstallConfig.policy.repositoryInstallUx`
+の明示的な `allowedOidcScopes` 内でなければなりません。allowlist がない場合は
+capability を許可しません。
+
+Plan は endpoint の `url` variable から、path、query、fragment、credential のない
+canonical な exact HTTPS origin を読めなければ fail closed です。その origin と
+review 済み `callbackPath` から redirect URI を導出し、exact 4 variables と authority
+digest を Plan sidecar に固定します。Plan と `apply_check` は Accounts を変更せず、
+final Apply だけが Capsule-bound public client を idempotent に登録できます。terminal
+destroy 後の retirement も idempotent です。Accounts capability が利用できない、
+origin/variable/callback/scope/digest が drift した場合は runner 実行前に失敗します。
+ProviderBinding、provider output、製品名、hostname 規則からの fallback/inference はなく、
+この request は provider/resource/deployment/lifecycle authority を追加しません。
 
 `interface.consume` は provider、製品名、Interface ID、endpoint、credential を宣言
 しません。host は Plan 後の DB-owned InstallConfig から exact type/version を読み、同じ
@@ -238,28 +270,27 @@ fail closed です。
 
 ## 無効な例
 
-v2 に v2.1 field を足しても無効です。
+closed object に module 選択 field を足しても無効です。
 
 ```json
 {
   "apiVersion": "takosumi.com/v2",
   "kind": "Repository",
   "install": {
-    "defaultModule": "deploy/app",
+    "modulePath": "deploy/app",
     "modules": { "deploy/app": { "inputs": [] } }
   }
 }
 ```
 
-存在しない key や alias も無効です。
+non-canonical module key も無効です。
 
 ```json
 {
   "apiVersion": "takosumi.com/v2.1",
   "kind": "Repository",
   "install": {
-    "defaultModule": "./deploy/app",
-    "modules": { "deploy/app": { "inputs": [] } }
+    "modules": { "./deploy/app": { "inputs": [] } }
   }
 }
 ```
@@ -282,9 +313,8 @@ v2 に v2.1 field を足しても無効です。
 ## Migration と versioning
 
 version identifier は closed schema の識別子です。既存 version の field set や意味を
-後から広げません。v2.1 は optional `install.defaultModule`、v2.2 は provider-neutral な
-`interface.consume`、v2.3 は bounded credential-free `sourceBuild` だけを追加する
-additive schema revision です。既存の module、
+後から広げません。v2.1 は v2 と同じ module metadata、v2.2 は provider-neutral な
+`interface.consume`、v2.3 は bounded credential-free `sourceBuild` を持ちます。既存の module、
 provided Interface、authority semantics は変えません。未知 version/field は fail closed
 です。incompatible vocabulary や authority model の変更には別の schema identifier が
 必要です。
@@ -292,8 +322,8 @@ provided Interface、authority semantics は変えません。未知 version/fie
 将来 metadata section を追加するときは新しい `apiVersion` を定義し、未知 field は
 fail closed のままにします。
 
-- v1/v2 の single-module repository はそのまま利用でき、唯一の key が選ばれます。
-- multi-module repository は v2.1 に上げ、exact `defaultModule` を追加します。
+- manifest の version にかかわらず、scan で1件だけ見つかった module は自動選択されます。
+- scan で複数 module が見つかった repository は利用者が exact path を選択します。
 - v2 の `interfaces` は v2.1 へ変更しても同じ形・意味で保持されます。
 - host Interface を利用する repository だけが v2.2 に上げ、
   `interface.consume` を追加します。
@@ -302,7 +332,6 @@ fail closed のままにします。
 - v1/v2 の文書に field だけ backport してはいけません。
 
 Store はこの manifest を代理しません。TCS 2.0 との接続と URL-only handoff は
-[Store API](./store-api.md)を参照してください。root の `install-options.json` は
-`apiVersion: install.takosumi.com/v1alpha1`、`kind: CapsuleSourceOptions` を使って
-通常の Capsule source 候補を選ぶ別 contract であり、inputs や InstallConfig を
-二重宣言できません。
+[Store API](./store-api.md)を参照してください。repository install の入力は Git URL、ref、
+optional module path hint であり、module/provider 候補は exact SourceSnapshot の
+OpenTofu scan から得ます。

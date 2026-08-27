@@ -1,3 +1,5 @@
+import { isCanonicalRepositoryDirectoryPath } from "./sources.ts";
+
 export const TAKOSUMI_APP_HANDOFF_PUBLIC_PATH = "/install" as const;
 export const TAKOSUMI_APP_HANDOFF_DASHBOARD_PATH = "/new" as const;
 
@@ -36,6 +38,9 @@ export interface CreateTakosumiAppHandoffUrlInput {
   readonly source?: string;
   readonly git?: string;
   readonly ref?: string;
+  /** Git repository subtree captured by Source sync. Omitted means `.`. */
+  readonly sourcePath?: string;
+  /** OpenTofu module hint relative to the captured Source subtree. */
   readonly path?: string;
   readonly name?: string;
 }
@@ -93,6 +98,7 @@ export function createTakosumiAppHandoffUrl(
     "git",
     "installConfigId",
     "ref",
+    "sourcePath",
     "path",
     "name",
     "product",
@@ -113,6 +119,13 @@ export function createTakosumiAppHandoffUrl(
   if (!source && !git) {
     throw new Error("App handoff URL requires git or source.");
   }
+  const sourcePath = optionalInstallDirectoryPath(
+    input.sourcePath,
+    "App handoff sourcePath",
+  );
+  const path = optionalInstallDirectoryPath(input.path, "App handoff path");
+  const ref = optionalQueryValue(input.ref, "App handoff ref");
+  const name = optionalQueryValue(input.name, "App handoff name");
 
   if (input.product || input.returnUri) {
     const product = requireTakosumiAppProductKey(
@@ -127,9 +140,10 @@ export function createTakosumiAppHandoffUrl(
   }
   if (source) url.searchParams.set("source", source);
   if (!source && git) url.searchParams.set("git", git);
-  if (input.ref != null) url.searchParams.set("ref", input.ref);
-  if (input.path != null) url.searchParams.set("path", input.path);
-  if (input.name) url.searchParams.set("name", input.name);
+  if (ref) url.searchParams.set("ref", ref);
+  if (sourcePath) url.searchParams.set("sourcePath", sourcePath);
+  if (path) url.searchParams.set("path", path);
+  if (name) url.searchParams.set("name", name);
   return url.toString();
 }
 
@@ -160,6 +174,7 @@ export interface TakosumiAppInstallSchemeFields {
   readonly git?: string;
   readonly source?: string;
   readonly ref?: string;
+  readonly sourcePath?: string;
   readonly path?: string;
   readonly name?: string;
   readonly product?: TakosumiAppProductKey;
@@ -184,6 +199,13 @@ export function createTakosumiAppInstallScheme(
   if (!source && !git) {
     throw new Error("Install scheme requires git or source.");
   }
+  const sourcePath = optionalInstallDirectoryPath(
+    input.sourcePath,
+    "Install scheme sourcePath",
+  );
+  const path = optionalInstallDirectoryPath(input.path, "Install scheme path");
+  const ref = optionalQueryValue(input.ref, "Install scheme ref");
+  const name = optionalQueryValue(input.name, "Install scheme name");
   const url = new URL(TAKOSUMI_APP_INSTALL_SCHEME_BASE);
   if (input.product || input.returnUri) {
     url.searchParams.set(
@@ -197,9 +219,10 @@ export function createTakosumiAppInstallScheme(
   }
   if (source) url.searchParams.set("source", source);
   if (!source && git) url.searchParams.set("git", git);
-  if (input.ref != null) url.searchParams.set("ref", input.ref);
-  if (input.path != null) url.searchParams.set("path", input.path);
-  if (input.name) url.searchParams.set("name", input.name);
+  if (ref) url.searchParams.set("ref", ref);
+  if (sourcePath) url.searchParams.set("sourcePath", sourcePath);
+  if (path) url.searchParams.set("path", path);
+  if (name) url.searchParams.set("name", name);
   return url.toString();
 }
 
@@ -235,14 +258,29 @@ export function parseTakosumiAppInstallScheme(
 
   const params = url.searchParams;
 
+  const allowed = new Set([
+    "source",
+    "git",
+    "ref",
+    "sourcePath",
+    "path",
+    "name",
+    "product",
+    "return_uri",
+  ]);
+  for (const key of params.keys()) {
+    if (!allowed.has(key) || params.getAll(key).length !== 1) return undefined;
+  }
+
   // Fail closed: if a recognized field is PRESENT but fails validation (e.g. a
   // percent-encoded newline in `ref`/`path` that only surfaces after decode),
   // reject the whole payload rather than silently prefilling a partial one.
   let invalid = false;
   const field = (key: string): string | undefined => {
     if (!params.has(key)) return undefined;
-    const value = safeQueryValue(params.get(key) ?? undefined);
-    if (!value) {
+    const raw = params.get(key) ?? undefined;
+    const value = safeQueryValue(raw);
+    if (!value || value !== raw) {
       invalid = true;
       return undefined;
     }
@@ -252,8 +290,16 @@ export function parseTakosumiAppInstallScheme(
   const source = field("source");
   const git = field("git");
   const ref = field("ref");
+  const sourcePath = field("sourcePath");
   const path = field("path");
   const name = field("name");
+  if (
+    (sourcePath !== undefined &&
+      !isCanonicalRepositoryDirectoryPath(sourcePath)) ||
+    (path !== undefined && !isCanonicalRepositoryDirectoryPath(path))
+  ) {
+    invalid = true;
+  }
 
   let product: TakosumiAppProductKey | undefined;
   if (params.has("product")) {
@@ -275,6 +321,7 @@ export function parseTakosumiAppInstallScheme(
     ...(git ? { git } : {}),
     ...(source ? { source } : {}),
     ...(ref ? { ref } : {}),
+    ...(sourcePath ? { sourcePath } : {}),
     ...(path ? { path } : {}),
     ...(name ? { name } : {}),
     ...(product ? { product } : {}),
@@ -406,6 +453,29 @@ function parseBoundedString(value: unknown, maxLength: number): string | null {
 function safeQueryValue(value: string | undefined): string | undefined {
   const parsed = parseBoundedString(value, 4096);
   if (!parsed || hasUnsafeBytes(parsed)) return undefined;
+  return parsed;
+}
+
+function optionalQueryValue(
+  value: string | undefined,
+  label: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  const parsed = safeQueryValue(value);
+  if (!parsed) throw new Error(`${label} is invalid.`);
+  if (parsed !== value) throw new Error(`${label} is invalid.`);
+  return parsed;
+}
+
+function optionalInstallDirectoryPath(
+  value: string | undefined,
+  label: string,
+): string | undefined {
+  const parsed = optionalQueryValue(value, label);
+  if (parsed === undefined) return undefined;
+  if (!isCanonicalRepositoryDirectoryPath(parsed)) {
+    throw new Error(`${label} is invalid.`);
+  }
   return parsed;
 }
 

@@ -141,29 +141,28 @@ Any helper input file stays outside the repo and is deleted after import.
 Shell history, logs, PR comments, and terminal transcripts must not contain the
 credential.
 
-## Takos hosted Capsule runtime-secret file
+## Operator runtime-secret file profile
 
-Takos has a narrow DB-owned hosted profile for five per-Capsule runtime values;
-it is not a bulk/operator secret registry. The profile generates exactly these
-names: `PLATFORM_PRIVATE_KEY` (RSA-2048 private key), `PLATFORM_PUBLIC_KEY`
-(the matching RSA-2048 public key), `ENCRYPTION_KEY` (32 random bytes, base64),
-`TAKOS_AGENT_START_TOKEN` (32 random bytes, hex), and
-`TAKOS_INTERNAL_API_SECRET` (32 random bytes, hex). This runbook never records
-their values.
+An operator may supply one value-free, DB-owned per-Capsule runtime-secret file
+profile. The stock hosted Worker supplies no application-specific InstallConfig
+or profile. This mechanism is not a repository-manifest capability or a
+bulk/operator secret registry; its exact random values or RSA key pairs,
+environment variable, file name, and mode are part of the reviewed profile.
+This runbook never records generated values.
 
-The controller seals the material in the Takos secret boundary, outside
-ProviderConnection, InstallConfig public projections, state, Outputs, Run or
+The controller seals material in the host secret boundary, outside
+ProviderConnection, public InstallConfig projections, state, Outputs, Run or
 audit records, diagnostics, and logs. A Capsule keeps the same sealed material
 for the same profile across InstallConfig replacement. A profile-digest change
 is a fail-closed authority fence, not an automatic rotation; handle an
 intentional profile change as a separately reviewed lifecycle operation.
 
-The only delivery phase is successful `post_apply`. The runner receives one
-`takos-runtime-secrets.json` file through `TAKOS_RUNTIME_SECRETS_FILE`, in a
-temporary `0700` directory with file mode `0600`. It validates the closed JSON
-shape and exact names, then removes the file and directory. Truncate, fsync,
-unlink, or directory-removal failure is fail-closed and must be repaired before
-the Run is treated as clean; no raw value belongs in the diagnostic.
+The only delivery phase is successful `post_apply`. The runner receives the
+exactly declared JSON file and path environment variable in a temporary `0700`
+directory with file mode `0600`. It validates the closed JSON shape and exact
+names, then removes the file and directory. Truncate, fsync, unlink, or
+directory-removal failure is fail-closed and must be repaired before the Run is
+treated as clean; no raw value belongs in the diagnostic.
 
 Destroy cleanup is a durable outbox tail. After provider destroy and the atomic
 terminal Capsule transition, the controller records a value-free
@@ -178,24 +177,27 @@ or creating another lifecycle ledger.
 
 Workspace provider credentials, bulk/operator secrets, OIDC signing keys, and
 other generic Connection material remain operator-owned and follow the normal
-rotation procedure above. This hosted profile is the sole narrow exception.
+rotation procedure above.
 
 ## Capsule OIDC activation authority
 
-The hosted Accounts profile uses a value-free `activationDigest`, not an
-Accounts-row timestamp, as its live-grant authority. The digest binds contract
+The repository-manifest `identity.oidc` capability uses a value-free
+`activationDigest`, not an Accounts-row timestamp, as its live-grant authority.
+The digest binds contract
 `takosumi.accounts-oidc-activation/v1`, Workspace and Capsule identity,
-`executionAuthorityEpoch`, the full InstallConfig digest, and the OIDC profile
-digest. Live grant requires an exact match to the current Capsule/config/profile
-and epoch. A legacy null or mismatched digest is stale and denied without
-deleting the client; only final Apply may save the exact current digest. Plan and
-`apply_check` may validate it but never mutate Accounts. The client id remains
-stable for the Capsule and profile across InstallConfig replacement, while
+`executionAuthorityEpoch`, and the full InstallConfig digest. Live grant
+requires an exact match to the current Capsule, accepted repository projections,
+scope policy, config, and epoch. A legacy null or mismatched digest is stale and
+denied without deleting the client; only final Apply may save the exact current
+digest. Plan and `apply_check` may validate it but never mutate Accounts. The
+client id remains Capsule-bound across InstallConfig replacement, while
 `updatedAt` is ordinary audit time only and never authority.
 
 Provider runtime-binding remains read-only derivation and has no registration
-authority; the direct DB-owned Accounts module-variable materializer owns
-final-Apply activation. The Accounts schema migration order is
+authority; the Takosumi-owned generic Accounts capability implementation owns
+final-Apply activation and delivers only `accountsUrl`, `issuerUrl`, `clientId`,
+and `redirectUri`. No private descriptor, owner-subject delivery, provider
+fallback, or client secret is part of this lane. The Accounts schema migration order is
 substrate-specific. For PostgreSQL,
 apply migration 043, then migration 044, before promoting the feature Worker;
 043 adds the nullable `activation_digest` column and its NOT VALID shape check,

@@ -2,15 +2,22 @@ import type {
   CapsuleCompatibilityLevel,
   CapsuleDataSourceSummary,
   CapsuleGateFinding,
-  CapsuleProviderRequirement,
+  CapsuleProviderPackage,
   CapsuleProvisionerSummary,
   CapsuleResourceSummary,
+  CapsuleRootProviderRequirement,
   CapsuleRootModuleOutputDeclaration,
   CapsuleRootModuleVariableDeclaration,
 } from "takosumi-contract/capsules";
 import type { PolicyConfig } from "takosumi-contract/install-configs";
 import { canonicalProviderSource } from "takosumi-contract/provider-env-rules";
 import type { SourceSnapshot } from "takosumi-contract/sources";
+import {
+  compileOpenTofuConfigurationGraph,
+  openTofuConfigurationFileKind,
+  parseOpenTofuProviderLockObservation,
+  type OpenTofuConfigurationDiagnostic,
+} from "takosumi-opentofu-configuration";
 
 export interface CapsuleSourceFile {
   readonly path: string;
@@ -27,7 +34,8 @@ export interface CapsuleCompatibilityAnalysisInput {
 export interface CapsuleCompatibilityAnalysis {
   readonly level: CapsuleCompatibilityLevel;
   readonly findings: readonly CapsuleGateFinding[];
-  readonly providers: readonly CapsuleProviderRequirement[];
+  readonly providerPackages: readonly CapsuleProviderPackage[];
+  readonly rootProviderRequirements: readonly CapsuleRootProviderRequirement[];
   readonly resources: readonly CapsuleResourceSummary[];
   readonly dataSources: readonly CapsuleDataSourceSummary[];
   readonly provisioners: readonly CapsuleProvisionerSummary[];
@@ -86,7 +94,8 @@ export function analyzeOpenTofuCapsuleFiles(
             "Run compatibility_check through the Runner Container so the SourceSnapshot archive can be inspected before provider credential mint.",
         },
       ],
-      providers: [],
+      providerPackages: [],
+      rootProviderRequirements: [],
       resources: [],
       dataSources: [],
       provisioners: [],
@@ -96,20 +105,14 @@ export function analyzeOpenTofuCapsuleFiles(
     };
   }
 
-  const allHclFiles = input.files.filter((file) => file.path.endsWith(".tf"));
-  const hclFiles = selectReachableModuleTreeFiles(allHclFiles, findings);
+  const configuration = compileOpenTofuConfigurationGraph({
+    files: input.files,
+  });
+  collectOpenTofuConfigurationDiagnostics(configuration.diagnostics, findings);
+  const hclFiles = configuration.files.filter(
+    (file) => openTofuConfigurationFileKind(file.path) === "hcl",
+  );
   const rootModuleOutputs = collectRootModuleOutputDeclarations(hclFiles);
-  if (hclFiles.length === 0) {
-    findings.push({
-      severity: "error",
-      compatibilityImpact: "unsupported",
-      code: "opentofu_configuration_missing",
-      message: "No .tf files were found in the Capsule path.",
-      path: input.sourceSnapshot.path,
-      suggestion:
-        "Point the install path at an OpenTofu module-compatible configuration.",
-    });
-  }
   for (const output of rootModuleOutputs) {
     if (output.sensitive === null || output.ephemeral === null) {
       findings.push({
@@ -152,21 +155,50 @@ export function analyzeOpenTofuCapsuleFiles(
   const provisionerAllowlist = new Set(
     input.policy?.allowedProvisionerTypes ?? [],
   );
-  const providers = collectProviders(
-    hclFiles,
-    findings,
-    providerAllowlist,
-    credentialRequiredProviders,
+  const providerPackages = configuration.providerPackages.map((providerPackage) => ({
+    ...providerPackage,
+    allowed: providerAllowed(providerPackage.source, providerAllowlist),
+  }));
+  const rootProviderRequirements = configuration.rootProviderRequirements.map(
+    (requirement) => ({
+      ...requirement,
+      ...(credentialRequiredProviders.has("*") ||
+      providerInSet(requirement.source, credentialRequiredProviders)
+        ? { credentialRequired: true }
+        : {}),
+    }),
   );
+  const rootProviderSources = new Set(
+    rootProviderRequirements.map((requirement) => requirement.source),
+  );
+  for (const providerPackage of providerPackages) {
+    if (
+      !(credentialRequiredProviders.has("*") ||
+        providerInSet(providerPackage.source, credentialRequiredProviders)) ||
+      rootProviderSources.has(providerPackage.source)
+    ) {
+      continue;
+    }
+    findings.push({
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      code: "binding_boundary_incomplete",
+      message: `Provider ${providerPackage.source} needs host credentials but is declared only below the selected root provider boundary.`,
+      suggestion:
+        "Declare the provider in the selected root and pass its configuration explicitly to child modules before requesting host credential injection.",
+      context: { provider: providerPackage.source },
+    });
+  }
+  collectHclConfigurationFindings(hclFiles, findings);
   const resources = collectResources(hclFiles, resourceAllowlist);
   const dataSources = collectDataSources(hclFiles, dataSourceAllowlist);
   const provisioners = collectProvisioners(hclFiles, provisionerAllowlist);
-  collectDependencyLockFindings(input.files, findings);
+  collectDependencyLockFindings(input.files, providerPackages, findings);
   collectFilesystemSensitiveExpressionFindings(hclFiles, findings);
 
   const hasProviderBackedBlocks =
     resources.length > 0 || dataSources.length > 0 || provisioners.length > 0;
-  if (providers.length === 0 && hasProviderBackedBlocks) {
+  if (providerPackages.length === 0 && hasProviderBackedBlocks) {
     findings.push({
       severity: "warning",
       compatibilityImpact: "needs_patch",
@@ -188,13 +220,13 @@ export function analyzeOpenTofuCapsuleFiles(
     });
   }
 
-  for (const provider of providers) {
-    if (!provider.allowed) {
+  for (const providerPackage of providerPackages) {
+    if (!providerPackage.allowed) {
       findings.push({
         severity: "error",
         compatibilityImpact: "unsupported",
         code: "provider_not_allowed",
-        message: `Provider ${provider.source} is not allowed by policy.`,
+        message: `Provider ${providerPackage.source} is not allowed by policy.`,
         suggestion:
           "Use a qualified provider source such as namespace/name or registry-host/namespace/name.",
       });
@@ -243,7 +275,8 @@ export function analyzeOpenTofuCapsuleFiles(
   return {
     level,
     findings,
-    providers,
+    providerPackages,
+    rootProviderRequirements,
     resources,
     dataSources,
     provisioners,
@@ -254,156 +287,46 @@ export function analyzeOpenTofuCapsuleFiles(
   };
 }
 
-function selectReachableModuleTreeFiles(
+function collectOpenTofuConfigurationDiagnostics(
+  diagnostics: readonly OpenTofuConfigurationDiagnostic[],
+  findings: CapsuleGateFinding[],
+): void {
+  for (const diagnostic of diagnostics) {
+    const code =
+      diagnostic.code === "configuration_missing"
+        ? "opentofu_configuration_missing"
+        : diagnostic.code === "json_invalid"
+          ? "opentofu_json_invalid"
+          : diagnostic.code === "json_semantics_unsupported"
+            ? "opentofu_json_semantics_unsupported"
+            : diagnostic.code === "local_module_source_escapes"
+              ? "local_module_source_escapes_capsule"
+              : diagnostic.code === "local_module_source_missing"
+                ? "local_module_source_missing"
+                : diagnostic.code === "remote_module_source_unresolved"
+                  ? "remote_module_source_unsupported"
+                  : `opentofu_configuration_${diagnostic.code}`;
+    findings.push({
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      code,
+      message: diagnostic.message,
+      path: diagnostic.path,
+      suggestion:
+        diagnostic.code === "json_semantics_unsupported"
+          ? "Use equivalent HCL until compatibility classification covers all OpenTofu JSON block semantics."
+          : diagnostic.code === "remote_module_source_unresolved"
+            ? "Vendor the dependency in the immutable repository tree and reference it with a static ./ or ../ source."
+            : "Make the selected OpenTofu module and every reachable local child statically readable before compatibility review.",
+    });
+  }
+}
+
+function collectHclConfigurationFindings(
   files: readonly CapsuleSourceFile[],
   findings: CapsuleGateFinding[],
-): readonly CapsuleSourceFile[] {
-  const byDir = new Map<string, CapsuleSourceFile[]>();
+): void {
   for (const file of files) {
-    const dir = dirnameForRelativeFile(file.path);
-    const entries = byDir.get(dir) ?? [];
-    entries.push(file);
-    byDir.set(dir, entries);
-  }
-
-  const queued = ["."];
-  const visited = new Set<string>();
-  const selected = new Map<string, CapsuleSourceFile>();
-  while (queued.length > 0) {
-    const dir = queued.shift()!;
-    if (visited.has(dir)) continue;
-    visited.add(dir);
-    const dirFiles = byDir.get(dir) ?? [];
-    for (const file of dirFiles) {
-      selected.set(file.path, file);
-      for (const moduleBlock of matchNamedBlocks(file.text, "module")) {
-        const source = stringAttribute(moduleBlock.body, "source");
-        if (!source || !isLocalModuleSource(source)) continue;
-        const resolved = resolveLocalModuleDir(dir, source);
-        if (!resolved) {
-          findings.push({
-            severity: "error",
-            compatibilityImpact: "unsupported",
-            code: "local_module_source_escapes_capsule",
-            message: `Module ${moduleBlock.name} uses local source ${source} outside the Capsule archive.`,
-            path: file.path,
-            suggestion:
-              "Keep local module sources inside the Git path installed as the Capsule.",
-          });
-          continue;
-        }
-        if (!byDir.has(resolved)) {
-          findings.push({
-            severity: "warning",
-            compatibilityImpact: "needs_patch",
-            code: "local_module_source_missing",
-            message: `Module ${moduleBlock.name} local source ${source} was not found in the Capsule archive.`,
-            path: file.path,
-            suggestion:
-              "Vendor the local module under the installed Git path or pin it as an explicit remote module source.",
-          });
-          continue;
-        }
-        queued.push(resolved);
-      }
-    }
-  }
-  return Array.from(selected.values()).sort((a, b) =>
-    a.path.localeCompare(b.path),
-  );
-}
-
-function dirnameForRelativeFile(path: string): string {
-  const index = path.lastIndexOf("/");
-  return index === -1 ? "." : path.slice(0, index);
-}
-
-function isLocalModuleSource(source: string): boolean {
-  return source.startsWith("./") || source.startsWith("../");
-}
-
-function resolveLocalModuleDir(
-  fromDir: string,
-  source: string,
-): string | undefined {
-  const parts = [
-    ...(fromDir === "." ? [] : fromDir.split("/")),
-    ...source.split("/"),
-  ];
-  const out: string[] = [];
-  for (const part of parts) {
-    if (part === "" || part === ".") continue;
-    if (part === "..") {
-      if (out.length === 0) return undefined;
-      out.pop();
-      continue;
-    }
-    out.push(part);
-  }
-  return out.length === 0 ? "." : out.join("/");
-}
-
-function collectProviders(
-  files: readonly CapsuleSourceFile[],
-  findings: CapsuleGateFinding[],
-  allowedProviders: ExplicitAllowlist,
-  credentialRequiredProviders: ReadonlySet<string>,
-): CapsuleProviderRequirement[] {
-  const providers = new Map<
-    string,
-    {
-      readonly source: string;
-      readonly localName: string;
-      readonly aliases: Set<string>;
-      versionConstraintOccurrences: number;
-      versionConstraint?: string;
-    }
-  >();
-  const canonicalProviderOccurrences = new Map<string, number>();
-  for (const file of files) {
-    const terraformBlocks = matchBlocks(file.text, "terraform");
-    for (const block of terraformBlocks) {
-      const required = matchBlocks(block.body, "required_providers");
-      for (const requiredBlock of required) {
-        for (const providerBlock of matchArbitraryNamedAssignments(
-          requiredBlock.body,
-        )) {
-          // OpenTofu's source-address default for a local provider name is the
-          // HashiCorp namespace. Record that real address rather than treating
-          // valid OpenTofu shorthand as a Takosumi-specific provider.
-          const source =
-            stringAttribute(providerBlock.body, "source") ??
-            `hashicorp/${providerBlock.name}`;
-          const localName = providerBlock.name;
-          const canonicalSource = canonicalProviderSource(source);
-          canonicalProviderOccurrences.set(
-            canonicalSource,
-            (canonicalProviderOccurrences.get(canonicalSource) ?? 0) + 1,
-          );
-          const aliases = aliasesAttribute(providerBlock.body, localName);
-          const key = `${localName}\u0000${source}`;
-          const entry = providers.get(key) ?? {
-            source,
-            localName,
-            aliases: new Set<string>(),
-            versionConstraintOccurrences: 0,
-          };
-          for (const alias of aliases) entry.aliases.add(alias);
-          entry.versionConstraintOccurrences += 1;
-          const versionConstraint = stringAttributeValue(
-            providerBlock.body,
-            "version",
-          );
-          if (
-            entry.versionConstraintOccurrences === 1 &&
-            versionConstraint.kind === "literal"
-          ) {
-            entry.versionConstraint = versionConstraint.value;
-          }
-          providers.set(key, entry);
-        }
-      }
-    }
     for (const providerBlock of matchNamedBlocks(file.text, "provider")) {
       if (containsCredentialAttribute(providerBlock.body)) {
         findings.push({
@@ -439,54 +362,7 @@ function collectProviders(
         path: file.path,
       });
     }
-    for (const moduleBlock of matchNamedBlocks(file.text, "module")) {
-      const source = stringAttribute(moduleBlock.body, "source");
-      if (source && isUnpinnedRemoteModule(source)) {
-        findings.push({
-          severity: "warning",
-          compatibilityImpact: "needs_patch",
-          code: "remote_module_unpinned",
-          message: `Module ${moduleBlock.name} uses an unpinned remote source.`,
-          path: file.path,
-          suggestion:
-            "Pin remote module sources with an immutable ref or vendor the dependency.",
-        });
-      }
-    }
   }
-  return Array.from(providers.values())
-    .map(
-      ({
-        source,
-        localName,
-        aliases,
-        versionConstraintOccurrences,
-        versionConstraint,
-      }) => {
-        const provider = {
-          source,
-          localName,
-          ...(versionConstraintOccurrences === 1 &&
-          canonicalProviderOccurrences.get(canonicalProviderSource(source)) ===
-            1 &&
-          versionConstraint !== undefined
-            ? { versionConstraint }
-            : {}),
-          aliases: Array.from(aliases).sort(),
-          allowed: providerAllowed(source, allowedProviders),
-          ...(credentialRequiredProviders.has("*") ||
-          providerInSet(source, credentialRequiredProviders)
-            ? { credentialRequired: true }
-            : {}),
-        };
-        return provider;
-      },
-    )
-    .sort(
-      (a, b) =>
-        a.localName.localeCompare(b.localName) ||
-        a.source.localeCompare(b.source),
-    );
 }
 
 function collectResources(
@@ -549,9 +425,10 @@ function collectProvisioners(
 
 function collectDependencyLockFindings(
   files: readonly CapsuleSourceFile[],
+  providerPackages: readonly CapsuleProviderPackage[],
   findings: CapsuleGateFinding[],
 ): void {
-  const lock = files.find((file) => file.path.endsWith(".terraform.lock.hcl"));
+  const lock = files.find((file) => file.path === ".terraform.lock.hcl");
   if (!lock) return;
   findings.push({
     severity: "info",
@@ -561,6 +438,46 @@ function collectDependencyLockFindings(
       "A provider dependency lockfile is present and will be reviewed by the provider lockfile policy after credential-free init.",
     path: lock.path,
   });
+  const staticallyDerived = Array.from(
+    new Set(
+      providerPackages.map((providerPackage) =>
+        canonicalProviderSource(providerPackage.source)
+      ),
+    ),
+  ).sort(compareCodePoints);
+  const observation = parseOpenTofuProviderLockObservation(
+    lock.text,
+    lock.path,
+  );
+  if (!observation.complete) {
+    findings.push({
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      code: "dependency_lock_incomplete",
+      message: observation.diagnostics[0]?.message ??
+        "The dependency lock could not be parsed exactly.",
+      path: lock.path,
+      suggestion:
+        "Rerun credential-free OpenTofu init and review the newly generated dependency lock before Plan.",
+    });
+    return;
+  }
+  const observed = observation.sources;
+  if (
+    observed.length !== staticallyDerived.length ||
+    observed.some((provider, index) => provider !== staticallyDerived[index])
+  ) {
+    findings.push({
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      code: "provider_observation_mismatch",
+      message:
+        "The credential-free init dependency lock provider set does not exactly match the statically derived selected-module provider set.",
+      path: lock.path,
+      suggestion:
+        "Declare every provider required by the selected and reachable local module graph, then rerun compatibility review before Plan.",
+    });
+  }
 }
 
 const MODULE_LOCAL_FILESYSTEM_PATTERNS: readonly {
@@ -789,7 +706,9 @@ function collectRootModuleNamedBlocks(
 }
 
 function isRootModuleTfFile(path: string): boolean {
-  return path.endsWith(".tf") && !path.includes("/");
+  return (
+    (path.endsWith(".tf") || path.endsWith(".tofu")) && !path.includes("/")
+  );
 }
 
 function providerAllowed(
@@ -806,6 +725,10 @@ function providerInSet(
 ): boolean {
   const normalized = canonicalProviderSource(source);
   return providers.has(source) || providers.has(normalized);
+}
+
+function compareCodePoints(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function isQualifiedProviderSource(source: string): boolean {
@@ -878,56 +801,6 @@ function containsCredentialAttribute(body: string): boolean {
     const pattern = new RegExp(`(^|\\n)\\s*${attr}\\s*=`, "m");
     if (pattern.test(body)) return true;
   }
-  return false;
-}
-
-function stringAttribute(body: string, name: string): string | undefined {
-  const pattern = new RegExp(`(^|\\n)\\s*${name}\\s*=\\s*"([^"]+)"`, "m");
-  return pattern.exec(body)?.[2];
-}
-
-type StringAttributeValue =
-  | { readonly kind: "missing" }
-  | { readonly kind: "literal"; readonly value: string }
-  | { readonly kind: "non_literal" };
-
-function stringAttributeValue(
-  body: string,
-  name: string,
-): StringAttributeValue {
-  const assignment = new RegExp(
-    `(^|\\n)\\s*${name}\\s*=\\s*(.*)$`,
-    "mu",
-  ).exec(body);
-  if (!assignment) return { kind: "missing" };
-  const expression = assignment[2]!.trim();
-  const literal = /^"((?:[^"\\]|\\.)*)"$/u.exec(expression);
-  if (!literal) return { kind: "non_literal" };
-  const value = literal[1]!;
-  return value.includes("${") || value.includes("%{")
-    ? { kind: "non_literal" }
-    : { kind: "literal", value };
-}
-
-function aliasesAttribute(body: string, localName: string): string[] {
-  const match = /configuration_aliases\s*=\s*\[([\s\S]*?)\]/m.exec(body);
-  if (!match) return [];
-  return match[1]!
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
-    .map((entry) => entry.replace(/^"|"$/g, ""))
-    .map((entry) =>
-      entry.startsWith(`${localName}.`)
-        ? entry.slice(localName.length + 1)
-        : entry,
-    );
-}
-
-function isUnpinnedRemoteModule(source: string): boolean {
-  if (source.startsWith("./") || source.startsWith("../")) return false;
-  if (source.startsWith("git::")) return !source.includes("?ref=");
-  if (/^https?:\/\//.test(source)) return !source.includes("?ref=");
   return false;
 }
 
@@ -1017,30 +890,6 @@ function matchNamedBlockRanges(text: string, blockType: string): BlockRange[] {
     const block = readBlock(masked, match.index! + match[0].length - 1);
     if (block !== undefined) {
       blocks.push({ name: match[1]!, body: block.body, start, end: block.end });
-    }
-  }
-  return blocks;
-}
-
-function matchBlocks(text: string, blockType: string): readonly NamedBlock[] {
-  const masked = maskHclCommentsAndHeredocs(text);
-  const blocks: NamedBlock[] = [];
-  const pattern = new RegExp(`\\b${blockType}\\b\\s*\\{`, "g");
-  for (const match of masked.matchAll(pattern)) {
-    const body = readBlockBody(masked, match.index! + match[0].length - 1);
-    if (body !== undefined) blocks.push({ name: blockType, body });
-  }
-  return blocks;
-}
-
-function matchArbitraryNamedAssignments(text: string): NamedBlock[] {
-  const masked = maskHclCommentsAndHeredocs(text);
-  const blocks: NamedBlock[] = [];
-  const pattern = /([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*\{/g;
-  for (const match of masked.matchAll(pattern)) {
-    const body = readBlockBody(masked, match.index! + match[0].length - 1);
-    if (body !== undefined) {
-      blocks.push({ name: match[1]!, body });
     }
   }
   return blocks;

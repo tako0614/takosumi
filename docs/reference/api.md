@@ -129,6 +129,12 @@ schema、Workspace / Project / TargetPool を更新・bootstrap しません。
 Stack API は plain OpenTofu / Terraform module を Git から実行します。
 この flow では既存 provider をそのまま使います。
 
+module graph は immutable SourceSnapshot 内の tracked regular files と vendored local
+source（`./` / `../`）だけを辿ります。pinned を含む remote module source は v1 では
+未対応で、`tofu init` への network fetch authority にはなりません。scan / compatibility
+は部分的な provider set を公開せず fail closed するため、dependency は repository tree
+へ vendor してください。
+
 stock composition は、すべての正しい provider source に provider-neutral な
 `opentofu-default` 実行経路を使います。operator は別の capability profile を明示
 選択できます。Credential Recipe は env/file の設定を簡単にする補助情報です。Recipe が
@@ -148,7 +154,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 87 件です。
+次の 86 件です。
 
 **Account views**
 
@@ -224,17 +230,17 @@ Run は必ず計画の作成から始まります。
 
 **Source**
 
-| メソッド | パス                                                                          | 説明                                                                 |
-| -------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| GET      | `/api/v1/sources`                                                             | Source を一覧する                                                    |
-| POST     | `/api/v1/sources`                                                             | Source を作る                                                        |
-| GET      | `/api/v1/sources/{sourceId}`                                                  | Source を読む                                                        |
-| PATCH    | `/api/v1/sources/{sourceId}`                                                  | Source のメタ情報を更新する                                          |
-| POST     | `/api/v1/sources/{sourceId}/sync`                                             | 同期 Run を作る                                                      |
-| GET      | `/api/v1/sources/{sourceId}/snapshots`                                        | SourceSnapshot を一覧する                                            |
-| GET      | `/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/deployment-profiles` | その Snapshot で実在を確認できた DB 所有のデプロイ方法だけを一覧する |
-| POST     | `/api/v1/sources/{sourceId}/compatibility-check`                              | 互換性レポートを作る                                                 |
-| GET      | `/api/v1/compatibility-reports/{reportId}`                                    | 互換性レポートを読む                                                 |
+| メソッド | パス                                                                     | 説明                                                              |
+| -------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| GET      | `/api/v1/sources`                                                        | Source を一覧する                                                 |
+| POST     | `/api/v1/sources`                                                        | Source を作る                                                     |
+| GET      | `/api/v1/sources/{sourceId}`                                             | Source を読む                                                     |
+| PATCH    | `/api/v1/sources/{sourceId}`                                             | Source のメタ情報を更新する                                       |
+| POST     | `/api/v1/sources/{sourceId}/sync`                                        | 同期 Run を作る                                                   |
+| GET      | `/api/v1/sources/{sourceId}/snapshots`                                   | SourceSnapshot を一覧する                                         |
+| GET      | `/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules` | 同期時に tree から検出した module と provider 要求を一覧する      |
+| POST     | `/api/v1/sources/{sourceId}/compatibility-check`                         | 互換性レポートを作る                                              |
+| GET      | `/api/v1/compatibility-reports/{reportId}`                               | 互換性レポートを読む                                              |
 
 **Git install plan**
 
@@ -249,6 +255,36 @@ Run は必ず計画の作成から始まります。
 SourceSnapshot、InstallConfig、Capsule、Plan Run の参照と bounded diagnostic だけです。
 variable 値、credential、token、Output 値は受け付けません。`reviewable` になった後の
 承認と apply は `Run` API だけが所有し、install-plan 専用 apply route はありません。
+
+作成 body の provider 選択は provider source だけの map ではなく、scan で得た
+module-local tuple をそのまま指定します。
+
+```json
+{
+  "source": {
+    "name": "sample-app",
+    "url": "https://git.example.test/apps/sample-app.git",
+    "ref": "main",
+    "path": "infra"
+  },
+  "capsule": { "name": "sample-app", "environment": "production" },
+  "options": {
+    "modulePath": "deploy/selected",
+    "providerBindings": [
+      {
+        "provider": "registry.opentofu.org/tako0614/takoform",
+        "moduleLocalName": "takoform",
+        "connectionId": "conn_takoform"
+      }
+    ]
+  }
+}
+```
+
+`source.path` は同期する Git subtree、`options.modulePath` はその Snapshot の
+tree scan で検出された archive-relative module です。`providerBindings` の
+`provider` / `moduleLocalName` / optional `childAlias` は選択 module の requirement
+tuple と完全一致しなければならず、`connectionId` は既存 Connection の参照だけです。
 
 **Git revision plan**
 
@@ -290,14 +326,13 @@ Content-Type: application/json
 {
   "baseInstallConfigId": "<base-install-config-id>",
   "sourceSnapshotId": "<source-snapshot-id>",
-  "deploymentProfileKey": "<optional-profile-key>",
   "reason": "<bounded non-secret reason>",
   "expected": { "authorityGuard": "<guard-from-capsule-get>" }
 }
 ```
 
-`deploymentProfileKey` は省略可能です。body はこの閉じた shape だけを受け付け、
-`reason` は bounded かつ secret-like value を含めません。成功は 200 で、response は
+body はこの閉じた shape だけを受け付け、`reason` は bounded かつ secret-like value を
+含めません。成功は 200 で、response は
 次の value-free projection です。
 
 ```json
@@ -490,29 +525,28 @@ Credential Recipe の明示的な pre-run action として設計します。公�
 discovery が揃ってからです。
 Operator / hosted service はその汎用 seam に Enterprise SSO、SCIM、商用 audit export を追加できます。
 
-Takosumi は Git metadata、provider output、または任意の provider 呼び出しから
-Accounts OIDC client を推測して登録しません。provider runtime-binding は read-only
-derivation であり、registration authority を持ちません。Host が DB 所有の InstallConfig で
-direct な Accounts OIDC module-variable materializer を明示した場合だけ、その materializer が
-final-Apply activation を所有し、Plan と `apply_check` では非 secret 値を
-導出して authority digest に固定します。この二つの phase は Accounts を変更しません。
-最終 Apply の再検証時だけ exact client を冪等登録でき、現在の value-free
-`activationDigest` を保存します。この digest は contract
-`takosumi.accounts-oidc-activation/v1`、Workspace/Capsule、
-`executionAuthorityEpoch`、full InstallConfig digest、OIDC profile digest を束ねます。
-live grant は current Capsule/config/profile/epoch と digest の exact match を要求し、legacy
-null または mismatch は stale/denied として Apply 修復まで認可しません。`updatedAt` は通常の
-監査時刻であり authority ではありません。既に登録済みの Capsule client は current
-Capsule / InstallConfig / Workspace membership / scope を利用時に再検証し、無効な terminal
-binding は best-effort で revoke します。
+Takosumi は Git metadata、provider output、product identity、hostname convention、
+または任意の provider 呼び出しから Accounts OIDC client を推測して登録しません。
+provider runtime-binding は read-only derivation で registration authority を持ちません。
+Takosumi-owned generic Accounts capability implementation が final-Apply activation を所有します。
+review 済み repository manifest は、同じ module に exactly one の `http.endpoint` がある
+場合だけ generic `identity.oidc` capability を要求できます。read-only Plan は endpoint の
+exact Plan-known canonical HTTPS origin を要求し、`accountsUrl`、`issuerUrl`、`clientId`、
+`redirectUri` の4つの非 secret delivery 値だけを authority digest に固定します。
+Plan と `apply_check` は Accounts を変更せず、最終 Apply の再検証時だけ Capsule-bound
+client を冪等登録して現在の value-free `activationDigest` を保存できます。
 
-Takos hosted の browser profile の登録は、exact six scopes
-`openid`, `profile`, `email`, `offline_access`, `capsules:read`, `capsules:write` と
-callback `/auth/oidc/callback` を使います。redirect URI は reviewed HTTPS `public_url`
-の exact origin から導出され、path/query/credential や non-HTTPS origin は受け付けません。
-同じ Capsule と profile なら InstallConfig row を replacement しても client identity は
-安定し、client secret は作成・保存しません。bulk/operator secret と generic
-ProviderConnection は引き続き operator/Accounts の所有です。
+この digest は contract `takosumi.accounts-oidc-activation/v1`、Workspace/Capsule、
+`executionAuthorityEpoch`、full InstallConfig digest を束ねます。live grant は current
+Capsule/config/repository provenance/epoch と digest の exact match を要求し、legacy null
+または mismatch は stale/denied として Apply 修復まで認可しません。`updatedAt` は通常の
+監査時刻であり authority ではありません。callback と scopes は manifest request と
+operator policy の exact intersection であり、scopes は `openid` を含む明示 allowlist 内に
+限定されます。ProviderBinding、private descriptor、owner-subject variable、provider fallback、
+client secret はこの lane に存在しません。既に登録済みの Capsule client は current Capsule /
+InstallConfig / Workspace membership / scope を利用時に再検証し、無効な terminal binding は
+best-effort で revoke します。bulk/operator secret と generic ProviderConnection は引き続き
+operator/Accounts の所有です。
 Accounts が発行する Workspace-scoped token と Interface 呼び出しは、引き続き scope と
 Workspace の両方を検証します。token の実体は利用側の secret store に暗号化して保存し、
 OpenTofu state や Output には保存しません。

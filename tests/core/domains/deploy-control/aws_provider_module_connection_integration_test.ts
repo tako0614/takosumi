@@ -186,7 +186,7 @@ async function putCompatibilityReport(input: {
     policy: input.installConfig.policy,
   });
   expect(analysis.level).toBe("ready");
-  expect(analysis.providers.map((provider) => provider.source)).toEqual([
+  expect(analysis.providerPackages.map((provider) => provider.source)).toEqual([
     AWS_PROVIDER,
   ]);
   const report: CapsuleCompatibilityReport = {
@@ -197,7 +197,8 @@ async function putCompatibilityReport(input: {
     modulePath: ".",
     level: analysis.level,
     findings: analysis.findings,
-    providers: analysis.providers,
+    providerPackages: analysis.providerPackages,
+    rootProviderRequirements: analysis.rootProviderRequirements,
     resources: analysis.resources,
     dataSources: analysis.dataSources,
     provisioners: analysis.provisioners,

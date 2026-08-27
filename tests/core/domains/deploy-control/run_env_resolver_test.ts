@@ -196,6 +196,185 @@ test("RunEnvResolver resolves secret Provider Connections without hashing secret
   expect(first.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });
 
+test("RunEnvResolver records the exact required child alias resolution", async () => {
+  const subject = resolver({
+    resolved: [
+      {
+        provider: CLOUDFLARE_PROVIDER,
+        moduleLocalName: "edge",
+        childAlias: "account",
+        rootAlias: "root_account",
+        materialization: "secret",
+        connection: connection({ id: "conn_cf_account" }),
+      },
+      {
+        provider: CLOUDFLARE_PROVIDER,
+        moduleLocalName: "edge",
+        childAlias: "zone",
+        rootAlias: "root_zone",
+        materialization: "secret",
+        connection: connection({ id: "conn_cf_zone" }),
+      },
+    ],
+    credentials: () => undefined,
+  });
+
+  const result = await subject.resolveRunEnvironment({
+    planRun: planRun({
+      requiredProviderRequirements: [
+        {
+          source: CLOUDFLARE_PROVIDER,
+          moduleLocalName: "edge",
+          childAlias: "zone",
+          allowed: true,
+          credentialRequired: true,
+        },
+      ],
+    }),
+    phase: "plan",
+    auditRunId: "plan_exact_zone",
+  });
+
+  expect(result.providerResolutions).toHaveLength(1);
+  expect(result.providerResolutions[0]).toMatchObject({
+    connectionId: "conn_cf_zone",
+    requirement: {
+      providerSource: CLOUDFLARE_PROVIDER,
+      providerName: "edge",
+      alias: "zone",
+    },
+    evidence: {
+      provider: CLOUDFLARE_PROVIDER,
+    },
+  });
+  expect(result.providerConfigurations).toEqual({
+    format: "takosumi.provider-configurations@v1",
+    providers: [
+      {
+        provider: CLOUDFLARE_PROVIDER,
+        alias: "root_zone",
+        configuration: {},
+      },
+    ],
+  });
+});
+
+test("RunEnvResolver rejects same-source child-alias substitution after Plan review", async () => {
+  const reviewed: readonly ResolvedCapsuleProviderBinding[] = [
+    {
+      provider: CLOUDFLARE_PROVIDER,
+      moduleLocalName: "edge",
+      childAlias: "zone",
+      rootAlias: "root_zone",
+      materialization: "secret",
+      connection: connection({ id: "conn_cf_zone" }),
+    },
+  ];
+  const live: readonly ResolvedCapsuleProviderBinding[] = [
+    {
+      provider: CLOUDFLARE_PROVIDER,
+      moduleLocalName: "edge",
+      childAlias: "account",
+      rootAlias: "root_account",
+      materialization: "secret",
+      connection: connection({ id: "conn_cf_account" }),
+    },
+  ];
+  const subject = resolver({ resolved: live, credentials: () => undefined });
+
+  await expect(
+    subject.resolveRunEnvironment({
+      planRun: planRun({
+        requiredProviderRequirements: [
+          {
+            source: CLOUDFLARE_PROVIDER,
+            moduleLocalName: "edge",
+            childAlias: "zone",
+            allowed: true,
+            credentialRequired: true,
+          },
+        ],
+        resolvedProviderBindingsDigest:
+          await resolvedProviderBindingsDigest(reviewed),
+      }),
+      phase: "apply",
+      auditRunId: "apply_exact_zone",
+    }),
+  ).rejects.toMatchObject({
+    message: expect.stringContaining("resolved_bindings_changed"),
+    details: { reason: "provider_connection_changed" },
+  });
+});
+
+test("RunEnvResolver never falls back from a present empty exact field", async () => {
+  const subject = resolver({ resolved: [], credentials: () => undefined });
+
+  await expect(
+    subject.resolveRunEnvironment({
+      planRun: planRun({ requiredProviderRequirements: [] }),
+      phase: "plan",
+      auditRunId: "plan_malformed_empty_exact",
+    }),
+  ).rejects.toThrow(/do not match requiredProviders/);
+});
+
+test("RunEnvResolver distinguishes a pre-field stored row from explicit empty requirements", async () => {
+  const subject = resolver({
+    resolved: [
+      {
+        provider: CLOUDFLARE_PROVIDER,
+        materialization: "secret",
+        connection: connection({ id: "conn_legacy_default" }),
+      },
+    ],
+    credentials: () => undefined,
+  });
+
+  const legacy = await subject.resolveRunEnvironment({
+    planRun: planRun(),
+    phase: "plan",
+    auditRunId: "plan_legacy_default",
+  });
+  const explicitEmpty = await subject.resolveRunEnvironment({
+    planRun: planRun({
+      requiredProviders: [],
+      requiredProviderRequirements: [],
+    }),
+    phase: "plan",
+    auditRunId: "plan_explicit_empty",
+  });
+
+  expect(legacy.providerResolutions).toHaveLength(1);
+  expect(legacy.providerResolutions[0]?.connectionId).toBe(
+    "conn_legacy_default",
+  );
+  expect(explicitEmpty.providerResolutions).toEqual([]);
+  expect(explicitEmpty.providerConfigurations).toEqual({
+    format: "takosumi.provider-configurations@v1",
+    providers: [],
+  });
+});
+
+test("RunEnvResolver rejects duplicate exact requirement tuples", async () => {
+  const requirement = {
+    source: CLOUDFLARE_PROVIDER,
+    moduleLocalName: "edge",
+    childAlias: "zone",
+    allowed: true,
+  } as const;
+  const subject = resolver({ resolved: [], credentials: () => undefined });
+
+  await expect(
+    subject.resolveRunEnvironment({
+      planRun: planRun({
+        requiredProviderRequirements: [requirement, requirement],
+      }),
+      phase: "plan",
+      auditRunId: "plan_duplicate_exact",
+    }),
+  ).rejects.toThrow(/duplicate required provider identity/);
+});
+
 test("RunEnvResolver mints provider env for release command context", async () => {
   const calls: Array<{
     phase: string;
@@ -289,17 +468,21 @@ test("RunEnvResolver delivers deterministic alias-aware non-secret provider conf
   const resolved: readonly ResolvedCapsuleProviderBinding[] = [
     {
       provider: AWS_PROVIDER,
+      moduleLocalName: "aws",
       materialization: "secret",
       connection: aws,
     },
     {
       provider: CLOUDFLARE_PROVIDER,
-      alias: "edge",
+      moduleLocalName: "cloudflare",
+      childAlias: "edge",
+      rootAlias: "edge",
       materialization: "secret",
       connection: cloudflareEdge,
     },
     {
       provider: "cloudflare/cloudflare",
+      moduleLocalName: "cloudflare",
       materialization: "secret",
       connection: cloudflareDefault,
     },
@@ -313,6 +496,24 @@ test("RunEnvResolver delivers deterministic alias-aware non-secret provider conf
   const result = await subject.resolveRunEnvironment({
     planRun: planRun({
       requiredProviders: [AWS_PROVIDER, CLOUDFLARE_PROVIDER],
+      requiredProviderRequirements: [
+        {
+          source: AWS_PROVIDER,
+          moduleLocalName: "aws",
+          allowed: true,
+        },
+        {
+          source: CLOUDFLARE_PROVIDER,
+          moduleLocalName: "cloudflare",
+          allowed: true,
+        },
+        {
+          source: CLOUDFLARE_PROVIDER,
+          moduleLocalName: "cloudflare",
+          childAlias: "edge",
+          allowed: true,
+        },
+      ],
     }),
     phase: "apply",
     auditRunId: "release_apply_1",
@@ -325,6 +526,24 @@ test("RunEnvResolver delivers deterministic alias-aware non-secret provider conf
   }).resolveRunEnvironment({
     planRun: planRun({
       requiredProviders: [AWS_PROVIDER, CLOUDFLARE_PROVIDER],
+      requiredProviderRequirements: [
+        {
+          source: AWS_PROVIDER,
+          moduleLocalName: "aws",
+          allowed: true,
+        },
+        {
+          source: CLOUDFLARE_PROVIDER,
+          moduleLocalName: "cloudflare",
+          allowed: true,
+        },
+        {
+          source: CLOUDFLARE_PROVIDER,
+          moduleLocalName: "cloudflare",
+          childAlias: "edge",
+          allowed: true,
+        },
+      ],
     }),
     phase: "apply",
     auditRunId: "release_apply_1",
@@ -406,7 +625,8 @@ test("RunEnvResolver fences lifecycle provider configuration to the reviewed bin
   const reviewed: readonly ResolvedCapsuleProviderBinding[] = [
     {
       provider: CLOUDFLARE_PROVIDER,
-      alias: "main",
+      moduleLocalName: "cloudflare",
+      rootAlias: "main",
       materialization: "secret",
       connection: connection({
         scopeHints: {
@@ -435,6 +655,13 @@ test("RunEnvResolver fences lifecycle provider configuration to the reviewed bin
   try {
     await subject.resolveRunEnvironment({
       planRun: planRun({
+        requiredProviderRequirements: [
+          {
+            source: CLOUDFLARE_PROVIDER,
+            moduleLocalName: "cloudflare",
+            allowed: true,
+          },
+        ],
         resolvedProviderBindingsDigest:
           await resolvedProviderBindingsDigest(reviewed),
       }),
@@ -577,7 +804,7 @@ test("RunEnvResolver fails closed for raw runs without a Capsule or Resource sub
   expect(error.runEnvironment.credentials).toBeUndefined();
   expect(error.runEnvironment.providerResolutions[0]).toMatchObject({
     status: "blocked_missing_connection",
-    blockedReason: `capsule provider connection evidence is required for provider ${CLOUDFLARE_PROVIDER}`,
+    blockedReason: `capsule provider connection evidence is required for provider ${CLOUDFLARE_PROVIDER} (cloudflare default)`,
   });
   expect(error.runEnvironment.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });

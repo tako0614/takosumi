@@ -47,7 +47,8 @@ export function appHandoffProductLabel(product: string): string {
 /**
  * Redirect target for a `web+takosumi:install?…` protocol payload delivered as
  * `/install?handoff=<…>`. Builds a FRESH `/new` query from only the decoded,
- * whitelisted scheme fields — every other outer param is discarded, so a
+ * whitelisted scheme fields. Unknown inner fields invalidate the scheme; every
+ * outer param is discarded, so a
  * hand-crafted `/install?handoff=<benign>&auto=1&tcsBase=…&tcsListing=…` link
  * cannot smuggle the auto-install trigger past the prefill-only gate. Capsule-
  * only: no `kind`, so it always lands on `/new`. Invalid payloads fall back to a
@@ -60,6 +61,7 @@ export function installHandoffTarget(handoff: string): string {
   if (fields.git) fresh.set("git", fields.git);
   if (fields.source) fresh.set("source", fields.source);
   if (fields.ref) fresh.set("ref", fields.ref);
+  if (fields.sourcePath) fresh.set("sourcePath", fields.sourcePath);
   if (fields.path) fresh.set("path", fields.path);
   if (fields.name) fresh.set("name", fields.name);
   if (fields.product) fresh.set("product", fields.product);

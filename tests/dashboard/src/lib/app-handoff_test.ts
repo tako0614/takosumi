@@ -125,10 +125,11 @@ describe("Takosumi App Handoff", () => {
 });
 
 describe("web+takosumi: install scheme", () => {
-  test("builds the opaque form and round-trips the git/ref/path/name payload", () => {
+  test("builds the opaque form and round-trips distinct source/module paths", () => {
     const scheme = createTakosumiAppInstallScheme({
       git: "https://github.com/acme/repo.git",
       ref: "main",
+      sourcePath: "infra",
       path: "deploy/opentofu",
       name: "Customer API",
     });
@@ -139,6 +140,7 @@ describe("web+takosumi: install scheme", () => {
     expect(parseTakosumiAppInstallScheme(scheme)).toEqual({
       git: "https://github.com/acme/repo.git",
       ref: "main",
+      sourcePath: "infra",
       path: "deploy/opentofu",
       name: "Customer API",
     });
@@ -218,24 +220,34 @@ describe("web+takosumi: install scheme", () => {
     ).toBeUndefined();
   });
 
-  test("installHandoffTarget rebuilds a fresh /new query and drops non-whitelist params", () => {
+  test("installHandoffTarget rebuilds a fresh /new query from known fields", () => {
     const scheme = createTakosumiAppInstallScheme({
       git: "https://github.com/acme/repo.git",
+      sourcePath: "infra",
       name: "Customer API",
     });
-    // An attacker appends the auto-install trigger + a rogue store handoff
-    // INSIDE the scheme; none are whitelisted, so they must not survive.
-    const poisoned = `${scheme}&auto=1&tcsBase=https%3A%2F%2Fevil.example&tcsListing=x`;
-    const target = installHandoffTarget(poisoned);
+    const target = installHandoffTarget(scheme);
     const url = new URL(target, "https://app.takosumi.com");
     expect(url.pathname).toBe("/new");
     expect(url.searchParams.get("git")).toBe(
       "https://github.com/acme/repo.git",
     );
     expect(url.searchParams.get("name")).toBe("Customer API");
+    expect(url.searchParams.get("sourcePath")).toBe("infra");
     expect(url.searchParams.get("auto")).toBeNull();
     expect(url.searchParams.get("tcsBase")).toBeNull();
     expect(url.searchParams.get("tcsListing")).toBeNull();
+  });
+
+  test("fails closed when a scheme carries unknown or invalid coordinates", () => {
+    const base = createTakosumiAppInstallScheme({
+      git: "https://github.com/acme/repo.git",
+    });
+    expect(parseTakosumiAppInstallScheme(`${base}&auto=1`)).toBeUndefined();
+    expect(installHandoffTarget(`${base}&auto=1`)).toBe("/new");
+    expect(
+      parseTakosumiAppInstallScheme(`${base}&sourcePath=infra%2F..%2Fother`),
+    ).toBeUndefined();
   });
 
   test("installHandoffTarget falls back to bare /new on an invalid payload", () => {

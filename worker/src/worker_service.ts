@@ -70,6 +70,7 @@ import {
 import {
   platformExtensionProviderCredentialComposition,
 } from "../../deploy/platform/platform_extension_provider_credentials.ts";
+import { applyCredentialRequiredProviderSources } from "../../deploy/platform/host_install_config_composition.ts";
 import { createTakosumiAccountsOidcModuleVariableMaterializer } from "../../deploy/platform/accounts_oidc_module_variable_materializer.ts";
 
 export async function createWorkerServiceApp(
@@ -213,11 +214,6 @@ export async function createWorkerServiceApp(
       stateSecret: runtimeEnv.TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET,
       descriptors: connectionOAuthDescriptorsFromEnv(runtimeEnv),
     });
-  const operatorInstallConfigs = options.operatorInstallConfigs ??
-    env.TAKOSUMI_INSTALL_CONFIG_COMPOSITION ??
-    (operatorControlMcpEnabled(env)
-      ? [OPERATOR_CONTROL_MCP_INSTALL_CONFIG]
-      : []);
   const envCredentialRecipeHost = mergeCredentialRecipeHostContributions(
     env.TAKOSUMI_CREDENTIAL_RECIPE_HOST_COMPOSITION,
     platformExtensionProviderCredentialComposition(env),
@@ -244,7 +240,23 @@ export async function createWorkerServiceApp(
       credentialRecipeDrivers:
         options.credentialRecipeDrivers ??
         REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+      ...(options.credentialRecipes === undefined &&
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRequiredProviderSources
+        ? {
+            credentialRequiredProviderSources:
+              REFERENCE_CREDENTIAL_RECIPE_COMPOSITION
+                .credentialRequiredProviderSources,
+          }
+        : {}),
     },
+  );
+  const operatorInstallConfigs = applyCredentialRequiredProviderSources(
+    options.operatorInstallConfigs ??
+      env.TAKOSUMI_INSTALL_CONFIG_COMPOSITION ??
+      (operatorControlMcpEnabled(env)
+        ? [OPERATOR_CONTROL_MCP_INSTALL_CONFIG]
+        : []),
+    credentialRecipeHost.credentialRequiredProviderSources,
   );
   const runCredentialIssuer = runCredentialIssuerFromEnv(env);
   return await createTakosumiService({
@@ -340,6 +352,17 @@ function mergeCredentialRecipeHostContributions(
       ...left.credentialRecipeDrivers,
       ...right.credentialRecipeDrivers,
     },
+    ...(left.credentialRequiredProviderSources !== undefined ||
+    right.credentialRequiredProviderSources !== undefined
+      ? {
+          credentialRequiredProviderSources: Array.from(
+            new Set([
+              ...(left.credentialRequiredProviderSources ?? []),
+              ...(right.credentialRequiredProviderSources ?? []),
+            ]),
+          ).sort(),
+        }
+      : {}),
     operatorProviderConnections: [
       ...(left.operatorProviderConnections ?? []),
       ...(right.operatorProviderConnections ?? []),

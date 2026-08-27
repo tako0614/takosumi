@@ -1,10 +1,21 @@
 # Repository manifest
 
-`.well-known/takosumi.json` is an optional install-metadata proposal owned by a
-Git repository and pinned to the same commit as the executable source. It is
-never execution authority. Source sync validates the repository-root file as
-UTF-8 JSON of at most 128 KiB and records its status and digest in the immutable
-`SourceSnapshot.repositoryManifest`. Public APIs never return the raw document.
+`.well-known/takosumi.json` is the optional repository manifest. It adds input
+presentation hints to real OpenTofu modules found by the repository scan and
+declares requests for generic Takosumi-provided APIs/services and their exact
+delivery targets. It is owned by a Git repository and pinned to the same commit
+as the executable source, but it is never module-path, provider, Connection,
+resource, deployment, or lifecycle authority. A plain Git/OpenTofu app remains
+installable without this file. Source sync validates the repository-root file
+as UTF-8 JSON of at most 128 KiB and records its status and digest in the
+immutable `SourceSnapshot.repositoryManifest`. Public APIs never return the raw
+document.
+
+The Git URL, ref, Source subtree, and tracked-regular-file scan at the exact
+commit are the source of module and provider candidates. The app-owned
+Git/OpenTofu configuration remains the infrastructure and lifecycle authority. Takosumi owns
+the implementation of each accepted generic API/capability; the manifest only
+requests it and maps its delivered values to the app-owned module.
 
 Takosumi checks the exact SourceSnapshot declaration against an exact
 compatibility report and compiles it within operator policy into a DB-owned
@@ -23,17 +34,16 @@ Every version has exactly three root fields:
 }
 ```
 
-| `apiVersion`        | `install` fields            | module fields                               |
-| ------------------- | --------------------------- | ------------------------------------------- |
-| `takosumi.com/v1`   | `modules`                   | `inputs`, `requires`, `features`            |
-| `takosumi.com/v2`   | `modules`                   | v1 + `interfaces`                           |
-| `takosumi.com/v2.1` | `modules`, `defaultModule`? | identical to v2                             |
-| `takosumi.com/v2.2` | `modules`, `defaultModule`? | v2.1 + `requires[].kind: interface.consume` |
-| `takosumi.com/v2.3` | `modules`, `defaultModule`? | v2.2 + optional `sourceBuild`               |
+| `apiVersion`        | `install` fields | module fields                               |
+| ------------------- | ---------------- | ------------------------------------------- |
+| `takosumi.com/v1`   | `modules`        | `inputs`, `requires`, `features`            |
+| `takosumi.com/v2`   | `modules`        | v1 + `interfaces`                           |
+| `takosumi.com/v2.1` | `modules`        | identical to v2                             |
+| `takosumi.com/v2.2` | `modules`        | v2.1 + `requires[].kind: interface.consume` |
+| `takosumi.com/v2.3` | `modules`        | v2.2 + optional `sourceBuild`               |
 
 Every object is closed. Fields not listed in this document, `$schema`, and the
-retired `schemaVersion: takosumi.install-ux/v1` are rejected. Adding
-`defaultModule` to a v1 or v2 document does not make it v2.1.
+retired `schemaVersion: takosumi.install-ux/v1` are rejected.
 
 The published JSON Schemas are
 [`repository-manifest-v2.1.schema.json`](/schemas/repository-manifest-v2.1.schema.json)
@@ -44,37 +54,47 @@ and
 It is a structural schema, not a claim of JSON Schema/parser equivalence. The
 canonical parser additionally fails closed on constraints that require
 cross-field or value-aware inspection: uniqueness across related declarations,
-equality between `defaultModule` and a dynamic object key, recursive JSON depth
-(maximum 32), and the secret/authority vocabulary checks described below.
+recursive JSON depth (maximum 32), and the secret/authority vocabulary checks
+described below.
 
-## Module paths and default selection
+## Scanned modules and manifest entries
 
 `install.modules` contains 1–32 entries. A key is `.` or a canonical
 repository-relative path of at most 1,024 characters. Absolute paths, `./`
 prefixes, drive prefixes, a trailing slash, backslashes, NUL, empty segments,
-and `.` or `..` segments are invalid.
+and `.` or `..` segments are invalid. An entry is used as a hint/request only
+when the exact `SourceSnapshot` scan found a module at the same path. The
+manifest cannot create, select, or override a module.
 
-For Store `compileInstallUx`, neither the client nor the Store sends a
-`modulePath`. After source sync, the server selects from the exact
-SourceSnapshot manifest, runs compatibility for that exact path, and persists
-the same path in the derived InstallConfig:
+The authenticated
+`GET /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules`
+projection returns `status`, the exact `sourceSnapshotId`, `scopePath`, and
+scan-derived
+`modules: [{ path, providerPackages, rootProviderRequirements }]`.
+`providerPackages` is the complete reachable package set used for policy, lock,
+and mirror checks. `rootProviderRequirements` is the selected root's exact
+local-name/alias tuple set used for bindings and root generation. The dashboard
+selects a module from those candidates before compatibility runs. Direct Git
+and Store installs use the same Git URL/ref and optional module-path hint flow;
+Store metadata and DB-owned deployment-profile rows do not select module,
+provider, or policy behavior.
 
-Direct Git and repository-owned source options use the same `compileInstallUx`
-flow and may send their selected `modulePath`. The server validates that path
-as an exact `install.modules` key in the immutable SourceSnapshot manifest;
-Store metadata never selects executable behavior.
+The dashboard auto-selects exactly one candidate and asks the user to select
+when multiple candidates exist. A path that exists only in the manifest is not
+a candidate, and an explicit URL `path` fails closed with a typed 4xx unless it
+exists in the immutable scan result. An absent manifest does not block scanned
+modules. A malformed or invalid optional manifest is likewise never guessed or
+partially adopted: its assistance is disabled and the scan-derived generic
+install continues. Only an operator Host policy that explicitly requires an
+exact manifest API version fails closed on an absent, invalid, or mismatched
+manifest. This endpoint checks account-session authentication, Source Workspace
+access, and the exact SourceSnapshot-to-Source relationship.
 
-1. If `modules` has one entry, select its only key.
-2. Multiple entries require `install.defaultModule` in `takosumi.com/v2.1`,
-   `takosumi.com/v2.2`, or `takosumi.com/v2.3`.
-3. `defaultModule` must be canonical and byte-for-byte equal to an own
-   `modules` key.
-
-Takosumi never guesses `.`, the first JSON object key, a path from
-`.well-known/tcs.json`, `Source.defaultPath`, or a base
-`InstallConfig.modulePath`. A missing or invalid default returns a typed
-diagnostic before compatibility runs. Ordinary manual Git compatibility
-requests may continue to supply an explicit `modulePath`.
+The v1 scan follows only tracked regular files and vendored local module edges
+(`./` and `../`) inside the immutable archive. A remote module source is not
+network-fetch authority, whether pinned or unpinned; discovery becomes
+`invalid` rather than publishing a partial candidate. Vendor the dependency in
+the repository tree.
 
 ### Valid multi-module v2.1 example
 
@@ -83,7 +103,6 @@ requests may continue to supply an explicit `modulePath`.
   "apiVersion": "takosumi.com/v2.1",
   "kind": "Repository",
   "install": {
-    "defaultModule": "deploy/takoform",
     "modules": {
       ".": { "inputs": [] },
       "deploy/takoform": { "inputs": [] }
@@ -130,6 +149,8 @@ delivery names, never a value or credential.
 - `secret.generated`: `kind`, optional `bytes` (16–64), optional `encoding`
   (`hex` / `base64url`), and `deliver`; at most eight per module.
 - `http.endpoint`: `kind` and `deliver`.
+- `identity.oidc`: `kind`, a root-relative `callbackPath`, 1–16 `scopes`, and
+  `deliver`.
 - `interface.consume` (v2.2): `kind`, a module-unique `key`, exact
   `interface.type` / `interface.version`, 1–16 `permissions`, and a `delivery`
   object containing only `{ "type": token }`.
@@ -139,8 +160,28 @@ closed per requirement kind, and values are exact OpenTofu variable or runtime
 binding names. Requirements cannot claim the same delivery name. Endpoint is a
 singleton per module. The compiler rejects host-reserved bindings,
 absent/non-string variables, and requirement kinds outside operator policy.
-Capsule-specific `identity.oidc` materialization is rejected by the current
-Git-owned install flow.
+
+`identity.oidc` is a Takosumi Accounts capability that any reviewed
+Git/OpenTofu app may request without naming a product or provider. The selected
+module must contain exactly one `identity.oidc` and exactly one
+`http.endpoint`. OIDC delivery is variables-only and has exactly four slots:
+`accountsUrl`, `issuerUrl`, `clientId`, and `redirectUri`. The endpoint delivers
+`url` to a distinct string variable. OIDC scopes must be unique, include
+`openid`, and remain within the explicit
+`InstallConfig.policy.repositoryInstallUx.allowedOidcScopes`; no allowlist
+grants no capability.
+
+At Plan, the endpoint `url` variable must resolve to a canonical exact HTTPS
+origin with no path, query, fragment, or credentials. Takosumi derives the
+redirect URI from that origin and the reviewed `callbackPath`, then pins the
+exact four variables and authority digest in the private Plan sidecar. Plan and
+`apply_check` do not mutate Accounts. Only final Apply may idempotently register
+the Capsule-bound public client, and retirement after terminal destroy is also
+idempotent. An unavailable Accounts capability or drift in origin, variable,
+callback, scope, or digest fails before runner execution. There is no fallback
+or inference from ProviderBinding, provider output, product identity, or
+hostname convention, and the request adds no provider, resource, deployment,
+or lifecycle authority.
 
 `interface.consume` never declares a provider, product name, Interface ID,
 endpoint, or credential. After Plan, the host reads the DB-owned InstallConfig
@@ -260,28 +301,27 @@ mismatches fail closed.
 
 ## Invalid examples
 
-A v2 document cannot use the v2.1 field:
+A closed install object cannot add a module-selection field:
 
 ```json
 {
   "apiVersion": "takosumi.com/v2",
   "kind": "Repository",
   "install": {
-    "defaultModule": "deploy/app",
+    "modulePath": "deploy/app",
     "modules": { "deploy/app": { "inputs": [] } }
   }
 }
 ```
 
-An alias or missing key is invalid:
+A non-canonical module key is invalid:
 
 ```json
 {
   "apiVersion": "takosumi.com/v2.1",
   "kind": "Repository",
   "install": {
-    "defaultModule": "./deploy/app",
-    "modules": { "deploy/app": { "inputs": [] } }
+    "modules": { "./deploy/app": { "inputs": [] } }
   }
 }
 ```
@@ -304,17 +344,16 @@ Public documents cannot embed secret or authority material:
 ## Migration and versioning
 
 An API identifier names a closed schema. Existing versions do not gain fields
-or new meanings later. v2.1 adds only optional `install.defaultModule`; v2.2
-adds only provider-neutral `interface.consume`; v2.3 adds only bounded,
-credential-free `sourceBuild`. These are additive schema
-revisions that preserve existing module, provided-Interface, and authority
-semantics. Unknown versions or fields fail closed. Incompatible vocabulary or
+or new meanings later. v2.1 retains the v2 module metadata, v2.2 adds
+provider-neutral `interface.consume`, and v2.3 adds bounded, credential-free
+`sourceBuild`. Existing module, provided-Interface, and authority semantics are
+preserved. Unknown versions or fields fail closed. Incompatible vocabulary or
 authority changes require a separate schema identifier.
 
 A future metadata section requires a new `apiVersion`; unknown fields continue to fail closed.
 
-- A single-module v1/v2 repository needs no migration; its only key is selected.
-- A multi-module repository upgrades to v2.1 and adds an exact `defaultModule`.
+- Regardless of manifest version, exactly one scanned module is auto-selected.
+- When a scan finds multiple modules, the user selects an exact path.
 - v2 `interfaces` keep the same shape and meaning after changing to v2.1.
 - Only a repository that consumes a host Interface upgrades to v2.2 and adds
   `interface.consume`.
@@ -323,7 +362,6 @@ A future metadata section requires a new `apiVersion`; unknown fields continue t
 - Do not backport the new field while retaining a v1/v2 identifier.
 
 The Store does not proxy this manifest. See [Store API](./store-api.md) for the
-TCS 2.0 URL-only handoff and integration boundary. Root `install-options.json`
-is a separate chooser with `apiVersion: install.takosumi.com/v1alpha1` and
-`kind: CapsuleSourceOptions` for ordinary Capsule source candidates. It cannot
-duplicate inputs or InstallConfig declarations.
+TCS 2.0 URL-only handoff and integration boundary. A repository install takes a
+Git URL, ref, and optional module-path hint; module/provider candidates come
+from the exact SourceSnapshot's OpenTofu scan.

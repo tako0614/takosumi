@@ -9,6 +9,11 @@
 //   bun run deploy -- takosumi-website
 //   bun run deploy -- takosumi-platform-staging plan ...
 //   bun run deploy -- takosumi-platform plan ...
+//   bun run deploy -- takosumi-platform-staging restore ...
+//   bun run deploy -- takosumi-platform restore ...
+//   bun run deploy -- takosumi-runner-image build ...
+//   bun run deploy -- takosumi-runner-image reconcile ...
+//   bun run deploy -- takosumi-runner-image verify ...
 //
 // `--contract` は副作用なしで、この repo が publish できる surface と、それぞれの
 // trigger・義務の果たし方を印字します。takos-control の
@@ -48,25 +53,32 @@ const PLATFORM_PRODUCTION = {
   target: "cloudflare-worker:takosumi",
 };
 
+const CONTRACT_PACKAGE = {
+  surface: "takosumi-contract-package",
+  target: "npm:@takosjp/takosumi-contract",
+};
+
+const runnerImageRelease = await import("./runner-image-release.ts");
+
 const platformContract = ({ surface, target, environment }) => ({
   surface,
   target,
   triggers: ["irreversible", "authority", "published-identity"],
   obligations: {
     provenance:
-      `plan binds one clean pushed OSS commit, the exact external realized ${environment} config digest, dashboard bytes, dry-run, and the exact 100 percent predecessor Version; execute rechecks all identities before upload`,
+      `plan binds one clean pushed OSS commit, the exact external realized ${environment} config digest, a twice-reproduced complete physical dashboard asset tree, an immutable Git source snapshot, the exact Wrangler dry-run output tree, metadata-only secret names, the exact 100 percent predecessor Version, and the exact healthy predecessor Container application identity and immutable image; execute and restore recheck their external sealed closures and copy them with stable no-follow reads into fresh single-link upload custody`,
     "post-conditions":
-      "execute requires the published Version at 100 percent, reads that immutable Version back with the exact required bindings and fetch handler, and proves the public root and Takosumi discovery document are served; authenticated Hosted extension E2E is a separate required composition check",
+      "execute parses exactly one emitted Worker Version UUID, requires only that UUID at 100 percent, reads that immutable tagged Version back with the exact required bindings and fetch handler, proves the public root and Takosumi discovery document serve it, and requires exact Container list/detail identity, configured immutable image, no active rollout, and zero unhealthy instances; authenticated Hosted extension E2E is a separate required composition check",
     reversal:
-      "the plan records the exact predecessor immutable Version and execute prints the one-Version restore command; deleted Durable Object storage is forward-only and cannot be restored by code rollback",
+      "the same reviewed owner surface exposes restore against the exact plan confirmation; it first uses the sealed image-only predecessor config with strict immediate rollout, then restores the exact predecessor Worker Version at 100 percent, and records exact public Version plus Container identity/image/health readback under a durable staged checkpoint; deleted Durable Object storage is forward-only and cannot be restored by code rollback",
     "failure-handling":
-      "stable private evidence distinguishes failed from indeterminate after mutation; execute never retries an upload and requires authoritative Version reconciliation before another attempt",
+      "plan-derived external fsynced unknown checkpoints are durable immediately before forward upload and each restore stage and are shared by alternate evidence paths; malformed or torn checkpoints are post-touch ambiguity; bounded redacted provider diagnostics record pre-mutation, post-mutation-unknown, or post-mutation-readback failure; execute never uploads after any forward checkpoint, and bounded lost-ack recovery requires one unique post-plan tagged Version or remains incomplete",
     "pre-mutation-proof":
-      `plan reads Cloudflare's metadata-only secret-name list, runs the dashboard build and Wrangler dry-run against the exact realized ${environment} config, then seals the secret-name-set, config, dashboard, source, and predecessor Version digests`,
+      `plan reads Cloudflare's metadata-only secret-name list, exact serving Version, and exact healthy Container list/detail state; it reproduces the environment-aware dashboard build twice and runs Wrangler dry-run with immediate Container rollout plus strict conflict checks for both the reviewed forward config and an image-only predecessor projection; the private plan seals every physical asset and dry-run output path, size, and digest with config, immutable source, secret-name-set, and predecessor identities`,
     "independent-review":
       "execute requires the exact plan confirmation and a named operator reviewer distinct from the source bytes",
     "no-overwrite":
-      "Wrangler mints a new immutable Worker Version and the owner requires exact 100 percent readback before ready evidence",
+      "Wrangler uploads the fresh custody copy of the exact sealed dry-run entry with --no-bundle and mints one new immutable Worker Version under a nonce-bound plan-unique recovery tag; custody is re-sealed before and after upload, and the owner binds its emitted UUID to exact 100 percent status and immutable Version readback before ready evidence",
   },
 });
 
@@ -75,6 +87,7 @@ const CONTRACT = {
   surfaces: [
     platformContract(PLATFORM_STAGING),
     platformContract(PLATFORM_PRODUCTION),
+    runnerImageRelease.RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE,
     {
       surface: WEBSITE.surface,
       target: `cloudflare-pages:${WEBSITE.project}`,
@@ -90,6 +103,26 @@ const CONTRACT = {
         reversal: `the previous production deployment id is read and printed before publishing; restore it with \`wrangler pages deployment list --project-name ${WEBSITE.project}\` and a rollback to that id`,
         "failure-handling":
           "prints the provider's own stdout and stderr, names whether the failure was before or after publication, and on a readback mismatch exits non-zero naming the previous deployment instead of retrying",
+      },
+    },
+    {
+      surface: CONTRACT_PACKAGE.surface,
+      target: CONTRACT_PACKAGE.target,
+      covers: ["contract", "scripts/contract-package-release.ts"],
+      triggers: ["published-identity"],
+      requiresScripts: ["check", "deploy"],
+      requiresTools: ["git", "bun", "npm"],
+      obligations: {
+        provenance:
+          "refuses a dirty or unpushed worktree, requires the package-scoped lightweight tag takosumi-contract-v<version> on the exact pushed source commit, runs the complete owner gate, packs once, records npm sha512 integrity, scans the tarball inventory, and installs those exact bytes into a fresh typechecked consumer before publication",
+        "post-conditions":
+          "reads the exact version and integrity back from npm, installs that registry identity into a fresh consumer, typechecks it, and executes public discovery, OIDC, and Interface imports",
+        reversal:
+          "npm package identities are immutable and cannot be rolled back in place; consumers can pin the previous version and a bad release is repaired only with a new patch version",
+        "failure-handling":
+          "distinguishes a failure before publication from an indeterminate attempted mutation, never retries blindly, and requires exact registry-integrity reconciliation before resuming",
+        "no-overwrite":
+          "publishes only an absent version; an existing identity is accepted solely when its registry integrity exactly matches the one prepared tarball",
       },
     },
   ],
@@ -128,6 +161,21 @@ if (
       ? PLATFORM_STAGING.environment
       : PLATFORM_PRODUCTION.environment;
   await runPlatformWorkerRelease(process.argv.slice(3), environment);
+  process.exit(0);
+}
+
+if (selected === runnerImageRelease.RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE.surface) {
+  const options = runnerImageRelease.parseRunnerImageReleaseArgs(
+    process.argv.slice(3),
+  );
+  const result = await runnerImageRelease.runRunnerImageRelease(options);
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.exit(0);
+}
+
+if (selected === CONTRACT_PACKAGE.surface) {
+  const { runContractPackageRelease } = await import("./contract-package-release.ts");
+  await runContractPackageRelease(process.argv.slice(3));
   process.exit(0);
 }
 

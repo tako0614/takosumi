@@ -166,16 +166,16 @@ function compatibilityProviderPolicyReasons(
   policy: PolicyConfig | undefined,
 ): readonly string[] {
   const allowed = policy?.allowedProviders;
-  const denied = report.providers.filter((provider) => {
-    if (allowed === undefined) return !provider.allowed;
-    const canonical = canonicalProviderAddress(provider.source);
+  const denied = report.providerPackages.filter((providerPackage) => {
+    if (allowed === undefined) return !providerPackage.allowed;
+    const canonical = canonicalProviderAddress(providerPackage.source);
     return !allowed.some(
       (entry) => entry === "*" || providerMatches(canonical, entry),
     );
   });
   return denied.map(
-    (provider) =>
-      `capsule provider ${provider.source} is not allowed by Workspace/InstallConfig policy`,
+    (providerPackage) =>
+      `capsule provider ${providerPackage.source} is not allowed by Workspace/InstallConfig policy`,
   );
 }
 
@@ -228,11 +228,11 @@ export function requiredProvidersFromCompatibilityReport(
   report: CapsuleCompatibilityReport | undefined,
   allowedProviders: readonly string[],
 ): readonly string[] {
-  if (!report || report.providers.length === 0) return [];
+  if (!report || report.providerPackages.length === 0) return [];
   return normalizeProviders(
-    report.providers
-      .filter((provider) => provider.allowed)
-      .map((provider) => provider.source)
+    report.providerPackages
+      .filter((providerPackage) => providerPackage.allowed)
+      .map((providerPackage) => providerPackage.source)
       .filter((source) => source.trim().length > 0)
       .map(canonicalProviderAddress)
       .filter((source) =>

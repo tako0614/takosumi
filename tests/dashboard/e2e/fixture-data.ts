@@ -19,83 +19,13 @@ export const PORTABLE_EXPECTATIONS = {
   appUrl: "https://apps.example.test/repository-office",
 } as const;
 
-/**
- * Product-owned CapsuleSourceOptions documents used by the portable browser
- * check. These are chooser projections only: they name ordinary Git sources
- * and deliberately contain no ProviderConnection or credential data.
- */
-export const PORTABLE_SOURCE_OPTION_DOCUMENTS = {
-  takos: {
-    apiVersion: "install.takosumi.com/v1alpha1",
-    kind: "CapsuleSourceOptions",
-    metadata: {
-      name: "takos",
-      title: "Takos",
-      description:
-        "Choose a deployment target for the Takos AI workspace distribution.",
-    },
-    options: [
-      {
-        id: "portable-cloud",
-        title: "Portable cloud",
-        description: "Deploy the Takoform adapter to a compatible cloud host.",
-        source: {
-          url: "https://github.com/tako0614/takos.git",
-          path: "deploy/opentofu/takoform",
-        },
-      },
-      {
-        id: "cloudflare",
-        title: "Cloudflare (direct)",
-        description:
-          "Advanced: deploy directly into your own Cloudflare account.",
-        source: {
-          url: "https://github.com/tako0614/takos.git",
-          path: "deploy/opentofu/cloudflare",
-        },
-      },
-    ],
-  },
-  yurucommu: {
-    apiVersion: "install.takosumi.com/v1alpha1",
-    kind: "CapsuleSourceOptions",
-    metadata: {
-      name: "yurucommu",
-      title: "Yurucommu",
-      description: "Choose where to run Yurucommu.",
-    },
-    options: [
-      {
-        id: "takosumi-cloud",
-        title: "Takosumi hosted service",
-        description:
-          "Run Yurucommu on cloud resources provided by Takosumi hosted service.",
-        source: {
-          url: "https://github.com/tako0614/yurucommu.git",
-          path: "deploy/takoform",
-        },
-      },
-      {
-        id: "cloudflare",
-        title: "Cloudflare (direct)",
-        description:
-          "Advanced: run Yurucommu in your own Cloudflare account.",
-        source: {
-          url: "https://github.com/tako0614/yurucommu.git",
-          path: ".",
-        },
-      },
-    ],
-  },
-} as const;
-
-/** Immutable commit used by chooser fixture snapshots. */
-export const PORTABLE_SOURCE_OPTIONS_COMMIT =
+/** Immutable commit used by the deterministic source fixtures. */
+export const PORTABLE_SOURCE_COMMIT =
   "0123456789abcdef0123456789abcdef01234567";
 
 /**
- * Provider destination fixtures are independent from the source-option
- * documents above. The first row is an operator-provided, workspace-bindable
+ * Provider destination fixtures are independent from repository metadata.
+ * The first row is an operator-provided, workspace-bindable
  * managed ProviderConnection; the second is a user-owned direct credential.
  */
 export const PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS = [

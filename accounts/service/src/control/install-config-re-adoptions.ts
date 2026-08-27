@@ -6,6 +6,7 @@ import type {
   PublicCapsule,
 } from "takosumi-contract/install-configs";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
+import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { containsSecretLikeString } from "../../../../contract/redaction.ts";
@@ -21,10 +22,11 @@ import {
   publicCapsule,
   type ControlDispatchContext,
 } from "./shared.ts";
-import { isPlainJsonObject } from "./parse.ts";
+import { isPlainJsonObject, modulePathValue } from "./parse.ts";
+import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/capsules/default_install_config.ts";
 import {
   adoptRepoOwnedInstallConfig,
-  resolveRepoOwnedDeploymentProfile,
+  resolveRepoOwnedInstallModulePath,
 } from "./repo-owned-install-config.ts";
 
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
@@ -33,9 +35,8 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const EMPTY_DERIVED_TARGET_DIGEST = `sha256:${"0".repeat(64)}`;
 
 interface ReAdoptionRequest {
-  readonly baseInstallConfigId: string;
+  readonly baseInstallConfigId?: string;
   readonly sourceSnapshotId: string;
-  readonly deploymentProfileKey?: string;
   readonly reason: string;
   readonly expected: {
     readonly authorityGuard: string;
@@ -60,7 +61,6 @@ interface ReAdoptionReceipt {
   readonly derivedTargetDigest: string;
   readonly baseInstallConfigId: string;
   readonly sourceSnapshotId: string;
-  readonly deploymentProfileKey?: string;
 }
 
 interface ReAdoptionAuthoritySnapshot {
@@ -122,7 +122,7 @@ export async function handleCapsuleInstallConfigReAdoption(
   if (!request) {
     return errorJson(
       "invalid_request",
-      "Re-adoption requires one base InstallConfig, SourceSnapshot, bounded reason, and exact current Capsule authority guard.",
+      "Re-adoption requires a SourceSnapshot, bounded reason, and exact current Capsule authority guard.",
       400,
       ctx.request,
     );
@@ -237,34 +237,26 @@ export async function handleCapsuleInstallConfigReAdoption(
       ctx.request,
     );
   }
-  const sharedConfigs = await ctx.operations.capsules.listSharedInstallConfigs({
-    includeInternal: false,
-  });
-  const profile = resolveRepoOwnedDeploymentProfile({
+  // A re-adoption may use the generic host InstallConfig or an operator-
+  // explicitly supplied generic shared config. Legacy Store deployment
+  // profiles are intentionally not read here; their source-URL catalog is
+  // historical data and cannot contribute provider, policy, or module
+  // authority.
+  const resolved = await resolveReAdoptionBaseInstallConfig({
+    operations: ctx.operations,
     source,
     sourceSnapshot,
-    candidates: sharedConfigs,
-    ...(request.deploymentProfileKey
-      ? { deploymentProfileKey: request.deploymentProfileKey }
-      : {}),
+    baseInstallConfigId: request.baseInstallConfigId,
   });
-  if (
-    !profile.ok ||
-    (profile.kind !== "profile" && profile.kind !== "legacy") ||
-    profile.installConfig.id !== request.baseInstallConfigId
-  ) {
+  if (!resolved.ok) {
     return errorJson(
       "failed_precondition",
-      "The requested DB-owned deployment profile is unavailable for this SourceSnapshot.",
+      resolved.message,
       409,
       ctx.request,
     );
   }
-  const baseConfig = profile.installConfig;
-  const modulePath =
-    profile.kind === "profile"
-      ? profile.modulePath
-      : (baseConfig.modulePath ?? sourceSnapshot.path);
+  const { baseConfig, modulePath } = resolved;
   const compatibility = await ctx.operations.createSourceCompatibilityCheck(
     source.id,
     {
@@ -285,7 +277,11 @@ export async function handleCapsuleInstallConfigReAdoption(
       sourceSnapshot.repositoryManifest?.status === "present"
         ? sourceSnapshot.repositoryManifest.document
         : undefined,
-    modulePath,
+    // The scanner/compatibility modulePath is relative to Source.path, while
+    // repository manifest keys are repository-root-relative. Translate only
+    // for this optional input-assistance lookup; execution keeps `modulePath`.
+    modulePath: repositoryManifestModulePath(sourceSnapshot, modulePath) ??
+      modulePath,
     values: reviewedVariables,
   });
   const adoption = await adoptRepoOwnedInstallConfig({
@@ -346,9 +342,6 @@ export async function handleCapsuleInstallConfigReAdoption(
       : {}),
     baseInstallConfigId: baseConfig.id,
     sourceSnapshotId: sourceSnapshot.id,
-    ...(request.deploymentProfileKey
-      ? { deploymentProfileKey: request.deploymentProfileKey }
-      : {}),
   };
   const provisionalTarget = derivedTarget({
     id: targetInstallConfigId,
@@ -505,6 +498,12 @@ function derivedTarget(input: {
     ...(input.adoption.requiredInterfaces
       ? { requiredInterfaces: input.adoption.requiredInterfaces }
       : {}),
+    ...(input.adoption.runtimeBindingMaterialization !== undefined
+      ? {
+          runtimeBindingMaterialization:
+            input.adoption.runtimeBindingMaterialization,
+        }
+      : {}),
     outputAllowlist: input.adoption.outputAllowlist,
     ...(input.adoption.sourceBuild
       ? { sourceBuild: input.adoption.sourceBuild }
@@ -561,6 +560,76 @@ async function existingTarget(
     }
     throw error;
   }
+}
+
+type ReAdoptionBaseInstallConfigResolution =
+  | {
+      readonly ok: true;
+      readonly baseConfig: InstallConfig;
+      readonly modulePath: string;
+    }
+  | {
+      readonly ok: false;
+      readonly message: string;
+    };
+
+async function resolveReAdoptionBaseInstallConfig(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly source: Source;
+  readonly sourceSnapshot: SourceSnapshot;
+  readonly baseInstallConfigId: string | undefined;
+}): Promise<ReAdoptionBaseInstallConfigResolution> {
+  const configId = input.baseInstallConfigId ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID;
+  let baseConfig: InstallConfig;
+  try {
+    baseConfig = await input.operations.capsules.getInstallConfig(configId);
+  } catch (error) {
+    if (
+      !(error instanceof OpenTofuControllerError) ||
+      error.code !== "not_found"
+    ) {
+      throw error;
+    }
+    return {
+      ok: false,
+      message:
+        input.baseInstallConfigId === undefined
+          ? "The generic host InstallConfig is unavailable."
+          : "The requested generic host InstallConfig is unavailable.",
+    };
+  }
+  // Explicit base configs are an operator choice only when they are genuinely
+  // generic shared policy. Source-URL/Store rows (including legacy profile
+  // rows) are rejected before any provider or policy fields are read.
+  if (
+    baseConfig.workspaceId !== undefined ||
+    baseConfig.internal !== undefined ||
+    baseConfig.sourceSelector !== undefined ||
+    baseConfig.store !== undefined
+  ) {
+    return {
+      ok: false,
+      message:
+        "The requested InstallConfig is not a generic host policy configuration.",
+    };
+  }
+  const moduleSelection = resolveRepoOwnedInstallModulePath({
+    sourceSnapshot: input.sourceSnapshot,
+  });
+  // Re-adoption must never recover a module from Source.defaultPath or any
+  // legacy InstallConfig/manifest key. A missing, malformed, stale, or
+  // ambiguous source-sync index is a hard fail-closed condition.
+  if (!moduleSelection.ok) {
+    return {
+      ok: false,
+      message: moduleSelection.diagnostic.message,
+    };
+  }
+  return {
+    ok: true,
+    baseConfig,
+    modulePath: moduleSelection.modulePath,
+  };
 }
 
 async function reAdoptionAuthoritySnapshot(
@@ -624,7 +693,6 @@ function parseRequest(
   const allowed = new Set([
     "baseInstallConfigId",
     "sourceSnapshotId",
-    "deploymentProfileKey",
     "reason",
     "expected",
   ]);
@@ -635,19 +703,20 @@ function parseRequest(
   if (Object.keys(expected).some((key) => !expectedAllowed.has(key))) {
     return undefined;
   }
-  const baseInstallConfigId = exactString(value.baseInstallConfigId);
-  const sourceSnapshotId = exactString(value.sourceSnapshotId);
-  const deploymentProfileKey = optionalString(value.deploymentProfileKey);
+  const baseInstallConfigId =
+    value.baseInstallConfigId === undefined
+      ? undefined
+      : exactString(value.baseInstallConfigId);
   if (
-    value.deploymentProfileKey !== undefined &&
-    deploymentProfileKey === undefined
+    value.baseInstallConfigId !== undefined &&
+    baseInstallConfigId === undefined
   ) {
     return undefined;
   }
+  const sourceSnapshotId = exactString(value.sourceSnapshotId);
   const reason = exactString(value.reason);
   const authorityGuard = exactString(expected.authorityGuard);
   if (
-    !baseInstallConfigId ||
     !sourceSnapshotId ||
     !reason ||
     new TextEncoder().encode(reason).byteLength > MAX_REASON_BYTES ||
@@ -659,9 +728,8 @@ function parseRequest(
     return undefined;
   }
   return {
-    baseInstallConfigId,
+    ...(baseInstallConfigId ? { baseInstallConfigId } : {}),
     sourceSnapshotId,
-    ...(deploymentProfileKey ? { deploymentProfileKey } : {}),
     reason,
     expected: {
       authorityGuard,
@@ -716,6 +784,17 @@ function reAdoptionReviewedUserVariables(input: {
       return inputOwnership === undefined || inputOwnership === "user";
     }),
   );
+}
+
+function repositoryManifestModulePath(
+  snapshot: SourceSnapshot,
+  modulePath: string,
+): string | undefined {
+  const parsedScopePath = modulePathValue(snapshot.path);
+  const scopePath = parsedScopePath === "" ? "." : parsedScopePath;
+  if (!scopePath) return undefined;
+  if (scopePath === ".") return modulePath;
+  return modulePath === "." ? scopePath : `${scopePath}/${modulePath}`;
 }
 
 function exactString(value: unknown): string | undefined {

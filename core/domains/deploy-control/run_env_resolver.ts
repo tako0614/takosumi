@@ -9,7 +9,8 @@
  */
 
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
-import { sameProviderSource } from "takosumi-contract/provider-env-rules";
+import type { CapsuleProviderRequirement } from "takosumi-contract/capsules";
+import { normalizeProviderSourceAddress } from "takosumi-contract/provider-env-rules";
 import type {
   ProviderRequirement,
   ProviderRequirementPhase,
@@ -24,6 +25,7 @@ import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import {
   resolvedProviderBindingsDigest,
   type ResolvedCapsuleProviderBinding,
+  validateRequiredProviderBindingIdentities,
 } from "../connections/mod.ts";
 import type { RunCredentials } from "./mod.ts";
 import type { RunCredentialBroker } from "./run_credential_broker.ts";
@@ -175,12 +177,13 @@ export class RunEnvResolver {
     input: ResolveRunEnvironmentInput,
   ): Promise<ProviderResolutionContext> {
     const planRun = input.planRun;
-    // A subject-bound Plan pins the complete resolved binding set even when
-    // OpenTofu reported no required providers. Apply/destroy must re-resolve
-    // that set so an empty reviewed set stays valid while a binding added
-    // after review is still detected by the digest fence.
+    const requiredProviderRequirements =
+      requiredProviderRequirementsForPlanRun(planRun);
+    // A subject-bound Plan pins only bindings selected by its exact provider
+    // requirements. An explicit empty requirement set therefore stays empty;
+    // unrelated bindings added later are neither dispatched nor evidence.
     const resolveBindings =
-      planRun.requiredProviders.length > 0 ||
+      requiredProviderRequirements.length > 0 ||
       input.credentialContext === "release_command" ||
       (input.phase !== "plan" &&
         planRun.resolvedProviderBindingsDigest !== undefined);
@@ -192,16 +195,17 @@ export class RunEnvResolver {
     }
     if (!planRun.capsuleContext) {
       return {
-        providerResolutions: planRun.requiredProviders.map((provider) => {
+        providerResolutions: requiredProviderRequirements.map((provider) => {
           const requirement = providerRequirement(planRun, provider);
+          const identity = formatProviderRequirementIdentity(provider);
           return {
             requirement,
             status: "blocked_missing_connection",
-            blockedReason: `capsule provider connection evidence is required for provider ${provider}`,
+            blockedReason: `capsule provider connection evidence is required for provider ${identity}`,
             evidence: {
               kind: "blocked",
-              provider,
-              reason: `capsule provider connection evidence is required for provider ${provider}`,
+              provider: provider.source,
+              reason: `capsule provider connection evidence is required for provider ${identity}`,
             },
           };
         }),
@@ -211,16 +215,17 @@ export class RunEnvResolver {
     const resolved = await this.#resolveRunProviderBindings(planRun);
     if (!resolved) {
       return {
-        providerResolutions: planRun.requiredProviders.map((provider) => {
+        providerResolutions: requiredProviderRequirements.map((provider) => {
           const requirement = providerRequirement(planRun, provider);
+          const identity = formatProviderRequirementIdentity(provider);
           return {
             requirement,
             status: "blocked_missing_connection",
-            blockedReason: `capsule provider connection resolution is required for provider ${provider}`,
+            blockedReason: `capsule provider connection resolution is required for provider ${identity}`,
             evidence: {
               kind: "blocked",
-              provider,
-              reason: `capsule provider connection resolution is required for provider ${provider}`,
+              provider: provider.source,
+              reason: `capsule provider connection resolution is required for provider ${identity}`,
             },
           };
         }),
@@ -229,8 +234,16 @@ export class RunEnvResolver {
     }
 
     const resolutions: ProviderResolution[] = [];
-    for (const provider of planRun.requiredProviders) {
-      const match = resolvedBindingForProvider(resolved, provider);
+    const selectedBindings: ResolvedCapsuleProviderBinding[] = [];
+    const allowLegacySourceOnlyBinding =
+      planRun.requiredProviderRequirements === undefined ||
+      planRun.source.kind === "operator_module";
+    for (const provider of requiredProviderRequirements) {
+      const match = resolvedBindingForProvider(
+        resolved,
+        provider,
+        allowLegacySourceOnlyBinding,
+      );
       const requirement = providerRequirement(planRun, provider);
       if (!match) {
         // `resolveRunProviderBindings` has already enforced the
@@ -240,11 +253,15 @@ export class RunEnvResolver {
         // by a generic runner profile without Takosumi env injection.
         continue;
       }
+      selectedBindings.push(match);
       resolutions.push(
         providerResolutionFromResolved(input, requirement, match),
       );
     }
-    return { providerResolutions: resolutions, resolvedBindings: resolved };
+    return {
+      providerResolutions: resolutions,
+      resolvedBindings: selectedBindings,
+    };
   }
 }
 
@@ -274,22 +291,27 @@ function throwResolvedBindingsChanged(
 
 function resolvedBindingForProvider(
   resolved: readonly ResolvedCapsuleProviderBinding[],
-  provider: string,
+  provider: CapsuleProviderRequirement,
+  allowLegacySourceOnlyBinding: boolean,
 ): ResolvedCapsuleProviderBinding | undefined {
-  return resolved
-    .filter((entry) => sameProviderSource(provider, entry.provider))
-    .sort((left, right) => {
-      if (left.alias === right.alias) {
-        return compareText(left.connection.id, right.connection.id);
-      }
-      if (left.alias === undefined) return -1;
-      if (right.alias === undefined) return 1;
-      return compareText(left.alias, right.alias);
-    })[0];
-}
-
-function compareText(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
+  const matches = resolved.filter(
+    (entry) =>
+      entry.alias === undefined &&
+      normalizeProviderSourceAddress(entry.provider) === provider.source &&
+      (entry.moduleLocalName === provider.moduleLocalName ||
+        (allowLegacySourceOnlyBinding &&
+          entry.moduleLocalName === undefined &&
+          providerName(entry.provider) === provider.moduleLocalName)) &&
+      entry.childAlias === provider.childAlias,
+  );
+  if (matches.length > 1) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `duplicate provider binding identity: ${formatProviderRequirementIdentity(provider)}`,
+      { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+    );
+  }
+  return matches[0];
 }
 
 interface ProviderResolutionContext {
@@ -304,10 +326,18 @@ function providerConfigurationsFromResolved(
   if (!resolved || resolved.length === 0) {
     return emptyProviderConfigurationsEnvelope();
   }
+  const ambiguous = resolved.find((entry) => entry.alias !== undefined);
+  if (ambiguous) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `deprecated ambiguous ProviderBinding alias cannot produce provider configuration: ${ambiguous.alias}`,
+      { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+    );
+  }
   return providerConfigurationsEnvelope(
     resolved.map((entry) => ({
       provider: entry.provider,
-      alias: entry.rootAlias ?? entry.alias ?? null,
+      alias: entry.rootAlias ?? null,
       configuration: entry.connection.scopeHints?.providerConfig ?? {},
     })),
   );
@@ -336,11 +366,15 @@ function credentialEnvNamesFromRunCredentials(
 
 function providerRequirement(
   planRun: PlanRun,
-  provider: string,
+  provider: CapsuleProviderRequirement,
 ): ProviderRequirement {
   return {
-    providerSource: provider,
-    providerName: providerName(provider),
+    providerSource: provider.source,
+    providerName: provider.moduleLocalName,
+    ...(provider.childAlias ? { alias: provider.childAlias } : {}),
+    ...(provider.version
+      ? { versionConstraint: provider.version }
+      : {}),
     modulePath:
       planRun.source.kind === "operator_module"
         ? "."
@@ -350,12 +384,52 @@ function providerRequirement(
   };
 }
 
+function requiredProviderRequirementsForPlanRun(
+  planRun: PlanRun,
+): readonly CapsuleProviderRequirement[] {
+  if (planRun.requiredProviderRequirements === undefined) {
+    return planRun.requiredProviders.map((source) => ({
+      source: normalizeProviderSourceAddress(source),
+      moduleLocalName: providerName(source),
+      allowed: true,
+    }));
+  }
+  const requiredProviderRequirements = validateRequiredProviderBindingIdentities(
+    planRun.requiredProviderRequirements,
+  );
+  const declaredSources = new Set(
+    planRun.requiredProviders.map(normalizeProviderSourceAddress),
+  );
+  const exactSources = new Set(
+    requiredProviderRequirements.map((entry) => entry.source),
+  );
+  if (
+    declaredSources.size !== exactSources.size ||
+    [...declaredSources].some((source) => !exactSources.has(source))
+  ) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "required provider requirements do not match requiredProviders",
+      { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+    );
+  }
+  return requiredProviderRequirements;
+}
+
+function formatProviderRequirementIdentity(
+  requirement: Pick<
+    CapsuleProviderRequirement,
+    "source" | "moduleLocalName" | "childAlias"
+  >,
+): string {
+  return `${requirement.source} (${requirement.moduleLocalName}${requirement.childAlias ? `.${requirement.childAlias}` : " default"})`;
+}
+
 function providerResolutionFromResolved(
   _input: ResolveRunEnvironmentInput,
   requirement: ProviderRequirement,
   resolved: ResolvedCapsuleProviderBinding,
 ): ProviderResolution {
-  const provider = resolved.provider;
   return {
     requirement,
     status: "resolved_provider_connection",
@@ -363,7 +437,7 @@ function providerResolutionFromResolved(
     materialization: resolved.materialization,
     evidence: {
       kind: "provider_connection",
-      provider,
+      provider: requirement.providerSource,
       connectionId: resolved.connection.id,
       materialization: resolved.materialization,
       requiredEnvNames: resolved.connection.envNames,

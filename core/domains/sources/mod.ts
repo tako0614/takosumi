@@ -24,7 +24,6 @@ import type {
 import type {
   Capsule,
   CapsuleCompatibilityReport,
-  CapsuleProviderRequirement,
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
@@ -709,7 +708,8 @@ export class SourcesService {
       modulePath: normalizeCompatibilityReportModulePath(input.modulePath),
       level: analysis.level,
       findings: analysis.findings,
-      providers: analysis.providers,
+      providerPackages: analysis.providerPackages,
+      rootProviderRequirements: analysis.rootProviderRequirements,
       resources: analysis.resources,
       dataSources: analysis.dataSources,
       provisioners: analysis.provisioners,
@@ -940,10 +940,10 @@ export class SourcesService {
     sourceSnapshot: SourceSnapshot,
     options?: { readonly modulePath?: string; readonly runId?: string },
   ): Promise<readonly CapsuleSourceFile[]> {
-    const modulePath = modulePathWithinSnapshotArchive(
-      sourceSnapshot,
-      options?.modulePath,
-    );
+    // The selected module path is already relative to the immutable snapshot
+    // archive. `sourceSnapshot.path` identifies the captured subtree but is not
+    // another coordinate prefix to strip from the execution path.
+    const modulePath = normalizeRelativeModulePath(options?.modulePath);
     const normalizedOptions =
       modulePath || options?.runId
         ? {
@@ -1090,22 +1090,6 @@ export function toPublicSource(stored: StoredSource): Source {
   return rest;
 }
 
-function modulePathWithinSnapshotArchive(
-  snapshot: SourceSnapshot,
-  modulePath: string | undefined,
-): string | undefined {
-  const requested = normalizeRelativeModulePath(modulePath);
-  if (!requested) return undefined;
-  const snapshotPath = normalizeRelativeModulePath(snapshot.path);
-  if (!snapshotPath) return requested;
-  if (requested === snapshotPath) return undefined;
-  const prefix = `${snapshotPath}/`;
-  if (requested.startsWith(prefix)) {
-    return requested.slice(prefix.length) || undefined;
-  }
-  return requested;
-}
-
 function normalizeRelativeModulePath(
   path: string | undefined,
 ): string | undefined {
@@ -1133,7 +1117,8 @@ function compatibilityCheckFailureAnalysis(
           "Retry the check after source sync finishes. If it still fails, ask the operator to inspect the compatibility_check runner.",
       },
     ],
-    providers: [],
+    providerPackages: [],
+    rootProviderRequirements: [],
     resources: [],
     dataSources: [],
     provisioners: [],

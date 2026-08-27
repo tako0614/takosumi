@@ -6,7 +6,7 @@
  * special with `/install` (it is a plain SPA path); the SPA router forwards
  * the query to `/new`, and this parser pre-fills the Git form. Two link forms:
  *
- *   /install?git=<https url>&ref=<ref>&path=<module path>
+ *   /install?git=<https url>&ref=<ref>&sourcePath=<subtree>&path=<module path>
  *   /install?source=git::<https url>//<module path>?ref=<ref>
  *
  * A link only PRE-FILLS — nothing installs from a URL. The visitor always
@@ -18,9 +18,17 @@
  * (non-https, embedded credentials, unparsable URLs).
  */
 
+import {
+  isCanonicalRepositoryDirectoryPath,
+  takosumiAppHandoffFromSearch,
+} from "takosumi-contract";
+
 export interface InstallPrefill {
   readonly git: string;
   readonly ref: string;
+  /** Git subtree captured by Source sync. */
+  readonly sourcePath: string;
+  /** OpenTofu module hint relative to sourcePath. */
   readonly path: string;
   readonly name?: string;
 }
@@ -36,14 +44,51 @@ export function parseInstallPrefill(
   search: string,
 ): InstallPrefill | undefined {
   const params = new URLSearchParams(search);
-  const packed = parsePackedSource(params.get("source"));
-  const git = params.get("git") ?? packed?.git ?? "";
-  if (!isSafeHttpsGitUrl(git)) return undefined;
-  const name = parseOptionalName(params.get("name"));
+  if (!hasOnlyKnownUniqueInstallParams(params)) return undefined;
+  const hasGit = params.has("git");
+  const hasSource = params.has("source");
+  if (hasGit === hasSource) return undefined;
+  if (
+    (params.has("product") || params.has("return_uri")) &&
+    !takosumiAppHandoffFromSearch(search)
+  ) {
+    return undefined;
+  }
+
+  const packed = hasSource ? parsePackedSource(params.get("source")) : undefined;
+  if (hasSource && !packed) return undefined;
+  const rawGit = params.get("git") ?? packed?.git ?? "";
+  if (rawGit.trim() !== rawGit || !isSafeHttpsGitUrl(rawGit)) return undefined;
+
+  if (
+    (params.has("ref") && packed?.ref !== undefined) ||
+    (params.has("path") && packed?.path !== undefined)
+  ) {
+    return undefined;
+  }
+  const ref = params.has("ref")
+    ? parseOptionalBoundedField(params.get("ref"), 512)
+    : packed?.ref ?? "";
+  if (ref === undefined) return undefined;
+  const rawSourcePath = params.get("sourcePath") ?? ".";
+  if (!isCanonicalRepositoryDirectoryPath(rawSourcePath)) return undefined;
+  const rawPath = params.has("path") ? params.get("path") : packed?.path;
+  if (
+    rawPath !== null &&
+    rawPath !== undefined &&
+    !isCanonicalRepositoryDirectoryPath(rawPath)
+  ) {
+    return undefined;
+  }
+  const name = params.has("name")
+    ? parseOptionalName(params.get("name"))
+    : undefined;
+  if (params.has("name") && name === undefined) return undefined;
   return {
-    git,
-    ref: (params.get("ref") ?? packed?.ref ?? "").trim(),
-    path: (params.get("path") ?? packed?.path ?? "").trim(),
+    git: rawGit.trim(),
+    ref,
+    sourcePath: rawSourcePath,
+    path: rawPath ?? "",
     ...(name ? { name } : {}),
   };
 }
@@ -70,10 +115,16 @@ export function parseInstallPrefillFromInput(
 }
 
 function parseOptionalName(value: string | null): string | undefined {
-  const name = value?.trim();
-  if (!name) return undefined;
-  if (/[\r\n\0]/u.test(name)) return undefined;
-  return name.slice(0, 96);
+  return parseOptionalBoundedField(value, 96);
+}
+
+function parseOptionalBoundedField(
+  value: string | null,
+  maxLength: number,
+): string | undefined {
+  if (value === null || !value || value.trim() !== value) return undefined;
+  if (value.length > maxLength || /[\r\n\0]/u.test(value)) return undefined;
+  return value;
 }
 
 export function isSafeInstallVariableName(name: string): boolean {
@@ -101,7 +152,7 @@ function isSafeInstallVariablePathSegment(segment: string): boolean {
 /** `source=git::<url>//<path>?ref=<ref>` (Terraform/OpenTofu module address). */
 function parsePackedSource(
   source: string | null,
-): { git: string; ref: string; path: string } | undefined {
+): { git: string; ref?: string; path?: string } | undefined {
   const prefix = "git::";
   if (!source?.startsWith(prefix)) return undefined;
   const body = source.slice(prefix.length);
@@ -112,7 +163,41 @@ function parsePackedSource(
   const git = marker === -1 ? beforeQuery : beforeQuery.slice(0, marker);
   const path = marker === -1 ? "" : beforeQuery.slice(marker + 2);
   const params = new URLSearchParams(query);
-  return { git, ref: params.get("ref") ?? "", path };
+  for (const key of params.keys()) {
+    if (key !== "ref" || params.getAll(key).length !== 1) return undefined;
+  }
+  const ref = params.has("ref")
+    ? parseOptionalBoundedField(params.get("ref"), 512)
+    : undefined;
+  if (params.has("ref") && ref === undefined) return undefined;
+  if (marker !== -1 && !isCanonicalRepositoryDirectoryPath(path)) {
+    return undefined;
+  }
+  return {
+    git,
+    ...(ref !== undefined ? { ref } : {}),
+    ...(marker !== -1 ? { path } : {}),
+  };
+}
+
+const INSTALL_QUERY_KEYS = new Set([
+  "git",
+  "source",
+  "ref",
+  "sourcePath",
+  "path",
+  "name",
+  "product",
+  "return_uri",
+]);
+
+function hasOnlyKnownUniqueInstallParams(params: URLSearchParams): boolean {
+  for (const key of params.keys()) {
+    if (!INSTALL_QUERY_KEYS.has(key) || params.getAll(key).length !== 1) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Index of the `//` module-path separator (after the URL scheme's own `//`). */
@@ -127,7 +212,7 @@ function findModulePathMarker(value: string): number {
  * (Local/private-host rejection and the full Source URL policy stay
  * server-side at the registration / compatibility boundary.)
  */
-function isSafeHttpsGitUrl(raw: string): boolean {
+export function isSafeHttpsGitUrl(raw: string): boolean {
   const value = raw.trim();
   if (!value) return false;
   if (/[\r\n\0]/.test(value)) return false;
@@ -139,6 +224,7 @@ function isSafeHttpsGitUrl(raw: string): boolean {
   }
   if (url.protocol !== "https:") return false;
   if (url.username || url.password) return false;
+  if (url.search || url.hash) return false;
   return true;
 }
 

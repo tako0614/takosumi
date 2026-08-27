@@ -37,7 +37,6 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
   StableSourceTagResolutionResponse,
-  SourceSnapshotFileResponse,
 } from "takosumi-contract/sources";
 import type {
   CapsuleAdoptedSourceRevision,
@@ -430,10 +429,6 @@ export interface ControlPlaneOperations {
   resolveStableSourceTag(
     url: string,
   ): Promise<StableSourceTagResolutionResponse>;
-  readSourceSnapshotPresentationFile(
-    id: string,
-    path: string,
-  ): Promise<Omit<SourceSnapshotFileResponse, "sourceSnapshotId">>;
   // --- Billing (§28) ---
   getWorkspaceBilling(workspaceId: string): Promise<{
     readonly billing: {

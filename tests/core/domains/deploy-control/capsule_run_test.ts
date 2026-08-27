@@ -82,6 +82,7 @@ import {
   seedCapsuleModel,
   seedProviderConnections,
   type SeedCapsuleModelOptions,
+  type SeededCapsuleModel,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import type { CapsuleModuleVariableMaterializer } from "../../../../core/domains/deploy-control/module_variable_materializer.ts";
@@ -109,6 +110,7 @@ const STATE_DIGEST =
 // The fixture archives the snapshot under this object key (snapshotId snap_fixture).
 const ARCHIVE_KEY =
   "workspaces/ws_test001/sources/src_fixture/snapshots/snap_fixture/source.tar.zst";
+const AWS = "registry.opentofu.org/hashicorp/aws";
 const CLOUDFLARE_MIRROR_EVIDENCE = {
   provider: "registry.opentofu.org/cloudflare/cloudflare",
   mirrored: true,
@@ -117,6 +119,32 @@ const CLOUDFLARE_MIRROR_EVIDENCE = {
   attestationMethod: "forced_filesystem_mirror_init",
   mirrorPath:
     "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
+} as const;
+const AWS_MIRROR_EVIDENCE = {
+  provider: AWS,
+  mirrored: true,
+  installationMethod: "filesystem_mirror",
+  attested: true,
+  attestationMethod: "forced_filesystem_mirror_init",
+  mirrorPath: "/opt/opentofu/provider-mirror/registry.opentofu.org/hashicorp/aws",
+} as const;
+const PROVIDER_FREE_COMPATIBILITY_GRAPH = {
+  providerPackages: [],
+  rootProviderRequirements: [],
+} as const;
+const CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH = {
+  providerPackages: [
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      allowed: true,
+    },
+  ],
+  rootProviderRequirements: [
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "cloudflare",
+    },
+  ],
 } as const;
 
 function deterministicIds(): (prefix: string) => string {
@@ -654,6 +682,13 @@ async function seedRunnableCapsuleModel(
     capsuleId: options.capsuleId ?? "cap_fixture1",
     ...options,
   });
+  if (
+    options.installConfig?.installExperience?.projections?.some(
+      (projection) => projection.kind === "oidc_client",
+    )
+  ) {
+    await pinOidcRepositoryManifest(store, seeded.snapshot);
+  }
   await seedProviderConnections(store, seeded.capsule);
   return seeded;
 }
@@ -720,21 +755,57 @@ function runtimeSecretLifecycleInstallConfig(): Partial<InstallConfig> {
   };
 }
 
+const OIDC_REPOSITORY_INSTALL_UX_DIGEST = `sha256:${"a".repeat(64)}`;
+
+async function pinOidcRepositoryManifest(
+  store: OpenTofuControlStore,
+  snapshot: SeededCapsuleModel["snapshot"],
+): Promise<void> {
+  await store.putSourceSnapshot({
+    ...snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest: OIDC_REPOSITORY_INSTALL_UX_DIGEST,
+      document: {
+        apiVersion: "takosumi.com/v2.2",
+        kind: "Repository",
+        install: { modules: { ".": { inputs: [] } } },
+      },
+    },
+  });
+}
+
 function oidcMaterializedInstallConfig(): Partial<InstallConfig> {
   return {
     workspaceId: "ws_test001",
-    variableMapping: {
-      project_name: "yuru-main",
-      worker_name: "",
+    internal: {
+      reason: "per_install_overrides",
+      sourceSnapshotId: "snap_fixture",
+      repositoryInstallUxDigest: OIDC_REPOSITORY_INSTALL_UX_DIGEST,
     },
-    accountsOidcModuleVariableMaterialization: {
-      contract: "takosumi.accounts-oidc-module-variables/v1",
-      workerNameVariable: "worker_name",
-      projectNameVariable: "project_name",
-      issuerUrlVariable: "takosumi_accounts_issuer_url",
-      clientIdVariable: "takosumi_accounts_client_id",
-      ownerSubjectVariable: "oidc_owner_sub",
-      allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
+    variableMapping: { public_url: "https://staging.example.test" },
+    installExperience: {
+      projections: [
+        { kind: "public_endpoint", variables: { url: "public_url" } },
+        {
+          kind: "oidc_client",
+          variables: {
+            accountsUrl: "takosumi_accounts_url",
+            issuerUrl: "takosumi_accounts_issuer_url",
+            clientId: "takosumi_accounts_client_id",
+            redirectUri: "takosumi_accounts_redirect_uri",
+          },
+          callbackPath: "/auth/oidc/callback",
+          scopes: ["openid", "profile"],
+        },
+      ],
+      repositoryInstallUx: { status: "accepted" },
+    },
+    policy: {
+      repositoryInstallUx: {
+        allowedInterfacePermissions: [],
+        allowedOidcScopes: ["openid", "profile"],
+      },
     },
   };
 }
@@ -761,10 +832,11 @@ function fixtureAuthorityBoundModuleVariableMaterializer(
   } = {},
 ): CapsuleModuleVariableMaterializer {
   const variables = {
+    takosumi_accounts_url: "https://app.takosumi.com",
     takosumi_accounts_issuer_url: "https://app.takosumi.com",
     takosumi_accounts_client_id: "tko_public_client",
-    oidc_owner_sub: "tsub_pairwise_owner",
-    allow_unpinned_owner_claim: false,
+    takosumi_accounts_redirect_uri:
+      "https://staging.example.test/auth/oidc/callback",
   } as const;
   return {
     async materialize(input) {
@@ -776,7 +848,7 @@ function fixtureAuthorityBoundModuleVariableMaterializer(
       }
       return {
         digest: await stableJsonDigest({
-          contract: "fixture.accounts-oidc-module-variables/v1",
+          contract: "fixture.repository-accounts-oidc-variables/v1",
           activationDigest,
           variables,
         }),
@@ -1399,7 +1471,8 @@ test("capsule plan does not invent Cloudflare Capsule inputs from scope hints", 
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -1454,7 +1527,8 @@ test("requested Cloudflare Capsule input can be filled from provider scope hints
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -1509,7 +1583,8 @@ test("dotted Cloudflare Capsule input merges with provider scope hints", async (
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -1580,7 +1655,8 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -1615,88 +1691,18 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
 
 test("Capsule OIDC materialization registers only on provision Apply and retires best-effort after terminal destroy", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
+  const runner = recordingRunner({ requiredProviders: [] });
   const seeded = await seedCapsuleModel(store, {
     workspaceId: "ws_test001",
     capsuleId: "cap_fixture1",
     environment: "preview",
-    name: "yuru-main",
-    installConfig: {
-      workspaceId: "ws_test001",
-      variableMapping: {
-        project_name: "yuru-main",
-        worker_name: "",
-        tenant_slug: "yuru-community",
-        cloudflare_account_id: null,
-        cloudflare_workers_subdomain: null,
-      },
-      accountsOidcModuleVariableMaterialization: {
-        contract: "takosumi.accounts-oidc-module-variables/v1",
-        workerNameVariable: "worker_name",
-        projectNameVariable: "project_name",
-        additionalInputVariables: ["tenant_slug"],
-        forbiddenNonEmptyInputVariables: [
-          "auth_password_hash",
-          "notification_push_gateway_token",
-        ],
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        ownerSubjectVariable: "oidc_owner_sub",
-        allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-      },
-      policy: {
-        allowedProviders: [
-          "registry.opentofu.org/cloudflare/cloudflare",
-        ],
-        providerCredentials: {
-          requiredProviders: [
-            "registry.opentofu.org/cloudflare/cloudflare",
-          ],
-          allowedConnectionScopes: ["workspace"],
-          allowedCredentialRecipes: [
-            { id: "cloudflare", authMode: "api_token" },
-          ],
-        },
-      },
-    },
+    name: "generic-git-app",
+    installConfig: oidcMaterializedInstallConfig(),
   });
+  await pinOidcRepositoryManifest(store, seeded.snapshot);
   await store.putCapsule({
     ...seeded.capsule,
     installingPrincipalId: "tsub_owner",
-  });
-  await putConnectionWithProviderEnv(store, {
-    ...cloudflareConnection("conn_cloudflare_oidc", "ws_test001"),
-    credentialRecipe: {
-      id: "cloudflare",
-      authMode: "api_token",
-      secretPartition: "provider-credentials",
-    },
-    secretPartition: "provider-credentials",
-    verifiedAt: "2026-06-07T00:00:00.000Z",
-    scopeHints: {
-      providerSettings: {
-        accountId: "acct_verified",
-        workersSubdomain: "team-workers",
-      },
-      moduleInputDefaults: {
-        cloudflare_account_id: "acct_verified",
-        cloudflare_workers_subdomain: "team-workers",
-      },
-    },
-  });
-  await store.putProviderBindingSet({
-    id: "bindings_cloudflare_oidc",
-    workspaceId: seeded.capsule.workspaceId,
-    capsuleId: seeded.capsule.id,
-    environment: seeded.capsule.environment,
-    bindings: [
-      {
-        provider: "registry.opentofu.org/cloudflare/cloudflare",
-        connectionId: "conn_cloudflare_oidc",
-      },
-    ],
-    createdAt: "2026-06-07T00:00:00.000Z",
-    updatedAt: "2026-06-07T00:00:00.000Z",
   });
   const phases: string[] = [];
   const retirementStatuses: string[] = [];
@@ -1709,28 +1715,27 @@ test("Capsule OIDC materialization registers only on provision Apply and retires
       if (input.phase === "apply") applyWrites += 1;
       materializerInputs.push(input.variables);
       expect(input.capsule.installingPrincipalId).toBe("tsub_owner");
-      expect(input.resolvedProviderBindings).toHaveLength(1);
-      if (!input.installConfig.accountsOidcModuleVariableMaterialization) {
-        return undefined;
-      }
+      expect(input.resolvedProviderBindings).toEqual([]);
       if (input.expectedDigest !== undefined) {
         expect(input.expectedDigest).toBe(digest);
       }
       if (input.phase !== "plan") {
         expect(input.plannedVariables).toEqual({
+          takosumi_accounts_url: "https://app.takosumi.com",
           takosumi_accounts_issuer_url: "https://app.takosumi.com",
           takosumi_accounts_client_id: "tko_public_client",
-          oidc_owner_sub: "tsub_pairwise_owner",
-          allow_unpinned_owner_claim: false,
+          takosumi_accounts_redirect_uri:
+            "https://staging.example.test/auth/oidc/callback",
         });
       }
       return {
         digest,
         variables: {
+          takosumi_accounts_url: "https://app.takosumi.com",
           takosumi_accounts_issuer_url: "https://app.takosumi.com",
           takosumi_accounts_client_id: "tko_public_client",
-          oidc_owner_sub: "tsub_pairwise_owner",
-          allow_unpinned_owner_claim: false,
+          takosumi_accounts_redirect_uri:
+            "https://staging.example.test/auth/oidc/callback",
         },
       };
     },
@@ -1750,15 +1755,14 @@ test("Capsule OIDC materialization registers only on provision Apply and retires
 
   expect(planRun.status).toBe("succeeded");
   expect(materializerInputs[0]).toEqual({
-    project_name: "yuru-main",
-    worker_name: "",
-    tenant_slug: "yuru-community",
+    public_url: "https://staging.example.test",
   });
   expect(runner.planJobs[0]?.variables).toMatchObject({
+    takosumi_accounts_url: "https://app.takosumi.com",
     takosumi_accounts_issuer_url: "https://app.takosumi.com",
     takosumi_accounts_client_id: "tko_public_client",
-    oidc_owner_sub: "tsub_pairwise_owner",
-    allow_unpinned_owner_claim: false,
+    takosumi_accounts_redirect_uri:
+      "https://staging.example.test/auth/oidc/callback",
   });
   const serializedVariables = JSON.stringify(runner.planJobs[0]?.variables);
   expect(serializedVariables).not.toContain("ENCRYPTION_KEY");
@@ -1803,6 +1807,120 @@ test("Capsule OIDC materialization registers only on provision Apply and retires
   );
 });
 
+test("Capsule Run pins generic repository OIDC variables before Apply mutation", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({
+    requiredProviders: [],
+    providerInstallation: [],
+  });
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "ws_test001",
+    capsuleId: "cap_fixture1",
+    environment: "preview",
+    name: "generic-git-app",
+    installConfig: {
+      workspaceId: "ws_test001",
+      internal: {
+        reason: "per_install_overrides",
+        sourceSnapshotId: "snap_fixture",
+        repositoryInstallUxDigest: `sha256:${"a".repeat(64)}`,
+      },
+      variableMapping: {
+        public_url: "https://staging.example.test",
+      },
+      installExperience: {
+        projections: [
+          { kind: "public_endpoint", variables: { url: "public_url" } },
+          {
+            kind: "oidc_client",
+            variables: {
+              accountsUrl: "takosumi_accounts_url",
+              issuerUrl: "takosumi_accounts_issuer_url",
+              clientId: "takosumi_accounts_client_id",
+              redirectUri: "takosumi_accounts_redirect_uri",
+            },
+            callbackPath: "/auth/oidc/callback",
+            scopes: ["openid", "profile"],
+          },
+        ],
+        repositoryInstallUx: { status: "accepted" },
+      },
+      policy: {
+        repositoryInstallUx: {
+          allowedInterfacePermissions: [],
+          allowedOidcScopes: ["openid", "profile"],
+        },
+      },
+    },
+  });
+  await store.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest: `sha256:${"a".repeat(64)}`,
+      document: {
+        apiVersion: "takosumi.com/v2.2",
+        kind: "Repository",
+        install: { modules: { ".": { inputs: [] } } },
+      },
+    },
+  });
+  await store.putCapsule({
+    ...seeded.capsule,
+    installingPrincipalId: "tsub_owner",
+  });
+  const unavailableController = controllerWith(store, runner);
+  await expect(
+    unavailableController.createCapsulePlan(seeded.capsule.id),
+  ).rejects.toThrow(/host materializer is unavailable/i);
+  expect(runner.planJobs).toHaveLength(0);
+  const phases: string[] = [];
+  let writes = 0;
+  const digest = `sha256:${"7".repeat(64)}`;
+  const variables = {
+    takosumi_accounts_url: "https://app.takosumi.com",
+    takosumi_accounts_issuer_url: "https://app.takosumi.com",
+    takosumi_accounts_client_id: "tko_public_client",
+    takosumi_accounts_redirect_uri:
+      "https://staging.example.test/auth/oidc/callback",
+  } as const;
+  const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
+    async materialize(input) {
+      phases.push(input.phase);
+      if (input.phase === "apply") writes += 1;
+      expect(input.variables).toEqual({
+        public_url: "https://staging.example.test",
+      });
+      expect(input.resolvedProviderBindings).toEqual([]);
+      if (input.phase !== "plan") {
+        expect(input.expectedDigest).toBe(digest);
+        expect(input.plannedVariables).toEqual(variables);
+      }
+      return { digest, variables };
+    },
+    async retire() {},
+  };
+  const controller = controllerWith(store, runner, {
+    moduleVariableMaterializer,
+  });
+
+  const { planRun } = await controller.createCapsulePlan(seeded.capsule.id);
+  expect(planRun.status).toBe("succeeded");
+  expect(phases).toEqual(["plan", "plan"]);
+  expect(writes).toBe(0);
+  expect(runner.planJobs[0]?.variables).toMatchObject(variables);
+  expect(JSON.stringify(planRun)).not.toContain("tko_public_client");
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(applyRun.status).toBe("succeeded");
+  expect(phases).toEqual(["plan", "plan", "apply_check", "apply"]);
+  expect(writes).toBe(1);
+  expect(runner.applyJobs).toHaveLength(1);
+});
+
 test("failed provider destroy retains the current OIDC client without re-entering registration", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
@@ -1810,23 +1928,8 @@ test("failed provider destroy retains the current OIDC client without re-enterin
     workspaceId: "ws_test001",
     capsuleId: "cap_fixture1",
     environment: "preview",
-    name: "yuru-main",
-    installConfig: {
-      workspaceId: "ws_test001",
-      variableMapping: {
-        project_name: "yuru-main",
-        worker_name: "",
-      },
-      accountsOidcModuleVariableMaterialization: {
-        contract: "takosumi.accounts-oidc-module-variables/v1",
-        workerNameVariable: "worker_name",
-        projectNameVariable: "project_name",
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        ownerSubjectVariable: "oidc_owner_sub",
-        allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-      },
-    },
+    name: "generic-git-app",
+    installConfig: oidcMaterializedInstallConfig(),
   });
   await store.putCapsule({
     ...seeded.capsule,
@@ -1847,10 +1950,11 @@ test("failed provider destroy retains the current OIDC client without re-enterin
       return {
         digest,
         variables: {
+          takosumi_accounts_url: "https://app.takosumi.com",
           takosumi_accounts_issuer_url: "https://app.takosumi.com",
           takosumi_accounts_client_id: "tko_public_client",
-          oidc_owner_sub: "tsub_pairwise_owner",
-          allow_unpinned_owner_claim: false,
+          takosumi_accounts_redirect_uri:
+            "https://staging.example.test/auth/oidc/callback",
         },
       };
     },
@@ -1903,19 +2007,7 @@ test("Capsule Apply fails closed when the OIDC module materialization declaratio
   const runner = recordingRunner();
   const seeded = await seedRunnableCapsuleModel(store, {
     environment: "preview",
-    installConfig: {
-      workspaceId: "ws_test001",
-      variableMapping: { project_name: "yuru-main" },
-      accountsOidcModuleVariableMaterialization: {
-        contract: "takosumi.accounts-oidc-module-variables/v1",
-        workerNameVariable: "worker_name",
-        projectNameVariable: "project_name",
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        ownerSubjectVariable: "oidc_owner_sub",
-        allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-      },
-    },
+    installConfig: oidcMaterializedInstallConfig(),
   });
   await store.putCapsule({
     ...seeded.capsule,
@@ -1924,16 +2016,17 @@ test("Capsule Apply fails closed when the OIDC module materialization declaratio
   const digest = `sha256:${"c".repeat(64)}`;
   const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
     async materialize(input) {
-      if (!input.installConfig.accountsOidcModuleVariableMaterialization) {
+      if (!input.installConfig.installExperience?.repositoryInstallUx) {
         return undefined;
       }
       return {
         digest,
         variables: {
+          takosumi_accounts_url: "https://app.takosumi.com",
           takosumi_accounts_issuer_url: "https://app.takosumi.com",
           takosumi_accounts_client_id: "tko_public_client",
-          oidc_owner_sub: "tsub_pairwise_owner",
-          allow_unpinned_owner_claim: false,
+          takosumi_accounts_redirect_uri:
+            "https://staging.example.test/auth/oidc/callback",
         },
       };
     },
@@ -1945,10 +2038,7 @@ test("Capsule Apply fails closed when the OIDC module materialization declaratio
   const { planRun } = await controller.createCapsulePlan(seeded.capsule.id);
   expect(planRun.status).toBe("succeeded");
   const current = (await store.getInstallConfig(seeded.installConfig.id))!;
-  const {
-    accountsOidcModuleVariableMaterialization: _removed,
-    ...withoutMaterialization
-  } = current;
+  const { installExperience: _removed, ...withoutMaterialization } = current;
   await store.putInstallConfig({
     ...withoutMaterialization,
     updatedAt: "2026-08-25T12:00:01.000Z",
@@ -1967,19 +2057,7 @@ test("Capsule Plan fails closed when its OIDC module materializer is unavailable
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   const seeded = await seedRunnableCapsuleModel(store, {
-    installConfig: {
-      workspaceId: "ws_test001",
-      variableMapping: { project_name: "yuru-main" },
-      accountsOidcModuleVariableMaterialization: {
-        contract: "takosumi.accounts-oidc-module-variables/v1",
-        workerNameVariable: "worker_name",
-        projectNameVariable: "project_name",
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        ownerSubjectVariable: "oidc_owner_sub",
-        allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-      },
-    },
+    installConfig: oidcMaterializedInstallConfig(),
   });
   const controller = controllerWith(store, runner);
 
@@ -1993,29 +2071,18 @@ test("Capsule Plan rejects secret or undeclared module values returned by its ho
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   const seeded = await seedRunnableCapsuleModel(store, {
-    installConfig: {
-      workspaceId: "ws_test001",
-      variableMapping: { project_name: "yuru-main" },
-      accountsOidcModuleVariableMaterialization: {
-        contract: "takosumi.accounts-oidc-module-variables/v1",
-        workerNameVariable: "worker_name",
-        projectNameVariable: "project_name",
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        ownerSubjectVariable: "oidc_owner_sub",
-        allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-      },
-    },
+    installConfig: oidcMaterializedInstallConfig(),
   });
   const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
     async materialize() {
       return {
         digest: `sha256:${"d".repeat(64)}`,
         variables: {
+          takosumi_accounts_url: "https://app.takosumi.com",
           takosumi_accounts_issuer_url: "https://app.takosumi.com",
           takosumi_accounts_client_id: "tko_public_client",
-          oidc_owner_sub: "tsub_pairwise_owner",
-          allow_unpinned_owner_claim: false,
+          takosumi_accounts_redirect_uri:
+            "https://staging.example.test/auth/oidc/callback",
           ENCRYPTION_KEY: "must-never-cross-this-port",
         },
       };
@@ -2030,118 +2097,6 @@ test("Capsule Plan rejects secret or undeclared module values returned by its ho
     controller.createCapsulePlan(seeded.capsule.id),
   ).rejects.toThrow(/exact declared target set/i);
   expect(runner.planJobs).toHaveLength(0);
-});
-
-test("Capsule Plan rejects declared forbidden module inputs before the OIDC materializer", async () => {
-  for (const [name, value] of [
-    ["auth_password_hash", "$argon2id$unsealed"],
-    ["notification_push_gateway_token", "push-gateway-secret"],
-  ] as const) {
-    const store = new InMemoryOpenTofuControlStore();
-    const runner = recordingRunner();
-    const seeded = await seedRunnableCapsuleModel(store, {
-      installConfig: {
-        workspaceId: "ws_test001",
-        variableMapping: { project_name: "yuru-main", [name]: value },
-        accountsOidcModuleVariableMaterialization: {
-          contract: "takosumi.accounts-oidc-module-variables/v1",
-          workerNameVariable: "worker_name",
-          projectNameVariable: "project_name",
-          forbiddenNonEmptyInputVariables: [
-            "auth_password_hash",
-            "notification_push_gateway_token",
-          ],
-          issuerUrlVariable: "takosumi_accounts_issuer_url",
-          clientIdVariable: "takosumi_accounts_client_id",
-          ownerSubjectVariable: "oidc_owner_sub",
-          allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-        },
-      },
-    });
-    let calls = 0;
-    const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
-      async materialize() {
-        calls += 1;
-        return {
-          digest: `sha256:${"e".repeat(64)}`,
-          variables: {
-            takosumi_accounts_issuer_url: "https://app.takosumi.com",
-            takosumi_accounts_client_id: "tko_public_client",
-            oidc_owner_sub: "tsub_pairwise_owner",
-            allow_unpinned_owner_claim: false,
-          },
-        };
-      },
-      async retire() {},
-    };
-    const controller = controllerWith(store, runner, {
-      moduleVariableMaterializer,
-    });
-
-    await expect(
-      controller.createCapsulePlan(seeded.capsule.id),
-    ).rejects.toThrow(/unsealed module secret input/i);
-    expect(calls).toBe(0);
-    expect(runner.planJobs).toHaveLength(0);
-  }
-});
-
-test("Capsule Plan rejects malformed module-variable declarations before host calls", async () => {
-  for (const declaration of [
-    { additionalInputVariables: ["invalid-name"] },
-    { additionalInputVariables: ["project_name"] },
-    { forbiddenNonEmptyInputVariables: ["project_name"] },
-    {
-      additionalInputVariables: Array.from(
-        { length: 33 },
-        (_, index) => `metadata_${index}`,
-      ),
-    },
-  ]) {
-    const store = new InMemoryOpenTofuControlStore();
-    const runner = recordingRunner();
-    const seeded = await seedRunnableCapsuleModel(store, {
-      installConfig: {
-        workspaceId: "ws_test001",
-        variableMapping: { project_name: "yuru-main" },
-        accountsOidcModuleVariableMaterialization: {
-          contract: "takosumi.accounts-oidc-module-variables/v1",
-          workerNameVariable: "worker_name",
-          projectNameVariable: "project_name",
-          issuerUrlVariable: "takosumi_accounts_issuer_url",
-          clientIdVariable: "takosumi_accounts_client_id",
-          ownerSubjectVariable: "oidc_owner_sub",
-          allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-          ...declaration,
-        },
-      },
-    });
-    let calls = 0;
-    const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
-      async materialize() {
-        calls += 1;
-        return {
-          digest: `sha256:${"f".repeat(64)}`,
-          variables: {
-            takosumi_accounts_issuer_url: "https://app.takosumi.com",
-            takosumi_accounts_client_id: "tko_public_client",
-            oidc_owner_sub: "tsub_pairwise_owner",
-            allow_unpinned_owner_claim: false,
-          },
-        };
-      },
-      async retire() {},
-    };
-    const controller = controllerWith(store, runner, {
-      moduleVariableMaterializer,
-    });
-
-    await expect(
-      controller.createCapsulePlan(seeded.capsule.id),
-    ).rejects.toThrow(/declaration/i);
-    expect(calls).toBe(0);
-    expect(runner.planJobs).toHaveLength(0);
-  }
 });
 
 test("declared generic Capsule Cloudflare inputs and outputs are wired from source shape", async () => {
@@ -2179,7 +2134,8 @@ test("declared generic Capsule Cloudflare inputs and outputs are wired from sour
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -2292,7 +2248,8 @@ test("standard Git Capsule variables stay ordinary OpenTofu inputs", async () =>
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -2361,7 +2318,8 @@ test("app_url stays an ordinary OpenTofu input without publicEndpoint mapping", 
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_managed_plain",
       },
     ],
@@ -2413,13 +2371,7 @@ test("generic Capsule setup variables are filtered to the declared OpenTofu modu
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "cloudflare/cloudflare",
-        aliases: [],
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -2493,13 +2445,7 @@ test("generic Capsule with known empty module interface receives no setup variab
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "cloudflare/cloudflare",
-        aliases: [],
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -2559,7 +2505,8 @@ test("explicit Cloudflare Capsule variables override provider scope hint default
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -2966,13 +2913,7 @@ test("capsule destroy remains runnable when its applied CompatibilityReport is n
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "cloudflare/cloudflare",
-        aliases: [],
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -3078,7 +3019,8 @@ test("capsule queued plan reconstructs dispatch when generated-root sidecar is m
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_missing_sidecar",
       },
     ],
@@ -3127,7 +3069,7 @@ test("capsule plan verifies CompatibilityReport before provider credential mint"
         message: "provider credentials are configured in source",
       },
     ],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -3184,13 +3126,7 @@ test("capsule CompatibilityReport gate honors InstallConfig resource policy", as
         message: "Provisioner local-exec is not allowed by default policy.",
       },
     ],
-    providers: [
-      {
-        source: "cloudflare/cloudflare",
-        aliases: [],
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -3220,7 +3156,10 @@ test("capsule CompatibilityReport gate honors InstallConfig resource policy", as
 
 test("capsule plan creates and pins a CompatibilityReport when SourcesService is wired", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
+  const runner = recordingRunner({
+    requiredProviders: [AWS],
+    providerInstallation: [AWS_MIRROR_EVIDENCE],
+  });
   await seedRunnableCapsuleModel(store, {
     environment: "preview",
     installConfig: {
@@ -3318,7 +3257,8 @@ test("capsule plan reuses a preflight CompatibilityReport hint without recheckin
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_cloudflare_scope",
       },
     ],
@@ -3332,13 +3272,7 @@ test("capsule plan reuses a preflight CompatibilityReport hint without recheckin
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "cloudflare/cloudflare",
-        aliases: [],
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -3417,13 +3351,7 @@ test("capsule plan reuses the latest matching preflight CompatibilityReport when
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "cloudflare/cloudflare",
-        aliases: [],
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -3480,7 +3408,7 @@ test("capsule plan ignores a stale cached CompatibilityReport when a matching pr
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -3498,13 +3426,7 @@ test("capsule plan ignores a stale cached CompatibilityReport when a matching pr
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      {
-        source: "cloudflare/cloudflare",
-        aliases: [],
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [
       {
         type: "cloudflare_workers_script",
@@ -3557,7 +3479,7 @@ test("failed compatibility analysis does not replace the Capsule current report"
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -3598,7 +3520,10 @@ test("failed compatibility analysis does not replace the Capsule current report"
 
 test("capsule plan dispatches the original source archive without a rewritten module artifact", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
+  const runner = recordingRunner({
+    requiredProviders: [AWS],
+    providerInstallation: [AWS_MIRROR_EVIDENCE],
+  });
   await seedRunnableCapsuleModel(store, { environment: "preview" });
   const sourcesService = new SourcesService({
     store,
@@ -3676,13 +3601,7 @@ test("capsule plan records runnable CompatibilityReport in policy audit", async 
         message: "No output blocks were detected.",
       },
     ],
-    providers: [
-      {
-        source: "cloudflare/cloudflare",
-        aliases: [],
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -3737,11 +3656,11 @@ test("generic Capsule capsule plan derives pre-init requiredProviders from Compa
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
+    providerPackages: [{ source: awsProvider, allowed: true }],
+    rootProviderRequirements: [
       {
         source: awsProvider,
-        aliases: [],
-        allowed: true,
+        moduleLocalName: "aws",
       },
     ],
     resources: [],
@@ -3760,6 +3679,66 @@ test("generic Capsule capsule plan derives pre-init requiredProviders from Compa
 
   expect(planRun.requiredProviders).toEqual([awsProvider]);
   expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([awsProvider]);
+});
+
+test("Capsule plan persists every exact default and child alias provider requirement", async () => {
+  const provider = "registry.opentofu.org/cloudflare/cloudflare";
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({
+    requiredProviders: [provider],
+    providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+  });
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "ws_test001",
+    capsuleId: "cap_fixture1",
+    environment: "preview",
+  });
+  const requiredProviderRequirements = [
+    {
+      source: provider,
+      moduleLocalName: "edge",
+      allowed: true,
+    },
+    {
+      source: provider,
+      moduleLocalName: "edge",
+      childAlias: "zone",
+      allowed: true,
+    },
+  ] as const;
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_exact_provider_aliases",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
+    level: "ready",
+    findings: [],
+    providerPackages: [{ source: provider, allowed: true }],
+    rootProviderRequirements: requiredProviderRequirements.map(
+      ({ allowed: _allowed, ...requirement }) => requirement,
+    ),
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-08-27T00:00:00.000Z",
+  });
+  await store.putCapsule({
+    ...seeded.capsule,
+    compatibilityReportId: "caprep_exact_provider_aliases",
+    compatibilityStatus: "ready",
+  });
+
+  const { planRun } = await controllerWith(store, runner).createCapsulePlan(
+    seeded.capsule.id,
+  );
+
+  expect(planRun.status).toBe("succeeded");
+  expect(planRun.requiredProviderRequirements).toEqual(
+    requiredProviderRequirements,
+  );
+  expect(runner.planJobs[0]?.planRun.requiredProviderRequirements).toEqual(
+    requiredProviderRequirements,
+  );
 });
 
 test("generic OpenTofu runner profile derives pre-init requiredProviders from ProviderBinding before dispatch", async () => {
@@ -3802,7 +3781,8 @@ test("generic OpenTofu runner profile derives pre-init requiredProviders from Pr
     bindings: [
       {
         provider,
-        alias: "main",
+        moduleLocalName: "vercel",
+        rootAlias: "main",
         connectionId: "conn_vercel",
       },
     ],
@@ -3839,6 +3819,46 @@ test("generic OpenTofu runner profile derives pre-init requiredProviders from Pr
   expect(planRun.policy.status).toEqual("passed");
 });
 
+test("binding-only provider derivation rejects a missing module-local name", async () => {
+  const provider = "registry.opentofu.org/vercel/vercel";
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({ requiredProviders: [provider] });
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+  });
+  await putConnectionWithProviderEnv(store, {
+    id: "conn_vercel_legacy_binding",
+    workspaceId: seeded.capsule.workspaceId,
+    provider,
+    kind: "generic_env_provider",
+    scope: "workspace",
+    status: "verified",
+    envNames: ["VERCEL_API_TOKEN"],
+    createdAt: "2026-08-27T00:00:00.000Z",
+    updatedAt: "2026-08-27T00:00:00.000Z",
+    verifiedAt: "2026-08-27T00:00:00.000Z",
+  });
+  await store.putProviderBindingSet({
+    id: "profile_vercel_legacy_binding",
+    workspaceId: seeded.capsule.workspaceId,
+    capsuleId: seeded.capsule.id,
+    environment: seeded.capsule.environment,
+    bindings: [
+      {
+        provider,
+        connectionId: "conn_vercel_legacy_binding",
+      },
+    ],
+    createdAt: "2026-08-27T00:00:00.000Z",
+    updatedAt: "2026-08-27T00:00:00.000Z",
+  });
+
+  await expect(
+    controllerWith(store, runner).createCapsulePlan(seeded.capsule.id),
+  ).rejects.toThrow(/must declare moduleLocalName/);
+  expect(runner.planJobs).toHaveLength(0);
+});
+
 test("compatibility-declared arbitrary provider credentials require an explicit binding on the default runner", async () => {
   const provider = "registry.opentofu.org/acme/service";
   const store = new InMemoryOpenTofuControlStore();
@@ -3853,12 +3873,11 @@ test("compatibility-declared arbitrary provider credentials require an explicit 
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
+    providerPackages: [{ source: provider, allowed: true }],
+    rootProviderRequirements: [
       {
         source: provider,
-        localName: "service_api",
-        aliases: [],
-        allowed: true,
+        moduleLocalName: "service_api",
         credentialRequired: true,
       },
     ],
@@ -3916,7 +3935,8 @@ test("generic OpenTofu runner profile permits direct provider install by default
     bindings: [
       {
         provider,
-        alias: "main",
+        moduleLocalName: "vercel",
+        rootAlias: "main",
         connectionId: "conn_vercel_direct_profile",
       },
     ],
@@ -3984,7 +4004,71 @@ test("generic Capsule plan allows provider-free modules without ProviderConnecti
   expect(runner.applyJobs[0]?.planRun.requiredProviders).toEqual([]);
 });
 
-test("provider-free Capsule apply rejects a ProviderBinding added after Plan review", async () => {
+test("an explicit empty compiler requirement set never falls back to ProviderBindings", async () => {
+  const provider = "registry.opentofu.org/vercel/vercel";
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({ requiredProviders: [] });
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+  });
+  await putConnectionWithProviderEnv(store, {
+    id: "conn_vercel_ignored",
+    workspaceId: seeded.capsule.workspaceId,
+    provider,
+    kind: "generic_env_provider",
+    scope: "workspace",
+    status: "verified",
+    envNames: ["VERCEL_API_TOKEN"],
+    createdAt: "2026-08-27T00:00:00.000Z",
+    updatedAt: "2026-08-27T00:00:00.000Z",
+    verifiedAt: "2026-08-27T00:00:00.000Z",
+  });
+  await store.putProviderBindingSet({
+    id: "bindings_vercel_ignored",
+    workspaceId: seeded.capsule.workspaceId,
+    capsuleId: seeded.capsule.id,
+    environment: seeded.capsule.environment,
+    bindings: [
+      {
+        provider,
+        moduleLocalName: "vercel",
+        connectionId: "conn_vercel_ignored",
+      },
+    ],
+    createdAt: "2026-08-27T00:00:00.000Z",
+    updatedAt: "2026-08-27T00:00:00.000Z",
+  });
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_explicit_provider_free",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
+    level: "ready",
+    findings: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-08-27T00:00:00.000Z",
+  });
+  await store.putCapsule({
+    ...seeded.capsule,
+    compatibilityReportId: "caprep_explicit_provider_free",
+    compatibilityStatus: "ready",
+  });
+
+  const { planRun } = await controllerWith(store, runner).createCapsulePlan(
+    seeded.capsule.id,
+  );
+
+  expect(planRun.status).toBe("succeeded");
+  expect(planRun.requiredProviders).toEqual([]);
+  expect(planRun.requiredProviderRequirements).toEqual([]);
+  expect(runner.planJobs[0]?.planRun.requiredProviderRequirements).toEqual([]);
+  expect(runner.planJobs[0]?.generatedRoot).toBeUndefined();
+});
+
+test("provider-free Capsule apply ignores a ProviderBinding added after Plan review", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner({
     requiredProviders: [],
@@ -4026,17 +4110,15 @@ test("provider-free Capsule apply rejects a ProviderBinding added after Plan rev
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
 
-  expect(applyRun.status).toBe("failed");
-  expect(applyRun.diagnostics).toContainEqual(
-    expect.objectContaining({ code: "provider_connection_changed" }),
-  );
-  expect(runner.applyJobs).toHaveLength(0);
+  expect(applyRun.status).toBe("succeeded");
+  expect(runner.applyJobs).toHaveLength(1);
+  expect(runner.applyJobs[0]?.credentials).toBeUndefined();
 });
 
 test("low-level plan does not infer requiredProviders from ProviderBinding alone", async () => {
   const provider = "registry.opentofu.org/vercel/vercel";
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
+  const runner = recordingRunner({ requiredProviders: [] });
   const seeded = await seedRunnableCapsuleModel(store, {
     environment: "preview",
   });
@@ -4060,7 +4142,8 @@ test("low-level plan does not infer requiredProviders from ProviderBinding alone
     bindings: [
       {
         provider,
-        alias: "main",
+        moduleLocalName: "vercel",
+        rootAlias: "main",
         connectionId: "conn_vercel_direct",
       },
     ],
@@ -4100,18 +4183,23 @@ test("low-level plan does not infer requiredProviders from ProviderBinding alone
       modulePath: seeded.source.defaultPath,
     },
     runnerProfileId: genericProfile.id,
+    requiredProviderRequirements: [],
     requiredProviders: [],
   });
 
   expect(planRun.status).toEqual("succeeded");
   expect(planRun.policy.status).toEqual("passed");
+  expect(planRun.requiredProviderRequirements).toEqual([]);
   expect(runner.planJobs).toHaveLength(1);
   expect(runner.planJobs[0]?.requiredProviders).toBeUndefined();
 });
 
 test("low-level plan never treats allowedProviders as discovered requirements", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner();
+  const runner = recordingRunner({
+    requiredProviders: [],
+    providerInstallation: [],
+  });
   const seeded = await seedCapsuleModel(store, {
     environment: "preview",
   });
@@ -4159,11 +4247,33 @@ test("low-level plan never treats allowedProviders as discovered requirements", 
       modulePath: seeded.source.defaultPath,
     },
     runnerProfileId: strictProfile.id,
+    requiredProviders: [],
+    requiredProviderRequirements: [],
   });
 
   expect(planRun.requiredProviders).toEqual([]);
   expect(runner.planJobs).toHaveLength(1);
   expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([]);
+});
+
+test("new low-level Plans reject an absent exact provider requirement field", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, recordingRunner({ requiredProviders: [] }));
+
+  await expect(
+    controller.createPlanRun({
+      workspaceId: seeded.capsule.workspaceId,
+      capsuleId: seeded.capsule.id,
+      source: {
+        kind: "git",
+        url: seeded.source.url,
+        ref: seeded.source.defaultRef,
+        modulePath: seeded.source.defaultPath,
+      },
+      requiredProviders: [],
+    } as never),
+  ).rejects.toThrow(/requiredProviderRequirements must be present/);
 });
 
 test("generic Capsule plan creation blocks stale CompatibilityReport as policy", async () => {
@@ -4179,7 +4289,7 @@ test("generic Capsule plan creation blocks stale CompatibilityReport as policy",
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -4217,7 +4327,7 @@ test("capsule plan rejects a CompatibilityReport hint from another module path",
     modulePath: "examples/hello",
     level: "ready",
     findings: [],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -4247,7 +4357,7 @@ test("capsule plan rejects a CompatibilityReport hint with no recorded module pa
     sourceSnapshotId: seeded.snapshot.id,
     level: "ready",
     findings: [],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -4283,7 +4393,7 @@ test("capsule plan re-checks instead of reusing a preflight report for another m
     modulePath: "examples/hello",
     level: "ready",
     findings: [],
-    providers: [],
+    ...PROVIDER_FREE_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -4357,13 +4467,7 @@ test("capsule apply revalidates CompatibilityReport before provider credential m
     modulePath: ".",
     level: "ready" as const,
     findings: [],
-    providers: [
-      {
-        source: "cloudflare/cloudflare",
-        aliases: [],
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -4395,7 +4499,8 @@ test("capsule apply revalidates CompatibilityReport before provider credential m
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_apply_guard",
       },
     ],
@@ -4455,13 +4560,7 @@ test("capsule apply rejects a CompatibilityReport scoped to another Capsule befo
     modulePath: ".",
     level: "ready" as const,
     findings: [],
-    providers: [
-      {
-        source: "cloudflare/cloudflare",
-        aliases: [],
-        allowed: true,
-      },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -4493,7 +4592,8 @@ test("capsule apply rejects a CompatibilityReport scoped to another Capsule befo
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_apply_scope_guard",
       },
     ],
@@ -4556,7 +4656,8 @@ test("capsule apply reconstructs dispatch when generated-root sidecar is missing
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_apply_missing_sidecar",
       },
     ],
@@ -4617,7 +4718,14 @@ test("capsule plan blocks when provider lockfile digest is required but missing"
 
 test("capsule plan blocks when provider mirror evidence is required but missing", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner({ providerInstallation: undefined });
+  const requiredProviders = [
+    "registry.opentofu.org/cloudflare/cloudflare",
+    AWS,
+  ];
+  const runner = recordingRunner({
+    requiredProviders,
+    providerInstallation: undefined,
+  });
   const seeded = await seedRunnableCapsuleModel(store, {
     environment: "preview",
     installConfig: {
@@ -4627,10 +4735,7 @@ test("capsule plan blocks when provider mirror evidence is required but missing"
     },
   });
   await seedProviderConnections(store, seeded.capsule, {
-    requiredProviders: [
-      "registry.opentofu.org/cloudflare/cloudflare",
-      "registry.opentofu.org/hashicorp/aws",
-    ],
+    requiredProviders,
   });
   const profile = multiProviderRunnerProfile();
   const controller = controllerWith(store, runner, {
@@ -7569,7 +7674,8 @@ test("Workspace-owned ProviderConnection apply is not capped by host-managed pol
     bindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
-        alias: "main",
+        moduleLocalName: "cloudflare",
+        rootAlias: "main",
         connectionId: "conn_self_cf",
       },
     ],
@@ -8462,6 +8568,80 @@ test("failed provider apply without readable state consumes the Plan without inv
   expect(providerApplyAttempts).toBe(1);
 });
 
+test("failed provider destroy atomically retains partial state, consumes the Plan, and keeps the Capsule in error", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  let providerDestroyAttempts = 0;
+  runner.destroy = (job) => {
+    providerDestroyAttempts += 1;
+    runner.destroyJobs.push(job);
+    return Promise.resolve({
+      providerExecutionFailure: {
+        kind: "provider_execution_failed",
+        statePersistence: "persisted",
+        errorCode: "apply_failed",
+      },
+      stateDigest: STATE_DIGEST,
+      providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      diagnostics: [
+        {
+          severity: "error",
+          code: "apply_failed",
+          message: "OpenTofu provider execution failed after dispatch",
+          detail:
+            "Error: destroy rejected a later resource after earlier resources were removed",
+        },
+      ],
+    });
+  };
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+  });
+
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const destroyPlan = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroyPlan.planRun.id);
+  const failed = await controller.createApplyRun({
+    planRunId: destroyPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan.planRun),
+  });
+
+  expect(failed.applyRun.status).toBe("failed");
+  expect(failed.applyRun.operation).toBe("destroy");
+  expect(failed.applyRun.outputId).toBeUndefined();
+  const partialState = await store.getStateVersion(
+    failed.applyRun.stateVersionId!,
+  );
+  expect(partialState).toMatchObject({
+    capsuleId: "cap_fixture1",
+    generation: 2,
+    digest: STATE_DIGEST,
+    createdByRunId: failed.applyRun.id,
+  });
+  expect(await store.getPlanRun(destroyPlan.planRun.id)).toMatchObject({
+    appliedApplyRunId: failed.applyRun.id,
+  });
+  expect(failed.capsule).toMatchObject({
+    status: "error",
+    currentStateGeneration: 2,
+    currentStateVersionId: partialState!.id,
+  });
+  expect(failed.capsule?.currentOutputId).toBeUndefined();
+  expect(providerDestroyAttempts).toBe(1);
+
+  const replay = await controller.createApplyRun({
+    planRunId: destroyPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan.planRun),
+  });
+  expect(replay.applyRun).toEqual(failed.applyRun);
+  expect(providerDestroyAttempts).toBe(1);
+});
+
 test("capsule plan and apply record deploy operation metrics", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
@@ -8853,39 +9033,22 @@ test("capsule destroy: a D1 ledger-tail failure requeues the same ApplyRun witho
   const runner = recordingRunner();
   await seedRunnableCapsuleModel(inner, {
     environment: "preview",
-    name: "yuru-main",
-    installConfig: {
-      workspaceId: "ws_test001",
-      variableMapping: {
-        project_name: "yuru-main",
-        worker_name: "",
-      },
-      accountsOidcModuleVariableMaterialization: {
-        contract: "takosumi.accounts-oidc-module-variables/v1",
-        workerNameVariable: "worker_name",
-        projectNameVariable: "project_name",
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        ownerSubjectVariable: "oidc_owner_sub",
-        allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-      },
-    },
+    name: "generic-git-app",
+    installConfig: oidcMaterializedInstallConfig(),
   });
   let oidcClientPresent = false;
   let retirementCalls = 0;
   const moduleVariableMaterializer: CapsuleModuleVariableMaterializer = {
     async materialize(input) {
-      if (!input.installConfig.accountsOidcModuleVariableMaterialization) {
-        return undefined;
-      }
       if (input.phase === "apply") oidcClientPresent = true;
       return {
         digest: `sha256:${"9".repeat(64)}`,
         variables: {
+          takosumi_accounts_url: "https://app.takosumi.com",
           takosumi_accounts_issuer_url: "https://app.takosumi.com",
           takosumi_accounts_client_id: "tko_public_client",
-          oidc_owner_sub: "tsub_pairwise_owner",
-          allow_unpinned_owner_claim: false,
+          takosumi_accounts_redirect_uri:
+            "https://staging.example.test/auth/oidc/callback",
         },
       };
     },
@@ -9024,9 +9187,7 @@ test("generic Capsule captures ordinary root Outputs without publishing unallowl
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      { source: "cloudflare/cloudflare", aliases: [], allowed: true },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [{ type: "cloudflare_workers_script", count: 1, allowed: true }],
     dataSources: [],
     provisioners: [],
@@ -9104,9 +9265,7 @@ test("generic Capsule retains explicit public source Outputs before applying the
     modulePath: ".",
     level: "ready",
     findings: [],
-    providers: [
-      { source: "cloudflare/cloudflare", aliases: [], allowed: true },
-    ],
+    ...CLOUDFLARE_ROOT_COMPATIBILITY_GRAPH,
     resources: [{ type: "cloudflare_workers_script", count: 1, allowed: true }],
     dataSources: [],
     provisioners: [],

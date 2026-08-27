@@ -219,6 +219,11 @@ export function projectPlanRun(
           }),
         }
       : {}),
+    ...(planRun.requiredProviderRequirements !== undefined
+      ? {
+          requiredProviderRequirements: planRun.requiredProviderRequirements,
+        }
+      : {}),
     ...runEnvironmentEvidence(planRun),
     policyStatus: policyStatusFor(planRun.policy.status),
     ...(planRun.requiresApproval === true || type === "destroy_plan"

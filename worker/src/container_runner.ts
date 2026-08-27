@@ -21,8 +21,6 @@ import type {
   OpenTofuSourceSyncResult,
   OpenTofuStableSourceTagResolutionJob,
   OpenTofuStableSourceTagResolutionResult,
-  OpenTofuSourceSnapshotPresentationFileJob,
-  OpenTofuSourceSnapshotPresentationFile,
   ReleaseCommandRunJob,
   ReleaseCommandRunResult,
 } from "../../core/domains/deploy-control/mod.ts";
@@ -33,7 +31,10 @@ import {
 import type { CloudflareWorkerEnv, OpenTofuRunAction } from "./bindings.ts";
 import { redactString } from "takosumi-contract/redaction";
 import { normalizePlanResourceScope } from "takosumi-contract";
-import { parseRepositoryManifestSnapshot } from "takosumi-contract/sources";
+import {
+  parseRepositoryManifestSnapshot,
+  parseRepositoryModulesSnapshot,
+} from "takosumi-contract/sources";
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
 import { RUNNER_MUTATION_INDETERMINATE_CODE } from "./runner_protocol.ts";
 
@@ -79,8 +80,7 @@ const MAX_RUNNER_EXECUTION_DETAIL_CHARS = 4_096;
 const UNSAFE_PROVIDER_FAILURE_DETAIL_LINE =
   /(?:\b(?:authorization|bearer|cookie|token|password|passwd|secret|credential|api[_-]?key|body)\b|\/work\/)/iu;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
-type ContainerRunnerAction =
-  OpenTofuRunAction | "release" | "stable_semver_tag" | "source_snapshot_file";
+type ContainerRunnerAction = OpenTofuRunAction | "release" | "stable_semver_tag";
 
 export class CloudflareContainerOpenTofuRunner
   implements OpenTofuRunner, ServiceDataBackupRunner
@@ -231,6 +231,30 @@ export class CloudflareContainerOpenTofuRunner
       },
     );
     const state = recordFromRecord(result, "state");
+    const providerExecutionFailure =
+      providerExecutionFailureFromContainerResult(result);
+    if (providerExecutionFailure) {
+      const stateDigest = state ? stringFromRecord(state, "digest") : undefined;
+      if (
+        (providerExecutionFailure.statePersistence === "persisted") !==
+        Boolean(stateDigest)
+      ) {
+        throw new Error(
+          "runner failed-state persistence evidence is inconsistent",
+        );
+      }
+      return {
+        providerExecutionFailure,
+        ...(stateDigest ? { stateDigest } : {}),
+        ...(providerInstallationFromContainerResult(result)
+          ? {
+              providerInstallation:
+                providerInstallationFromContainerResult(result),
+            }
+          : {}),
+        diagnostics: diagnosticsFromContainerResult(result),
+      };
+    }
     return {
       ...(state && stringFromRecord(state, "digest")
         ? { stateDigest: stringFromRecord(state, "digest") }
@@ -362,7 +386,15 @@ export class CloudflareContainerOpenTofuRunner
     const repositoryManifest = parseRepositoryManifestSnapshot(
       result.repositoryManifest,
     );
-    if (!resolvedCommit || !archiveDigest || archiveSizeBytes === undefined) {
+    const repositoryModules = parseRepositoryModulesSnapshot(
+      result.repositoryModules,
+    );
+    if (
+      !resolvedCommit ||
+      !archiveDigest ||
+      archiveSizeBytes === undefined ||
+      !repositoryModules
+    ) {
       throw new Error("runner source sync returned an incomplete result");
     }
     const phaseTimings = phaseTimingsFromContainerResult(result);
@@ -372,6 +404,7 @@ export class CloudflareContainerOpenTofuRunner
       archiveSizeBytes,
       ...(repositoryInstallMetadata ? { repositoryInstallMetadata } : {}),
       ...(repositoryManifest ? { repositoryManifest } : {}),
+      repositoryModules,
       ...(archiveRef ? { archiveRef } : {}),
       ...(phaseTimings ? { phaseTimings } : {}),
     };
@@ -428,38 +461,6 @@ export class CloudflareContainerOpenTofuRunner
       throw new Error("stable_semver_tag returned an incomplete result");
     }
     return { tag, commit };
-  }
-
-  async readSourceSnapshotPresentationFile(
-    job: OpenTofuSourceSnapshotPresentationFileJob,
-  ): Promise<OpenTofuSourceSnapshotPresentationFile> {
-    const result = await this.#runContainer(
-      "source_snapshot_file",
-      job.runId,
-      {
-        sourceArchive: {
-          ref: job.sourceSnapshot.archiveRef,
-          digest: job.sourceSnapshot.archiveDigest,
-        },
-        action: "source_snapshot_file",
-        path: job.path,
-      },
-      { timeoutMs: compatibilityCheckTimeoutMs(this.env) },
-    );
-    const path = stringFromRecord(result, "path");
-    const text = stringFromRecord(result, "text");
-    const digest = stringFromRecord(result, "digest");
-    const sizeBytes = result.sizeBytes;
-    if (
-      !path ||
-      text === undefined ||
-      !digest ||
-      typeof sizeBytes !== "number" ||
-      !Number.isSafeInteger(sizeBytes)
-    ) {
-      throw new Error("source_snapshot_file returned an incomplete result");
-    }
-    return { path, text, digest, sizeBytes };
   }
 
   async run(
@@ -587,7 +588,7 @@ export class CloudflareContainerOpenTofuRunner
           }
           if (!response.ok) {
             if (
-              action === "apply" &&
+              (action === "apply" || action === "destroy") &&
               providerExecutionFailureFromContainerResult(payload)
             ) {
               return failedProviderExecutionResult(payload);

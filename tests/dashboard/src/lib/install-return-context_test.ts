@@ -15,6 +15,7 @@ describe("installReturnContext", () => {
     ).toEqual({
       git: "https://github.com/acme/worker.git",
       ref: "main",
+      sourcePath: ".",
       path: "deploy/opentofu",
       label: "worker",
       host: "github.com",
@@ -77,14 +78,16 @@ describe("installReturnContext", () => {
     const returnPath = installReturnPathFromPrefill({
       git: "https://github.com/acme/worker.git",
       ref: "main",
+      sourcePath: "infra",
       path: "deploy/opentofu",
     });
     expect(returnPath).toEqual(
-      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu",
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&sourcePath=infra&path=deploy%2Fopentofu",
     );
     expect(installReturnContext(returnPath)).toMatchObject({
       git: "https://github.com/acme/worker.git",
       ref: "main",
+      sourcePath: "infra",
       path: "deploy/opentofu",
       label: "worker",
     });
@@ -107,14 +110,43 @@ describe("installReturnContext", () => {
     });
   });
 
-  test("drops OpenTofu variable side channels from canonical return paths", () => {
+  test("preserves an omitted module path through provider-connection returns", () => {
+    const returnPath = installReturnPathFromPrefill({
+      git: "https://github.com/acme/worker.git",
+      ref: "main",
+    });
+    expect(returnPath).toEqual(
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main",
+    );
+    expect(installReturnContext(returnPath)).toMatchObject({
+      path: "",
+      ref: "main",
+    });
+
+    const href = providerConnectionsHrefForInstallReturn(returnPath);
+    const url = new URL(href, "https://app.takosumi.test");
+    expect(installReturnPathFromReturnParam(url.searchParams.get("return"))).toBe(
+      returnPath,
+    );
+  });
+
+  test("keeps an explicitly selected repository root in provider returns", () => {
+    const returnPath = installReturnPathFromPrefill({
+      git: "https://github.com/acme/worker.git",
+      ref: "main",
+      path: ".",
+    });
+    expect(returnPath).toEqual(
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=.",
+    );
+    expect(installReturnContext(returnPath)).toMatchObject({ path: "." });
+  });
+
+  test("rejects OpenTofu variable side channels in return paths", () => {
     const returnPath = installReturnPathFromReturnParam(
       "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu&varjson.cloudflare=%7B%7D&varjson.enable_cloudflare_resources=true&var.project_name=takos-space",
     );
-    expect(returnPath).toEqual(
-      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu",
-    );
-    expect(installReturnContext(returnPath)).not.toHaveProperty("vars");
+    expect(returnPath).toBeUndefined();
   });
 
   test("preserves the typed Capsule name through install return links", () => {
@@ -211,8 +243,6 @@ describe("installReturnContext", () => {
       installReturnPathFromReturnParam(
         "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy&product=notes-app&return_uri=http%3A%2F%2Fexample.com%2Fconnect",
       ),
-    ).toEqual(
-      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy",
-    );
+    ).toBeUndefined();
   });
 });

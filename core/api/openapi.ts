@@ -625,6 +625,30 @@ function policySchemas(): Record<string, Record<string, unknown>> {
           type: "object",
           required: ["allowedInterfacePermissions"],
           properties: {
+            allowedRequirementKinds: {
+              type: "array",
+              uniqueItems: true,
+              items: {
+                enum: [
+                  "secret.generated",
+                  "http.endpoint",
+                  "identity.oidc",
+                  "interface.consume",
+                ],
+              },
+            },
+            allowedOidcScopes: {
+              type: "array",
+              minItems: 1,
+              maxItems: 16,
+              uniqueItems: true,
+              items: {
+                type: "string",
+                minLength: 1,
+                maxLength: 128,
+                pattern: "^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$",
+              },
+            },
             allowedInterfacePermissions: {
               type: "array",
               uniqueItems: true,
@@ -662,6 +686,7 @@ function policySchemas(): Record<string, Record<string, unknown>> {
                 "takosumi.com/v2.1",
                 "takosumi.com/v2.2",
                 "takosumi.com/v2.3",
+                "takosumi.com/v2.4",
               ],
             },
           },
@@ -734,7 +759,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: ["kind", "id"],
       properties: {
-        kind: { enum: ["Workspace", "Capsule", "Resource"] },
+        kind: { enum: ["Workspace", "Capsule"] },
         id: { type: "string", minLength: 1 },
       },
       additionalProperties: false,
@@ -756,22 +781,10 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    InterfaceResourceOutputInput: {
-      type: "object",
-      required: ["source", "resourceId", "outputName"],
-      properties: {
-        source: { const: "resource_output" },
-        resourceId: { type: "string", minLength: 1 },
-        outputName: { type: "string", minLength: 1 },
-        pointer: { type: "string", pattern: "^(|/)" },
-      },
-      additionalProperties: false,
-    },
     InterfaceInput: {
       oneOf: [
         ref("InterfaceLiteralInput"),
         ref("InterfaceCapsuleOutputInput"),
-        ref("InterfaceResourceOutputInput"),
       ],
     },
     CapsuleInterfaceBlueprintCapsuleOutputInput: {
@@ -788,7 +801,6 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       oneOf: [
         ref("InterfaceLiteralInput"),
         ref("CapsuleInterfaceBlueprintCapsuleOutputInput"),
-        ref("InterfaceResourceOutputInput"),
       ],
     },
     CapsuleInterfaceBlueprintSpec: {
@@ -808,6 +820,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
           pattern: "^\\S+$",
         },
         document: {},
+        documentSchema: { type: "object", additionalProperties: true },
         inputs: {
           type: "object",
           maxProperties: 64,
@@ -893,6 +906,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
         type: { type: "string", minLength: 1 },
         version: { type: "string", minLength: 1 },
         document: {},
+        documentSchema: { type: "object", additionalProperties: true },
         inputs: {
           type: "object",
           maxProperties: 64,
@@ -933,19 +947,11 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
             },
             {
               type: "object",
-              required: ["source"],
+              required: ["source", "descriptorName", "descriptorVersion"],
               properties: {
-                source: { const: "capsule_resource" },
-              },
-              additionalProperties: false,
-            },
-            {
-              type: "object",
-              required: ["source", "profile", "key"],
-              properties: {
-                source: { const: "compatibility_profile" },
-                profile: { type: "string", minLength: 1 },
-                key: { type: "string", minLength: 1 },
+                source: { const: "portable_iac" },
+                descriptorName: { type: "string", minLength: 1 },
+                descriptorVersion: { type: "string", minLength: 1 },
               },
               additionalProperties: false,
             },
@@ -1039,7 +1045,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       required: ["kind", "id"],
       properties: {
         kind: {
-          enum: ["Principal", "ServiceAccount", "Capsule", "Resource"],
+          enum: ["Principal", "ServiceAccount", "Capsule"],
         },
         id: { type: "string", minLength: 1 },
       },
@@ -1119,11 +1125,19 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
                 },
                 {
                   type: "object",
-                  required: ["source", "profile", "key"],
+                  required: [
+                    "source",
+                    "capsuleId",
+                    "requirementKey",
+                    "interfaceType",
+                    "interfaceVersion",
+                  ],
                   properties: {
-                    source: { const: "compatibility_profile" },
-                    profile: { type: "string", minLength: 1 },
-                    key: { type: "string", minLength: 1 },
+                    source: { const: "capsule_required_interface" },
+                    capsuleId: { type: "string", minLength: 1 },
+                    requirementKey: { type: "string", minLength: 1 },
+                    interfaceType: { type: "string", minLength: 1 },
+                    interfaceVersion: { type: "string", minLength: 1 },
                   },
                   additionalProperties: false,
                 },
@@ -1581,7 +1595,11 @@ function runnerSchemas(): Record<string, Record<string, unknown>> {
         url: { type: "string" },
         ref: { type: "string" },
         commit: { type: "string" },
-        modulePath: { type: "string" },
+        modulePath: {
+          type: "string",
+          description:
+            "OpenTofu module directory relative to the immutable Source archive; this is not the Git Source subtree.",
+        },
       },
       additionalProperties: false,
     },
@@ -2128,7 +2146,7 @@ export function capsuleAndInstallConfigSchemas(): Record<
  * Capsule Gate / Compatibility Report shapes: findings, provider / resource /
  * data-source / provisioner requirements, and the aggregate report.
  */
-function capsuleSchemas(): Record<string, Record<string, unknown>> {
+export function capsuleSchemas(): Record<string, Record<string, unknown>> {
   return {
     CapsuleCompatibilityFinding: {
       type: "object",
@@ -2147,15 +2165,46 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    CapsuleProviderRequirement: {
+    CapsuleProviderPackage: {
       type: "object",
-      required: ["source", "aliases", "allowed"],
+      required: ["source", "allowed"],
       properties: {
-        source: { type: "string" },
-        localName: { type: "string" },
-        versionConstraint: { type: "string" },
-        aliases: { type: "array", items: { type: "string" } },
+        source: {
+          type: "string",
+          pattern:
+            "^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?/[a-z0-9_-]+/[a-z0-9_-]+$",
+        },
+        version: {
+          type: "string",
+          pattern:
+            "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
+        },
         allowed: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    CapsuleRootProviderRequirement: {
+      type: "object",
+      required: ["source", "moduleLocalName"],
+      properties: {
+        source: {
+          type: "string",
+          pattern:
+            "^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?/[a-z0-9_-]+/[a-z0-9_-]+$",
+        },
+        moduleLocalName: {
+          type: "string",
+          pattern: "^[A-Za-z_][A-Za-z0-9_-]*$",
+        },
+        childAlias: {
+          type: "string",
+          pattern: "^[A-Za-z_][A-Za-z0-9_-]*$",
+        },
+        version: {
+          type: "string",
+          pattern:
+            "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
+        },
         credentialRequired: { type: "boolean" },
       },
       additionalProperties: false,
@@ -2196,7 +2245,8 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
         "sourceSnapshotId",
         "level",
         "findings",
-        "providers",
+        "providerPackages",
+        "rootProviderRequirements",
         "resources",
         "dataSources",
         "provisioners",
@@ -2214,9 +2264,13 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
           type: "array",
           items: ref("CapsuleCompatibilityFinding"),
         },
-        providers: {
+        providerPackages: {
           type: "array",
-          items: ref("CapsuleProviderRequirement"),
+          items: ref("CapsuleProviderPackage"),
+        },
+        rootProviderRequirements: {
+          type: "array",
+          items: ref("CapsuleRootProviderRequirement"),
         },
         resources: {
           type: "array",
@@ -2647,12 +2701,12 @@ function providerConnectionAndRecipeSchemas(): Record<
         sourceSnapshotId: {
           type: "string",
           description:
-            "Exact snapshot for a manual check. During Store compilation, an optional value must equal the latest root-synced SourceSnapshot selected by the server.",
+            "Exact snapshot for a manual check. During repository-assisted compilation, an optional value must equal the latest immutable SourceSnapshot selected by the server.",
         },
         modulePath: {
           type: "string",
           description:
-            "Safe relative OpenTofu/Terraform module path. With compileInstallUx, an explicit direct-Git or repository source-option path must name the exact immutable manifest module; Store URL discovery omits it so the server selects the repository default.",
+            "Safe relative OpenTofu module directory. With compileInstallUx, an explicit direct-Git or Store hint must exactly match the immutable SourceSnapshot tree-scan index. Omission auto-selects only when the scan found exactly one module.",
         },
         capsuleId: { type: "string" },
         installConfigId: {
@@ -2663,7 +2717,7 @@ function providerConnectionAndRecipeSchemas(): Record<
         compileInstallUx: {
           type: "boolean",
           description:
-            "Compile repository-owned install UX before Capsule creation. Requires capsuleName, rejects capsuleId and installConfigId, and accepts an optional exact manifest modulePath.",
+            "Compile repository-assisted install UX before Capsule creation. Requires capsuleName, rejects capsuleId and installConfigId, and accepts an optional exact tree-scanned modulePath.",
         },
         capsuleName: {
           type: "string",
@@ -2965,7 +3019,7 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
 }
 
 /** Git Source registrations, SourceSnapshots, and source-sync run shapes. */
-function sourceSchemas(): Record<string, Record<string, unknown>> {
+export function sourceSchemas(): Record<string, Record<string, unknown>> {
   return {
     Source: {
       type: "object",
@@ -2987,7 +3041,11 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
         name: { type: "string" },
         url: { type: "string" },
         defaultRef: { type: "string" },
-        defaultPath: { type: "string" },
+        defaultPath: {
+          type: "string",
+          description:
+            "Canonical Git repository subtree captured, archived, and scanned. Defaults to `.` and never selects an OpenTofu module.",
+        },
         authConnectionId: { type: "string" },
         status: { enum: ["active", "disabled", "error"] },
         autoSync: { type: "boolean" },
@@ -3021,7 +3079,11 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
         url: { type: "string" },
         ref: { type: "string" },
         resolvedCommit: { type: "string" },
-        path: { type: "string" },
+        path: {
+          type: "string",
+          description:
+            "Canonical Git repository subtree captured in this immutable Snapshot; module paths are relative to the resulting archive.",
+        },
         archiveRef: { type: "string" },
         archiveDigest: { type: "string" },
         archiveSizeBytes: { type: "number" },
@@ -3132,7 +3194,11 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
         name: { type: "string" },
         url: { type: "string" },
         defaultRef: { type: "string" },
-        defaultPath: { type: "string" },
+        defaultPath: {
+          type: "string",
+          description:
+            "Canonical Git repository subtree to capture, archive, and scan. Defaults to `.` and is distinct from modulePath.",
+        },
         authConnectionId: { type: "string" },
         autoSync: { type: "boolean" },
       },
@@ -3217,17 +3283,135 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    SourceSnapshotFileResponse: {
+    RepositoryModuleProviderPackage: {
       type: "object",
-      required: ["sourceSnapshotId", "path", "text", "digest", "sizeBytes"],
+      required: ["source"],
       properties: {
-        sourceSnapshotId: { type: "string" },
-        path: { type: "string" },
-        text: { type: "string" },
-        digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
-        sizeBytes: { type: "integer", minimum: 0 },
+        source: {
+          type: "string",
+          pattern:
+            "^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?/[a-z0-9_-]+/[a-z0-9_-]+$",
+        },
+        version: {
+          type: "string",
+          pattern:
+            "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
+        },
       },
       additionalProperties: false,
+    },
+    RepositoryModuleRootProviderRequirement: {
+      type: "object",
+      required: ["source", "moduleLocalName"],
+      properties: {
+        source: {
+          type: "string",
+          pattern:
+            "^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?/[a-z0-9_-]+/[a-z0-9_-]+$",
+        },
+        moduleLocalName: {
+          type: "string",
+          pattern: "^[A-Za-z_][A-Za-z0-9_-]*$",
+        },
+        childAlias: {
+          type: "string",
+          pattern: "^[A-Za-z_][A-Za-z0-9_-]*$",
+        },
+        version: {
+          type: "string",
+          pattern:
+            "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
+        },
+      },
+      additionalProperties: false,
+    },
+    SourceSnapshotInstallModule: {
+      type: "object",
+      required: ["path", "providerPackages", "rootProviderRequirements"],
+      properties: {
+        path: {
+          type: "string",
+          minLength: 1,
+          description:
+            "Canonical module directory relative to the SourceSnapshot archive; individual .tf files are never choices.",
+        },
+        providerPackages: {
+          type: "array",
+          maxItems: 256,
+          items: ref("RepositoryModuleProviderPackage"),
+        },
+        rootProviderRequirements: {
+          type: "array",
+          maxItems: 256,
+          items: ref("RepositoryModuleRootProviderRequirement"),
+        },
+      },
+      additionalProperties: false,
+    },
+    SourceSnapshotInstallModulesResponse: {
+      description:
+        "Immutable tracked-tree projection. V1 follows only vendored local ./ and ../ module edges; any remote module source, pinned or unpinned, makes discovery invalid rather than granting network fetch authority.",
+      oneOf: [
+        {
+          type: "object",
+          required: [
+            "status",
+            "sourceSnapshotId",
+            "scopePath",
+            "reason",
+            "modules",
+          ],
+          properties: {
+            status: { const: "invalid" },
+            sourceSnapshotId: { type: "string" },
+            scopePath: {
+              type: "string",
+              minLength: 1,
+              description:
+                "Exact Git Source subtree captured by the Snapshot. modules[].path remains relative to this archive and is never joined into this field.",
+            },
+            reason: {
+              enum: [
+                "scan_unavailable",
+                "scan_failed",
+                "file_limit_exceeded",
+                "file_too_large",
+                "total_bytes_exceeded",
+                "module_limit_exceeded",
+                "configuration_invalid",
+              ],
+            },
+            modules: { type: "array", maxItems: 0, items: {} },
+          },
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          required: [
+            "status",
+            "sourceSnapshotId",
+            "scopePath",
+            "modules",
+          ],
+          properties: {
+            status: { const: "ready" },
+            sourceSnapshotId: { type: "string" },
+            scopePath: {
+              type: "string",
+              minLength: 1,
+              description:
+                "Exact Git Source subtree captured by the Snapshot. modules[].path remains relative to this archive and is never joined into this field.",
+            },
+            modules: {
+              type: "array",
+              minItems: 0,
+              maxItems: 32,
+              items: ref("SourceSnapshotInstallModule"),
+            },
+          },
+          additionalProperties: false,
+        },
+      ],
     },
   };
 }
@@ -3561,7 +3745,11 @@ export function workspaceProjectAndCapsuleRequestSchemas(): Record<
         sourceId: { type: "string" },
         installConfigId: { type: "string" },
         autoUpdate: { type: "boolean" },
-        modulePath: { type: "string" },
+        modulePath: {
+          type: "string",
+          description:
+            "Exact tree-scanned module directory relative to the SourceSnapshot archive, not Source.defaultPath.",
+        },
         sourceBuild: ref("SourceBuildConfig"),
         runnerId: { type: "string" },
         outputAllowlist: {

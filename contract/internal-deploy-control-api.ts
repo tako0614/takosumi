@@ -12,6 +12,7 @@ import type { JsonValue } from "./types.ts";
 import type { PublicCapsule } from "./install-configs.ts";
 import type { StateVersion } from "./state-versions.ts";
 import type { ProviderResolution } from "./provider-resolution.ts";
+import type { CapsuleProviderRequirement } from "./capsules.ts";
 import type { PlanResourceScope } from "./plan-scope.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 export type {
@@ -238,6 +239,13 @@ export interface PlanRun {
   readonly runnerProfileId: string;
   readonly variablesDigest: string;
   readonly requiredProviders: readonly string[];
+  /**
+   * Exact child-module provider identities pinned by current Plan creation.
+   * `undefined` is reserved for pre-v1 stored rows that only carried the
+   * source-only `requiredProviders` mirror; current writers persist this field,
+   * including an explicit empty array for provider-free modules.
+   */
+  readonly requiredProviderRequirements?: readonly CapsuleProviderRequirement[];
   readonly status: RunStatus;
   readonly policy: PolicyDecision;
   readonly policyDecisionDigest: string;
@@ -533,6 +541,13 @@ export interface CreatePlanRunRequest {
   readonly capsuleId?: string;
   readonly operation?: OpenTofuOperation;
   readonly variables?: Readonly<Record<string, JsonValue>>;
+  /**
+   * Exact child-module provider identities proved before Plan creation.
+   * This field is required even when empty; a source-only provider list cannot
+   * recover module-local names or distinguish default and aliased instances.
+   */
+  readonly requiredProviderRequirements: readonly CapsuleProviderRequirement[];
+  /** @deprecated Read mirror checked against requiredProviderRequirements. */
   readonly requiredProviders?: readonly string[];
 }
 

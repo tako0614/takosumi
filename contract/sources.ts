@@ -4,9 +4,11 @@
  * A Source is a Workspace-scoped registration of a Git repository that Takosumi can
  * resolve to an immutable archive snapshot. Takosumi core is GitHub-agnostic: it
  * knows only a {@link GitAddress} (`{ url, ref, path, credentialId }`) and never
- * a forge-specific manifest. A repository may carry optional presentation or
- * install-UX proposals, but every accepted service-side concern is compiled
- * into DB config on the Source / Connection / InstallConfig records.
+ * a forge-specific manifest. A repository may carry optional display metadata
+ * and manifest assistance for a module already discovered from tracked
+ * OpenTofu files. Neither document creates a module/provider candidate; every
+ * accepted service-side concern is compiled into DB config on the Source /
+ * Connection / InstallConfig records.
  *
  * Resolution never happens from the trusted Worker: registration validates shape
  * + URL policy and stores the Source `active`; the actual `git ls-remote` /
@@ -23,11 +25,13 @@ import {
   parseRepositoryManifestText,
   type RepositoryManifestDocument,
 } from "./repository-manifest.ts";
+import { canonicalProviderSource } from "./provider-env-rules.ts";
 
 /**
  * GitHub-agnostic Git coordinate. The only repository identity Takosumi core
  * understands. `credentialId` references a `source_git_*` Connection (none for a
- * public repo). `path` is the Capsule path within the repo (defaults to `"."`).
+ * public repo). `path` is the source-sync subtree within the repo (defaults to
+ * `"."`); it is not the selected executable module path.
  */
 export interface GitAddress {
   readonly url: string;
@@ -41,8 +45,9 @@ export type SourceStatus = "active" | "disabled" | "error";
 /**
  * Public Source record. NEVER carries the hook secret or any
  * credential value. `defaultRef` / `defaultPath` seed the {@link GitAddress}
- * used by source-sync and Capsule planning when the request does not
- * override them.
+ * used by source-sync when the request does not override them. `defaultPath`
+ * scopes the captured archive and module scan; it never selects a module from
+ * that scan for Capsule planning.
  */
 export interface Source {
   readonly id: string;
@@ -50,7 +55,7 @@ export interface Source {
   readonly name: string;
   readonly url: string;
   readonly defaultRef: string;
-  /** Capsule path within the repo. Defaults to `"."`. */
+  /** Source-sync subtree within the repo. Defaults to `"."`; not a module default. */
   readonly defaultPath: string;
   /** References a `source_git_*` Connection. Absent for a public repo. */
   readonly authConnectionId?: string;
@@ -67,10 +72,10 @@ export interface Source {
 /**
  * Bounded observation of the optional repository-owned display presentation
  * document at `.well-known/tcs.json` from the same Git commit as a
- * {@link SourceSnapshot}. The selected OpenTofu module remains the executable
- * archive; this observation only keeps repository-root display metadata
- * immutable when the Source points at a nested module path. It never selects
- * that path or carries InstallConfig execution declarations.
+ * {@link SourceSnapshot}. This observation only keeps repository-root display
+ * metadata immutable when the Source captures a nested subtree. It never
+ * creates or selects an executable module/provider candidate and carries no
+ * InstallConfig execution declarations.
  */
 export type RepositoryInstallMetadataSnapshot =
   | { readonly status: "absent" }
@@ -219,7 +224,7 @@ function sha256Digest(value: unknown): value is string {
 }
 
 /**
- * Immutable archive snapshot of a Capsule pinned to a content digest.
+ * Immutable archive snapshot of a Source subtree pinned to a content digest.
  *
  * A snapshot is produced only by a `source_sync` run for a registered
  * {@link Source}. `sourceId` is therefore required and is the sole source
@@ -257,11 +262,21 @@ export interface SourceSnapshot {
    * or invalid; old snapshots are not eligible for archive reuse.
    */
   readonly repositoryManifest?: RepositoryManifestSnapshot;
+  /**
+   * Bounded OpenTofu module index derived from tracked regular files in the
+   * exact cloned Source subtree. Optional only for snapshots created before
+   * source-sync module discovery was introduced; such snapshots are not
+   * eligible for reuse by a new sync.
+   */
+  readonly repositoryModules?: RepositoryModulesSnapshot;
   readonly fetchedByRunId: string;
   readonly fetchedAt: string;
 }
 
-export type PublicSourceSnapshot = Omit<SourceSnapshot, "repositoryManifest"> & {
+export type PublicSourceSnapshot = Omit<
+  SourceSnapshot,
+  "repositoryManifest" | "repositoryModules"
+> & {
   readonly repositoryManifest?: PublicRepositoryManifestObservation;
 };
 
@@ -269,13 +284,337 @@ export type PublicSourceSnapshot = Omit<SourceSnapshot, "repositoryManifest"> & 
 export function toPublicSourceSnapshot(
   snapshot: SourceSnapshot,
 ): PublicSourceSnapshot {
-  if (!snapshot.repositoryManifest) return snapshot;
+  const { repositoryModules: _repositoryModules, ...withoutModules } = snapshot;
+  void _repositoryModules;
+  if (!snapshot.repositoryManifest) return withoutModules;
   return {
-    ...snapshot,
+    ...withoutModules,
     repositoryManifest: publicRepositoryManifestObservation(
       snapshot.repositoryManifest,
     ),
   };
+}
+
+export const TAKOSUMI_SOURCE_SNAPSHOT_MAX_MODULES = 32;
+export const TAKOSUMI_SOURCE_SNAPSHOT_MAX_PROVIDER_PACKAGES = 256;
+export const TAKOSUMI_SOURCE_SNAPSHOT_MAX_ROOT_PROVIDER_REQUIREMENTS = 256;
+
+export type RepositoryModulesInvalidReason =
+  | "scan_unavailable"
+  | "scan_failed"
+  | "file_limit_exceeded"
+  | "file_too_large"
+  | "total_bytes_exceeded"
+  | "module_limit_exceeded"
+  | "configuration_invalid";
+
+export interface RepositoryModuleProviderPackage {
+  readonly source: string;
+  readonly version?: string;
+}
+
+export interface RepositoryModuleRootProviderRequirement {
+  readonly source: string;
+  readonly moduleLocalName: string;
+  readonly childAlias?: string;
+  readonly version?: string;
+}
+
+export interface SourceSnapshotInstallModule {
+  readonly path: string;
+  readonly providerPackages: readonly RepositoryModuleProviderPackage[];
+  readonly rootProviderRequirements: readonly RepositoryModuleRootProviderRequirement[];
+}
+
+export type RepositoryModulesSnapshot =
+  | {
+      readonly status: "ready";
+      /** Git Source path whose archive-relative tree was scanned. */
+      readonly scopePath: string;
+      readonly modules: readonly SourceSnapshotInstallModule[];
+    }
+  | {
+      readonly status: "invalid";
+      readonly scopePath: string;
+      readonly reason: RepositoryModulesInvalidReason;
+    };
+
+/** Strict parser for the untrusted runner-to-host module-index seam. */
+export function parseRepositoryModulesSnapshot(
+  value: unknown,
+): RepositoryModulesSnapshot | undefined {
+  if (
+    !plainRecord(value) ||
+    !isCanonicalRepositoryDirectoryPath(value.scopePath)
+  ) {
+    return undefined;
+  }
+  if (value.status === "invalid") {
+    if (
+      !exactRecordKeys(value, ["status", "scopePath", "reason"]) ||
+      typeof value.reason !== "string" ||
+      !REPOSITORY_MODULES_INVALID_REASONS.has(
+        value.reason as RepositoryModulesInvalidReason,
+      )
+    ) {
+      return undefined;
+    }
+    return {
+      status: "invalid",
+      scopePath: value.scopePath,
+      reason: value.reason as RepositoryModulesInvalidReason,
+    };
+  }
+  if (
+    value.status !== "ready" ||
+    !exactRecordKeys(value, ["status", "scopePath", "modules"]) ||
+    !Array.isArray(value.modules) ||
+    value.modules.length > TAKOSUMI_SOURCE_SNAPSHOT_MAX_MODULES
+  ) {
+    return undefined;
+  }
+  const paths = new Set<string>();
+  const modules: SourceSnapshotInstallModule[] = [];
+  for (const module of value.modules) {
+    if (
+      !plainRecord(module) ||
+      !exactRecordKeys(module, [
+        "path",
+        "providerPackages",
+        "rootProviderRequirements",
+      ]) ||
+      !isCanonicalRepositoryDirectoryPath(module.path) ||
+      !isModuleDirectoryPath(module.path) ||
+      paths.has(module.path) ||
+      !Array.isArray(module.providerPackages) ||
+      module.providerPackages.length >
+        TAKOSUMI_SOURCE_SNAPSHOT_MAX_PROVIDER_PACKAGES ||
+      !Array.isArray(module.rootProviderRequirements) ||
+      module.rootProviderRequirements.length >
+        TAKOSUMI_SOURCE_SNAPSHOT_MAX_ROOT_PROVIDER_REQUIREMENTS
+    ) {
+      return undefined;
+    }
+    paths.add(module.path);
+    const packages: RepositoryModuleProviderPackage[] = [];
+    const packageSources = new Set<string>();
+    for (const providerPackage of module.providerPackages) {
+      const parsed = parseRepositoryModuleProviderPackage(providerPackage);
+      if (!parsed || packageSources.has(parsed.source)) return undefined;
+      packageSources.add(parsed.source);
+      packages.push(parsed);
+    }
+    packages.sort(compareProviderPackage);
+    const requirements: RepositoryModuleRootProviderRequirement[] = [];
+    const requirementKeys = new Set<string>();
+    for (const requirement of module.rootProviderRequirements) {
+      const parsed = parseRepositoryModuleRootProviderRequirement(requirement);
+      const providerPackage = parsed
+        ? packages.find((entry) => entry.source === parsed.source)
+        : undefined;
+      if (
+        !parsed ||
+        !providerPackage ||
+        (parsed.version !== undefined &&
+          parsed.version !== providerPackage.version)
+      ) {
+        return undefined;
+      }
+      const key = `${parsed.source}\0${parsed.moduleLocalName}\0${parsed.childAlias ?? ""}`;
+      if (requirementKeys.has(key)) return undefined;
+      requirementKeys.add(key);
+      requirements.push(parsed);
+    }
+    requirements.sort(compareRootProviderRequirement);
+    modules.push({
+      path: module.path,
+      providerPackages: packages,
+      rootProviderRequirements: requirements,
+    });
+  }
+  modules.sort((left, right) => compareModulePath(left.path, right.path));
+  return { status: "ready", scopePath: value.scopePath, modules };
+}
+
+export type SourceSnapshotInstallModulesResponse =
+  | {
+      readonly status: "invalid";
+      readonly sourceSnapshotId: string;
+      readonly scopePath: string;
+      readonly reason: RepositoryModulesInvalidReason;
+      readonly modules: readonly [];
+    }
+  | {
+      readonly status: "ready";
+      readonly sourceSnapshotId: string;
+      readonly scopePath: string;
+      readonly modules: readonly SourceSnapshotInstallModule[];
+    };
+
+/**
+ * Project only the validated immutable OpenTofu index captured during source
+ * sync. The optional repository manifest can add labels/input assistance to a
+ * selected real module, but it never creates a candidate or provider tuple.
+ */
+export function sourceSnapshotInstallModulesProjection(
+  snapshot: SourceSnapshot,
+): SourceSnapshotInstallModulesResponse {
+  const sourceSnapshotId = snapshot.id;
+  const observation = parseRepositoryModulesSnapshot(
+    snapshot.repositoryModules,
+  );
+  if (!observation) {
+    return {
+      status: "invalid",
+      sourceSnapshotId,
+      scopePath: isCanonicalRepositoryDirectoryPath(snapshot.path)
+        ? snapshot.path
+        : ".",
+      reason: "scan_unavailable",
+      modules: [],
+    };
+  }
+  return observation.status === "ready"
+    ? { ...observation, sourceSnapshotId }
+    : { ...observation, sourceSnapshotId, modules: [] };
+}
+
+const REPOSITORY_MODULES_INVALID_REASONS = new Set<RepositoryModulesInvalidReason>([
+  "scan_unavailable",
+  "scan_failed",
+  "file_limit_exceeded",
+  "file_too_large",
+  "total_bytes_exceeded",
+  "module_limit_exceeded",
+  "configuration_invalid",
+]);
+
+function parseRepositoryModuleProviderPackage(
+  value: unknown,
+): RepositoryModuleProviderPackage | undefined {
+  if (
+    !plainRecord(value) ||
+    !exactRecordKeys(value, ["source", "version"]) ||
+    !isCanonicalProviderSource(value.source) ||
+    (value.version !== undefined &&
+      (typeof value.version !== "string" ||
+        !EXACT_PROVIDER_VERSION.test(value.version)))
+  ) {
+    return undefined;
+  }
+  return {
+    source: value.source,
+    ...(typeof value.version === "string" ? { version: value.version } : {}),
+  };
+}
+
+function parseRepositoryModuleRootProviderRequirement(
+  value: unknown,
+): RepositoryModuleRootProviderRequirement | undefined {
+  if (
+    !plainRecord(value) ||
+    !exactRecordKeys(value, [
+      "source",
+      "moduleLocalName",
+      "childAlias",
+      "version",
+    ]) ||
+    !isCanonicalProviderSource(value.source) ||
+    typeof value.moduleLocalName !== "string" ||
+    !PROVIDER_LOCAL_NAME.test(value.moduleLocalName) ||
+    (value.childAlias !== undefined &&
+      (typeof value.childAlias !== "string" ||
+        !PROVIDER_LOCAL_NAME.test(value.childAlias))) ||
+    (value.version !== undefined &&
+      (typeof value.version !== "string" ||
+        !EXACT_PROVIDER_VERSION.test(value.version)))
+  ) {
+    return undefined;
+  }
+  return {
+    source: value.source,
+    moduleLocalName: value.moduleLocalName,
+    ...(typeof value.childAlias === "string"
+      ? { childAlias: value.childAlias }
+      : {}),
+    ...(typeof value.version === "string" ? { version: value.version } : {}),
+  };
+}
+
+function compareProviderPackage(
+  left: RepositoryModuleProviderPackage,
+  right: RepositoryModuleProviderPackage,
+): number {
+  return (
+    compareModulePath(left.source, right.source) ||
+    compareModulePath(left.version ?? "", right.version ?? "")
+  );
+}
+
+function compareRootProviderRequirement(
+  left: RepositoryModuleRootProviderRequirement,
+  right: RepositoryModuleRootProviderRequirement,
+): number {
+  return (
+    compareModulePath(left.source, right.source) ||
+    compareModulePath(left.moduleLocalName, right.moduleLocalName) ||
+    compareModulePath(left.childAlias ?? "", right.childAlias ?? "") ||
+    compareModulePath(left.version ?? "", right.version ?? "")
+  );
+}
+
+const PROVIDER_LOCAL_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/u;
+const EXACT_PROVIDER_VERSION =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+
+function isCanonicalProviderSource(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    canonicalProviderSource(value) === value &&
+    /^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?\/[a-z0-9_-]+\/[a-z0-9_-]+$/u.test(
+      value,
+    )
+  );
+}
+
+function compareModulePath(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** Keep this projection defensive even when a hand-seeded durable row bypasses
+ * the source-sync parser. Aliases such as `./deploy/app` must never become
+ * executable choices. */
+/**
+ * Exact directory coordinate used by Git Source subtrees and by module-index
+ * entries. Callers must reject aliases instead of normalizing them: `infra`,
+ * `./infra`, and `infra/../infra` are not interchangeable authority strings.
+ */
+export function isCanonicalRepositoryDirectoryPath(
+  value: unknown,
+): value is string {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value.trim() !== value ||
+    value.length > 1_024 ||
+    value.startsWith("/") ||
+    value.startsWith("./") ||
+    value.endsWith("/") ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    /^[A-Za-z]:/u.test(value)
+  ) {
+    return false;
+  }
+  if (value === ".") return true;
+  return !value
+    .split("/")
+    .some((segment) => !segment || segment === "." || segment === "..");
+}
+
+/** An install module is a directory choice, never an individual OpenTofu file. */
+function isModuleDirectoryPath(value: string): boolean {
+  return !/(?:\.tf|\.tofu)(?:\.json)?$/iu.test(value);
 }
 
 /**
@@ -447,11 +786,11 @@ export const SOURCE_SYNC_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(id)}/sync`;
 export const SOURCE_SNAPSHOTS_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(id)}/snapshots`;
-export const SOURCE_SNAPSHOT_FILE_PATH = (
+export const SOURCE_SNAPSHOT_INSTALL_MODULES_PATH = (
   sourceId: string,
   sourceSnapshotId: string,
 ): string =>
-  `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(sourceSnapshotId)}/file`;
+  `${INTERNAL_V1_PREFIX}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(sourceSnapshotId)}/install-modules`;
 export const WORKSPACE_STABLE_SOURCE_TAG_PATH = (workspaceId: string): string =>
   `${INTERNAL_V1_PREFIX}/workspaces/${encodeURIComponent(workspaceId)}/source-ref-resolutions/stable-semver`;
 export const SOURCE_COMPATIBILITY_CHECK_PATH = (id: string): string =>
@@ -496,15 +835,6 @@ export interface StableSourceTagResolutionRequest {
 export interface StableSourceTagResolutionResponse {
   readonly tag: string;
   readonly commit: string;
-}
-
-export interface SourceSnapshotFileResponse {
-  readonly sourceSnapshotId: string;
-  readonly path: string;
-  readonly text: string;
-  /** SHA-256 of the exact UTF-8 bytes read inside the Runner boundary. */
-  readonly digest: string;
-  readonly sizeBytes: number;
 }
 
 export interface ListSourcesResponse {

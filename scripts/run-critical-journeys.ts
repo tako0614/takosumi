@@ -22,16 +22,18 @@ export type CriticalJourney = {
 export const CRITICAL_JOURNEYS: readonly CriticalJourney[] = [
   {
     id: "source-install",
-    title: "repository/store source install preparation",
+    title: "Git repository source install preparation",
     tests: [
-      "tests/contract/capsule-source-options_test.ts",
+      "tests/lib/opentofu-configuration/src/mod_test.ts",
+      "tests/worker/src/runner_source_sync_test.ts",
       "tests/core/domains/capsules/repository_install_ux_compiler_test.ts",
       "tests/core/api/deploy_control_source_routes_test.ts",
     ],
     negativeControls: [
       {
-        path: "tests/contract/capsule-source-options_test.ts",
-        description: "rejects unsafe fields, duplicate ids, and credentials",
+        path: "tests/lib/opentofu-configuration/src/mod_test.ts",
+        description:
+          "fails closed for ambiguous local topology, scan limits, and remote modules",
       },
       {
         path: "tests/core/api/deploy_control_source_routes_test.ts",
@@ -99,16 +101,11 @@ export const CRITICAL_JOURNEYS: readonly CriticalJourney[] = [
     id: "dashboard-install",
     title: "dashboard install route and browser harness",
     tests: [
-      "tests/dashboard/src/views/new/capsule-source-options_test.ts",
       "tests/dashboard/src/views/new/install-view_test.ts",
       "tests/dashboard/src/views/new/install-execution_test.ts",
       "tests/dashboard/e2e/harness_test.ts",
     ],
     negativeControls: [
-      {
-        path: "tests/dashboard/src/views/new/capsule-source-options_test.ts",
-        description: "keeps /install and source-option links on the one /new route",
-      },
       {
         path: "tests/dashboard/src/views/new/install-view_test.ts",
         description: "keeps non-ready compatibility out of Capsule creation",
@@ -123,7 +120,13 @@ export const CRITICAL_JOURNEYS: readonly CriticalJourney[] = [
 
 const TEST_TIMEOUT_MS = 30_000;
 const REPO_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const TEST_ROOT_PREFIXES = ["tests/contract/", "tests/core/", "tests/dashboard/"];
+const TEST_ROOT_PREFIXES = [
+  "tests/contract/",
+  "tests/core/",
+  "tests/dashboard/",
+  "tests/lib/",
+  "tests/worker/",
+];
 
 /**
  * Build the only command this entrypoint is allowed to execute for a journey.

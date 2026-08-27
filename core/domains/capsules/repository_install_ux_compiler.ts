@@ -13,6 +13,7 @@ import type {
   InstallConfig,
   InstallConfigInstallExperience,
   InstallConfigInstallProjection,
+  InstallConfigRuntimeBindingMaterialization,
   OutputAllowlistEntry,
   InstallConfigVariablePresentation,
 } from "takosumi-contract/install-configs";
@@ -33,6 +34,7 @@ import {
   isRepositoryManifestInterfaceCapableApiVersion,
   parseRepositorySourceBuild,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
+  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4,
 } from "takosumi-contract/repository-manifest";
 import type { JsonValue } from "takosumi-contract/types";
 
@@ -43,9 +45,10 @@ const SUPPORTED_SOURCE_KINDS = [
   "module_default",
 ] as const;
 
-const SUPPORTED_REQUIREMENT_KINDS = [
+export const DEFAULT_REPOSITORY_INSTALL_UX_ALLOWED_REQUIREMENT_KINDS = [
   "secret.generated",
   "http.endpoint",
+  "identity.oidc",
   "interface.consume",
 ] as const;
 
@@ -85,6 +88,7 @@ export type RepositoryInstallUxDiagnosticCode =
   | "repository_install_ux_plain_env_unsupported"
   | "repository_install_ux_source_disallowed"
   | "repository_install_ux_requirement_disallowed"
+  | "repository_install_ux_requirement_version_unsupported"
   | "repository_install_ux_requirement_target_invalid"
   | "repository_install_ux_feature_input_invalid"
   | "repository_install_ux_secret_materialization_required"
@@ -114,6 +118,8 @@ export interface RepositoryInstallUxDiagnostic {
 export interface RepositoryInstallUxCompilerPolicy {
   readonly allowedSourceKinds?: readonly RepositoryInstallUxInputSource["kind"][];
   readonly allowedRequirementKinds?: readonly RepositoryRuntimeRequirement["kind"][];
+  /** Exact Takosumi Accounts scopes a reviewed repository may request. */
+  readonly allowedOidcScopes?: readonly string[];
   /** Permission tokens accepted from repository-owned binding requests. */
   readonly allowedInterfacePermissions?: readonly string[];
   /** Delivery tokens accepted from repository-owned binding requests. */
@@ -152,6 +158,8 @@ export interface CompiledRepositoryInstallUx {
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   /** Credential-free source preparation persisted into InstallConfig. */
   readonly sourceBuild?: InstallConfig["sourceBuild"];
+  /** Private host runtime binding declarations compiled from binding delivery. */
+  readonly runtimeBindingMaterialization?: InstallConfigRuntimeBindingMaterialization;
 }
 
 export type CompileRepositoryInstallUxResult =
@@ -187,7 +195,7 @@ export function compileRepositoryInstallUx(
     );
   }
 
-  // `sourceBuild` is a v2.3-only field. Keep this runtime check in addition to
+  // `sourceBuild` is a v2.3+ field. Keep this runtime check in addition to
   // the closed parser so manually constructed documents cannot smuggle it into
   // an older API version and accidentally widen the execution contract.
   const moduleWithSourceBuild = module as typeof module & {
@@ -195,16 +203,18 @@ export function compileRepositoryInstallUx(
   };
   if (
     input.document.apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 &&
+    input.document.apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 &&
     moduleWithSourceBuild.sourceBuild !== undefined
   ) {
     return invalid(
       "repository_install_ux_source_build_version_unsupported",
-      "Repository-owned sourceBuild requires takosumi.com/v2.3.",
+      "Repository-owned sourceBuild requires takosumi.com/v2.3 or v2.4.",
     );
   }
   let sourceBuild: InstallConfig["sourceBuild"];
   if (
-    input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3
+    input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 ||
+    input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4
   ) {
     const parsedSourceBuild = parseRepositorySourceBuild(
       moduleWithSourceBuild.sourceBuild,
@@ -255,8 +265,18 @@ export function compileRepositoryInstallUx(
   const sourceKinds = new Set(
     input.policy?.allowedSourceKinds ?? SUPPORTED_SOURCE_KINDS,
   );
+  const requirements = module.requires ?? [];
+  if (
+    requirements.length > 0 &&
+    input.policy?.allowedRequirementKinds === undefined
+  ) {
+    return invalid(
+      "repository_install_ux_requirement_disallowed",
+      "Repository runtime requirements require an explicit operator allowlist.",
+    );
+  }
   const requirementKinds = new Set(
-    input.policy?.allowedRequirementKinds ?? SUPPORTED_REQUIREMENT_KINDS,
+    input.policy?.allowedRequirementKinds ?? [],
   );
 
   for (const declaration of module.inputs) {
@@ -268,18 +288,23 @@ export function compileRepositoryInstallUx(
     if (validation) return validation;
   }
 
-  const requirements = module.requires ?? [];
   for (const requirement of requirements) {
     const validation = validateRequirement(
       requirement,
       declarationByName,
       requirementKinds,
+      input.policy?.allowedOidcScopes,
       input.policy?.allowedInterfacePermissions,
       input.policy?.allowedInterfaceDeliveryTypes,
       input.policy?.allowedInterfaceBindingProfiles,
+      input.document.apiVersion,
     );
     if (validation) return validation;
   }
+  const runtimeBindingCollision = validateRuntimeBindingCollisions(requirements);
+  if (runtimeBindingCollision) return runtimeBindingCollision;
+  const oidcEndpointValidation = validateOidcEndpointPair(requirements);
+  if (oidcEndpointValidation) return oidcEndpointValidation;
   const roleValidation = validateRoles(module.inputs, declarationByName);
   if (roleValidation) return roleValidation;
 
@@ -374,6 +399,10 @@ export function compileRepositoryInstallUx(
 
   const projections = compileVariableProjections(requirements, module.inputs);
   const requiredInterfaces = compileRequiredInterfaces(requirements);
+  const runtimeBindingMaterialization = compileRuntimeBindingMaterialization(
+    requirements,
+    input.document.apiVersion,
+  );
 
   return {
     ok: true,
@@ -395,6 +424,9 @@ export function compileRepositoryInstallUx(
       },
       variableMapping,
       ...(sourceBuild ? { sourceBuild } : {}),
+      ...(runtimeBindingMaterialization
+        ? { runtimeBindingMaterialization }
+        : {}),
       userVariableNames: module.inputs
         .filter((declaration) => declaration.source.kind === "user")
         .map((declaration) => declaration.name)
@@ -442,7 +474,7 @@ function compileInterfaceDeclarations(
   if (!isRepositoryManifestInterfaceCapableApiVersion(input.apiVersion)) {
     return invalid(
       "repository_install_ux_interface_version_unsupported",
-      "Repository-owned Interface declarations require takosumi.com/v2, v2.1, v2.2, or v2.3.",
+      "Repository-owned Interface declarations require takosumi.com/v2, v2.1, v2.2, v2.3, or v2.4.",
     );
   }
 
@@ -875,18 +907,14 @@ function validateRequirement(
   requirement: RepositoryRuntimeRequirement,
   declarations: ReadonlyMap<string, CapsuleRootModuleVariableDeclaration>,
   allowedKinds: ReadonlySet<RepositoryRuntimeRequirement["kind"]>,
+  allowedOidcScopes: readonly string[] | undefined,
   allowedInterfacePermissions: readonly string[] | undefined,
   allowedInterfaceDeliveryTypes: readonly string[] | undefined,
   allowedInterfaceBindingProfiles:
     | RepositoryInstallUxCompilerPolicy["allowedInterfaceBindingProfiles"]
     | undefined,
+  apiVersion: RepositoryManifestDocument["apiVersion"],
 ): CompileRepositoryInstallUxResult | undefined {
-  if (requirement.kind === "identity.oidc") {
-    return invalid(
-      "repository_install_ux_requirement_disallowed",
-      "Capsule-specific OIDC client materialization is not part of the Git-owned install flow.",
-    );
-  }
   if (!allowedKinds.has(requirement.kind)) {
     return invalid(
       "repository_install_ux_requirement_disallowed",
@@ -894,10 +922,71 @@ function validateRequirement(
     );
   }
   if (requirement.kind === "secret.generated") {
-    return invalid(
-      "repository_install_ux_requirement_disallowed",
-      "Generated runtime secrets are not supported by the generic Capsule install flow.",
-    );
+    const targets = deliveryTargets(requirement.deliver);
+    if (
+      apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
+      deliversToVariables(requirement.deliver) ||
+      Object.keys(targets).length !== 1 ||
+      !Object.prototype.hasOwnProperty.call(targets, "value") ||
+      !targets.value ||
+      requirement.bytes !== 32 ||
+      requirement.encoding !== "hex"
+    ) {
+      return invalid(
+        "repository_install_ux_requirement_disallowed",
+        "Generated runtime secrets require takosumi.com/v2.4 binding delivery with exactly 32 bytes and hex encoding.",
+      );
+    }
+  }
+  if (requirement.kind === "identity.oidc") {
+    const targets = deliveryTargets(requirement.deliver);
+    const targetNames = Object.keys(targets).sort();
+    const targetVariables = Object.values(targets);
+    const requestedScopes = requirement.scopes ?? [];
+    if (deliversToVariables(requirement.deliver)) {
+      if (
+        targetNames.length !== 4 ||
+        !sameStrings(targetNames, [
+          "accountsUrl",
+          "clientId",
+          "issuerUrl",
+          "redirectUri",
+        ]) ||
+        new Set(targetVariables).size !== targetVariables.length
+      ) {
+        return invalid(
+          "repository_install_ux_requirement_target_invalid",
+          "An identity.oidc requirement must deliver accountsUrl, issuerUrl, clientId, and redirectUri to module variables.",
+        );
+      }
+    } else if (
+      apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
+      targetNames.length !== 4 ||
+      !sameStrings(targetNames, [
+        "clientId",
+        "issuerUrl",
+        "ownerSubject",
+        "redirectUri",
+      ]) ||
+      new Set(targetVariables).size !== targetVariables.length
+    ) {
+      return invalid(
+        "repository_install_ux_requirement_version_unsupported",
+        "Binding-delivered identity.oidc requires takosumi.com/v2.4 and exact issuerUrl, clientId, ownerSubject, and redirectUri slots.",
+      );
+    }
+    if (
+      !allowedOidcScopes?.length ||
+      requestedScopes.length === 0 ||
+      !requestedScopes.includes("openid") ||
+      new Set(requestedScopes).size !== requestedScopes.length ||
+      requestedScopes.some((scope) => !allowedOidcScopes.includes(scope))
+    ) {
+      return invalid(
+        "repository_install_ux_requirement_disallowed",
+        "The identity.oidc scopes are not allowed by explicit operator policy.",
+      );
+    }
   }
   if (requirement.kind === "interface.consume") {
     if (!allowedInterfacePermissions?.length) {
@@ -1007,6 +1096,56 @@ function validateFeatures(
   return undefined;
 }
 
+function validateOidcEndpointPair(
+  requirements: readonly RepositoryRuntimeRequirement[],
+): CompileRepositoryInstallUxResult | undefined {
+  const oidcRequirements = requirements.filter(
+    (requirement) => requirement.kind === "identity.oidc",
+  );
+  if (oidcRequirements.length === 0) return undefined;
+  // Binding-delivered OIDC is activated after the trusted Takoserver upload
+  // supplies the public origin. It therefore has no repository-declared
+  // endpoint requirement. Variable delivery retains the reviewed URL pair.
+  if (!deliversToVariables(oidcRequirements[0]!.deliver)) {
+    if (oidcRequirements.length !== 1) {
+      return invalid(
+        "repository_install_ux_requirement_target_invalid",
+        "An identity.oidc capability request may contain only one binding-delivered identity.oidc requirement.",
+      );
+    }
+    return undefined;
+  }
+  const endpointRequirements = requirements.filter(
+    (requirement) => requirement.kind === "http.endpoint",
+  );
+  if (oidcRequirements.length !== 1 || endpointRequirements.length !== 1) {
+    return invalid(
+      "repository_install_ux_requirement_target_invalid",
+      "An identity.oidc capability request must contain exactly one identity.oidc requirement and one same-module http.endpoint requirement.",
+    );
+  }
+  const oidc = oidcRequirements[0]!;
+  const endpoint = endpointRequirements[0]!;
+  if (
+    !deliversToVariables(endpoint.deliver) ||
+    !deliveryTargets(endpoint.deliver).url
+  ) {
+    return invalid(
+      "repository_install_ux_requirement_target_invalid",
+      "An identity.oidc requirement needs a same-module http.endpoint URL variable for its reviewed public origin.",
+    );
+  }
+  const endpointUrl = deliveryTargets(endpoint.deliver).url!;
+  const oidcTargets = Object.values(deliveryTargets(oidc.deliver));
+  if (oidcTargets.includes(endpointUrl)) {
+    return invalid(
+      "repository_install_ux_requirement_target_invalid",
+      "The identity.oidc and http.endpoint requirements must use distinct module variables.",
+    );
+  }
+  return undefined;
+}
+
 function compileVariablePresentation(
   input: RepositoryInstallUxInput,
   moduleDeclaration: CapsuleRootModuleVariableDeclaration,
@@ -1111,16 +1250,131 @@ function compileVariableProjections(
   }
   for (const requirement of requirements) {
     if (requirement.kind === "interface.consume") continue;
+    if (
+      requirement.kind === "identity.oidc" &&
+      !deliversToVariables(requirement.deliver)
+    ) {
+      // Keep the install-experience grant explicit while the private profile
+      // carries all binding names. No module variable or public endpoint is
+      // involved in this delivery form.
+      projections.push({
+        kind: "oidc_client",
+        variables: {},
+        callbackPath: requirement.callbackPath,
+        ...(requirement.scopes ? { scopes: [...requirement.scopes] } : {}),
+      });
+      continue;
+    }
     if (!deliversToVariables(requirement.deliver)) continue;
     const variables = deliveryTargets(requirement.deliver);
     if (requirement.kind === "http.endpoint") {
       projections.push({ kind: "public_endpoint", variables: { ...variables } });
       continue;
     }
+    if (requirement.kind === "identity.oidc") {
+      projections.push({
+        kind: "oidc_client",
+        variables: { ...variables },
+        callbackPath: requirement.callbackPath,
+        ...(requirement.scopes ? { scopes: [...requirement.scopes] } : {}),
+      });
+      continue;
+    }
     // A generated secret has no variable form: the host never writes a secret
     // into portable module state.
   }
   return projections;
+}
+
+/**
+ * Compile only the value-free private profile consumed by the current runtime
+ * materializer. The public InstallConfig projection deliberately omits this
+ * field; repository metadata never contributes a value or provider identity.
+ */
+function compileRuntimeBindingMaterialization(
+  requirements: readonly RepositoryRuntimeRequirement[],
+  apiVersion: RepositoryManifestDocument["apiVersion"],
+): InstallConfigRuntimeBindingMaterialization | undefined {
+  const generatedSecrets = requirements
+    .filter(
+      (
+        requirement,
+      ): requirement is Extract<
+        RepositoryRuntimeRequirement,
+        { readonly kind: "secret.generated" }
+      > => requirement.kind === "secret.generated",
+    )
+    .filter((requirement) => !deliversToVariables(requirement.deliver))
+    .map((requirement) => ({
+      binding: deliveryTargets(requirement.deliver).value!,
+      bytes: 32 as const,
+      encoding: "hex" as const,
+    }))
+    .sort((left, right) => left.binding.localeCompare(right.binding));
+
+  const oidcRequirement = requirements.find(
+    (
+      requirement,
+    ): requirement is Extract<
+      RepositoryRuntimeRequirement,
+      { readonly kind: "identity.oidc" }
+    > => requirement.kind === "identity.oidc",
+  );
+  const oidcClient =
+    oidcRequirement && !deliversToVariables(oidcRequirement.deliver)
+      ? (() => {
+          const targets = deliveryTargets(oidcRequirement.deliver);
+          return {
+            issuerBinding: targets.issuerUrl!,
+            clientIdBinding: targets.clientId!,
+            ownerSubjectBinding: targets.ownerSubject!,
+            redirectUriBinding: targets.redirectUri!,
+            callbackPath: oidcRequirement.callbackPath,
+            ...(oidcRequirement.scopes
+              ? { scopes: [...oidcRequirement.scopes] }
+              : {}),
+          };
+        })()
+      : undefined;
+
+  if (generatedSecrets.length === 0 && !oidcClient) return undefined;
+  // All currently supported private materialization declarations are closed
+  // under v2.4. Keep this guard for manually constructed documents that bypass
+  // the parser and to prevent a future API version from silently reusing v2.
+  if (apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4) {
+    return undefined;
+  }
+  return {
+    contract: "takosumi.runtime-binding-profile/v2",
+    generatedSecrets,
+    ...(oidcClient ? { oidcClient } : {}),
+  };
+}
+
+/** Reject manually constructed manifests that collide on runtime bindings. */
+function validateRuntimeBindingCollisions(
+  requirements: readonly RepositoryRuntimeRequirement[],
+): CompileRepositoryInstallUxResult | undefined {
+  const bindings = new Map<string, string>();
+  for (const requirement of requirements) {
+    if (
+      requirement.kind === "interface.consume" ||
+      deliversToVariables(requirement.deliver)
+    ) {
+      continue;
+    }
+    for (const binding of Object.values(deliveryTargets(requirement.deliver))) {
+      const previous = bindings.get(binding);
+      if (previous) {
+        return invalid(
+          "repository_install_ux_requirement_target_invalid",
+          `The runtime binding ${boundedIdentifier(binding)} is claimed by both ${previous} and ${requirement.kind}.`,
+        );
+      }
+      bindings.set(binding, requirement.kind);
+    }
+  }
+  return undefined;
 }
 
 function compileRequiredInterfaces(
@@ -1159,6 +1413,16 @@ function jsonValueMatchesType(
     case "boolean":
       return typeof value === "boolean";
   }
+}
+
+function sameStrings(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 function canonicalModulePath(value: string): string | undefined {

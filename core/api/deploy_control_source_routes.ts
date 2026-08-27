@@ -9,10 +9,11 @@ import type {
   CreateSourceSyncRequest,
   PatchSourceRequest,
   StableSourceTagResolutionRequest,
-  SourceSnapshotFileResponse,
 } from "takosumi-contract/sources";
-import { toPublicSourceSnapshot } from "takosumi-contract/sources";
-import { TAKOSUMI_REPOSITORY_MANIFEST_PATH } from "../../contract/repository-manifest.ts";
+import {
+  sourceSnapshotInstallModulesProjection,
+  toPublicSourceSnapshot,
+} from "takosumi-contract/sources";
 import type { CreateSourceCompatibilityCheckRequest } from "takosumi-contract/capsules";
 import { isAbsolute, normalize } from "node:path";
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
@@ -36,7 +37,7 @@ import {
   TAKOSUMI_SOURCE_COMPATIBILITY_CHECK_ROUTE,
   TAKOSUMI_SOURCE_ROUTE,
   TAKOSUMI_SOURCE_SNAPSHOTS_ROUTE,
-  TAKOSUMI_SOURCE_SNAPSHOT_FILE_ROUTE,
+  TAKOSUMI_SOURCE_SNAPSHOT_INSTALL_MODULES_ROUTE,
   TAKOSUMI_WORKSPACE_STABLE_SOURCE_TAG_ROUTE,
   TAKOSUMI_SOURCE_SYNC_ROUTE,
   TAKOSUMI_SOURCES_ROUTE,
@@ -152,18 +153,16 @@ export const DEPLOY_CONTROL_SOURCE_ENDPOINTS: readonly DeployControlEndpoint[] =
     },
     {
       method: "GET",
-      path: TAKOSUMI_SOURCE_SNAPSHOT_FILE_ROUTE,
+      path: TAKOSUMI_SOURCE_SNAPSHOT_INSTALL_MODULES_ROUTE,
       summary:
-        "Reads one bounded presentation file from an immutable SourceSnapshot.",
+        "Lists validated repository-owned install module directories for one immutable SourceSnapshot.",
       auth: "deploy-control-token",
-      operationId: "readSourceSnapshotPresentationFile",
+      operationId: "listSourceSnapshotInstallModules",
       openapi: {
         pathParams: ["sourceId", "sourceSnapshotId"],
-        query: ["path"],
-        okSchema: "SourceSnapshotFileResponse",
+        okSchema: "SourceSnapshotInstallModulesResponse",
       },
-      notImplementedMessage:
-        "SourceSnapshot presentation-file inspection not wired",
+      notImplementedMessage: "SourceSnapshot install module projection not wired",
     },
     {
       method: "POST",
@@ -339,7 +338,7 @@ export function mountDeployControlSourceRoutes(
     }),
   );
 
-  app.get(TAKOSUMI_SOURCE_SNAPSHOT_FILE_ROUTE, async (c) => {
+  app.get(TAKOSUMI_SOURCE_SNAPSHOT_INSTALL_MODULES_ROUTE, async (c) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
     const sourceId = c.req.param("sourceId");
@@ -357,51 +356,20 @@ export function mountDeployControlSourceRoutes(
         400,
       );
     }
-    const path = presentationFilePath(c.req.query("path"));
-    if (!path) {
-      return c.json(
-        errorEnvelope(
-          c,
-          "invalid_argument",
-          "path must be a safe relative JSON file path",
-        ),
-        400,
-      );
-    }
-    if (path === TAKOSUMI_REPOSITORY_MANIFEST_PATH) {
-      return c.json(
-        errorEnvelope(
-          c,
-          "invalid_argument",
-          "repository manifest content is available only through validated section compilers",
-        ),
-        400,
-      );
-    }
     return await runHandler(c, async () => {
       const source = await controller.getSource(sourceId);
       ensureWorkspacePermission(auth.principal, source.source.workspaceId);
-      if (source.source.authConnectionId) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          "presentation-file inspection is limited to credential-free public Sources",
-        );
-      }
       const snapshot = await controller.getSourceSnapshot(sourceSnapshotId);
-      if (snapshot.sourceId !== sourceId) {
+      if (
+        snapshot.sourceId !== sourceId ||
+        snapshot.workspaceId !== source.source.workspaceId
+      ) {
         throw new OpenTofuControllerError(
           "not_found",
           "SourceSnapshot does not belong to Source",
         );
       }
-      const file = await controller.readSourceSnapshotPresentationFile(
-        sourceSnapshotId,
-        path,
-      );
-      return c.json(
-        { sourceSnapshotId, ...file } satisfies SourceSnapshotFileResponse,
-        200,
-      );
+      return c.json(sourceSnapshotInstallModulesProjection(snapshot), 200);
     });
   });
 
@@ -428,13 +396,6 @@ export function mountDeployControlSourceRoutes(
       });
     },
   );
-}
-
-function presentationFilePath(value: unknown): string | undefined {
-  const path = modulePathValue(value);
-  if (!path || !path.toLowerCase().endsWith(".json") || path.length > 1_024)
-    return undefined;
-  return path;
 }
 
 function modulePathValue(value: unknown): string | undefined {

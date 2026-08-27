@@ -1,4 +1,12 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import {
+  D1AccountsStore,
+  resolveD1AccountsSchemaMode,
+  type AccountsStore,
+  type D1AccountsSchemaMode,
+  type D1Database as AccountsD1Database,
+} from "@takosjp/takosumi-accounts-service";
+import { oidcClientActivationDigest } from "../../accounts/service/src/oidc-activation.ts";
 import { oidcAllowedScopes } from "../../accounts/service/src/oidc-live-grant.ts";
 import type { Capsule } from "../../contract/capsules.ts";
 import type {
@@ -6,6 +14,7 @@ import type {
   InstallConfigRuntimeBindingMaterialization,
 } from "../../contract/install-configs.ts";
 import { installExperienceOidcClient } from "../../contract/install-experience.ts";
+import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
 import type {
   CanonicalCapsuleRunCredentialContextResult,
   CapsuleRunCredentialPhase,
@@ -16,10 +25,12 @@ import type { D1Database as ControlD1Database } from "../../worker/src/bindings.
 import {
   deriveCapsulePublicOidcClientIdentity,
   derivePublicOidcClientId,
+  registerCapsulePublicOidcClient,
 } from "./accounts_oidc_client_registration.ts";
 
 const AUTHORITY_CONTRACT = "takosumi.runtime-bindings/v1";
-const PROFILE_CONTRACT = "takosumi.runtime-binding-profile/v1";
+const PROFILE_CONTRACT_V1 = "takosumi.runtime-binding-profile/v1";
+const PROFILE_CONTRACT_V2 = "takosumi.runtime-binding-profile/v2";
 const BINDING_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/u;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 
@@ -38,24 +49,30 @@ export interface RuntimeBindingControlLedger {
     readonly runId: string;
     readonly phase: CapsuleRunCredentialPhase;
   }): Promise<CanonicalCapsuleRunCredentialContextResult>;
-  getCapsule(id: string): Promise<
-    | Pick<Capsule, "id" | "workspaceId" | "name" | "installConfigId">
-    | undefined
-  >;
+  getCapsule(id: string): Promise<Capsule | undefined>;
   getInstallConfig(id: string): Promise<InstallConfig | undefined>;
+  getCapsuleExecutionAuthorityEpoch(id: string): Promise<number | undefined>;
+}
+
+export type RuntimeBindingAccountsLedger = Pick<
+  AccountsStore,
+  "findOidcClient" | "findOidcClientForCapsule" | "saveOidcClient"
+>;
+
+export interface RuntimeBindingMaterializerInput {
+  readonly request: unknown;
+  readonly resourceName: string;
+  readonly scriptName: string;
+  readonly publicOrigin: string;
+  readonly bindings: readonly string[];
 }
 
 export interface TakosumiRuntimeBindingMaterializer {
-  materializeRuntimeBindings(input: {
-    readonly request: unknown;
-    readonly resourceName: string;
-    readonly scriptName: string;
-    readonly publicOrigin: string;
-    readonly bindings: readonly string[];
-  }): Promise<{
+  materializeRuntimeBindings(input: RuntimeBindingMaterializerInput): Promise<{
     readonly values: Readonly<Record<string, string>>;
     readonly rollbackReceipt?: string;
   }>;
+  commitRuntimeBindings(input: RuntimeBindingMaterializerInput): Promise<void>;
   rollbackRuntimeBindings(input: {
     readonly request: unknown;
     readonly rollbackReceipt: string;
@@ -65,6 +82,8 @@ export interface TakosumiRuntimeBindingMaterializer {
 export interface RuntimeBindingMaterializerCloudflareEnv {
   readonly TAKOSUMI_CONTROL_DB: ControlD1Database;
   readonly TAKOSUMI_CONTROL_D1_SCHEMA_MODE?: "bootstrap" | "predeployed";
+  readonly TAKOSUMI_ACCOUNTS_DB: AccountsD1Database;
+  readonly TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE?: D1AccountsSchemaMode;
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
   readonly TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET?: string;
   readonly TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY?: string;
@@ -77,13 +96,21 @@ export function createCloudflareTakosumiRuntimeBindingMaterializer(
     env.TAKOSUMI_CONTROL_DB,
     { schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap" },
   );
+  const accounts = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+    schemaMode: resolveD1AccountsSchemaMode(
+      env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
+    ),
+  });
   return createTakosumiRuntimeBindingMaterializer({
     control: {
       resolveContext: (request) =>
         resolveCanonicalCapsuleRunCredentialContext(store, request),
       getCapsule: (id) => store.getCapsule(id),
       getInstallConfig: (id) => store.getInstallConfig(id),
+      getCapsuleExecutionAuthorityEpoch: (id) =>
+        store.getCapsuleExecutionAuthorityEpoch(id),
     },
+    accounts,
     issuer: env.TAKOSUMI_ACCOUNTS_ISSUER ?? "",
     pairwiseSubjectSecret:
       env.TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET ?? "",
@@ -93,9 +120,11 @@ export function createCloudflareTakosumiRuntimeBindingMaterializer(
 
 export function createTakosumiRuntimeBindingMaterializer(input: {
   readonly control: RuntimeBindingControlLedger;
+  readonly accounts: RuntimeBindingAccountsLedger;
   readonly issuer: string;
   readonly pairwiseSubjectSecret: string;
   readonly derivationKey: string;
+  readonly clock?: () => Date;
 }): TakosumiRuntimeBindingMaterializer {
   const issuer = exactHttpsOrigin(input.issuer);
   const pairwiseSubjectSecret = boundedSecret(
@@ -103,119 +132,244 @@ export function createTakosumiRuntimeBindingMaterializer(input: {
     "pairwiseSubjectSecret",
   );
   const derivationKey = boundedSecret(input.derivationKey, "derivationKey");
+  const clock = input.clock ?? (() => new Date());
+
+  const resolve = async (
+    call: RuntimeBindingMaterializerInput,
+  ): Promise<ResolvedRuntimeBindingMaterialization> => {
+    const authority = parseAuthority(call.request);
+    const resourceName = exactIdentifier(call.resourceName, "resourceName");
+    const scriptName = exactIdentifier(call.scriptName, "scriptName");
+    const publicOrigin = exactHttpsOrigin(call.publicOrigin);
+    const requestedBindings = exactBindingSet(call.bindings);
+
+    const canonical = await input.control.resolveContext(authority);
+    if (
+      !canonical.ok ||
+      canonical.context.workspaceId !== authority.workspaceId ||
+      canonical.context.capsuleId !== authority.capsuleId ||
+      canonical.context.runId !== authority.runId ||
+      canonical.context.phase !== authority.phase ||
+      (authority.phase === "apply" &&
+        canonical.context.lifecycleIntent !== "provision") ||
+      (authority.phase === "destroy" &&
+        canonical.context.lifecycleIntent !== "destroy") ||
+      !/^tsub_[A-Za-z0-9_-]{1,128}$/u.test(
+        canonical.context.installingPrincipalId,
+      )
+    ) {
+      invalid("runtime binding authority is not current");
+    }
+
+    const capsule = await input.control.getCapsule(authority.capsuleId);
+    if (
+      !capsule ||
+      capsule.id !== authority.capsuleId ||
+      capsule.workspaceId !== authority.workspaceId ||
+      capsule.installingPrincipalId !== canonical.context.installingPrincipalId
+    ) {
+      invalid("runtime binding Capsule is not current");
+    }
+    const config = await input.control.getInstallConfig(capsule.installConfigId);
+    if (
+      !config ||
+      config.id !== capsule.installConfigId ||
+      config.workspaceId !== authority.workspaceId
+    ) {
+      invalid("runtime binding InstallConfig is not current");
+    }
+    const profile = exactProfile(config.runtimeBindingMaterialization);
+    const declared = declaredBindings(profile);
+    if (!sameStrings(requestedBindings, declared)) {
+      invalid("runtime binding request differs from the DB-owned profile");
+    }
+
+    const values: Record<string, string> = {};
+    for (const generated of profile.generatedSecrets ?? []) {
+      values[generated.binding] = await derivedHexSecret(
+        derivationKey,
+        generatedSecretDerivationParts(
+          profile.contract,
+          authority,
+          config.id,
+          generated.binding,
+        ),
+      );
+    }
+
+    let oidc: ResolvedRuntimeBindingOidc | undefined;
+    if (profile.oidcClient) {
+      const callbackPath = exactCallbackPath(profile.oidcClient.callbackPath);
+      const scopes = oidcAllowedScopes(profile.oidcClient.scopes);
+      const grantDeclarations =
+        config.installExperience?.projections?.filter(
+          (projection) => projection.kind === "oidc_client",
+        ) ?? [];
+      const grant = installExperienceOidcClient(config.installExperience);
+      if (
+        grantDeclarations.length !== 1 ||
+        Object.keys(grantDeclarations[0]!.variables).length !== 0 ||
+        !grant ||
+        grant.callbackPath !== callbackPath ||
+        !sameStrings(oidcAllowedScopes(grant.scopes), scopes)
+      ) {
+        invalid("runtime binding OIDC grant differs from the DB-owned profile");
+      }
+      const clientId = await derivePublicOidcClientId(
+        derivationKey,
+        oidcClientDerivationParts(profile.contract, authority, config.id),
+      );
+      const identity = await deriveCapsulePublicOidcClientIdentity({
+        capsule,
+        installingPrincipalId: canonical.context
+          .installingPrincipalId as TakosumiSubject,
+        publicOrigin,
+        callbackPath,
+        clientId,
+        pairwiseSubjectSecret,
+      });
+      values[profile.oidcClient.issuerBinding] = issuer;
+      values[profile.oidcClient.clientIdBinding] = identity.clientId;
+      values[profile.oidcClient.ownerSubjectBinding] = identity.ownerSubject;
+      values[profile.oidcClient.redirectUriBinding] = identity.redirectUri;
+      oidc = {
+        installingPrincipalId: canonical.context
+          .installingPrincipalId as TakosumiSubject,
+        publicOrigin,
+        callbackPath,
+        scopes,
+        clientId,
+        identity,
+      };
+    }
+
+    if (!sameStrings(Object.keys(values).sort(), declared)) {
+      invalid("runtime materialization did not produce the exact binding set");
+    }
+    return {
+      authority,
+      resourceName,
+      scriptName,
+      publicOrigin,
+      requestedBindings,
+      capsule,
+      config,
+      profile,
+      values,
+      oidc,
+    };
+  };
 
   return {
     async materializeRuntimeBindings(call) {
-      const authority = parseAuthority(call.request);
-      exactIdentifier(call.resourceName, "resourceName");
-      exactIdentifier(call.scriptName, "scriptName");
-      const publicOrigin = exactHttpsOrigin(call.publicOrigin);
-      const requestedBindings = exactBindingSet(call.bindings);
-
-      const canonical = await input.control.resolveContext(authority);
-      if (
-        !canonical.ok ||
-        canonical.context.workspaceId !== authority.workspaceId ||
-        canonical.context.capsuleId !== authority.capsuleId ||
-        canonical.context.runId !== authority.runId ||
-        canonical.context.phase !== authority.phase ||
-        (authority.phase === "apply" &&
-          canonical.context.lifecycleIntent !== "provision") ||
-        (authority.phase === "destroy" &&
-          canonical.context.lifecycleIntent !== "destroy") ||
-        !/^tsub_[A-Za-z0-9_-]{1,128}$/u.test(
-          canonical.context.installingPrincipalId,
-        )
-      ) {
-        invalid("runtime binding authority is not current");
+      return { values: (await resolve(call)).values };
+    },
+    async commitRuntimeBindings(call) {
+      const parsed = parseAuthority(call.request);
+      if (parsed.phase !== "apply") {
+        invalid("runtime binding commit requires Apply phase");
       }
-
-      const capsule = await input.control.getCapsule(authority.capsuleId);
-      if (
-        !capsule ||
-        capsule.id !== authority.capsuleId ||
-        capsule.workspaceId !== authority.workspaceId
-      ) {
-        invalid("runtime binding Capsule is not current");
+      const resolved = await resolve(call);
+      if (resolved.profile.contract === PROFILE_CONTRACT_V1 || !resolved.oidc) {
+        return;
       }
-      const config = await input.control.getInstallConfig(
-        capsule.installConfigId,
+      const executionAuthorityEpoch = exactExecutionAuthorityEpoch(
+        await input.control.getCapsuleExecutionAuthorityEpoch(
+          resolved.capsule.id,
+        ),
+      );
+      const commitAuthorityDigest = await runtimeBindingCommitAuthorityDigest(
+        resolved,
+        executionAuthorityEpoch,
+      );
+      const confirmed = await resolve(call);
+      if (!confirmed.oidc || confirmed.profile.contract !== PROFILE_CONTRACT_V2) {
+        invalid("runtime binding commit authority changed during confirmation");
+      }
+      const confirmedExecutionAuthorityEpoch = exactExecutionAuthorityEpoch(
+        await input.control.getCapsuleExecutionAuthorityEpoch(
+          confirmed.capsule.id,
+        ),
       );
       if (
-        !config ||
-        config.id !== capsule.installConfigId ||
-        config.workspaceId !== authority.workspaceId
+        (await runtimeBindingCommitAuthorityDigest(
+          confirmed,
+          confirmedExecutionAuthorityEpoch,
+        )) !== commitAuthorityDigest
       ) {
-        invalid("runtime binding InstallConfig is not current");
+        invalid("runtime binding commit authority changed during confirmation");
       }
-      const profile = exactProfile(config.runtimeBindingMaterialization);
-      const declared = declaredBindings(profile);
-      if (!sameStrings(requestedBindings, declared)) {
-        invalid("runtime binding request differs from the DB-owned profile");
+      const activationDigest = await oidcClientActivationDigest({
+        workspaceId: confirmed.authority.workspaceId,
+        capsuleId: confirmed.authority.capsuleId,
+        executionAuthorityEpoch: confirmedExecutionAuthorityEpoch,
+        installConfig: confirmed.config,
+      });
+      const registered = await registerCapsulePublicOidcClient({
+        accounts: input.accounts,
+        capsule: confirmed.capsule,
+        installingPrincipalId: confirmed.oidc.installingPrincipalId,
+        issuer,
+        publicOrigin: confirmed.oidc.publicOrigin,
+        callbackPath: confirmed.oidc.callbackPath,
+        scopes: confirmed.oidc.scopes,
+        clientId: confirmed.oidc.clientId,
+        activationDigest,
+        pairwiseSubjectSecret,
+        clock,
+      });
+      if (
+        registered.clientId !== confirmed.oidc.identity.clientId ||
+        registered.ownerSubject !== confirmed.oidc.identity.ownerSubject ||
+        registered.redirectUri !== confirmed.oidc.identity.redirectUri
+      ) {
+        invalid("runtime binding Accounts registration differs from derived values");
       }
-
-      const values: Record<string, string> = {};
-      for (const generated of profile.generatedSecrets ?? []) {
-        values[generated.binding] = await derivedHexSecret(derivationKey, [
-          AUTHORITY_CONTRACT,
-          authority.workspaceId,
-          authority.capsuleId,
-          config.id,
-          generated.binding,
-        ]);
-      }
-
-      if (profile.oidcClient) {
-        const callbackPath = exactCallbackPath(profile.oidcClient.callbackPath);
-        const scopes = oidcAllowedScopes(profile.oidcClient.scopes);
-        const grantDeclarations =
-          config.installExperience?.projections?.filter(
-            (projection) => projection.kind === "oidc_client",
-          ) ?? [];
-        const grant = installExperienceOidcClient(config.installExperience);
-        if (
-          grantDeclarations.length !== 1 ||
-          Object.keys(grantDeclarations[0]!.variables).length !== 0 ||
-          !grant ||
-          grant.callbackPath !== callbackPath ||
-          !sameStrings(oidcAllowedScopes(grant.scopes), scopes)
-        ) {
-          invalid("runtime binding OIDC grant differs from the DB-owned profile");
-        }
-        const clientId = await derivePublicOidcClientId(derivationKey, [
-          "takosumi-runtime-oidc-client-v1",
-          authority.workspaceId,
-          authority.capsuleId,
-          config.id,
-        ]);
-        const identity = await deriveCapsulePublicOidcClientIdentity({
-          capsule,
-          installingPrincipalId: canonical.context
-            .installingPrincipalId as TakosumiSubject,
-          publicOrigin,
-          callbackPath,
-          clientId,
-          pairwiseSubjectSecret,
-        });
-        values[profile.oidcClient.issuerBinding] = issuer;
-        values[profile.oidcClient.clientIdBinding] = identity.clientId;
-        values[profile.oidcClient.ownerSubjectBinding] =
-          identity.ownerSubject;
-        values[profile.oidcClient.redirectUriBinding] = identity.redirectUri;
-      }
-
-      if (!sameStrings(Object.keys(values).sort(), declared)) {
-        invalid("runtime materialization did not produce the exact binding set");
-      }
-      return { values };
     },
     async rollbackRuntimeBindings() {
-      // Values and deterministic OIDC registration are shared by immutable
-      // Worker Versions. A failed upload has no mutation-specific authority to
-      // delete them; the next attempt re-reads and revalidates everything.
+      // Materialization is read-only and v2 commit happens only after upload.
+      // Therefore an upload failure has no Accounts mutation to undo; the next
+      // attempt re-reads and revalidates all authority before any commit.
     },
   };
 }
+
+interface ResolvedRuntimeBindingOidc {
+  readonly installingPrincipalId: TakosumiSubject;
+  readonly publicOrigin: string;
+  readonly callbackPath: string;
+  readonly scopes: readonly string[];
+  readonly clientId: string;
+  readonly identity: Awaited<
+    ReturnType<typeof deriveCapsulePublicOidcClientIdentity>
+  >;
+}
+
+interface ResolvedRuntimeBindingMaterialization {
+  readonly authority: RuntimeBindingAuthority;
+  readonly resourceName: string;
+  readonly scriptName: string;
+  readonly publicOrigin: string;
+  readonly requestedBindings: readonly string[];
+  readonly capsule: NonNullable<
+    Awaited<ReturnType<RuntimeBindingControlLedger["getCapsule"]>>
+  >;
+  readonly config: InstallConfig;
+  readonly profile: RuntimeBindingProfile;
+  readonly values: Readonly<Record<string, string>>;
+  readonly oidc?: ResolvedRuntimeBindingOidc;
+}
+
+type RuntimeBindingProfileContract =
+  | typeof PROFILE_CONTRACT_V1
+  | typeof PROFILE_CONTRACT_V2;
+
+type RuntimeBindingProfile = Omit<
+  InstallConfigRuntimeBindingMaterialization,
+  "contract"
+> & {
+  readonly contract: RuntimeBindingProfileContract;
+};
 
 function parseAuthority(value: unknown): RuntimeBindingAuthority {
   if (!isRecord(value)) invalid("runtime binding authority is invalid");
@@ -238,23 +392,36 @@ function parseAuthority(value: unknown): RuntimeBindingAuthority {
 
 function exactProfile(
   value: InstallConfigRuntimeBindingMaterialization | undefined,
-): InstallConfigRuntimeBindingMaterialization {
+): RuntimeBindingProfile {
   if (!isRecord(value)) invalid("runtime binding profile is missing");
   exactKeys(value, ["contract"], [
     "generatedSecrets",
     "oidcClient",
     "runtimeSecretFile",
   ]);
-  if (value.contract !== PROFILE_CONTRACT) invalid("runtime binding profile is invalid");
-  if (!Array.isArray(value.generatedSecrets) || value.generatedSecrets.length > 16) {
+  if (
+    value.contract !== PROFILE_CONTRACT_V1 &&
+    value.contract !== PROFILE_CONTRACT_V2
+  ) {
+    invalid("runtime binding profile is invalid");
+  }
+  if (
+    (value.contract === PROFILE_CONTRACT_V1 &&
+      !Array.isArray(value.generatedSecrets)) ||
+    (value.generatedSecrets !== undefined &&
+      (!Array.isArray(value.generatedSecrets) ||
+        value.generatedSecrets.length > 16))
+  ) {
     invalid("generated secret profile is invalid");
   }
-  for (const entry of value.generatedSecrets) {
-    if (!isRecord(entry)) invalid("generated secret profile is invalid");
-    exactKeys(entry, ["binding", "bytes", "encoding"]);
-    exactBinding(entry.binding);
-    if (entry.bytes !== 32 || entry.encoding !== "hex") {
-      invalid("generated secret profile is invalid");
+  if (Array.isArray(value.generatedSecrets)) {
+    for (const entry of value.generatedSecrets) {
+      if (!isRecord(entry)) invalid("generated secret profile is invalid");
+      exactKeys(entry, ["binding", "bytes", "encoding"]);
+      exactBinding(entry.binding);
+      if (entry.bytes !== 32 || entry.encoding !== "hex") {
+        invalid("generated secret profile is invalid");
+      }
     }
   }
   if (value.oidcClient !== undefined) {
@@ -275,17 +442,83 @@ function exactProfile(
     oidcAllowedScopes(value.oidcClient.scopes);
   }
   declaredBindings(value);
-  return value;
+  return value as RuntimeBindingProfile;
 }
 
 function declaredBindings(
-  profile: InstallConfigRuntimeBindingMaterialization,
+  profile: RuntimeBindingProfile,
 ): string[] {
   const values = [
     ...(profile.generatedSecrets ?? []).map((entry) => entry.binding),
     ...(profile.oidcClient ? oidcBindingNames(profile.oidcClient) : []),
   ];
   return exactBindingSet(values);
+}
+
+function generatedSecretDerivationParts(
+  profileContract: RuntimeBindingProfileContract,
+  authority: RuntimeBindingAuthority,
+  installConfigId: string,
+  binding: string,
+): readonly string[] {
+  return profileContract === PROFILE_CONTRACT_V1
+    ? [
+        AUTHORITY_CONTRACT,
+        authority.workspaceId,
+        authority.capsuleId,
+        installConfigId,
+        binding,
+      ]
+    : [
+        "takosumi.runtime-generated-secret/v2",
+        authority.workspaceId,
+        authority.capsuleId,
+        binding,
+      ];
+}
+
+function oidcClientDerivationParts(
+  profileContract: RuntimeBindingProfileContract,
+  authority: RuntimeBindingAuthority,
+  installConfigId: string,
+): readonly string[] {
+  return profileContract === PROFILE_CONTRACT_V1
+    ? [
+        "takosumi-runtime-oidc-client-v1",
+        authority.workspaceId,
+        authority.capsuleId,
+        installConfigId,
+      ]
+    : [
+        "takosumi-runtime-oidc-client-v2",
+        authority.workspaceId,
+        authority.capsuleId,
+      ];
+}
+
+async function runtimeBindingCommitAuthorityDigest(
+  resolved: ResolvedRuntimeBindingMaterialization,
+  executionAuthorityEpoch: number,
+): Promise<string> {
+  return await stableJsonDigest({
+    contract: "takosumi.runtime-binding-commit-authority/v1",
+    authority: resolved.authority,
+    resourceName: resolved.resourceName,
+    scriptName: resolved.scriptName,
+    publicOrigin: resolved.publicOrigin,
+    bindings: resolved.requestedBindings,
+    capsule: resolved.capsule,
+    executionAuthorityEpoch,
+    installConfig: resolved.config,
+    profile: resolved.profile,
+  });
+}
+
+function exactExecutionAuthorityEpoch(value: number | undefined): number {
+  if (!Number.isSafeInteger(value) || value === undefined || value < 1) {
+    invalid("runtime binding Capsule execution authority is not current");
+  }
+  return value;
 }
 
 function oidcBindingNames(

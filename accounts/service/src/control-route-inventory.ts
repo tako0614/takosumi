@@ -379,15 +379,9 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
-      path: "/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/file",
-      summary: "Read one bounded SourceSnapshot presentation file",
-      auth: "account-session",
-    },
-    {
-      method: "GET",
-      path: "/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/deployment-profiles",
+      path: "/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules",
       summary:
-        "List DB-owned deployment profiles proven against one SourceSnapshot manifest",
+        "List install module directories and provider requirements scanned from one SourceSnapshot tree",
       auth: "account-session",
     },
     {

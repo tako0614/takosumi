@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://takosumi.com/docs/schemas/repository-manifest-v2.4.schema.json",
+  "title": "Takosumi repository manifest v2.4",
+  "description": "Closed structural schema for .well-known/takosumi.json at apiVersion takosumi.com/v2.4. Version 2.4 retains the v2.3 wire and permits binding-delivered OIDC ownerSubject alongside the existing credential-free sourceBuild proposal. The Takosumi parser additionally enforces the semantic constraints listed in x-takosumi-semanticConstraints.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "install"],
+  "properties": {
+    "apiVersion": { "const": "takosumi.com/v2.4" },
+    "kind": { "const": "Repository" },
+    "install": { "$ref": "#/$defs/install" }
+  },
+  "additionalProperties": false,
+  "x-takosumi-semanticConstraints": [
+    "each module may declare at most 8 requires entries whose kind is secret.generated",
+    "JSON values in Interface documents and literal inputs are limited to recursive depth 32",
+    "module input names, roles, requirement singleton kinds, interface.consume keys, delivery targets, feature ids, and feature input claims are unique within their documented scopes",
+    "Interface keys and names are unique and one Output name cannot request conflicting public types",
+    "Interface access.resourceUriInput names a declared Interface input",
+    "repository public presentation text and Interface JSON contain no known secret-like or host-authority material",
+    "interface.consume selectors resolve to exactly one Workspace-owned Resolved Interface and never carry an Interface id, endpoint, provider name, or credential",
+    "sourceBuild has 1-8 argv commands and 1-16 safe non-dot relative outputs; commands carry no env or credential fields",
+    "binding-delivered identity.oidc uses exactly issuerUrl, clientId, ownerSubject, and redirectUri slots; variable delivery retains issuerUrl, accountsUrl, clientId, and redirectUri"
+  ],
+  "$defs": {
+    "consumedInterfaceRequirement": {
+      "type": "object",
+      "required": ["kind", "key", "interface", "permissions", "delivery"],
+      "properties": {
+        "kind": { "const": "interface.consume" },
+        "key": {
+          "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/token128"
+        },
+        "interface": {
+          "type": "object",
+          "required": ["type", "version"],
+          "properties": {
+            "type": {
+              "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/token128"
+            },
+            "version": {
+              "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/token128"
+            }
+          },
+          "additionalProperties": false
+        },
+        "permissions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[\\u0021\\u0023-\\u005b\\u005d-\\u007e]+$"
+          }
+        },
+        "delivery": {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/token128"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "oidcDelivery": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["variables"],
+          "properties": {
+            "variables": {
+              "allOf": [
+                {
+                  "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/variableTargets"
+                },
+                {
+                  "propertyNames": {
+                    "enum": [
+                      "issuerUrl",
+                      "accountsUrl",
+                      "clientId",
+                      "redirectUri"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["bindings"],
+          "properties": {
+            "bindings": {
+              "allOf": [
+                {
+                  "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/bindingTargets"
+                },
+                {
+                  "propertyNames": {
+                    "enum": [
+                      "issuerUrl",
+                      "clientId",
+                      "ownerSubject",
+                      "redirectUri"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "requirement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "callbackPath", "deliver"],
+          "properties": {
+            "kind": { "const": "identity.oidc" },
+            "callbackPath": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^/(?!/)(?!.*[?#\\\\])(?!.*/\\.\\.?(?:/|$)).*$"
+            },
+            "scopes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/token128"
+              }
+            },
+            "deliver": { "$ref": "#/$defs/oidcDelivery" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "deliver"],
+          "properties": {
+            "kind": { "const": "secret.generated" },
+            "bytes": {
+              "type": "integer",
+              "minimum": 16,
+              "maximum": 64
+            },
+            "encoding": { "enum": ["hex", "base64url"] },
+            "deliver": {
+              "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/secretDelivery"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "deliver"],
+          "properties": {
+            "kind": { "const": "http.endpoint" },
+            "deliver": {
+              "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/endpointDelivery"
+            }
+          },
+          "additionalProperties": false
+        },
+        { "$ref": "#/$defs/consumedInterfaceRequirement" }
+      ]
+    },
+    "module": {
+      "type": "object",
+      "required": ["inputs"],
+      "properties": {
+        "inputs": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/input"
+          }
+        },
+        "requires": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/requirement" },
+          "allOf": [
+            {
+              "contains": {
+                "type": "object",
+                "required": ["kind"],
+                "properties": { "kind": { "const": "secret.generated" } }
+              },
+              "minContains": 0,
+              "maxContains": 8
+            }
+          ]
+        },
+        "features": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/feature"
+          }
+        },
+        "interfaces": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/interfaceDeclaration"
+          }
+        },
+        "sourceBuild": {
+          "$ref": "#/$defs/sourceBuild"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sourceBuildCommand": {
+      "type": "object",
+      "required": ["argv"],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^[^\\u0000]*$"
+          }
+        },
+        "workingDirectory": {
+          "$ref": "#/$defs/sourceBuildRelativePath"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sourceBuildRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!.*[\\u0000-\\u001F\\u007F\\u2028\\u2029])(?!\\s)(?!.*\\s$)(?:\\.|(?!/|\\./|\\.\\.?$|\\.\\.?/|[A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*/\\.\\.?(?:/|$))(?!.*/$).+)$"
+    },
+    "sourceBuildOutputPath": {
+      "allOf": [
+        { "$ref": "#/$defs/sourceBuildRelativePath" },
+        { "not": { "const": "." } }
+      ]
+    },
+    "sourceBuild": {
+      "type": "object",
+      "required": ["commands", "outputs"],
+      "properties": {
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/sourceBuildCommand" }
+        },
+        "outputs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/sourceBuildOutputPath"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "install": {
+      "type": "object",
+      "required": ["modules"],
+      "properties": {
+        "modules": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 32,
+          "propertyNames": {
+            "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/modulePath"
+          },
+          "additionalProperties": { "$ref": "#/$defs/module" }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

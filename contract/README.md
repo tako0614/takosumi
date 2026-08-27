@@ -1,98 +1,87 @@
 # Takosumi Contract
 
-TypeScript DTOs and wire types for the OpenTofu-native Takosumi control-plane
-contract.
+`@takosjp/takosumi-contract` is the curated, versioned TypeScript wire
+contract for independent applications that connect to Takosumi. It is not the
+Takosumi source-tree contract facade, an SDK for operating the control plane,
+or a reference implementation.
 
-The target public contract is centered on the final Takosumi model:
+Takos and Takosumi build and release independently. An application may depend
+on this package, but must not require a Takosumi source checkout, private
+Accounts package, service implementation, provider adapter, or matching
+Takosumi release commit.
 
-- `Workspace` - personal purpose, resource, and security context for projects,
-  provider connections, secrets, state isolation, and audit. Membership and
-  sharing are optional extensions for advanced collaboration.
-- `Project` - one product, service, application, or infrastructure group.
-- `Capsule` - one Git-hosted OpenTofu/Terraform module execution unit.
-- `Source` - Git URL/ref/path registration and commit-pinned source identity.
-- `ProviderConnection` - provider credential configuration stored by Takosumi.
-- `CredentialRecipe` - provider-specific env/file/pre-run action definition for
-  running an existing OpenTofu/Terraform provider as-is.
-- `ProviderBinding` - provider address or alias to ProviderConnection mapping.
-- `Secret` - encrypted Stack-flow backing material; secret values are
-  write-only and redacted from logs and public records. Current v1alpha1
-  material is sealed through ProviderConnection registration; it does not
-  publish a standalone Secret API or bundled `Secret` Resource Shape.
-- `Run` / `Plan` / `Apply` / `Destroy` - execution records for init, validate,
-  plan, apply, destroy, refresh, and output flows.
-- `StateVersion` - persisted Capsule state generation.
-- `Output` - captured `tofu output -json`, projected for UI and downstream
-  inputs without exposing secret literals.
-- `Runner` - local/docker/remote/operator/cloud execution boundary for checkout,
-  OpenTofu execution, state sync, output extraction, and cleanup.
-- `AuditEvent` - actor/action/target/result evidence.
-- `Operator` - the party operating a Takosumi for Operator instance.
+## Entry points
 
-`Workspace.displayName` is the primary human-facing identity. Its `handle` is a
-stable, globally unique public API identifier for API and CLI callers; it may be
-supplied by those callers but is not a required user choice. First-party
-dashboard flows generate handles and surface `@handle` only for disambiguation
-or advanced details. Concrete environments such as `production` and `preview`
-belong to Capsules, not Workspaces.
+| Import | Public contract |
+| --- | --- |
+| `@takosjp/takosumi-contract` | The unchanged 2.0 portable runtime entrypoint from `runtime.ts`. Version 2.1 adds no new root exports. |
+| `@takosjp/takosumi-contract/background-events` | Portable background-event ABI. |
+| `@takosjp/takosumi-contract/managed-runtime-connections` | Portable managed-runtime connection contract. |
+| `@takosjp/takosumi-contract/managed-relational-runtime` | Portable managed relational-runtime contract. |
+| `@takosjp/takosumi-contract/discovery` | Public API, well-known, and capability paths plus discovery DTOs and builders. |
+| `@takosjp/takosumi-contract/interface-types` | Dependency-free Interface protocol type, version, and permission tokens. |
+| `@takosjp/takosumi-contract/runtime-interfaces` | App-facing `Interface` and `InterfaceBinding` wire views, constituent types, and lexical validators. |
+| `@takosjp/takosumi-contract/notification-pushers` | Generic notification pusher registration and gateway wire contract. |
+| `@takosjp/takosumi-contract/identity-oidc` | Standard same-origin Takosumi Accounts OIDC paths for installed clients. |
 
-The root contract facade exports canonical names only. Internal stores may still
-read old physical columns while operator data is migrated, but that storage
-detail is not part of the public contract. Public code should use `Workspace`,
-`Capsule`, `StateVersion`, `Output`, `Run`, `ProviderConnection`,
-`CredentialRecipe`, and `ProviderBinding` directly.
+The package uses an exact export map. There is no wildcard subpath.
 
-Account-plane workload compatibility shapes remain internal and are not
-re-exported from the public deploy-control contract facade.
+The package is distributed under the MIT License independently from the
+AGPL-3.0-only Takosumi service implementation.
 
-Mobile delivery remains product-owned. `notification-pushers.ts` is the
-portable client-to-host registration contract for new mobile shells; Takosumi
-does not define a generic push service, deployment target, or Resource Shape.
-`mobile.ts` also retains typed `MobilePushHostRegistration*` DTOs and a strict
-parser as a wire-compatibility surface for product hosts that still expose a
-native-token registration route. The shared mobile kit does not advertise or
-call that compatibility route, and product-specific token storage and delivery
-stay in the product host.
+## Example
 
-Repositories remain plain OpenTofu modules. Source identity comes from the
-configured Git URL, ref, and module path plus the resolved commit. A repository
-may publish the optional general `.well-known/takosumi.json` manifest using the
-closed `apiVersion: takosumi.com/v1alpha1`, `kind: Repository` envelope. The
-current version defines only `install.modules`; it does not accept `$schema`,
-the retired install-only `schemaVersion`, or empty reserved sections. Takosumi
-compiles that same-commit install proposal into a DB-owned `InstallConfig`.
-The file cannot select providers, credentials, targets, billing, permissions,
-or host execution authority. OpenTofu Outputs remain ordinary state results;
-Takosumi exposes or consumes selected values only through explicit
-service-side Output allowlists and Interface input mappings.
+```ts
+import {
+  TAKOSUMI_API_VERSION,
+  createTakosumiWellKnownDocument,
+} from "@takosjp/takosumi-contract/discovery";
+import {
+  UI_SURFACE_INTERFACE_TYPE,
+  UI_SURFACE_OPEN_PERMISSION,
+} from "@takosjp/takosumi-contract/interface-types";
+import type {
+  Interface,
+  InterfaceBinding,
+} from "@takosjp/takosumi-contract/runtime-interfaces";
+import { TAKOSUMI_ACCOUNTS_USERINFO_PATH } from "@takosjp/takosumi-contract/identity-oidc";
 
-Platform launch evidence has a provider-neutral OSS baseline. Optional host or
-edition requirements use the public, versioned
-`PlatformReadinessContribution` contract. A contribution declares requirement
-groups, evidence schemas, consistency rules, and redaction patterns as data;
-the generic validator composes them through a duplicate-rejecting registry and
-embeds a copy of the selected definitions in the readiness document. Validation
-still requires the owner-controlled canonical contribution input and compares
-that copy exactly; a document cannot grant itself a weaker profile by retaining
-only an id/version claim. Extension code is not a second validation authority,
-and absent trusted contributions add no requirements.
-Optional `collectionClassHints` only maps contribution-owned evidence types to
-the fixed generic collector classes; it cannot define a new collector DSL or
-attach host vocabulary to the OSS baseline.
+const discovery = createTakosumiWellKnownDocument({
+  origin: "https://operator-selected.example",
+});
 
-The OSS contract runs existing providers through ProviderConnection,
-CredentialRecipe, ProviderBinding, and per-run env/file injection. It must not
-define complete provider-compatible cloud APIs or official managed capacity as
-OSS product concepts. Compatibility API profiles are scoped capabilities such as
-`compat.s3.v1`, `compat.oci.v1`, `compat.cloudevents.v1`, and
-`compat.kubernetes.crd.v1`; operator-provided deployment targets, billing
-enforcement, quota, usage rating, support, and resource backends belong to
-Takosumi for Operator / Takosumi hosted service composition.
+console.log(
+  discovery.api_versions[0] === TAKOSUMI_API_VERSION,
+  UI_SURFACE_INTERFACE_TYPE,
+  UI_SURFACE_OPEN_PERMISSION,
+  TAKOSUMI_ACCOUNTS_USERINFO_PATH,
+);
 
-A CredentialRecipe auth mode may carry localized `presentation`, `inputHints`,
-and an HTTPS setup guide. Those fields let any service-installed recipe render
-the same generic Provider Connection form without a dashboard provider catalog.
-They are presentation only: provider admission and credential materialization
-remain exclusively defined by the recipe's explicit `env`, `files`, and
-`preRun` contract, while providers without a guided recipe remain valid through
-the generic-env path.
+declare const runtimeInterface: Interface;
+declare const binding: InterfaceBinding;
+void [runtimeInterface, binding];
+```
+
+## Boundary
+
+Discovery reports public paths and capabilities that an operator actually
+provides. It does not select application infrastructure or grant install,
+provider, resource, Run, Apply, Destroy, or lifecycle authority. A repository
+manifest may request a generic Takosumi-provided capability and name its module
+variable delivery targets, but the application's OpenTofu module remains the
+authority for its provider and resource graph.
+
+The runtime Interface entrypoint is a consumer view. Host-only input resolution,
+materialization markers, reconciliation provenance, projection sinks, Capsule
+blueprints, and create/status/token issuance requests stay inside the Takosumi
+source contract. Interface display parsing and security policy remain
+application-owned and are not exported here.
+
+The OIDC entrypoint publishes paths only. The issuer origin, client
+registration, scopes, authorization decisions, credentials, and account
+service remain operator- or Accounts-owned.
+
+The package does not export `contract/index.ts`, repository install DTOs,
+`InstallConfig`, provider bindings/adapters, Run or state lifecycles,
+internal APIs or crypto, IP classification, private Accounts code, root
+generation, graph/policy libraries, or reference implementations.

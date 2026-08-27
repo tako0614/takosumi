@@ -582,13 +582,48 @@ function operationsFixture() {
       source: {
         id: "src_git",
         workspaceId: workspace.id,
-        kind: "git",
-        git: { url: "https://example.test/module.git", ref: "main" },
+        name: "module",
+        url: "https://example.test/module.git",
+        defaultRef: "main",
+        defaultPath: ".",
+        status: "active",
+        autoSync: false,
         createdAt: workspace.createdAt,
         updatedAt: workspace.updatedAt,
       },
     }),
-    listSourceSnapshots: async () => ({ snapshots: [] }),
+    listSourceSnapshots: async () => ({
+      snapshots: [
+        {
+          id: "snap_git",
+          origin: "git",
+          workspaceId: workspace.id,
+          sourceId: "src_git",
+          url: "https://example.test/module.git",
+          ref: "main",
+          resolvedCommit: "a".repeat(40),
+          path: ".",
+          archiveRef: "source-archive/snap_git",
+          archiveDigest: `sha256:${"b".repeat(64)}`,
+          archiveSizeBytes: 1,
+          repositoryInstallMetadata: { status: "absent" },
+          repositoryManifest: { status: "absent" },
+          repositoryModules: {
+            status: "ready",
+            scopePath: ".",
+            modules: [
+              {
+                path: ".",
+                providerPackages: [],
+                rootProviderRequirements: [],
+              },
+            ],
+          },
+          fetchedByRunId: "run_sync",
+          fetchedAt: workspace.createdAt,
+        },
+      ],
+    }),
     capsules: {
       getCapsule: async () => ({
         id: "cap_1",

@@ -8,8 +8,7 @@ import {
 import {
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
-  PORTABLE_SOURCE_OPTIONS_COMMIT,
-  PORTABLE_SOURCE_OPTION_DOCUMENTS,
+  PORTABLE_SOURCE_COMMIT,
 } from "./fixture-data.ts";
 import { monitorDashboardTraffic } from "./traffic-monitor.ts";
 import {
@@ -223,10 +222,7 @@ function workspaceTrigger(page: Page) {
     .first();
 }
 
-type SourceOptionsFixture =
-  (typeof PORTABLE_SOURCE_OPTION_DOCUMENTS)[keyof typeof PORTABLE_SOURCE_OPTION_DOCUMENTS];
-
-const SOURCE_OPTIONS_DIGEST = `sha256:${"1".repeat(64)}`;
+const SOURCE_ARCHIVE_DIGEST = `sha256:${"1".repeat(64)}`;
 
 interface SourceCreateFixtureState {
   readonly sourceListReads: string[];
@@ -240,135 +236,17 @@ function expectSingleSourceCreate(state: SourceCreateFixtureState): void {
   expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
 }
 
-/** Stub only the public source/snapshot projections needed by the real chooser. */
-async function stubSourceOptionsRead(
-  page: Page,
-  fixture: SourceOptionsFixture,
-): Promise<SourceCreateFixtureState> {
-  const sourceId = `src_options_${fixture.metadata.name}`;
-  const snapshotId = `snap_options_${fixture.metadata.name}`;
-  const syncRunId = `run_options_${fixture.metadata.name}`;
-  const fileText = JSON.stringify(fixture);
-  const state: SourceCreateFixtureState = {
-    sourceListReads: [],
-    sourcePosts: [],
-  };
-  await page.route("**/api/v1/**", async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-    const path = url.pathname;
-    if (
-      path === "/api/v1/sources" &&
-      request.method() === "GET" &&
-      url.search === "?workspaceId=ws_alpha&limit=100"
-    ) {
-      state.sourceListReads.push(`${path}${url.search}`);
-      return route.fulfill({ json: { sources: [] } });
-    }
-    if (path === "/api/v1/sources" && request.method() === "POST") {
-      const body = request.postDataJSON() as {
-        readonly workspaceId: string;
-        readonly name: string;
-        readonly url: string;
-        readonly defaultRef?: string;
-        readonly defaultPath?: string;
-        readonly autoSync?: boolean;
-      };
-      state.sourcePosts.push(path);
-      return route.fulfill({
-        json: {
-          source: {
-            id: sourceId,
-            workspaceId: body.workspaceId,
-            name: body.name,
-            url: body.url,
-            defaultRef: body.defaultRef ?? "HEAD",
-            defaultPath: body.defaultPath ?? ".",
-            status: "active",
-            autoSync: body.autoSync ?? false,
-            createdAt: "2026-08-01T00:00:00.000Z",
-            updatedAt: "2026-08-01T00:00:00.000Z",
-          },
-          hookSecret: "fixture-only",
-        },
-      });
-    }
-    if (
-      path === `/api/v1/sources/${sourceId}/sync` &&
-      request.method() === "POST"
-    ) {
-      return route.fulfill({ json: { run: { id: syncRunId } } });
-    }
-    if (path === `/api/v1/runs/${syncRunId}`) {
-      return route.fulfill({
-        json: {
-          run: {
-            id: syncRunId,
-            workspaceId: "ws_alpha",
-            sourceId,
-            type: "source_sync",
-            status: "succeeded",
-            sourceSnapshotId: snapshotId,
-            createdBy: "portable-e2e",
-            createdAt: "2026-08-01T00:00:00.000Z",
-          },
-        },
-      });
-    }
-    if (path === `/api/v1/sources/${sourceId}/snapshots`) {
-      return route.fulfill({
-        json: {
-          snapshots: [
-            {
-              id: snapshotId,
-              origin: "git",
-              workspaceId: "ws_alpha",
-              sourceId,
-              url: fixture.options[0]!.source.url,
-              ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
-              resolvedCommit: PORTABLE_SOURCE_OPTIONS_COMMIT,
-              path: ".",
-              archiveRef: "fixture",
-              archiveDigest: SOURCE_OPTIONS_DIGEST,
-              archiveSizeBytes: fileText.length,
-              fetchedByRunId: syncRunId,
-              fetchedAt: "2026-08-01T00:00:00.000Z",
-            },
-          ],
-        },
-      });
-    }
-    if (path === `/api/v1/sources/${sourceId}/snapshots/${snapshotId}/file`) {
-      return route.fulfill({
-        json: {
-          sourceSnapshotId: snapshotId,
-          path: url.searchParams.get("path"),
-          text: fileText,
-          digest: SOURCE_OPTIONS_DIGEST,
-          sizeBytes: fileText.length,
-        },
-      });
-    }
-    return route.fallback();
-  });
-  return state;
-}
-
 interface ProviderDestinationFixtureState extends SourceCreateFixtureState {
   readonly mutations: string[];
   readonly compatibilityBodies: unknown[];
-  readonly profileDiscoveryRequests: string[];
+  readonly installModuleRequests: string[];
+  readonly sourceCreateBodies: Record<string, unknown>[];
   bindingBody?: { readonly bindings?: readonly Record<string, unknown>[] };
 }
 
-interface ProviderDestinationFixtureOptions {
-  readonly deploymentProfiles?: readonly {
-    readonly key: string;
-    readonly label: { readonly ja: string; readonly en: string };
-    readonly description: { readonly ja: string; readonly en: string };
-    readonly order: number;
-    readonly recommended: boolean;
-  }[];
+interface ProviderDestinationFixtureCoordinates {
+  readonly sourcePath?: string;
+  readonly modulePath?: string;
 }
 
 /** Stub a complete manual source check while retaining mutation ordering. */
@@ -377,18 +255,21 @@ async function stubProviderDestinationFixture(
   providerConnections = PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   compatibilityProviders: readonly Record<string, unknown>[] = [
     {
-      source: "cloudflare/cloudflare",
-      aliases: [],
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "cloudflare",
       allowed: true,
       credentialRequired: true,
     },
   ],
-  options: ProviderDestinationFixtureOptions = {},
+  coordinates: ProviderDestinationFixtureCoordinates = {},
 ): Promise<ProviderDestinationFixtureState> {
+  const sourcePath = coordinates.sourcePath ?? ".";
+  const modulePath = coordinates.modulePath ?? ".";
   const state: ProviderDestinationFixtureState = {
     mutations: [],
     compatibilityBodies: [],
-    profileDiscoveryRequests: [],
+    installModuleRequests: [],
+    sourceCreateBodies: [],
     sourceListReads: [],
     sourcePosts: [],
   };
@@ -431,6 +312,7 @@ async function stubProviderDestinationFixture(
         readonly autoSync?: boolean;
       };
       state.sourcePosts.push(path);
+      state.sourceCreateBodies.push(body);
       sourceName = body.name;
       sourceUrl = body.url;
       return route.fulfill({
@@ -483,11 +365,11 @@ async function stubProviderDestinationFixture(
               workspaceId: "ws_alpha",
               sourceId,
               url: sourceUrl,
-              ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
-              resolvedCommit: PORTABLE_SOURCE_OPTIONS_COMMIT,
-              path: ".",
+              ref: PORTABLE_SOURCE_COMMIT,
+              resolvedCommit: PORTABLE_SOURCE_COMMIT,
+              path: sourcePath,
               archiveRef: "fixture",
-              archiveDigest: SOURCE_OPTIONS_DIGEST,
+              archiveDigest: SOURCE_ARCHIVE_DIGEST,
               archiveSizeBytes: 1,
               fetchedByRunId: syncRunId,
               fetchedAt: "2026-08-01T00:00:00.000Z",
@@ -498,14 +380,23 @@ async function stubProviderDestinationFixture(
     }
     if (
       path ===
-        `/api/v1/sources/${sourceId}/snapshots/${snapshotId}/deployment-profiles` &&
+        `/api/v1/sources/${sourceId}/snapshots/${snapshotId}/install-modules` &&
       request.method() === "GET"
     ) {
-      state.profileDiscoveryRequests.push(path);
+      state.installModuleRequests.push(path);
       return route.fulfill({
-        json: options.deploymentProfiles
-          ? { status: "ready", profiles: options.deploymentProfiles }
-          : { status: "none", profiles: [] },
+        json: {
+          status: "ready",
+          sourceSnapshotId: snapshotId,
+          scopePath: sourcePath,
+          modules: [
+            {
+              path: modulePath,
+              providerPackages: [],
+              rootProviderRequirements: [],
+            },
+          ],
+        },
       });
     }
     if (path === `/api/v1/sources/${sourceId}/compatibility-check`) {
@@ -516,7 +407,41 @@ async function stubProviderDestinationFixture(
             id: "report_provider_destination_e2e",
             level: "ready",
             findings: [],
-            providers: compatibilityProviders,
+            providerPackages: [
+              ...new Map(
+                compatibilityProviders
+                  .filter((provider) => typeof provider.source === "string")
+                  .map((provider) => [
+                    provider.source,
+                    {
+                      source: provider.source,
+                      ...(typeof provider.version === "string"
+                        ? { version: provider.version }
+                        : {}),
+                      allowed: provider.allowed !== false,
+                    },
+                  ]),
+              ).values(),
+            ],
+            rootProviderRequirements: compatibilityProviders
+              .filter(
+                (provider) =>
+                  typeof provider.source === "string" &&
+                  typeof provider.moduleLocalName === "string",
+              )
+              .map((provider) => ({
+                source: provider.source,
+                moduleLocalName: provider.moduleLocalName,
+                ...(typeof provider.childAlias === "string"
+                  ? { childAlias: provider.childAlias }
+                  : {}),
+                ...(typeof provider.version === "string"
+                  ? { version: provider.version }
+                  : {}),
+                ...(provider.credentialRequired === true
+                  ? { credentialRequired: true }
+                  : {}),
+              })),
             resources: [],
             rootModuleVariables: [],
           },
@@ -874,131 +799,6 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
-  test("opening a repository chooser link performs no control-plane mutation", async ({
-    page,
-  }) => {
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const mutations: string[] = [];
-    page.on("request", (request) => {
-      if (
-        shouldRecordControlPlaneMutation(
-          mode,
-          mutationOrigin,
-          request.url(),
-          request.method(),
-        )
-      ) {
-        mutations.push(
-          `${request.method()} ${new URL(request.url()).pathname}`,
-        );
-      }
-    });
-    const query = new URLSearchParams({
-      kind: "capsule-source-options",
-      git: "https://github.com/example/choices.git",
-      ref: "0123456789abcdef0123456789abcdef01234567",
-      path: "takosumi/install-options.json",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await expect(
-      page.getByRole("heading", {
-        name: /追加候補を確認|Review the available choices/u,
-      }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("button", {
-        name: /候補を読み込む|Load choices/u,
-      }),
-    ).toBeVisible();
-    expect(
-      mutations,
-      "opening the link must not create a Source or Run",
-    ).toEqual([]);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("Takos source options keep Portable cloud and Cloudflare direct distinct", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the immutable product chooser fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    await page.addInitScript(() => {
-      localStorage.setItem("takosumi.currentWorkspaceId", "ws_alpha");
-    });
-    const fixture = PORTABLE_SOURCE_OPTION_DOCUMENTS.takos;
-    const state = await stubSourceOptionsRead(page, fixture);
-    const query = new URLSearchParams({
-      kind: "capsule-source-options",
-      git: fixture.options[0]!.source.url,
-      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
-      path: "install-options.json",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await page
-      .getByRole("button", { name: /候補を読み込む|Load choices/u })
-      .click();
-
-    const cards = page.locator(".iv-entry-card");
-    await expect(page.getByRole("heading", { name: fixture.metadata.title })).toBeVisible();
-    await expect(cards).toHaveCount(fixture.options.length);
-    await expect(cards.nth(0)).toContainText("Portable cloud");
-    await expect(cards.nth(1)).toContainText("Cloudflare (direct)");
-    await expect(cards.nth(0)).toContainText(fixture.options[0]!.source.url);
-    await expect(cards.nth(1)).toContainText(fixture.options[1]!.source.url);
-    await expect(cards.nth(0)).not.toContainText("github.com/tako0614/yurucommu");
-    await expect(cards.nth(1)).not.toContainText("github.com/tako0614/yurucommu");
-    await expect(page.locator(".iv-entry-card").filter({ hasText: "Yurucommu" })).toHaveCount(0);
-    expectSingleSourceCreate(state);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("Yurucommu source options keep Takosumi hosted service and Cloudflare direct distinct", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the immutable product chooser fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    await page.addInitScript(() => {
-      localStorage.setItem("takosumi.currentWorkspaceId", "ws_alpha");
-    });
-    const fixture = PORTABLE_SOURCE_OPTION_DOCUMENTS.yurucommu;
-    const state = await stubSourceOptionsRead(page, fixture);
-    const query = new URLSearchParams({
-      kind: "capsule-source-options",
-      git: fixture.options[0]!.source.url,
-      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
-      path: "install-options.json",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await page
-      .getByRole("button", { name: /候補を読み込む|Load choices/u })
-      .click();
-
-    const cards = page.locator(".iv-entry-card");
-    await expect(page.getByRole("heading", { name: fixture.metadata.title })).toBeVisible();
-    await expect(cards).toHaveCount(fixture.options.length);
-    await expect(cards.nth(0)).toContainText("Takosumi hosted service");
-    await expect(cards.nth(1)).toContainText("Cloudflare (direct)");
-    await expect(cards.nth(0)).toContainText(fixture.options[0]!.source.url);
-    await expect(cards.nth(1)).toContainText(fixture.options[1]!.source.url);
-    await expect(cards.nth(0)).not.toContainText("github.com/tako0614/takos.git");
-    await expect(cards.nth(1)).not.toContainText("github.com/tako0614/takos.git");
-    await expect(page.locator(".iv-entry-card").filter({ hasText: "Portable cloud" })).toHaveCount(0);
-    expectSingleSourceCreate(state);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
   test("supported resources show every compatible Host/account before Plan", async ({
     page,
   }) => {
@@ -1025,8 +825,8 @@ test.describe("Takosumi dashboard browser surface", () => {
       [accountA, accountB],
       [
         {
-          source: "cloudflare/cloudflare-v02",
-          aliases: [],
+          source: "registry.opentofu.org/cloudflare/cloudflare-v02",
+          moduleLocalName: "cloudflare-v02",
           allowed: true,
           credentialRequired: true,
         },
@@ -1034,7 +834,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     const query = new URLSearchParams({
       git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
+      ref: PORTABLE_SOURCE_COMMIT,
       path: ".",
       name: "cloudflare-service",
     });
@@ -1059,7 +859,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       .poll(() => state.bindingBody?.bindings)
       .toEqual([
         {
-          provider: "cloudflare/cloudflare-v02",
+          provider: "registry.opentofu.org/cloudflare/cloudflare-v02",
           moduleLocalName: "cloudflare-v02",
           connectionId: "pc_cloudflare_account_b_v02",
         },
@@ -1099,7 +899,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     const state = await stubProviderDestinationFixture(page, []);
     const query = new URLSearchParams({
       git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
+      ref: PORTABLE_SOURCE_COMMIT,
       path: ".",
       name: "cloudflare-service",
     });
@@ -1160,14 +960,14 @@ test.describe("Takosumi dashboard browser surface", () => {
       [cloudflareHost, awsPrimary, awsSecondary],
       [
         {
-          source: "cloudflare/cloudflare-v02",
-          aliases: [],
+          source: "registry.opentofu.org/cloudflare/cloudflare-v02",
+          moduleLocalName: "cloudflare-v02",
           allowed: true,
           credentialRequired: true,
         },
         {
-          source: "hashicorp/aws",
-          aliases: [],
+          source: "registry.opentofu.org/hashicorp/aws",
+          moduleLocalName: "aws",
           allowed: true,
           credentialRequired: true,
         },
@@ -1175,7 +975,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     const query = new URLSearchParams({
       git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
+      ref: PORTABLE_SOURCE_COMMIT,
       path: ".",
       name: "cloudflare-service",
     });
@@ -1203,14 +1003,133 @@ test.describe("Takosumi dashboard browser surface", () => {
       .poll(() => state.bindingBody?.bindings)
       .toEqual([
         {
-          provider: "cloudflare/cloudflare-v02",
+          provider: "registry.opentofu.org/cloudflare/cloudflare-v02",
           moduleLocalName: "cloudflare-v02",
           connectionId: "pc_cloudflare_host_v02_mixed",
         },
         {
-          provider: "hashicorp/aws",
+          provider: "registry.opentofu.org/hashicorp/aws",
           moduleLocalName: "aws",
           connectionId: "pc_aws_primary_mixed",
+        },
+      ]);
+    expectSingleSourceCreate(state);
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
+  test("exact compatibility provider tuples preserve same-source aliases", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the exact provider tuple fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const awsPrimary = {
+      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
+      id: "pc_aws_primary_tuple",
+      provider: "aws",
+      providerSource: "registry.opentofu.org/aws/aws",
+      displayName: "AWS primary",
+    };
+    const awsSecondary = {
+      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!,
+      id: "pc_aws_secondary_tuple",
+      provider: "aws",
+      providerSource: "registry.opentofu.org/aws/aws",
+      displayName: "AWS secondary",
+    };
+    const state = await stubProviderDestinationFixture(
+      page,
+      [awsPrimary, awsSecondary],
+      [
+        {
+          source: "registry.opentofu.org/aws/aws",
+          moduleLocalName: "aws",
+          childAlias: "primary",
+          version: "5.0.0",
+          allowed: true,
+          credentialRequired: true,
+        },
+        {
+          source: "registry.opentofu.org/aws/aws",
+          moduleLocalName: "aws",
+          childAlias: "secondary",
+          version: "5.0.0",
+          allowed: true,
+          credentialRequired: true,
+        },
+        {
+          source: "registry.opentofu.org/aws/aws",
+          moduleLocalName: "aws-edge",
+          childAlias: "edge",
+          allowed: true,
+          credentialRequired: true,
+        },
+      ],
+    );
+    const query = new URLSearchParams({
+      git: "https://github.com/example/aws-service.git",
+      ref: PORTABLE_SOURCE_COMMIT,
+      path: ".",
+      name: "aws-service",
+    });
+    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /追加|Add/u }).click();
+
+    await expect(
+      page.getByRole("heading", {
+        name: /Host \/ accountを選択|Choose a Host \/ account/u,
+      }),
+    ).toBeVisible();
+    const choices = page.locator(".iv-connection-choice");
+    await expect(choices).toHaveCount(3);
+    await expect(choices.nth(0)).toHaveAttribute(
+      "data-provider-source",
+      "registry.opentofu.org/aws/aws",
+    );
+    await expect(choices.nth(0)).toHaveAttribute(
+      "data-module-local-name",
+      "aws",
+    );
+    await expect(choices.nth(1)).toHaveAttribute(
+      "data-module-local-name",
+      "aws",
+    );
+    await expect(choices.nth(2)).toHaveAttribute(
+      "data-module-local-name",
+      "aws-edge",
+    );
+    await choices.nth(0).locator("select").selectOption("pc_aws_primary_tuple");
+    await choices.nth(1).locator("select").selectOption("pc_aws_secondary_tuple");
+    await choices.nth(2).locator("select").selectOption("pc_aws_primary_tuple");
+    await page.getByRole("button", { name: /続ける|Continue/u }).click();
+
+    await expect
+      .poll(() => state.bindingBody?.bindings)
+      .toEqual([
+        {
+          provider: "registry.opentofu.org/aws/aws",
+          moduleLocalName: "aws",
+          childAlias: "primary",
+          rootAlias: "primary",
+          connectionId: "pc_aws_primary_tuple",
+        },
+        {
+          provider: "registry.opentofu.org/aws/aws",
+          moduleLocalName: "aws",
+          childAlias: "secondary",
+          rootAlias: "secondary",
+          connectionId: "pc_aws_secondary_tuple",
+        },
+        {
+          provider: "registry.opentofu.org/aws/aws",
+          moduleLocalName: "aws-edge",
+          childAlias: "edge",
+          rootAlias: "edge",
+          connectionId: "pc_aws_primary_tuple",
         },
       ]);
     expectSingleSourceCreate(state);
@@ -1243,7 +1162,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     ]);
     const query = new URLSearchParams({
       git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
+      ref: PORTABLE_SOURCE_COMMIT,
       path: ".",
       name: "cloudflare-service",
     });
@@ -1294,8 +1213,8 @@ test.describe("Takosumi dashboard browser surface", () => {
       [unrelatedV01],
       [
         {
-          source: "cloudflare/cloudflare-v02",
-          aliases: [],
+          source: "registry.opentofu.org/cloudflare/cloudflare-v02",
+          moduleLocalName: "cloudflare-v02",
           allowed: true,
           credentialRequired: true,
         },
@@ -1303,7 +1222,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     const query = new URLSearchParams({
       git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
+      ref: PORTABLE_SOURCE_COMMIT,
       path: ".",
       name: "cloudflare-service",
     });
@@ -1342,14 +1261,14 @@ test.describe("Takosumi dashboard browser surface", () => {
       [PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!],
       [
         {
-          source: "cloudflare/cloudflare",
-          aliases: [],
+          source: "registry.opentofu.org/cloudflare/cloudflare",
+          moduleLocalName: "cloudflare",
           allowed: true,
           credentialRequired: true,
         },
         {
-          source: "hashicorp/aws",
-          aliases: [],
+          source: "registry.opentofu.org/hashicorp/aws",
+          moduleLocalName: "aws",
           allowed: true,
           credentialRequired: true,
         },
@@ -1357,7 +1276,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     const query = new URLSearchParams({
       git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
+      ref: PORTABLE_SOURCE_COMMIT,
       path: ".",
       name: "cloudflare-service",
     });
@@ -1393,7 +1312,8 @@ test.describe("Takosumi dashboard browser surface", () => {
     const resolvedCommit = "0123456789abcdef0123456789abcdef01234567";
     const seenMutations: string[] = [];
     const prematureConfigReads: string[] = [];
-    const profileDiscoveryRequests: string[] = [];
+    const installModuleRequests: string[] = [];
+    const compatibilityBodies: unknown[] = [];
     const stableRefResolutionBodies: unknown[] = [];
     const sourcePostBodies: unknown[] = [];
     const syncBodies: unknown[] = [];
@@ -1454,73 +1374,7 @@ test.describe("Takosumi dashboard browser surface", () => {
         url.search === "?view=store"
       ) {
         prematureConfigReads.push(`${path}${url.search}`);
-        const profileConfig = (input: {
-          readonly id: string;
-          readonly key: string;
-          readonly label: string;
-          readonly modulePath: string;
-          readonly order: number;
-          readonly recommended: boolean;
-        }) => ({
-          id: input.id,
-          name: input.key,
-          sourceSelector: {
-            url: "https://github.com/example/service.git",
-            path: ".",
-          },
-          modulePath: input.modulePath,
-          variableMapping: {},
-          outputAllowlist: {},
-          policy: {},
-          store: {
-            source: {
-              url: "https://github.com/example/service.git",
-              path: ".",
-            },
-            order: 1,
-            surface: "service",
-            kind: "application",
-            provider: "portable-e2e",
-            suggestedName: "example-service",
-            badge: { ja: "追加", en: "Add" },
-            name: { ja: "Example Service", en: "Example Service" },
-            description: { ja: "Example", en: "Example" },
-            deploymentProfile: {
-              key: input.key,
-              label: { ja: input.label, en: input.label },
-              description: {
-                ja: `${input.label} fixture`,
-                en: `${input.label} fixture`,
-              },
-              order: input.order,
-              recommended: input.recommended,
-            },
-          },
-          createdAt: now,
-          updatedAt: now,
-        });
-        return route.fulfill({
-          json: {
-            installConfigs: [
-              profileConfig({
-                id: "cfg_store_takoform_e2e",
-                key: "takoform-v2",
-                label: "Takoform",
-                modulePath: "deploy/takoform",
-                order: 20,
-                recommended: true,
-              }),
-              profileConfig({
-                id: "cfg_store_cloudflare_e2e",
-                key: "cloudflare-v1",
-                label: "Cloudflare",
-                modulePath: "deploy/cloudflare",
-                order: 10,
-                recommended: false,
-              }),
-            ],
-          },
-        });
+        return route.fulfill({ json: { installConfigs: [] } });
       }
       if (path === "/api/v1/connections") {
         return route.fulfill({ json: { connections: [] } });
@@ -1603,52 +1457,68 @@ test.describe("Takosumi dashboard browser surface", () => {
       }
       if (
         path ===
-          "/api/v1/sources/src_install_e2e/snapshots/snap_install_e2e/deployment-profiles" &&
+          "/api/v1/sources/src_install_e2e/snapshots/snap_install_e2e/install-modules" &&
         request.method() === "GET"
       ) {
-        profileDiscoveryRequests.push(path);
+        installModuleRequests.push(path);
         return route.fulfill({
           json: {
             status: "ready",
-            profiles: [
+            sourceSnapshotId: "snap_install_e2e",
+            scopePath: ".",
+            modules: [
               {
-                key: "takoform-v2",
-                label: {
-                  ja: "Takoform",
-                  en: "Takoform",
-                },
-                description: {
-                  ja: "Takoform fixture",
-                  en: "Takoform fixture",
-                },
-                order: 20,
-                recommended: true,
+                path: ".",
+                providerPackages: [
+                  {
+                    source: "registry.opentofu.org/cloudflare/cloudflare",
+                  },
+                ],
+                rootProviderRequirements: [
+                  {
+                    source: "registry.opentofu.org/cloudflare/cloudflare",
+                    moduleLocalName: "cloudflare",
+                  },
+                ],
               },
               {
-                key: "cloudflare-v1",
-                label: {
-                  ja: "Cloudflare",
-                  en: "Cloudflare",
-                },
-                description: {
-                  ja: "Cloudflare fixture",
-                  en: "Cloudflare fixture",
-                },
-                order: 10,
-                recommended: false,
+                path: "deploy/takoform",
+                providerPackages: [
+                  {
+                    source: "registry.opentofu.org/aws/aws",
+                  },
+                  {
+                    source: "registry.opentofu.org/cloudflare/cloudflare",
+                    version: "4.0.0",
+                  },
+                ],
+                rootProviderRequirements: [
+                  {
+                    source: "registry.opentofu.org/aws/aws",
+                    moduleLocalName: "aws",
+                  },
+                  {
+                    source: "registry.opentofu.org/cloudflare/cloudflare",
+                    moduleLocalName: "cloudflare",
+                    childAlias: "edge",
+                    version: "4.0.0",
+                  },
+                ],
               },
             ],
           },
         });
       }
       if (path === "/api/v1/sources/src_install_e2e/compatibility-check") {
+        compatibilityBodies.push(request.postDataJSON());
         return route.fulfill({
           json: {
             report: {
               id: "report_install_e2e",
               level: "ready",
               findings: [],
-              providers: [],
+              providerPackages: [],
+              rootProviderRequirements: [],
               resources: [],
               rootModuleVariables: ["region"],
             },
@@ -1736,27 +1606,40 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(hostingOption).toHaveCount(0);
     expect(prematureConfigReads).toEqual([]);
     await page.getByRole("button", { name: /追加|Add/u }).last().click();
-    await expect(hostingOption).toBeVisible();
-    expect(profileDiscoveryRequests).toEqual([
-      "/api/v1/sources/src_install_e2e/snapshots/snap_install_e2e/deployment-profiles",
+    const moduleChooser = page.getByTestId("install-module-chooser");
+    await expect(moduleChooser).toBeVisible();
+    await expect
+      .poll(() => installModuleRequests.length)
+      .toBe(1);
+    expect(installModuleRequests).toEqual([
+      "/api/v1/sources/src_install_e2e/snapshots/snap_install_e2e/install-modules",
     ]);
     expect(seenMutations).not.toContain(
       "POST /api/v1/sources/src_install_e2e/compatibility-check",
     );
-    await expect(hostingOption).toHaveValue("");
-    await expect(hostingOption).toContainText(
-      /Takoform.*おすすめ|Takoform.*Recommended/u,
-    );
-    await hostingOption.selectOption("takoform-v2");
-    await expect(hostingOption).toHaveValue("takoform-v2");
-    await expect(page.getByText("Takoform fixture", { exact: true })).toBeVisible();
-    const hostingOptionConfirmation = page.getByRole("checkbox", {
-      name: /このプロバイダー \/ モジュールで追加することを確認しました|I confirm this Provider \/ module/u,
+    const moduleOption = moduleChooser.getByRole("combobox", {
+      name: /モジュールディレクトリ|Module directory/u,
     });
-    await expect(hostingOptionConfirmation).toBeVisible();
-    await expect(hostingOptionConfirmation).not.toBeChecked();
-    await hostingOptionConfirmation.check();
-    await page.getByRole("button", { name: /追加|Add/u }).last().click();
+    await expect(moduleOption).toHaveValue("");
+    await expect(moduleOption.locator("option")).toHaveText([
+      /モジュールディレクトリ|Module directory/u,
+      ".",
+      "deploy/takoform",
+    ]);
+    await moduleOption.selectOption("deploy/takoform");
+    await moduleChooser
+      .getByRole("button", {
+        name: /このモジュールで続ける|Continue with this module/u,
+      })
+      .click();
+    await expect
+      .poll(() => compatibilityBodies.length)
+      .toBe(1);
+    expect(compatibilityBodies[0]).toMatchObject({
+      compileInstallUx: true,
+      modulePath: "deploy/takoform",
+      sourceSnapshotId: "snap_install_e2e",
+    });
     await expect(
       page.getByRole("heading", { name: /サービスを設定|Set up the service/u }),
     ).toBeVisible();
@@ -1781,7 +1664,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     expect(syncBodies).toEqual([{ expectedRef: resolvedCommit }]);
   });
 
-  test("direct Git installs discover and submit the snapshot-bound deployment profile", async ({
+  test("direct Git installs submit the exact scanned module path", async ({
     page,
   }) => {
     test.skip(
@@ -1790,74 +1673,42 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
-    const state = await stubProviderDestinationFixture(
-      page,
-      [],
-      [],
-      {
-        deploymentProfiles: [
-          {
-            key: "takoform-v2",
-            label: { ja: "Takoform", en: "Takoform" },
-            description: {
-              ja: "Run on a Takoform Host",
-              en: "Run on a Takoform Host",
-            },
-            order: 10,
-            recommended: true,
-          },
-          {
-            key: "cloudflare-v1",
-            label: { ja: "Cloudflare", en: "Cloudflare" },
-            description: {
-              ja: "Run with a connected Cloudflare account",
-              en: "Run with a connected Cloudflare account",
-            },
-            order: 20,
-            recommended: false,
-          },
-        ],
-      },
-    );
+    const state = await stubProviderDestinationFixture(page, [], [], {
+      sourcePath: "infra",
+      modulePath: "deploy/selected",
+    });
     const query = new URLSearchParams({
       git: "https://github.com/tako0614/yurucommu.git",
-      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
-      path: ".",
+      ref: PORTABLE_SOURCE_COMMIT,
+      sourcePath: "infra",
+      path: "deploy/selected",
       name: "yurucommu",
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    const hostingOption = page.getByRole("combobox", {
-      name: /プロバイダー|Provider/u,
-    });
-    await expect(hostingOption).toHaveCount(0);
+    await expect(page.getByTestId("install-module-chooser")).toHaveCount(0);
 
     await page.getByRole("button", { name: /追加|Add/u }).click();
-    await expect(hostingOption).toBeVisible();
+    await expect
+      .poll(() => state.sourcePosts.length)
+      .toBe(1);
     expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
-    expect(state.profileDiscoveryRequests).toEqual([
-      "/api/v1/sources/src_provider_destination_e2e/snapshots/snap_provider_destination_e2e/deployment-profiles",
+    await expect
+      .poll(() => state.installModuleRequests.length)
+      .toBe(1);
+    expect(state.installModuleRequests).toEqual([
+      "/api/v1/sources/src_provider_destination_e2e/snapshots/snap_provider_destination_e2e/install-modules",
     ]);
-    expect(state.compatibilityBodies).toHaveLength(0);
-    await expect(hostingOption).toHaveValue("");
-
-    await hostingOption.selectOption("takoform-v2");
-    await expect(hostingOption).toHaveValue("takoform-v2");
-    await expect(
-      page.getByText("Run on a Takoform Host", { exact: true }),
-    ).toBeVisible();
-    const confirmation = page.getByRole("checkbox", {
-      name: /このプロバイダー \/ モジュールで追加することを確認しました|I confirm this Provider \/ module/u,
-    });
-    await confirmation.check();
-    await page.getByRole("button", { name: /追加|Add/u }).click();
     await expect
       .poll(() => state.compatibilityBodies.length)
       .toBe(1);
     expect(state.compatibilityBodies[0]).toMatchObject({
       compileInstallUx: true,
-      deploymentProfileKey: "takoform-v2",
+      modulePath: "deploy/selected",
       sourceSnapshotId: "snap_provider_destination_e2e",
     });
+    expect(state.sourceCreateBodies).toEqual([
+      expect.objectContaining({ defaultPath: "infra" }),
+    ]);
     expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();

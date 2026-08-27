@@ -6,8 +6,8 @@ const NOW = "2026-01-01T00:00:00.000Z";
 
 function installConfig(): InstallConfig {
   return {
-    id: "cfg_office",
-    name: "takos-office",
+    id: "cfg_generic_app",
+    name: "generic-app",
     variableMapping: {
       app_url: "https://office.example.test",
       takos_storage_access_token: "tksa_live_not_a_real_token",
@@ -55,15 +55,6 @@ function installConfig(): InstallConfig {
         ],
       },
     },
-    accountsOidcModuleVariableMaterialization: {
-      contract: "takosumi.accounts-oidc-module-variables/v1",
-      workerNameVariable: "worker_name",
-      projectNameVariable: "project_name",
-      issuerUrlVariable: "takosumi_accounts_issuer_url",
-      clientIdVariable: "takosumi_accounts_client_id",
-      ownerSubjectVariable: "oidc_owner_sub",
-      allowUnpinnedOwnerClaimVariable: "allow_unpinned_owner_claim",
-    },
     createdAt: NOW,
     updatedAt: NOW,
   };
@@ -107,8 +98,6 @@ test("public InstallConfig projection never returns secret install variables", (
   expect(serialized).not.toContain("INTERNAL_SECRET");
   expect(serialized).not.toContain("TAKOS_RUNTIME_SECRETS_FILE");
   expect(serialized).not.toContain("FILE_SECRET");
-  expect(serialized).not.toContain("accounts-oidc-module-variables");
-  expect(serialized).not.toContain("oidc_owner_sub");
 });
 
 test("public InstallConfig policy projection keeps only safe policy fields", () => {

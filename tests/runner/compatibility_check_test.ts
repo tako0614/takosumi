@@ -100,7 +100,6 @@ exit 0
     });
     expect(body.files).toEqual([
       { path: "main.tf", text: "terraform {}\n" },
-      { path: "nested/outputs.tf", text: 'output "x" { value = 1 }\n' },
     ]);
   } finally {
     Bun.env.PATH = previousPath;
@@ -120,7 +119,10 @@ test("compatibility_check runs inside source.modulePath when provided", async ()
     await mkdir(moduleRoot, { recursive: true });
     await mkdir(join(sourceRoot, ".well-known"), { recursive: true });
     await writeFile(join(sourceRoot, "root.tf"), "terraform {}\n");
-    await writeFile(join(moduleRoot, "main.tf"), "terraform {}\n");
+    await writeFile(
+      join(moduleRoot, "main.tf"),
+      'terraform { required_providers { cloudflare = { source = "cloudflare/cloudflare" } } }\n',
+    );
     await writeFile(
       join(sourceRoot, ".well-known", "tcs.json"),
       '{"schemaVersion":"tcs.repo/v1","inputs":[]}\n',
@@ -184,7 +186,10 @@ esac
         path: ".terraform.lock.hcl",
         text: 'provider "registry.opentofu.org/cloudflare/cloudflare" {}\n',
       },
-      { path: "main.tf", text: "terraform {}\n" },
+      {
+        path: "main.tf",
+        text: 'terraform { required_providers { cloudflare = { source = "cloudflare/cloudflare" } } }\n',
+      },
       {
         path: ".well-known/tcs.json",
         text: '{"schemaVersion":"tcs.repo/v1","inputs":[]}\n',
@@ -207,7 +212,10 @@ test("compatibility_check runs tofu init without provider credentials and return
   const previousCloudflareToken = Bun.env.CLOUDFLARE_API_TOKEN;
   try {
     await mkdir(sourceRoot, { recursive: true });
-    await writeFile(join(sourceRoot, "main.tf"), "terraform {}\n");
+    await writeFile(
+      join(sourceRoot, "main.tf"),
+      'terraform { required_providers { aws = { source = "hashicorp/aws" } } }\n',
+    );
     const tofuPath = join(fakeBin, "tofu");
     await writeFile(
       tofuPath,
@@ -261,7 +269,10 @@ esac
         path: ".terraform.lock.hcl",
         text: 'provider "registry.opentofu.org/hashicorp/aws" {}\n',
       },
-      { path: "main.tf", text: "terraform {}\n" },
+      {
+        path: "main.tf",
+        text: 'terraform { required_providers { aws = { source = "hashicorp/aws" } } }\n',
+      },
     ]);
   } finally {
     if (previousPath === undefined) delete Bun.env.PATH;
@@ -639,6 +650,7 @@ case "$1" in
     cp "$TF_CLI_CONFIG_FILE" "$PWD/strict-tofu.rc.seen"
     mkdir -p "$PWD/.terraform/providers/registry.opentofu.org/cloudflare/cloudflare/1.0.0/linux_amd64"
     printf 'provider-binary' > "$PWD/.terraform/providers/registry.opentofu.org/cloudflare/cloudflare/1.0.0/linux_amd64/terraform-provider-cloudflare"
+    printf 'provider "registry.opentofu.org/cloudflare/cloudflare" {}\n' > "$PWD/.terraform.lock.hcl"
     echo "init"
     ;;
   plan)
@@ -1288,7 +1300,119 @@ esac
       kind: "provider_execution_failed",
     });
     expect(body.stderr).not.toContain("partial-provider-secret");
-    expect(body.stderr).toContain("[redacted]");
+    expect(body.stderr).toContain("provider rejected a later resource");
+
+    const stateResponse = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}/artifacts/tfstate`),
+    );
+    expect(stateResponse.status).toBe(200);
+    expect(await stateResponse.text()).toBe(partialState);
+  } finally {
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("failed provider destroy reports recoverable runner-local state", async () => {
+  const runId = `destroy_partial_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, runId);
+  const sourceRoot = join(root, "source");
+  const fakeBin = await mkdtemp(join(tmpdir(), "takosumi-partial-destroy-bin-"));
+  const previousPath = Bun.env.PATH;
+  const planBytes = new TextEncoder().encode("fake-reviewed-destroy-plan");
+  const planDigest = await digestBytes(planBytes);
+  const partialState =
+    '{"version":4,"serial":2,"lineage":"partial-destroy","resources":[]}\n';
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await writeFile(join(sourceRoot, "main.tf"), "terraform {}\n");
+    const putPlan = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}/artifacts/tfplan`, {
+        method: "PUT",
+        headers: { "content-type": "application/vnd.opentofu.plan" },
+        body: planBytes,
+      }),
+    );
+    expect(putPlan.status).toBe(200);
+
+    const tofuPath = join(fakeBin, "tofu");
+    await writeFile(
+      tofuPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  init)
+    echo "init"
+    ;;
+  apply)
+    cat > terraform.tfstate <<'JSON'
+${partialState.trimEnd()}
+JSON
+    echo "provider rejected a later destroy resource" >&2
+    exit 1
+    ;;
+  *)
+    echo "unexpected tofu command: $*" >&2
+    exit 2
+    ;;
+esac
+`,
+    );
+    await chmod(tofuPath, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+
+    const response = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "destroy",
+          runId,
+          request: {
+            planRun: {
+              id: runId,
+              operation: "destroy",
+              source: RESTORED_GIT_SOURCE,
+              requiredProviders: [],
+            },
+            planArtifact: {
+              kind: "runner-local",
+              ref: `runner-local://${runId}/tfplan`,
+              digest: planDigest,
+            },
+            runnerProfile: { allowedProviders: [] },
+            generatedRoot: {
+              files: {
+                "main.tf": [
+                  'module "child" {',
+                  '  source = "./module"',
+                  "}",
+                  "",
+                ].join("\n"),
+              },
+            },
+            variables: {},
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as {
+      readonly status?: string;
+      readonly errorCode?: string;
+      readonly stderr?: string;
+      readonly providerExecutionFailure?: { readonly kind?: string };
+    };
+    expect(body.status).toBe("failed");
+    expect(body.errorCode).toBe("apply_failed");
+    expect(body.providerExecutionFailure).toEqual({
+      kind: "provider_execution_failed",
+    });
+    expect(body.stderr).toContain("provider rejected a later destroy resource");
 
     const stateResponse = await handleRunnerRequest(
       new Request(`https://runner/runs/${runId}/artifacts/tfstate`),

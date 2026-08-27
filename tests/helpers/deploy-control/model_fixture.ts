@@ -12,6 +12,8 @@ import type {
   ProviderConnection,
 } from "@takosumi/internal/deploy-control-api";
 import type { Project } from "takosumi-contract/projects";
+import type { CapsuleProviderRequirement } from "takosumi-contract/capsules";
+import { normalizeProviderSourceAddress } from "takosumi-contract/provider-env-rules";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import type { Workspace } from "takosumi-contract/workspaces";
 import {
@@ -51,6 +53,23 @@ export interface SeedCapsuleModelOptions {
 export interface SeedProviderConnectionOptions {
   readonly requiredProviders?: readonly string[];
   readonly materialization?: "secret" | "oauth";
+}
+
+export function providerRequirementsForFixture(
+  requiredProviders: readonly string[],
+  options: { readonly credentialRequired?: boolean } = {},
+): readonly CapsuleProviderRequirement[] {
+  return requiredProviders.map((provider) => {
+    const source = normalizeProviderSourceAddress(provider);
+    return {
+      source,
+      moduleLocalName: providerShortName(source),
+      allowed: true,
+      ...(options.credentialRequired === false
+        ? {}
+        : { credentialRequired: true }),
+    };
+  });
 }
 
 export const FIXTURE_ARCHIVE_DIGEST =
@@ -253,7 +272,8 @@ export async function seedProviderConnections(
     const shortName = providerShortName(provider);
     return {
       provider,
-      alias: "main",
+      moduleLocalName: shortName,
+      rootAlias: "main",
       connectionId: `conn_fixture_${sanitizeId(capsule.workspaceId)}_${shortName}`,
     } as const;
   });

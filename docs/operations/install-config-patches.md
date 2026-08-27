@@ -61,9 +61,8 @@ reconcile step.
    }
    ```
 
-   `deploymentProfileKey` may be included when the reviewed deployment profile
-   requires it. Unknown fields, secret-like reasons, malformed guards, and
-   missing idempotency keys fail before mutation.
+   Unknown fields, secret-like reasons, malformed guards, and missing
+   idempotency keys fail before mutation.
 
 3. On 200, re-read the Capsule and the returned target InstallConfig. The
    target is a new immutable derived row; the response is value-free and
@@ -108,11 +107,14 @@ is part of the Accounts OIDC activation digest, so an old or orphaned Apply
 cannot authorize the newly adopted configuration; only a later final Apply can
 save the exact current digest.
 
-For the hosted Accounts profile, provider runtime-binding is read-only derivation
-with no registration authority; the direct DB-owned module-variable materializer
-owns final-Apply activation. Plan and `apply_check` remain read-only and only
-final Apply registers or repairs the exact current activation digest. The
-`updatedAt` field is ordinary audit time, not activation authority. Schema
+For an accepted repository-manifest `identity.oidc` request, provider
+runtime-binding is read-only derivation with no registration authority;
+the Takosumi-owned generic Accounts capability implementation owns final-Apply
+activation. The repository `oidc_client` plus paired `public_endpoint`
+projections are the only declaration, and exactly four non-secret OIDC values
+are delivered. Plan and `apply_check` remain read-only and only final Apply
+registers or repairs the exact current activation digest. The `updatedAt` field
+is ordinary audit time, not activation authority. Schema
 promotion is substrate-specific: for PostgreSQL, apply migration 043, then
 migration 044, before promoting the feature Worker. For Cloudflare D1, first
 verify the exact-v3 ledger/schema closure, then deploy the v3/v4 feature bridge,

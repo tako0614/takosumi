@@ -13,7 +13,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import type {
   JsonRecord,
   OpenTofuModuleSource,
@@ -63,18 +63,36 @@ import {
   parseRunnerProfile,
   positiveIntegerLimitFromProfile,
 } from "./parsing.ts";
-import type { RepositoryInstallMetadataSnapshot } from "takosumi-contract/sources";
-import type { RepositoryManifestSnapshot } from "takosumi-contract/sources";
+import {
+  parseRepositoryModulesSnapshot,
+  TAKOSUMI_SOURCE_SNAPSHOT_MAX_MODULES,
+  type RepositoryInstallMetadataSnapshot,
+  type RepositoryManifestSnapshot,
+  type RepositoryModulesInvalidReason,
+  type RepositoryModulesSnapshot,
+} from "../../contract/sources.ts";
 import {
   parseRepositoryManifestText,
   TAKOSUMI_REPOSITORY_MANIFEST_MAX_BYTES,
   TAKOSUMI_REPOSITORY_MANIFEST_PATH,
 } from "../../contract/repository-manifest.ts";
+import {
+  DEFAULT_OPENTOFU_CONFIGURATION_LIMITS,
+  discoverOpenTofuModules,
+  openTofuConfigurationFileKind,
+  type OpenTofuSourceFile,
+} from "../../lib/opentofu-configuration/src/mod.ts";
 
 const REPOSITORY_INSTALL_METADATA_PATH = ".well-known/tcs.json";
-const SOURCE_SNAPSHOT_PRESENTATION_MAX_FILE_BYTES = 128 * 1024;
 const STABLE_TAG_DISCOVERY_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const STABLE_TAG_DISCOVERY_MAX_CANDIDATES = 10_000;
+const REPOSITORY_MODULE_SCAN_MAX_DEPTH = 64;
+const SOURCE_SNAPSHOT_UNSUPPORTED_TRACKED_SYMLINK =
+  "source snapshot contains unsupported tracked symlink";
+const SOURCE_SNAPSHOT_UNSUPPORTED_TRACKED_GITLINK =
+  "source snapshot contains unsupported tracked gitlink";
+const SOURCE_SNAPSHOT_TREE_METADATA_SCAN_FAILED =
+  "source snapshot tree metadata scan failed";
 
 export async function ensureSourceAvailable(
   source: OpenTofuModuleSource,
@@ -110,10 +128,6 @@ export function isSourceSyncRequest(request: unknown): boolean {
 
 export function isStableSemverTagRequest(request: unknown): boolean {
   return stringField(request, "action") === "stable_semver_tag";
-}
-
-export function isSourceSnapshotFileRequest(request: unknown): boolean {
-  return stringField(request, "action") === "source_snapshot_file";
 }
 
 /**
@@ -238,54 +252,6 @@ function compareSemver(
     if (left[index]! > right[index]!) return 1;
   }
   return 0;
-}
-
-/** Read one bounded regular file from an already-restored SourceSnapshot. */
-export async function runSourceSnapshotFileRead(
-  runId: string,
-  request: unknown,
-): Promise<JsonRecord> {
-  const requestedPath = requiredStringField(request, "path");
-  const path = normalizeSourceSubtreePath(requestedPath);
-  if (path === ".") throw new Error("source snapshot file path is required");
-  const workspace = workspaceForRun(runId);
-  await assertDirectory(workspace.sourceRoot, "source root");
-  const target = resolve(workspace.sourceRoot, path);
-  await assertRealPathInsideSourceRoot(
-    target,
-    workspace.sourceRoot,
-    "source snapshot file",
-  );
-  const stat = await lstat(target);
-  if (!stat.isFile())
-    throw new Error("source snapshot path is not a regular file");
-  if (stat.size > SOURCE_SNAPSHOT_PRESENTATION_MAX_FILE_BYTES) {
-    throw new Error(
-      `source snapshot file exceeds ${SOURCE_SNAPSHOT_PRESENTATION_MAX_FILE_BYTES} bytes`,
-    );
-  }
-  const bytes = await readFile(target);
-  if (bytes.byteLength > SOURCE_SNAPSHOT_PRESENTATION_MAX_FILE_BYTES) {
-    throw new Error(
-      `source snapshot file exceeds ${SOURCE_SNAPSHOT_PRESENTATION_MAX_FILE_BYTES} bytes`,
-    );
-  }
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    throw new Error("source snapshot presentation file must be UTF-8 text");
-  }
-  return {
-    runId,
-    action: "source_snapshot_file",
-    status: "succeeded",
-    exitCode: 0,
-    path,
-    text,
-    digest: await digestBytes(bytes),
-    sizeBytes: bytes.byteLength,
-  };
 }
 
 export function parseSourceSyncSource(request: unknown): SourceSyncSource {
@@ -438,6 +404,36 @@ export async function runSourceSync(
       "source_repository_manifest",
       () => readRepositoryManifest(workspace.sourceRoot),
     );
+    const subtree = await timer.measure("source_subtree", async () => {
+      const resolvedSubtree = await resolveSourceSubtree(
+        workspace.sourceRoot,
+        source.path,
+      );
+      // The restore policy accepts only regular files and directories. Check
+      // the immutable Git tree before either reusing an existing archive or
+      // creating a new one so a successful source_sync can never publish an
+      // archive that a later restore must reject.
+      await assertTrackedSourceSnapshotArchiveable({
+        repositoryRoot: workspace.sourceRoot,
+        scopePath: source.path,
+        git: gitContext,
+      });
+      return resolvedSubtree;
+    });
+    // Archive bytes may be reused for an exact commit, but module discovery is
+    // a derived observation whose scanner semantics can change independently.
+    // Until snapshots carry an explicit scanner-version identity, recompute it
+    // from the freshly cloned tracked tree on every sync.
+    const repositoryModules = await timer.measure(
+      "source_repository_modules",
+      () =>
+        readRepositoryModules({
+          repositoryRoot: workspace.sourceRoot,
+          subtree,
+          scopePath: source.path,
+          git: gitContext,
+        }),
+    );
     if (reuseSnapshot?.resolvedCommit === resolvedCommit) {
       await timer.measure("source_snapshot_reuse", async () => undefined);
       return withPhaseTimings(
@@ -451,6 +447,7 @@ export async function runSourceSync(
           archiveSizeBytes: reuseSnapshot.archiveSizeBytes,
           repositoryInstallMetadata,
           repositoryManifest,
+          repositoryModules,
           sourceArchive: {
             kind: "object-storage",
             ref: reuseSnapshot.archiveRef,
@@ -463,9 +460,6 @@ export async function runSourceSync(
         timer,
       );
     }
-    const subtree = await timer.measure("source_subtree", () =>
-      resolveSourceSubtree(workspace.sourceRoot, source.path),
-    );
     const archivePath = sourceArchivePath(workspace);
     await timer.measure("source_archive", () =>
       createDeterministicArchive(subtree, archivePath, gitContext),
@@ -496,6 +490,7 @@ export async function runSourceSync(
         archiveSizeBytes: archiveBytes.byteLength,
         repositoryInstallMetadata,
         repositoryManifest,
+        repositoryModules,
         sourceArchive: {
           kind: "runner-local",
           ref: archiveRef,
@@ -590,6 +585,165 @@ export async function readRepositoryManifest(
     if (code === "ENOENT") return { status: "absent" };
     throw error;
   }
+}
+
+class RepositoryModuleScanError extends Error {
+  constructor(readonly reason: RepositoryModulesInvalidReason) {
+    super(reason);
+  }
+}
+
+/**
+ * Build a bounded module index from tracked regular OpenTofu files in the
+ * exact subtree that will be archived. This observation is advisory for the
+ * chooser; compatibility still re-reads and compiles the selected module.
+ */
+export async function readRepositoryModules(input: {
+  readonly repositoryRoot: string;
+  readonly subtree: string;
+  readonly scopePath: string;
+  readonly git: SourceGitContext;
+}): Promise<RepositoryModulesSnapshot> {
+  try {
+    const candidates = await trackedOpenTofuSourceFiles(input);
+    const discovery = discoverOpenTofuModules({
+      files: candidates,
+      maxModules: TAKOSUMI_SOURCE_SNAPSHOT_MAX_MODULES,
+    });
+    if (!discovery.complete) {
+      return {
+        status: "invalid",
+        scopePath: input.scopePath,
+        reason: repositoryModuleDiscoveryReason(discovery.diagnostics),
+      };
+    }
+    const parsed = parseRepositoryModulesSnapshot({
+      status: "ready",
+      scopePath: input.scopePath,
+      modules: discovery.modules,
+    });
+    return parsed ?? {
+      status: "invalid",
+      scopePath: input.scopePath,
+      reason: "configuration_invalid",
+    };
+  } catch (error) {
+    return {
+      status: "invalid",
+      scopePath: input.scopePath,
+      reason:
+        error instanceof RepositoryModuleScanError
+          ? error.reason
+          : "scan_failed",
+    };
+  }
+}
+
+async function trackedOpenTofuSourceFiles(input: {
+  readonly repositoryRoot: string;
+  readonly subtree: string;
+  readonly git: SourceGitContext;
+}): Promise<readonly OpenTofuSourceFile[]> {
+  const limits = DEFAULT_OPENTOFU_CONFIGURATION_LIMITS;
+  const paths: Array<{
+    readonly absolute: string;
+    readonly repositoryRelative: string;
+    readonly subtreeRelative: string;
+    readonly size: number;
+  }> = [];
+  let totalBytes = 0;
+  const tracked = await runCommand(
+    [
+      "git",
+      "ls-files",
+      "-z",
+      "--",
+      "*.tf",
+      "*.tofu",
+      "*.tf.json",
+      "*.tofu.json",
+    ],
+    { cwd: input.repositoryRoot, context: input.git.context },
+  );
+  if (tracked.exitCode !== 0) {
+    throw new RepositoryModuleScanError("scan_failed");
+  }
+  for (const repositoryRelative of tracked.stdout.split("\0")) {
+    if (repositoryRelative.length === 0) continue;
+    const absolute = resolve(input.repositoryRoot, repositoryRelative);
+    const subtreeRelative = relative(input.subtree, absolute).replace(/\\/gu, "/");
+    if (
+      subtreeRelative === "" ||
+      subtreeRelative === ".." ||
+      subtreeRelative.startsWith("../")
+    ) {
+      continue;
+    }
+    if (subtreeRelative.split("/").length > REPOSITORY_MODULE_SCAN_MAX_DEPTH) {
+      throw new RepositoryModuleScanError("file_limit_exceeded");
+    }
+    if (openTofuConfigurationFileKind(subtreeRelative) === undefined) continue;
+    const info = await lstat(absolute);
+    // Git may track a symlink or submodule path with a configuration suffix;
+    // neither is an executable regular file in this immutable observation.
+    if (!info.isFile()) continue;
+    await assertRealPathInsideSourceRoot(
+      absolute,
+      input.subtree,
+      "OpenTofu source file",
+    );
+    if (paths.length >= limits.maxFiles) {
+      throw new RepositoryModuleScanError("file_limit_exceeded");
+    }
+    if (info.size > limits.maxFileBytes) {
+      throw new RepositoryModuleScanError("file_too_large");
+    }
+    totalBytes += info.size;
+    if (totalBytes > limits.maxTotalBytes) {
+      throw new RepositoryModuleScanError("total_bytes_exceeded");
+    }
+    paths.push({
+      absolute,
+      repositoryRelative,
+      subtreeRelative,
+      size: info.size,
+    });
+  }
+  paths.sort((left, right) =>
+    left.subtreeRelative < right.subtreeRelative
+      ? -1
+      : left.subtreeRelative > right.subtreeRelative
+        ? 1
+        : 0,
+  );
+  const files: OpenTofuSourceFile[] = [];
+  for (const path of paths) {
+    const bytes = await readFile(path.absolute);
+    if (bytes.byteLength !== path.size) {
+      throw new RepositoryModuleScanError("scan_failed");
+    }
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new RepositoryModuleScanError("configuration_invalid");
+    }
+    files.push({ path: path.subtreeRelative, text });
+  }
+  return files;
+}
+
+function repositoryModuleDiscoveryReason(
+  diagnostics: readonly { readonly code: string }[],
+): RepositoryModulesInvalidReason {
+  const codes = new Set(diagnostics.map((diagnostic) => diagnostic.code));
+  if (codes.has("file_limit_exceeded")) return "file_limit_exceeded";
+  if (codes.has("file_too_large")) return "file_too_large";
+  if (codes.has("total_bytes_exceeded")) return "total_bytes_exceeded";
+  if (codes.has("module_candidate_limit_exceeded")) {
+    return "module_limit_exceeded";
+  }
+  return "configuration_invalid";
 }
 
 // Writes any minted credential files to the per-run credential dir and builds
@@ -814,6 +968,83 @@ export async function resolveSourceSubtree(
   return subtree;
 }
 
+/**
+ * Reject tracked symlink entries from the exact Git tree that backs a source
+ * snapshot. Git records symlinks as mode 120000; checking tree metadata avoids
+ * following a link or relying on the host filesystem's checkout behavior.
+ * Diagnostics are intentionally fixed and path-free because tree paths can
+ * contain repository-controlled or secret-looking values.
+ */
+export async function assertTrackedSourceSnapshotArchiveable(input: {
+  readonly repositoryRoot: string;
+  readonly scopePath: string;
+  readonly git: SourceGitContext;
+}): Promise<void> {
+  // `:(literal)` prevents a repository path containing glob characters from
+  // changing the Git pathspec. The normalized `.` scope still selects the
+  // complete tree.
+  const pathspec = `:(literal)${input.scopePath}`;
+  const tree = await runCommand(
+    [
+      "git",
+      "ls-tree",
+      "-r",
+      "-z",
+      "--full-tree",
+      "HEAD",
+      "--",
+      pathspec,
+    ],
+    { cwd: input.repositoryRoot, context: input.git.context },
+  );
+  if (tree.exitCode !== 0) {
+    throw new Error(SOURCE_SNAPSHOT_TREE_METADATA_SCAN_FAILED);
+  }
+  for (const record of tree.stdout.split("\0")) {
+    if (record.length === 0) continue;
+    const separator = record.indexOf("\t");
+    if (separator <= 0) {
+      throw new Error(SOURCE_SNAPSHOT_TREE_METADATA_SCAN_FAILED);
+    }
+    const metadata = record.slice(0, separator).split(/\s+/u);
+    const mode = metadata[0];
+    if (!mode || !/^\d{6}$/u.test(mode)) {
+      throw new Error(SOURCE_SNAPSHOT_TREE_METADATA_SCAN_FAILED);
+    }
+    if (mode === "120000") {
+      throw new Error(SOURCE_SNAPSHOT_UNSUPPORTED_TRACKED_SYMLINK);
+    }
+    if (mode === "160000") {
+      throw new Error(SOURCE_SNAPSHOT_UNSUPPORTED_TRACKED_GITLINK);
+    }
+  }
+}
+
+/**
+ * Keep the archive format aligned with the restore validator even when this
+ * helper is called outside `runSourceSync`: a source archive may contain only
+ * regular files and directories, never a symlink entry.
+ */
+async function assertArchiveTreeHasNoSymlinks(
+  directory: string,
+): Promise<void> {
+  if ((await lstat(directory)).isSymbolicLink()) {
+    throw new Error(SOURCE_SNAPSHOT_UNSUPPORTED_TRACKED_SYMLINK);
+  }
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    // `.git` is excluded by the tar invocation and is not part of the source
+    // snapshot payload. Do not inspect it or let its internal metadata affect
+    // archive eligibility.
+    if (entry.name === ".git") continue;
+    if (entry.isSymbolicLink()) {
+      throw new Error(SOURCE_SNAPSHOT_UNSUPPORTED_TRACKED_SYMLINK);
+    }
+    if (entry.isDirectory()) {
+      await assertArchiveTreeHasNoSymlinks(join(directory, entry.name));
+    }
+  }
+}
+
 // Build a deterministic tar of the subtree (sorted entries, numeric owners,
 // excluding .git) and compress with zstd. Determinism makes the digest stable
 // across two runs of the same commit.
@@ -822,6 +1053,7 @@ export async function createDeterministicArchive(
   archivePath: string,
   git: SourceGitContext,
 ): Promise<void> {
+  await assertArchiveTreeHasNoSymlinks(subtree);
   await runRequiredCommand(
     [
       "tar",

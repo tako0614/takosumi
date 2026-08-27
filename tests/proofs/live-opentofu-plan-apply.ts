@@ -72,6 +72,42 @@ export async function runLiveOpenTofuPlanApplyProof(
         },
       },
     });
+    const compatibilityReportId = ids.next("caprep");
+    await store.putCapsuleCompatibilityReport({
+      id: compatibilityReportId,
+      sourceId: seeded.source.id,
+      sourceSnapshotId: seeded.snapshot.id,
+      modulePath: ".",
+      level: "ready",
+      findings: [],
+      providerPackages: [
+        {
+          source: "registry.opentofu.org/hashicorp/local",
+          allowed: true,
+        },
+      ],
+      rootProviderRequirements: [
+        {
+          source: "registry.opentofu.org/hashicorp/local",
+          moduleLocalName: "local",
+        },
+      ],
+      resources: [
+        {
+          type: "local_file",
+          count: 1,
+          allowed: true,
+        },
+      ],
+      dataSources: [],
+      provisioners: [],
+      createdAt: options.now?.() ?? new Date().toISOString(),
+    });
+    await store.putCapsule({
+      ...seeded.capsule,
+      compatibilityReportId,
+      compatibilityStatus: "ready",
+    });
     const controller = new OpenTofuController({
       store,
       runner: new LocalTofuRunner(workdir),

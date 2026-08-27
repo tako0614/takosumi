@@ -27,6 +27,8 @@ import {
   assertGeneratedRootFileName,
   assertSafeRelativePath,
 } from "./policy.ts";
+import { canonicalProviderSource } from "../../contract/provider-env-rules.ts";
+import type { OpenTofuRootProviderRequirement } from "../../lib/opentofu-configuration/src/mod.ts";
 
 export function parseOperation(request: unknown): OpenTofuOperation {
   const planRun = recordField(request, "planRun");
@@ -287,6 +289,101 @@ export function parseRequiredProviders(request: unknown): readonly string[] {
     : undefined;
   return stringArray(providers);
 }
+
+export function parseRequiredProviderRequirements(
+  request: unknown,
+): readonly OpenTofuRootProviderRequirement[] | undefined {
+  const planRun = recordField(request, "planRun");
+  const value = planRun
+    ? recordField(planRun, "requiredProviderRequirements")
+    : undefined;
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error("planRun.requiredProviderRequirements must be an array");
+  }
+  const requirements = value.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(
+        `planRun.requiredProviderRequirements[${index}] must be an object`,
+      );
+    }
+    if (
+      "localName" in entry ||
+      "aliases" in entry ||
+      "alias" in entry ||
+      "versionConstraint" in entry
+    ) {
+      throw new Error(
+        `planRun.requiredProviderRequirements[${index}] uses a legacy ambiguous field`,
+      );
+    }
+    const source = canonicalProviderSource(requiredStringField(entry, "source"));
+    if (!PROVIDER_SOURCE.test(source)) {
+      throw new Error(
+        `planRun.requiredProviderRequirements[${index}].source must be canonical`,
+      );
+    }
+    const moduleLocalName = requiredStringField(entry, "moduleLocalName");
+    if (!PROVIDER_LOCAL_NAME.test(moduleLocalName)) {
+      throw new Error(
+        `planRun.requiredProviderRequirements[${index}].moduleLocalName is invalid`,
+      );
+    }
+    const childAlias = stringField(entry, "childAlias");
+    if (childAlias !== undefined && !PROVIDER_LOCAL_NAME.test(childAlias)) {
+      throw new Error(
+        `planRun.requiredProviderRequirements[${index}].childAlias is invalid`,
+      );
+    }
+    const version = stringField(entry, "version");
+    if (version !== undefined && !EXACT_PROVIDER_VERSION.test(version)) {
+      throw new Error(
+        `planRun.requiredProviderRequirements[${index}].version must be exact`,
+      );
+    }
+    return {
+      source,
+      moduleLocalName,
+      ...(childAlias === undefined ? {} : { childAlias }),
+      ...(version === undefined ? {} : { version }),
+    };
+  });
+  requirements.sort(compareProviderRequirements);
+  const identities = new Set<string>();
+  for (const requirement of requirements) {
+    const identity = JSON.stringify([
+      requirement.source,
+      requirement.moduleLocalName,
+      requirement.childAlias ?? null,
+    ]);
+    if (identities.has(identity)) {
+      throw new Error("planRun.requiredProviderRequirements contains a duplicate identity");
+    }
+    identities.add(identity);
+  }
+  return requirements;
+}
+
+function compareProviderRequirements(
+  left: OpenTofuRootProviderRequirement,
+  right: OpenTofuRootProviderRequirement,
+): number {
+  return (
+    compareCodePoints(left.source, right.source) ||
+    compareCodePoints(left.moduleLocalName, right.moduleLocalName) ||
+    compareCodePoints(left.childAlias ?? "", right.childAlias ?? "")
+  );
+}
+
+function compareCodePoints(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+const PROVIDER_SOURCE =
+  /^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?\/[a-z0-9_-]+\/[a-z0-9_-]+$/u;
+const PROVIDER_LOCAL_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/u;
+const EXACT_PROVIDER_VERSION =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 
 export function parseOutputAllowlist(
   request: unknown,

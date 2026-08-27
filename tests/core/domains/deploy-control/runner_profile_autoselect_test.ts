@@ -7,6 +7,7 @@ import {
 } from "../../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import {
+  providerRequirementsForFixture,
   seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -56,6 +57,8 @@ test("an arbitrary provider uses the default runner without provider routing", a
     capsuleId: capsule.id,
     operation: "update",
     source: SOURCE,
+    requiredProviderRequirements:
+      providerRequirementsForFixture([VERCEL_PROVIDER]),
     requiredProviders: [VERCEL_PROVIDER],
   });
   expect(planRun.runnerProfileId).toBe(DEFAULT_OPENTOFU_RUNNER_PROFILE_ID);
@@ -88,6 +91,8 @@ test("an explicit capability profile remains explicit", async () => {
     operation: "update",
     source: SOURCE,
     runnerProfileId: "private-network",
+    requiredProviderRequirements:
+      providerRequirementsForFixture([VERCEL_PROVIDER]),
     requiredProviders: [VERCEL_PROVIDER],
   });
   expect(planRun.runnerProfileId).toBe("private-network");

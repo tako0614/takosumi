@@ -196,6 +196,64 @@ test("authorize resolves a current Capsule grant and terminal status revokes its
   expect(store.findOidcClientForCapsule(capsuleId)).toBeUndefined();
 });
 
+test("repository-materialized OIDC keeps its live grant without a static client id mapping", async () => {
+  const { store, operations, installConfig } = await liveGrantFixture();
+  const generic = installConfig as unknown as InstallConfig & {
+    internal: NonNullable<InstallConfig["internal"]>;
+  };
+  generic.internal = {
+    reason: "per_install_overrides",
+    sourceSnapshotId: "snap_live_grant",
+    repositoryInstallUxDigest: `sha256:${"a".repeat(64)}`,
+  };
+  generic.variableMapping = {
+    public_url: "https://app.example.test",
+  };
+  generic.installExperience = {
+    projections: [
+      { kind: "public_endpoint", variables: { url: "public_url" } },
+      {
+        kind: "oidc_client",
+        variables: {
+          accountsUrl: "takosumi_accounts_url",
+          issuerUrl: "takosumi_accounts_issuer_url",
+          clientId: "takosumi_accounts_client_id",
+          redirectUri: "takosumi_accounts_redirect_uri",
+        },
+        callbackPath: "/auth/callback",
+        scopes: ["openid", "profile", "offline_access"],
+      },
+    ],
+    repositoryInstallUx: { status: "accepted" },
+  };
+  generic.policy = {
+    repositoryInstallUx: {
+      allowedInterfacePermissions: [],
+      allowedOidcScopes: ["openid", "profile", "offline_access"],
+    },
+  };
+  const current = store.findOidcClient(clientId)!;
+  store.saveOidcClient({
+    ...current,
+    activationDigest: await oidcClientActivationDigest({
+      workspaceId,
+      capsuleId,
+      executionAuthorityEpoch: 1,
+      installConfig: generic,
+    }),
+  });
+
+  const response = await handleAuthorize({
+    ...authorizeRequest(),
+    flow,
+    clients: new Map(),
+    store,
+    operations,
+  });
+
+  expect(response.status).toBe(302);
+});
+
 test("dynamic grant denies a legacy or stale activation digest without revoking its Apply-repairable client", async () => {
   const { store, state, operations } = await liveGrantFixture();
   const current = store.findOidcClient(clientId)!;

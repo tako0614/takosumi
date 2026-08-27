@@ -5,7 +5,7 @@
 
 | Field         | Value                                      |
 | ------------- | ------------------------------------------ |
-| Last reviewed | 2026-07-15                                 |
+| Last reviewed | 2026-08-27                                 |
 | Owner         | Takosumi release owner / platform operator |
 | Scope         | Takosumi platform worker artifacts         |
 
@@ -31,6 +31,7 @@ fallbackしません。
 | --------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | Platform service bundle                 | `takosumi/deploy/platform/worker.ts`, `takosumi/worker`, `takosumi/core` | built by the selected host composition                           | commit SHA, composition build result, immutable deployment revision                      |
 | Dashboard SPA                           | `takosumi/dashboard`                                                     | `bun run check:dashboard`; mounted by the selected asset adapter | dashboard build result, asset digest, deployment log                                     |
+| Cloudflare reference runner image       | `takosumi/runner`, `takosumi/scripts/runner-image-release.ts`            | `bun run deploy -- takosumi-runner-image`; immutable OCI digest  | source branch/commit, Dockerfile/config digests, previous/new image, application readback |
 | Runner executor artifact                | `RunnerProfile.executorId` + operator executor adapter                   | image/binary/remote service format is adapter-owned              | immutable executor revision and contributed runner smoke                                 |
 | Control-store migrations / schema       | `takosumi/core/adapters/storage`                                         | applied by the selected storage migration adapter                | migration transcript and logical-schema tests                                            |
 | Credential Recipe contribution          | operator/provider contribution + `docs/internal/core-spec.md`            | registered explicitly by the composition; no implicit seed       | contribution diff, driver availability, ProviderConnection policy evidence               |

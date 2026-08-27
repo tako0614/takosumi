@@ -30,9 +30,9 @@ state、output、ログ、監査記録は Run の結果です。provider の API
 ## Git module をデプロイする
 
 ```text
-1. Git URL、ref、module path を Source として登録
-2. ref を 1 つの commit に固定
-3. module から Capsule を作成
+1. Git URL、ref、optional source subtree を Source として登録
+2. ref を 1 つの commit に固定して tracked OpenTofu tree を scan
+3. 実在する module を選び Capsule を作成
 4. Connection と入力変数を割り当て
 5. plan を実行
 6. 差分を確認して apply

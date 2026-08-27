@@ -148,21 +148,14 @@ export interface CapsuleGateFinding {
 }
 
 export interface CapsuleProviderRequirement {
+  /** Canonical provider source address, including registry host. */
   readonly source: string;
-  /**
-   * Exact local name declared by the child module in `required_providers`.
-   * This is independent from the provider source's type segment: two providers
-   * may share the same type name, and a module may choose a different local
-   * name. Older compatibility reports may omit it.
-   */
-  readonly localName?: string;
-  readonly versionConstraint?: string;
-  /**
-   * Child-module configuration alias names, without the local-name prefix.
-   * For example `configuration_aliases = [cloudflare.zone]` is represented as
-   * localName `cloudflare` plus alias `zone`.
-   */
-  readonly aliases: readonly string[];
+  /** Exact local name declared by the child module in `required_providers`. */
+  readonly moduleLocalName: string;
+  /** Exact child-module configuration alias; absence means the default. */
+  readonly childAlias?: string;
+  /** Exact literal version only when static analysis proved one. */
+  readonly version?: string;
   readonly allowed: boolean;
   /**
    * Explicit service-side decision that this provider needs a
@@ -170,6 +163,25 @@ export interface CapsuleProviderRequirement {
    * credentials; absent/false means the compatibility analyzer made no such
    * requirement.
    */
+  readonly credentialRequired?: boolean;
+}
+
+/** Reachable provider package used only for policy and supply-chain checks. */
+export interface CapsuleProviderPackage {
+  /** Canonical provider source address, including registry host. */
+  readonly source: string;
+  /** Exact literal version only when graph analysis proved one. */
+  readonly version?: string;
+  readonly allowed: boolean;
+}
+
+/** Exact provider identity declared or implicitly used by the selected root. */
+export interface CapsuleRootProviderRequirement {
+  readonly source: string;
+  readonly moduleLocalName: string;
+  readonly childAlias?: string;
+  readonly version?: string;
+  /** Root binding needs run-scoped credential material when true. */
   readonly credentialRequired?: boolean;
 }
 
@@ -232,7 +244,8 @@ export interface CapsuleCompatibilityReport {
   readonly modulePath?: string;
   readonly level: CapsuleCompatibilityLevel;
   readonly findings: readonly CapsuleGateFinding[];
-  readonly providers: readonly CapsuleProviderRequirement[];
+  readonly providerPackages: readonly CapsuleProviderPackage[];
+  readonly rootProviderRequirements: readonly CapsuleRootProviderRequirement[];
   readonly resources: readonly CapsuleResourceSummary[];
   readonly dataSources: readonly CapsuleDataSourceSummary[];
   readonly provisioners: readonly CapsuleProvisionerSummary[];
@@ -278,7 +291,8 @@ export function normalizeCompatibilityReportModulePath(
 export interface CapsuleGateResult {
   readonly level: CapsuleCompatibilityLevel;
   readonly findings: readonly CapsuleGateFinding[];
-  readonly providers: readonly CapsuleProviderRequirement[];
+  readonly providerPackages: readonly CapsuleProviderPackage[];
+  readonly rootProviderRequirements: readonly CapsuleRootProviderRequirement[];
   readonly resources: readonly CapsuleResourceSummary[];
   readonly dataSources: readonly CapsuleDataSourceSummary[];
   readonly provisioners: readonly CapsuleProvisionerSummary[];
@@ -304,11 +318,6 @@ export interface CreateSourceCompatibilityCheckRequest {
    * validated result after the exact report succeeds.
    */
   readonly compileInstallUx?: boolean;
-  /**
-   * Opaque DB-owned deployment-profile equality key consumed only by the
-   * authenticated Accounts compiler. It is never forwarded to Core analysis.
-   */
-  readonly deploymentProfileKey?: string;
   readonly capsuleName?: string;
 }
 

@@ -15,6 +15,7 @@ import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import {
   CapsuleStateVersionGuardConflict,
   InMemoryOpenTofuControlStore,
+  parseStoredCapsuleCompatibilityProviderGraph,
   type OpenTofuControlStore,
   type StoredSecretBlob,
 } from "../../../../core/domains/deploy-control/store.ts";
@@ -626,7 +627,8 @@ test("Capsule compatibility reports persist the analyzed module path on every st
     modulePath: "deploy/opentofu",
     level: "ready",
     findings: [],
-    providers: [],
+    providerPackages: [],
+    rootProviderRequirements: [],
     resources: [],
     dataSources: [],
     provisioners: [],
@@ -647,6 +649,71 @@ test("Capsule compatibility reports persist the analyzed module path on every st
       label,
     ).toMatchObject(report);
   }
+});
+
+test("compatibility provider graph storage rejects the retired flat array", () => {
+  expect(() =>
+    parseStoredCapsuleCompatibilityProviderGraph([
+      {
+        source: "registry.opentofu.org/hashicorp/random",
+        moduleLocalName: "random",
+        allowed: true,
+      },
+    ])
+  ).toThrow(/must be an object/);
+  expect(() =>
+    parseStoredCapsuleCompatibilityProviderGraph({
+      providerPackages: [],
+      rootProviderRequirements: [],
+      providers: [],
+    })
+  ).toThrow(/unsupported field/);
+});
+
+test("Postgres and D1 report reads reject a retired flat provider row", async () => {
+  const report = {
+    id: "caprep_retired_provider_array",
+    sourceId: "source_retired_provider_array",
+    sourceSnapshotId: "snapshot_retired_provider_array",
+    modulePath: ".",
+    level: "ready",
+    findings: [],
+    providerPackages: [],
+    rootProviderRequirements: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: TS,
+  } satisfies CapsuleCompatibilityReport;
+  const retired = JSON.stringify([
+    {
+      source: "registry.opentofu.org/hashicorp/random",
+      moduleLocalName: "random",
+      allowed: true,
+    },
+  ]);
+
+  const pgClient = await PGliteSqlClient.create();
+  pgClients.push(pgClient);
+  const pgStore = new SqlOpenTofuControlStore({ client: pgClient });
+  await pgStore.putCapsuleCompatibilityReport(report);
+  await pgClient.query(
+    "update takosumi_capsule_compatibility_reports set providers_json = $1::json where id = $2",
+    [retired, report.id],
+  );
+  await expect(pgStore.getCapsuleCompatibilityReport(report.id)).rejects.toThrow(
+    /must be an object/,
+  );
+
+  const d1 = new SqliteFakeD1();
+  const d1Store = new CloudflareD1OpenTofuControlStore(d1);
+  await d1Store.putCapsuleCompatibilityReport(report);
+  await d1.prepare(
+    "update capsule_compatibility_reports set providers_json = ? where id = ?",
+  ).bind(retired, report.id).run();
+  await expect(d1Store.getCapsuleCompatibilityReport(report.id)).rejects.toThrow(
+    /must be an object/,
+  );
 });
 
 test("account Workspace pages push active/archive/order/limit/cursor into every store", async () => {

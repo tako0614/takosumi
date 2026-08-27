@@ -15,7 +15,10 @@ import type {
   CapsuleRequiredInterface,
 } from "./interfaces.ts";
 import type { ScopeBoundaryPolicy } from "./plan-scope.ts";
-import type { RepositoryManifestInterfaceApiVersion } from "./repository-manifest.ts";
+import type {
+  RepositoryManifestInterfaceApiVersion,
+  RepositoryRuntimeRequirement,
+} from "./repository-manifest.ts";
 import type { JsonValue } from "./types.ts";
 import type { ConnectionScopeKind } from "./connections.ts";
 import type { CapsuleStatus } from "./capsules.ts";
@@ -237,6 +240,13 @@ export interface PolicyConfig {
    * binding permissions; repository metadata can never widen this policy.
    */
   readonly repositoryInstallUx?: {
+    /** Exact generic runtime requirement kinds accepted from a repository. */
+    readonly allowedRequirementKinds?: readonly RepositoryRuntimeRequirement["kind"][];
+    /**
+     * Exact Takosumi Accounts scopes repository-owned `identity.oidc` may
+     * request. Absence grants no dynamic Capsule client capability.
+     */
+    readonly allowedOidcScopes?: readonly string[];
     readonly allowedInterfacePermissions: readonly string[];
     /** Delivery mechanisms repository-owned Interface requests may use. */
     readonly allowedInterfaceDeliveryTypes?: readonly string[];
@@ -680,7 +690,7 @@ export interface RuntimeSecretFileMaterialization {
  * a runtime secret file, when declared, is kept only as opaque sealed host
  * material and opened only on the runner dispatch path.
  */
-export interface InstallConfigRuntimeBindingMaterialization {
+export interface InstallConfigRuntimeBindingMaterializationV1 {
   readonly contract: "takosumi.runtime-binding-profile/v1";
   readonly generatedSecrets?: readonly RuntimeGeneratedSecretBinding[];
   readonly oidcClient?: RuntimeOidcClientBindings;
@@ -688,58 +698,20 @@ export interface InstallConfigRuntimeBindingMaterialization {
 }
 
 /**
- * Private host declaration for materializing a Capsule-bound Takosumi Accounts
- * public OIDC client into ordinary OpenTofu module variables.
- *
- * The declaration contains variable names only. The host derives the issuer,
- * public client id, pairwise owner subject, and workers.dev redirect from the
- * current Capsule, InstallConfig, and verified Workspace ProviderBinding. Raw
- * credentials and generated runtime secrets never cross this port.
+ * v2 keeps the value-free wire shape while defining Capsule-stable generated
+ * secret derivation and post-upload activation semantics. Existing v1 rows
+ * remain on their original derivation contract.
  */
-export interface InstallConfigAccountsOidcPairwiseModuleVariableMaterialization {
-  readonly contract: "takosumi.accounts-oidc-module-variables/v1";
-  /** Optional Worker name; an empty value falls back to projectNameVariable. */
-  readonly workerNameVariable: string;
-  /** Required project/resource name used when workerNameVariable is empty. */
-  readonly projectNameVariable: string;
-  /** Additional non-secret public scalar inputs passed to the host materializer. */
-  readonly additionalInputVariables?: readonly string[];
-  /** Input names that Core rejects when a non-empty value is requested. */
-  readonly forbiddenNonEmptyInputVariables?: readonly string[];
-  readonly issuerUrlVariable: string;
-  readonly clientIdVariable: string;
-  readonly ownerSubjectVariable: string;
-  readonly allowUnpinnedOwnerClaimVariable: string;
+export interface InstallConfigRuntimeBindingMaterializationV2 {
+  readonly contract: "takosumi.runtime-binding-profile/v2";
+  readonly generatedSecrets?: readonly RuntimeGeneratedSecretBinding[];
+  readonly oidcClient?: RuntimeOidcClientBindings;
+  readonly runtimeSecretFile?: RuntimeSecretFileMaterialization;
 }
 
-/**
- * Private host declaration for a Capsule-bound public browser client whose
- * four ordinary module variables are derived by Takosumi Accounts. The client
- * identity is stable for the Capsule and this exact profile across immutable
- * InstallConfig replacements; a changed profile is a distinct authority and
- * is never silently rotated during Plan.
- */
-export interface InstallConfigAccountsOidcBrowserModuleVariableMaterialization {
-  readonly contract: "takosumi.accounts-oidc-module-variables/v2";
-  /** Public resource name used for the workers.dev fallback origin. */
-  readonly resourceNameVariable: string;
-  /** Optional exact reviewed HTTPS origin. Empty/unset uses workers.dev. */
-  readonly publicUrlVariable: string;
-  /** Additional non-secret public scalar inputs passed to the host materializer. */
-  readonly additionalInputVariables?: readonly string[];
-  /** Input names that Core rejects when a non-empty value is requested. */
-  readonly forbiddenNonEmptyInputVariables?: readonly string[];
-  readonly accountsUrlVariable: string;
-  readonly issuerUrlVariable: string;
-  readonly clientIdVariable: string;
-  readonly redirectUriVariable: string;
-  readonly callbackPath: string;
-  readonly scopes: readonly string[];
-}
-
-export type InstallConfigAccountsOidcModuleVariableMaterialization =
-  | InstallConfigAccountsOidcPairwiseModuleVariableMaterialization
-  | InstallConfigAccountsOidcBrowserModuleVariableMaterialization;
+export type InstallConfigRuntimeBindingMaterialization =
+  | InstallConfigRuntimeBindingMaterializationV1
+  | InstallConfigRuntimeBindingMaterializationV2;
 
 /**
  * Value-free proof that one exact failed create/update Apply committed the
@@ -813,7 +785,6 @@ export interface InstallConfig {
       readonly derivedTargetDigest: string;
       readonly baseInstallConfigId: string;
       readonly sourceSnapshotId: string;
-      readonly deploymentProfileKey?: string;
     };
   };
   readonly variableMapping: Readonly<Record<string, unknown>>;
@@ -854,8 +825,6 @@ export interface InstallConfig {
   readonly requiredInterfaces?: readonly CapsuleRequiredInterface[];
   /** Private host authority; never repository or public API configuration. */
   readonly runtimeBindingMaterialization?: InstallConfigRuntimeBindingMaterialization;
-  /** Private host authority for non-secret Accounts OIDC module variables. */
-  readonly accountsOidcModuleVariableMaterialization?: InstallConfigAccountsOidcModuleVariableMaterialization;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -867,7 +836,6 @@ export type PublicInstallConfig = Omit<
   | "internal"
   | "requiredInterfaces"
   | "runtimeBindingMaterialization"
-  | "accountsOidcModuleVariableMaterialization"
 >;
 
 /**

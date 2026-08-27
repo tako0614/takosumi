@@ -7,7 +7,8 @@
  *
  * Generated files:
  *   - versions.tf : `terraform { required_providers { ... } }` from the exact
- *                   child-module requirements, without inferred version pins.
+ *                   child-module requirements, preserving exact versions when
+ *                   present without inferring version pins.
  *   - main.tf     : `module "child" { source = "./module"; <inputs> }`.
  *   - outputs.tf  : passthrough of the explicit output allowlist only:
  *                   `output "<public>" { value = module.child.<from> }`.
@@ -39,7 +40,7 @@ export const ROOTGEN_VALIDATION_ERROR_REASONS = [
   "rootgen_provider_configuration_alias_override",
   "rootgen_conflicting_provider_bindings",
   "rootgen_conflicting_provider_local_names",
-  "rootgen_invalid_provider_local_name",
+  "rootgen_provider_binding_outside_root_requirements",
   "rootgen_explicit_provider_source_required",
   "rootgen_non_finite_number_input",
   "rootgen_unsupported_json_input",
@@ -79,34 +80,29 @@ export interface RootProviderBinding {
   /** Explicit provider source (`namespace/type` or `hostname/namespace/type`). */
   readonly provider: string;
   /** Exact provider local name expected by the child module. */
-  readonly moduleLocalName?: string;
+  readonly moduleLocalName: string;
   /** Alias expected by the child module; absent means its default provider. */
   readonly childAlias?: string;
   /** Alias of the root provider block; absent means its default provider. */
   readonly rootAlias?: string;
-  /**
-   * @deprecated Ambiguous pre-v1 root alias. New callers must provide the
-   * independent child/root identity fields above.
-   */
-  readonly alias?: string;
   /** Non-secret provider-block arguments rendered as escaped HCL literals. */
   readonly configuration?: Readonly<Record<string, JsonValue>>;
 }
 
 export interface RootProviderRequirement {
   /** Explicit provider source (`namespace/type` or `hostname/namespace/type`). */
-  readonly provider: string;
+  readonly source: string;
   /** Exact local name declared in the child module. */
-  readonly localName: string;
+  readonly moduleLocalName: string;
+  /** Exact configuration alias declared by the selected root module. */
+  readonly childAlias?: string;
+  /** Exact literal version only when selected-root analysis proved one. */
+  readonly version?: string;
 }
 
 export interface GenerateOpenTofuChildModuleRootInput {
-  readonly requiredProviders: readonly string[];
-  /**
-   * Identity-preserving provider requirements discovered from the child
-   * module. Older callers may omit this and use the source-tail fallback.
-   */
-  readonly providerRequirements?: readonly RootProviderRequirement[];
+  /** Exact provider identities declared or used by the selected root module. */
+  readonly rootProviderRequirements: readonly RootProviderRequirement[];
   readonly inputs: Readonly<Record<string, JsonValue>>;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly providerBindings?: ReadonlyArray<RootProviderBinding>;
@@ -122,16 +118,15 @@ export function generateOpenTofuChildModuleRoot(
   input: GenerateOpenTofuChildModuleRootInput,
 ): GeneratedRootModule {
   const providerBindings = input.providerBindings ?? [];
+  const rootProviderRequirements = input.rootProviderRequirements;
   return {
     files: {
-      "versions.tf": renderProviderVersionsTf(
-        input.providerRequirements ??
-          input.requiredProviders.map((provider) => ({
-            provider,
-            localName: providerLocalName(provider),
-          })),
+      "versions.tf": renderProviderVersionsTf(rootProviderRequirements),
+      "main.tf": renderGenericMainTf(
+        input.inputs,
+        providerBindings,
+        rootProviderRequirements,
       ),
-      "main.tf": renderGenericMainTf(input.inputs, providerBindings),
       "outputs.tf": renderGenericOutputsTf(input.outputAllowlist),
     },
   };
@@ -143,25 +138,38 @@ function renderProviderVersionsTf(
   if (providers.length === 0) {
     return ["terraform {}", ""].join("\n");
   }
-  const byLocalName = new Map<string, string>();
+  const byLocalName = new Map<
+    string,
+    { readonly source: string; readonly version?: string }
+  >();
   for (const requirement of providers) {
-    assertIdentifier(requirement.localName, "rootgen: provider local name");
-    const source = normalizeProviderSource(requirement.provider);
-    const existing = byLocalName.get(requirement.localName);
-    if (existing && existing !== source) {
+    assertIdentifier(
+      requirement.moduleLocalName,
+      "rootgen: provider local name",
+    );
+    const source = normalizeProviderSource(requirement.source);
+    const existing = byLocalName.get(requirement.moduleLocalName);
+    if (existing && existing.source !== source) {
       throw new RootgenValidationError(
         "rootgen_conflicting_provider_local_names",
-        `rootgen: provider local name ${requirement.localName} maps to both ${existing} and ${source}`,
+        `rootgen: provider local name ${requirement.moduleLocalName} maps to both ${existing.source} and ${source}`,
       );
     }
-    byLocalName.set(requirement.localName, source);
+    const version = requirement.version ?? existing?.version;
+    byLocalName.set(requirement.moduleLocalName, {
+      source,
+      ...(version === undefined ? {} : { version }),
+    });
   }
   const entries = Array.from(byLocalName.entries())
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([localName, source]) => {
+    .map(([localName, requirement]) => {
       const lines = [
         `    ${localName} = {`,
-        `      source = ${hclString(source)}`,
+        `      source = ${hclString(requirement.source)}`,
+        ...(requirement.version === undefined
+          ? []
+          : [`      version = ${hclString(`= ${requirement.version}`)}`]),
         `    }`,
       ];
       return lines.join("\n");
@@ -196,7 +204,7 @@ function appendProviderSections(
     for (const binding of providerBindings) {
       const localProvider = bindingLocalName(binding);
       const aliasLines = [`provider ${hclString(localProvider)} {`];
-      const rootAlias = bindingRootAlias(binding);
+      const rootAlias = binding.rootAlias;
       if (rootAlias) {
         assertIdentifier(rootAlias, "rootgen: root provider alias");
         aliasLines.push(`  alias = ${hclString(rootAlias)}`);
@@ -222,6 +230,7 @@ function appendProviderSections(
 function renderGenericMainTf(
   inputs: Readonly<Record<string, JsonValue>>,
   providerBindings: ReadonlyArray<RootProviderBinding>,
+  rootProviderRequirements: readonly RootProviderRequirement[],
 ): string {
   const sections: string[] = [
     [
@@ -239,7 +248,7 @@ function renderGenericMainTf(
     'module "child" {',
     `  source = ${hclString(CHILD_MODULE_SOURCE)}`,
   ];
-  appendProviderMap(moduleLines, providerBindings);
+  appendProviderMap(moduleLines, providerBindings, rootProviderRequirements);
   for (const name of Object.keys(inputs).sort()) {
     assertIdentifier(name, "rootgen: input name");
     moduleLines.push(`  ${name} = ${hclJsonLiteral(inputs[name]!)}`);
@@ -252,8 +261,12 @@ function renderGenericMainTf(
 function appendProviderMap(
   moduleLines: string[],
   providerBindings: ReadonlyArray<RootProviderBinding>,
+  rootProviderRequirements: readonly RootProviderRequirement[],
 ): void {
-  const entries = providerMapEntries(providerBindings);
+  const entries = providerMapEntries(
+    providerBindings,
+    rootProviderRequirements,
+  );
   if (entries.length === 0) return;
   moduleLines.push("", "  providers = {");
   for (const entry of entries) {
@@ -269,6 +282,7 @@ interface ProviderMapEntry {
 
 function providerMapEntries(
   providerBindings: ReadonlyArray<RootProviderBinding>,
+  rootProviderRequirements: readonly RootProviderRequirement[],
 ): ProviderMapEntry[] {
   const byLocalProvider = new Map<string, RootProviderBinding[]>();
   for (const binding of providerBindings) {
@@ -278,61 +292,76 @@ function providerMapEntries(
       binding,
     ]);
   }
+  const requirementsByChildRef = new Map<
+    string,
+    RootProviderRequirement
+  >();
   const byChildRef = new Map<string, ProviderMapEntry>();
+  const explicitRootRefByChildRef = new Map<string, string>();
+  for (const requirement of rootProviderRequirements) {
+    assertIdentifier(
+      requirement.moduleLocalName,
+      "rootgen: provider local name",
+    );
+    const childRef = childProviderRef(
+      requirement.moduleLocalName,
+      requirement.childAlias,
+    );
+    const normalized = normalizeProviderSource(requirement.source);
+    const existing = requirementsByChildRef.get(childRef);
+    if (
+      existing &&
+      normalizeProviderSource(existing.source) !== normalized
+    ) {
+      throw new RootgenValidationError(
+        "rootgen_conflicting_provider_local_names",
+        `rootgen: provider reference ${childRef} maps to both ${normalizeProviderSource(existing.source)} and ${normalized}`,
+      );
+    }
+    requirementsByChildRef.set(childRef, requirement);
+    byChildRef.set(childRef, {
+      childRef,
+      rootRef: requirement.moduleLocalName,
+    });
+  }
   for (const [localProvider, bindings] of byLocalProvider) {
-    // Compatibility only for pre-v1 bindings whose one `alias` field could not
-    // distinguish a root alias from a child alias. New bindings never take this
-    // path.
-    const singleAliasDefault =
-      bindings.length === 1 &&
-      bindings[0]?.alias !== undefined &&
-      !hasExplicitProviderIdentity(bindings[0]);
     for (const binding of bindings) {
-      const childRef = singleAliasDefault
-        ? localProvider
-        : childProviderRef(localProvider, bindingChildAlias(binding));
-      const rootRef = rootProviderRef(localProvider, bindingRootAlias(binding));
-      const existing = byChildRef.get(childRef);
-      if (existing) {
-        if (existing.rootRef === rootRef) continue;
+      const childRef = childProviderRef(localProvider, binding.childAlias);
+      const requirement = requirementsByChildRef.get(childRef);
+      if (
+        !requirement ||
+        normalizeProviderSource(requirement.source) !==
+          normalizeProviderSource(binding.provider)
+      ) {
+        throw new RootgenValidationError(
+          "rootgen_provider_binding_outside_root_requirements",
+          `rootgen: provider binding ${childRef} is not an exact selected-root provider requirement`,
+        );
+      }
+      const rootRef = rootProviderRef(localProvider, binding.rootAlias);
+      const existingRootRef = explicitRootRefByChildRef.get(childRef);
+      if (existingRootRef !== undefined && existingRootRef !== rootRef) {
         throw new RootgenValidationError(
           "rootgen_conflicting_provider_bindings",
           `rootgen: conflicting provider bindings for ${childRef}`,
         );
       }
+      explicitRootRefByChildRef.set(childRef, rootRef);
       byChildRef.set(childRef, {
         childRef,
         rootRef,
       });
     }
   }
-  return Array.from(byChildRef.values());
-}
-
-function hasExplicitProviderIdentity(binding: RootProviderBinding): boolean {
-  return (
-    binding.moduleLocalName !== undefined ||
-    binding.childAlias !== undefined ||
-    binding.rootAlias !== undefined
+  return Array.from(byChildRef.values()).sort((left, right) =>
+    left.childRef.localeCompare(right.childRef),
   );
 }
 
 function bindingLocalName(binding: RootProviderBinding): string {
-  const localName =
-    binding.moduleLocalName ?? providerLocalName(binding.provider);
+  const localName = binding.moduleLocalName;
   assertIdentifier(localName, "rootgen: provider local name");
   return localName;
-}
-
-function bindingChildAlias(binding: RootProviderBinding): string | undefined {
-  return (
-    binding.childAlias ??
-    (hasExplicitProviderIdentity(binding) ? undefined : binding.alias)
-  );
-}
-
-function bindingRootAlias(binding: RootProviderBinding): string | undefined {
-  return binding.rootAlias ?? binding.alias;
 }
 
 function childProviderRef(
@@ -382,22 +411,6 @@ function assertOutputPath(value: string): void {
   for (const part of value.split(".")) {
     assertIdentifier(part, "rootgen: output allowlist path");
   }
-}
-
-/**
- * OpenTofu local provider name used inside required_providers / module
- * references. OpenTofu defines this as the type segment of an explicit source.
- */
-function providerLocalName(rule: string): string {
-  const parts = rule.split("/");
-  const type = parts[parts.length - 1] ?? rule;
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(type)) {
-    throw new RootgenValidationError(
-      "rootgen_invalid_provider_local_name",
-      `rootgen: provider rule ${rule} has no valid local name`,
-    );
-  }
-  return type;
 }
 
 /**

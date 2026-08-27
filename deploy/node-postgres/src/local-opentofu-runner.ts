@@ -22,8 +22,6 @@ import type {
   OpenTofuSourceSyncResult,
   OpenTofuStableSourceTagResolutionJob,
   OpenTofuStableSourceTagResolutionResult,
-  OpenTofuSourceSnapshotPresentationFileJob,
-  OpenTofuSourceSnapshotPresentationFile,
   ProviderInstallationEvidence,
   ReleaseCommandRunJob,
   ReleaseCommandRunResult,
@@ -36,7 +34,10 @@ import {
 } from "../../../core/domains/deploy-control/errors.ts";
 import type { SecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { normalizePlanResourceScope } from "takosumi-contract";
-import { parseRepositoryManifestSnapshot } from "takosumi-contract/sources";
+import {
+  parseRepositoryManifestSnapshot,
+  parseRepositoryModulesSnapshot,
+} from "takosumi-contract/sources";
 import type {
   DispatchPriorState,
   DispatchStateScope,
@@ -456,10 +457,11 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         `/runs/${encodeURIComponent(job.applyRun.id)}/artifacts/tfstate`,
         control?.signal,
       );
-      const normalizedFailure = failedApplyResult(
+      const normalizedFailure = failedProviderExecutionResult(
         result,
         stateBytes ? "persisted" : "unavailable",
         stateBytes ? await digestBytes(stateBytes) : undefined,
+        "apply",
       );
       if (!stateBytes) return normalizedFailure;
       const committed = await this.commitStateMutation(
@@ -538,6 +540,29 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       job,
       control?.signal,
     );
+    if (runnerProviderExecutionFailed(result)) {
+      const stateBytes = await fetchRunnerArtifactIfPresent(
+        this.transport,
+        job.applyRun.id,
+        `/runs/${encodeURIComponent(job.applyRun.id)}/artifacts/tfstate`,
+        control?.signal,
+      );
+      const normalizedFailure = failedProviderExecutionResult(
+        result,
+        stateBytes ? "persisted" : "unavailable",
+        stateBytes ? await digestBytes(stateBytes) : undefined,
+        "destroy",
+      );
+      if (!stateBytes) return normalizedFailure as OpenTofuDestroyResult;
+      const committed = await this.commitStateMutation(
+        job.applyRun.id,
+        "destroy",
+        job.stateScope,
+        stateBytes,
+        normalizedFailure,
+      );
+      return committed.result as OpenTofuDestroyResult;
+    }
     const stateBytes = await fetchRunnerArtifact(
       this.transport,
       job.applyRun.id,
@@ -633,9 +658,12 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     const repositoryManifest = parseRepositoryManifestSnapshot(
       result.repositoryManifest,
     );
+    const repositoryModules = parseRepositoryModulesSnapshot(
+      result.repositoryModules,
+    );
     const resolvedCommit = requiredString(result, "resolvedCommit");
-    if (!archiveDigest || archiveSizeBytes === undefined) {
-      throw new Error(`source_sync ${job.runId} returned no archive metadata`);
+    if (!archiveDigest || archiveSizeBytes === undefined || !repositoryModules) {
+      throw new Error(`source_sync ${job.runId} returned incomplete metadata`);
     }
     if (archive && stringValue(archive, "kind") === "object-storage") {
       assertMatchingReusedSourceArchive(
@@ -660,6 +688,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       archiveSizeBytes,
       ...(repositoryInstallMetadata ? { repositoryInstallMetadata } : {}),
       ...(repositoryManifest ? { repositoryManifest } : {}),
+      repositoryModules,
       ...(archiveRef ? { archiveRef } : {}),
       ...(phaseTimings ? { phaseTimings } : {}),
     };
@@ -708,31 +737,6 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     return {
       tag: requiredString(result, "tag"),
       commit: requiredString(result, "commit"),
-    };
-  }
-
-  async readSourceSnapshotPresentationFile(
-    job: OpenTofuSourceSnapshotPresentationFileJob,
-  ): Promise<OpenTofuSourceSnapshotPresentationFile> {
-    await this.restoreSourceArchive(job.runId, {
-      ref: job.sourceSnapshot.archiveRef,
-      digest: job.sourceSnapshot.archiveDigest,
-    });
-    const result = await runRunner(
-      this.transport,
-      "source_snapshot_file",
-      job.runId,
-      { action: "source_snapshot_file", path: job.path },
-    );
-    const sizeBytes = result.sizeBytes;
-    if (typeof sizeBytes !== "number" || !Number.isSafeInteger(sizeBytes)) {
-      throw new Error("source_snapshot_file returned an invalid sizeBytes");
-    }
-    return {
-      path: requiredString(result, "path"),
-      text: requiredString(result, "text"),
-      digest: requiredString(result, "digest"),
-      sizeBytes,
     };
   }
 
@@ -1014,7 +1018,6 @@ async function runRunner(
     | "compatibility_check"
     | "source_sync"
     | "stable_semver_tag"
-    | "source_snapshot_file"
     | "release",
   runId: string,
   request: unknown,
@@ -1036,7 +1039,8 @@ async function runRunner(
   const body = text.trim().length > 0 ? parseObject(text) : {};
   if (
     !response.ok &&
-    !(action === "apply" && runnerProviderExecutionFailed(body))
+    !((action === "apply" || action === "destroy") &&
+      runnerProviderExecutionFailed(body))
   ) {
     const reason = stringValue(body, "errorCode");
     const detail =
@@ -1062,13 +1066,14 @@ function runnerProviderExecutionFailed(
   );
 }
 
-function failedApplyResult(
+function failedProviderExecutionResult(
   result: Record<string, unknown>,
   statePersistence: "persisted" | "unavailable",
   stateDigest: string | undefined,
-): OpenTofuApplyResult {
+  action: "apply" | "destroy",
+): OpenTofuApplyResult | OpenTofuDestroyResult {
   const errorCode = stringValue(result, "errorCode");
-  return {
+  const failure = {
     providerExecutionFailure: {
       kind: "provider_execution_failed",
       statePersistence,
@@ -1081,7 +1086,12 @@ function failedApplyResult(
       ? { providerInstallation: providerInstallation(result) }
       : {}),
     diagnostics: diagnostics(result),
-  };
+  } as const;
+  return action === "apply"
+    ? failure
+    : {
+        ...failure,
+      };
 }
 
 async function fetchRunnerArtifact(

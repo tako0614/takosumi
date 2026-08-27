@@ -150,6 +150,12 @@ export type OperatorProviderConnectionDeclaration =
 export interface CredentialRecipeHostComposition {
   readonly credentialRecipes: readonly CredentialRecipe[];
   readonly credentialRecipeDrivers: CredentialRecipeDriverRegistry;
+  /**
+   * Explicit host authority for providers that require a ProviderConnection
+   * in the generic default Capsule policy. Recipe and connection presence do
+   * not imply this requirement; every entry is an exact canonical source.
+   */
+  readonly credentialRequiredProviderSources?: readonly string[];
   readonly operatorProviderConnections?: readonly FixedOperatorProviderConnectionDeclaration[];
 }
 
@@ -178,6 +184,8 @@ export function resolveCredentialRecipeHostComposition(
       !isCredentialRecipeDriverRegistry(
         contribution.credentialRecipeDrivers,
       ) ||
+      (contribution.credentialRequiredProviderSources !== undefined &&
+        !Array.isArray(contribution.credentialRequiredProviderSources)) ||
       (contribution.operatorProviderConnections !== undefined &&
         !Array.isArray(contribution.operatorProviderConnections))
     ) {
@@ -189,11 +197,24 @@ export function resolveCredentialRecipeHostComposition(
   if (
     !Array.isArray(base.credentialRecipes) ||
     !isCredentialRecipeDriverRegistry(base.credentialRecipeDrivers) ||
+    (base.credentialRequiredProviderSources !== undefined &&
+      !Array.isArray(base.credentialRequiredProviderSources)) ||
     (base.operatorProviderConnections !== undefined &&
       !Array.isArray(base.operatorProviderConnections))
   ) {
     throw new TypeError("base Credential Recipe composition is invalid");
   }
+
+  const credentialRequiredProviderSources = sortedCredentialProviderSources(
+    validateCredentialRequiredProviderSources(
+      base.credentialRequiredProviderSources,
+      "base Credential Recipe composition",
+    ),
+    validateCredentialRequiredProviderSources(
+      contribution?.credentialRequiredProviderSources,
+      "Credential Recipe host contribution",
+    ),
+  );
 
   const recipes = [
     ...base.credentialRecipes,
@@ -275,10 +296,50 @@ export function resolveCredentialRecipeHostComposition(
   return Object.freeze({
     credentialRecipes: Object.freeze([...recipes]),
     credentialRecipeDrivers: Object.freeze({ ...drivers }),
+    ...(credentialRequiredProviderSources.length > 0
+      ? {
+          credentialRequiredProviderSources: Object.freeze(
+            credentialRequiredProviderSources,
+          ),
+        }
+      : {}),
     operatorProviderConnections: Object.freeze([
       ...operatorProviderConnections,
     ]),
   });
+}
+
+const CANONICAL_PROVIDER_SOURCE_PATTERN =
+  /^[a-z0-9.-]+\/[a-z0-9_-]+\/[a-z0-9_-]+$/u;
+
+function validateCredentialRequiredProviderSources(
+  value: unknown,
+  label: string,
+): readonly string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new TypeError(
+      `${label}.credentialRequiredProviderSources must be an array`,
+    );
+  }
+  for (const source of value) {
+    if (
+      typeof source !== "string" ||
+      !CANONICAL_PROVIDER_SOURCE_PATTERN.test(source) ||
+      canonicalProviderSource(source) !== source
+    ) {
+      throw new TypeError(
+        `${label}.credentialRequiredProviderSources must contain exact canonical provider sources`,
+      );
+    }
+  }
+  return value;
+}
+
+function sortedCredentialProviderSources(
+  ...sourceLists: readonly (readonly string[])[]
+): string[] {
+  return Array.from(new Set(sourceLists.flat())).sort();
 }
 
 /** Validate one fixed-id declaration against the resolved host composition. */

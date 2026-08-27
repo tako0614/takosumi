@@ -26,7 +26,6 @@ import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { analyzeOpenTofuCapsuleFiles } from "../../../../core/domains/sources/capsule_compatibility.ts";
-import { resolveRepoOwnedDeploymentProfile } from "../../../../accounts/service/src/control/repo-owned-install-config.ts";
 import { RunCredentialBroker } from "../../../../core/domains/deploy-control/run_credential_broker.ts";
 import { generateOpenTofuChildModuleRoot } from "../../../../lib/rootgen/src/mod.ts";
 import { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../../providers/registry.ts";
@@ -44,7 +43,6 @@ const repositoryManifest = {
   apiVersion: "takosumi.com/v2.1",
   kind: "Repository",
   install: {
-    defaultModule: ".",
     modules: { ".": { inputs: [] } },
   },
 } satisfies RepositoryManifestDocument;
@@ -325,7 +323,8 @@ async function seedTakoserverRunModel(
     modulePath: ".",
     level: compatibility.level,
     findings: compatibility.findings,
-    providers: compatibility.providers,
+    providerPackages: compatibility.providerPackages,
+    rootProviderRequirements: compatibility.rootProviderRequirements,
     resources: compatibility.resources,
     dataSources: compatibility.dataSources,
     provisioners: compatibility.provisioners,
@@ -353,35 +352,26 @@ async function seedTakoserverRunModel(
   return { seeded, vault, connection };
 }
 
-test("Takoform profile using Takoserver Host connection uses the exact provider binding and runner-only env", async () => {
-  const profile = resolveRepoOwnedDeploymentProfile({
-    source,
-    sourceSnapshot: snapshot,
-    candidates: [installConfig],
-    deploymentProfileKey: "takoform-v2",
-  });
-  expect(profile).toEqual({
-    ok: true,
-    kind: "profile",
-    installConfig,
-    modulePath: ".",
-  });
-  if (!profile.ok) return;
-
+test("generic Takoform install using a Takoserver Host connection uses the exact provider binding and runner-only env", async () => {
   const profileCompatibility = analyzeOpenTofuCapsuleFiles({
     sourceId: source.id,
     sourceSnapshot: snapshot,
     files: [providerSourceFile],
-    policy: profile.installConfig.policy,
+    policy: installConfig.policy,
   });
   expect(profileCompatibility.level).toBe("ready");
-  expect(profileCompatibility.providers).toEqual([
+  expect(profileCompatibility.providerPackages).toEqual([
     {
       source: TAKOSERVER_PROVIDER,
-      localName: "takoform",
-      versionConstraint: "= 2.1.1",
-      aliases: [],
+      version: "2.1.1",
       allowed: true,
+    },
+  ]);
+  expect(profileCompatibility.rootProviderRequirements).toEqual([
+    {
+      source: TAKOSERVER_PROVIDER,
+      moduleLocalName: "takoform",
+      version: "2.1.1",
       credentialRequired: true,
     },
   ]);
@@ -396,7 +386,15 @@ test("Takoform profile using Takoserver Host connection uses the exact provider 
   const connections = new ConnectionsService({ store });
   const resolved = await connections.resolveProviderBindingsForRun(
     seeded.capsule,
-    [TAKOSERVER_PROVIDER],
+    [
+      {
+        source: TAKOSERVER_PROVIDER,
+        moduleLocalName: "takoform",
+        version: "2.1.1",
+        allowed: true,
+        credentialRequired: true,
+      },
+    ],
   );
   expect(resolved).toHaveLength(1);
   expect(resolved[0]).toMatchObject({
@@ -415,9 +413,8 @@ test("Takoform profile using Takoserver Host connection uses the exact provider 
   });
 
   const generatedRoot = generateOpenTofuChildModuleRoot({
-    requiredProviders: [TAKOSERVER_PROVIDER],
-    providerRequirements: [
-      { provider: TAKOSERVER_PROVIDER, localName: "takoform" },
+    rootProviderRequirements: [
+      { source: TAKOSERVER_PROVIDER, moduleLocalName: "takoform" },
     ],
     inputs: {},
     outputAllowlist: installConfig.outputAllowlist,
@@ -469,7 +466,7 @@ test("Takoform profile using Takoserver Host connection uses the exact provider 
   });
 
   const persisted = {
-    profile: profile.installConfig,
+    installConfig,
     binding: resolved[0],
     manifest: credentials?.manifest,
     mintEvents: await store.listCredentialMintEventsForRun("run_takoserver"),
@@ -479,7 +476,7 @@ test("Takoform profile using Takoserver Host connection uses the exact provider 
   expect(JSON.stringify(persisted)).not.toContain(TAKOSERVER_TOKEN);
 });
 
-test("Takoform profile using Takoserver Host credentials remain dispatch-only through the Capsule apply ledger", async () => {
+test("generic Takoform install keeps Takoserver Host credentials dispatch-only through the Capsule apply ledger", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const { seeded, vault, connection } = await seedTakoserverRunModel(store, {
     capsuleId: "cap_takoserver_apply",

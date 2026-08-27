@@ -124,6 +124,28 @@ test("every MCP POST re-introspects exact Interface OAuth evidence and serves ad
   expect((await second?.json()).result.tools).toHaveLength(9);
   expect(
     OPERATOR_CONTROL_MCP_TOOLS.find(
+      (tool) => tool.name === "takosumi_install_plan_create",
+    )?.inputSchema,
+  ).toMatchObject({
+    properties: {
+      options: {
+        properties: {
+          modulePath: { type: "string", minLength: 1, maxLength: 1024 },
+          providerBindings: {
+            type: "array",
+            maxItems: 32,
+            items: {
+              required: ["provider", "moduleLocalName", "connectionId"],
+              additionalProperties: false,
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  });
+  expect(
+    OPERATOR_CONTROL_MCP_TOOLS.find(
       (tool) => tool.name === "takosumi_capsules_list",
     )?.annotations,
   ).toEqual({ readOnlyHint: true, destructiveHint: false });
@@ -172,15 +194,30 @@ test("Git install-plan tools forward only the bounded public API contract and pr
     request("tools/call", {
       name: "takosumi_install_plan_create",
       arguments: {
-        idempotencyKey: "agent-run-1:yurucommu",
+        idempotencyKey: "agent-run-1:sample-app",
         source: {
-          name: "yurucommu-source",
-          url: "https://github.com/tako0614/yurucommu.git",
+          name: "sample-app-source",
+          url: "https://git.example.test/apps/sample-app.git",
           ref: "main",
           path: ".",
         },
-        capsule: { name: "yurucommu", environment: "production" },
-        options: { deploymentProfileKey: "takoform-v2" },
+        capsule: { name: "sample-app", environment: "production" },
+        options: {
+          modulePath: ".",
+          providerBindings: [
+            {
+              provider: "registry.opentofu.org/cloudflare/cloudflare",
+              moduleLocalName: "cloudflare",
+              connectionId: "conn_cloudflare_default",
+            },
+            {
+              provider: "registry.opentofu.org/cloudflare/cloudflare",
+              moduleLocalName: "cloudflare",
+              childAlias: "account",
+              connectionId: "conn_cloudflare_account",
+            },
+          ],
+        },
       },
     }),
     env(),
@@ -195,17 +232,32 @@ test("Git install-plan tools forward only the bounded public API contract and pr
     "/api/v1/workspaces/workspace_a/install-plans",
   );
   expect(dispatched[0]!.headers.get("idempotency-key")).toBe(
-    "agent-run-1:yurucommu",
+    "agent-run-1:sample-app",
   );
   expect(await dispatched[0]!.json()).toEqual({
     source: {
-      name: "yurucommu-source",
-      url: "https://github.com/tako0614/yurucommu.git",
+      name: "sample-app-source",
+      url: "https://git.example.test/apps/sample-app.git",
       ref: "main",
       path: ".",
     },
-    capsule: { name: "yurucommu", environment: "production" },
-    options: { deploymentProfileKey: "takoform-v2" },
+    capsule: { name: "sample-app", environment: "production" },
+    options: {
+      modulePath: ".",
+      providerBindings: [
+        {
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
+          moduleLocalName: "cloudflare",
+          connectionId: "conn_cloudflare_default",
+        },
+        {
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
+          moduleLocalName: "cloudflare",
+          childAlias: "account",
+          connectionId: "conn_cloudflare_account",
+        },
+      ],
+    },
   });
 
   const reconciled = await handlePlatformOperatorControlMcpRequest(
@@ -256,7 +308,7 @@ test("install-plan reads and reconciliation are fenced to the bound Workspace", 
   });
 });
 
-test("install-plan tools reject unstable idempotency keys and undeclared variable payloads before dispatch", async () => {
+test("install-plan tools reject unstable keys and retired or ambiguous option shapes before dispatch", async () => {
   let dispatched = false;
   for (const arguments_ of [
     {
@@ -269,6 +321,41 @@ test("install-plan tools reject unstable idempotency keys and undeclared variabl
       source: { name: "source", url: "https://example.com/repo.git" },
       capsule: { name: "capsule", environment: "production" },
       variables: { token: "must-not-cross" },
+    },
+    {
+      idempotencyKey: "agent-run-2",
+      source: { name: "source", url: "https://example.com/repo.git" },
+      capsule: { name: "capsule", environment: "production" },
+      options: {
+        providerBindingConnectionIds: {
+          "registry.opentofu.org/cloudflare/cloudflare": "conn_old_map",
+        },
+      },
+    },
+    {
+      idempotencyKey: "agent-run-3",
+      source: { name: "source", url: "https://example.com/repo.git" },
+      capsule: { name: "capsule", environment: "production" },
+      options: { deploymentProfileKey: "retired-profile" },
+    },
+    {
+      idempotencyKey: "agent-run-4",
+      source: { name: "source", url: "https://example.com/repo.git" },
+      capsule: { name: "capsule", environment: "production" },
+      options: {
+        providerBindings: [
+          {
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            moduleLocalName: "cloudflare",
+            connectionId: "conn_a",
+          },
+          {
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            moduleLocalName: "cloudflare",
+            connectionId: "conn_b",
+          },
+        ],
+      },
     },
   ]) {
     const response = await handlePlatformOperatorControlMcpRequest(

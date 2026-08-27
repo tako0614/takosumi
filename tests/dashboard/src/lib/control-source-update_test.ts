@@ -7,6 +7,7 @@ import {
   planCapsuleUpdate,
   updateCapsuleSourceRevision,
   waitForLatestSourceSnapshot,
+  listSourceSnapshotInstallModules,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
 const realFetch = globalThis.fetch;
@@ -49,7 +50,54 @@ const NEW_SNAPSHOT = {
 } as const;
 
 describe("SourceSnapshot update pinning", () => {
-  test("compile preflight sends only the opaque deployment profile selection", async () => {
+  test("reads the bounded install-module projection for the exact snapshot", async () => {
+    let requestedUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requestedUrl = String(input);
+      return json({
+        status: "ready",
+        sourceSnapshotId: "snap_new",
+        scopePath: ".",
+        modules: [
+          {
+            path: ".",
+            providerPackages: [],
+            rootProviderRequirements: [],
+          },
+          {
+            path: "deploy/takoform",
+            providerPackages: [],
+            rootProviderRequirements: [],
+          },
+        ],
+      });
+    }) as typeof fetch;
+
+    await expect(
+      listSourceSnapshotInstallModules("src_1", "snap_new"),
+    ).resolves.toEqual({
+      status: "ready",
+      sourceSnapshotId: "snap_new",
+      scopePath: ".",
+      modules: [
+          {
+            path: ".",
+            providerPackages: [],
+            rootProviderRequirements: [],
+          },
+          {
+            path: "deploy/takoform",
+            providerPackages: [],
+            rootProviderRequirements: [],
+          },
+      ],
+    });
+    expect(requestedUrl).toBe(
+      "/api/v1/sources/src_1/snapshots/snap_new/install-modules",
+    );
+  });
+
+  test("compile preflight carries an explicit non-root module path", async () => {
     let compatibilityBody: unknown;
     globalThis.fetch = (async (
       input: RequestInfo | URL,
@@ -82,7 +130,8 @@ describe("SourceSnapshot update pinning", () => {
             id: "caprep_new",
             level: "ready",
             findings: [],
-            providers: [],
+            providerPackages: [],
+            rootProviderRequirements: [],
             resources: [],
             rootModuleVariables: [],
           },
@@ -100,14 +149,347 @@ describe("SourceSnapshot update pinning", () => {
       name: "app",
       installConfigId: "client-selected-config",
       compileInstallUx: true,
-      deploymentProfileKey: "byoc-v1",
     });
 
     expect(compatibilityBody).toEqual({
       sourceSnapshotId: "snap_new",
       compileInstallUx: true,
       capsuleName: "app",
-      deploymentProfileKey: "byoc-v1",
+      modulePath: "deploy/client-selected-path",
+    });
+  });
+
+  test("creates the Source from sourcePath and keeps modulePath archive-relative", async () => {
+    let sourceCreateBody: unknown;
+    let compatibilityBody: unknown;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (
+        url === "/api/v1/sources?workspaceId=workspace_1&limit=100" &&
+        method === "GET"
+      ) {
+        return json({ sources: [] });
+      }
+      if (url === "/api/v1/sources" && method === "POST") {
+        sourceCreateBody =
+          typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+        return json({
+          source: {
+            id: "src_nested",
+            workspaceId: "workspace_1",
+            name: "app",
+            url: "https://example.test/app.git",
+            defaultRef: "main",
+            defaultPath: "infra",
+            status: "active",
+            autoSync: true,
+            createdAt: "2026-07-10T00:00:00.000Z",
+            updatedAt: "2026-07-10T00:00:00.000Z",
+          },
+          hookSecret: "fixture-only",
+        }, 201);
+      }
+      if (url === "/api/v1/sources/src_nested/sync") {
+        return json({ run: { id: "ssr_nested" } }, 201);
+      }
+      if (url === "/api/v1/runs/ssr_nested") {
+        return json({
+          run: {
+            id: "ssr_nested",
+            type: "source_sync",
+            status: "succeeded",
+            workspaceId: "workspace_1",
+            sourceSnapshotId: "snap_nested",
+            createdAt: "2026-07-10T00:00:30.000Z",
+          },
+        });
+      }
+      if (url === "/api/v1/sources/src_nested/snapshots") {
+        return json({
+          snapshots: [
+            {
+              ...NEW_SNAPSHOT,
+              id: "snap_nested",
+              sourceId: "src_nested",
+              path: "infra",
+              fetchedByRunId: "ssr_nested",
+            },
+          ],
+        });
+      }
+      if (url === "/api/v1/sources/src_nested/compatibility-check") {
+        compatibilityBody =
+          typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+        return json({
+          report: {
+            id: "caprep_nested",
+            level: "ready",
+            findings: [],
+            providerPackages: [],
+            rootProviderRequirements: [],
+            resources: [],
+            rootModuleVariables: [],
+          },
+        }, 201);
+      }
+      throw new Error(`unexpected request: ${method} ${url}`);
+    }) as typeof fetch;
+
+    await checkCapsuleCompatibility({
+      workspaceId: "workspace_1",
+      gitUrl: "https://example.test/app.git",
+      ref: "main",
+      sourcePath: "infra",
+      path: "deploy/selected",
+      name: "app",
+      compileInstallUx: true,
+    });
+
+    expect(sourceCreateBody).toEqual({
+      workspaceId: "workspace_1",
+      name: "app",
+      url: "https://example.test/app.git",
+      defaultRef: "main",
+      defaultPath: "infra",
+      autoSync: true,
+    });
+    expect(compatibilityBody).toEqual({
+      sourceSnapshotId: "snap_nested",
+      compileInstallUx: true,
+      capsuleName: "app",
+      modulePath: "deploy/selected",
+    });
+  });
+
+  test("rejects non-canonical sourcePath before Source registration", async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      throw new Error("must not fetch");
+    }) as typeof fetch;
+
+    await expect(
+      checkCapsuleCompatibility({
+        workspaceId: "workspace_1",
+        gitUrl: "https://example.test/app.git",
+        ref: "main",
+        sourcePath: "infra/../other",
+        path: "deploy/selected",
+        name: "app",
+        compileInstallUx: true,
+      }),
+    ).rejects.toThrow(/sourcePath/u);
+    expect(fetches).toBe(0);
+  });
+
+  test("compile preflight carries an explicitly selected repository root module", async () => {
+    let compatibilityBody: unknown;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if (url === "/api/v1/sources/src_1/sync") {
+        return json({ run: { id: "ssr_new" } }, 201);
+      }
+      if (url === "/api/v1/runs/ssr_new") {
+        return json({
+          run: {
+            id: "ssr_new",
+            type: "source_sync",
+            status: "succeeded",
+            workspaceId: "workspace_1",
+            sourceSnapshotId: "snap_new",
+            createdAt: "2026-07-10T00:00:30.000Z",
+          },
+        });
+      }
+      if (url === "/api/v1/sources/src_1/snapshots") {
+        return json({ snapshots: [NEW_SNAPSHOT] });
+      }
+      if (url === "/api/v1/sources/src_1/compatibility-check") {
+        compatibilityBody =
+          typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+        return json({
+          report: {
+            id: "caprep_new",
+            level: "ready",
+            findings: [],
+            providerPackages: [],
+            rootProviderRequirements: [],
+            resources: [],
+            rootModuleVariables: [],
+          },
+        }, 201);
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }) as typeof fetch;
+
+    await checkCapsuleCompatibility({
+      workspaceId: "workspace_1",
+      sourceId: "src_1",
+      gitUrl: "https://example.test/app.git",
+      ref: "main",
+      path: ".",
+      name: "app",
+      compileInstallUx: true,
+    });
+
+    expect(compatibilityBody).toEqual({
+      sourceSnapshotId: "snap_new",
+      compileInstallUx: true,
+      capsuleName: "app",
+      modulePath: ".",
+    });
+  });
+
+  test("projects exact compatibility provider tuples without collapsing aliases", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe(
+        "/api/v1/sources/src_1/compatibility-check",
+      );
+      return json({
+        report: {
+          id: "caprep_provider_tuples",
+          level: "ready",
+          findings: [],
+          providerPackages: [
+            {
+              source: "registry.opentofu.org/aws/aws",
+              version: "5.0.0",
+              allowed: true,
+            },
+          ],
+          rootProviderRequirements: [
+            {
+              source: "registry.opentofu.org/aws/aws",
+              moduleLocalName: "aws",
+              childAlias: "primary",
+              version: "5.0.0",
+              credentialRequired: true,
+            },
+            {
+              source: "registry.opentofu.org/aws/aws",
+              moduleLocalName: "aws",
+              childAlias: "secondary",
+              version: "5.0.0",
+              credentialRequired: true,
+            },
+            {
+              source: "registry.opentofu.org/aws/aws",
+              moduleLocalName: "aws-edge",
+              childAlias: "edge",
+              credentialRequired: true,
+            },
+          ],
+          resources: [],
+          rootModuleVariables: [],
+        },
+      });
+    }) as typeof fetch;
+
+    const result = await checkCapsuleCompatibility({
+      workspaceId: "workspace_1",
+      sourceId: "src_1",
+      sourceSnapshotId: "snap_new",
+      gitUrl: "https://example.test/app.git",
+      ref: "main",
+      path: ".",
+      name: "app",
+      compileInstallUx: true,
+    });
+
+    expect(result.providerPackages).toEqual([
+      {
+        source: "registry.opentofu.org/aws/aws",
+        version: "5.0.0",
+        allowed: true,
+      },
+    ]);
+    expect(result.rootProviderRequirements).toEqual([
+      {
+        source: "registry.opentofu.org/aws/aws",
+        moduleLocalName: "aws",
+        childAlias: "primary",
+        version: "5.0.0",
+        credentialRequired: true,
+      },
+      {
+        source: "registry.opentofu.org/aws/aws",
+        moduleLocalName: "aws",
+        childAlias: "secondary",
+        version: "5.0.0",
+        credentialRequired: true,
+      },
+      {
+        source: "registry.opentofu.org/aws/aws",
+        moduleLocalName: "aws-edge",
+        childAlias: "edge",
+        credentialRequired: true,
+      },
+    ]);
+  });
+
+  test("compile preflight omits modulePath when no path was supplied by Store discovery", async () => {
+    let compatibilityBody: unknown;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if (url === "/api/v1/sources/src_1/sync") {
+        return json({ run: { id: "ssr_new" } }, 201);
+      }
+      if (url === "/api/v1/runs/ssr_new") {
+        return json({
+          run: {
+            id: "ssr_new",
+            type: "source_sync",
+            status: "succeeded",
+            workspaceId: "workspace_1",
+            sourceSnapshotId: "snap_new",
+            createdAt: "2026-07-10T00:00:30.000Z",
+          },
+        });
+      }
+      if (url === "/api/v1/sources/src_1/snapshots") {
+        return json({ snapshots: [NEW_SNAPSHOT] });
+      }
+      if (url === "/api/v1/sources/src_1/compatibility-check") {
+        compatibilityBody =
+          typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+        return json({
+          report: {
+            id: "caprep_new",
+            level: "ready",
+            findings: [],
+            providerPackages: [],
+            rootProviderRequirements: [],
+            resources: [],
+            rootModuleVariables: [],
+          },
+        }, 201);
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }) as typeof fetch;
+
+    await checkCapsuleCompatibility({
+      workspaceId: "workspace_1",
+      sourceId: "src_1",
+      gitUrl: "https://example.test/app.git",
+      ref: "main",
+      name: "app",
+      compileInstallUx: true,
+    });
+
+    expect(compatibilityBody).toEqual({
+      sourceSnapshotId: "snap_new",
+      compileInstallUx: true,
+      capsuleName: "app",
     });
   });
 

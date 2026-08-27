@@ -18,12 +18,30 @@ describe("Takosumi App Handoff contract", () => {
         returnUri: "notesapp://connect",
         git: "https://github.com/acme/notes.git",
         ref: "v1.2.3",
+        sourcePath: "infra",
         path: "deploy/opentofu",
         name: "Notes",
       }),
     ).toBe(
-      "https://operator.example/install?product=notes-app&return_uri=notesapp%3A%2F%2Fconnect&git=https%3A%2F%2Fgithub.com%2Facme%2Fnotes.git&ref=v1.2.3&path=deploy%2Fopentofu&name=Notes",
+      "https://operator.example/install?product=notes-app&return_uri=notesapp%3A%2F%2Fconnect&git=https%3A%2F%2Fgithub.com%2Facme%2Fnotes.git&ref=v1.2.3&sourcePath=infra&path=deploy%2Fopentofu&name=Notes",
     );
+  });
+
+  test("rejects non-canonical source and module paths", () => {
+    for (const input of [
+      { sourcePath: "./infra" },
+      { sourcePath: "infra/../other" },
+      { path: "/deploy/opentofu" },
+      { path: "deploy//opentofu" },
+    ]) {
+      expect(() =>
+        createTakosumiAppHandoffUrl({
+          baseUrl: "https://operator.example/install",
+          git: "https://github.com/acme/notes.git",
+          ...input,
+        }),
+      ).toThrow(/path/iu);
+    }
   });
 
   test("builds ordinary install URLs without client handoff params", () => {

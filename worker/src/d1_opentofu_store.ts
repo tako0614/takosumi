@@ -90,6 +90,8 @@ import type {
   SecurityFinding,
 } from "takosumi-contract/security";
 import type {
+  CommitSourceSyncSuccessInput,
+  CommitSourceSyncSuccessResult,
   CommitRunStateInput,
   CommitRunStateResult,
   CommitRestoredStateInput,
@@ -115,6 +117,7 @@ import type {
   TransitionRunResult,
 } from "../../core/domains/deploy-control/store.ts";
 import {
+  assertSourceSyncSuccessCommit,
   boundedActivityWorkspaceIds,
   clampActivityLimit,
   clampRecoverableOpenTofuRunListLimit,
@@ -127,8 +130,12 @@ import {
   isRecoverableOpenTofuRunRecord,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
+  parseStoredCapsuleCompatibilityProviderGraph,
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
   runtimeSecretRetirementDispatchAttempt,
+  sourceSnapshotsExactlyMatch,
+  storedCapsuleCompatibilityProviderGraph,
+  SourceSnapshotConflictError,
 } from "../../core/domains/deploy-control/store.ts";
 import {
   artifactRecordFromRow,
@@ -1191,6 +1198,51 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             ? await this.getSourceSyncRun(input.id)
             : await this.getBackupRun(input.id);
     return { won: false, ...(current ? { run: current } : {}) };
+  }
+
+  async commitSourceSyncSuccess(
+    input: CommitSourceSyncSuccessInput,
+  ): Promise<CommitSourceSyncSuccessResult> {
+    assertD1AtomicCommitBatch(this.db, "commitSourceSyncSuccess");
+    await this.#ensureSchema();
+    assertSourceSyncSuccessCommit(input);
+    const snapshot = normalizeSourceSnapshotRecord(input.snapshot);
+    const observedSnapshot = await this.getSourceSnapshot(snapshot.id);
+    const exactGuardSnapshot =
+      observedSnapshot &&
+      sourceSnapshotsExactlyMatch(observedSnapshot, snapshot)
+        ? observedSnapshot
+        : snapshot;
+    const statements = [
+      d1RunLeaseGuardStmt(
+        this.#orm,
+        input.terminalRun.id,
+        input.leaseToken,
+        [RUN_KIND_SOURCE_SYNC],
+      ),
+      d1UpsertRunStmt(
+        this.#orm,
+        RUN_KIND_SOURCE_SYNC,
+        input.terminalRun,
+      ),
+      d1InsertSourceSnapshotIfAbsentStmt(this.#orm, snapshot),
+      d1SourceSnapshotExactGuardStmt(this.#orm, exactGuardSnapshot),
+    ];
+    try {
+      await this.#orm.batch(
+        statements as [(typeof statements)[number], ...typeof statements],
+      );
+      return { won: true, run: input.terminalRun };
+    } catch (error) {
+      if (isD1RunLeaseLostError(error)) {
+        const current = await this.getSourceSyncRun(input.terminalRun.id);
+        return { won: false, ...(current ? { run: current } : {}) };
+      }
+      if (isD1SourceSnapshotConflictError(error)) {
+        throw new SourceSnapshotConflictError(snapshot.id);
+      }
+      throw error;
+    }
   }
 
   async putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
@@ -3453,7 +3505,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       modulePath: normalized.modulePath ?? null,
       level: normalized.level,
       findingsJson: normalized.findings,
-      providersJson: normalized.providers,
+      providersJson: storedCapsuleCompatibilityProviderGraph(normalized),
       resourcesJson: normalized.resources,
       dataSourcesJson: normalized.dataSources,
       provisionersJson: normalized.provisioners,
@@ -3475,6 +3527,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .limit(1);
     const row = rows[0];
     if (!row) return undefined;
+    const providerGraph = parseStoredCapsuleCompatibilityProviderGraph(
+      row.providersJson,
+    );
     return {
       id: row.id,
       sourceId: compatibilityReportSourceId(row.sourceId),
@@ -3483,7 +3538,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       ...(row.modulePath ? { modulePath: row.modulePath } : {}),
       level: normalizeStoredCapsuleCompatibilityLevel(row.level),
       findings: row.findingsJson as CapsuleCompatibilityReport["findings"],
-      providers: row.providersJson as CapsuleCompatibilityReport["providers"],
+      ...providerGraph,
       resources: row.resourcesJson as CapsuleCompatibilityReport["resources"],
       dataSources:
         row.dataSourcesJson as CapsuleCompatibilityReport["dataSources"],
@@ -3532,6 +3587,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .limit(1);
     const row = rows[0];
     if (!row) return undefined;
+    const providerGraph = parseStoredCapsuleCompatibilityProviderGraph(
+      row.providersJson,
+    );
     return {
       id: row.id,
       sourceId: compatibilityReportSourceId(row.sourceId),
@@ -3540,7 +3598,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       ...(row.modulePath ? { modulePath: row.modulePath } : {}),
       level: normalizeStoredCapsuleCompatibilityLevel(row.level),
       findings: row.findingsJson as CapsuleCompatibilityReport["findings"],
-      providers: row.providersJson as CapsuleCompatibilityReport["providers"],
+      ...providerGraph,
       resources: row.resourcesJson as CapsuleCompatibilityReport["resources"],
       dataSources:
         row.dataSourcesJson as CapsuleCompatibilityReport["dataSources"],
@@ -4526,7 +4584,7 @@ export function createCloudflareD1OpenTofuControlStoreForRequest(
 function d1UpsertRunStmt(
   orm: DrizzleD1Database<typeof schema>,
   type: string,
-  run: PlanRun | ApplyRun | Run,
+  run: PlanRun | ApplyRun | SourceSyncRun | Run,
 ) {
   const generic = run as Partial<Run>;
   const values = {
@@ -4534,7 +4592,7 @@ function d1UpsertRunStmt(
     runGroupId: generic.runGroupId ?? null,
     workspaceId: run.workspaceId,
     sourceId: generic.sourceId ?? null,
-    capsuleId: run.capsuleId ?? null,
+    capsuleId: "capsuleId" in run ? (run.capsuleId ?? null) : null,
     environment: generic.environment ?? null,
     type,
     status: run.status,
@@ -4547,6 +4605,58 @@ function d1UpsertRunStmt(
     .insert(schema.runs)
     .values(values)
     .onConflictDoUpdate({ target: schema.runs.id, set: values });
+}
+
+function d1InsertSourceSnapshotIfAbsentStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  snapshot: SourceSnapshot,
+) {
+  const values = {
+    id: snapshot.id,
+    sourceId: snapshot.sourceId,
+    recordJson: snapshot,
+    fetchedAt: snapshot.fetchedAt,
+  };
+  return orm
+    .insert(schema.sourceSnapshots)
+    .values(values)
+    .onConflictDoNothing({ target: schema.sourceSnapshots.id });
+}
+
+/**
+ * Fails the surrounding D1 batch unless the immutable snapshot row is exactly
+ * the one observed/inserted by this commit. The deliberate same-id insert has
+ * no conflict handler, so a mismatched existing row aborts and rolls back the
+ * already-issued terminal Run write.
+ */
+function d1SourceSnapshotExactGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  snapshot: SourceSnapshot,
+) {
+  const exact = orm
+    .select({ one: sql`1` })
+    .from(schema.sourceSnapshots)
+    .where(
+      and(
+        eq(schema.sourceSnapshots.id, snapshot.id),
+        eq(schema.sourceSnapshots.sourceId, snapshot.sourceId),
+        eq(schema.sourceSnapshots.recordJson, snapshot),
+        eq(schema.sourceSnapshots.fetchedAt, snapshot.fetchedAt),
+      ),
+    );
+  return orm.insert(schema.sourceSnapshots).select(
+    orm
+      .select({
+        id: sql<string>`${snapshot.id}`.as("id"),
+        sourceId: sql<string>`${snapshot.sourceId}`.as("sourceId"),
+        recordJson: sql<SourceSnapshot>`${JSON.stringify(snapshot)}`.as(
+          "recordJson",
+        ),
+        fetchedAt: sql<string>`${snapshot.fetchedAt}`.as("fetchedAt"),
+      })
+      .from(sql`(select 1) as source_snapshot_guard`)
+      .where(notExists(exact)),
+  );
 }
 
 function d1RunLeaseGuardStmt(
@@ -4670,7 +4780,10 @@ function d1InvalidCapsuleGuardRow(capsuleId: string) {
 
 function assertD1AtomicCommitBatch(
   db: D1Database,
-  operation: "commitRunState" | "commitRestoredState",
+  operation:
+    | "commitRunState"
+    | "commitRestoredState"
+    | "commitSourceSyncSuccess",
 ): void {
   if (typeof db.batch !== "function") {
     throw new Error(`D1 ${operation} requires atomic batch support`);
@@ -4683,6 +4796,14 @@ function isD1RunLeaseLostError(error: unknown): boolean {
         error.message.includes("constraint failed: runs.id") ||
         error.message.includes("NOT NULL constraint failed: runs.space_id") ||
         error.message.includes("constraint failed: runs.space_id")
+    : false;
+}
+
+function isD1SourceSnapshotConflictError(error: unknown): boolean {
+  return error instanceof Error
+    ? error.message.includes(
+        "UNIQUE constraint failed: source_snapshots.id",
+      ) || error.message.includes("constraint failed: source_snapshots.id")
     : false;
 }
 

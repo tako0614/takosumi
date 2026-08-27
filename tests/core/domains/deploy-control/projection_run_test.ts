@@ -116,6 +116,25 @@ test("projectPlanRun exposes destructive approval requirement", () => {
   expect(run.requiresApproval).toBe(true);
 });
 
+test("projectPlanRun exposes exact required provider identities", () => {
+  const requiredProviderRequirements = [
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "edge",
+      childAlias: "zone",
+      version: "5.10.1",
+      allowed: true,
+      credentialRequired: true,
+    },
+  ] as const;
+
+  const run = projectPlanRun(planRun({ requiredProviderRequirements }));
+
+  expect(run.requiredProviderRequirements).toEqual(
+    requiredProviderRequirements,
+  );
+});
+
 test("projectPlanRun carries snapshot id, generation, plan digest, policy pass", () => {
   const run = projectPlanRun(
     planRun({

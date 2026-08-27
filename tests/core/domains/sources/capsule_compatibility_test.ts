@@ -22,6 +22,105 @@ const snapshot: SourceSnapshot = {
   fetchedAt: "2026-06-07T00:00:00.000Z",
 };
 
+test.each([
+  "hashicorp/consul/aws",
+  "git::https://example.com/modules/network.git?ref=0123456789abcdef",
+])("fails closed for every remote module source, including pinned %s", (source) => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_remote_module",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+module "network" {
+  source = "${source}"
+}
+
+output "ok" { value = true }
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(result.providerPackages).toEqual([]);
+  expect(result.rootProviderRequirements).toEqual([]);
+  expect(result.findings).toContainEqual(
+    expect.objectContaining({
+      code: "remote_module_source_unsupported",
+      compatibilityImpact: "unsupported",
+    }),
+  );
+  expect(result.findings).not.toContainEqual(
+    expect.objectContaining({ code: "remote_module_unpinned" }),
+  );
+});
+
+test("child-only credential packages fail closed without becoming root binding prompts", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_child_provider_boundary",
+    sourceSnapshot: snapshot,
+    policy: {
+      allowedProviders: ["*"],
+      providerCredentials: {
+        requiredProviders: ["cloudflare/cloudflare"],
+      },
+    },
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    aws = { source = "hashicorp/aws" }
+  }
+}
+module "child" { source = "./modules/child" }
+output "ok" { value = true }
+`,
+      },
+      {
+        path: "modules/child/providers.tf",
+        text: `
+terraform {
+  required_providers {
+    edge = {
+      source = "cloudflare/cloudflare"
+      configuration_aliases = [edge.zone]
+    }
+  }
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.providerPackages).toEqual([
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      allowed: true,
+    },
+    {
+      source: "registry.opentofu.org/hashicorp/aws",
+      allowed: true,
+    },
+  ]);
+  expect(result.rootProviderRequirements).toEqual([
+    {
+      source: "registry.opentofu.org/hashicorp/aws",
+      moduleLocalName: "aws",
+    },
+  ]);
+  expect(result.level).toBe("unsupported");
+  expect(result.findings).toContainEqual(
+    expect.objectContaining({
+      code: "binding_boundary_incomplete",
+      compatibilityImpact: "unsupported",
+    }),
+  );
+});
+
 test("collectRootModuleVariableDeclarations preserves bounded type and default metadata", () => {
   expect(
     collectRootModuleVariableDeclarations([
@@ -199,12 +298,16 @@ output "attachments_bucket" {
   });
 
   expect(result.level).toBe("ready");
-  expect(result.providers).toEqual([
+  expect(result.providerPackages).toEqual([
     {
-      source: "hashicorp/aws",
-      localName: "aws",
-      aliases: [],
+      source: "registry.opentofu.org/hashicorp/aws",
       allowed: true,
+    },
+  ]);
+  expect(result.rootProviderRequirements).toEqual([
+    {
+      source: "registry.opentofu.org/hashicorp/aws",
+      moduleLocalName: "aws",
     },
   ]);
   expect(result.resources).toEqual([
@@ -245,13 +348,18 @@ output "ok" {
   });
 
   expect(result.level).toBe("ready");
-  expect(result.providers).toEqual([
+  expect(result.providerPackages).toEqual([
     {
       source: "registry.terraform.io/tako0614/takoform",
-      localName: "takoform",
-      versionConstraint: "= 2.1.1",
-      aliases: [],
+      version: "2.1.1",
       allowed: true,
+    },
+  ]);
+  expect(result.rootProviderRequirements).toEqual([
+    {
+      source: "registry.terraform.io/tako0614/takoform",
+      moduleLocalName: "takoform",
+      version: "2.1.1",
       credentialRequired: true,
     },
   ]);
@@ -282,11 +390,9 @@ terraform {
   });
 
   expect(result.level).toBe("unsupported");
-  expect(result.providers).toEqual([
+  expect(result.providerPackages).toEqual([
     {
       source: "registry.terraform.io/tako0614/takoform",
-      localName: "takoform",
-      aliases: [],
       allowed: false,
     },
   ]);
@@ -295,7 +401,7 @@ terraform {
   );
 });
 
-test("omits a non-literal required provider version without downgrading compatibility", () => {
+test("fails closed on a non-literal required provider version", () => {
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_provider_dynamic_version",
     sourceSnapshot: snapshot,
@@ -324,16 +430,12 @@ output "ok" {
     ],
   });
 
-  expect(result.level).toBe("ready");
-  expect(result.providers).toEqual([
-    {
-      source: "cloudflare/cloudflare",
-      localName: "cloudflare",
-      aliases: [],
-      allowed: true,
-    },
-  ]);
-  expect(result.findings).toEqual([]);
+  expect(result.level).toBe("unsupported");
+  expect(result.providerPackages).toEqual([]);
+  expect(result.rootProviderRequirements).toEqual([]);
+  expect(result.findings.map((finding) => finding.code)).toContain(
+    "opentofu_configuration_provider_declaration_incomplete",
+  );
 });
 
 test("omits a provider version when the provider appears across reachable modules", () => {
@@ -380,12 +482,16 @@ terraform {
   });
 
   expect(result.level).toBe("ready");
-  expect(result.providers).toEqual([
+  expect(result.providerPackages).toEqual([
     {
-      source: "cloudflare/cloudflare",
-      localName: "cloudflare",
-      aliases: ["zone"],
+      source: "registry.opentofu.org/cloudflare/cloudflare",
       allowed: true,
+    },
+  ]);
+  expect(result.rootProviderRequirements).toEqual([
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "cloudflare",
     },
   ]);
   expect(result.findings).toEqual([]);
@@ -421,24 +527,26 @@ output "ok" {
   });
 
   expect(result.level).toBe("ready");
-  expect(result.providers).toEqual([
+  expect(result.providerPackages).toEqual([
     {
-      source: "hashicorp/aws",
-      localName: "aws",
-      aliases: [],
+      source: "registry.opentofu.org/hashicorp/aws",
       allowed: true,
+    },
+  ]);
+  expect(result.rootProviderRequirements).toEqual([
+    {
+      source: "registry.opentofu.org/hashicorp/aws",
+      moduleLocalName: "aws",
     },
     {
       source: "registry.opentofu.org/hashicorp/aws",
-      localName: "cloud",
-      aliases: [],
-      allowed: true,
+      moduleLocalName: "cloud",
     },
   ]);
   expect(result.findings).toEqual([]);
 });
 
-test("omits a quoted template provider version without downgrading compatibility", () => {
+test("fails closed on a quoted template provider version", () => {
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_provider_quoted_template_version",
     sourceSnapshot: snapshot,
@@ -467,16 +575,12 @@ output "ok" {
     ],
   });
 
-  expect(result.level).toBe("ready");
-  expect(result.providers).toEqual([
-    {
-      source: "cloudflare/cloudflare",
-      localName: "cloudflare",
-      aliases: [],
-      allowed: true,
-    },
-  ]);
-  expect(result.findings).toEqual([]);
+  expect(result.level).toBe("unsupported");
+  expect(result.providerPackages).toEqual([]);
+  expect(result.rootProviderRequirements).toEqual([]);
+  expect(result.findings.map((finding) => finding.code)).toContain(
+    "opentofu_configuration_provider_declaration_incomplete",
+  );
 });
 
 test("treats provider-free output modules as runnable", () => {
@@ -504,7 +608,8 @@ output "public_origin" {
   });
 
   expect(result.level).toBe("ready");
-  expect(result.providers).toEqual([]);
+  expect(result.providerPackages).toEqual([]);
+  expect(result.rootProviderRequirements).toEqual([]);
   expect(result.resources).toEqual([]);
   expect(result.dataSources).toEqual([]);
   expect(result.provisioners).toEqual([]);
@@ -545,12 +650,26 @@ output "public_url" {
   });
 
   expect(result.level).toBe("ready");
-  expect(result.providers).toEqual([
+  expect(result.providerPackages).toEqual([
     {
-      source: "cloudflare/cloudflare",
-      localName: "cloudflare",
-      aliases: ["main", "zone"],
+      source: "registry.opentofu.org/cloudflare/cloudflare",
       allowed: true,
+    },
+  ]);
+  expect(result.rootProviderRequirements).toEqual([
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "cloudflare",
+    },
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "cloudflare",
+      childAlias: "main",
+    },
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "cloudflare",
+      childAlias: "zone",
     },
   ]);
   expect(result.findings.map((finding) => finding.code)).toContain(
@@ -682,7 +801,11 @@ test("uses explicit policy allowlists when classifying gate findings", () => {
     sourceId: "src_test",
     sourceSnapshot: snapshot,
     policy: {
-      allowedProviders: ["registry.opentofu.org/custom/provider"],
+      allowedProviders: [
+        "registry.opentofu.org/custom/provider",
+        "registry.opentofu.org/hashicorp/external",
+        "registry.opentofu.org/hashicorp/null",
+      ],
       allowedResourceTypes: ["custom_resource", "null_resource"],
       allowedDataSourceTypes: ["external"],
       allowedProvisionerTypes: ["local-exec"],
@@ -720,12 +843,32 @@ output "public_url" {
   });
 
   expect(result.level).toBe("ready");
-  expect(result.providers).toEqual([
+  expect(result.providerPackages).toEqual([
     {
-      source: "custom/provider",
-      localName: "custom",
-      aliases: [],
+      source: "registry.opentofu.org/custom/provider",
       allowed: true,
+    },
+    {
+      source: "registry.opentofu.org/hashicorp/external",
+      allowed: true,
+    },
+    {
+      source: "registry.opentofu.org/hashicorp/null",
+      allowed: true,
+    },
+  ]);
+  expect(result.rootProviderRequirements).toEqual([
+    {
+      source: "registry.opentofu.org/custom/provider",
+      moduleLocalName: "custom",
+    },
+    {
+      source: "registry.opentofu.org/hashicorp/external",
+      moduleLocalName: "external",
+    },
+    {
+      source: "registry.opentofu.org/hashicorp/null",
+      moduleLocalName: "null",
     },
   ]);
   expect(result.resources).toEqual([
@@ -772,21 +915,179 @@ output "ok" {
   });
 
   expect(result.level).toBe("ready");
-  expect(result.providers).toEqual([
+  expect(result.providerPackages).toEqual([
     {
-      source: "acme/service",
-      localName: "primary",
-      aliases: ["archive"],
+      source: "registry.opentofu.org/acme/service",
       allowed: true,
-      credentialRequired: true,
     },
     {
-      source: "other/service",
-      localName: "secondary",
-      aliases: [],
+      source: "registry.opentofu.org/other/service",
       allowed: true,
     },
   ]);
+  expect(result.rootProviderRequirements).toEqual([
+    {
+      source: "registry.opentofu.org/acme/service",
+      moduleLocalName: "primary",
+      credentialRequired: true,
+    },
+    {
+      source: "registry.opentofu.org/acme/service",
+      moduleLocalName: "primary",
+      childAlias: "archive",
+      credentialRequired: true,
+    },
+    {
+      source: "registry.opentofu.org/other/service",
+      moduleLocalName: "secondary",
+    },
+  ]);
+});
+
+test("derives canonical provider identities from .tofu and keeps default plus every child alias", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_tofu_provider_identities",
+    sourceSnapshot: snapshot,
+    policy: {
+      allowedProviders: ["cloudflare/cloudflare"],
+      providerCredentials: { requiredProviders: ["cloudflare/cloudflare"] },
+    },
+    files: [
+      {
+        path: "main.tofu",
+        text: `
+terraform {
+  required_providers {
+    edge = {
+      source = "cloudflare/cloudflare"
+      version = "~> 5.0"
+      configuration_aliases = [edge.zone, edge.account]
+    }
+  }
+}
+
+output "ok" {
+  value = true
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(
+    result.rootProviderRequirements.map((requirement) => ({
+      source: requirement.source,
+      moduleLocalName: requirement.moduleLocalName,
+      childAlias: requirement.childAlias,
+      version: requirement.version,
+      credentialRequired: requirement.credentialRequired,
+    })),
+  ).toEqual([
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "edge",
+      childAlias: undefined,
+      version: undefined,
+      credentialRequired: true,
+    },
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "edge",
+      childAlias: "account",
+      version: undefined,
+      credentialRequired: true,
+    },
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "edge",
+      childAlias: "zone",
+      version: undefined,
+      credentialRequired: true,
+    },
+  ]);
+});
+
+test("JSON provider declarations contribute identities and malformed JSON fails closed", () => {
+  const valid = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_json_provider",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: 'output "ok" { value = true }\n',
+      },
+      {
+        path: "providers.tf.json",
+        text: JSON.stringify({
+          terraform: {
+            required_providers: {
+              random: {
+                source: "hashicorp/random",
+                version: "= 3.7.2",
+              },
+            },
+          },
+        }),
+      },
+    ],
+  });
+  expect(valid.providerPackages).toContainEqual(
+    expect.objectContaining({
+      source: "registry.opentofu.org/hashicorp/random",
+      version: "3.7.2",
+      allowed: true,
+    }),
+  );
+  expect(valid.rootProviderRequirements).toContainEqual(
+    expect.objectContaining({
+      source: "registry.opentofu.org/hashicorp/random",
+      moduleLocalName: "random",
+      version: "3.7.2",
+    }),
+  );
+  expect(valid.findings.map((finding) => finding.code)).toContain(
+    "opentofu_json_semantics_unsupported",
+  );
+  expect(valid.level).toBe("unsupported");
+
+  const malformed = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_malformed_json_provider",
+    sourceSnapshot: snapshot,
+    files: [{ path: "providers.tofu.json", text: "{ not json" }],
+  });
+  expect(malformed.level).toBe("unsupported");
+  expect(malformed.findings.map((finding) => finding.code)).toContain(
+    "opentofu_json_invalid",
+  );
+});
+
+test("post-init dependency lock observation must equal the statically derived provider set", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_provider_observation_mismatch",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    aws = { source = "hashicorp/aws" }
+  }
+}
+output "ok" { value = true }
+`,
+      },
+      {
+        path: ".terraform.lock.hcl",
+        text: 'provider "registry.opentofu.org/hashicorp/random" {}\n',
+      },
+    ],
+  });
+  expect(result.level).toBe("unsupported");
+  expect(result.findings.map((finding) => finding.code)).toContain(
+    "provider_observation_mismatch",
+  );
 });
 
 test("detects dependency lockfiles without downgrading reusable modules", () => {
@@ -896,7 +1197,7 @@ data "external" "ignored" {
   expect(result.dataSources).toEqual([]);
 });
 
-test("requires patch when a referenced local module is missing", () => {
+test("fails closed when a referenced local module is missing", () => {
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_test",
     sourceSnapshot: snapshot,
@@ -924,7 +1225,7 @@ output "attachments_bucket" {
     ],
   });
 
-  expect(result.level).toBe("needs_patch");
+  expect(result.level).toBe("unsupported");
   expect(result.findings.map((finding) => finding.code)).toContain(
     "local_module_source_missing",
   );
@@ -1347,12 +1648,16 @@ output "database_name" {
   });
 
   expect(result.level).toBe("ready");
-  expect(result.providers).toEqual([
+  expect(result.providerPackages).toEqual([
     {
-      source: "snowflake-labs/snowflake",
-      localName: "snowflake",
-      aliases: [],
+      source: "registry.opentofu.org/snowflake-labs/snowflake",
       allowed: true,
+    },
+  ]);
+  expect(result.rootProviderRequirements).toEqual([
+    {
+      source: "registry.opentofu.org/snowflake-labs/snowflake",
+      moduleLocalName: "snowflake",
     },
   ]);
   expect(result.resources).toEqual([

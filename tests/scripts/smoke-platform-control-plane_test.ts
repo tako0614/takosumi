@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -9,6 +16,7 @@ import {
   capsuleFromLedgerResponse,
   createdCapsuleFromCreateResponse,
   dryRunResult,
+  failedResult,
   isSmokeProviderConnectionMatch,
   isSelectableCapsuleInstallConfig,
   main,
@@ -22,6 +30,45 @@ import {
   smokeWorkspaceCloudflareConnectionBody,
   assertServiceIdentityResponse,
 } from "../../scripts/smoke-platform-control-plane.ts";
+
+test("platform smoke preserves the original pre-apply failure when a projected runtime URL is configured", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      cloudflareConnectionMode: "guided",
+      cloudflareAccountId: "acc_test",
+      cloudflareWorkersSubdomain: "workers-subdomain",
+      verificationMode: "cloudflare-worker",
+      outputAllowlistJson: JSON.stringify({
+        launch_url: { from: "launch_url", type: "url", required: true },
+      }),
+      runtimePublicUrlOutput: "launch_url",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+  const startedAtMs = Date.now();
+  const result = failedResult(options, {
+    startedAt: new Date(startedAtMs).toISOString(),
+    startedAtMs,
+    workspaceId: "ws_test",
+    completedSteps: ["sourceSynced"],
+    stepTimings: [],
+    runTimings: [],
+    capsuleGateStatus: "not_reached",
+    policyStatus: "not_reached",
+    connectionRevoked: false,
+    error: new Error("original source install failure"),
+  });
+
+  expect(result.status).toBe("failed");
+  expect(result.workerUrl).toBe("");
+  expect(result.error).toBe("original source install failure");
+});
 
 test("Cloudflare public URL verification allows bounded edge propagation", () => {
   expect(CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS).toBe(180_000);
@@ -387,9 +434,7 @@ test("platform control-plane smoke matches canonical provider connection sources
     "Layer-2 smoke canonical",
   );
 
-  expect(expected.provider).toBe(
-    "registry.opentofu.org/cloudflare/cloudflare",
-  );
+  expect(expected.provider).toBe("registry.opentofu.org/cloudflare/cloudflare");
 
   expect(
     isSmokeProviderConnectionMatch(
@@ -447,8 +492,14 @@ test("platform control-plane smoke creates Provider Connections through installe
     },
     displayName: "Layer-2 smoke canonical",
     scopeHints: {
-      accountId: "account",
-      workersSubdomain: "takosumi-smoke",
+      providerSettings: {
+        accountId: "account",
+        workersSubdomain: "takosumi-smoke",
+      },
+      moduleInputDefaults: {
+        cloudflare_account_id: "account",
+        cloudflare_workers_subdomain: "takosumi-smoke",
+      },
     },
     values: {
       CLOUDFLARE_API_TOKEN: "cloudflare-token",
@@ -521,21 +572,272 @@ test("platform control-plane smoke accepts an existing ProviderConnection only i
   expect(envOptions.providerConnectionId).toBe("pcn_from_env");
 });
 
+test("platform control-plane smoke accepts a deterministic 0..N explicit ProviderBinding set", async () => {
+  const bindings = [
+    {
+      provider: "registry.terraform.io/tako0614/takoform",
+      moduleLocalName: "takoform",
+      childAlias: "objects",
+      rootAlias: "takoform_objects",
+      connectionId: "pcn_takoform",
+    },
+    {
+      provider: "registry.opentofu.org/hashicorp/aws",
+      moduleLocalName: "aws",
+      connectionId: "pcn_aws",
+    },
+  ];
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      sourceGitUrl: "https://github.com/example/multi-provider.git",
+      providerBindingsJson: JSON.stringify(bindings),
+    },
+    { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token" },
+  );
+
+  expect(options.providerBindings).toEqual([bindings[1], bindings[0]]);
+  expect(options.providerConnectionId).toBeUndefined();
+  expect(options.runnerProfileId).toBeUndefined();
+
+  const result = dryRunResult(options);
+  expect(result.credentialPath).toBe("workspace_scoped_provider_connection");
+  expect(result.steps).toContain("existingProviderConnectionsSelected");
+  expect(result.steps).not.toContain("providerConnectionNotRequired");
+  expect(result.inputs.providerBindingCount).toBe(2);
+  expect(result.inputs.providerBindingsExplicit).toBe(true);
+  expect(result.inputs.providerBindingsDigest).toMatch(
+    /^sha256:[0-9a-f]{64}$/u,
+  );
+  expect(JSON.stringify(result)).not.toContain("pcn_takoform");
+  expect(JSON.stringify(result)).not.toContain("pcn_aws");
+});
+
+test("an explicit empty ProviderBinding set remains authoritative zero", async () => {
+  const base = {
+    dryRun: true,
+    url: "https://app-staging.takosumi.com",
+    workspace: "ws_test",
+    cloudflareConnectionMode: "none",
+    verificationMode: "opentofu",
+    sourceGitUrl: "https://github.com/example/providerless.git",
+    providerBindingsJson: "[]",
+  } as const;
+
+  const options = await resolveOptions(base, {
+    TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+  });
+  const result = dryRunResult(options);
+  expect(options.providerBindings).toEqual([]);
+  expect(options.providerBindingsExplicit).toBe(true);
+  expect(result.inputs.providerBindingCount).toBe(0);
+  expect(result.inputs.providerBindingsExplicit).toBe(true);
+  expect(result.inputs.providerBindingsDigest).toMatch(
+    /^sha256:[0-9a-f]{64}$/u,
+  );
+  expect(result.steps).toContain("providerConnectionNotRequired");
+
+  await expect(
+    resolveOptions(base, {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      TAKOSUMI_SMOKE_PROVIDER_CONNECTION_ID: "pcn_legacy",
+    }),
+  ).rejects.toThrow(/cannot be combined/u);
+  await expect(
+    resolveOptions(
+      {
+        ...base,
+        cloudflareConnectionMode: "guided",
+        cloudflareAccountId: "account",
+        cloudflareWorkersSubdomain: "workers-subdomain",
+      },
+      {
+        TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+        CLOUDFLARE_API_TOKEN: "cloudflare-token",
+      },
+    ),
+  ).rejects.toThrow(/cannot be combined/u);
+});
+
+test("platform control-plane smoke rejects ambiguous or non-canonical ProviderBinding input", async () => {
+  const base = {
+    dryRun: true,
+    url: "https://app-staging.takosumi.com",
+    workspace: "ws_test",
+    cloudflareConnectionMode: "none",
+    verificationMode: "opentofu",
+    sourceGitUrl: "https://github.com/example/multi-provider.git",
+  } as const;
+  const env = { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token" };
+
+  await expect(
+    resolveOptions(
+      {
+        ...base,
+        providerBindingsJson: JSON.stringify([
+          { provider: "hashicorp/aws", connectionId: "pcn_aws" },
+        ]),
+      },
+      env,
+    ),
+  ).rejects.toThrow(/exact canonical provider source/u);
+  await expect(
+    resolveOptions(
+      {
+        ...base,
+        providerBindingsJson: JSON.stringify([
+          {
+            provider: "registry.opentofu.org/hashicorp/aws",
+            moduleLocalName: "aws",
+            connectionId: "pcn_aws",
+          },
+          {
+            provider: "registry.opentofu.org/hashicorp/aws",
+            moduleLocalName: "aws",
+            connectionId: "pcn_other",
+          },
+        ]),
+      },
+      env,
+    ),
+  ).rejects.toThrow(/duplicate ProviderBinding address/u);
+  await expect(
+    resolveOptions(
+      {
+        ...base,
+        providerConnectionId: "pcn_legacy",
+        providerBindingsJson: JSON.stringify([
+          {
+            provider: "registry.opentofu.org/hashicorp/aws",
+            connectionId: "pcn_aws",
+          },
+        ]),
+      },
+      env,
+    ),
+  ).rejects.toThrow(/cannot be combined/u);
+  await expect(
+    resolveOptions(
+      {
+        ...base,
+        providerBindingsJson: JSON.stringify([
+          {
+            provider: "registry.opentofu.org/hashicorp/aws",
+            moduleLocalName: "aws",
+            childAlias: "one",
+            connectionId: "pcn_one",
+          },
+          {
+            provider: "registry.opentofu.org/hashicorp/aws",
+            moduleLocalName: "aws",
+            childAlias: "two",
+            connectionId: "pcn_two",
+          },
+        ]),
+      },
+      env,
+    ),
+  ).rejects.toThrow(/duplicate root provider target/u);
+});
+
 test("platform control-plane smoke binds an existing provider by its source", () => {
   expect(
     smokeCapsuleProviderBindingsBody({
-      providerConnectionId: "pcn_existing_takoform",
-      providerSource: "registry.terraform.io/tako0614/takoform",
+      bindings: [
+        {
+          provider: "registry.terraform.io/tako0614/takoform",
+          moduleLocalName: "takoform",
+          childAlias: "objects",
+          rootAlias: "takoform_objects",
+          connectionId: "pcn_existing_takoform",
+        },
+        {
+          provider: "registry.opentofu.org/hashicorp/aws",
+          moduleLocalName: "aws",
+          connectionId: "pcn_existing_aws",
+        },
+      ],
     }),
   ).toEqual({
     bindings: [
       {
+        provider: "registry.opentofu.org/hashicorp/aws",
+        moduleLocalName: "aws",
+        connectionId: "pcn_existing_aws",
+      },
+      {
         provider: "registry.terraform.io/tako0614/takoform",
-        alias: "main",
+        moduleLocalName: "takoform",
+        childAlias: "objects",
+        rootAlias: "takoform_objects",
         connectionId: "pcn_existing_takoform",
       },
     ],
   });
+  expect(
+    JSON.stringify(
+      smokeCapsuleProviderBindingsBody({
+        bindings: [
+          {
+            provider: "registry.opentofu.org/hashicorp/aws",
+            connectionId: "pcn_existing_aws",
+          },
+        ],
+      }),
+    ),
+  ).not.toContain('"alias"');
+});
+
+test("multi-provider smoke evidence redacts explicit ProviderConnection ids on failure", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      sourceGitUrl: "https://github.com/example/multi-provider.git",
+      providerBindingsJson: JSON.stringify([
+        {
+          provider: "registry.opentofu.org/hashicorp/aws",
+          connectionId: "pcn_private_aws",
+        },
+      ]),
+    },
+    { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token" },
+  );
+  const startedAtMs = Date.now();
+  const result = failedResult(options, {
+    startedAt: new Date(startedAtMs).toISOString(),
+    startedAtMs,
+    workspaceId: "ws_test",
+    completedSteps: [],
+    stepTimings: [],
+    runTimings: [],
+    capsuleGateStatus: "not_reached",
+    policyStatus: "not_reached",
+    runCancellationError: "cancel failed for pcn_private_aws",
+    failureCleanup: {
+      attempted: true,
+      cloudflareWorkerGone: false,
+      capsuleMarkedError: false,
+      destroyAttempted: true,
+      destroySucceeded: false,
+      destroyError: "destroy failed for pcn_private_aws",
+      error: "cleanup failed for pcn_private_aws",
+    },
+    serviceIdentitySampleCount: 0,
+    error: new Error(
+      "ProviderConnection pcn_private_aws was not available to this Workspace",
+    ),
+  });
+
+  expect(result.error).toContain("<provider-connection>");
+  expect(JSON.stringify(result)).not.toContain("pcn_private_aws");
 });
 
 test("platform control-plane smoke records an existing ProviderConnection without revoking or leaking secrets", async () => {
@@ -1028,10 +1330,7 @@ test("platform control-plane smoke selects InstallConfig from explicit structure
     ]),
   ).toBe("workspace-config");
   expect(
-    selectSmokeInstallConfigId(
-      [{ id: "one" }, { id: "two" }],
-      "two",
-    ),
+    selectSmokeInstallConfigId([{ id: "one" }, { id: "two" }], "two"),
   ).toBe("two");
   expect(() =>
     selectSmokeInstallConfigId([{ id: "one" }, { id: "two" }]),

@@ -8,7 +8,7 @@ plan / apply します。CLI は任意の Takosumi endpoint に向けて使え�
 export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com
 export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
 
-open "$TAKOSUMI_DEPLOY_CONTROL_URL/install?git=https://git.example.com/example/photo-blog.git&path=deploy/opentofu&ref=v1.0.0"
+open "$TAKOSUMI_DEPLOY_CONTROL_URL/install?git=https://git.example.com/example/photo-blog.git&ref=v1.0.0&sourcePath=infra&path=deploy/opentofu"
 
 takosumi status <run-id>
 takosumi logs   <run-id>
@@ -17,8 +17,9 @@ takosumi logs   <run-id>
 Takosumi hosted service を使う場合の endpoint は `https://app.takosumi.com` です。
 
 CLI は OpenTofu を直接実行しません。通常の作成フローは dashboard の Git URL install で、
-ここで Source / Capsule / Run を作ります。Run の source identity として Git commit / ref /
-path を固定し、実行は runner sandbox で行います。credential は ProviderConnection と
+ここで Source / Capsule / Run を作ります。`sourcePath` は Source が取得する Git subtree、
+`path` はその Snapshot 内で scan された module path です。Run の source identity として
+Git commit / ref と両方の path を固定し、実行は runner sandbox で行います。credential は ProviderConnection と
 CredentialRecipe から、Run の実行中だけ env/file として注入されます。
 `takosumi deploy` / `takosumi plan` のローカルアップロード経路は廃止済みです。
 

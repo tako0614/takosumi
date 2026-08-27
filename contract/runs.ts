@@ -18,6 +18,7 @@ import type {
 } from "./provider-resolution.ts";
 import type { PlanResourceScope } from "./plan-scope.ts";
 import type { JsonValue } from "./types.ts";
+import type { CapsuleProviderRequirement } from "./capsules.ts";
 
 export type RunType =
   | "source_sync"
@@ -155,6 +156,8 @@ export interface Run {
   /** Non-secret resource/action review lines. No raw resource values. */
   readonly planResources?: readonly RunPlanResource[];
   readonly policyStatus?: RunPolicyStatus;
+  /** Exact non-secret provider identities pinned by current Plan creation. */
+  readonly requiredProviderRequirements?: readonly CapsuleProviderRequirement[];
   readonly providerResolutions?: readonly ProviderResolution[];
   readonly runEnvironmentEvidenceDigest?: string;
   readonly redactionProfileId?: string;

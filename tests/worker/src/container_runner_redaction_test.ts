@@ -147,6 +147,13 @@ test("container runner returns sanitized source sync phase timings", async () =>
           install: { modules: { ".": { inputs: [] } } },
         },
       },
+      repositoryModules: {
+        status: "ready",
+        scopePath: ".",
+        modules: [
+          { path: ".", providerPackages: [], rootProviderRequirements: [] },
+        ],
+      },
       phaseTimings: [
         {
           phase: "source_ref_resolve",
@@ -197,6 +204,13 @@ test("container runner returns sanitized source sync phase timings", async () =>
       kind: "Repository",
       install: { modules: { ".": { inputs: [] } } },
     },
+  });
+  expect(result.repositoryModules).toEqual({
+    status: "ready",
+    scopePath: ".",
+    modules: [
+      { path: ".", providerPackages: [], rootProviderRequirements: [] },
+    ],
   });
 });
 
@@ -505,6 +519,54 @@ test("container runner returns a typed failed apply with persisted partial state
       code: "apply_failed",
       message: "OpenTofu provider execution failed after dispatch",
       detail: expect.stringContaining(safeFailureDetail),
+    },
+  ]);
+});
+
+test("container runner returns a typed failed destroy with persisted partial state", async () => {
+  const stateDigest = `sha256:${"f".repeat(64)}`;
+  const safeFailureDetail =
+    "Error: destroy rejected resource 7 after earlier resources were removed";
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        status: "failed",
+        exitCode: 1,
+        errorCode: "apply_failed",
+        providerExecutionFailure: {
+          kind: "provider_execution_failed",
+          statePersistence: "persisted",
+        },
+        state: { digest: stateDigest },
+        detail: safeFailureDetail,
+      },
+      undefined,
+      500,
+    ),
+  );
+
+  const result = await runner.destroy({
+    applyRun: { id: "destroy_partial" },
+    planRun: { id: "destroy_partial" },
+    planArtifact: {
+      kind: "runner-local",
+      ref: "runner-local://destroy_partial/tfplan",
+      digest: PLAN_DIGEST,
+    },
+  } as Parameters<CloudflareContainerOpenTofuRunner["destroy"]>[0]);
+
+  expect(result.providerExecutionFailure).toEqual({
+    kind: "provider_execution_failed",
+    statePersistence: "persisted",
+    errorCode: "apply_failed",
+  });
+  expect(result.stateDigest).toBe(stateDigest);
+  expect(result.diagnostics).toEqual([
+    {
+      severity: "error",
+      code: "apply_failed",
+      message: "OpenTofu provider execution failed after dispatch",
+      detail: safeFailureDetail,
     },
   ]);
 });

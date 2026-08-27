@@ -1,18 +1,13 @@
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 import {
-  compareInstallConfigDeploymentProfiles,
-  installConfigDeploymentProfileSetIsValid,
-  isInstallConfigDeploymentProfileKey,
-  normalizeInstallConfigSourceUrl,
-  type InstallConfig,
-  type InstallConfigDeploymentProfile,
-} from "takosumi-contract/install-configs";
+  parseRepositoryModulesSnapshot,
+  type RepositoryModuleRootProviderRequirement,
+  type Source,
+  type SourceSnapshot,
+} from "takosumi-contract/sources";
+import type { InstallConfig } from "takosumi-contract/install-configs";
 import {
   isRepositoryManifestInterfaceCapableApiVersion,
-  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
-  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2,
-  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
   type RepositoryManifestDocument,
 } from "takosumi-contract/repository-manifest";
 import type { JsonValue } from "takosumi-contract/types";
@@ -73,10 +68,12 @@ export type RepoOwnedInstallConfigAdoptionDiagnostic =
   | RepositoryInstallUxDiagnostic
   | {
       readonly code:
-        | "repository_install_ux_default_module_invalid"
-        | "repository_install_ux_default_module_missing"
+        | "repository_install_module_index_unavailable"
+        | "repository_install_module_selection_required"
+        | "repository_install_ux_oidc_endpoint_conflict"
         | "repository_install_ux_interface_blueprint_conflict"
         | "repository_install_ux_output_allowlist_conflict"
+        | "repository_install_ux_runtime_binding_profile_conflict"
         | "repository_install_ux_installing_principal_invalid"
         | "repository_install_ux_manifest_api_version_required";
       readonly message: string;
@@ -98,8 +95,21 @@ export type RepoOwnedInstallConfigAdoptionResult =
       readonly outputAllowlist: InstallConfig["outputAllowlist"];
       /** Repository sourceBuild is a proposal; an existing base value wins. */
       readonly sourceBuild?: InstallConfig["sourceBuild"];
+      /**
+       * Private runtime binding materialization. An absent repository proposal
+       * preserves the operator/base profile; a differing proposal is rejected
+       * rather than merged field-by-field.
+       */
+      readonly runtimeBindingMaterialization?:
+        InstallConfig["runtimeBindingMaterialization"];
       /** Exact repository module compiled into the derived InstallConfig. */
       readonly modulePath: string;
+      /**
+       * Provider tuples captured by source sync for the selected module. This
+       * is advisory preflight evidence; compatibility/init remains the binding
+       * authority for provider resolution.
+       */
+      readonly rootProviderRequirements: readonly RepositoryModuleRootProviderRequirement[];
       readonly sourceSnapshotId: string;
       readonly digest: string;
       readonly repositoryManifestApiVersion: RepositoryManifestDocument["apiVersion"];
@@ -162,219 +172,11 @@ export async function latestSourceSnapshotForSource(
   }
 }
 
-export type RepoOwnedDeploymentProfileResolution =
-  | { readonly ok: true; readonly kind: "none" }
-  | {
-      readonly ok: true;
-      readonly kind: "legacy";
-      readonly installConfig: InstallConfig;
-    }
-  | {
-      readonly ok: true;
-      readonly kind: "profile";
-      readonly installConfig: InstallConfig;
-      readonly modulePath: string;
-    }
-  | {
-      readonly ok: false;
-      readonly diagnostic: {
-        readonly code:
-          | "repository_install_ux_deployment_profile_invalid"
-          | "repository_install_ux_deployment_profile_ambiguous"
-          | "repository_install_ux_deployment_profile_module_invalid";
-        readonly message: string;
-      };
-    };
-
-export type RepoOwnedDeploymentProfileCatalog =
-  | { readonly status: "none" | "legacy"; readonly profiles: readonly [] }
-  | { readonly status: "invalid"; readonly profiles: readonly [] }
-  | {
-      readonly status: "ready";
-      readonly profiles: readonly InstallConfigDeploymentProfile[];
-    };
-
-function matchingRepoOwnedDeploymentProfileConfigs(input: {
-  readonly source: Source;
-  readonly candidates: readonly InstallConfig[];
-}): readonly InstallConfig[] {
-  const sourceUrl = input.source.url.trim();
-  const canonicalSourceUrl = normalizeInstallConfigSourceUrl(sourceUrl);
-  return input.candidates.filter((config) => {
-    const selectorUrl = config.sourceSelector?.url.trim();
-    const listingUrl = config.store?.source?.url.trim();
-    return Boolean(
-      sourceUrl &&
-        selectorUrl &&
-        listingUrl &&
-        config.workspaceId === undefined &&
-        config.internal === undefined &&
-        normalizeInstallConfigSourceUrl(selectorUrl) === canonicalSourceUrl &&
-        normalizeInstallConfigSourceUrl(listingUrl) === canonicalSourceUrl,
-    );
-  });
-}
-
-/**
- * Project only DB-owned deployment profiles that the existing execution
- * resolver can prove against this exact immutable SourceSnapshot. Invalid or
- * missing module paths stay server-side and never become dashboard choices.
- */
-export function repoOwnedDeploymentProfileCatalog(input: {
-  readonly source: Source;
-  readonly sourceSnapshot: SourceSnapshot;
-  readonly candidates: readonly InstallConfig[];
-}): RepoOwnedDeploymentProfileCatalog {
-  const matches = matchingRepoOwnedDeploymentProfileConfigs(input);
-  if (matches.length === 0) return { status: "none", profiles: [] };
-
-  const profiles = matches.map((config) => config.store?.deploymentProfile);
-  const profileCount = profiles.filter(
-    (profile): profile is InstallConfigDeploymentProfile =>
-      profile !== undefined,
-  ).length;
-  if (profileCount === 0) {
-    return matches.length === 1
-      ? { status: "legacy", profiles: [] }
-      : { status: "invalid", profiles: [] };
-  }
-  const exactProfiles = profiles.filter(
-    (profile): profile is InstallConfigDeploymentProfile =>
-      profile !== undefined,
-  );
-  if (
-    profileCount !== matches.length ||
-    !installConfigDeploymentProfileSetIsValid(exactProfiles)
-  ) {
-    return { status: "invalid", profiles: [] };
-  }
-
-  const available = exactProfiles.filter((profile) => {
-    const resolution = resolveRepoOwnedDeploymentProfile({
-      source: input.source,
-      sourceSnapshot: input.sourceSnapshot,
-      candidates: input.candidates,
-      deploymentProfileKey: profile.key,
-    });
-    return resolution.ok && resolution.kind === "profile";
-  });
-  return available.length > 0
-    ? {
-        status: "ready",
-        profiles: [...available].sort(compareInstallConfigDeploymentProfiles),
-      }
-    : { status: "invalid", profiles: [] };
-}
-
-/**
- * Select one DB-owned deployment profile without trusting Store presentation
- * fields as execution authority. Both the policy selector and Store listing
- * URL must independently match the authenticated Source. A profiled config's
- * exact module path must be an own key of the pinned manifest.
- */
-export function resolveRepoOwnedDeploymentProfile(input: {
-  readonly source: Source;
-  readonly sourceSnapshot: SourceSnapshot | undefined;
-  readonly candidates: readonly InstallConfig[];
-  readonly deploymentProfileKey?: string;
-}): RepoOwnedDeploymentProfileResolution {
-  const matches = matchingRepoOwnedDeploymentProfileConfigs(input);
-  if (matches.length === 0) {
-    return input.deploymentProfileKey === undefined
-      ? { ok: true, kind: "none" }
-      : invalidDeploymentProfileResolution(
-          "repository_install_ux_deployment_profile_invalid",
-          "The selected deployment profile is unavailable for this Source.",
-        );
-  }
-
-  const profiles = matches.map((config) => config.store?.deploymentProfile);
-  const profileCount = profiles.filter((profile) => profile !== undefined).length;
-  if (profileCount === 0) {
-    if (matches.length === 1 && input.deploymentProfileKey === undefined) {
-      return { ok: true, kind: "legacy", installConfig: matches[0]! };
-    }
-    return invalidDeploymentProfileResolution(
-      "repository_install_ux_deployment_profile_ambiguous",
-      "Takosumi could not prove one legacy Store InstallConfig for this Source.",
-    );
-  }
-  if (profileCount !== matches.length) {
-    return invalidDeploymentProfileResolution(
-      "repository_install_ux_deployment_profile_ambiguous",
-      "Profiled and legacy Store InstallConfigs cannot be mixed for one Source.",
-    );
-  }
-  const exactProfiles = profiles.filter(
-    (profile): profile is NonNullable<typeof profile> => profile !== undefined,
-  );
-  if (!installConfigDeploymentProfileSetIsValid(exactProfiles)) {
-    return invalidDeploymentProfileResolution(
-      "repository_install_ux_deployment_profile_ambiguous",
-      "The deployment profile set is ambiguous.",
-    );
-  }
-  if (!isInstallConfigDeploymentProfileKey(input.deploymentProfileKey)) {
-    return invalidDeploymentProfileResolution(
-      "repository_install_ux_deployment_profile_invalid",
-      "Select and confirm an available deployment profile.",
-    );
-  }
-  const selected = matches.find(
-    (config) =>
-      config.store?.deploymentProfile?.key === input.deploymentProfileKey,
-  );
-  if (!selected) {
-    return invalidDeploymentProfileResolution(
-      "repository_install_ux_deployment_profile_invalid",
-      "The selected deployment profile is unavailable.",
-    );
-  }
-
-  const rawModulePath = selected.modulePath;
-  const parsedModulePath = modulePathValue(rawModulePath);
-  const canonicalModulePath =
-    parsedModulePath === "" ? "." : parsedModulePath;
-  const manifest = input.sourceSnapshot?.repositoryManifest;
-  if (
-    typeof rawModulePath !== "string" ||
-    canonicalModulePath === undefined ||
-    rawModulePath !== canonicalModulePath ||
-    !manifest ||
-    manifest.status !== "present" ||
-    !Object.prototype.hasOwnProperty.call(
-      manifest.document.install.modules,
-      canonicalModulePath,
-    )
-  ) {
-    return invalidDeploymentProfileResolution(
-      "repository_install_ux_deployment_profile_module_invalid",
-      "The selected deployment profile does not name an exact module in the pinned Source manifest.",
-    );
-  }
-  return {
-    ok: true,
-    kind: "profile",
-    installConfig: selected,
-    modulePath: canonicalModulePath,
-  };
-}
-
-function invalidDeploymentProfileResolution(
-  code: Extract<
-    RepoOwnedDeploymentProfileResolution,
-    { readonly ok: false }
-  >["diagnostic"]["code"],
-  message: string,
-): RepoOwnedDeploymentProfileResolution {
-  return { ok: false, diagnostic: { code, message } };
-}
-
 /**
  * Validate and compile the immutable repository proposal into DB-owned
- * InstallConfig fields. Present invalid metadata is never silently ignored;
- * absent/legacy observations preserve the ordinary generic install flow
- * unless the operator policy requires an exact manifest API version.
+ * InstallConfig fields. Invalid optional metadata disables repository
+ * assistance and preserves the ordinary generic install flow unless the
+ * operator policy requires an exact manifest API version.
  */
 export async function adoptRepoOwnedInstallConfig(
   input: RepoOwnedInstallConfigAdoptionInput,
@@ -382,6 +184,17 @@ export async function adoptRepoOwnedInstallConfig(
   const observation = input.sourceSnapshot?.repositoryManifest;
   const requiredManifestApiVersion =
     input.baseConfig.policy.repositoryInstallUx?.requiredManifestApiVersion;
+
+  // Module selection is always grounded in the immutable source-sync index,
+  // even when the optional repository manifest is absent. An old/malformed
+  // snapshot therefore cannot fall back to Source/default or base config paths.
+  const selectedModule = resolveRepoOwnedInstallModulePath({
+    sourceSnapshot: input.sourceSnapshot,
+    modulePath: input.modulePath,
+  });
+  if (!selectedModule.ok) {
+    return { status: "invalid", diagnostic: selectedModule.diagnostic };
+  }
   if (!observation || observation.status === "absent") {
     if (requiredManifestApiVersion) {
       return {
@@ -395,10 +208,18 @@ export async function adoptRepoOwnedInstallConfig(
     return { status: "absent" };
   }
   if (observation.status === "invalid") {
-    return {
-      status: "invalid",
-      diagnostic: invalidRepositoryManifestDiagnostic(observation.diagnostic),
-    };
+    if (requiredManifestApiVersion) {
+      return {
+        status: "invalid",
+        diagnostic: {
+          code: "repository_install_ux_manifest_api_version_required",
+          message: `Repository install UX requires manifest API ${requiredManifestApiVersion}; observed invalid repository metadata.`,
+        },
+      };
+    }
+    // Manifest metadata is optional assistance. Keep the generic scanner
+    // install path available while disabling malformed presentation/UX data.
+    return { status: "absent" };
   }
   if (
     requiredManifestApiVersion &&
@@ -411,6 +232,23 @@ export async function adoptRepoOwnedInstallConfig(
         message: `Repository install UX requires manifest API ${requiredManifestApiVersion}; observed ${observation.document.apiVersion}.`,
       },
     };
+  }
+
+  // The manifest can assist only an actual file-derived module. A valid
+  // manifest with no matching entry is simply absent for this module; it does
+  // not make the real OpenTofu configuration uninstallable.
+  const manifestModulePath = repositoryManifestModulePath(
+    input.sourceSnapshot!,
+    selectedModule.modulePath,
+  );
+  if (
+    !manifestModulePath ||
+    !Object.prototype.hasOwnProperty.call(
+      observation.document.install.modules,
+      manifestModulePath,
+    )
+  ) {
+    return { status: "absent" };
   }
 
   const installingPrincipalId = input.installingPrincipalId?.trim();
@@ -428,14 +266,12 @@ export async function adoptRepoOwnedInstallConfig(
     };
   }
 
-  const moduleSelection = resolveRepoOwnedInstallModulePath({
-    sourceSnapshot: input.sourceSnapshot,
-    modulePath: input.modulePath,
-  });
-  if (!moduleSelection.ok) {
-    return { status: "invalid", diagnostic: moduleSelection.diagnostic };
-  }
-  const modulePath = moduleSelection.modulePath;
+  const modulePath = selectedModule.modulePath;
+  const manifestDocument = remapRepositoryManifestModule(
+    observation.document,
+    manifestModulePath,
+    modulePath,
+  );
   let compatibilityReport = input.compatibilityReport;
   if (!compatibilityReport) {
     try {
@@ -458,7 +294,7 @@ export async function adoptRepoOwnedInstallConfig(
     }
   }
   const compiled = compileRepositoryInstallUx({
-    document: observation.document,
+    document: manifestDocument,
     sourceSnapshotId: input.sourceSnapshot!.id,
     modulePath,
     compatibilityReport,
@@ -471,6 +307,20 @@ export async function adoptRepoOwnedInstallConfig(
       ? { requireReviewedValues: input.requireReviewedValues }
       : {}),
     policy: {
+      ...(input.baseConfig.policy?.repositoryInstallUx
+        ?.allowedRequirementKinds
+        ? {
+            allowedRequirementKinds:
+              input.baseConfig.policy.repositoryInstallUx
+                .allowedRequirementKinds,
+          }
+        : {}),
+      ...(input.baseConfig.policy?.repositoryInstallUx?.allowedOidcScopes
+        ? {
+            allowedOidcScopes:
+              input.baseConfig.policy.repositoryInstallUx.allowedOidcScopes,
+          }
+        : {}),
       allowedInterfacePermissions:
         input.baseConfig.policy?.repositoryInstallUx
           ?.allowedInterfacePermissions ?? [],
@@ -532,6 +382,23 @@ export async function adoptRepoOwnedInstallConfig(
   }
   const sourceBuild =
     input.baseConfig.sourceBuild ?? compiled.compiled.sourceBuild;
+  const installExperience = mergeInstallExperience(
+    compiled.compiled.installExperience,
+    input.baseConfig.installExperience,
+  );
+  if (!installExperience.ok) {
+    return { status: "invalid", diagnostic: installExperience.diagnostic };
+  }
+  const runtimeBindingMaterialization = mergeRuntimeBindingMaterialization(
+    input.baseConfig.runtimeBindingMaterialization,
+    compiled.compiled.runtimeBindingMaterialization,
+  );
+  if (!runtimeBindingMaterialization.ok) {
+    return {
+      status: "invalid",
+      diagnostic: runtimeBindingMaterialization.diagnostic,
+    };
+  }
 
   return {
     status: "accepted",
@@ -539,10 +406,7 @@ export async function adoptRepoOwnedInstallConfig(
       compiled.compiled.variablePresentation,
       input.baseConfig.variablePresentation,
     ),
-    installExperience: mergeInstallExperience(
-      compiled.compiled.installExperience,
-      input.baseConfig.installExperience,
-    ),
+    installExperience: installExperience.value,
     // Repository-derived and reviewed values are proposals. Existing
     // service/operator values retain final authority on collisions.
     variableMapping: mergeRecords(
@@ -555,10 +419,14 @@ export async function adoptRepoOwnedInstallConfig(
       : {}),
     outputAllowlist: outputAllowlist.value,
     ...(sourceBuild ? { sourceBuild } : {}),
+    ...(runtimeBindingMaterialization.value
+      ? { runtimeBindingMaterialization: runtimeBindingMaterialization.value }
+      : {}),
     sourceSnapshotId: input.sourceSnapshot!.id,
     digest: observation.digest,
     repositoryManifestApiVersion,
     modulePath,
+    rootProviderRequirements: selectedModule.rootProviderRequirements,
   };
 }
 
@@ -633,6 +501,9 @@ export async function previewRepoOwnedInstallConfig(
       : {}),
     ...(adoption.requiredInterfaces !== undefined
       ? { requiredInterfaces: adoption.requiredInterfaces }
+      : {}),
+    ...(adoption.runtimeBindingMaterialization !== undefined
+      ? { runtimeBindingMaterialization: adoption.runtimeBindingMaterialization }
       : {}),
     sourceSelector,
     modulePath: selectedPath,
@@ -880,103 +751,171 @@ function boundedMergeIdentifier(value: string): string {
   return JSON.stringify(value.replace(/[\0-\u001f\u007f]/gu, "").slice(0, 96));
 }
 
+/** Match the source-sync module index's canonical directory spelling. */
+function isCanonicalRepositoryModulePath(value: string): boolean {
+  if (
+    !value ||
+    value.trim() !== value ||
+    value.length > 1_024 ||
+    value.startsWith("/") ||
+    value.startsWith("./") ||
+    value.endsWith("/") ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    /^[A-Za-z]:/u.test(value)
+  ) {
+    return false;
+  }
+  if (value === ".") return true;
+  return !value
+    .split("/")
+    .some((segment) => !segment || segment === "." || segment === "..");
+}
+
+/** Individual OpenTofu files are not install-module directory choices. */
+function isRepositoryModuleDirectoryPath(value: string): boolean {
+  return !/(?:\.tf|\.tofu)(?:\.json)?$/iu.test(value);
+}
+
 export type RepoOwnedInstallModulePathResolution =
-  | { readonly ok: true; readonly modulePath: string }
+  | {
+      readonly ok: true;
+      readonly modulePath: string;
+      readonly rootProviderRequirements: readonly RepositoryModuleRootProviderRequirement[];
+    }
   | {
       readonly ok: false;
       readonly diagnostic: RepoOwnedInstallConfigAdoptionDiagnostic;
     };
 
 /**
- * Select the repository-owned install module without consulting Store, Source,
- * or base InstallConfig paths. An explicit path remains available to the
- * ordinary manual Git flow; Store preflight calls this with no explicit path.
+ * Select an actual OpenTofu root observed from the immutable Git tree. Store,
+ * Source defaults, base InstallConfig paths, and manifest-only keys are never
+ * consulted. An omitted choice auto-selects exactly one candidate; zero or
+ * multiple candidates require an actionable caller decision.
  */
 export function resolveRepoOwnedInstallModulePath(input: {
   readonly sourceSnapshot: SourceSnapshot | undefined;
   readonly modulePath?: string;
 }): RepoOwnedInstallModulePathResolution {
-  const observation = input.sourceSnapshot?.repositoryManifest;
-  if (!observation || observation.status === "absent") {
+  const observation = parseRepositoryModulesSnapshot(
+    input.sourceSnapshot?.repositoryModules,
+  );
+  if (
+    !observation ||
+    observation.status === "invalid" ||
+    !input.sourceSnapshot ||
+    observation.scopePath !== canonicalSourceSnapshotPath(input.sourceSnapshot)
+  ) {
     return {
       ok: false,
       diagnostic: {
-        code: "repository_install_ux_default_module_missing",
+        code: "repository_install_module_index_unavailable",
         message:
-          "Repository install UX cannot select a module because the repository manifest is absent.",
+          "The pinned SourceSnapshot has no complete OpenTofu module index; sync and review the source again.",
       },
     };
   }
-  if (observation.status === "invalid") {
-    return {
-      ok: false,
-      diagnostic: invalidRepositoryManifestDiagnostic(observation.diagnostic),
-    };
-  }
-
+  const modules = observation.modules;
   if (input.modulePath !== undefined) {
-    return {
-      ok: true,
-      modulePath: input.modulePath === "" ? "." : input.modulePath,
-    };
-  }
-
-  const document = observation.document;
-  const modulePaths = Object.keys(document.install.modules);
-  if (
-    document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 ||
-    document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 ||
-    document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3
-  ) {
-    const defaultModule = document.install.defaultModule;
+    // A URL path is only a selection hint until it is proven against the exact
+    // source-sync index. Never consult Source/default/base/manifest paths as a
+    // fallback for an explicit request.
+    const parsedModulePath = modulePathValue(input.modulePath);
+    const canonicalModulePath =
+      parsedModulePath === "" ? "." : parsedModulePath;
     if (
-      defaultModule !== undefined &&
-      !Object.prototype.hasOwnProperty.call(
-        document.install.modules,
-        defaultModule,
-      )
+      canonicalModulePath === undefined ||
+      (input.modulePath !== "." && input.modulePath !== canonicalModulePath) ||
+      !isCanonicalRepositoryModulePath(canonicalModulePath) ||
+      !isRepositoryModuleDirectoryPath(canonicalModulePath)
     ) {
       return {
         ok: false,
         diagnostic: {
-          code: "repository_install_ux_default_module_invalid",
+          code: "repository_install_ux_module_path_invalid",
           message:
-            "Repository install UX defaultModule must name an exact canonical install.modules key.",
+            "The selected module path is not a canonical relative path.",
         },
       };
     }
-    if (defaultModule !== undefined) {
-      return { ok: true, modulePath: defaultModule };
+    const selected = modules.find(
+      (module) => module.path === canonicalModulePath,
+    );
+    if (!selected) {
+      return {
+        ok: false,
+        diagnostic: {
+          code: "repository_install_ux_module_missing",
+          message: `The pinned Git tree does not contain the selected OpenTofu module ${boundedMergeIdentifier(canonicalModulePath)}.`,
+        },
+      };
     }
+    return {
+      ok: true,
+      modulePath: canonicalModulePath,
+      rootProviderRequirements: selected.rootProviderRequirements,
+    };
   }
-  if (modulePaths.length === 1) {
-    return { ok: true, modulePath: modulePaths[0]! };
+
+  if (modules.length === 1) {
+    return {
+      ok: true,
+      modulePath: modules[0]!.path,
+      rootProviderRequirements: modules[0]!.rootProviderRequirements,
+    };
   }
   return {
     ok: false,
     diagnostic: {
-      code: "repository_install_ux_default_module_missing",
+      code:
+        modules.length === 0
+          ? "repository_install_ux_module_missing"
+          : "repository_install_module_selection_required",
       message:
-        "Repository install UX declares multiple modules; takosumi.com/v2.1 install.defaultModule is required.",
+        modules.length === 0
+          ? "The pinned Git tree contains no installable OpenTofu root module."
+          : "The pinned Git tree contains multiple OpenTofu root modules; choose one exact path.",
     },
   };
 }
 
-function invalidRepositoryManifestDiagnostic(
-  parserDiagnostic: string | undefined,
-): RepoOwnedInstallConfigAdoptionDiagnostic {
-  if (parserDiagnostic?.startsWith("install.defaultModule")) {
-    return {
-      code: "repository_install_ux_default_module_invalid",
-      message:
-        "The repository install UX default module declaration is invalid; update the pinned repository metadata and sync the Source again.",
-    };
-  }
+function canonicalSourceSnapshotPath(snapshot: SourceSnapshot): string {
+  const parsed = modulePathValue(snapshot.path);
+  return parsed === "" ? "." : parsed ?? "";
+}
+
+/**
+ * Repository manifests use repository-root-relative module keys while the
+ * source-sync module index (and compatibility runner) uses paths relative to
+ * SourceSnapshot.path. Map only for the optional presentation/Install UX
+ * lookup; executable modulePath remains subtree-relative.
+ */
+function repositoryManifestModulePath(
+  snapshot: SourceSnapshot,
+  modulePath: string,
+): string | undefined {
+  const scopePath = canonicalSourceSnapshotPath(snapshot);
+  if (!scopePath) return undefined;
+  if (scopePath === ".") return modulePath;
+  if (modulePath === ".") return scopePath;
+  return `${scopePath}/${modulePath}`;
+}
+
+function remapRepositoryManifestModule(
+  document: RepositoryManifestDocument,
+  repositoryModulePath: string,
+  selectedModulePath: string,
+): RepositoryManifestDocument {
+  const selected = document.install.modules[repositoryModulePath];
+  if (!selected) return document;
   return {
-    code: "repository_install_ux_document_invalid",
-    message:
-      "The repository install UX document is invalid; update the pinned repository metadata and sync the Source again.",
-  };
+    ...document,
+    install: {
+      ...document.install,
+      modules: { [selectedModulePath]: selected },
+    },
+  } as RepositoryManifestDocument;
 }
 
 function mergeVariablePresentation(
@@ -993,21 +932,56 @@ function mergeVariablePresentation(
 function mergeInstallExperience(
   proposed: NonNullable<InstallConfig["installExperience"]>,
   operator: InstallConfig["installExperience"],
-): InstallConfig["installExperience"] {
-  if (!operator) return proposed;
+):
+  | { readonly ok: true; readonly value: InstallConfig["installExperience"] }
+  | {
+      readonly ok: false;
+      readonly diagnostic: RepoOwnedInstallConfigAdoptionDiagnostic;
+    } {
+  if (!operator) return { ok: true, value: proposed };
   const projections = new Map(
     (proposed.projections ?? []).map((projection) => [
       projection.kind,
       projection,
     ]),
   );
+  const repositoryOidcRequested = (proposed.projections ?? []).some(
+    (projection) => projection.kind === "oidc_client",
+  );
+  if (
+    repositoryOidcRequested &&
+    (operator.projections ?? []).some(
+      (projection) => projection.kind === "public_endpoint",
+    )
+  ) {
+    return {
+      ok: false,
+      diagnostic: {
+        code: "repository_install_ux_oidc_endpoint_conflict",
+        message:
+          "The repository OIDC capability and its public endpoint are one reviewed manifest pair; remove the base public endpoint before adoption.",
+      },
+    };
+  }
   for (const projection of operator.projections ?? []) {
+    if (projection.kind === "oidc_client") {
+      // Dynamic Capsule registration is available only when this exact
+      // repository snapshot requested and compiled identity.oidc. A catalog
+      // or manual presentation projection must not be promoted merely because
+      // another repository declaration caused a derived InstallConfig row.
+      continue;
+    }
     projections.set(projection.kind, projection);
   }
   return {
-    ...(projections.size > 0 ? { projections: [...projections.values()] } : {}),
-    ...(proposed.features ? { features: proposed.features } : {}),
-    repositoryInstallUx: { status: "accepted" },
+    ok: true,
+    value: {
+      ...(projections.size > 0
+        ? { projections: [...projections.values()] }
+        : {}),
+      ...(proposed.features ? { features: proposed.features } : {}),
+      repositoryInstallUx: { status: "accepted" },
+    },
   };
 }
 
@@ -1016,6 +990,31 @@ function mergeRecords(
   operator: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
   return { ...proposed, ...operator };
+}
+
+/**
+ * Runtime materialization is a private host profile, not a set of independent
+ * repository fields. Keep an operator profile when the repository is silent;
+ * accept a repository proposal only when it is byte-for-byte compatible with
+ * the existing profile, and fail closed on any collision.
+ */
+function mergeRuntimeBindingMaterialization(
+  base: InstallConfig["runtimeBindingMaterialization"],
+  proposed: InstallConfig["runtimeBindingMaterialization"],
+): DeclarationMergeResult<InstallConfig["runtimeBindingMaterialization"]> {
+  if (proposed === undefined) return { ok: true, value: base };
+  if (base === undefined) return { ok: true, value: proposed };
+  if (normalizedDeclarationEqual(base, proposed)) {
+    return { ok: true, value: base };
+  }
+  return {
+    ok: false,
+    diagnostic: {
+      code: "repository_install_ux_runtime_binding_profile_conflict",
+      message:
+        "The repository runtime binding profile conflicts with the operator profile.",
+    },
+  };
 }
 
 function repoPresentationStoreMetadata(input: {

@@ -211,17 +211,44 @@ const TOOLS = Object.freeze([
         options: {
           type: "object",
           properties: {
-            deploymentProfileKey: {
+            modulePath: {
               type: "string",
               minLength: 1,
-              maxLength: 256,
+              maxLength: 1024,
             },
-            providerBindingConnectionIds: {
-              type: "object",
-              additionalProperties: {
-                type: "string",
-                minLength: 1,
-                maxLength: 128,
+            providerBindings: {
+              type: "array",
+              maxItems: 32,
+              items: {
+                type: "object",
+                properties: {
+                  provider: {
+                    type: "string",
+                    minLength: 1,
+                    maxLength: 256,
+                    pattern:
+                      "^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?/[a-z0-9_-]+/[a-z0-9_-]+$",
+                  },
+                  moduleLocalName: {
+                    type: "string",
+                    minLength: 1,
+                    maxLength: 128,
+                    pattern: "^[A-Za-z_][A-Za-z0-9_-]*$",
+                  },
+                  childAlias: {
+                    type: "string",
+                    minLength: 1,
+                    maxLength: 128,
+                    pattern: "^[A-Za-z_][A-Za-z0-9_-]*$",
+                  },
+                  connectionId: {
+                    type: "string",
+                    minLength: 1,
+                    maxLength: 128,
+                  },
+                },
+                required: ["provider", "moduleLocalName", "connectionId"],
+                additionalProperties: false,
               },
             },
           },
@@ -624,46 +651,21 @@ function installPlanCreateArguments(args: Record<string, unknown>): {
   let normalizedOptions: Record<string, unknown> | undefined;
   if (args.options !== undefined) {
     const options = requiredRecord(args.options, "options");
-    assertOnlyKeys(options, [
-      "deploymentProfileKey",
-      "providerBindingConnectionIds",
-    ]);
-    let providerBindingConnectionIds: Record<string, string> | undefined;
-    if (options.providerBindingConnectionIds !== undefined) {
-      const references = requiredRecord(
-        options.providerBindingConnectionIds,
-        "options.providerBindingConnectionIds",
-      );
-      if (Object.keys(references).length > 32) {
-        throw new TypeError(
-          "options.providerBindingConnectionIds exceeds 32 entries",
-        );
-      }
-      providerBindingConnectionIds = {};
-      for (const [provider, connectionId] of Object.entries(references)) {
-        if (!provider || provider.length > 256) {
-          throw new TypeError("provider binding name is invalid");
-        }
-        providerBindingConnectionIds[provider] = requiredText(
-          connectionId,
-          `options.providerBindingConnectionIds.${provider}`,
-          128,
-        );
-      }
-    }
+    assertOnlyKeys(options, ["modulePath", "providerBindings"]);
+    const providerBindings = parseInstallPlanProviderBindings(
+      options.providerBindings,
+    );
     normalizedOptions = {
-      ...(options.deploymentProfileKey === undefined
+      ...(options.modulePath === undefined
         ? {}
         : {
-            deploymentProfileKey: requiredText(
-              options.deploymentProfileKey,
-              "options.deploymentProfileKey",
-              256,
+            modulePath: requiredText(
+              options.modulePath,
+              "options.modulePath",
+              1024,
             ),
           }),
-      ...(providerBindingConnectionIds
-        ? { providerBindingConnectionIds }
-        : {}),
+      ...(providerBindings === undefined ? {} : { providerBindings }),
     };
   }
   return {
@@ -674,6 +676,75 @@ function installPlanCreateArguments(args: Record<string, unknown>): {
       ...(normalizedOptions ? { options: normalizedOptions } : {}),
     },
   };
+}
+
+function parseInstallPlanProviderBindings(
+  value: unknown,
+):
+  | readonly {
+      readonly provider: string;
+      readonly moduleLocalName: string;
+      readonly childAlias?: string;
+      readonly connectionId: string;
+    }[]
+  | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new TypeError("options.providerBindings must be an array");
+  }
+  if (value.length > 32) {
+    throw new TypeError("options.providerBindings exceeds 32 entries");
+  }
+  const identities = new Set<string>();
+  return value.map((entry, index) => {
+    const field = `options.providerBindings[${index}]`;
+    const binding = requiredRecord(entry, field);
+    assertOnlyKeys(binding, [
+      "provider",
+      "moduleLocalName",
+      "childAlias",
+      "connectionId",
+    ]);
+    const provider = requiredText(binding.provider, `${field}.provider`, 256);
+    if (
+      !/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?\/[a-z0-9_-]+\/[a-z0-9_-]+$/u.test(
+        provider,
+      )
+    ) {
+      throw new TypeError(`${field}.provider must be a canonical source`);
+    }
+    const moduleLocalName = requiredText(
+      binding.moduleLocalName,
+      `${field}.moduleLocalName`,
+      128,
+    );
+    if (!/^[A-Za-z_][A-Za-z0-9_-]*$/u.test(moduleLocalName)) {
+      throw new TypeError(`${field}.moduleLocalName is invalid`);
+    }
+    const childAlias = optionalText(
+      binding.childAlias,
+      `${field}.childAlias`,
+      128,
+    );
+    if (childAlias && !/^[A-Za-z_][A-Za-z0-9_-]*$/u.test(childAlias)) {
+      throw new TypeError(`${field}.childAlias is invalid`);
+    }
+    const identity = `${provider}\0${moduleLocalName}\0${childAlias ?? ""}`;
+    if (identities.has(identity)) {
+      throw new TypeError(`${field} duplicates a provider binding identity`);
+    }
+    identities.add(identity);
+    return {
+      provider,
+      moduleLocalName,
+      ...(childAlias === undefined ? {} : { childAlias }),
+      connectionId: requiredText(
+        binding.connectionId,
+        `${field}.connectionId`,
+        128,
+      ),
+    };
+  });
 }
 
 async function requireWorkspaceTarget(
