@@ -1912,8 +1912,14 @@ export function smokeWorkspaceCloudflareConnectionBody(
         },
     displayName,
     scopeHints: {
-      accountId: options.cloudflareAccountId,
-      workersSubdomain: options.cloudflareWorkersSubdomain,
+      providerSettings: {
+        accountId: options.cloudflareAccountId,
+        workersSubdomain: options.cloudflareWorkersSubdomain,
+      },
+      moduleInputDefaults: {
+        cloudflare_account_id: options.cloudflareAccountId,
+        cloudflare_workers_subdomain: options.cloudflareWorkersSubdomain,
+      },
     },
     values: {
       CLOUDFLARE_API_TOKEN: options.cloudflareApiToken,

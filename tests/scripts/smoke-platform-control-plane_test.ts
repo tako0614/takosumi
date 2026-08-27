@@ -447,8 +447,14 @@ test("platform control-plane smoke creates Provider Connections through installe
     },
     displayName: "Layer-2 smoke canonical",
     scopeHints: {
-      accountId: "account",
-      workersSubdomain: "takosumi-smoke",
+      providerSettings: {
+        accountId: "account",
+        workersSubdomain: "takosumi-smoke",
+      },
+      moduleInputDefaults: {
+        cloudflare_account_id: "account",
+        cloudflare_workers_subdomain: "takosumi-smoke",
+      },
     },
     values: {
       CLOUDFLARE_API_TOKEN: "cloudflare-token",
