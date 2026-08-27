@@ -196,7 +196,7 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
   ).toThrow("platform_worker_release_config_source_invalid");
 });
 
-test("platform release parser exposes only reviewed plan and execute actions", () => {
+test("platform release parser exposes reviewed plan, execute, recovery, and restore actions", () => {
   expect(
     parsePlatformWorkerReleaseArgs([
       "plan",
@@ -244,6 +244,25 @@ test("platform release parser exposes only reviewed plan and execute actions", (
     reviewer: "operator:reviewer",
     evidence: "/private/recovered.json",
   });
+  expect(
+    parsePlatformWorkerReleaseArgs([
+      "restore",
+      "--plan",
+      "/private/plan.json",
+      "--confirm",
+      "sha256:confirmation",
+      "--review",
+      "operator:reviewer",
+      "--evidence",
+      "/private/restored.json",
+    ]),
+  ).toEqual({
+    action: "restore",
+    plan: "/private/plan.json",
+    confirmation: "sha256:confirmation",
+    reviewer: "operator:reviewer",
+    evidence: "/private/restored.json",
+  });
 });
 
 test("platform release verifies the exact pushed branch without a remote-tracking ref", () => {
@@ -275,14 +294,11 @@ test("platform release selects exactly one 100 percent serving Version", () => {
   expect(
     parseServingVersion(
       JSON.stringify({
-        deployments: [
+        id: "deployment-id",
+        versions: [
           {
-            versions: [
-              {
-                version_id: "11111111-1111-4111-8111-111111111111",
-                percentage: 100,
-              },
-            ],
+            version_id: "11111111-1111-4111-8111-111111111111",
+            percentage: 100,
           },
         ],
       }),
@@ -305,13 +321,16 @@ test("lost acknowledgement recovery selects one post-plan Version and exact bind
         {
           id: "11111111-1111-4111-8111-111111111111",
           metadata: { created_on: "2026-08-18T16:00:00Z" },
+          annotations: { "workers/tag": "platform-release-proof" },
         },
         {
           id: "22222222-2222-4222-8222-222222222222",
           metadata: { created_on: "2026-08-18T16:30:00Z" },
+          annotations: { "workers/tag": "platform-release-proof" },
         },
       ]),
       "2026-08-18T16:29:00Z",
+      "platform-release-proof",
     ),
   ).toBe("22222222-2222-4222-8222-222222222222");
   expect(

@@ -27,7 +27,7 @@ bun run deploy
 | ---------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | Platform service source                  | `takosumi/worker` / `takosumi/core`                                 | Takosumi service checks + selected composition deploy                       |
 | Dashboard SPA                            | `takosumi/dashboard`                                                | dashboard typecheck / build                                                 |
-| Reference runner image                   | `takosumi/runner/Dockerfile`                                        | image rebuild + selected executor-adapter smoke                             |
+| Reference runner image                   | `takosumi/runner/Dockerfile`, `takosumi/scripts/runner-image-release.ts` | owning runner-image build + platform release + runner verification         |
 | CredentialRecipe / provider policy packs | `takosumi/docs/internal/core-spec.md`, schema/store/policy packages | CredentialRecipe/provider allowlist tests + custom provider policy evidence |
 | Custom runner policy                     | `takosumi/runner`, operator boundary policy                         | custom runner smoke + egress policy evidence                                |
 | Provider mirror/cache policy             | runner tofu CLI config / provider mirror                            | provider install attestation tests                                          |
@@ -96,10 +96,9 @@ bun run check:legacy-names
 When a runner artifact changed, add a staging smoke through the selected
 `RunnerProfile.executorId` and real executor adapter, not only a local image
 start. For the Cloudflare reference adapter this means the deployed Container
-runner path; other adapters provide their own equivalent versioned hardening
-contribution. Official hosted Cloud checks are composed by
-`takosumi-cloud/modules/hardening/cloudflare-platform-hardening.json`, not by a
-fixed OSS checklist.
+runner path through the owning runner-image build, platform release, and
+[`takosumi-runner-image`](./runner-image-release.md) verification workflow;
+other adapters provide their own equivalent versioned hardening contribution.
 
 ## Severity SLA
 

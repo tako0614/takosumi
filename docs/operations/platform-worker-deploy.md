@@ -52,33 +52,101 @@ Workspace context.
 ## Official staging release
 
 The official staging target is a reviewed two-step owner surface. Plan is
-read-only: it requires a clean pushed source, builds the dashboard, validates
-that the external config points at that same worktree, reads the exact serving
-predecessor, and runs Wrangler's dry-run.
+read-only: it requires clean pushed source, reproduces the environment-specific
+dashboard build twice, seals every physical output path/size/digest, validates
+that the external config points at that same worktree, seals the metadata-only
+secret-name inventory and exact serving predecessor, and seals Wrangler's
+strict immediate-rollout dry-run output tree in an external, non-worktree
+release closure. It also reads and seals the exact healthy predecessor
+Container application identity, immutable image, version, rollout state, and
+instance health. A second sealed closure projects only that image literal back
+to the predecessor digest for reviewed restore.
 
 ```bash
 bun run deploy -- takosumi-platform-staging plan \
   --config /absolute/operator-private/wrangler.staging.toml \
-  --plan-out /absolute/operator-private/release-plan.json
+  --plan-out /absolute/non-worktree-release-state/release-plan.json
 
 bun run deploy -- takosumi-platform-staging execute \
-  --plan /absolute/operator-private/release-plan.json \
+  --plan /absolute/non-worktree-release-state/release-plan.json \
   --confirm sha256:<reviewed-plan-digest> \
   --review operator:<reviewer> \
-  --evidence /absolute/operator-private/release-evidence.json
+  --evidence /absolute/non-worktree-release-state/release-evidence.json
 ```
 
-Execute rechecks the source, config, dashboard bytes, and predecessor before
-the single upload. A touched target with missing post-conditions is
-`indeterminate`; reconcile the authoritative deployment before another
-attempt. Successful execute records the immutable predecessor and new serving
-Version. The immutable Version readback requires one exact required binding of
-each expected type and the configured Hosted service. The public root and
-discovery document must then emit that exact Version id as
-`x-takosumi-version-id`; a cache hit or another serving Version cannot satisfy
-the release evidence. The authenticated Hosted subscription read is a separate
-E2E post-condition after publication; cloud-resource and AI E2E run against
-Takoserver's owning endpoints.
+Execute rechecks the exact source, config, secret names, complete dashboard
+tree, and dry-run tree. It copies that closure with stable no-follow reads into
+fresh external single-link upload custody, then deploys the custody dry-run
+entry with `--no-bundle` and its exact projected config. Custody is re-sealed
+immediately before and after upload, so upload does not re-read the retained
+plan tree, live checkout, or ignored dashboard bytes. If no plan-derived
+external checkpoint exists, it rechecks the
+predecessor and fsyncs an `unknown` checkpoint immediately before the sole
+`wrangler deploy --containers-rollout immediate --strict` command. The
+checkpoint is derived from the physical plan and confirmation, not the chosen
+evidence path, so an alternate output path cannot upload twice.
+
+Execute parses exactly one `Current Version ID: <uuid>` from Wrangler's output,
+records that accepted UUID in the checkpoint, and requires deployment status to
+contain only that UUID at 100 percent. It reads the exact immutable Version back
+and requires its nonce-bound plan-unique tag, message, required binding types,
+configured Hosted service, and fetch handler. The public root and discovery
+document must then emit that same UUID as `x-takosumi-version-id`; a cache hit,
+50/50 split, unchanged predecessor, or concurrent Version cannot satisfy ready
+evidence. Ready evidence also requires Container list and authoritative detail
+to agree on the exact application id, name, state, version, and immutable
+configured image, with no active rollout and no failed, starting, scheduling,
+or error entries.
+
+If provider acknowledgement is lost, recovery lists the bounded recent Version
+set and accepts exactly one post-plan Version carrying that unique plan tag.
+Zero or multiple matches remain incomplete. The exact predecessor stays in the
+plan and ready evidence for rollback.
+
+Rollback is also owned by this surface; do not copy a printed Wrangler command
+or bypass its checkpoint/readback boundary:
+
+```bash
+bun run deploy -- takosumi-platform-staging restore \
+  --plan /absolute/non-worktree-release-state/release-plan.json \
+  --confirm sha256:<reviewed-plan-digest> \
+  --review operator:<reviewer> \
+  --evidence /absolute/non-worktree-release-state/restore-evidence.json
+```
+
+Use `takosumi-platform` for production. Restore first consumes the sealed
+image-only predecessor closure through a strict full deploy with immediate
+Container rollout. Before that mutation it requires the live Container
+application id and name to equal the reviewed plan and its image to be either
+the reviewed forward image or predecessor image. An interrupted forward rollout
+may be active or unhealthy at this pre-restore boundary; a changed application
+identity or third image fails before the restore checkpoint and deploy. It
+recovers a lost acknowledgement only from exactly one plan-tagged Version,
+verifies that Version and the predecessor Container identity, image, settled
+rollout, and zero-error health, then routes the exact predecessor Worker Version
+alone at 100 percent. Separate fsynced `unknown` stages fence the Container
+upload and Worker routing command. Ready restore evidence requires the public
+predecessor Version plus the same exact healthy predecessor Container readback.
+Failure evidence is derived from those stages: no restore checkpoint is
+pre-mutation, an `unknown` or malformed checkpoint is post-mutation ambiguity,
+and an accepted stage is post-mutation readback.
+
+The whole restore state machine runs under one inter-process lock derived from
+the checkpoint and confirmation, including every staged checkpoint transition,
+provider command, and authoritative readback. The owner record is fsynced under
+a private pending name and published with an atomic no-overwrite hard link; it
+binds the machine, PID namespace, boot, PID, and process start identity. A live
+owner excludes an alternate evidence-path invocation. Restore also rejects
+canonical-path or inode aliases involving its plan, evidence, closures,
+checkpoints, lock, or reserved pending-lock namespace before opening the lock.
+After a crashed local owner is proven dead, the next invocation removes only
+that exact lock inode, re-reads the canonical staged checkpoint, and follows its
+existing lost-acknowledgement recovery path instead of starting another
+restore.
+
+The authenticated Hosted subscription read is a separate E2E post-condition
+after publication; cloud-resource and AI E2E run against Takoserver's owning
+endpoints.
 
 ## Self-host build and deployment
 
@@ -134,6 +202,13 @@ holds the credential.
 Container image reuse, capacity, keepalive, cache, egress, and timeout settings
 are explicit operator policy. A class or binding rename requires a durable
 migration; never assume production state can be discarded.
+
+For the Cloudflare reference runner, this repository owns both
+`runner/Dockerfile` and the
+[`takosumi-runner-image`](./runner-image-release.md) build/verification surface.
+The platform surface remains the sole full Worker/Container mutation authority.
+The official realized digest pin and operator-only evidence remain in
+`takosumi-private`; they are not source-controlled here.
 
 The platform worker does not advertise or dispatch the retired Resource Shape,
 TargetPool, SpacePolicy, Form Host, or FormActivation HTTP families. Their
