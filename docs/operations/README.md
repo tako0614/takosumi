@@ -27,6 +27,7 @@ Cloud 側のリポジトリで管理します。
 ### Deploy と rollback
 
 - [platform worker を deploy する](./platform-worker-deploy.md)
+- [runner image を release する](./runner-image-release.md)
 - [構成ごとの注意点](./deploy-topology-notes.md)
 - [release artifact](./release-artifacts.md)
 - [v1 release](./takosumi-v1-release.md)
