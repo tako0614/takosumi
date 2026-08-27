@@ -48,6 +48,11 @@ const PLATFORM_PRODUCTION = {
   target: "cloudflare-worker:takosumi",
 };
 
+const CONTRACT_PACKAGE = {
+  surface: "takosumi-contract-package",
+  target: "npm:@takosjp/takosumi-contract",
+};
+
 const platformContract = ({ surface, target, environment }) => ({
   surface,
   target,
@@ -92,6 +97,26 @@ const CONTRACT = {
           "prints the provider's own stdout and stderr, names whether the failure was before or after publication, and on a readback mismatch exits non-zero naming the previous deployment instead of retrying",
       },
     },
+    {
+      surface: CONTRACT_PACKAGE.surface,
+      target: CONTRACT_PACKAGE.target,
+      covers: ["contract", "scripts/contract-package-release.ts"],
+      triggers: ["published-identity"],
+      requiresScripts: ["check", "deploy"],
+      requiresTools: ["git", "bun", "npm"],
+      obligations: {
+        provenance:
+          "refuses a dirty or unpushed worktree, requires the package-scoped lightweight tag takosumi-contract-v<version> on the exact pushed source commit, runs the complete owner gate, packs once, records npm sha512 integrity, scans the tarball inventory, and installs those exact bytes into a fresh typechecked consumer before publication",
+        "post-conditions":
+          "reads the exact version and integrity back from npm, installs that registry identity into a fresh consumer, typechecks it, and executes public discovery, OIDC, and Interface imports",
+        reversal:
+          "npm package identities are immutable and cannot be rolled back in place; consumers can pin the previous version and a bad release is repaired only with a new patch version",
+        "failure-handling":
+          "distinguishes a failure before publication from an indeterminate attempted mutation, never retries blindly, and requires exact registry-integrity reconciliation before resuming",
+        "no-overwrite":
+          "publishes only an absent version; an existing identity is accepted solely when its registry integrity exactly matches the one prepared tarball",
+      },
+    },
   ],
 };
 
@@ -128,6 +153,12 @@ if (
       ? PLATFORM_STAGING.environment
       : PLATFORM_PRODUCTION.environment;
   await runPlatformWorkerRelease(process.argv.slice(3), environment);
+  process.exit(0);
+}
+
+if (selected === CONTRACT_PACKAGE.surface) {
+  const { runContractPackageRelease } = await import("./contract-package-release.ts");
+  await runContractPackageRelease(process.argv.slice(3));
   process.exit(0);
 }
 

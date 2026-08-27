@@ -34,6 +34,10 @@ test("OSS deploy entrypoint owns the official platform Worker without a Cloud wr
       surface: "takosumi-website",
       target: "cloudflare-pages:takosumi-website",
     }),
+    expect.objectContaining({
+      surface: "takosumi-contract-package",
+      target: "npm:@takosjp/takosumi-contract",
+    }),
   ]);
 
   const source = await Bun.file(resolve(root, "scripts/deploy.mjs")).text();
