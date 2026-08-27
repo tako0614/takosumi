@@ -469,6 +469,7 @@ test("ready evidence requires exact bindings and the fetch handler", () => {
   const version = (
     handlers: readonly string[],
     hostedService = "takosumi-hosted",
+    includeRuntimeBinding = true,
   ) =>
     JSON.stringify({
       resources: {
@@ -483,6 +484,14 @@ test("ready evidence requires exact bindings and the fetch handler", () => {
             service: hostedService,
           },
           { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" },
+          ...(includeRuntimeBinding
+            ? [
+                {
+                  name: "TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY",
+                  type: "secret_text",
+                },
+              ]
+            : []),
         ],
       },
     });
@@ -508,6 +517,10 @@ test("ready evidence requires exact bindings and the fetch handler", () => {
             {
               name: "TAKOSUMI_VERSION_METADATA",
               type: "version_metadata",
+            },
+            {
+              name: "TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY",
+              type: "secret_text",
             },
           ],
         },
@@ -537,6 +550,12 @@ test("ready evidence requires exact bindings and the fetch handler", () => {
           bindings: [{ name: "ASSETS" }],
         },
       }),
+      "takosumi-hosted",
+    ),
+  ).toThrow("platform_worker_release_binding_invalid");
+  expect(() =>
+    assertPublishedVersion(
+      version(["fetch"], "takosumi-hosted", false),
       "takosumi-hosted",
     ),
   ).toThrow("platform_worker_release_binding_invalid");

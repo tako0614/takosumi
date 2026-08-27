@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -21,6 +21,7 @@ import {
   appendPlatformMutationFence,
   appendPlatformRestoreFence,
   buildDryRunSeal,
+  createPlatformDryRunConfig,
   createPlatformUploadCustody,
   dashboardAssetTreeSeal,
   parseDeployedVersion,
@@ -192,6 +193,30 @@ test("plan dry-run invokes Wrangler from the exact candidate worktree root", asy
     config,
   ]);
   expect(seal.entries.map((entry) => entry.path)).toEqual(["worker.js"]);
+});
+
+test("transient restore dry-run config stays global and cleans up", () => {
+  const originalConfigPath = resolve(import.meta.dir, "../../deploy/platform/wrangler.toml");
+  const transient = createPlatformDryRunConfig(
+    ['main = "entry-worker.ts"', 'directory = "../../dashboard/dist"', ""].join(
+      "\n",
+    ),
+    originalConfigPath,
+  );
+  try {
+    expect(relative(resolve(import.meta.dir, "../.."), transient.path)).toMatch(
+      /^\.\./u,
+    );
+    expect(readFileSync(transient.path, "utf8")).toContain(
+      `main = ${JSON.stringify(resolve(import.meta.dir, "../../deploy/platform/entry-worker.ts"))}`,
+    );
+    expect(readFileSync(transient.path, "utf8")).toContain(
+      `directory = ${JSON.stringify(resolve(import.meta.dir, "../../dashboard/dist"))}`,
+    );
+  } finally {
+    transient.dispose();
+  }
+  expect(existsSync(transient.path)).toBeFalse();
 });
 
 test("asset-tree seal fails closed when a file is swapped after no-follow open", () => {

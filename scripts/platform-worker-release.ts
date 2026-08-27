@@ -42,6 +42,7 @@ const REQUIRED_BINDINGS = [
   "TAKOSUMI_CONTROL_DB",
   "HOSTED",
   "TAKOSUMI_VERSION_METADATA",
+  "TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY",
 ] as const;
 
 export type DashboardAssetSeal = Readonly<{
@@ -1918,30 +1919,64 @@ type PlatformDryRunConfig = Readonly<{
   dispose: () => void;
 }>;
 
-function createPlatformDryRunConfig(
+export function createPlatformDryRunConfig(
   source: string,
   originalConfigPath: string,
 ): PlatformDryRunConfig {
-  const path = join(
-    dirname(originalConfigPath),
-    `.takosumi-platform-dry-run-${randomBytes(16).toString("hex")}.toml`,
+  if (!isAbsolute(originalConfigPath)) {
+    throw new Error("platform_worker_release_dry_run_config_invalid");
+  }
+  const workspace = createGlobalTransientDirectory(
+    "takosumi-platform-dry-run-config-",
   );
-  assertExternalAbsent(path);
+  const path = join(workspace, "wrangler.toml");
   try {
-    writePrivate(path, new TextEncoder().encode(source));
+    assertExternalAbsent(path);
+    writePrivate(
+      path,
+      new TextEncoder().encode(
+        platformDryRunConfigProjection(source, originalConfigPath),
+      ),
+    );
     let disposed = false;
     return {
       path,
       dispose: () => {
         if (disposed) return;
         disposed = true;
-        rmSync(path, { force: true });
+        rmSync(workspace, { recursive: true, force: true });
       },
     };
   } catch (error) {
-    rmSync(path, { force: true });
+    rmSync(workspace, { recursive: true, force: true });
     throw error;
   }
+}
+
+function platformDryRunConfigProjection(
+  source: string,
+  originalConfigPath: string,
+): string {
+  const base = dirname(originalConfigPath);
+  let projected = source;
+  for (const name of ["main", "directory"] as const) {
+    const expression = new RegExp(
+      `^(${name}\\s*=\\s*)"([^"]+)"(\\s*)$`,
+      "gmu",
+    );
+    const matches = [...projected.matchAll(expression)];
+    if (matches.length !== 1) {
+      throw new Error("platform_worker_release_dry_run_config_invalid");
+    }
+    projected = projected.replace(
+      expression,
+      (_match, prefix: string, value: string, suffix: string) =>
+        `${prefix}${JSON.stringify(
+          resolve(base, value).replaceAll("\\", "/"),
+        )}${suffix}`,
+    );
+  }
+  return projected;
 }
 
 async function createPlatformDeployClosure(
@@ -2135,7 +2170,8 @@ export async function buildDryRunSeal(
 ): Promise<DashboardAssetSeal> {
   const output =
     retainedOutput ??
-    mkdtempSync(resolve(tmpdir(), "takosumi-platform-dry-run-"));
+    createGlobalTransientDirectory("takosumi-platform-dry-run-");
+  if (retainedOutput) assertOutsideGitWorktree(output);
   if (retainedOutput && !outputAlreadyExists) {
     mkdirSync(output, { mode: 0o700 });
   }
@@ -2162,6 +2198,24 @@ export async function buildDryRunSeal(
     return dashboardAssetTreeSeal(output);
   } finally {
     if (!retainedOutput) rmSync(output, { recursive: true, force: true });
+  }
+}
+
+function createGlobalTransientDirectory(prefix: string): string {
+  const directory = mkdtempSync(join(resolve(tmpdir()), prefix));
+  try {
+    chmodSync(directory, 0o700);
+    if (
+      insideRoot(directory) ||
+      realpathSync(directory) !== directory
+    ) {
+      throw new Error("platform_worker_release_output_must_be_globally_external");
+    }
+    assertOutsideGitWorktree(directory);
+    return directory;
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true });
+    throw error;
   }
 }
 
@@ -3091,6 +3145,7 @@ export function assertPublishedVersion(
       TAKOSUMI_CONTROL_DB: "d1",
       HOSTED: "service",
       TAKOSUMI_VERSION_METADATA: "version_metadata",
+      TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY: "secret_text",
     }[required];
     if (
       matches.length !== 1 ||
