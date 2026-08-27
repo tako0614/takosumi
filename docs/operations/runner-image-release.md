@@ -78,13 +78,16 @@ target identity used by the journal and lock. A mismatched prior pin therefore
 cannot fork coordination while pushing to the same registry target.
 
 Immediately before the one push, build fsyncs the exact transport reference,
-local image config digest, sealed source/config identities, and reviewer to the
-publication state journal. After the push it reads Docker 29's exact
-`Descriptor.platform`, requires one `linux/amd64` manifest, and requires the
-remote manifest config digest to equal the locally inspected image ID. A local
-tag race therefore cannot produce trusted evidence for different uploaded
-bytes. The sole published and consumer identity is the resulting
-content-addressed
+locally inspected image descriptor digest, sealed source/config identities, and
+reviewer to the publication state journal. After the push it reads Docker 29's
+exact `Descriptor.platform`, requires one `linux/amd64` manifest, and accepts
+exactly one Docker schema-2 or OCI manifest payload. The remote descriptor
+digest must exactly equal the locally inspected descriptor digest;
+config-digest-only identity is refused because one config can be referenced by
+different manifests and layer descriptors. The actual config digest is retained
+separately as evidence. A local tag race therefore cannot produce trusted
+evidence for different uploaded bytes. The sole published and consumer identity
+is the resulting content-addressed descriptor
 `registry.cloudflare.com/.../takosumi-runner@sha256:...` digest. Content digest
 immutability is the no-overwrite property. If publication acknowledgement or
 manifest readback is missing or ambiguous, evidence records an unknown
@@ -124,8 +127,9 @@ bun run deploy -- takosumi-runner-image reconcile \
   --evidence /absolute/non-worktree-release-state/runner-reconcile.jsonl
 ```
 
-Reconcile records either the exact remotely observed immutable digest with the
-same image-config digest or an exact-tag authoritative manifest absence. Auth,
+Reconcile records either the exact remotely observed immutable descriptor
+digest after applying the same descriptor-equality rule, plus the actual remote
+image-config digest, or an exact-tag authoritative manifest absence. Auth,
 network, TLS, malformed, or ambiguous failures leave the journal unresolved.
 
 The successful build record retains the previous digest and computes the exact

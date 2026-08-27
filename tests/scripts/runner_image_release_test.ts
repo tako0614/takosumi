@@ -279,7 +279,7 @@ function publicationAttempt(input: Fixture) {
     image: {
       transportTag: TRANSPORT_TAG,
       transportRef: TRANSPORT_REF,
-      localImageId: `sha256:${"f".repeat(64)}`,
+      localImageId: `sha256:${"d".repeat(64)}`,
     },
     review: "operator:builder",
   } as const;
@@ -388,6 +388,15 @@ function buildRuntime(
     args: readonly string[],
   ) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
   observed?: string[][],
+  localImageInspect: unknown = {
+    Id: `sha256:${"d".repeat(64)}`,
+    Descriptor: {
+      digest: `sha256:${"d".repeat(64)}`,
+      mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+    },
+    Os: "linux",
+    Architecture: "amd64",
+  },
 ) {
   return {
     repositoryRoot: input.repository,
@@ -420,11 +429,7 @@ function buildRuntime(
       if (executable === "docker" && args[0] === "image") {
         return {
           exitCode: 0,
-          stdout: JSON.stringify({
-            Id: `sha256:${"f".repeat(64)}`,
-            Os: "linux",
-            Architecture: "amd64",
-          }),
+          stdout: JSON.stringify(localImageInspect),
           stderr: "",
         };
       }
@@ -453,11 +458,13 @@ async function successfulPublicationCommand(
       exitCode: 0,
       stdout: JSON.stringify({
         Descriptor: {
+          mediaType: "application/vnd.docker.distribution.manifest.v2+json",
           digest: `sha256:${"d".repeat(64)}`,
           platform: { os: "linux", architecture: "amd64" },
         },
         SchemaV2Manifest: {
           schemaVersion: 2,
+          mediaType: "application/vnd.docker.distribution.manifest.v2+json",
           config: { digest: `sha256:${"f".repeat(64)}` },
         },
       }),
@@ -875,11 +882,13 @@ test("an unresolved publication blocks every later nonce until exact read-only r
           exitCode: 0,
           stdout: JSON.stringify({
             Descriptor: {
+              mediaType: "application/vnd.docker.distribution.manifest.v2+json",
               digest: `sha256:${"d".repeat(64)}`,
               platform: { architecture: "amd64", os: "linux" },
             },
             SchemaV2Manifest: {
               schemaVersion: 2,
+              mediaType: "application/vnd.docker.distribution.manifest.v2+json",
               config: { digest: `sha256:${"f".repeat(64)}` },
             },
           }),
@@ -889,6 +898,115 @@ test("an unresolved publication blocks every later nonce until exact read-only r
     },
   );
   expect(reconciled).toMatchObject({ status: "published", image: { immutableRef: NEXT } });
+});
+
+test("OCI reconciliation treats legacy localImageId as the descriptor digest and retains the actual config digest", async () => {
+  const input = fixture();
+  writePrivate(input.state, `${JSON.stringify(publicationAttempt(input))}\n`);
+  const descriptorDigest = `sha256:${"d".repeat(64)}`;
+  const imageConfigDigest = `sha256:${"3".repeat(64)}`;
+  const immutableRef =
+    `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@${descriptorDigest}`;
+  const reconciled = await runRunnerImageRelease(
+    { ...buildOptions(input), command: "reconcile" },
+    {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      command: async () => ({
+        exitCode: 0,
+        stdout: JSON.stringify({
+          Descriptor: {
+            mediaType: "application/vnd.oci.image.manifest.v1+json",
+            digest: descriptorDigest,
+            platform: { architecture: "amd64", os: "linux" },
+          },
+          OCIManifest: {
+            schemaVersion: 2,
+            mediaType: "application/vnd.oci.image.manifest.v1+json",
+            config: { digest: imageConfigDigest },
+          },
+        }),
+        stderr: "",
+      }),
+    },
+  );
+  expect(reconciled).toMatchObject({
+    status: "published",
+    image: { immutableRef, imageConfigDigest },
+  });
+
+  await expect(
+    runRunnerImageRelease(
+      { ...buildOptions(input), command: "reconcile" },
+      {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+        command: async () => {
+          throw new Error("resolved reconciliation must not inspect again");
+        },
+      },
+    ),
+  ).resolves.toMatchObject({
+    status: "published",
+    image: { immutableRef, imageConfigDigest },
+  });
+});
+
+test("a persisted resolution must bind the attempt to the descriptor rather than only the config", async () => {
+  const input = fixture();
+  writePrivate(input.state, `${JSON.stringify(publicationAttempt(input))}\n`);
+  const localDescriptorDigest = `sha256:${"d".repeat(64)}`;
+  await runRunnerImageRelease(
+    { ...buildOptions(input), command: "reconcile" },
+    {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      command: async () => ({
+        exitCode: 0,
+        stdout: JSON.stringify({
+          Descriptor: {
+            mediaType: "application/vnd.oci.image.manifest.v1+json",
+            digest: localDescriptorDigest,
+            platform: { architecture: "amd64", os: "linux" },
+          },
+          OCIManifest: {
+            schemaVersion: 2,
+            mediaType: "application/vnd.oci.image.manifest.v1+json",
+            config: { digest: localDescriptorDigest },
+          },
+        }),
+        stderr: "",
+      }),
+    },
+  );
+  const [attempt, resolution] = readFileSync(input.state, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line)) as [
+    unknown,
+    { immutableRef: string; build: { image: { immutableRef: string } } },
+  ];
+  const mismatchedImmutableRef =
+    `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${"e".repeat(64)}`;
+  resolution.immutableRef = mismatchedImmutableRef;
+  resolution.build.image.immutableRef = mismatchedImmutableRef;
+  writePrivate(
+    input.state,
+    `${JSON.stringify(attempt)}\n${JSON.stringify(resolution)}\n`,
+  );
+
+  await expect(
+    runRunnerImageRelease(
+      { ...buildOptions(input), command: "reconcile" },
+      {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+        command: async () => {
+          throw new Error("invalid persisted resolution must not inspect again");
+        },
+      },
+    ),
+  ).rejects.toThrow("runner_image_publication_state_invalid");
 });
 
 test("a release-scope journal locator rejects an alternate caller-selected state path", async () => {
@@ -1396,11 +1514,13 @@ test("build publishes linux amd64 with generated transport identity and records 
           exitCode: 0,
           stdout: JSON.stringify({
             Descriptor: {
+              mediaType: "application/vnd.docker.distribution.manifest.v2+json",
               digest: `sha256:${"d".repeat(64)}`,
               platform: { os: "linux", architecture: "amd64" },
             },
             SchemaV2Manifest: {
               schemaVersion: 2,
+              mediaType: "application/vnd.docker.distribution.manifest.v2+json",
               config: { digest: `sha256:${"f".repeat(64)}` },
             },
           }),
@@ -1431,6 +1551,73 @@ test("build publishes linux amd64 with generated transport identity and records 
   expect(JSON.parse(readFileSync(input.evidence, "utf8"))).toMatchObject({
     image: { immutableRef: NEXT },
   });
+  const [attempt] = readFileSync(input.state, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line)) as [{ image: { localImageId: string } }];
+  expect(attempt.image.localImageId).toBe(`sha256:${"d".repeat(64)}`);
+});
+
+test("build rejects a missing or invalid local image descriptor before publication", async () => {
+  for (const localImageInspect of [
+    {
+      Id: `sha256:${"d".repeat(64)}`,
+      Os: "linux",
+      Architecture: "amd64",
+    },
+    {
+      Id: `sha256:${"d".repeat(64)}`,
+      Descriptor: {
+        digest: "not-a-digest",
+        mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+      },
+      Os: "linux",
+      Architecture: "amd64",
+    },
+    {
+      Id: `sha256:${"d".repeat(64)}`,
+      Descriptor: {
+        digest: `sha256:${"d".repeat(64)}`,
+        mediaType: "application/octet-stream",
+      },
+      Os: "linux",
+      Architecture: "amd64",
+    },
+    {
+      Id: `sha256:${"d".repeat(64)}`,
+      Descriptor: {
+        digest: `sha256:${"d".repeat(64)}`,
+        mediaType: "application/vnd.oci.image.manifest.v1+json",
+      },
+      Os: "linux",
+      Architecture: "arm64",
+    },
+  ]) {
+    const input = fixture();
+    let publicationCommands = 0;
+    await expect(
+      runRunnerImageRelease(buildOptions(input, "staging", true), {
+        ...buildRuntime(
+          input,
+          async (_executable, args) => {
+            if (args[0] === "buildx") {
+              return { exitCode: 0, stdout: "", stderr: "" };
+            }
+            publicationCommands += 1;
+            throw new Error(`unexpected command: ${args.join(" ")}`);
+          },
+          undefined,
+          localImageInspect,
+        ),
+      }),
+    ).rejects.toThrow("runner_image_local_identity_invalid");
+    expect(publicationCommands).toBe(0);
+    expect(JSON.parse(readFileSync(input.evidence, "utf8"))).toMatchObject({
+      status: "failed",
+      mutationOutcome: "not-started",
+      failureBoundary: "pre-mutation",
+    });
+  }
 });
 
 test("build records bounded pre-mutation diagnostics before any publication attempt", async () => {
@@ -1495,12 +1682,14 @@ test("a local-tag interleaving race cannot bind different remotely pushed bytes"
             exitCode: 0,
             stdout: JSON.stringify({
               Descriptor: {
-                digest: `sha256:${"d".repeat(64)}`,
+                mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+                digest: `sha256:${"e".repeat(64)}`,
                 platform: { architecture: "amd64", os: "linux" },
               },
               SchemaV2Manifest: {
                 schemaVersion: 2,
-                config: { digest: `sha256:${"0".repeat(64)}` },
+                mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+                config: { digest: `sha256:${"f".repeat(64)}` },
               },
             }),
             stderr: "",

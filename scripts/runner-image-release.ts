@@ -111,6 +111,7 @@ type RunnerPublicationAttempt = Readonly<{
   image: {
     transportTag: string;
     transportRef: string;
+    /** Legacy wire field name; stores the local Docker Descriptor.digest. */
     localImageId: string;
   };
   review: string;
@@ -181,6 +182,10 @@ const TRANSPORT_REF =
   /^registry\.cloudflare\.com\/[0-9a-f]{32}\/takosumi-runner:[a-z0-9][a-z0-9._-]{0,127}$/u;
 const RELEASE_LABEL = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
+const DOCKER_SCHEMA2_MANIFEST_MEDIA_TYPE =
+  "application/vnd.docker.distribution.manifest.v2+json";
+const OCI_IMAGE_MANIFEST_MEDIA_TYPE =
+  "application/vnd.oci.image.manifest.v1+json";
 const VERSION = /^[0-9a-f]{8}-[0-9a-f-]{27,}$/u;
 const WORKER_NAMES = {
   staging: "takosumi-staging",
@@ -210,7 +215,7 @@ export const RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE = {
     provenance:
       "build and verification refuse dirty or detached source; staging requires HEAD to equal pushed origin/current-branch while production additionally requires main; build materializes the immutable Git commit in an external sealed context, verifies the Dockerfile-pinned OpenTofu artifact through its upstream Sigstore identity, and binds the exact image-only activation transform plus publication journal to the remotely read content digest; verification consumes exact ready platform-release evidence",
     "post-conditions":
-      "build accepts only Docker's unambiguous Descriptor.platform linux/amd64 shape and requires the remote manifest config digest to equal the locally inspected built-image ID before recording the immutable digest as the sole consumer identity; verification requires the platform evidence Worker Version to be exactly serving at 100 percent and the exact environment Container application to be healthy on that digest",
+      "build requires the locally inspected Docker Descriptor to carry an exact supported manifest media type and sha256 digest for a linux/amd64 image, accepts only Docker's unambiguous remote Descriptor.platform linux/amd64 shape, and requires exact local/remote descriptor-digest equality before recording that immutable descriptor digest as the sole consumer identity and the actual config digest as evidence; verification requires the platform evidence Worker Version to be exactly serving at 100 percent and the exact environment Container application to be healthy on that digest",
     reversal:
       "build evidence retains the exact previous immutable digest; rollback changes only the realized image literal back to that retained digest, passes through a new reviewed platform plan and execute, and verifies it",
     "failure-handling":
@@ -218,7 +223,7 @@ export const RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE = {
     "independent-review":
       "executing build or verification requires a named --review value; verification additionally consumes the platform release reviewer and sealed plan evidence",
     "no-overwrite":
-      "the source/content/nonce-bound mutable transport tag is never a version identity or consumer input and is not protected by a racy check-then-push claim; the published identity is the content-addressed sha256 digest, whose bytes are bound by remote config-digest readback, and verification consumes exactly one matching immutable-digest build record",
+      "the source/content/nonce-bound mutable transport tag is never a version identity or consumer input and is not protected by a racy check-then-push claim; the published identity is the content-addressed sha256 descriptor digest, whose exact manifest bytes are bound through local/remote descriptor-digest equality, and verification consumes exactly one matching immutable-digest build record",
   },
 } as const;
 
@@ -303,7 +308,7 @@ export function parseRemoteRunnerManifest(
   publicationOutput: string,
   manifestOutput: string,
   transportTag: string,
-  expectedImageConfigDigest?: string,
+  expectedLocalDescriptorDigest?: string,
 ): Readonly<{
   transportRef: string;
   immutableRef: string;
@@ -329,28 +334,44 @@ export function parseRemoteRunnerManifest(
   } catch {
     throw new Error("runner_image_remote_manifest_invalid");
   }
+  const schemaV2Manifest =
+    isRecord(manifest) && isRecord(manifest.SchemaV2Manifest)
+      ? manifest.SchemaV2Manifest
+      : null;
+  const ociManifest =
+    isRecord(manifest) && isRecord(manifest.OCIManifest)
+      ? manifest.OCIManifest
+      : null;
+  const imageManifest = schemaV2Manifest ?? ociManifest;
+  const expectedManifestMediaType =
+    ociManifest === null
+      ? DOCKER_SCHEMA2_MANIFEST_MEDIA_TYPE
+      : OCI_IMAGE_MANIFEST_MEDIA_TYPE;
   if (
     !isRecord(manifest) ||
     "Platform" in manifest ||
     "manifests" in manifest ||
+    (schemaV2Manifest === null) === (ociManifest === null) ||
     !isRecord(manifest.Descriptor) ||
     typeof manifest.Descriptor.digest !== "string" ||
     !SHA256.test(manifest.Descriptor.digest) ||
+    manifest.Descriptor.mediaType !== expectedManifestMediaType ||
     !isRecord(manifest.Descriptor.platform) ||
     manifest.Descriptor.platform.os !== "linux" ||
     manifest.Descriptor.platform.architecture !== "amd64" ||
-    !isRecord(manifest.SchemaV2Manifest) ||
-    manifest.SchemaV2Manifest.schemaVersion !== 2 ||
-    !isRecord(manifest.SchemaV2Manifest.config) ||
-    typeof manifest.SchemaV2Manifest.config.digest !== "string" ||
-    !SHA256.test(manifest.SchemaV2Manifest.config.digest)
+    !isRecord(imageManifest) ||
+    imageManifest.schemaVersion !== 2 ||
+    imageManifest.mediaType !== expectedManifestMediaType ||
+    !isRecord(imageManifest.config) ||
+    typeof imageManifest.config.digest !== "string" ||
+    !SHA256.test(imageManifest.config.digest)
   ) {
     throw new Error("runner_image_remote_manifest_invalid");
   }
-  const imageConfigDigest = manifest.SchemaV2Manifest.config.digest;
+  const imageConfigDigest = imageManifest.config.digest;
   if (
-    expectedImageConfigDigest !== undefined &&
-    imageConfigDigest !== expectedImageConfigDigest
+    expectedLocalDescriptorDigest !== undefined &&
+    manifest.Descriptor.digest !== expectedLocalDescriptorDigest
   ) {
     throw new Error("runner_image_remote_content_mismatch");
   }
@@ -749,7 +770,9 @@ async function buildRunnerImage(
       ["image", "inspect", localTag, "--format", "{{json .}}"],
       workspace,
     );
-    const localImageId = parseLocalRunnerImage(localImage.stdout);
+    const localDescriptorDigest = parseLocalRunnerImageDescriptorDigest(
+      localImage.stdout,
+    );
     const attempt: RunnerPublicationAttempt = {
       kind: "takosumi.runner-image-publication-state@v1",
       status: "publication-started",
@@ -767,7 +790,11 @@ async function buildRunnerImage(
         buildSha256: context.config.sha256,
         previousImage: context.config.runnerImage,
       },
-      image: { transportTag, transportRef: remoteRef, localImageId },
+      image: {
+        transportTag,
+        transportRef: remoteRef,
+        localImageId: localDescriptorDigest,
+      },
       review: options.review!,
     };
     if (!publicationJournal) {
@@ -804,7 +831,7 @@ async function buildRunnerImage(
       publicationOutput,
       manifest.stdout,
       transportTag,
-      localImageId,
+      localDescriptorDigest,
     );
     if (image.transportRef !== remoteRef) {
       throw new Error("runner_image_remote_manifest_invalid");
@@ -1142,7 +1169,7 @@ async function verifyOpenTofuSigstore(
   }
 }
 
-function parseLocalRunnerImage(source: string): string {
+function parseLocalRunnerImageDescriptorDigest(source: string): string {
   let value: unknown;
   try {
     value = JSON.parse(source.trim()) as unknown;
@@ -1151,14 +1178,17 @@ function parseLocalRunnerImage(source: string): string {
   }
   if (
     !isRecord(value) ||
-    typeof value.Id !== "string" ||
-    !SHA256.test(value.Id) ||
+    !isRecord(value.Descriptor) ||
+    typeof value.Descriptor.digest !== "string" ||
+    !SHA256.test(value.Descriptor.digest) ||
+    (value.Descriptor.mediaType !== DOCKER_SCHEMA2_MANIFEST_MEDIA_TYPE &&
+      value.Descriptor.mediaType !== OCI_IMAGE_MANIFEST_MEDIA_TYPE) ||
     value.Os !== "linux" ||
     value.Architecture !== "amd64"
   ) {
     throw new Error("runner_image_local_identity_invalid");
   }
-  return value.Id;
+  return value.Descriptor.digest;
 }
 
 async function unresolvedPublicationAttempts(
@@ -1194,8 +1224,11 @@ function publicationResolutionMatchesAttempt(
   attempt: RunnerPublicationAttempt,
 ): boolean {
   const build = resolution.build;
+  const descriptorDigest = resolution.immutableRef.slice(
+    resolution.immutableRef.lastIndexOf("@") + 1,
+  );
   return (
-    resolution.imageConfigDigest === attempt.image.localImageId &&
+    descriptorDigest === attempt.image.localImageId &&
     resolution.immutableRef === build.image.immutableRef &&
     build.environment === attempt.environment &&
     build.release === attempt.release &&
@@ -1208,7 +1241,7 @@ function publicationResolutionMatchesAttempt(
     build.config.previousImage === attempt.config.previousImage &&
     build.image.transportTag === attempt.image.transportTag &&
     build.image.transportRef === attempt.image.transportRef &&
-    build.image.imageConfigDigest === attempt.image.localImageId &&
+    build.image.imageConfigDigest === resolution.imageConfigDigest &&
     build.review === attempt.review
   );
 }
