@@ -93,10 +93,12 @@ and requires its nonce-bound plan-unique tag, message, required binding types,
 configured Hosted service, and fetch handler. The public root and discovery
 document must then emit that same UUID as `x-takosumi-version-id`; a cache hit,
 50/50 split, unchanged predecessor, or concurrent Version cannot satisfy ready
-evidence. Ready evidence also requires Container list and authoritative detail
-to agree on the exact application id, name, state, version, and immutable
-configured image, with no active rollout and no failed, starting, scheduling,
-or error entries.
+evidence. Ready evidence also requires the unique Container list row and
+authoritative detail to agree on the exact application id, name, version, and
+immutable configured image. Wrangler's list row supplies the synthesized
+application state; raw detail may omit that field, but must agree when it is
+present. The result must have no active rollout and no failed, starting,
+scheduling, or error entries.
 
 If provider acknowledgement is lost, recovery lists the bounded recent Version
 set and accepts exactly one post-plan Version carrying that unique plan tag.

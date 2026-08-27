@@ -5,6 +5,7 @@ import {
   assertPublishedVersion,
   bindingNames,
   parsePlatformWorkerReleaseArgs,
+  parsePlatformContainerDetail,
   parseServingVersion,
   platformDashboardBuildEnvironment,
   platformTargetForEnvironment,
@@ -312,6 +313,75 @@ test("platform release selects exactly one 100 percent serving Version", () => {
       ]),
     ),
   ).toThrow("platform_worker_release_serving_version_invalid");
+});
+
+test("platform container detail may omit state when the unique list state is authoritative", () => {
+  const image = `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`;
+  const summary = {
+    id: "application",
+    name: "takosumi-staging-opentofurunnerobject",
+    state: "ready",
+    image,
+    version: 7,
+  };
+  expect(
+    parsePlatformContainerDetail(summary, {
+      id: summary.id,
+      name: summary.name,
+      version: summary.version,
+      configuration: { image },
+      active_rollout_id: null,
+      health: {
+        instances: { failed: 0, starting: 0, scheduling: 0 },
+        errors: [],
+      },
+    }),
+  ).toMatchObject({
+    id: summary.id,
+    name: summary.name,
+    state: summary.state,
+    image,
+    version: summary.version,
+  });
+});
+
+test("platform container detail accepts only a matching bounded present state", () => {
+  const image = `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`;
+  const summary = {
+    id: "application",
+    name: "takosumi-staging-opentofurunnerobject",
+    state: "ready",
+    image,
+    version: 7,
+  };
+  const detail = {
+    id: summary.id,
+    name: summary.name,
+    version: summary.version,
+    configuration: { image },
+    health: {
+      instances: { failed: 0, starting: 0, scheduling: 0 },
+      errors: [],
+    },
+  };
+  const cases = [
+    { label: "equal", state: "ready", expected: "ready" },
+    { label: "mismatch", state: "deploying", expected: null },
+    { label: "null", state: null, expected: null },
+    { label: "wrong type", state: 7, expected: null },
+  ] as const;
+  for (const scenario of cases) {
+    const candidate = { ...detail, state: scenario.state };
+    if (scenario.expected === null) {
+      expect(() => parsePlatformContainerDetail(summary, candidate), scenario.label).toThrow(
+        "platform_worker_release_container_list_detail_mismatch",
+      );
+    } else {
+      expect(parsePlatformContainerDetail(summary, candidate), scenario.label).toMatchObject({
+        state: scenario.expected,
+      });
+    }
+  }
 });
 
 test("lost acknowledgement recovery selects one post-plan Version and exact bindings", () => {

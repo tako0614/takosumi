@@ -366,7 +366,7 @@ function healthyDetail(
   overrides: Readonly<{
     id?: string;
     name?: string;
-    state?: string;
+    state?: unknown;
     activeRolloutId?: string | null;
     failed?: number;
     starting?: number;
@@ -378,7 +378,7 @@ function healthyDetail(
     id: overrides.id ?? APPLICATION_ID,
     name: overrides.name ?? APPLICATION_NAME,
     version: 7,
-    state: overrides.state ?? "ready",
+    ...(Object.hasOwn(overrides, "state") ? { state: overrides.state } : {}),
     configuration: { image },
     active_rollout_id: overrides.activeRolloutId ?? null,
     health: {
@@ -2507,6 +2507,24 @@ test("verify consumes exact platform evidence and performs no Worker mutation", 
   expect(statSync(input.evidence).mode & 0o777).toBe(0o600);
 });
 
+test("verify accepts a matching detail state but uses the unique list state", async () => {
+  const input = fixture(NEXT);
+  writeBuildEvidence(input);
+  writePlatformEvidence(input);
+  const runtime = verificationCommand({
+    detail: healthyDetail(NEXT, { state: "ready" }),
+  });
+  const record = await runRunnerImageRelease(verifyOptions(input), {
+    repositoryRoot: input.repository,
+    git: gitFor("fix/TASK-0032-runner-image"),
+    command: runtime.command,
+  });
+  expect(record).toMatchObject({
+    status: "verified",
+    application: { state: "ready" },
+  });
+});
+
 test("verify rejects platform config or serving Version not bound to the build transform", async () => {
   const input = fixture(NEXT);
   writeBuildEvidence(input);
@@ -2579,6 +2597,20 @@ test("verify requires exact Container application identity, image, rollout, and 
       runtime: verificationCommand({
         summary: healthySummary(NEXT),
         detail: healthyDetail(NEXT, { state: "deploying" }),
+      }),
+      expected: "list/detail identity differs",
+    },
+    {
+      runtime: verificationCommand({
+        summary: healthySummary(NEXT),
+        detail: healthyDetail(NEXT, { state: null }),
+      }),
+      expected: "list/detail identity differs",
+    },
+    {
+      runtime: verificationCommand({
+        summary: healthySummary(NEXT),
+        detail: healthyDetail(NEXT, { state: 7 }),
       }),
       expected: "list/detail identity differs",
     },

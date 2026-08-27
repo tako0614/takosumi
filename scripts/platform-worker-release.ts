@@ -3210,17 +3210,25 @@ async function readPlatformContainer(
   } catch {
     throw new Error("platform_worker_release_container_detail_invalid");
   }
+  return parsePlatformContainerDetail(summary, detail);
+}
+
+export function parsePlatformContainerDetail(
+  summary: Readonly<Record<string, unknown>>,
+  detail: unknown,
+): PlatformContainerState {
   if (!record(detail) || !record(detail.configuration)) {
     throw new Error("platform_worker_release_container_detail_invalid");
   }
   const image = detail.configuration.image;
+  const hasState = Object.hasOwn(detail, "state");
   if (
     detail.id !== summary.id ||
     detail.name !== summary.name ||
-    detail.state !== summary.state ||
     detail.version !== summary.version ||
     image !== summary.image ||
-    !boundedString(detail.state, 64) ||
+    (hasState &&
+      (!boundedString(detail.state, 64) || detail.state !== summary.state)) ||
     !RUNNER_IMAGE.test(String(image))
   ) {
     throw new Error("platform_worker_release_container_list_detail_mismatch");
@@ -3229,7 +3237,7 @@ async function readPlatformContainer(
   return {
     id: detail.id as string,
     name: detail.name as string,
-    state: detail.state,
+    state: summary.state as string,
     image: image as string,
     version: detail.version as string | number,
     hasActiveRollout:

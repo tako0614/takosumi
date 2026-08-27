@@ -2057,12 +2057,13 @@ async function readRunnerApplication(
     throw new Error("live runner application detail readback is not an object");
   }
   const detailImage = runnerApplicationDetailImage(detail);
+  const hasDetailState = Object.hasOwn(detail, "state");
   if (
     detail.id !== summary.id ||
     detail.name !== summary.name ||
     detailImage !== summary.image ||
-    !isBoundedString(detail.state, 64) ||
-    detail.state !== summary.state ||
+    (hasDetailState &&
+      (!isBoundedString(detail.state, 64) || detail.state !== summary.state)) ||
     !isBoundedString(detailImage, 512) ||
     !isRunnerApplicationVersion(detail.version) ||
     detail.version !== summary.version
@@ -2072,9 +2073,9 @@ async function readRunnerApplication(
   return {
     id: summary.id as string,
     name: summary.name as string,
-    // `containers info` is the authoritative application readback. The list
-    // row is only the lookup index and must agree before its identity is used.
-    state: detail.state,
+    // `containers list --json` supplies the synthesized application state. The
+    // raw `containers info` detail may omit state, but must agree when present.
+    state: summary.state as string,
     image: detailImage,
     version: detail.version,
     hasActiveRollout:
