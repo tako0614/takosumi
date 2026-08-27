@@ -26,39 +26,65 @@ function platformEnv() {
   } as never;
 }
 
-test("platform tombstones every Takoform Host path before auth or SPA fallback", async () => {
-  const paths = [
-    "/.well-known/takoform",
-    "/.well-known/takoform/v1alpha1",
-    "/.well-known/takoform/v1alpha2",
-    "/.well-known/takoform/v1alpha3",
-    "/apis/forms.takoform.com/v1alpha1",
-    "/apis/forms.takoform.com/v1alpha1/forms",
-    "/apis/forms.takoform.com/v1alpha1/form-definitions/ObjectBucket",
-    "/apis/forms.takoform.com/v1alpha1/interfaces",
-    "/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/assets",
-    "/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/assets/preview",
-    "/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/assets/observe",
-    "/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/assets/form-transitions",
-    "/apis/forms.takoform.com/v1alpha2/resources/ObjectBucket/assets",
-    "/apis/forms.takoform.com/v1alpha3/resources/ObjectBucket/assets",
-    "/internal/v1/form-packages/install",
-    "/internal/v1/form-packages/reverify",
-  ];
+test(
+  "platform tombstones the complete Takoform Host namespace before auth or SPA fallback",
+  async () => {
+    const paths = [
+      "/.well-known/takoform",
+      "/.well-known/takoform/v1alpha1",
+      "/.well-known/takoform/v1alpha2",
+      "/.well-known/takoform/v1alpha3",
+      "/apis/forms.takoform.com",
+      "/apis/forms.takoform.com/v1",
+      "/apis/forms.takoform.com/v1beta1",
+      "/apis/forms.takoform.com/v1beta1/future-resource",
+      "/apis/forms.takoform.com/v2beta99/future-resource",
+      "/apis/forms.takoform.com/v1alpha1/forms",
+      "/apis/forms.takoform.com/v1alpha1/form-definitions/ObjectBucket",
+      "/apis/forms.takoform.com/v1alpha1/interfaces",
+      "/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/assets",
+      "/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/assets/preview",
+      "/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/assets/observe",
+      "/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/assets/form-transitions",
+      "/apis/forms.takoform.com/v1alpha2/resources/ObjectBucket/assets",
+      "/apis/forms.takoform.com/v1alpha3/resources/ObjectBucket/assets",
+      "/v1",
+      "/v1/resources/ObjectBucket/example",
+      "/v1/interfaces",
+      "/internal/v1/form-packages/install",
+      "/internal/v1/form-packages/reverify",
+    ];
 
-  for (const path of paths) {
-    const env = platformEnv();
-    for (const authorization of [undefined, "Bearer resource-token", "Bearer stale"]) {
-      const headers = authorization ? { authorization } : undefined;
-      const response = await worker.fetch(
-        new Request(
-          `https://app.takosumi.test${path}`,
-          headers ? { headers } : undefined,
-        ),
-        env,
-      );
-      expect(response.status).toBe(404);
+    for (const path of paths) {
+      const env = platformEnv();
+      for (const authorization of [
+        undefined,
+        "Bearer resource-token",
+        "Bearer stale",
+      ]) {
+        const headers = authorization ? { authorization } : undefined;
+        const response = await worker.fetch(
+          new Request(
+            `https://app.takosumi.test${path}`,
+            headers ? { headers } : undefined,
+          ),
+          env,
+        );
+        expect(response.status).toBe(404);
+      }
+      expect(env.assetRequests).toEqual([]);
     }
-    expect(env.assetRequests).toEqual([]);
-  }
+  },
+);
+
+test("platform keeps the canonical Interface API outside the retired Host namespace", async () => {
+  const env = platformEnv();
+  const { assetRequests } = env;
+  const response = await worker.fetch(
+    new Request("https://app.takosumi.test/api/v1/interfaces"),
+    env,
+  );
+  expect(response.status).toBe(401);
+  expect(response.headers.get("content-type")).toMatch(/application\/json/u);
+  expect(assetRequests).toEqual([]);
 });
