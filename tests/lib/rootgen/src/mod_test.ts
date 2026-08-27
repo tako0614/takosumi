@@ -102,6 +102,43 @@ test("rootgen preserves module-local names and maps child/root aliases independe
   );
 });
 
+test("rootgen keeps every default child provider mapped when one provider needs explicit configuration", () => {
+  const { files } = generateOpenTofuChildModuleRoot({
+    requiredProviders: [
+      "registry.opentofu.org/cloudflare/cloudflare",
+      "registry.opentofu.org/hashicorp/random",
+      "registry.opentofu.org/hashicorp/tls",
+    ],
+    providerRequirements: [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        localName: "cloudflare",
+      },
+      {
+        provider: "registry.opentofu.org/hashicorp/random",
+        localName: "random",
+      },
+      {
+        provider: "registry.opentofu.org/hashicorp/tls",
+        localName: "tls",
+      },
+    ],
+    inputs: {},
+    outputAllowlist: {},
+    providerBindings: [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
+        configuration: { api_base_url: "https://api.example.test" },
+      },
+    ],
+  });
+
+  expect(files["main.tf"]).toContain("cloudflare = cloudflare");
+  expect(files["main.tf"]).toContain("random = random");
+  expect(files["main.tf"]).toContain("tls = tls");
+});
+
 test("rootgen rejects two sources claiming the same explicit local name", () => {
   expect(() =>
     generateOpenTofuChildModuleRoot({

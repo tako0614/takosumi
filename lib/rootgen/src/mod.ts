@@ -122,16 +122,20 @@ export function generateOpenTofuChildModuleRoot(
   input: GenerateOpenTofuChildModuleRootInput,
 ): GeneratedRootModule {
   const providerBindings = input.providerBindings ?? [];
+  const providerRequirements =
+    input.providerRequirements ??
+    input.requiredProviders.map((provider) => ({
+      provider,
+      localName: providerLocalName(provider),
+    }));
   return {
     files: {
-      "versions.tf": renderProviderVersionsTf(
-        input.providerRequirements ??
-          input.requiredProviders.map((provider) => ({
-            provider,
-            localName: providerLocalName(provider),
-          })),
+      "versions.tf": renderProviderVersionsTf(providerRequirements),
+      "main.tf": renderGenericMainTf(
+        input.inputs,
+        providerBindings,
+        providerRequirements,
       ),
-      "main.tf": renderGenericMainTf(input.inputs, providerBindings),
       "outputs.tf": renderGenericOutputsTf(input.outputAllowlist),
     },
   };
@@ -222,6 +226,7 @@ function appendProviderSections(
 function renderGenericMainTf(
   inputs: Readonly<Record<string, JsonValue>>,
   providerBindings: ReadonlyArray<RootProviderBinding>,
+  providerRequirements: readonly RootProviderRequirement[],
 ): string {
   const sections: string[] = [
     [
@@ -239,7 +244,7 @@ function renderGenericMainTf(
     'module "child" {',
     `  source = ${hclString(CHILD_MODULE_SOURCE)}`,
   ];
-  appendProviderMap(moduleLines, providerBindings);
+  appendProviderMap(moduleLines, providerBindings, providerRequirements);
   for (const name of Object.keys(inputs).sort()) {
     assertIdentifier(name, "rootgen: input name");
     moduleLines.push(`  ${name} = ${hclJsonLiteral(inputs[name]!)}`);
@@ -252,8 +257,9 @@ function renderGenericMainTf(
 function appendProviderMap(
   moduleLines: string[],
   providerBindings: ReadonlyArray<RootProviderBinding>,
+  providerRequirements: readonly RootProviderRequirement[],
 ): void {
-  const entries = providerMapEntries(providerBindings);
+  const entries = providerMapEntries(providerBindings, providerRequirements);
   if (entries.length === 0) return;
   moduleLines.push("", "  providers = {");
   for (const entry of entries) {
@@ -269,6 +275,7 @@ interface ProviderMapEntry {
 
 function providerMapEntries(
   providerBindings: ReadonlyArray<RootProviderBinding>,
+  providerRequirements: readonly RootProviderRequirement[],
 ): ProviderMapEntry[] {
   const byLocalProvider = new Map<string, RootProviderBinding[]>();
   for (const binding of providerBindings) {
@@ -278,7 +285,7 @@ function providerMapEntries(
       binding,
     ]);
   }
-  const byChildRef = new Map<string, ProviderMapEntry>();
+  const explicitByChildRef = new Map<string, ProviderMapEntry>();
   for (const [localProvider, bindings] of byLocalProvider) {
     // Compatibility only for pre-v1 bindings whose one `alias` field could not
     // distinguish a root alias from a child alias. New bindings never take this
@@ -292,7 +299,7 @@ function providerMapEntries(
         ? localProvider
         : childProviderRef(localProvider, bindingChildAlias(binding));
       const rootRef = rootProviderRef(localProvider, bindingRootAlias(binding));
-      const existing = byChildRef.get(childRef);
+      const existing = explicitByChildRef.get(childRef);
       if (existing) {
         if (existing.rootRef === rootRef) continue;
         throw new RootgenValidationError(
@@ -300,13 +307,26 @@ function providerMapEntries(
           `rootgen: conflicting provider bindings for ${childRef}`,
         );
       }
-      byChildRef.set(childRef, {
+      explicitByChildRef.set(childRef, {
         childRef,
         rootRef,
       });
     }
   }
-  return Array.from(byChildRef.values());
+  const byChildRef = new Map<string, ProviderMapEntry>();
+  for (const requirement of providerRequirements) {
+    assertIdentifier(requirement.localName, "rootgen: provider local name");
+    byChildRef.set(requirement.localName, {
+      childRef: requirement.localName,
+      rootRef: requirement.localName,
+    });
+  }
+  for (const entry of explicitByChildRef.values()) {
+    byChildRef.set(entry.childRef, entry);
+  }
+  return Array.from(byChildRef.values()).sort((left, right) =>
+    left.childRef.localeCompare(right.childRef),
+  );
 }
 
 function hasExplicitProviderIdentity(binding: RootProviderBinding): boolean {
