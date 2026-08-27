@@ -13,6 +13,7 @@ import {
   remoteBranchContainsCommit,
   selectRecoveredVersion,
   secretNames,
+  waitForPlatformContainerReadback,
 } from "../../scripts/platform-worker-release.ts";
 
 const root = resolve(import.meta.dir, "../..");
@@ -413,6 +414,54 @@ test("platform container detail accepts only a matching bounded present state", 
       });
     }
   }
+});
+
+test("platform container readback retries a transient list/detail mismatch", async () => {
+  const state = {
+    id: "application",
+    name: "takosumi-staging-opentofurunnerobject",
+    state: "ready",
+    image: `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`,
+    version: 85,
+    hasActiveRollout: false,
+    health: { failed: 0, starting: 0, scheduling: 0, errorCount: 0 },
+  } as const;
+  let reads = 0;
+  const waits: number[] = [];
+  const result = await waitForPlatformContainerReadback(
+    state.image,
+    async () => {
+      reads += 1;
+      if (reads === 1) {
+        return { ...state, state: "deploying" };
+      }
+      if (reads === 2) {
+        throw new Error("platform_worker_release_container_list_detail_mismatch");
+      }
+      return state;
+    },
+    async (milliseconds) => {
+      waits.push(milliseconds);
+    },
+  );
+  expect(result).toEqual(state);
+  expect(reads).toBe(3);
+  expect(waits).toEqual([5_000, 5_000]);
+});
+
+test("platform container readback fails closed after persistent list/detail mismatch", async () => {
+  let reads = 0;
+  await expect(
+    waitForPlatformContainerReadback(
+      `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`,
+      async () => {
+        reads += 1;
+        throw new Error("platform_worker_release_container_list_detail_mismatch");
+      },
+      async () => {},
+    ),
+  ).rejects.toThrow("platform_worker_release_container_list_detail_mismatch");
+  expect(reads).toBe(36);
 });
 
 test("lost acknowledgement recovery selects one post-plan Version and exact bindings", () => {

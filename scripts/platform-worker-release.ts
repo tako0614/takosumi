@@ -3446,18 +3446,32 @@ async function waitForPlatformContainer(
   environment: PlatformEnvironment,
   expectedImage: string,
 ): Promise<PlatformContainerState> {
-  let state = await readPlatformContainer(configPath, environment);
-  for (let attempt = 1; attempt < 36; attempt += 1) {
+  return waitForPlatformContainerReadback(
+    expectedImage,
+    () => readPlatformContainer(configPath, environment),
+  );
+}
+
+export async function waitForPlatformContainerReadback(
+  expectedImage: string,
+  read: () => Promise<PlatformContainerState>,
+  wait: (milliseconds: number) => Promise<void> = Bun.sleep,
+): Promise<PlatformContainerState> {
+  for (let attempt = 1; attempt <= 36; attempt += 1) {
     try {
+      const state = await read();
       assertPlatformContainerComplete(state, expectedImage);
       return state;
-    } catch {
-      await Bun.sleep(5_000);
-      state = await readPlatformContainer(configPath, environment);
+    } catch (error) {
+      const retryable =
+        error instanceof Error &&
+        (error.message === "platform_worker_release_container_list_detail_mismatch" ||
+          error.message === "platform_worker_release_container_not_ready");
+      if (!retryable || attempt === 36) throw error;
+      await wait(5_000);
     }
   }
-  assertPlatformContainerComplete(state, expectedImage);
-  return state;
+  throw new Error("platform_worker_release_container_not_ready");
 }
 
 async function waitForExactServingVersion(
