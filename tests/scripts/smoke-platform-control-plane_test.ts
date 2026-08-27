@@ -9,6 +9,7 @@ import {
   capsuleFromLedgerResponse,
   createdCapsuleFromCreateResponse,
   dryRunResult,
+  failedResult,
   isSmokeProviderConnectionMatch,
   isSelectableCapsuleInstallConfig,
   main,
@@ -22,6 +23,45 @@ import {
   smokeWorkspaceCloudflareConnectionBody,
   assertServiceIdentityResponse,
 } from "../../scripts/smoke-platform-control-plane.ts";
+
+test("platform smoke preserves the original pre-apply failure when a projected runtime URL is configured", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      cloudflareConnectionMode: "guided",
+      cloudflareAccountId: "acc_test",
+      cloudflareWorkersSubdomain: "workers-subdomain",
+      verificationMode: "cloudflare-worker",
+      outputAllowlistJson: JSON.stringify({
+        launch_url: { from: "launch_url", type: "url", required: true },
+      }),
+      runtimePublicUrlOutput: "launch_url",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+  const startedAtMs = Date.now();
+  const result = failedResult(options, {
+    startedAt: new Date(startedAtMs).toISOString(),
+    startedAtMs,
+    workspaceId: "ws_test",
+    completedSteps: ["sourceSynced"],
+    stepTimings: [],
+    runTimings: [],
+    capsuleGateStatus: "not_reached",
+    policyStatus: "not_reached",
+    connectionRevoked: false,
+    error: new Error("original source install failure"),
+  });
+
+  expect(result.status).toBe("failed");
+  expect(result.workerUrl).toBe("");
+  expect(result.error).toBe("original source install failure");
+});
 
 test("Cloudflare public URL verification allows bounded edge propagation", () => {
   expect(CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS).toBe(180_000);

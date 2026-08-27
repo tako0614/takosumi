@@ -69,6 +69,12 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_INTERFACE_OAUTH2_RESOURCE_AUTHORIZER?: import("../../core/domains/interfaces/mod.ts").InterfaceOAuth2ResourceAuthorizer;
   readonly TAKOSUMI_ENVIRONMENT?: string;
   /**
+   * Explicit hosted-staging policy opt-in for OpenTofu local-exec
+   * provisioners. The composing Worker ignores this outside staging; it is
+   * code-owned execution policy, not repository or public-config authority.
+   */
+  readonly TAKOSUMI_STAGING_ALLOW_LOCAL_EXEC?: string;
+  /**
    * Runner performance knobs forwarded to the OpenTofu runner container. These
    * are non-secret operational settings: the plugin cache stores provider
    * binaries only. Keepalive is a legacy activity-expiry grace; every completed

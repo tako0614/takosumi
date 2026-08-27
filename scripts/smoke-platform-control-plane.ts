@@ -1609,7 +1609,7 @@ export async function runPlatformControlPlaneSmoke(
   });
 }
 
-function failedResult(
+export function failedResult(
   options: PlatformControlPlaneSmokeOptions,
   input: {
     readonly startedAt: string;
@@ -1700,10 +1700,10 @@ function failedResult(
     functionalProbe: input.functionalProbe,
     capsuleGateStatus: input.capsuleGateStatus,
     policyStatus: input.policyStatus,
-    workerUrl:
-      options.verificationMode === "cloudflare-worker"
-        ? publicRuntimeUrl(options, input.stateVersionLedger?.publicOutputs)
-        : "",
+    workerUrl: failedResultWorkerUrl(
+      options,
+      input.stateVersionLedger?.publicOutputs,
+    ),
     opentofuApplyVerified: input.completedSteps.includes(
       "opentofuApplyVerified",
     ),
@@ -2808,6 +2808,24 @@ function publicRuntimeUrl(
     options,
     cloudflareWorkerName(options, publicOutputs),
   );
+}
+
+function failedResultWorkerUrl(
+  options: PlatformControlPlaneSmokeOptions,
+  publicOutputs?: Readonly<Record<string, unknown>>,
+): string {
+  if (options.verificationMode !== "cloudflare-worker") return "";
+  if (options.runtimePublicUrlOutput) {
+    const value = publicOutputs?.[options.runtimePublicUrlOutput];
+    return typeof value === "string" && value.trim() ? value.trim() : "";
+  }
+  if (options.cloudflareWorkerNameOutput) {
+    const value = publicOutputs?.[options.cloudflareWorkerNameOutput];
+    return typeof value === "string" && value.trim()
+      ? publicWorkerUrlForName(options, value.trim())
+      : "";
+  }
+  return publicWorkerUrl(options);
 }
 
 function publicWorkerUrlForName(

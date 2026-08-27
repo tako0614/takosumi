@@ -6,6 +6,8 @@ import {
   OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
   operatorControlMcpEnabled,
 } from "../operator-control-mcp.ts";
+import { defaultCapsuleInstallConfig } from "../../core/domains/capsules/default_install_config.ts";
+import type { InstallConfig } from "takosumi-contract/install-configs";
 
 export {
   CoordinationObject,
@@ -16,6 +18,24 @@ export {
 
 const composed = new WeakMap<object, CloudflareWorkerEnv>();
 const EMPTY_INSTALL_CONFIGS = Object.freeze([]);
+
+function stagingLocalExecEnabled(env: CloudflareWorkerEnv): boolean {
+  return (
+    env.TAKOSUMI_ENVIRONMENT === "staging" &&
+    env.TAKOSUMI_STAGING_ALLOW_LOCAL_EXEC === "1"
+  );
+}
+
+function stagingLocalExecInstallConfig(): InstallConfig {
+  const defaultConfig = defaultCapsuleInstallConfig();
+  return Object.freeze({
+    ...defaultConfig,
+    policy: Object.freeze({
+      ...defaultConfig.policy,
+      allowedProvisionerTypes: Object.freeze(["local-exec"]),
+    }),
+  });
+}
 
 export function composeTakoserverHostedWorkerEnv(
   env: CloudflareWorkerEnv,
@@ -39,9 +59,17 @@ export function composeTakoserverHostedWorkerEnv(
         variableMapping: { takosumi_origin: operatorOrigin },
       }
     : OPERATOR_CONTROL_MCP_INSTALL_CONFIG;
-  const installConfigs = operatorControlMcpEnabled(env)
-    ? Object.freeze([operatorInstallConfig])
-    : EMPTY_INSTALL_CONFIGS;
+  const installConfigEntries: InstallConfig[] = [];
+  if (stagingLocalExecEnabled(env)) {
+    installConfigEntries.push(stagingLocalExecInstallConfig());
+  }
+  if (operatorControlMcpEnabled(env)) {
+    installConfigEntries.push(operatorInstallConfig);
+  }
+  const installConfigs =
+    installConfigEntries.length > 0
+      ? Object.freeze(installConfigEntries)
+      : EMPTY_INSTALL_CONFIGS;
   Object.defineProperty(value, "TAKOSUMI_INSTALL_CONFIG_COMPOSITION", {
     configurable: false,
     enumerable: true,

@@ -13,6 +13,40 @@ test("Takosumi Hosted composes no application InstallConfigs by default", () => 
   expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toEqual([]);
 });
 
+test("Takosumi Hosted explicitly allows local-exec only in staging", () => {
+  const composed = composeTakoserverHostedWorkerEnv({
+    TAKOSUMI_ENVIRONMENT: "staging",
+    TAKOSUMI_STAGING_ALLOW_LOCAL_EXEC: "1",
+  } as never);
+
+  expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toHaveLength(1);
+  const config = composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION?.[0];
+  expect(config?.id).toBe("cfg-default-opentofu-capsule");
+  expect(config?.policy).toMatchObject({
+    allowedProvisionerTypes: ["local-exec"],
+    repositoryInstallUx: {
+      allowedOidcScopes: expect.arrayContaining(["openid", "capsules:write"]),
+    },
+  });
+});
+
+test("Takosumi Hosted ignores the local-exec flag outside staging", () => {
+  const composed = composeTakoserverHostedWorkerEnv({
+    TAKOSUMI_ENVIRONMENT: "production",
+    TAKOSUMI_STAGING_ALLOW_LOCAL_EXEC: "1",
+  } as never);
+
+  expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toEqual([]);
+});
+
+test("Takosumi Hosted requires the explicit local-exec staging flag", () => {
+  const composed = composeTakoserverHostedWorkerEnv({
+    TAKOSUMI_ENVIRONMENT: "staging",
+  } as never);
+
+  expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toEqual([]);
+});
+
 test("Takoserver Hosted wrapper preserves every Worker Durable Object export", () => {
   expect(typeof hostedWorker.CoordinationObject).toBe("function");
   expect(typeof hostedWorker.LocalSubstrateOpenTofuRunnerProxyObject).toBe(
@@ -91,6 +125,25 @@ test("Takoserver Hosted composes only the optional operator MCP declaration", ()
       variableMapping: { takosumi_origin: "https://app.takosumi.test" },
     },
   ]);
+});
+
+test("Takoserver Hosted composes staging policy and operator MCP declarations", () => {
+  const composed = composeTakoserverHostedWorkerEnv({
+    TAKOSUMI_ENVIRONMENT: "staging",
+    TAKOSUMI_STAGING_ALLOW_LOCAL_EXEC: "1",
+    TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED: "1",
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.test",
+  } as never);
+
+  expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toHaveLength(2);
+  expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION?.[0]).toMatchObject({
+    id: "cfg-default-opentofu-capsule",
+    policy: { allowedProvisionerTypes: ["local-exec"] },
+  });
+  expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION?.[1]).toEqual({
+    ...OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
+    variableMapping: { takosumi_origin: "https://app.takosumi.test" },
+  });
 });
 
 test("Takoserver Hosted connection descriptor remains publicly discoverable", async () => {
