@@ -78,11 +78,12 @@ target identity used by the journal and lock. A mismatched prior pin therefore
 cannot fork coordination while pushing to the same registry target.
 
 Immediately before the one push, build fsyncs the exact transport reference,
-locally inspected image descriptor digest, sealed source/config identities, and
-reviewer to the publication state journal. After the push it reads Docker 29's
-exact `Descriptor.platform`, requires one `linux/amd64` manifest, and accepts
-exactly one Docker schema-2 or OCI manifest payload. The remote descriptor
-digest must exactly equal the locally inspected descriptor digest;
+locally inspected Docker image ID and explicit image descriptor digest, sealed
+source/config identities, and reviewer to the publication state journal. After
+the push it reads Docker 29's exact `Descriptor.platform`, requires one
+`linux/amd64` manifest, and accepts exactly one Docker schema-2 or OCI manifest
+payload. The remote descriptor digest must exactly equal the locally inspected
+descriptor digest;
 config-digest-only identity is refused because one config can be referenced by
 different manifests and layer descriptors. The actual config digest is retained
 separately as evidence. A local tag race therefore cannot produce trusted
@@ -115,8 +116,13 @@ push, so path rotation cannot substitute an empty journal. Supplying another
 `--state` path therefore cannot fork the journal or race a second push. New
 journal, locator, and lock entries are fsynced together with their containing
 directories. A build never adopts a pre-existing nonempty unbound journal;
-only the explicit read-only reconcile flow may bind it before inspecting the
-one recorded tag. Reconcile that exact tag without mutation:
+the explicit read-only reconcile flow may bind only one descriptor-less legacy
+attempt. While holding the publication lock, it first proves that attempt's
+exact local transport tag has both the recorded Docker image ID and descriptor
+digest, then revalidates the unchanged journal inode before publishing the
+locator. Descriptor-aware, multi-record, missing-tag, and mismatched-tag
+unbound journals remain unbound and fail closed. Reconcile that exact tag
+without mutation:
 
 ```bash
 bun run deploy -- takosumi-runner-image reconcile \
@@ -131,6 +137,24 @@ Reconcile records either the exact remotely observed immutable descriptor
 digest after applying the same descriptor-equality rule, plus the actual remote
 image-config digest, or an exact-tag authoritative manifest absence. Auth,
 network, TLS, malformed, or ambiguous failures leave the journal unresolved.
+
+The reconciler may run from a later tool commit only when that checkout is
+clean, attached to the attempt's same branch, and byte-identical to both the
+local and freshly read remote branch tip. Git replace refs are refused. While
+holding the publication lock, it requires the attempt commit to be an ancestor
+of the current tool and remote tip, archives that exact historical commit with
+replace objects disabled, and recomputes both the complete source-tree seal and
+`runner/Dockerfile` digest from that archive. The realized config path, bytes,
+previous image, release, transport repository/tag, and reviewer must still
+match the journal. A legacy attempt without an explicit descriptor digest must
+also retain its exact local transport tag: Docker must report both its image ID
+and descriptor digest as the journal's legacy `localImageId`. Otherwise the
+attempt remains unresolved.
+
+A recovered build record keeps the attempt commit, Dockerfile, and source-tree
+digest under `source`; it records the later clean, pushed release-tool commit
+separately under `reconciledBy`. This prevents a tool repair from being
+misrepresented as the image's source provenance.
 
 The successful build record retains the previous digest and computes the exact
 expected activation config SHA by replacing only the unique runner image
@@ -184,7 +208,9 @@ bun run deploy -- takosumi-runner-image verify \
 
 Verify requires the current config SHA to equal the build record's exact
 image-only transform and the platform ready evidence to bind that same config,
-source commit, and serving Worker Version. It then requires exactly
+activation source commit, and serving Worker Version. For a normal build the
+activation source is `source`; for a recovered build it is `reconciledBy`, while
+the historical image provenance remains in `source`. It then requires exactly
 `takosumi-staging-opentofurunnerobject` or
 `takosumi-opentofurunnerobject`, with matching list/detail identity, the exact
 selected digest, no active rollout, `active`/`ready` state, and zero failed,

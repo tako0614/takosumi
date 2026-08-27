@@ -22,9 +22,11 @@ import {
   parseRunnerImageReleaseArgs,
   runRunnerImageRelease,
 } from "../../scripts/runner-image-release.ts";
+import { dashboardAssetTreeSeal } from "../../scripts/platform-worker-release.ts";
 
 const roots: string[] = [];
 const COMMIT = "a".repeat(40);
+const RECONCILER_COMMIT = "9".repeat(40);
 const PREVIOUS =
   `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${"c".repeat(64)}`;
 const NEXT =
@@ -120,14 +122,55 @@ function realizedConfig(
   ].join("\n");
 }
 
-function gitFor(branch: string, remoteCommit = COMMIT) {
+function gitFor(
+  branch: string,
+  remoteCommitOrOptions:
+    | string
+    | Readonly<{
+        head?: string;
+        originCommit?: string;
+        remoteCommit?: string;
+        replaceRefs?: string;
+        missingCommits?: readonly string[];
+        resolvedCommits?: Readonly<Record<string, string>>;
+        nonAncestorPairs?: readonly string[];
+      }> = COMMIT,
+) {
+  const options = typeof remoteCommitOrOptions === "string"
+    ? {
+        head: COMMIT,
+        originCommit: remoteCommitOrOptions,
+        remoteCommit: remoteCommitOrOptions,
+      }
+    : remoteCommitOrOptions;
+  const head = options.head ?? COMMIT;
+  const originCommit = options.originCommit ?? options.remoteCommit ?? head;
+  const remoteCommit = options.remoteCommit ?? head;
   return async (_root: string, args: readonly string[]): Promise<string> => {
-    if (args[0] === "status") return "";
-    if (args.join(" ") === "branch --show-current") return branch;
-    if (args.join(" ") === "rev-parse HEAD") return COMMIT;
-    if (args.join(" ") === `rev-parse origin/${branch}`) return remoteCommit;
-    if (args[0] === "ls-remote") {
+    const noReplaceObjects = args[0] === "--no-replace-objects";
+    const gitArgs = noReplaceObjects ? args.slice(1) : args;
+    if (gitArgs[0] === "for-each-ref") {
+      if (!noReplaceObjects) throw new Error("replace refs must be inspected without replacement");
+      return options.replaceRefs ?? "";
+    }
+    if (gitArgs[0] === "status") return "";
+    if (gitArgs.join(" ") === "branch --show-current") return branch;
+    if (gitArgs.join(" ") === "rev-parse HEAD") return head;
+    if (gitArgs.join(" ") === `rev-parse origin/${branch}`) return originCommit;
+    if (gitArgs[0] === "ls-remote") {
       return `${remoteCommit}\trefs/heads/${branch}`;
+    }
+    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--verify") {
+      if (!noReplaceObjects) throw new Error("commit resolution must disable replacement");
+      const commit = gitArgs[2]?.replace(/\^\{commit\}$/u, "") ?? "";
+      if (options.missingCommits?.includes(commit)) throw new Error("missing commit");
+      return options.resolvedCommits?.[commit] ?? commit;
+    }
+    if (gitArgs[0] === "merge-base" && gitArgs[1] === "--is-ancestor") {
+      if (!noReplaceObjects) throw new Error("ancestry must disable replacement");
+      const pair = `${gitArgs[2]}:${gitArgs[3]}`;
+      if (options.nonAncestorPairs?.includes(pair)) throw new Error("not an ancestor");
+      return "";
     }
     throw new Error(`unexpected git command: ${args.join(" ")}`);
   };
@@ -258,7 +301,24 @@ function publicationCoordinationPaths(
   };
 }
 
-function publicationAttempt(input: Fixture) {
+function publicationAttempt(
+  input: Fixture,
+  overrides: Readonly<{
+    branch?: string;
+    commit?: string;
+    dockerfileSha256?: string;
+    buildContextSha256?: string;
+    configPath?: string;
+    configSha256?: string;
+    previousImage?: string;
+    transportRef?: string;
+    localImageId?: string;
+    localDescriptorDigest?: string | null;
+  }> = {},
+) {
+  const localDescriptorDigest = overrides.localDescriptorDigest === undefined
+    ? null
+    : overrides.localDescriptorDigest;
   return {
     kind: "takosumi.runner-image-publication-state@v1",
     status: "publication-started",
@@ -266,20 +326,22 @@ function publicationAttempt(input: Fixture) {
     release: "release-1",
     observedAt: "2026-08-27T00:00:00.000Z",
     source: {
-      branch: "fix/TASK-0032-runner-image",
-      commit: COMMIT,
-      dockerfileSha256: sha256(DOCKERFILE),
-      buildContextSha256: `sha256:${"1".repeat(64)}`,
+      branch: overrides.branch ?? "fix/TASK-0032-runner-image",
+      commit: overrides.commit ?? COMMIT,
+      dockerfileSha256: overrides.dockerfileSha256 ?? sha256(DOCKERFILE),
+      buildContextSha256:
+        overrides.buildContextSha256 ?? dashboardAssetTreeSeal(input.repository).digest,
     },
     config: {
-      path: input.config,
-      buildSha256: sha256(input.configSource),
-      previousImage: PREVIOUS,
+      path: overrides.configPath ?? input.config,
+      buildSha256: overrides.configSha256 ?? sha256(input.configSource),
+      previousImage: overrides.previousImage ?? PREVIOUS,
     },
     image: {
       transportTag: TRANSPORT_TAG,
-      transportRef: TRANSPORT_REF,
-      localImageId: `sha256:${"d".repeat(64)}`,
+      transportRef: overrides.transportRef ?? TRANSPORT_REF,
+      localImageId: overrides.localImageId ?? `sha256:${"d".repeat(64)}`,
+      ...(localDescriptorDigest === null ? {} : { localDescriptorDigest }),
     },
     review: "operator:builder",
   } as const;
@@ -403,13 +465,7 @@ function buildRuntime(
     git: gitFor("fix/TASK-0032-runner-image"),
     nonce: () => "01".repeat(16),
     accountId: "b".repeat(32),
-    materializeSource: async (
-      repositoryRoot: string,
-      _commit: string,
-      destination: string,
-    ) => {
-      cpSync(repositoryRoot, destination, { recursive: true });
-    },
+    materializeSource: materializeFixtureSource,
     command: async (executable: string, args: readonly string[]) => {
       observed?.push([executable, ...args]);
       if (executable === "curl") {
@@ -436,6 +492,14 @@ function buildRuntime(
       return handler(executable, args);
     },
   };
+}
+
+async function materializeFixtureSource(
+  repositoryRoot: string,
+  _commit: string,
+  destination: string,
+): Promise<void> {
+  cpSync(repositoryRoot, destination, { recursive: true });
 }
 
 async function successfulPublicationCommand(
@@ -472,6 +536,64 @@ async function successfulPublicationCommand(
     };
   }
   throw new Error(`unexpected command: ${args.join(" ")}`);
+}
+
+function legacyLocalImageInspect() {
+  return {
+    exitCode: 0,
+    stdout: JSON.stringify({
+      Id: `sha256:${"d".repeat(64)}`,
+      Descriptor: {
+        digest: `sha256:${"d".repeat(64)}`,
+        mediaType: "application/vnd.oci.image.manifest.v1+json",
+      },
+      Os: "linux",
+      Architecture: "amd64",
+    }),
+    stderr: "",
+  };
+}
+
+function withLegacyLocalImageProof(
+  handler: (
+    executable: string,
+    args: readonly string[],
+  ) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
+) {
+  return async (executable: string, args: readonly string[]) =>
+    executable === "docker" && args[0] === "image"
+      ? legacyLocalImageInspect()
+      : handler(executable, args);
+}
+
+async function bindDescriptorAwareAttemptThroughBuild(
+  input: Fixture,
+  journalRoot: string,
+): Promise<void> {
+  await expect(
+    runRunnerImageRelease(buildOptions(input, "staging", true), {
+      ...buildRuntime(input, async (_executable, args) => {
+        if (args[0] === "buildx") {
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        if (args[1] === "containers" && args[2] === "push") {
+          return { exitCode: 2, stdout: "", stderr: "simulated uncertain push" };
+        }
+        throw new Error(`unexpected command: ${args.join(" ")}`);
+      }),
+      publicationJournalRoot: journalRoot,
+    }),
+  ).rejects.toThrow(
+    "runner image publication outcome is incomplete; immutable digest evidence was not established",
+  );
+  const [attempt] = readFileSync(input.state, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line)) as Array<{
+      image: { localDescriptorDigest?: string };
+    }>;
+  expect(attempt?.image.localDescriptorDigest).toBe(`sha256:${"d".repeat(64)}`);
+  expect(existsSync(publicationCoordinationPaths(journalRoot).locator)).toBeTrue();
 }
 
 test("staging accepts a clean pushed feature branch and records branch plus commit", async () => {
@@ -876,7 +998,8 @@ test("an unresolved publication blocks every later nonce until exact read-only r
     {
       repositoryRoot: input.repository,
       git: gitFor("fix/TASK-0032-runner-image"),
-      command: async (_executable, args) => {
+      materializeSource: materializeFixtureSource,
+      command: withLegacyLocalImageProof(async (_executable, args) => {
         expect(args).toEqual(["manifest", "inspect", "--verbose", TRANSPORT_REF]);
         return {
           exitCode: 0,
@@ -894,15 +1017,623 @@ test("an unresolved publication blocks every later nonce until exact read-only r
           }),
           stderr: "",
         };
-      },
+      }),
     },
   );
   expect(reconciled).toMatchObject({ status: "published", image: { immutableRef: NEXT } });
 });
 
-test("OCI reconciliation treats legacy localImageId as the descriptor digest and retains the actual config digest", async () => {
+test("initial journal adoption refuses an explicit descriptor without binding or mutating it", async () => {
   const input = fixture();
-  writePrivate(input.state, `${JSON.stringify(publicationAttempt(input))}\n`);
+  const journalRoot = join(input.operator, "publication-locator");
+  const coordination = publicationCoordinationPaths(journalRoot);
+  writePrivate(
+    input.state,
+    `${JSON.stringify(publicationAttempt(input, {
+      localDescriptorDigest: `sha256:${"d".repeat(64)}`,
+    }))}\n`,
+  );
+  const beforeBytes = readFileSync(input.state);
+  const before = statSync(input.state, { bigint: true });
+  let materializations = 0;
+  let commands = 0;
+
+  await expect(
+    runRunnerImageRelease(
+      { ...buildOptions(input), command: "reconcile" },
+      {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+        publicationJournalRoot: journalRoot,
+        materializeSource: async () => {
+          materializations += 1;
+          throw new Error("unbound explicit attempt must not materialize");
+        },
+        command: async () => {
+          commands += 1;
+          throw new Error("unbound explicit attempt must not inspect images");
+        },
+      },
+    ),
+  ).rejects.toThrow("runner_image_publication_journal_adoption_invalid");
+
+  const after = statSync(input.state, { bigint: true });
+  expect(readFileSync(input.state)).toEqual(beforeBytes);
+  expect({
+    dev: after.dev,
+    ino: after.ino,
+    mode: after.mode,
+    nlink: after.nlink,
+    size: after.size,
+  }).toEqual({
+    dev: before.dev,
+    ino: before.ino,
+    mode: before.mode,
+    nlink: before.nlink,
+    size: before.size,
+  });
+  expect(existsSync(coordination.locator)).toBeFalse();
+  expect(existsSync(coordination.lock)).toBeFalse();
+  expect(materializations).toBe(0);
+  expect(commands).toBe(0);
+});
+
+test("a pushed descendant tool reconciles the exact archived attempt under the journal lock", async () => {
+  const input = fixture();
+  const attempt = publicationAttempt(input);
+  writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
+  writeFileSync(
+    join(input.repository, "runner", "Dockerfile"),
+    `${DOCKERFILE}# current reconciliation tool changed this file\n`,
+  );
+  let lockLinked = false;
+  const operations: string[] = [];
+
+  const reconciled = await runRunnerImageRelease(
+    { ...buildOptions(input), command: "reconcile" },
+    {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image", {
+        head: RECONCILER_COMMIT,
+        originCommit: RECONCILER_COMMIT,
+        remoteCommit: RECONCILER_COMMIT,
+      }),
+      publicationLockHook: async (phase) => {
+        if (phase === "linked") lockLinked = true;
+      },
+      materializeSource: async (repositoryRoot, commit, destination) => {
+        expect(lockLinked).toBe(true);
+        expect(commit).toBe(COMMIT);
+        operations.push("materialize");
+        cpSync(repositoryRoot, destination, { recursive: true });
+        writeFileSync(join(destination, "runner", "Dockerfile"), DOCKERFILE);
+      },
+      command: async (executable, args) => {
+        expect(lockLinked).toBe(true);
+        expect(executable).toBe("docker");
+        if (args[0] === "image") {
+          operations.push("local-inspect");
+          return legacyLocalImageInspect();
+        }
+        expect(args).toEqual(["manifest", "inspect", "--verbose", TRANSPORT_REF]);
+        operations.push("remote-readback");
+        return successfulPublicationCommand(executable, args);
+      },
+    },
+  );
+
+  expect(operations).toEqual([
+    "local-inspect",
+    "materialize",
+    "local-inspect",
+    "remote-readback",
+  ]);
+  expect(reconciled).toMatchObject({
+    status: "published",
+    source: {
+      branch: attempt.source.branch,
+      commit: attempt.source.commit,
+      dockerfileSha256: attempt.source.dockerfileSha256,
+      buildContextSha256: attempt.source.buildContextSha256,
+    },
+    reconciledBy: {
+      branch: "fix/TASK-0032-runner-image",
+      commit: RECONCILER_COMMIT,
+    },
+    image: { immutableRef: NEXT },
+    review: attempt.review,
+  });
+});
+
+test("historical reconciliation rejects untrusted current or attempt Git history before archive or readback", async () => {
+  const branch = "fix/TASK-0032-runner-image";
+  const trusted = {
+    head: RECONCILER_COMMIT,
+    originCommit: RECONCILER_COMMIT,
+    remoteCommit: RECONCILER_COMMIT,
+  } as const;
+  const cases: ReadonlyArray<{
+    name: string;
+    attemptBranch?: string;
+    git: Parameters<typeof gitFor>[1];
+    error: string;
+  }> = [
+    {
+      name: "different branch",
+      attemptBranch: "other-branch",
+      git: trusted,
+      error: "runner_image_publication_reconciliation_identity_mismatch",
+    },
+    {
+      name: "unpushed reconciliation tool",
+      git: { ...trusted, remoteCommit: "8".repeat(40) },
+      error: `must equal pushed origin/${branch}`,
+    },
+    {
+      name: "missing historical commit",
+      git: { ...trusted, missingCommits: [COMMIT] },
+      error: "runner_image_publication_attempt_history_invalid",
+    },
+    {
+      name: "rewritten historical object",
+      git: {
+        ...trusted,
+        resolvedCommits: { [COMMIT]: "7".repeat(40) },
+      },
+      error: "runner_image_publication_attempt_history_invalid",
+    },
+    {
+      name: "non-ancestor or shallow history",
+      git: {
+        ...trusted,
+        nonAncestorPairs: [`${COMMIT}:${RECONCILER_COMMIT}`],
+      },
+      error: "runner_image_publication_attempt_history_invalid",
+    },
+    {
+      name: "replace ref",
+      git: { ...trusted, replaceRefs: "refs/replace/aaaaaaaa" },
+      error: "runner_image_git_replace_refs_forbidden",
+    },
+  ];
+
+  for (const scenario of cases) {
+    const input = fixture();
+    const attempt = publicationAttempt(input, {
+      ...(scenario.attemptBranch ? { branch: scenario.attemptBranch } : {}),
+    });
+    writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
+    let materializations = 0;
+    let readbacks = 0;
+    await expect(
+      runRunnerImageRelease(
+        { ...buildOptions(input), command: "reconcile" },
+        {
+          repositoryRoot: input.repository,
+          git: gitFor(branch, scenario.git),
+          materializeSource: async () => {
+            materializations += 1;
+          },
+          command: withLegacyLocalImageProof(async () => {
+            readbacks += 1;
+            throw new Error("untrusted history reached readback");
+          }),
+        },
+      ),
+      scenario.name,
+    ).rejects.toThrow(scenario.error);
+    expect(materializations, scenario.name).toBe(0);
+    expect(readbacks, scenario.name).toBe(0);
+  }
+});
+
+test("historical reconciliation requires the archived Dockerfile and full source seal", async () => {
+  for (const mismatch of ["dockerfile", "context"] as const) {
+    const input = fixture();
+    const attempt = publicationAttempt(input);
+    writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
+    let readbacks = 0;
+
+    await expect(
+      runRunnerImageRelease(
+        { ...buildOptions(input), command: "reconcile" },
+        {
+          repositoryRoot: input.repository,
+          git: gitFor("fix/TASK-0032-runner-image", {
+            head: RECONCILER_COMMIT,
+            originCommit: RECONCILER_COMMIT,
+            remoteCommit: RECONCILER_COMMIT,
+          }),
+          materializeSource: async (repositoryRoot, commit, destination) => {
+            await materializeFixtureSource(repositoryRoot, commit, destination);
+            if (mismatch === "dockerfile") {
+              writeFileSync(
+                join(destination, "runner", "Dockerfile"),
+                `${DOCKERFILE}# historical bytes changed\n`,
+              );
+            } else {
+              writeFileSync(join(destination, "unrecorded-source.txt"), "changed\n");
+            }
+          },
+          command: withLegacyLocalImageProof(async () => {
+            readbacks += 1;
+            throw new Error("mismatched archive reached remote readback");
+          }),
+        },
+      ),
+      mismatch,
+    ).rejects.toThrow("runner_image_historical_source_mismatch");
+    expect(readbacks, mismatch).toBe(0);
+  }
+});
+
+test("historical reconciliation archives with replace objects disabled and keeps archive failure unresolved", async () => {
+  const input = fixture();
+  const attempt = publicationAttempt(input);
+  writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
+  let archiveCalls = 0;
+  let otherCommands = 0;
+
+  await expect(
+    runRunnerImageRelease(
+      { ...buildOptions(input), command: "reconcile" },
+      {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image", {
+          head: RECONCILER_COMMIT,
+          originCommit: RECONCILER_COMMIT,
+          remoteCommit: RECONCILER_COMMIT,
+        }),
+        command: withLegacyLocalImageProof(async (executable, args) => {
+          if (executable === "git") {
+            archiveCalls += 1;
+            expect(args.slice(0, 3)).toEqual([
+              "--no-replace-objects",
+              "archive",
+              "--format=tar",
+            ]);
+            expect(args.at(-1)).toBe(COMMIT);
+            return { exitCode: 128, stdout: "", stderr: "missing archive object" };
+          }
+          otherCommands += 1;
+          throw new Error("archive failure reached another command");
+        }),
+      },
+    ),
+  ).rejects.toThrow("git --no-replace-objects archive --format=tar failed");
+  expect(archiveCalls).toBe(1);
+  expect(otherCommands).toBe(0);
+  expect(readFileSync(input.state, "utf8").trim().split("\n")).toHaveLength(1);
+});
+
+test("historical reconciliation keeps config path, bytes, previous image, and transport repository exact", async () => {
+  const differentPrevious =
+    `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${"e".repeat(64)}`;
+  const differentTransport =
+    `registry.cloudflare.com/${"c".repeat(32)}/takosumi-runner:${TRANSPORT_TAG}`;
+  for (const drift of ["path", "bytes", "previous-image", "transport"] as const) {
+    const input = fixture();
+    const attempt = publicationAttempt(input, {
+      ...(drift === "path"
+        ? { configPath: join(input.operator, "other-wrangler.toml") }
+        : {}),
+      ...(drift === "previous-image" ? { previousImage: differentPrevious } : {}),
+      ...(drift === "transport" ? { transportRef: differentTransport } : {}),
+    });
+    writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
+    if (drift === "bytes") {
+      writeFileSync(input.config, `${input.configSource}# current config drift\n`);
+    }
+    let materializations = 0;
+    let readbacks = 0;
+
+    await expect(
+      runRunnerImageRelease(
+        { ...buildOptions(input), command: "reconcile" },
+        {
+          repositoryRoot: input.repository,
+          git: gitFor("fix/TASK-0032-runner-image", {
+            head: RECONCILER_COMMIT,
+            originCommit: RECONCILER_COMMIT,
+            remoteCommit: RECONCILER_COMMIT,
+          }),
+          materializeSource: async () => {
+            materializations += 1;
+          },
+          command: withLegacyLocalImageProof(async () => {
+            readbacks += 1;
+            throw new Error("identity drift reached readback");
+          }),
+        },
+      ),
+      drift,
+    ).rejects.toThrow("runner_image_publication_reconciliation_identity_mismatch");
+    expect(materializations, drift).toBe(0);
+    expect(readbacks, drift).toBe(0);
+  }
+});
+
+test("historical reconciliation revalidates external config bytes after archive materialization", async () => {
+  const input = fixture();
+  const attempt = publicationAttempt(input);
+  writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
+  let readbacks = 0;
+  await expect(
+    runRunnerImageRelease(
+      { ...buildOptions(input), command: "reconcile" },
+      {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image", {
+          head: RECONCILER_COMMIT,
+          originCommit: RECONCILER_COMMIT,
+          remoteCommit: RECONCILER_COMMIT,
+        }),
+        materializeSource: async (repositoryRoot, commit, destination) => {
+          await materializeFixtureSource(repositoryRoot, commit, destination);
+          writeFileSync(input.config, `${input.configSource}# raced config bytes\n`);
+        },
+        command: withLegacyLocalImageProof(async () => {
+          readbacks += 1;
+          return successfulPublicationCommand("docker", [
+            "manifest",
+            "inspect",
+            "--verbose",
+            TRANSPORT_REF,
+          ]);
+        }),
+      },
+    ),
+  ).rejects.toThrow("runner_image_publication_reconciliation_identity_mismatch");
+  expect(readbacks).toBe(0);
+});
+
+test("historical reconciliation leaves the attempt unresolved when the remote descriptor differs", async () => {
+  const input = fixture();
+  const attempt = publicationAttempt(input);
+  writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
+  await expect(
+    runRunnerImageRelease(
+      { ...buildOptions(input), command: "reconcile" },
+      {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image", {
+          head: RECONCILER_COMMIT,
+          originCommit: RECONCILER_COMMIT,
+          remoteCommit: RECONCILER_COMMIT,
+        }),
+        materializeSource: materializeFixtureSource,
+        command: withLegacyLocalImageProof(async () => ({
+          exitCode: 0,
+          stdout: JSON.stringify({
+            Descriptor: {
+              mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+              digest: `sha256:${"e".repeat(64)}`,
+              platform: { architecture: "amd64", os: "linux" },
+            },
+            SchemaV2Manifest: {
+              schemaVersion: 2,
+              mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+              config: { digest: `sha256:${"f".repeat(64)}` },
+            },
+          }),
+          stderr: "",
+        })),
+      },
+    ),
+  ).rejects.toThrow("runner_image_remote_content_mismatch");
+  expect(readFileSync(input.state, "utf8").trim().split("\n")).toHaveLength(1);
+});
+
+test("a recovered historical build verifies activation on the trusted reconciler commit", async () => {
+  const input = fixture();
+  const attempt = publicationAttempt(input);
+  writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
+  writeFileSync(
+    join(input.repository, "runner", "Dockerfile"),
+    `${DOCKERFILE}# reconciler-only tool change\n`,
+  );
+  const trustedGit = gitFor("fix/TASK-0032-runner-image", {
+    head: RECONCILER_COMMIT,
+    originCommit: RECONCILER_COMMIT,
+    remoteCommit: RECONCILER_COMMIT,
+  });
+  const reconciled = await runRunnerImageRelease(
+    { ...buildOptions(input), command: "reconcile" },
+    {
+      repositoryRoot: input.repository,
+      git: trustedGit,
+      materializeSource: async (repositoryRoot, commit, destination) => {
+        await materializeFixtureSource(repositoryRoot, commit, destination);
+        writeFileSync(join(destination, "runner", "Dockerfile"), DOCKERFILE);
+      },
+      command: withLegacyLocalImageProof(successfulPublicationCommand),
+    },
+  );
+  writePrivate(input.buildEvidence, `${JSON.stringify(reconciled)}\n`);
+  const activatedConfig = realizedConfig(
+    input.repository,
+    input.operator,
+    NEXT,
+  );
+  writeFileSync(input.config, activatedConfig);
+  writePlatformEvidence(input, {
+    sourceCommit: RECONCILER_COMMIT,
+    configSha256: sha256(activatedConfig),
+  });
+  const readback = verificationCommand();
+
+  await expect(
+    runRunnerImageRelease(verifyOptions(input), {
+      repositoryRoot: input.repository,
+      git: trustedGit,
+      command: readback.command,
+      wait: async () => undefined,
+    }),
+  ).resolves.toMatchObject({
+    operation: "verify",
+    status: "verified",
+    source: {
+      branch: "fix/TASK-0032-runner-image",
+      commit: RECONCILER_COMMIT,
+    },
+    image: NEXT,
+  });
+});
+
+test("legacy reconciliation proves the recorded Docker Id through the exact local tag before remote readback", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  const coordination = publicationCoordinationPaths(journalRoot);
+  const attempt = publicationAttempt(input, { localDescriptorDigest: null });
+  writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
+  const operations: string[] = [];
+
+  const reconciled = await runRunnerImageRelease(
+    { ...buildOptions(input), command: "reconcile" },
+    {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image", {
+        head: RECONCILER_COMMIT,
+        originCommit: RECONCILER_COMMIT,
+        remoteCommit: RECONCILER_COMMIT,
+      }),
+      publicationJournalRoot: journalRoot,
+      materializeSource: async (repositoryRoot, commit, destination) => {
+        expect(commit).toBe(COMMIT);
+        operations.push("materialize");
+        await materializeFixtureSource(repositoryRoot, commit, destination);
+      },
+      command: async (executable, args) => {
+        expect(executable).toBe("docker");
+        if (args[0] === "image") {
+          expect(args).toEqual([
+            "image",
+            "inspect",
+            `takosumi-runner:${TRANSPORT_TAG}`,
+            "--format",
+            "{{json .}}",
+          ]);
+          operations.push("local-inspect");
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              Id: `sha256:${"d".repeat(64)}`,
+              Descriptor: {
+                digest: `sha256:${"d".repeat(64)}`,
+                mediaType: "application/vnd.oci.image.manifest.v1+json",
+              },
+              Os: "linux",
+              Architecture: "amd64",
+            }),
+            stderr: "",
+          };
+        }
+        expect(args).toEqual(["manifest", "inspect", "--verbose", TRANSPORT_REF]);
+        operations.push("remote-readback");
+        return successfulPublicationCommand(executable, args);
+      },
+    },
+  );
+
+  expect(operations).toEqual([
+    "local-inspect",
+    "materialize",
+    "local-inspect",
+    "remote-readback",
+  ]);
+  expect(reconciled).toMatchObject({
+    status: "published",
+    source: { commit: COMMIT },
+    reconciledBy: { commit: RECONCILER_COMMIT },
+    image: { immutableRef: NEXT },
+  });
+  expect(existsSync(coordination.locator)).toBeTrue();
+  expect(existsSync(coordination.lock)).toBeFalse();
+});
+
+test("legacy reconciliation stays unresolved when the exact local tag is absent or has different identity", async () => {
+  const identities: Array<
+    | null
+    | Readonly<{ imageId: string; descriptorDigest: string }>
+  > = [
+    null,
+    {
+      imageId: `sha256:${"e".repeat(64)}`,
+      descriptorDigest: `sha256:${"d".repeat(64)}`,
+    },
+    {
+      imageId: `sha256:${"d".repeat(64)}`,
+      descriptorDigest: `sha256:${"e".repeat(64)}`,
+    },
+  ];
+  for (const identity of identities) {
+    const input = fixture();
+    const journalRoot = join(input.operator, "publication-locator");
+    const coordination = publicationCoordinationPaths(journalRoot);
+    const attempt = publicationAttempt(input, { localDescriptorDigest: null });
+    writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
+    let remoteReadbacks = 0;
+
+    const reconciliation = runRunnerImageRelease(
+      { ...buildOptions(input), command: "reconcile" },
+      {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image", {
+          head: RECONCILER_COMMIT,
+          originCommit: RECONCILER_COMMIT,
+          remoteCommit: RECONCILER_COMMIT,
+        }),
+        materializeSource: materializeFixtureSource,
+        publicationJournalRoot: journalRoot,
+        command: async (_executable, args) => {
+          if (args[0] !== "image") {
+            remoteReadbacks += 1;
+            throw new Error("remote readback must not follow failed local proof");
+          }
+          if (identity === null) {
+            return {
+              exitCode: 1,
+              stdout: "",
+              stderr: `No such image: takosumi-runner:${TRANSPORT_TAG}`,
+            };
+          }
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              Id: identity.imageId,
+              Descriptor: {
+                digest: identity.descriptorDigest,
+                mediaType: "application/vnd.oci.image.manifest.v1+json",
+              },
+              Os: "linux",
+              Architecture: "amd64",
+            }),
+            stderr: "",
+          };
+        },
+      },
+    );
+
+    if (identity === null) {
+      await expect(reconciliation).rejects.toThrow(
+        "docker image inspect takosumi-runner",
+      );
+    } else {
+      await expect(reconciliation).rejects.toThrow(
+        "runner_image_legacy_local_identity_mismatch",
+      );
+    }
+    expect(remoteReadbacks).toBe(0);
+    expect(readFileSync(input.state, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(existsSync(coordination.locator)).toBeFalse();
+    expect(existsSync(coordination.lock)).toBeFalse();
+  }
+});
+
+test("an already-bound OCI attempt uses its explicit descriptor and retains the actual config digest", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  await bindDescriptorAwareAttemptThroughBuild(input, journalRoot);
   const descriptorDigest = `sha256:${"d".repeat(64)}`;
   const imageConfigDigest = `sha256:${"3".repeat(64)}`;
   const immutableRef =
@@ -912,22 +1643,27 @@ test("OCI reconciliation treats legacy localImageId as the descriptor digest and
     {
       repositoryRoot: input.repository,
       git: gitFor("fix/TASK-0032-runner-image"),
-      command: async () => ({
-        exitCode: 0,
-        stdout: JSON.stringify({
-          Descriptor: {
-            mediaType: "application/vnd.oci.image.manifest.v1+json",
-            digest: descriptorDigest,
-            platform: { architecture: "amd64", os: "linux" },
-          },
-          OCIManifest: {
-            schemaVersion: 2,
-            mediaType: "application/vnd.oci.image.manifest.v1+json",
-            config: { digest: imageConfigDigest },
-          },
-        }),
-        stderr: "",
-      }),
+      materializeSource: materializeFixtureSource,
+      publicationJournalRoot: journalRoot,
+      command: async (_executable, args) => {
+        expect(args).toEqual(["manifest", "inspect", "--verbose", TRANSPORT_REF]);
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            Descriptor: {
+              mediaType: "application/vnd.oci.image.manifest.v1+json",
+              digest: descriptorDigest,
+              platform: { architecture: "amd64", os: "linux" },
+            },
+            OCIManifest: {
+              schemaVersion: 2,
+              mediaType: "application/vnd.oci.image.manifest.v1+json",
+              config: { digest: imageConfigDigest },
+            },
+          }),
+          stderr: "",
+        };
+      },
     },
   );
   expect(reconciled).toMatchObject({
@@ -941,6 +1677,8 @@ test("OCI reconciliation treats legacy localImageId as the descriptor digest and
       {
         repositoryRoot: input.repository,
         git: gitFor("fix/TASK-0032-runner-image"),
+        materializeSource: materializeFixtureSource,
+        publicationJournalRoot: journalRoot,
         command: async () => {
           throw new Error("resolved reconciliation must not inspect again");
         },
@@ -954,13 +1692,16 @@ test("OCI reconciliation treats legacy localImageId as the descriptor digest and
 
 test("a persisted resolution must bind the attempt to the descriptor rather than only the config", async () => {
   const input = fixture();
-  writePrivate(input.state, `${JSON.stringify(publicationAttempt(input))}\n`);
+  const journalRoot = join(input.operator, "publication-locator");
+  await bindDescriptorAwareAttemptThroughBuild(input, journalRoot);
   const localDescriptorDigest = `sha256:${"d".repeat(64)}`;
   await runRunnerImageRelease(
     { ...buildOptions(input), command: "reconcile" },
     {
       repositoryRoot: input.repository,
       git: gitFor("fix/TASK-0032-runner-image"),
+      materializeSource: materializeFixtureSource,
+      publicationJournalRoot: journalRoot,
       command: async () => ({
         exitCode: 0,
         stdout: JSON.stringify({
@@ -1001,6 +1742,8 @@ test("a persisted resolution must bind the attempt to the descriptor rather than
       {
         repositoryRoot: input.repository,
         git: gitFor("fix/TASK-0032-runner-image"),
+        materializeSource: materializeFixtureSource,
+        publicationJournalRoot: journalRoot,
         command: async () => {
           throw new Error("invalid persisted resolution must not inspect again");
         },
@@ -1018,11 +1761,12 @@ test("a release-scope journal locator rejects an alternate caller-selected state
       {
         repositoryRoot: input.repository,
         git: gitFor("fix/TASK-0032-runner-image"),
-        command: async () => ({
+        materializeSource: materializeFixtureSource,
+        command: withLegacyLocalImageProof(async () => ({
           exitCode: 2,
           stdout: "",
           stderr: "network timeout while reading manifest",
-        }),
+        })),
       },
     ),
   ).rejects.toThrow("docker manifest inspect --verbose failed with exit 2");
@@ -1361,12 +2105,13 @@ test("journal rotation after binding cannot bypass the descriptor-bound unresolv
       {
         repositoryRoot: input.repository,
         git: gitFor("fix/TASK-0032-runner-image"),
+        materializeSource: materializeFixtureSource,
         publicationJournalRoot: journalRoot,
-        command: async () => ({
+        command: withLegacyLocalImageProof(async () => ({
           exitCode: 2,
           stdout: "",
           stderr: "network timeout while reading manifest",
-        }),
+        })),
       },
     ),
   ).rejects.toThrow("docker manifest inspect --verbose failed with exit 2");
@@ -1473,11 +2218,12 @@ test("read-only reconciliation can prove an exact recorded transport tag absent"
     {
       repositoryRoot: input.repository,
       git: gitFor("fix/TASK-0032-runner-image"),
-      command: async () => ({
+      materializeSource: materializeFixtureSource,
+      command: withLegacyLocalImageProof(async () => ({
         exitCode: 1,
         stdout: "",
         stderr: `no such manifest: ${TRANSPORT_REF}`,
-      }),
+      })),
     },
   );
   expect(reconciled).toMatchObject({
@@ -1528,7 +2274,15 @@ test("build publishes linux amd64 with generated transport identity and records 
         };
       }
       throw new Error(`unexpected command: ${args.join(" ")}`);
-    }, calls),
+    }, calls, {
+      Id: `sha256:${"6".repeat(64)}`,
+      Descriptor: {
+        digest: `sha256:${"d".repeat(64)}`,
+        mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+      },
+      Os: "linux",
+      Architecture: "amd64",
+    }),
   });
   expect(record).toMatchObject({
     status: "published",
@@ -1554,12 +2308,26 @@ test("build publishes linux amd64 with generated transport identity and records 
   const [attempt] = readFileSync(input.state, "utf8")
     .trim()
     .split("\n")
-    .map((line) => JSON.parse(line)) as [{ image: { localImageId: string } }];
-  expect(attempt.image.localImageId).toBe(`sha256:${"d".repeat(64)}`);
+    .map((line) => JSON.parse(line)) as [
+    { image: { localImageId: string; localDescriptorDigest: string } },
+  ];
+  expect(attempt.image).toMatchObject({
+    localImageId: `sha256:${"6".repeat(64)}`,
+    localDescriptorDigest: `sha256:${"d".repeat(64)}`,
+  });
 });
 
 test("build rejects a missing or invalid local image descriptor before publication", async () => {
   for (const localImageInspect of [
+    {
+      Id: "not-a-digest",
+      Descriptor: {
+        digest: `sha256:${"d".repeat(64)}`,
+        mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+      },
+      Os: "linux",
+      Architecture: "amd64",
+    },
     {
       Id: `sha256:${"d".repeat(64)}`,
       Os: "linux",

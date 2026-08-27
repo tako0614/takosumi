@@ -88,6 +88,11 @@ export type RunnerImageBuildRecord = Readonly<{
     immutableRef: string | null;
     imageConfigDigest?: string | null;
   };
+  /** Present only when a later trusted checkout reconciled an earlier attempt. */
+  reconciledBy?: {
+    branch: string;
+    commit: string;
+  };
   review: string | null;
 }>;
 
@@ -111,8 +116,10 @@ type RunnerPublicationAttempt = Readonly<{
   image: {
     transportTag: string;
     transportRef: string;
-    /** Legacy wire field name; stores the local Docker Descriptor.digest. */
+    /** Legacy v1 field written from Docker image inspect .Id. */
     localImageId: string;
+    /** Explicit descriptor authority written by descriptor-aware publishers. */
+    localDescriptorDigest?: string;
   };
   review: string;
 }>;
@@ -213,9 +220,9 @@ export const RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE = {
   requiresTools: ["git", "bun", "docker", "wrangler", "tar", "curl", "cosign"],
   obligations: {
     provenance:
-      "build and verification refuse dirty or detached source; staging requires HEAD to equal pushed origin/current-branch while production additionally requires main; build materializes the immutable Git commit in an external sealed context, verifies the Dockerfile-pinned OpenTofu artifact through its upstream Sigstore identity, and binds the exact image-only activation transform plus publication journal to the remotely read content digest; verification consumes exact ready platform-release evidence",
+      "build, reconciliation, and verification refuse dirty or detached source; staging requires HEAD to equal both local and freshly read remote origin/current-branch while production additionally requires main; build materializes the immutable Git commit in an external sealed context, verifies the Dockerfile-pinned OpenTofu artifact through its upstream Sigstore identity, and binds the exact image-only activation transform plus publication journal to the remotely read content digest; reconciliation accepts only a no-replace-object historical attempt commit that is an ancestor of the trusted current tool and fresh remote tip, then re-materializes and seals that exact commit; verification consumes exact ready platform-release evidence and binds recovered records to their explicit reconciledBy tool identity",
     "post-conditions":
-      "build requires the locally inspected Docker Descriptor to carry an exact supported manifest media type and sha256 digest for a linux/amd64 image, accepts only Docker's unambiguous remote Descriptor.platform linux/amd64 shape, and requires exact local/remote descriptor-digest equality before recording that immutable descriptor digest as the sole consumer identity and the actual config digest as evidence; verification requires the platform evidence Worker Version to be exactly serving at 100 percent and the exact environment Container application to be healthy on that digest",
+      "build records the local Docker image ID and an explicit Descriptor digest with exact supported manifest media type and linux/amd64 platform, accepts only Docker's unambiguous remote Descriptor.platform linux/amd64 shape, and requires exact local/remote descriptor-digest equality before recording that immutable descriptor digest as the sole consumer identity and the actual config digest as evidence; a legacy attempt without the explicit descriptor field additionally requires the exact recorded local tag to remain present with both Docker Id and Descriptor equal to the legacy value; verification requires the platform evidence Worker Version to be exactly serving at 100 percent and the exact environment Container application to be healthy on that digest",
     reversal:
       "build evidence retains the exact previous immutable digest; rollback changes only the realized image literal back to that retained digest, passes through a new reviewed platform plan and execute, and verifies it",
     "failure-handling":
@@ -615,11 +622,27 @@ export async function runRunnerImageRelease(
           observedAt,
           command,
           publicationJournal,
+          git,
           [repositoryRoot],
+          runtime.materializeSource,
         ),
       true,
       runtime.publicationLockHook,
       runtime.publicationJournalHook,
+      async (attempt) => {
+        if (!publicationAttemptMatchesReconciliationContext(
+          attempt,
+          options,
+          context,
+        )) {
+          throw new Error("runner_image_publication_reconciliation_identity_mismatch");
+        }
+        await proveLegacyPublicationLocalIdentity(
+          attempt,
+          command,
+          context.repository.root,
+        );
+      },
     );
   }
   return verifyRunnerImage(
@@ -683,51 +706,22 @@ async function buildRunnerImage(
       join(dirname(resolve(options.state)), ".takosumi-runner-build-"),
     );
     await chmod(workspace, 0o700);
-    const sealedSource = join(workspace, "source");
-    await mkdir(sealedSource, { mode: 0o700 });
-    if (materializeSource) {
-      await materializeSource(
-        context.repository.root,
-        context.repository.commit,
-        sealedSource,
-      );
-    } else {
-      const archive = join(workspace, "source.tar");
-      await checkedCommand(
-        command,
-        "git",
-        [
-          "archive",
-          "--format=tar",
-          `--output=${archive}`,
-          context.repository.commit,
-        ],
-        context.repository.root,
-      );
-      await checkedCommand(
-        command,
-        "tar",
-        [
-          "--extract",
-          "--file",
-          archive,
-          "--directory",
-          sealedSource,
-          "--no-same-owner",
-          "--no-same-permissions",
-        ],
-        workspace,
-      );
-      await rm(archive);
-    }
-    const sealedDockerfile = join(sealedSource, "runner", "Dockerfile");
-    const dockerfileSource = await readStablePhysicalFile(
-      sealedDockerfile,
-      "sealed Dockerfile",
+    const materialized = await materializeRunnerSource(
+      context.repository.root,
+      context.repository.commit,
+      workspace,
+      command,
+      materializeSource,
     );
-    if (sha256(dockerfileSource) !== context.dockerfileSha256) {
+    if (materialized.dockerfileSha256 !== context.dockerfileSha256) {
       throw new Error("runner_image_sealed_source_mismatch");
     }
+    const {
+      sourceRoot: sealedSource,
+      dockerfilePath: sealedDockerfile,
+      dockerfileSource,
+      buildContext,
+    } = materialized;
     const sealedConfig = join(workspace, "wrangler.toml");
     await writeFile(sealedConfig, context.config.source, {
       encoding: "utf8",
@@ -740,7 +734,6 @@ async function buildRunnerImage(
       command,
       context.repository.root,
     );
-    const buildContext = dashboardAssetTreeSeal(sealedSource);
     await checkedCommand(
       command,
       "docker",
@@ -770,9 +763,7 @@ async function buildRunnerImage(
       ["image", "inspect", localTag, "--format", "{{json .}}"],
       workspace,
     );
-    const localDescriptorDigest = parseLocalRunnerImageDescriptorDigest(
-      localImage.stdout,
-    );
+    const localIdentity = parseLocalRunnerImageIdentity(localImage.stdout);
     const attempt: RunnerPublicationAttempt = {
       kind: "takosumi.runner-image-publication-state@v1",
       status: "publication-started",
@@ -793,7 +784,8 @@ async function buildRunnerImage(
       image: {
         transportTag,
         transportRef: remoteRef,
-        localImageId: localDescriptorDigest,
+        localImageId: localIdentity.imageId,
+        localDescriptorDigest: localIdentity.descriptorDigest,
       },
       review: options.review!,
     };
@@ -831,7 +823,7 @@ async function buildRunnerImage(
       publicationOutput,
       manifest.stdout,
       transportTag,
-      localDescriptorDigest,
+      localIdentity.descriptorDigest,
     );
     if (image.transportRef !== remoteRef) {
       throw new Error("runner_image_remote_manifest_invalid");
@@ -935,13 +927,98 @@ async function buildRunnerImage(
   }
 }
 
+type MaterializedRunnerSource = Readonly<{
+  sourceRoot: string;
+  dockerfilePath: string;
+  dockerfileSource: Uint8Array;
+  dockerfileSha256: string;
+  buildContext: ReturnType<typeof dashboardAssetTreeSeal>;
+}>;
+
+async function materializeRunnerSource(
+  repositoryRoot: string,
+  commit: string,
+  workspace: string,
+  command: NonNullable<RunnerImageReleaseRuntime["command"]>,
+  materializeSource: RunnerImageReleaseRuntime["materializeSource"],
+): Promise<MaterializedRunnerSource> {
+  if (!/^[0-9a-f]{40}$/u.test(commit)) {
+    throw new Error("runner_image_sealed_source_mismatch");
+  }
+  const sourceRoot = join(workspace, "source");
+  await mkdir(sourceRoot, { mode: 0o700 });
+  if (materializeSource) {
+    await materializeSource(repositoryRoot, commit, sourceRoot);
+  } else {
+    const archive = join(workspace, "source.tar");
+    await checkedCommand(
+      command,
+      "git",
+      [
+        "--no-replace-objects",
+        "archive",
+        "--format=tar",
+        `--output=${archive}`,
+        commit,
+      ],
+      repositoryRoot,
+    );
+    await checkedCommand(
+      command,
+      "tar",
+      [
+        "--extract",
+        "--file",
+        archive,
+        "--directory",
+        sourceRoot,
+        "--no-same-owner",
+        "--no-same-permissions",
+      ],
+      workspace,
+    );
+    await rm(archive);
+  }
+  const dockerfilePath = join(sourceRoot, "runner", "Dockerfile");
+  const dockerfileSource = await readStablePhysicalFile(
+    dockerfilePath,
+    "sealed Dockerfile",
+  );
+  return {
+    sourceRoot,
+    dockerfilePath,
+    dockerfileSource,
+    dockerfileSha256: sha256(dockerfileSource),
+    buildContext: dashboardAssetTreeSeal(sourceRoot),
+  };
+}
+
+function publicationAttemptMatchesReconciliationContext(
+  attempt: RunnerPublicationAttempt,
+  options: RunnerImageReleaseOptions,
+  context: ReleaseContext,
+): boolean {
+  return (
+    attempt.environment === options.environment &&
+    attempt.release === options.release &&
+    attempt.source.branch === context.repository.branch &&
+    attempt.config.path === context.config.path &&
+    attempt.config.buildSha256 === context.config.sha256 &&
+    attempt.config.previousImage === context.config.runnerImage &&
+    attempt.image.transportRef ===
+      `${runnerImageRepository(attempt.config.previousImage)}:${attempt.image.transportTag}`
+  );
+}
+
 async function reconcileRunnerImage(
   options: RunnerImageReleaseOptions,
   context: ReleaseContext,
   observedAt: string,
   command: NonNullable<RunnerImageReleaseRuntime["command"]>,
   publicationJournal: PublicationJournal,
+  git: NonNullable<RunnerImageReleaseRuntime["git"]>,
   sourceRoots: readonly string[],
+  materializeSource: RunnerImageReleaseRuntime["materializeSource"],
 ): Promise<unknown> {
   if (!options.state) throw new Error("reconcile requires --state");
   await prepareEvidenceFile(options.evidence, sourceRoots);
@@ -960,19 +1037,50 @@ async function reconcileRunnerImage(
     throw new Error("runner_image_publication_reconciliation_ambiguous");
   }
   const attempt = attempts[0]!;
-  if (
-    attempt.environment !== options.environment ||
-    attempt.release !== options.release ||
-    attempt.source.branch !== context.repository.branch ||
-    attempt.source.commit !== context.repository.commit ||
-    attempt.source.dockerfileSha256 !== context.dockerfileSha256 ||
-    attempt.config.path !== context.config.path ||
-    attempt.config.buildSha256 !== context.config.sha256 ||
-    attempt.config.previousImage !== context.config.runnerImage
-  ) {
+  if (!publicationAttemptMatchesReconciliationContext(attempt, options, context)) {
     throw new Error("runner_image_publication_reconciliation_identity_mismatch");
   }
+  let workspace: string | null = null;
   try {
+    await assertHistoricalPublicationCommit(context.repository, attempt, git);
+    await publicationJournal.assertBound();
+    workspace = await mkdtemp(
+      join(dirname(resolve(options.state)), ".takosumi-runner-reconcile-"),
+    );
+    await chmod(workspace, 0o700);
+    const materialized = await materializeRunnerSource(
+      context.repository.root,
+      attempt.source.commit,
+      workspace,
+      command,
+      materializeSource,
+    );
+    if (
+      materialized.dockerfileSha256 !== attempt.source.dockerfileSha256 ||
+      materialized.buildContext.digest !== attempt.source.buildContextSha256
+    ) {
+      throw new Error("runner_image_historical_source_mismatch");
+    }
+    if (
+      sha256(
+        await readStablePhysicalFile(
+          context.config.path,
+          "reconciliation config path",
+        ),
+      ) !== attempt.config.buildSha256
+    ) {
+      throw new Error("runner_image_publication_reconciliation_identity_mismatch");
+    }
+    let expectedLocalDescriptorDigest = attempt.image.localDescriptorDigest;
+    if (expectedLocalDescriptorDigest === undefined) {
+      await publicationJournal.assertBound();
+      expectedLocalDescriptorDigest = await proveLegacyPublicationLocalIdentity(
+        attempt,
+        command,
+        workspace,
+      );
+    }
+    await publicationJournal.assertBound();
     const manifest = await checkedCommand(
       command,
       "docker",
@@ -983,7 +1091,7 @@ async function reconcileRunnerImage(
       `Pushed image: ${attempt.image.transportRef}`,
       manifest.stdout,
       attempt.image.transportTag,
-      attempt.image.localImageId,
+      expectedLocalDescriptorDigest,
     );
     const expectedActivationSha256 = sha256(
       replaceRunnerImage(
@@ -992,9 +1100,18 @@ async function reconcileRunnerImage(
         image.immutableRef,
       ),
     );
+    const historicalContext: ReleaseContext = {
+      ...context,
+      repository: {
+        ...context.repository,
+        branch: attempt.source.branch,
+        commit: attempt.source.commit,
+      },
+      dockerfileSha256: attempt.source.dockerfileSha256,
+    };
     const base = buildRecord(
       options,
-      context,
+      historicalContext,
       observedAt,
       attempt.image.transportTag,
       image.transportRef,
@@ -1009,6 +1126,10 @@ async function reconcileRunnerImage(
         buildContextSha256: attempt.source.buildContextSha256,
       },
       image: { ...base.image, imageConfigDigest: image.imageConfigDigest },
+      reconciledBy: {
+        branch: context.repository.branch,
+        commit: context.repository.commit,
+      },
       review: attempt.review,
     };
     const resolution: RunnerPublicationResolution = {
@@ -1065,6 +1186,43 @@ async function reconcileRunnerImage(
       diagnostic: releaseDiagnostic(error),
     });
     throw error;
+  } finally {
+    if (workspace !== null) {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  }
+}
+
+async function assertHistoricalPublicationCommit(
+  repository: RepositoryIdentity,
+  attempt: RunnerPublicationAttempt,
+  git: NonNullable<RunnerImageReleaseRuntime["git"]>,
+): Promise<void> {
+  try {
+    const resolved = (
+      await git(repository.root, [
+        "--no-replace-objects",
+        "rev-parse",
+        "--verify",
+        `${attempt.source.commit}^{commit}`,
+      ])
+    ).trim();
+    if (resolved !== attempt.source.commit) {
+      throw new Error("historical commit resolved differently");
+    }
+    for (const descendant of [repository.commit, repository.remoteCommit]) {
+      await git(repository.root, [
+        "--no-replace-objects",
+        "merge-base",
+        "--is-ancestor",
+        attempt.source.commit,
+        descendant,
+      ]);
+    }
+  } catch (error) {
+    throw new Error("runner_image_publication_attempt_history_invalid", {
+      cause: error,
+    });
   }
 }
 
@@ -1169,7 +1327,10 @@ async function verifyOpenTofuSigstore(
   }
 }
 
-function parseLocalRunnerImageDescriptorDigest(source: string): string {
+function parseLocalRunnerImageIdentity(source: string): Readonly<{
+  imageId: string;
+  descriptorDigest: string;
+}> {
   let value: unknown;
   try {
     value = JSON.parse(source.trim()) as unknown;
@@ -1178,6 +1339,8 @@ function parseLocalRunnerImageDescriptorDigest(source: string): string {
   }
   if (
     !isRecord(value) ||
+    typeof value.Id !== "string" ||
+    !SHA256.test(value.Id) ||
     !isRecord(value.Descriptor) ||
     typeof value.Descriptor.digest !== "string" ||
     !SHA256.test(value.Descriptor.digest) ||
@@ -1188,7 +1351,32 @@ function parseLocalRunnerImageDescriptorDigest(source: string): string {
   ) {
     throw new Error("runner_image_local_identity_invalid");
   }
-  return value.Descriptor.digest;
+  return {
+    imageId: value.Id,
+    descriptorDigest: value.Descriptor.digest,
+  };
+}
+
+async function proveLegacyPublicationLocalIdentity(
+  attempt: RunnerPublicationAttempt,
+  command: NonNullable<RunnerImageReleaseRuntime["command"]>,
+  cwd: string,
+): Promise<string> {
+  const localTag = `takosumi-runner:${attempt.image.transportTag}`;
+  const localImage = await checkedCommand(
+    command,
+    "docker",
+    ["image", "inspect", localTag, "--format", "{{json .}}"],
+    cwd,
+  );
+  const localIdentity = parseLocalRunnerImageIdentity(localImage.stdout);
+  if (
+    localIdentity.imageId !== attempt.image.localImageId ||
+    localIdentity.descriptorDigest !== attempt.image.localImageId
+  ) {
+    throw new Error("runner_image_legacy_local_identity_mismatch");
+  }
+  return localIdentity.descriptorDigest;
 }
 
 async function unresolvedPublicationAttempts(
@@ -1228,7 +1416,8 @@ function publicationResolutionMatchesAttempt(
     resolution.immutableRef.lastIndexOf("@") + 1,
   );
   return (
-    descriptorDigest === attempt.image.localImageId &&
+    descriptorDigest ===
+      (attempt.image.localDescriptorDigest ?? attempt.image.localImageId) &&
     resolution.immutableRef === build.image.immutableRef &&
     build.environment === attempt.environment &&
     build.release === attempt.release &&
@@ -1275,6 +1464,12 @@ async function readPublicationState(
     if (isFileSystemError(error, "ENOENT")) return [];
     throw error;
   }
+  return parsePublicationState(bytes);
+}
+
+function parsePublicationState(
+  bytes: Uint8Array,
+): readonly (RunnerPublicationAttempt | RunnerPublicationResolution)[] {
   const entries: Array<RunnerPublicationAttempt | RunnerPublicationResolution> = [];
   for (const line of new TextDecoder("utf-8", { fatal: true })
     .decode(bytes)
@@ -1338,6 +1533,9 @@ function validPublicationAttempt(value: Record<string, unknown>): boolean {
     value.image.transportRef.endsWith(`:${value.image.transportTag}`) &&
     typeof value.image.localImageId === "string" &&
     SHA256.test(value.image.localImageId) &&
+    (value.image.localDescriptorDigest === undefined ||
+      (typeof value.image.localDescriptorDigest === "string" &&
+        SHA256.test(value.image.localDescriptorDigest))) &&
     typeof value.review === "string" &&
     isBoundedString(value.review, 256)
   );
@@ -1418,6 +1616,12 @@ function validPublishedBuildRecord(
     !DIGEST_IMAGE.test(value.image.immutableRef) ||
     typeof value.image.imageConfigDigest !== "string" ||
     !SHA256.test(value.image.imageConfigDigest) ||
+    (value.reconciledBy !== undefined &&
+      (!isRecord(value.reconciledBy) ||
+        !isBoundedString(value.reconciledBy.branch, 512) ||
+        value.reconciledBy.branch !== value.source.branch ||
+        typeof value.reconciledBy.commit !== "string" ||
+        !/^[0-9a-f]{40}$/u.test(value.reconciledBy.commit))) ||
     typeof value.review !== "string" ||
     !isBoundedString(value.review, 256)
   ) {
@@ -1513,10 +1717,12 @@ async function verifyRunnerImage(
     options.environment,
     options.release,
   );
+  const activationSource = build.reconciledBy ?? build.source;
   if (
-    build.source.branch !== context.repository.branch ||
-    build.source.commit !== context.repository.commit ||
-    build.source.dockerfileSha256 !== context.dockerfileSha256
+    activationSource.branch !== context.repository.branch ||
+    activationSource.commit !== context.repository.commit ||
+    (build.reconciledBy === undefined &&
+      build.source.dockerfileSha256 !== context.dockerfileSha256)
   ) {
     throw new Error("build evidence does not match current runner source");
   }
@@ -1736,6 +1942,20 @@ async function repositoryIdentity(
   environment: RunnerImageReleaseEnvironment,
   git: NonNullable<RunnerImageReleaseRuntime["git"]>,
 ): Promise<RepositoryIdentity> {
+  let replaceRefs: string;
+  try {
+    replaceRefs = await git(root, [
+      "--no-replace-objects",
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/replace",
+    ]);
+  } catch (error) {
+    throw new Error("runner_image_git_replace_refs_invalid", { cause: error });
+  }
+  if (replaceRefs.trim()) {
+    throw new Error("runner_image_git_replace_refs_forbidden");
+  }
   const status = await git(root, [
     "status",
     "--porcelain=v1",
@@ -2035,6 +2255,10 @@ async function readBuildRecord(
     !RELEASE_LABEL.test(record.image?.transportTag ?? "") ||
     !TRANSPORT_REF.test(record.image?.transportRef ?? "") ||
     !DIGEST_IMAGE.test(record.image?.immutableRef ?? "") ||
+    (record.reconciledBy !== undefined &&
+      (!isBoundedString(record.reconciledBy.branch, 512) ||
+        record.reconciledBy.branch !== record.source.branch ||
+        !/^[0-9a-f]{40}$/u.test(record.reconciledBy.commit))) ||
     !isBoundedString(record.review, 256)
   ) {
     throw new Error("build evidence has invalid provenance or image fields");
@@ -2828,11 +3052,64 @@ async function assertPublicationJournalBinding(
   await journal?.close();
 }
 
+async function legacyPublicationJournalAdoptionStatus(
+  path: string,
+): Promise<Readonly<{
+  status: BigIntStats;
+  attempt: RunnerPublicationAttempt;
+}>> {
+  try {
+    const pathBefore = await privateSingleLinkStatus(
+      path,
+      "publication state",
+    );
+    const descriptor = await open(
+      path,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+    );
+    try {
+      const opened = await descriptor.stat({ bigint: true });
+      if (!samePhysicalFile(pathBefore, opened)) {
+        throw new Error("publication state changed while opening");
+      }
+      const bytes = await readDescriptorBytes(
+        descriptor,
+        opened,
+        "publication state",
+      );
+      const after = await descriptor.stat({ bigint: true });
+      const linked = await lstat(path, { bigint: true });
+      if (
+        !samePhysicalFile(opened, after) ||
+        !samePhysicalFile(after, linked)
+      ) {
+        throw new Error("publication state changed while reading");
+      }
+      const entries = parsePublicationState(bytes);
+      if (
+        entries.length !== 1 ||
+        entries[0]?.status !== "publication-started" ||
+        entries[0].image.localDescriptorDigest !== undefined
+      ) {
+        throw new Error("publication state is not one legacy attempt");
+      }
+      return { status: after, attempt: entries[0] };
+    } finally {
+      await descriptor.close();
+    }
+  } catch (error) {
+    throw new Error("runner_image_publication_journal_adoption_invalid", {
+      cause: error,
+    });
+  }
+}
+
 async function openPublicationJournal(
   identity: PublicationJournalIdentity,
   requestedStatePath: string,
   create: boolean,
   allowExistingJournalAdoption: boolean,
+  proveLegacyAdoption?: (attempt: RunnerPublicationAttempt) => Promise<void>,
 ): Promise<PublicationJournal | null> {
   const requested = resolve(requestedStatePath);
   const hostIdentity = await publicationHostIdentity();
@@ -2845,21 +3122,32 @@ async function openPublicationJournal(
   }
   if (!locatorExists) {
     if (!create) return null;
-    let existing: BigIntStats | null = null;
-    try {
-      existing = await lstat(requested, { bigint: true });
-    } catch (stateError) {
-      if (!isFileSystemError(stateError, "ENOENT")) throw stateError;
+    let journalStatus: BigIntStats;
+    if (allowExistingJournalAdoption) {
+      const adoption = await legacyPublicationJournalAdoptionStatus(
+        requested,
+      );
+      if (!proveLegacyAdoption) {
+        throw new Error("runner_image_publication_journal_adoption_invalid");
+      }
+      await proveLegacyAdoption(adoption.attempt);
+      journalStatus = await lstat(requested, { bigint: true });
+      if (!samePhysicalFile(adoption.status, journalStatus)) {
+        throw new Error("runner_image_publication_journal_adoption_invalid");
+      }
+    } else {
+      let existing: BigIntStats | null = null;
+      try {
+        existing = await lstat(requested, { bigint: true });
+      } catch (stateError) {
+        if (!isFileSystemError(stateError, "ENOENT")) throw stateError;
+      }
+      if (existing !== null && existing.size > 0n) {
+        throw new Error("runner_image_publication_journal_unbound");
+      }
+      await prepareEvidenceFile(requested, []);
+      journalStatus = await lstat(requested, { bigint: true });
     }
-    if (
-      existing !== null &&
-      existing.size > 0n &&
-      !allowExistingJournalAdoption
-    ) {
-      throw new Error("runner_image_publication_journal_unbound");
-    }
-    await prepareEvidenceFile(requested, []);
-    const journalStatus = await lstat(requested, { bigint: true });
     const locator: PublicationLocator = {
       kind: "takosumi.runner-image-publication-locator@v3",
       scope: identity.scope,
@@ -3133,6 +3421,7 @@ async function withPublicationJournalLock<T>(
   allowExistingJournalAdoption = false,
   lockHook?: RunnerImageReleaseRuntime["publicationLockHook"],
   journalHook?: RunnerImageReleaseRuntime["publicationJournalHook"],
+  proveLegacyAdoption?: (attempt: RunnerPublicationAttempt) => Promise<void>,
 ): Promise<T> {
   await preparePublicationLocatorDirectory(identity.locatorRoot);
   const descriptor = await acquirePublicationJournalLock(identity, lockHook);
@@ -3144,6 +3433,7 @@ async function withPublicationJournalLock<T>(
       requestedStatePath,
       true,
       allowExistingJournalAdoption,
+      proveLegacyAdoption,
     );
     if (!journal) throw new Error("runner_image_publication_journal_not_bound");
     await journalHook?.("opened");
