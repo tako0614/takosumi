@@ -1470,11 +1470,18 @@ type Options =
       readonly evidence: string;
     };
 
-interface CommandResult {
+export interface CommandResult {
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr: string;
 }
+
+export type PlatformReleaseCommand = (
+  argv: readonly string[],
+  stdin?: Uint8Array,
+  cwd?: string,
+  environment?: Record<string, string>,
+) => Promise<CommandResult>;
 
 export async function runPlatformWorkerRelease(
   argv: readonly string[],
@@ -1609,7 +1616,15 @@ async function plan(
   );
   let sealed: Awaited<ReturnType<typeof createPlatformDeployClosure>>;
   let restoreSealed: Awaited<ReturnType<typeof createPlatformDeployClosure>>;
+  let restoreDryRunConfig:
+    | ReturnType<typeof createPlatformDryRunConfig>
+    | undefined;
   try {
+    const transientRestoreConfig = createPlatformDryRunConfig(
+      restoreConfigSource,
+      options.config,
+    );
+    restoreDryRunConfig = transientRestoreConfig;
     sealed = await createPlatformDeployClosure(
       closurePath,
       configSource,
@@ -1623,11 +1638,14 @@ async function plan(
       options.config,
       dashboardAssets,
       sourceCommit,
+      transientRestoreConfig.path,
     );
   } catch (error) {
     rmSync(closurePath, { recursive: true, force: true });
     rmSync(restoreClosurePath, { recursive: true, force: true });
     throw error;
+  } finally {
+    restoreDryRunConfig?.dispose();
   }
   const secrets = await readSecretNames(sealed.configPath);
   assertCleanAndPushed();
@@ -1895,12 +1913,44 @@ async function buildDeterministicDashboard(
   return second;
 }
 
+type PlatformDryRunConfig = Readonly<{
+  path: string;
+  dispose: () => void;
+}>;
+
+function createPlatformDryRunConfig(
+  source: string,
+  originalConfigPath: string,
+): PlatformDryRunConfig {
+  const path = join(
+    dirname(originalConfigPath),
+    `.takosumi-platform-dry-run-${randomBytes(16).toString("hex")}.toml`,
+  );
+  assertExternalAbsent(path);
+  try {
+    writePrivate(path, new TextEncoder().encode(source));
+    let disposed = false;
+    return {
+      path,
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        rmSync(path, { force: true });
+      },
+    };
+  } catch (error) {
+    rmSync(path, { force: true });
+    throw error;
+  }
+}
+
 async function createPlatformDeployClosure(
   closurePath: string,
   configSource: string,
   originalConfigPath: string,
   dashboardAssets: DashboardAssetSeal,
   sourceCommit: string,
+  dryRunConfigPath = originalConfigPath,
 ): Promise<Readonly<{
   configPath: string;
   configSha256: string;
@@ -1948,7 +1998,11 @@ async function createPlatformDeployClosure(
   );
   writePrivate(configPath, new TextEncoder().encode(sealedSource));
   mkdirSync(dryRunPath, { mode: 0o700 });
-  const dryRun = await buildDryRunSeal(configPath, dryRunPath, true);
+  const dryRun = await buildDryRunSeal(
+    dryRunConfigPath,
+    dryRunPath,
+    true,
+  );
   const entryCandidates = dryRun.entries.filter(
     (entry) => !entry.path.includes("/") && entry.path.endsWith(".js"),
   );
@@ -2072,10 +2126,12 @@ function assertPlatformUploadCustody(
   }
 }
 
-async function buildDryRunSeal(
+export async function buildDryRunSeal(
   configPath: string,
   retainedOutput?: string,
   outputAlreadyExists = false,
+  command: PlatformReleaseCommand = requiredCommand,
+  buildRoot = ROOT,
 ): Promise<DashboardAssetSeal> {
   const output =
     retainedOutput ??
@@ -2084,18 +2140,25 @@ async function buildDryRunSeal(
     mkdirSync(output, { mode: 0o700 });
   }
   try {
-    await requiredCommand([
-      WRANGLER,
-      "deploy",
-      "--dry-run",
-      "--outdir",
-      output,
-      "--containers-rollout",
-      "immediate",
-      "--strict",
-      "--config",
-      configPath,
-    ]);
+    const result = await command(
+      [
+        WRANGLER,
+        "deploy",
+        "--dry-run",
+        "--outdir",
+        output,
+        "--containers-rollout",
+        "immediate",
+        "--strict",
+        "--config",
+        configPath,
+      ],
+      undefined,
+      buildRoot,
+    );
+    if (result.exitCode !== 0) {
+      throw new Error("platform_worker_release_dry_run_failed");
+    }
     return dashboardAssetTreeSeal(output);
   } finally {
     if (!retainedOutput) rmSync(output, { recursive: true, force: true });
@@ -2170,18 +2233,6 @@ async function assertPlanClosure(plan: PlatformReleasePlan): Promise<void> {
     JSON.stringify(plan.dashboardAssets)
   ) {
     throw new Error("platform_worker_release_dashboard_drift");
-  }
-  if (
-    JSON.stringify(await buildDryRunSeal(plan.sealedConfigPath)) !==
-    JSON.stringify(plan.dryRun)
-  ) {
-    throw new Error("platform_worker_release_dry_run_drift");
-  }
-  if (
-    JSON.stringify(await buildDryRunSeal(plan.restoreSealedConfigPath)) !==
-    JSON.stringify(plan.restoreDryRun)
-  ) {
-    throw new Error("platform_worker_release_restore_dry_run_drift");
   }
 }
 

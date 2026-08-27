@@ -20,6 +20,7 @@ import {
   assertServingVersion,
   appendPlatformMutationFence,
   appendPlatformRestoreFence,
+  buildDryRunSeal,
   createPlatformUploadCustody,
   dashboardAssetTreeSeal,
   parseDeployedVersion,
@@ -153,6 +154,44 @@ test("platform upload consumes a fresh exact sealed custody copy, not the retain
   writeFileSync(join(closure, "dry-run", "index.js"), "raced source bytes\n");
   expect(dashboardAssetTreeSeal(custody.closurePath)).toEqual(expected);
   expect(() => custody.dispose()).not.toThrow();
+});
+
+test("plan dry-run invokes Wrangler from the exact candidate worktree root", async () => {
+  const root = mkdtempSync(join(tmpdir(), "takosumi-platform-dry-run-root-"));
+  roots.push(root);
+  const config = join(root, "wrangler.toml");
+  const output = join(root, "dry-run");
+  mkdirSync(output);
+  writeFileSync(config, 'name = "takosumi-staging"\n', { mode: 0o600 });
+  const calls: Array<{ argv: readonly string[]; cwd: string | undefined }> = [];
+  const buildRoot = resolve(import.meta.dir, "../..");
+
+  const seal = await buildDryRunSeal(
+    config,
+    output,
+    true,
+    async (argv, _stdin, cwd) => {
+      calls.push({ argv: [...argv], cwd });
+      writeFileSync(join(output, "worker.js"), "export default {};\n");
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+    buildRoot,
+  );
+
+  expect(calls).toHaveLength(1);
+  expect(calls[0]?.cwd).toBe(buildRoot);
+  expect(calls[0]?.argv.slice(1)).toEqual([
+    "deploy",
+    "--dry-run",
+    "--outdir",
+    output,
+    "--containers-rollout",
+    "immediate",
+    "--strict",
+    "--config",
+    config,
+  ]);
+  expect(seal.entries.map((entry) => entry.path)).toEqual(["worker.js"]);
 });
 
 test("asset-tree seal fails closed when a file is swapped after no-follow open", () => {
