@@ -231,6 +231,30 @@ export class CloudflareContainerOpenTofuRunner
       },
     );
     const state = recordFromRecord(result, "state");
+    const providerExecutionFailure =
+      providerExecutionFailureFromContainerResult(result);
+    if (providerExecutionFailure) {
+      const stateDigest = state ? stringFromRecord(state, "digest") : undefined;
+      if (
+        (providerExecutionFailure.statePersistence === "persisted") !==
+        Boolean(stateDigest)
+      ) {
+        throw new Error(
+          "runner failed-state persistence evidence is inconsistent",
+        );
+      }
+      return {
+        providerExecutionFailure,
+        ...(stateDigest ? { stateDigest } : {}),
+        ...(providerInstallationFromContainerResult(result)
+          ? {
+              providerInstallation:
+                providerInstallationFromContainerResult(result),
+            }
+          : {}),
+        diagnostics: diagnosticsFromContainerResult(result),
+      };
+    }
     return {
       ...(state && stringFromRecord(state, "digest")
         ? { stateDigest: stringFromRecord(state, "digest") }
@@ -587,7 +611,7 @@ export class CloudflareContainerOpenTofuRunner
           }
           if (!response.ok) {
             if (
-              action === "apply" &&
+              (action === "apply" || action === "destroy") &&
               providerExecutionFailureFromContainerResult(payload)
             ) {
               return failedProviderExecutionResult(payload);

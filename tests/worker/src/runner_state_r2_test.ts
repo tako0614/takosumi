@@ -1268,6 +1268,104 @@ test("failed provider apply with no readable state returns an unavailable result
   assert.equal(artifacts.body(rawOutputRef), undefined);
 });
 
+test("failed provider destroy encrypts partial state and same-run replay stays failed without provider re-execution", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await artifacts.put(
+    "opentofu-plan-runs/plan_1/tfplan.enc",
+    sealedPlan.ciphertext,
+  );
+  const applyRunId = "destroy_partial_1";
+  const targetStateRef = `${STATE_PREFIX}/00000001.tfstate.enc`;
+  let providerPosts = 0;
+  const runner = runnerWithContainer(artifacts, state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        providerPosts += 1;
+        return Response.json(
+          {
+            status: "failed",
+            exitCode: 1,
+            errorCode: "apply_failed",
+            providerExecutionFailure: {
+              kind: "provider_execution_failed",
+            },
+            stderr: "provider rejected a later destroy resource",
+          },
+          { status: 500 },
+        );
+      }
+      if (request.method === "GET" && path.endsWith("/artifacts/tfstate")) {
+        return new Response(NEW_STATE_BYTES);
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+  const requestBody = JSON.stringify({
+    kind: "takosumi.opentofu-run@v1",
+    action: "destroy",
+    runId: "plan_1",
+    request: {
+      applyRun: { id: applyRunId },
+      stateScope: { ...SCOPE, generation: 1, stateRef: targetStateRef },
+      planArtifact: {
+        kind: "object-storage",
+        ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+        digest: PLAN_DIGEST,
+      },
+    },
+  });
+
+  const first = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: requestBody,
+    }),
+  );
+  assert.equal(first.status, 500);
+  const firstPayload = (await first.json()) as Record<string, unknown>;
+  assert.equal(firstPayload.errorCode, "apply_failed");
+  assert.deepEqual(firstPayload.providerExecutionFailure, {
+    kind: "provider_execution_failed",
+    statePersistence: "persisted",
+  });
+  assert.equal(
+    (firstPayload.state as Record<string, unknown>).stateRef,
+    targetStateRef,
+  );
+  assert.equal(
+    (firstPayload.state as Record<string, unknown>).digest,
+    await digestOf(NEW_STATE_BYTES),
+  );
+  assert.equal(
+    state.metadata(targetStateRef)?.["takosumi-provider-execution"],
+    "failed",
+  );
+
+  const replay = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: requestBody,
+    }),
+  );
+  assert.equal(replay.status, 500);
+  assert.equal(providerPosts, 1);
+  const replayPayload = (await replay.json()) as Record<string, unknown>;
+  assert.equal(replayPayload.errorCode, "apply_failed");
+  assert.deepEqual(replayPayload.providerExecutionFailure, {
+    kind: "provider_execution_failed",
+    statePersistence: "persisted",
+  });
+});
+
 test("destroy does not adopt completed state without matching durable mutation authority", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();

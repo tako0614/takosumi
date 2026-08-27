@@ -456,10 +456,11 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         `/runs/${encodeURIComponent(job.applyRun.id)}/artifacts/tfstate`,
         control?.signal,
       );
-      const normalizedFailure = failedApplyResult(
+      const normalizedFailure = failedProviderExecutionResult(
         result,
         stateBytes ? "persisted" : "unavailable",
         stateBytes ? await digestBytes(stateBytes) : undefined,
+        "apply",
       );
       if (!stateBytes) return normalizedFailure;
       const committed = await this.commitStateMutation(
@@ -538,6 +539,29 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       job,
       control?.signal,
     );
+    if (runnerProviderExecutionFailed(result)) {
+      const stateBytes = await fetchRunnerArtifactIfPresent(
+        this.transport,
+        job.applyRun.id,
+        `/runs/${encodeURIComponent(job.applyRun.id)}/artifacts/tfstate`,
+        control?.signal,
+      );
+      const normalizedFailure = failedProviderExecutionResult(
+        result,
+        stateBytes ? "persisted" : "unavailable",
+        stateBytes ? await digestBytes(stateBytes) : undefined,
+        "destroy",
+      );
+      if (!stateBytes) return normalizedFailure as OpenTofuDestroyResult;
+      const committed = await this.commitStateMutation(
+        job.applyRun.id,
+        "destroy",
+        job.stateScope,
+        stateBytes,
+        normalizedFailure,
+      );
+      return committed.result as OpenTofuDestroyResult;
+    }
     const stateBytes = await fetchRunnerArtifact(
       this.transport,
       job.applyRun.id,
@@ -1036,7 +1060,8 @@ async function runRunner(
   const body = text.trim().length > 0 ? parseObject(text) : {};
   if (
     !response.ok &&
-    !(action === "apply" && runnerProviderExecutionFailed(body))
+    !((action === "apply" || action === "destroy") &&
+      runnerProviderExecutionFailed(body))
   ) {
     const reason = stringValue(body, "errorCode");
     const detail =
@@ -1062,13 +1087,14 @@ function runnerProviderExecutionFailed(
   );
 }
 
-function failedApplyResult(
+function failedProviderExecutionResult(
   result: Record<string, unknown>,
   statePersistence: "persisted" | "unavailable",
   stateDigest: string | undefined,
-): OpenTofuApplyResult {
+  action: "apply" | "destroy",
+): OpenTofuApplyResult | OpenTofuDestroyResult {
   const errorCode = stringValue(result, "errorCode");
-  return {
+  const failure = {
     providerExecutionFailure: {
       kind: "provider_execution_failed",
       statePersistence,
@@ -1081,7 +1107,12 @@ function failedApplyResult(
       ? { providerInstallation: providerInstallation(result) }
       : {}),
     diagnostics: diagnostics(result),
-  };
+  } as const;
+  return action === "apply"
+    ? failure
+    : {
+        ...failure,
+      };
 }
 
 async function fetchRunnerArtifact(

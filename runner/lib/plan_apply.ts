@@ -613,7 +613,7 @@ export async function runReviewedPlanApply(
               // created or updated. Host adapters use this explicit marker to
               // recover that state without confusing init/transport failures
               // with provider execution.
-              ...(action === "apply"
+              ...(action === "apply" || action === "destroy"
                 ? {
                     providerExecutionFailure: {
                       kind: "provider_execution_failed",

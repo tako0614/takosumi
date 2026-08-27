@@ -509,6 +509,54 @@ test("container runner returns a typed failed apply with persisted partial state
   ]);
 });
 
+test("container runner returns a typed failed destroy with persisted partial state", async () => {
+  const stateDigest = `sha256:${"f".repeat(64)}`;
+  const safeFailureDetail =
+    "Error: destroy rejected resource 7 after earlier resources were removed";
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        status: "failed",
+        exitCode: 1,
+        errorCode: "apply_failed",
+        providerExecutionFailure: {
+          kind: "provider_execution_failed",
+          statePersistence: "persisted",
+        },
+        state: { digest: stateDigest },
+        detail: safeFailureDetail,
+      },
+      undefined,
+      500,
+    ),
+  );
+
+  const result = await runner.destroy({
+    applyRun: { id: "destroy_partial" },
+    planRun: { id: "destroy_partial" },
+    planArtifact: {
+      kind: "runner-local",
+      ref: "runner-local://destroy_partial/tfplan",
+      digest: PLAN_DIGEST,
+    },
+  } as Parameters<CloudflareContainerOpenTofuRunner["destroy"]>[0]);
+
+  expect(result.providerExecutionFailure).toEqual({
+    kind: "provider_execution_failed",
+    statePersistence: "persisted",
+    errorCode: "apply_failed",
+  });
+  expect(result.stateDigest).toBe(stateDigest);
+  expect(result.diagnostics).toEqual([
+    {
+      severity: "error",
+      code: "apply_failed",
+      message: "OpenTofu provider execution failed after dispatch",
+      detail: safeFailureDetail,
+    },
+  ]);
+});
+
 test("container runner preserves the root provider error when warnings exceed the diagnostic bound", async () => {
   const rootFailure =
     "Error: SQLiteMigrationSet apply failed because host transition receipt was rejected";

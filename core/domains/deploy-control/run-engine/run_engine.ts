@@ -260,6 +260,7 @@ import type {
   GenericRootPlanContext,
   OpenTofuApplyResult,
   OpenTofuCapsuleSourceFile,
+  OpenTofuDestroyResult,
   OpenTofuPlanResult,
   OpenTofuRunDispatch,
   OpenTofuRunner,
@@ -6573,7 +6574,8 @@ export class RunEngine {
       const now = this.#now();
       if (result.providerExecutionFailure) {
         const committedFailure =
-          await this.#commitFailedProviderApplyWithState({
+          await this.#commitFailedProviderMutationWithState({
+            action: "apply",
             running: runningWithEnv,
             applyRun,
             planRun,
@@ -6591,7 +6593,8 @@ export class RunEngine {
           return { applyRun: (await this.getApplyRun(applyRun.id)).applyRun };
         }
         ledgerCommitted = true;
-        return await this.#completeFailedProviderApply({
+        return await this.#completeFailedProviderMutation({
+          action: "apply",
           ...committedFailure,
           planRun,
           startedAt,
@@ -7195,13 +7198,14 @@ export class RunEngine {
     return committed.capsule;
   }
 
-  async #commitFailedProviderApplyWithState(input: {
+  async #commitFailedProviderMutationWithState(input: {
+    readonly action: "apply" | "destroy";
     readonly running: ApplyRun;
     readonly applyRun: ApplyRun;
     readonly planRun: PlanRun;
     readonly profile: RunnerProfile;
     readonly plannedCapsule: Capsule | undefined;
-    readonly result: OpenTofuApplyResult;
+    readonly result: OpenTofuApplyResult | OpenTofuDestroyResult;
     readonly envDispatch: RunExecutionDispatch;
     readonly persistGeneration: number;
     readonly providerInstallationPolicy:
@@ -7219,6 +7223,7 @@ export class RunEngine {
       }
     | "lease_lost"
   > {
+    const action = input.action;
     const failure = input.result.providerExecutionFailure;
     if (!failure) {
       throw new OpenTofuControllerError(
@@ -7242,7 +7247,7 @@ export class RunEngine {
     if (failure.statePersistence === "persisted" && !stateVersion) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "failed provider apply returned state without a durable Capsule state scope",
+        `failed provider ${action} returned state without a durable Capsule state scope`,
       );
     }
     const nextStateGeneration = stateVersion
@@ -7250,6 +7255,8 @@ export class RunEngine {
       : capsule.currentStateGeneration;
     const errorCode = failure.errorCode ?? "apply_failed";
     const diagnostics = redactRunDiagnostics(input.result.diagnostics) ?? [];
+    const stateLock =
+      "stateLock" in input.result ? input.result.stateLock : undefined;
     const failed: ApplyRun = {
       ...input.running,
       capsuleId: capsule.id,
@@ -7257,7 +7264,7 @@ export class RunEngine {
       outputId: undefined,
       status: "failed",
       stateLock:
-        input.result.stateLock ??
+        stateLock ??
         stateLockEvidence(
           input.profile.stateBackend,
           input.startedAt,
@@ -7276,15 +7283,17 @@ export class RunEngine {
         ...input.running.auditEvents,
         ...providerInstallationAuditEvents(
           input.applyRun.id,
-          "apply",
+          action,
           input.now,
           input.result.providerInstallation,
           input.providerInstallationPolicy,
         ),
-        auditEvent(input.applyRun.id, "apply.failed", input.now, {
+        auditEvent(input.applyRun.id, `${action}.failed`, input.now, {
           message: "OpenTofu provider execution failed after dispatch",
           providerDispatched: true,
-          providerApplySucceeded: false,
+          ...(action === "destroy"
+            ? { providerDestroySucceeded: false }
+            : { providerApplySucceeded: false }),
           statePersistence: failure.statePersistence,
           ...(stateVersion ? { stateVersionId: stateVersion.id } : {}),
         }),
@@ -7340,7 +7349,8 @@ export class RunEngine {
     };
   }
 
-  async #completeFailedProviderApply(input: {
+  async #completeFailedProviderMutation(input: {
+    readonly action: "apply" | "destroy";
     readonly failed: ApplyRun;
     readonly capsule: Capsule;
     readonly stateVersion: StateVersion | undefined;
@@ -7360,7 +7370,7 @@ export class RunEngine {
       });
       await this.#recordDeployOperationMetric({
         run: input.failed,
-        operationKind: "apply",
+        operationKind: input.action === "destroy" ? "destroy_apply" : "apply",
         status: "failed",
         startedAt: input.startedAt,
         finishedAt: input.now,
@@ -7368,16 +7378,21 @@ export class RunEngine {
       });
       await this.#store.deletePlanRunInputs(input.planRun.id);
     } catch (error) {
-      log.warn("deploy_control.failed_apply_post_commit_cleanup_failed", {
-        planRunId: input.planRun.id,
-        applyRunId: input.failed.id,
-        message: errorMessage(error),
-      });
+      log.warn(
+        input.action === "destroy"
+          ? "deploy_control.destroy_post_commit_cleanup_failed"
+          : "deploy_control.failed_apply_post_commit_cleanup_failed",
+        {
+          planRunId: input.planRun.id,
+          applyRunId: input.failed.id,
+          message: errorMessage(error),
+        },
+      );
     }
     const errorCode =
       input.failed.diagnostics?.find(
         (diagnostic) => diagnostic.severity === "error" && diagnostic.code,
-      )?.code ?? "apply_failed";
+      )?.code ?? (input.action === "destroy" ? "destroy_failed" : "apply_failed");
     await this.#recordActivity({
       workspaceId: input.failed.workspaceId,
       action: "run.failed",
@@ -7385,7 +7400,7 @@ export class RunEngine {
       targetId: input.failed.id,
       runId: input.failed.id,
       metadata: {
-        phase: "apply",
+        phase: input.action === "destroy" ? "destroy_apply" : "apply",
         operation: input.failed.operation,
         errorCode,
         capsuleId: input.capsule.id,
@@ -8559,6 +8574,43 @@ export class RunEngine {
           ),
       );
       const now = this.#now();
+      if (result.providerExecutionFailure) {
+        const stateWasPersisted =
+          result.providerExecutionFailure.statePersistence === "persisted";
+        if (stateWasPersisted !== Boolean(result.stateDigest?.trim())) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `runner returned inconsistent failed-state persistence evidence for destroy apply run ${running.id}`,
+          );
+        }
+        const committedFailure =
+          await this.#commitFailedProviderMutationWithState({
+            action: "destroy",
+            running: effectiveRunning,
+            applyRun: running,
+            planRun,
+            profile,
+            plannedCapsule: capsule,
+            result,
+            envDispatch,
+            persistGeneration,
+            providerInstallationPolicy,
+            leaseToken,
+            startedAt,
+            now,
+          });
+        if (committedFailure === "lease_lost") {
+          return { applyRun: (await this.getApplyRun(running.id)).applyRun };
+        }
+        ledgerCommitted = true;
+        return await this.#completeFailedProviderMutation({
+          action: "destroy",
+          ...committedFailure,
+          planRun,
+          startedAt,
+          now,
+        });
+      }
       // Build the post-teardown StateVersion at the generation persisted by the
       // runner, then atomically advance the Capsule and terminal Run.
       const stateVersion = await this.#buildStateVersion({

@@ -484,11 +484,7 @@ export interface OpenTofuApplyResult {
    * the adapter retained the post-failure state at the job's exact stateRef;
    * `unavailable` means no readable state existed and Core must not invent one.
    */
-  readonly providerExecutionFailure?: {
-    readonly kind: "provider_execution_failed";
-    readonly statePersistence: "persisted" | "unavailable";
-    readonly errorCode?: string;
-  };
+  readonly providerExecutionFailure?: OpenTofuProviderExecutionFailure;
   /**
    * Plaintext digest of the persisted OpenTofu state, echoed by the runner
    * storage adapter after durable persistence.
@@ -502,6 +498,12 @@ export interface OpenTofuApplyResult {
    * its job or the run fails before ledger pointers are published.
    */
   readonly rawOutputRef?: string;
+}
+
+export interface OpenTofuProviderExecutionFailure {
+  readonly kind: "provider_execution_failed";
+  readonly statePersistence: "persisted" | "unavailable";
+  readonly errorCode?: string;
 }
 
 export type ReleaseActivationStatus =
@@ -626,6 +628,12 @@ export interface ReleaseActivator {
 export interface OpenTofuDestroyResult {
   readonly diagnostics?: readonly RunDiagnostic[];
   readonly providerInstallation?: readonly ProviderInstallationEvidence[];
+  /**
+   * The provider command was dispatched and returned a terminal failure. A
+   * persisted post-failure state is safe to advance in the ledger, but the
+   * Capsule remains in error until a fresh reviewed destroy succeeds.
+   */
+  readonly providerExecutionFailure?: OpenTofuProviderExecutionFailure;
   /** Digest of the persisted post-destroy state, echoed by the runner. */
   readonly stateDigest?: string;
 }

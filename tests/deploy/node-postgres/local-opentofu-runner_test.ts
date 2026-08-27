@@ -465,6 +465,124 @@ test("HTTP OpenTofu runner durably returns failed apply state without replaying 
   }
 });
 
+test("HTTP OpenTofu runner durably returns failed destroy state without replaying provider execution", async () => {
+  const planBytes = new TextEncoder().encode("reviewed destroy plan");
+  const planDigest = await sha256(planBytes);
+  const partialState = new TextEncoder().encode(
+    '{"version":4,"serial":2,"resources":[]}',
+  );
+  const requests: string[] = [];
+  let providerPosts = 0;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      requests.push(`${request.method} ${url.pathname}`);
+      if (
+        request.method === "GET" &&
+        url.pathname === "/runs/plan_destroy_partial/artifacts/tfplan"
+      ) {
+        return new Response(planBytes);
+      }
+      if (
+        request.method === "PUT" &&
+        url.pathname === "/runs/destroy_partial/artifacts/tfplan"
+      ) {
+        return Response.json({ ok: true });
+      }
+      if (
+        request.method === "POST" &&
+        url.pathname === "/runs/destroy_partial"
+      ) {
+        providerPosts += 1;
+        return Response.json(
+          {
+            status: "failed",
+            exitCode: 1,
+            errorCode: "apply_failed",
+            providerExecutionFailure: {
+              kind: "provider_execution_failed",
+            },
+            stderr: "provider rejected a later destroy resource",
+          },
+          { status: 500 },
+        );
+      }
+      if (
+        request.method === "GET" &&
+        url.pathname === "/runs/destroy_partial/artifacts/tfstate"
+      ) {
+        return new Response(partialState);
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+
+  let stored: LocalOpenTofuStateArtifact | undefined;
+  const stateStore = {
+    read: async (stateRef: string) =>
+      stored?.stateRef === stateRef ? stored : undefined,
+    commit: async (artifact: LocalOpenTofuStateArtifact) => {
+      stored = artifact;
+      return artifact;
+    },
+    readRawOutput: async () => undefined,
+    commitRawOutput: async () => {
+      throw new Error("failed destroy must not persist raw output");
+    },
+  };
+
+  try {
+    const runner = createHttpOpenTofuRunner({
+      stateStore,
+      archiveStore: {
+        write: async () => {},
+        read: async () => {
+          throw new Error("not used");
+        },
+      },
+      baseUrl: server.url.href,
+    });
+    const job = {
+      applyRun: { id: "destroy_partial" },
+      planRun: { id: "plan_destroy_partial" },
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_destroy_partial/tfplan",
+        digest: planDigest,
+      },
+      runnerProfile: {},
+      stateScope: {
+        workspaceId: "workspace_1",
+        subject: { kind: "capsule", id: "capsule_1" },
+        environment: "preview",
+        generation: 1,
+        stateRef:
+          "workspaces/workspace_1/capsules/capsule_1/environments/preview/state-versions/00000001.tfstate.enc",
+      },
+    } as Parameters<typeof runner.destroy>[0];
+
+    const first = await runner.destroy(job);
+    expect(first.providerExecutionFailure).toEqual({
+      kind: "provider_execution_failed",
+      statePersistence: "persisted",
+      errorCode: "apply_failed",
+    });
+    expect(first.stateDigest).toBe(await sha256(partialState));
+    expect(stored?.action).toBe("destroy");
+    expect(stored?.stateBytes).toEqual(partialState);
+
+    const replay = await runner.destroy(job);
+    expect(replay).toEqual(first);
+    expect(providerPosts).toBe(1);
+    expect(
+      requests.filter((entry) => entry === "POST /runs/destroy_partial"),
+    ).toHaveLength(1);
+  } finally {
+    server.stop(true);
+  }
+});
+
 const unusedStateStore = {
   read: async () => undefined,
   commit: async <T>(artifact: T): Promise<T> => artifact,
