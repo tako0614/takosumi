@@ -59,10 +59,11 @@ export async function runContractPackageRelease(args: readonly string[]): Promis
   const tag = requiredContractReleaseTag(version);
   const commit = git("rev-parse", "HEAD");
   const branch = git("rev-parse", "--abbrev-ref", "HEAD");
-  const upstreamCommit = git("rev-parse", "@{upstream}");
-  if (upstreamCommit !== commit) {
+  const remoteBranchCommit = git("ls-remote", "--heads", "origin", `refs/heads/${branch}`)
+    .split(/\s+/u)[0];
+  if (remoteBranchCommit !== commit) {
     throw new Error(
-      `deploy blocked before publication: HEAD ${commit} is not the exact pushed upstream commit ${upstreamCommit}`,
+      `deploy blocked before publication: HEAD ${commit} is not the exact pushed remote branch commit ${remoteBranchCommit ?? "missing"}`,
     );
   }
   if (git("rev-parse", `${tag}^{commit}`) !== commit) {
