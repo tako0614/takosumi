@@ -7,7 +7,8 @@
  *
  * Generated files:
  *   - versions.tf : `terraform { required_providers { ... } }` from the exact
- *                   child-module requirements, without inferred version pins.
+ *                   child-module requirements, preserving exact versions when
+ *                   present without inferring version pins.
  *   - main.tf     : `module "child" { source = "./module"; <inputs> }`.
  *   - outputs.tf  : passthrough of the explicit output allowlist only:
  *                   `output "<public>" { value = module.child.<from> }`.
@@ -137,7 +138,10 @@ function renderProviderVersionsTf(
   if (providers.length === 0) {
     return ["terraform {}", ""].join("\n");
   }
-  const byLocalName = new Map<string, string>();
+  const byLocalName = new Map<
+    string,
+    { readonly source: string; readonly version?: string }
+  >();
   for (const requirement of providers) {
     assertIdentifier(
       requirement.moduleLocalName,
@@ -145,20 +149,27 @@ function renderProviderVersionsTf(
     );
     const source = normalizeProviderSource(requirement.source);
     const existing = byLocalName.get(requirement.moduleLocalName);
-    if (existing && existing !== source) {
+    if (existing && existing.source !== source) {
       throw new RootgenValidationError(
         "rootgen_conflicting_provider_local_names",
-        `rootgen: provider local name ${requirement.moduleLocalName} maps to both ${existing} and ${source}`,
+        `rootgen: provider local name ${requirement.moduleLocalName} maps to both ${existing.source} and ${source}`,
       );
     }
-    byLocalName.set(requirement.moduleLocalName, source);
+    const version = requirement.version ?? existing?.version;
+    byLocalName.set(requirement.moduleLocalName, {
+      source,
+      ...(version === undefined ? {} : { version }),
+    });
   }
   const entries = Array.from(byLocalName.entries())
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([localName, source]) => {
+    .map(([localName, requirement]) => {
       const lines = [
         `    ${localName} = {`,
-        `      source = ${hclString(source)}`,
+        `      source = ${hclString(requirement.source)}`,
+        ...(requirement.version === undefined
+          ? []
+          : [`      version = ${hclString(`= ${requirement.version}`)}`]),
         `    }`,
       ];
       return lines.join("\n");

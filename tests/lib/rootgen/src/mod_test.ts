@@ -31,6 +31,39 @@ test("rootgen keys provider declarations and mappings only from selected-root tu
   expect(files["main.tf"]).not.toContain("cloudflare");
 });
 
+test("rootgen renders exact selected-root provider versions", () => {
+  const { files } = generateOpenTofuChildModuleRoot({
+    rootProviderRequirements: [
+      {
+        source: "registry.opentofu.org/hashicorp/aws",
+        moduleLocalName: "aws",
+        version: "3.0.0",
+      },
+    ],
+    inputs: {},
+    outputAllowlist: {},
+  });
+
+  expect(files["versions.tf"]).toContain(
+    'aws = {\n      source = "registry.opentofu.org/hashicorp/aws"\n      version = "= 3.0.0"\n    }',
+  );
+});
+
+test("rootgen omits provider versions when selected-root tuples have none", () => {
+  const { files } = generateOpenTofuChildModuleRoot({
+    rootProviderRequirements: [
+      {
+        source: "registry.opentofu.org/hashicorp/aws",
+        moduleLocalName: "aws",
+      },
+    ],
+    inputs: {},
+    outputAllowlist: {},
+  });
+
+  expect(files["versions.tf"]).not.toContain("version =");
+});
+
 test("rootgen rejects a binding that has no exact selected-root tuple", () => {
   let thrown: unknown;
   try {

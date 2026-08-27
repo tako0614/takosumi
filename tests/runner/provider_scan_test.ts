@@ -10,6 +10,7 @@ import {
   requiredProviderSourcesFromTerraformTree,
 } from "../../runner/lib/providers.ts";
 import { CAPSULE_COMPATIBILITY_MAX_FILES } from "../../runner/lib/constants.ts";
+import { generateOpenTofuChildModuleRoot } from "../../lib/rootgen/src/mod.ts";
 
 const REQUEST = {
   planRun: {
@@ -186,6 +187,42 @@ test("runner allows reachable child packages without inventing selected-root bin
     ).resolves.toMatchObject({
       providers: scan.providers,
       requirements: scan.requirements,
+    });
+  });
+});
+
+test("generated root exact provider versions survive runner requirement rescan", async () => {
+  await withRoot(async (root) => {
+    await mkdir(join(root, "module"), { recursive: true });
+    const requirement = {
+      source: "registry.opentofu.org/hashicorp/aws",
+      moduleLocalName: "aws",
+      version: "3.0.0",
+    } as const;
+    const generatedRoot = generateOpenTofuChildModuleRoot({
+      rootProviderRequirements: [requirement],
+      inputs: {},
+      outputAllowlist: {},
+    });
+    for (const [name, content] of Object.entries(generatedRoot.files)) {
+      await writeFile(join(root, name), content);
+    }
+    await writeFile(join(root, "module", "main.tf"), 'output "ok" { value = true }\n');
+
+    await expect(
+      requiredProvidersForGeneratedRoot(
+        {
+          planRun: {
+            requiredProviders: [requirement.source],
+            requiredProviderRequirements: [{ ...requirement, allowed: true }],
+          },
+        },
+        root,
+      ),
+    ).resolves.toMatchObject({
+      complete: true,
+      providers: [requirement.source],
+      requirements: [requirement],
     });
   });
 });
