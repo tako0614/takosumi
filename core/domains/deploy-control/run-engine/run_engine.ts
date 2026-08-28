@@ -296,6 +296,9 @@ interface CapsulePlanExecutionAuthority {
   readonly installConfigId: string;
   readonly installConfigDigest: string;
   readonly capsuleExecutionAuthorityEpoch: number;
+  /** Stateful destroy provenance cursor captured before request construction. */
+  readonly currentStateVersionId?: string | null;
+  readonly currentStateGeneration?: number;
 }
 
 /**
@@ -307,6 +310,30 @@ type RunEnginePlanRunInternalContext = PlanRunInternalContext & {
   /** Authority used to derive the private Capsule Plan request/root. */
   readonly capsulePlanExecutionAuthority?: CapsulePlanExecutionAuthority;
 };
+
+function assertCapsulePlanStateAuthority(
+  capsule: Capsule,
+  authority: CapsulePlanExecutionAuthority | undefined,
+): void {
+  const expectedStateVersionId = authority?.currentStateVersionId;
+  const expectedGeneration = authority?.currentStateGeneration;
+  if (expectedStateVersionId === undefined && expectedGeneration === undefined) {
+    return;
+  }
+  const actualStateVersionId = capsule.currentStateVersionId ?? null;
+  if (
+    expectedStateVersionId === undefined ||
+    expectedGeneration === undefined ||
+    actualStateVersionId !== expectedStateVersionId ||
+    capsule.currentStateGeneration !== expectedGeneration
+  ) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `capsule ${capsule.id} current StateVersion changed before Plan creation`,
+      { reason: "destroy_provenance_changed" },
+    );
+  }
+}
 
 function releaseCommandRunId(applyRunId: string): string {
   return `release_${applyRunId.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
@@ -755,6 +782,37 @@ function providerRequirementsFromResolvedBindings(
 function providerTypeLocalName(source: string): string {
   const canonical = canonicalProviderAddress(source);
   return canonical.split("/").at(-1) ?? canonical;
+}
+
+/**
+ * A pre-v1 source-less binding may omit moduleLocalName for the provider's
+ * default configuration. Recover only that one conservative identity from the
+ * already-pinned legacy requirement; aliases and child configurations remain
+ * fail-closed because their identity cannot be inferred safely.
+ */
+function legacyDefaultProviderBindingsForSourcelessDestroy(
+  bindings: readonly ResolvedCapsuleProviderBinding[],
+  requirements: readonly CapsuleProviderRequirement[],
+): readonly ResolvedCapsuleProviderBinding[] {
+  return bindings.map((binding) => {
+    if (
+      binding.alias !== undefined ||
+      binding.moduleLocalName !== undefined ||
+      binding.childAlias !== undefined
+    ) {
+      return binding;
+    }
+    const requirement = requirements.find(
+      (candidate) =>
+        canonicalProviderAddress(candidate.source) ===
+          canonicalProviderAddress(binding.provider) &&
+        candidate.childAlias === undefined &&
+        candidate.moduleLocalName === providerTypeLocalName(binding.provider),
+    );
+    return requirement
+      ? { ...binding, moduleLocalName: requirement.moduleLocalName }
+      : binding;
+  });
 }
 
 function rootProviderRequirementsForGeneratedRoot(
@@ -1298,6 +1356,8 @@ export class RunEngine {
     const requestCapsuleId = request.capsuleId;
     const operation =
       request.operation ?? (requestCapsuleId ? "update" : "create");
+    const compatibilityReportId =
+      operation === "destroy" ? undefined : internal.compatibilityReportId;
     const legacySourcelessDestroyRecovery =
       internal.legacySourcelessDestroyRecovery === true;
     if (legacySourcelessDestroyRecovery) {
@@ -1404,6 +1464,7 @@ export class RunEngine {
         { reason: "capsule_execution_authority_changed" },
       );
     }
+    assertCapsulePlanStateAuthority(currentCapsule, outerAuthority);
     capsule = currentCapsule;
     const capsuleContext: PlanRunCapsuleContext =
       internal.capsuleContext ?? {
@@ -1575,9 +1636,7 @@ export class RunEngine {
       requiredProviderRequirements,
       baseStateGeneration,
       ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
-      ...(internal.compatibilityReportId
-        ? { compatibilityReportId: internal.compatibilityReportId }
-        : {}),
+      ...(compatibilityReportId ? { compatibilityReportId } : {}),
       ...(capsuleContext ? { capsuleContext } : {}),
       ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
       ...(internal.driftCheck ? { driftCheck: true as const } : {}),
@@ -1620,6 +1679,17 @@ export class RunEngine {
       // A create-time policy denial finishes immediately (terminal `failed`).
       ...(policy.status === "blocked" ? { finishedAt: now } : {}),
     };
+    if (
+      outerAuthority?.currentStateVersionId !== undefined ||
+      outerAuthority?.currentStateGeneration !== undefined
+    ) {
+      // A concurrent Apply can advance the Capsule while the immutable Plan
+      // inputs are being assembled. Re-read immediately before persisting so
+      // a destroy Plan can never combine old StateVersion provenance with a
+      // newer current state.
+      const latestCapsule = await this.#requireCapsule(capsule.id);
+      assertCapsulePlanStateAuthority(latestCapsule, outerAuthority);
+    }
     await this.#store.putPlanRun(planRun);
     if (internal.resolvedDependencies?.entries.length) {
       planRun = await this.#pinDependencySnapshotRecord(
@@ -1654,7 +1724,7 @@ export class RunEngine {
         ? await this.#defaultGenericRootDispatchForPlanRun(
             { ...request, source: request.source },
             capsule,
-            internal.compatibilityReportId,
+            compatibilityReportId,
             requiredProviderRequirements,
           )
         : undefined);
@@ -1827,6 +1897,46 @@ export class RunEngine {
         ...(lifecycleActions ? { lifecycleActions } : {}),
       });
     }
+    // A stateful destroy must be reconstructed from the exact PlanRun that
+    // produced the current StateVersion. CompatibilityReport rows are
+    // admission evidence for create/update only; they are not teardown
+    // authority and may be unreadable legacy storage.
+    const appliedPlan =
+      destroy && capsule.currentStateGeneration > 0
+        ? await planCreationStage(
+            "current_state_plan_load",
+            this.#currentStatePlanRunForCapsule(capsule),
+          )
+        : undefined;
+    if (destroy && capsule.currentStateGeneration > 0 && !appliedPlan) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${capsule.id} current StateVersion has no applied PlanRun provenance`,
+        { reason: "destroy_provenance_missing" },
+      );
+    }
+    if (destroy && appliedPlan && !appliedPlan.sourceSnapshotId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${capsule.id} current StateVersion applied PlanRun has no SourceSnapshot provenance`,
+        { reason: "destroy_source_snapshot_missing" },
+      );
+    }
+    const destroyProviderRequirements = appliedPlan
+      ? (() => {
+          const requiredProviders = normalizeProviders(
+            appliedPlan.requiredProviders,
+          );
+          const requiredProviderRequirements =
+            requiredProviderRequirementsForNewPlan(
+              requiredProviders,
+              appliedPlan.requiredProviderRequirements ??
+                legacyProviderRequirementsForStoredPlan(requiredProviders),
+              runnerProfile.requireProviderBindings === true,
+            );
+          return { requiredProviders, requiredProviderRequirements };
+        })()
+      : undefined;
     const stored = await planCreationStage(
       "source_load",
       this.#store.getSource(capsule.sourceId),
@@ -1838,6 +1948,25 @@ export class RunEngine {
       );
     }
     const source: Source = stored;
+    const appliedSourceSnapshot =
+      destroy && appliedPlan?.sourceSnapshotId
+        ? await planCreationStage(
+            "current_state_source_snapshot_load",
+            this.#requireSourceSnapshotForSource(
+              stored.id,
+              appliedPlan.sourceSnapshotId,
+            ),
+          )
+        : undefined;
+    const appliedModulePath =
+      destroy && appliedPlan && appliedSourceSnapshot
+        ? this.#assertDestroyAppliedPlanSource({
+            capsule,
+            source,
+            snapshot: appliedSourceSnapshot,
+            planRun: appliedPlan,
+          })
+        : undefined;
     if (destroy && internal.sourceSnapshotId) {
       if (!capsule.currentStateVersionId) {
         throw new OpenTofuControllerError(
@@ -1880,7 +2009,7 @@ export class RunEngine {
     // The rollback-plan path pins a specific SourceSnapshot from a prior
     // StateVersion; otherwise resolve the registered Source's latest snapshot.
     const destroySnapshotId = destroy
-      ? await this.#destroySourceSnapshotIdForCapsule(capsule)
+      ? appliedPlan?.sourceSnapshotId
       : undefined;
     const acceptedRepositoryInstallUx =
       installConfig.installExperience?.repositoryInstallUx?.status ===
@@ -1982,7 +2111,10 @@ export class RunEngine {
       "latest_state_load",
       this.#store.getLatestStateVersion(capsule.id, capsule.environment),
     );
-    const baseStateGeneration = latestState?.generation ?? 0;
+    const baseStateGeneration =
+      destroy && appliedPlan
+        ? capsule.currentStateGeneration
+        : latestState?.generation ?? 0;
     const operation = destroy
       ? "destroy"
       : capsule.currentStateVersionId
@@ -1991,15 +2123,7 @@ export class RunEngine {
     const compatibilityReportFromHint =
       !destroy && Boolean(internal.compatibilityReportId);
     const compatibilityReport = destroy
-      ? await planCreationStage(
-          "compatibility_report_destroy",
-          this.#compatibilityReportForCapsuleDestroy(
-            capsule,
-            source,
-            snapshot,
-            installConfig.modulePath,
-          ),
-        )
+      ? undefined
       : internal.compatibilityReportId
         ? await planCreationStage(
             "compatibility_report_hint",
@@ -2033,7 +2157,12 @@ export class RunEngine {
         source,
         snapshot,
         operation,
+        modulePath:
+          destroy && appliedPlan ? appliedModulePath : installConfig.modulePath,
         ...(runnerProfileId ? { runnerProfileId } : {}),
+        ...(destroyProviderRequirements
+          ? destroyProviderRequirements
+          : {}),
         ...(compatibilityReport ? { compatibilityReport } : {}),
         skipReadySourceFileDiscovery: compatibilityReportFromHint,
       }),
@@ -2248,6 +2377,98 @@ export class RunEngine {
     return snapshot;
   }
 
+  /**
+   * Validates and returns the module coordinate that the applied PlanRun used.
+   * A mutable InstallConfig may be edited after Apply, but teardown must still
+   * restore the exact child module selected by that applied StateVersion.
+   */
+  #assertDestroyAppliedPlanSource(input: {
+    readonly capsule: Capsule;
+    readonly source: Source;
+    readonly snapshot: SourceSnapshot;
+    readonly planRun: PlanRun;
+  }): string | undefined {
+    const plannedSourceValue = input.planRun.source as unknown;
+    const plannedSource = isPlainRecord(plannedSourceValue)
+      ? plannedSourceValue
+      : undefined;
+    const modulePath =
+      typeof plannedSource?.modulePath === "string"
+        ? plannedSource.modulePath
+        : undefined;
+    if (
+      !plannedSource ||
+      plannedSource.kind !== "git" ||
+      typeof plannedSource.url !== "string" ||
+      plannedSource.url.trim() === "" ||
+      typeof plannedSource.commit !== "string" ||
+      plannedSource.commit.trim() === "" ||
+      (plannedSource.modulePath !== undefined &&
+        typeof plannedSource.modulePath !== "string") ||
+      !isPlainRecord(input.source) ||
+      !isPlainRecord(input.snapshot) ||
+      typeof input.source.id !== "string" ||
+      input.source.id.trim() === "" ||
+      typeof input.source.workspaceId !== "string" ||
+      input.source.workspaceId.trim() === "" ||
+      typeof input.source.url !== "string" ||
+      input.source.url.trim() === "" ||
+      typeof input.snapshot.id !== "string" ||
+      input.snapshot.id.trim() === "" ||
+      typeof input.snapshot.workspaceId !== "string" ||
+      input.snapshot.workspaceId.trim() === "" ||
+      typeof input.snapshot.sourceId !== "string" ||
+      input.snapshot.sourceId.trim() === "" ||
+      typeof input.snapshot.url !== "string" ||
+      input.snapshot.url.trim() === "" ||
+      typeof input.snapshot.ref !== "string" ||
+      input.snapshot.ref.trim() === "" ||
+      typeof input.snapshot.path !== "string" ||
+      input.snapshot.path.trim() === ""
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${input.capsule.id} applied PlanRun has invalid Git source provenance`,
+        { reason: "destroy_source_provenance_invalid" },
+      );
+    }
+    if (
+      input.source.id !== input.capsule.sourceId ||
+      input.source.workspaceId !== input.capsule.workspaceId ||
+      input.snapshot.origin !== "git" ||
+      input.snapshot.workspaceId !== input.capsule.workspaceId ||
+      input.snapshot.sourceId !== input.source.id ||
+      input.snapshot.url !== input.source.url ||
+      typeof input.snapshot.resolvedCommit !== "string" ||
+      input.snapshot.resolvedCommit.trim() === "" ||
+      input.snapshot.id !== input.planRun.sourceSnapshotId
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${input.capsule.id} applied PlanRun SourceSnapshot provenance is invalid`,
+        { reason: "destroy_source_provenance_invalid" },
+      );
+    }
+    const expectedSource = snapshotModuleSource(
+      input.source,
+      input.snapshot,
+      modulePath,
+    );
+    if (
+      plannedSource.url !== expectedSource.url ||
+      plannedSource.commit.toLowerCase() !== expectedSource.commit ||
+      normalizeDestroyModulePath(modulePath) !==
+        expectedSource.modulePath
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${input.capsule.id} applied PlanRun source does not match its SourceSnapshot`,
+        { reason: "destroy_source_provenance_invalid" },
+      );
+    }
+    return expectedSource.modulePath;
+  }
+
   async #ensureCapsuleCompatibilityReport(
     capsule: Capsule,
     source: Source,
@@ -2330,60 +2551,6 @@ export class RunEngine {
       updatedAt: new Date(this.#now()).toISOString(),
     });
     return report;
-  }
-
-  /**
-   * A CompatibilityReport is an admission gate for create/update, never a
-   * teardown lock. Destroy still reuses a report scoped to the exact active
-   * StateVersion snapshot when one exists, because its provider inventory helps
-   * reconstruct the generated root. Its old readiness verdict is deliberately
-   * not re-applied: policy or analyzer changes after a successful apply must not
-   * make the deployed resources impossible to remove.
-   */
-  async #compatibilityReportForCapsuleDestroy(
-    capsule: Capsule,
-    source: Source,
-    snapshot: SourceSnapshot,
-    modulePath?: string,
-  ): Promise<CapsuleCompatibilityReport | undefined> {
-    const existing = capsule.compatibilityReportId
-      ? await this.#store.getCapsuleCompatibilityReport(
-          capsule.compatibilityReportId,
-        )
-      : undefined;
-    if (
-      existing &&
-      this.#isCompatibilityReportScopedToCapsulePlan(
-        existing,
-        capsule,
-        source,
-        snapshot,
-        modulePath,
-      )
-    ) {
-      return existing;
-    }
-    const preflight =
-      await this.#store.getLatestCapsuleCompatibilityReportForSourceSnapshot(
-        snapshot.id,
-        {
-          sourceId: source.id,
-          capsuleId: capsule.id,
-        },
-      );
-    if (
-      preflight &&
-      this.#isCompatibilityReportScopedToCapsulePlan(
-        preflight,
-        capsule,
-        source,
-        snapshot,
-        modulePath,
-      )
-    ) {
-      return preflight;
-    }
-    return undefined;
   }
 
   async #useCapsuleCompatibilityReportHint(
@@ -2594,7 +2761,12 @@ export class RunEngine {
     readonly reasons: readonly string[];
     readonly audit?: Readonly<Record<string, JsonValue>>;
   }> {
-    if (!input.compatibilityReportId) return { reasons: [] };
+    // Compatibility reports are create/update admission evidence, never a
+    // teardown lock. Destroy must not even read a legacy report row while
+    // completing its plan.
+    if (input.operation === "destroy" || !input.compatibilityReportId) {
+      return { reasons: [] };
+    }
     const report = await this.#store.getCapsuleCompatibilityReport(
       input.compatibilityReportId,
     );
@@ -2633,12 +2805,9 @@ export class RunEngine {
         `compatibility_report_snapshot_mismatch: plan run ${input.planRunId} uses SourceSnapshot ${input.sourceSnapshotId} but report ${report.id} was created for ${report.sourceSnapshotId}`,
       );
     }
-    if (input.operation !== "destroy") {
-      reasons.push(
-        ...evaluateCompatibilityReportAgainstPolicy(report, input.policy)
-          .reasons,
-      );
-    }
+    reasons.push(
+      ...evaluateCompatibilityReportAgainstPolicy(report, input.policy).reasons,
+    );
     return { reasons, audit };
   }
 
@@ -2649,7 +2818,10 @@ export class RunEngine {
     readonly source: Source;
     readonly snapshot: SourceSnapshot;
     readonly operation: "create" | "update" | "destroy";
+    readonly modulePath: string | undefined;
     readonly runnerProfileId?: string;
+    readonly requiredProviders?: readonly string[];
+    readonly requiredProviderRequirements?: readonly CapsuleProviderRequirement[];
     readonly compatibilityReport?: CapsuleCompatibilityReport;
     readonly skipReadySourceFileDiscovery?: boolean;
   }): Promise<{
@@ -2662,7 +2834,7 @@ export class RunEngine {
     const moduleSource = snapshotModuleSource(
       input.source,
       input.snapshot,
-      input.installConfig.modulePath,
+      input.modulePath,
     );
     const generic = await this.#genericCapsulePlanRequest(input, moduleSource);
     return {
@@ -2685,7 +2857,10 @@ export class RunEngine {
       readonly capsule: Capsule;
       readonly installConfig: InstallConfig;
       readonly operation: "create" | "update" | "destroy";
+      readonly modulePath: string | undefined;
       readonly runnerProfileId?: string;
+      readonly requiredProviders?: readonly string[];
+      readonly requiredProviderRequirements?: readonly CapsuleProviderRequirement[];
       readonly compatibilityReport?: CapsuleCompatibilityReport;
       readonly snapshot: SourceSnapshot;
       readonly skipReadySourceFileDiscovery?: boolean;
@@ -2705,13 +2880,17 @@ export class RunEngine {
       input.compatibilityReport,
       profile.allowedProviders,
     );
-    let requiredProviders = compatibilityProviders;
-    let requiredProviderRequirements =
+    let requiredProviders = input.requiredProviders
+      ? normalizeProviders(input.requiredProviders)
+      : compatibilityProviders;
+    let requiredProviderRequirements = input.requiredProviderRequirements ??
       providerRequirementsFromCompatibilityReport(
         input.compatibilityReport,
         requiredProviders,
       );
     if (
+      input.requiredProviders === undefined &&
+      input.requiredProviderRequirements === undefined &&
       input.compatibilityReport === undefined &&
       requiredProviderRequirements.length === 0
     ) {
@@ -2737,7 +2916,7 @@ export class RunEngine {
     const sourceFiles = await this.#sourceModuleFilesForGenericCapsule(
       input.compatibilityReport,
       input.snapshot,
-      input.installConfig.modulePath,
+      input.modulePath,
       { skipReady: input.skipReadySourceFileDiscovery === true },
     );
     const declaredInputs = declaredGenericCapsuleInputs(
@@ -2795,6 +2974,15 @@ export class RunEngine {
         installConfigId: input.installConfig.id,
         installConfigDigest: await stableJsonDigest(input.installConfig),
         capsuleExecutionAuthorityEpoch,
+        ...(input.operation === "destroy"
+          ? {
+              // Preserve the exact no-state cursor too. `undefined` would
+              // disable the final re-read fence and let a generation-0 → 1
+              // Apply race mint a destroy Plan from an obsolete Capsule.
+              currentStateVersionId: input.capsule.currentStateVersionId ?? null,
+              currentStateGeneration: input.capsule.currentStateGeneration,
+            }
+          : {}),
       },
       request: {
         workspaceId: input.capsule.workspaceId,
@@ -3128,12 +3316,6 @@ export class RunEngine {
     );
   }
 
-  async #destroySourceSnapshotIdForCapsule(
-    capsule: Capsule,
-  ): Promise<string | undefined> {
-    return await this.#currentStateSourceSnapshotId(capsule);
-  }
-
   async #createLegacySourcelessDestroyPlan(input: {
     readonly capsule: Capsule;
     readonly runnerProfile: RunnerProfile;
@@ -3177,13 +3359,17 @@ export class RunEngine {
             capsule,
             bindingRequirements,
           );
+    const rootBindings = legacyDefaultProviderBindingsForSourcelessDestroy(
+      resolvedBindings,
+      requiredProviderRequirements,
+    );
     const generatedRoot = generateOpenTofuChildModuleRoot({
       rootProviderRequirements: rootProviderRequirementsForGeneratedRoot(
         requiredProviderRequirements,
       ),
       inputs: {},
       outputAllowlist: {},
-      providerBindings: providerBindingsFromResolved(resolvedBindings),
+      providerBindings: providerBindingsFromResolved(rootBindings),
     });
     const childVersions =
       generatedRoot.files["versions.tf"] ?? "terraform {}\n";
@@ -3243,27 +3429,77 @@ export class RunEngine {
     );
   }
 
-  async #currentStateSourceSnapshotId(
-    capsule: Capsule,
-  ): Promise<string | undefined> {
-    return (await this.#currentStatePlanRunForCapsule(capsule))
-      ?.sourceSnapshotId;
-  }
-
   async #currentStatePlanRunForCapsule(
     capsule: Capsule,
   ): Promise<PlanRun | undefined> {
-    if (capsule.currentStateGeneration <= 0) return undefined;
-    const snapshots = await this.#store.listStateVersions(
-      capsule.id,
-      capsule.environment,
+    if (
+      !Number.isSafeInteger(capsule.currentStateGeneration) ||
+      capsule.currentStateGeneration <= 0 ||
+      typeof capsule.currentStateVersionId !== "string" ||
+      capsule.currentStateVersionId.trim() === ""
+    ) {
+      return undefined;
+    }
+    const current = await this.#store.getStateVersion(
+      capsule.currentStateVersionId,
     );
-    const current = snapshots.find(
-      (snapshot) => snapshot.generation === capsule.currentStateGeneration,
+    if (!current || !stateVersionMatchesCapsuleCurrent(capsule, current)) {
+      return undefined;
+    }
+    return await this.#validatedPlanRunForStateVersion(
+      capsule,
+      current,
+      new Set(),
     );
-    return current
-      ? await this.#planRunForStateVersion(current, new Set())
-      : undefined;
+  }
+
+  async #validatedPlanRunForStateVersion(
+    capsule: Capsule,
+    stateVersion: StateVersion,
+    seenStateVersionIds: Set<string>,
+  ): Promise<PlanRun | undefined> {
+    if (
+      seenStateVersionIds.has(stateVersion.id) ||
+      seenStateVersionIds.size >= 64 ||
+      !stateVersionMatchesCapsuleScope(capsule, stateVersion)
+    ) {
+      return undefined;
+    }
+    seenStateVersionIds.add(stateVersion.id);
+
+    const applyRun = await this.#store.getApplyRun(stateVersion.createdByRunId);
+    if (applyRun) {
+      if (!applyRunMatchesStateVersion(capsule, stateVersion, applyRun)) {
+        return undefined;
+      }
+      const planRun = await this.#store.getPlanRun(applyRun.planRunId);
+      return planRun &&
+        planRunMatchesAppliedState(capsule, stateVersion, applyRun, planRun)
+        ? planRun
+        : undefined;
+    }
+
+    const restoreRun = await this.#store.getBackupRun(
+      stateVersion.createdByRunId,
+    );
+    if (!restoreRunMatchesStateVersion(capsule, stateVersion, restoreRun)) {
+      return undefined;
+    }
+    const restoredState = await this.#store.getStateVersion(
+      restoreRun.restoredFromStateVersionId!,
+    );
+    if (
+      !restoredState ||
+      !stateVersionMatchesCapsuleScope(capsule, restoredState) ||
+      restoredState.generation >= stateVersion.generation
+    ) {
+      return undefined;
+    }
+    return await this.#validatedPlanRunForStateVersion(
+      capsule,
+      restoredState,
+      seenStateVersionIds,
+    );
   }
 
   async #sourceSnapshotIdForStateVersion(
@@ -4706,11 +4942,18 @@ export class RunEngine {
         { reason: "install_config_not_found" },
       );
     }
-    const compatibilityReport = planRun.compatibilityReportId
-      ? await this.#store.getCapsuleCompatibilityReport(
-          planRun.compatibilityReportId,
-        )
-      : undefined;
+    // Destroy provider identities come from the current StateVersion's
+    // applied PlanRun, not CompatibilityReport admission evidence. In
+    // particular, do not parse a legacy flat providers_json row while minting
+    // destroy credentials.
+    const compatibilityReport =
+      planRun.operation === "destroy"
+        ? undefined
+        : planRun.compatibilityReportId
+          ? await this.#store.getCapsuleCompatibilityReport(
+              planRun.compatibilityReportId,
+            )
+          : undefined;
     const requiredProviderRequirements =
       planRun.requiredProviderRequirements !== undefined
         ? requiredProviderRequirementsForNewPlan(
@@ -4733,23 +4976,30 @@ export class RunEngine {
                 : {}),
             })),
           );
-    // Run-scoped: exact ProviderBindings required by this plan and its
-    // CompatibilityReport. This keeps minted credentials aligned with the
-    // generated provider blocks without inferring requirements from allowlists.
+    // Run-scoped: exact ProviderBindings required by this plan. Create/update
+    // plans may also carry CompatibilityReport evidence, but destroy never
+    // uses that report as provider or teardown authority.
     const bindingRequirements = providerBindingResolutionRequirements(
       requiredProviderRequirements,
       profile,
     );
-    return planRun.requiredProviderRequirements === undefined ||
-        planRun.source.kind === "operator_module"
-      ? await this.#connectionsService.resolveProviderBindingsForLegacyStoredRun(
-          capsule,
-          bindingRequirements,
+    const resolved =
+      planRun.requiredProviderRequirements === undefined ||
+      planRun.source.kind === "operator_module"
+        ? await this.#connectionsService.resolveProviderBindingsForLegacyStoredRun(
+            capsule,
+            bindingRequirements,
+          )
+        : await this.#connectionsService.resolveProviderBindingsForRun(
+            capsule,
+            bindingRequirements,
+          );
+    return planRun.source.kind === "operator_module"
+      ? legacyDefaultProviderBindingsForSourcelessDestroy(
+          resolved,
+          requiredProviderRequirements,
         )
-      : await this.#connectionsService.resolveProviderBindingsForRun(
-          capsule,
-          bindingRequirements,
-        );
+      : resolved;
   }
 
   /**
@@ -9490,7 +9740,138 @@ function isEligibleLegacySourcelessPlan(planRun: PlanRun): boolean {
     (retiredGeneratedRoot || retiredUploadProjection) &&
     typeof planRun.sourceSnapshotId === "string" &&
     planRun.sourceSnapshotId.length > 0 &&
-    typeof planRun.appliedApplyRunId === "string" &&
-    planRun.appliedApplyRunId.length > 0
+    (planRun.appliedApplyRunId === undefined ||
+      (typeof planRun.appliedApplyRunId === "string" &&
+        planRun.appliedApplyRunId.length > 0))
+  );
+}
+
+function normalizeDestroyModulePath(
+  path: string | undefined,
+): string | undefined {
+  const value = path?.trim();
+  if (!value || value === ".") return undefined;
+  const normalized = value.replace(/\\/g, "/").replace(/^\.\/+/, "");
+  if (!normalized || normalized === ".") return undefined;
+  return normalized.replace(/\/+$/g, "");
+}
+
+function isPlainRecord(
+  value: unknown,
+): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stateVersionMatchesCapsuleScope(
+  capsule: Capsule,
+  stateVersion: StateVersion,
+): boolean {
+  return (
+    typeof stateVersion.id === "string" &&
+    stateVersion.id.trim() !== "" &&
+    stateVersion.workspaceId === capsule.workspaceId &&
+    stateVersion.capsuleId === capsule.id &&
+    stateVersion.environment === capsule.environment &&
+    Number.isSafeInteger(stateVersion.generation) &&
+    stateVersion.generation >= 1 &&
+    typeof stateVersion.createdByRunId === "string" &&
+    stateVersion.createdByRunId.trim() !== ""
+  );
+}
+
+function stateVersionMatchesCapsuleCurrent(
+  capsule: Capsule,
+  stateVersion: StateVersion,
+): boolean {
+  return (
+    stateVersionMatchesCapsuleScope(capsule, stateVersion) &&
+    stateVersion.id === capsule.currentStateVersionId &&
+    stateVersion.generation === capsule.currentStateGeneration
+  );
+}
+
+function isOpenTofuOperation(value: unknown): value is PlanRun["operation"] {
+  return value === "create" || value === "update" || value === "destroy";
+}
+
+function applyRunMatchesStateVersion(
+  capsule: Capsule,
+  stateVersion: StateVersion,
+  applyRun: ApplyRun,
+): boolean {
+  const expected = applyRun.expected;
+  return (
+    applyRun.id === stateVersion.createdByRunId &&
+    typeof applyRun.planRunId === "string" &&
+    applyRun.planRunId.trim() !== "" &&
+    applyRun.workspaceId === capsule.workspaceId &&
+    applyRun.capsuleId === capsule.id &&
+    isOpenTofuOperation(applyRun.operation) &&
+    (applyRun.status === "succeeded" || applyRun.status === "failed") &&
+    applyRun.stateVersionId === stateVersion.id &&
+    expected !== undefined &&
+    expected !== null &&
+    typeof expected === "object" &&
+    expected.capsuleId === capsule.id &&
+    expected.planRunId === applyRun.planRunId
+  );
+}
+
+function planRunMatchesAppliedState(
+  capsule: Capsule,
+  stateVersion: StateVersion,
+  applyRun: ApplyRun,
+  planRun: PlanRun,
+): boolean {
+  const expectedCurrentStateVersionId =
+    applyRun.expected?.currentStateVersionId ?? null;
+  const plannedCurrentStateVersionId =
+    planRun.capsuleCurrentStateVersionId ?? null;
+  const source = planRun.source as unknown;
+  const context = planRun.capsuleContext;
+  return (
+    planRun.id === applyRun.planRunId &&
+    planRun.workspaceId === capsule.workspaceId &&
+    planRun.capsuleId === capsule.id &&
+    planRun.status === "succeeded" &&
+    isOpenTofuOperation(planRun.operation) &&
+    planRun.operation === applyRun.operation &&
+    (planRun.appliedApplyRunId === undefined ||
+      planRun.appliedApplyRunId === applyRun.id) &&
+    typeof planRun.sourceSnapshotId === "string" &&
+    planRun.sourceSnapshotId.trim() !== "" &&
+    source !== null &&
+    typeof source === "object" &&
+    !Array.isArray(source) &&
+    (!capsule.sourceId ||
+      (source as { readonly kind?: unknown }).kind === "git") &&
+    expectedCurrentStateVersionId === plannedCurrentStateVersionId &&
+    (planRun.baseStateGeneration === undefined ||
+      (Number.isSafeInteger(planRun.baseStateGeneration) &&
+        planRun.baseStateGeneration + 1 === stateVersion.generation)) &&
+    (context === undefined ||
+      context === null ||
+      (context.workspaceId === capsule.workspaceId &&
+        context.capsuleId === capsule.id &&
+        context.environment === capsule.environment))
+  );
+}
+
+function restoreRunMatchesStateVersion(
+  capsule: Capsule,
+  stateVersion: StateVersion,
+  restoreRun: Run | undefined,
+): restoreRun is Run & { readonly restoredFromStateVersionId: string } {
+  return (
+    restoreRun !== undefined &&
+    restoreRun.id === stateVersion.createdByRunId &&
+    restoreRun.type === "restore" &&
+    restoreRun.status === "succeeded" &&
+    restoreRun.workspaceId === capsule.workspaceId &&
+    restoreRun.capsuleId === capsule.id &&
+    restoreRun.environment === capsule.environment &&
+    restoreRun.restoredStateVersionId === stateVersion.id &&
+    typeof restoreRun.restoredFromStateVersionId === "string" &&
+    restoreRun.restoredFromStateVersionId.trim() !== ""
   );
 }
