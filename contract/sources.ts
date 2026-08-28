@@ -28,6 +28,7 @@ import {
 import {
   canonicalProviderSource,
   isOpenTofuBuiltinProviderSource,
+  isOpenTofuIdentifier,
 } from "./provider-env-rules.ts";
 
 /**
@@ -529,11 +530,9 @@ function parseRepositoryModuleRootProviderRequirement(
       "version",
     ]) ||
     !isCanonicalProviderSource(value.source) ||
-    typeof value.moduleLocalName !== "string" ||
-    !PROVIDER_LOCAL_NAME.test(value.moduleLocalName) ||
+    !isOpenTofuIdentifier(value.moduleLocalName) ||
     (value.childAlias !== undefined &&
-      (typeof value.childAlias !== "string" ||
-        !PROVIDER_LOCAL_NAME.test(value.childAlias))) ||
+      !isOpenTofuIdentifier(value.childAlias)) ||
     (value.version !== undefined &&
       (typeof value.version !== "string" ||
         !EXACT_PROVIDER_VERSION.test(value.version)))
@@ -572,7 +571,6 @@ function compareRootProviderRequirement(
   );
 }
 
-const PROVIDER_LOCAL_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/u;
 const EXACT_PROVIDER_VERSION =
   /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 

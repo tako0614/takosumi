@@ -2828,6 +2828,38 @@ test("Capsule ProviderBindings accept only the canonical route and payload", asy
   ).toBeUndefined();
 });
 
+test("Capsule ProviderBindings accept hyphenated OpenTofu identities", async () => {
+  const fixture = operationsFixture();
+  const bindings = [
+    {
+      provider: "registry.opentofu.org/cloudflare/cloudflare-v02",
+      moduleLocalName: "aws-edge",
+      childAlias: "cloudflare-v02",
+      rootAlias: "aws-edge",
+      connectionId: "conn_1",
+    },
+  ];
+  const request = new Request(
+    "https://app.example.test/api/v1/capsules/cap_1/provider-bindings",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ bindings }),
+    },
+  );
+
+  const response = await handleCapsules(
+    context(fixture.operations, request),
+    ["capsules", "cap_1", "provider-bindings"],
+    "PUT",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({
+    providerBindingSet: { bindings },
+  });
+});
+
 test("Capsule ProviderBindings reject missing or malformed OpenTofu identities", async () => {
   const fixture = operationsFixture();
   const baseBinding = {

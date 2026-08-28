@@ -23,6 +23,7 @@ import {
 } from "takosumi-contract/connections";
 import {
   isOpenTofuBuiltinProviderSource,
+  isOpenTofuIdentifier,
   normalizeProviderSourceAddress,
   sameProviderSource,
 } from "takosumi-contract/provider-env-rules";
@@ -119,8 +120,12 @@ function validateCapsuleProviderBinding(
     rootAlias === undefined
   ) {
     const configurationAlias =
-      /^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$/u.exec(alias);
-    if (configurationAlias) {
+      /^([^\.]+)\.([^\.]+)$/u.exec(alias);
+    if (
+      configurationAlias &&
+      isOpenTofuIdentifier(configurationAlias[1]!) &&
+      isOpenTofuIdentifier(configurationAlias[2]!)
+    ) {
       moduleLocalName = configurationAlias[1]!;
       childAlias = configurationAlias[2]!;
       rootAlias = configurationAlias[2]!;
@@ -159,7 +164,7 @@ function validateCapsuleProviderBinding(
 
 function providerIdentifierField(value: unknown, field: string): string {
   const normalized = nonEmptyField(value, field);
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(normalized)) {
+  if (!isOpenTofuIdentifier(normalized)) {
     throw new OpenTofuControllerError(
       "invalid_argument",
       `${field} must be a valid OpenTofu identifier`,

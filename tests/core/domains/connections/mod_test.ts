@@ -157,6 +157,89 @@ test("legacy full configuration aliases normalize into explicit child and root i
   expect(resolved[0]).not.toHaveProperty("alias");
 });
 
+test("hyphenated provider identifiers resolve as exact child and root identity", async () => {
+  const { store, model, service } = await setup();
+  await store.putConnection(
+    connection({
+      id: "conn_hyphenated_cf",
+      workspaceId: model.workspace.id,
+    }),
+  );
+  await store.putProviderBindingSet({
+    id: "dp_hyphenated",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [
+      {
+        provider: CLOUDFLARE,
+        moduleLocalName: "cloudflare-v02",
+        childAlias: "aws-edge",
+        rootAlias: "aws-edge",
+        connectionId: "conn_hyphenated_cf",
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  const resolved = await service.resolveProviderBindings(model.capsule);
+  expect(resolved[0]).toMatchObject({
+    provider: CLOUDFLARE,
+    moduleLocalName: "cloudflare-v02",
+    childAlias: "aws-edge",
+    rootAlias: "aws-edge",
+  });
+  const runResolved = await service.resolveProviderBindingsForRun(
+    model.capsule,
+    [
+      {
+        source: CLOUDFLARE,
+        moduleLocalName: "cloudflare-v02",
+        childAlias: "aws-edge",
+        allowed: true,
+      },
+    ],
+  );
+  expect(runResolved.map((entry) => entry.connection.id)).toEqual([
+    "conn_hyphenated_cf",
+  ]);
+});
+
+test("legacy dotted aliases normalize hyphenated provider identifiers", async () => {
+  const { store, model, service } = await setup();
+  await store.putConnection(
+    connection({
+      id: "conn_hyphenated_legacy",
+      workspaceId: model.workspace.id,
+    }),
+  );
+  await store.putProviderBindingSet({
+    id: "dp_hyphenated_legacy",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [
+      {
+        provider: CLOUDFLARE,
+        alias: "cloudflare-v02.aws-edge",
+        connectionId: "conn_hyphenated_legacy",
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  const resolved = await service.resolveProviderBindings(model.capsule);
+  expect(resolved[0]).toMatchObject({
+    provider: CLOUDFLARE,
+    moduleLocalName: "cloudflare-v02",
+    childAlias: "aws-edge",
+    rootAlias: "aws-edge",
+  });
+  expect(resolved[0]).not.toHaveProperty("alias");
+});
+
 test("raw operator-scoped ProviderConnection never resolves into a generic Capsule runner", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(connection({ id: "conn_operator_cf" }));

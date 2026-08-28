@@ -199,6 +199,49 @@ test("rootgen preserves module-local names and maps child/root aliases independe
   );
 });
 
+test("rootgen accepts hyphenated provider identifiers in generated mappings", () => {
+  const { files } = generateOpenTofuChildModuleRoot({
+    rootProviderRequirements: [
+      {
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare-v02",
+        childAlias: "aws-edge",
+      },
+      {
+        source: "registry.opentofu.org/hashicorp/aws",
+        moduleLocalName: "aws-edge",
+      },
+    ],
+    inputs: {},
+    outputAllowlist: {},
+    providerBindings: [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare-v02",
+        childAlias: "aws-edge",
+        rootAlias: "aws-edge",
+      },
+      {
+        provider: "registry.opentofu.org/hashicorp/aws",
+        moduleLocalName: "aws-edge",
+      },
+    ],
+  });
+
+  expect(files["versions.tf"]).toContain(
+    'cloudflare-v02 = {\n      source = "registry.opentofu.org/cloudflare/cloudflare"',
+  );
+  expect(files["versions.tf"]).toContain(
+    'aws-edge = {\n      source = "registry.opentofu.org/hashicorp/aws"',
+  );
+  const main = files["main.tf"]!;
+  expect(main).toContain('provider "cloudflare-v02" {');
+  expect(main).toContain('alias = "aws-edge"');
+  expect(main).toContain('provider "aws-edge" {');
+  expect(main).toContain("cloudflare-v02.aws-edge = cloudflare-v02.aws-edge");
+  expect(main).toContain("aws-edge = aws-edge");
+});
+
 test("rootgen keeps every default child provider mapped when one provider needs explicit configuration", () => {
   const { files } = generateOpenTofuChildModuleRoot({
     rootProviderRequirements: [
@@ -382,7 +425,7 @@ test("rootgen validation reasons are stable and layer-neutral", () => {
     {
       input: {
         rootProviderRequirements: [],
-        inputs: { "invalid-name": true },
+        inputs: { "invalid.name": true },
         outputAllowlist: {},
       },
       reason: "rootgen_invalid_identifier",

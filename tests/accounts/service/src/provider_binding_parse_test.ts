@@ -25,6 +25,22 @@ test("ProviderBinding parsing keeps current routing fields", () => {
   });
 });
 
+test("public ProviderBinding parsing accepts hyphenated OpenTofu identities", () => {
+  const binding = {
+    provider: "registry.opentofu.org/cloudflare/cloudflare-v02",
+    moduleLocalName: "aws-edge",
+    childAlias: "cloudflare-v02",
+    rootAlias: "aws-edge",
+    connectionId: "conn_1",
+  };
+
+  expect(parseProviderBinding(binding)).toEqual({ ok: true, binding });
+  expect(parseProviderBindings([binding])).toEqual({
+    ok: true,
+    bindings: [binding],
+  });
+});
+
 test("public ProviderBinding parsing rejects the deprecated ambiguous alias", () => {
   const binding = {
     provider: "registry.opentofu.org/hashicorp/aws",
@@ -47,10 +63,14 @@ test("ProviderBinding parsing rejects credential-shaped run settings", () => {
   expect(
     parseProviderBinding({
       provider: "registry.terraform.io/tako0614/takoform",
+      moduleLocalName: "takoform",
       connectionId: "conn_hosted",
       runCredentialSettings: { authToken: "must-not-cross" },
     }),
-  ).toMatchObject({ ok: false });
+  ).toEqual({
+    ok: false,
+    message: "runCredentialSettings.authToken is credential-shaped",
+  });
 });
 
 test("ProviderBinding parsing rejects OpenTofu builtin runtime capabilities", () => {

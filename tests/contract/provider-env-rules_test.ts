@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   canonicalProviderSource,
   isOpenTofuBuiltinProviderSource,
+  isOpenTofuIdentifier,
   isProviderEnvName,
   isReservedProviderEnvName,
   providerMatches,
@@ -25,6 +26,15 @@ test("OpenTofu builtin provider classification is exact and canonical", () => {
     isOpenTofuBuiltinProviderSource("terraform.io/builtin/terraform/extra"),
   ).toBe(false);
   expect(isOpenTofuBuiltinProviderSource("terraform.io/builtin/")).toBe(false);
+});
+
+test("OpenTofu identifiers share the hyphenated local/alias grammar", () => {
+  for (const value of ["cloudflare-v02", "aws-edge", "_aws-edge"]) {
+    expect(isOpenTofuIdentifier(value), value).toBe(true);
+  }
+  for (const value of ["", "-aws", "aws.alias", "aws edge", 42, null]) {
+    expect(isOpenTofuIdentifier(value), String(value)).toBe(false);
+  }
 });
 
 test("sameProviderSource normalizes only explicit default-registry sources", () => {

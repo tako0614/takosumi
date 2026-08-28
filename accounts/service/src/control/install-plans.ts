@@ -14,6 +14,7 @@ import {
 import type { ProviderBindings } from "takosumi-contract/connections";
 import {
   isOpenTofuBuiltinProviderSource,
+  isOpenTofuIdentifier,
   normalizeProviderSourceAddress,
 } from "takosumi-contract/provider-env-rules";
 import {
@@ -72,7 +73,6 @@ const DIAGNOSTIC_TOKEN = /^[A-Za-z][A-Za-z0-9._:-]*$/u;
 const CONNECTION_REFERENCE_PATTERN = /^conn_[0-9A-Za-z]{8,64}$/u;
 const PROVIDER_SOURCE_PATTERN =
   /^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?\/[a-z0-9_-]+\/[a-z0-9_-]+$/u;
-const PROVIDER_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const MAX_PROVIDER_BINDINGS = 32;
 
 /** POST /api/v1/workspaces/:workspaceId/install-plans (Workspace auth is done by the parent handler). */
@@ -1354,11 +1354,11 @@ function providerBindingRequests(
       isOpenTofuBuiltinProviderSource(provider) ||
       !moduleLocalName ||
       item.moduleLocalName !== moduleLocalName ||
-      !PROVIDER_IDENTIFIER_PATTERN.test(moduleLocalName) ||
+      !isOpenTofuIdentifier(moduleLocalName) ||
       (item.childAlias !== undefined &&
         (childAlias === undefined ||
           item.childAlias !== childAlias ||
-          !PROVIDER_IDENTIFIER_PATTERN.test(childAlias))) ||
+          !isOpenTofuIdentifier(childAlias))) ||
       !connectionId ||
       item.connectionId !== connectionId
     ) {

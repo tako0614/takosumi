@@ -95,7 +95,10 @@ import type {
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
 import { parseRepositorySourceBuild } from "takosumi-contract/repository-manifest";
-import { isOpenTofuBuiltinProviderSource } from "takosumi-contract/provider-env-rules";
+import {
+  isOpenTofuBuiltinProviderSource,
+  isOpenTofuIdentifier,
+} from "takosumi-contract/provider-env-rules";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import { isAbsolute, normalize } from "node:path";
 import { stringValue } from "../http-helpers.ts";
@@ -779,12 +782,8 @@ export function parseProviderBinding(value: unknown):
   return { ok: true, binding };
 }
 
-const PROVIDER_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
-
 function providerIdentifierValue(value: unknown): string | undefined {
-  return typeof value === "string" && PROVIDER_IDENTIFIER_PATTERN.test(value)
-    ? value
-    : undefined;
+  return isOpenTofuIdentifier(value) ? value : undefined;
 }
 
 function optionalProviderIdentifierValue(

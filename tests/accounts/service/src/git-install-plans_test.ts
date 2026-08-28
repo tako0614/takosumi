@@ -564,6 +564,48 @@ test("Git install plan preserves exact provider local and alias tuples through r
   );
 });
 
+test("Git install plan accepts hyphenated provider local and alias identities", async () => {
+  const provider = "registry.opentofu.org/cloudflare/cloudflare-v02";
+  const providerBinding: GitInstallPlanProviderBindingRequest = {
+    provider,
+    moduleLocalName: "aws-edge",
+    childAlias: "cloudflare-v02",
+    connectionId: "conn_edge0101",
+  };
+  const fixture = installFixture({
+    providerConnections: [providerConnection(provider, "conn_edge0101")],
+  });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody({ providerBindings: [providerBinding] }),
+    { "idempotency-key": "provider-binding-hyphens" },
+  );
+  expect(created.status).toBe(201);
+  const planId = (await created.json()).installPlan.id as string;
+  expect((await fixture.planStore.get(planId))?.options).toEqual({
+    providerBindings: [providerBinding],
+  });
+
+  await fixture.reconcile(planId); // Source
+  await fixture.reconcile(planId); // Source sync
+  fixture.succeedSourceSync();
+  for (let step = 0; step < 6; step += 1) {
+    await fixture.reconcile(planId);
+  }
+
+  const reviewable = await fixture.planStore.get(planId);
+  expect(reviewable?.phase).toBe("reviewable");
+  expect(
+    fixture.getProviderBindingSet("cap_one", "production")?.bindings,
+  ).toEqual([
+    {
+      ...providerBinding,
+      rootAlias: "cloudflare-v02",
+    },
+  ]);
+});
+
 test("lost acknowledgements recover exact Source, sync, Capsule, and Plan Run without duplicates", async () => {
   const fixture = installFixture({
     loseAckOnce: ["source", "sync", "capsule", "plan"],

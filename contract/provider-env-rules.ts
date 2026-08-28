@@ -13,6 +13,17 @@ export function isProviderEnvName(value: string): boolean {
   return PROVIDER_ENV_NAME_PATTERN.test(value);
 }
 
+const OPEN_TOFU_IDENTIFIER_PATTERN =
+  /^[A-Za-z_][A-Za-z0-9_-]*$/u;
+
+/** OpenTofu local names and aliases use one identifier grammar. */
+export function isOpenTofuIdentifier(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    OPEN_TOFU_IDENTIFIER_PATTERN.test(value)
+  );
+}
+
 const RESERVED_PROVIDER_ENV_NAMES = new Set([
   "ALL_PROXY",
   // The upstream `tofu init` binary can fetch `git::`/`ssh://` module sources

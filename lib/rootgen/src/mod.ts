@@ -31,6 +31,7 @@ import type { OutputAllowlistEntry } from "takosumi-contract/install-configs";
 import {
   canonicalProviderSource,
   isOpenTofuBuiltinProviderSource,
+  isOpenTofuIdentifier,
 } from "takosumi-contract/provider-env-rules";
 
 const CHILD_MODULE_SOURCE = "./module";
@@ -409,7 +410,7 @@ function renderGenericOutputsTf(
 }
 
 function assertIdentifier(value: string, label: string): void {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+  if (!isOpenTofuIdentifier(value)) {
     throw new RootgenValidationError(
       "rootgen_invalid_identifier",
       `${label} must be a valid OpenTofu identifier`,
