@@ -24,12 +24,36 @@ import {
   selectSmokeInstallConfigId,
   shouldMarkPendingSmokeCapsuleError,
   smokeCapsuleProviderBindingsBody,
+  smokeProviderBindingFromSource,
   smokeSourceCompatibilityCheckBody,
   smokeSourceCapsuleCreateBody,
   smokeCloudflareProviderConnectionMatch,
   smokeWorkspaceCloudflareConnectionBody,
   assertServiceIdentityResponse,
 } from "../../scripts/smoke-platform-control-plane.ts";
+
+test("generated smoke ProviderBindings derive the canonical module-local name from the provider source", () => {
+  expect(
+    smokeProviderBindingFromSource(
+      "registry.opentofu.org/cloudflare/cloudflare",
+      "pcn_cloudflare",
+    ),
+  ).toEqual({
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    moduleLocalName: "cloudflare",
+    connectionId: "pcn_cloudflare",
+  });
+  expect(
+    smokeProviderBindingFromSource(
+      "registry.terraform.io/tako0614/takoform",
+      "pcn_takoform",
+    ),
+  ).toEqual({
+    provider: "registry.terraform.io/tako0614/takoform",
+    moduleLocalName: "takoform",
+    connectionId: "pcn_takoform",
+  });
+});
 
 test("platform smoke preserves the original pre-apply failure when a projected runtime URL is configured", async () => {
   const options = await resolveOptions(
