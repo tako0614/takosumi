@@ -99,6 +99,33 @@ test("secret ProviderConnection binding resolves to its credential row", async (
   expect(mintableConnectionIds(resolved)).toEqual(["conn_space_cf"]);
 });
 
+test("legacy stored builtin ProviderBinding fails before connection or credential resolution", async () => {
+  const { store, model, service } = await setup();
+  await store.putProviderBindingSet({
+    id: "dp_legacy_builtin",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [
+      {
+        provider: "terraform.io/builtin/terraform",
+        connectionId: "conn_legacy_builtin",
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  await expect(service.resolveProviderBindings(model.capsule)).rejects.toThrow(
+    /stored ProviderBinding cannot target OpenTofu builtin runtime capability terraform\.io\/builtin\/terraform/,
+  );
+  await expect(
+    service.resolveProviderBindingsForRun(model.capsule, []),
+  ).rejects.toThrow(
+    /stored ProviderBinding cannot target OpenTofu builtin runtime capability terraform\.io\/builtin\/terraform/,
+  );
+});
+
 test("legacy full configuration aliases normalize into explicit child and root identity", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(

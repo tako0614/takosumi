@@ -82,6 +82,34 @@ test("container runner returns provider installation attestation from plan resul
   });
 });
 
+test("container runner rejects live provider installation evidence for an OpenTofu builtin", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning({
+      planDigest: PLAN_DIGEST,
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_builtin_provider/tfplan",
+        digest: PLAN_DIGEST,
+      },
+      providerInstallation: [
+        {
+          provider: "terraform.io/builtin/terraform",
+          mirrored: false,
+          installationMethod: "unknown",
+        },
+      ],
+    }),
+  );
+
+  await expect(
+    runner.plan({
+      planRun: { id: "plan_builtin_provider" },
+    } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]),
+  ).rejects.toThrow(
+    /runner returned provider installation evidence for OpenTofu builtin runtime capability terraform\.io\/builtin\/terraform/,
+  );
+});
+
 test("container runner threads phase timings into non-secret diagnostics", async () => {
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning({

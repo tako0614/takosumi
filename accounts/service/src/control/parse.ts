@@ -95,6 +95,7 @@ import type {
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
 import { parseRepositorySourceBuild } from "takosumi-contract/repository-manifest";
+import { isOpenTofuBuiltinProviderSource } from "takosumi-contract/provider-env-rules";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import { isAbsolute, normalize } from "node:path";
 import { stringValue } from "../http-helpers.ts";
@@ -704,6 +705,12 @@ export function parseProviderBinding(value: unknown):
   const input = value as Record<string, unknown>;
   const provider = stringValue(input.provider);
   if (!provider) return { ok: false, message: "provider is required" };
+  if (isOpenTofuBuiltinProviderSource(provider)) {
+    return {
+      ok: false,
+      message: "OpenTofu builtin providers cannot have ProviderBindings",
+    };
+  }
   const connectionId = stringValue(input.connectionId);
   if (!connectionId) {
     return { ok: false, message: "connectionId is required" };

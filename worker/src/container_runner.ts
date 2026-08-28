@@ -32,6 +32,10 @@ import type { CloudflareWorkerEnv, OpenTofuRunAction } from "./bindings.ts";
 import { redactString } from "takosumi-contract/redaction";
 import { normalizePlanResourceScope } from "takosumi-contract";
 import {
+  canonicalProviderSource,
+  isOpenTofuBuiltinProviderSource,
+} from "takosumi-contract/provider-env-rules";
+import {
   parseRepositoryManifestSnapshot,
   parseRepositoryModulesSnapshot,
 } from "takosumi-contract/sources";
@@ -1269,6 +1273,11 @@ function providerInstallationFromContainerResult(
   const rows = value.flatMap((entry) => {
     if (!isRecord(entry)) return [];
     const provider = stringFromRecord(entry, "provider");
+    if (provider && isOpenTofuBuiltinProviderSource(provider)) {
+      throw new Error(
+        `runner returned provider installation evidence for OpenTofu builtin runtime capability ${canonicalProviderSource(provider)}`,
+      );
+    }
     const rawMethod = stringFromRecord(entry, "installationMethod");
     if (
       !provider ||

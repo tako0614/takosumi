@@ -2,11 +2,30 @@ import { expect, test } from "bun:test";
 
 import {
   canonicalProviderSource,
+  isOpenTofuBuiltinProviderSource,
   isProviderEnvName,
   isReservedProviderEnvName,
   providerMatches,
   sameProviderSource,
 } from "../../contract/provider-env-rules.ts";
+
+test("OpenTofu builtin provider classification is exact and canonical", () => {
+  expect(isOpenTofuBuiltinProviderSource("terraform.io/builtin/terraform")).toBe(
+    true,
+  );
+  expect(
+    isOpenTofuBuiltinProviderSource(" Terraform.IO/Builtin/Terraform "),
+  ).toBe(true);
+  expect(
+    isOpenTofuBuiltinProviderSource(
+      "registry.opentofu.org/builtin/terraform",
+    ),
+  ).toBe(false);
+  expect(
+    isOpenTofuBuiltinProviderSource("terraform.io/builtin/terraform/extra"),
+  ).toBe(false);
+  expect(isOpenTofuBuiltinProviderSource("terraform.io/builtin/")).toBe(false);
+});
 
 test("sameProviderSource normalizes only explicit default-registry sources", () => {
   expect(

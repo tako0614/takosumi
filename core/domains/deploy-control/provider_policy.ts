@@ -16,7 +16,10 @@ import type {
 } from "takosumi-contract/connections";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import { normalizeScopeBoundaryPolicy } from "takosumi-contract";
-import { canonicalProviderSource } from "takosumi-contract/provider-env-rules";
+import {
+  canonicalProviderSource,
+  isOpenTofuBuiltinProviderSource,
+} from "takosumi-contract/provider-env-rules";
 import { providerMatches } from "./policy.ts";
 import { normalizeProviders } from "./validation.ts";
 import {
@@ -91,10 +94,15 @@ export function evaluateConfiguredProviderAllowlist(
   allowNoProviders: boolean,
 ): ProviderAllowlistResult | undefined {
   if (policy?.allowedProviders === undefined) return undefined;
-  return evaluateProviderAllowlist(requiredProviders, {
-    allowed: policy.allowedProviders,
-    ...(allowNoProviders ? { allowNoProviders: true } : {}),
-  });
+  return evaluateProviderAllowlist(
+    requiredProviders.filter(
+      (provider) => !isOpenTofuBuiltinProviderSource(provider),
+    ),
+    {
+      allowed: policy.allowedProviders,
+      ...(allowNoProviders ? { allowNoProviders: true } : {}),
+    },
+  );
 }
 
 export function evaluateCompatibilityReportAgainstPolicy(
@@ -166,13 +174,18 @@ function compatibilityProviderPolicyReasons(
   policy: PolicyConfig | undefined,
 ): readonly string[] {
   const allowed = policy?.allowedProviders;
-  const denied = report.providerPackages.filter((providerPackage) => {
-    if (allowed === undefined) return !providerPackage.allowed;
-    const canonical = canonicalProviderAddress(providerPackage.source);
-    return !allowed.some(
-      (entry) => entry === "*" || providerMatches(canonical, entry),
-    );
-  });
+  const denied = report.providerPackages
+    .filter(
+      (providerPackage) =>
+        !isOpenTofuBuiltinProviderSource(providerPackage.source),
+    )
+    .filter((providerPackage) => {
+      if (allowed === undefined) return !providerPackage.allowed;
+      const canonical = canonicalProviderAddress(providerPackage.source);
+      return !allowed.some(
+        (entry) => entry === "*" || providerMatches(canonical, entry),
+      );
+    });
   return denied.map(
     (providerPackage) =>
       `capsule provider ${providerPackage.source} is not allowed by Workspace/InstallConfig policy`,
@@ -231,6 +244,10 @@ export function requiredProvidersFromCompatibilityReport(
   if (!report || report.providerPackages.length === 0) return [];
   return normalizeProviders(
     report.providerPackages
+      .filter(
+        (providerPackage) =>
+          !isOpenTofuBuiltinProviderSource(providerPackage.source),
+      )
       .filter((providerPackage) => providerPackage.allowed)
       .map((providerPackage) => providerPackage.source)
       .filter((source) => source.trim().length > 0)
@@ -540,7 +557,13 @@ export function evaluateProviderLockfilePolicy(
   requiredProviders: readonly string[],
 ): ProviderLockfilePolicyResult | undefined {
   if (policy?.providerLockfile?.requireDigest !== true) return undefined;
-  if (requiredProviders.length === 0) return undefined;
+  if (
+    requiredProviders.every((provider) =>
+      isOpenTofuBuiltinProviderSource(provider),
+    )
+  ) {
+    return undefined;
+  }
   const digestPresent =
     providerLockDigest !== undefined && providerLockDigest.trim().length > 0;
   return {
@@ -559,7 +582,10 @@ export function evaluateProviderInstallationPolicy(
   requiredProviders: readonly string[],
 ): ProviderInstallationPolicyResult | undefined {
   if (policy?.providerInstallation?.requireMirror !== true) return undefined;
-  if (requiredProviders.length === 0) {
+  const installableProviders = requiredProviders.filter(
+    (provider) => !isOpenTofuBuiltinProviderSource(provider),
+  );
+  if (installableProviders.length === 0) {
     return {
       requireMirror: true,
       evidenceCount: 0,
@@ -568,9 +594,11 @@ export function evaluateProviderInstallationPolicy(
       reasons: [],
     };
   }
-  const rows = evidence ?? [];
+  const rows = (evidence ?? []).filter(
+    (row) => !isOpenTofuBuiltinProviderSource(row.provider),
+  );
   const requiredProviderSet = new Set(
-    requiredProviders.map(canonicalProviderAddress),
+    installableProviders.map(canonicalProviderAddress),
   );
   const evidenceByProvider = new Map(
     rows.map((row) => [canonicalProviderAddress(row.provider), row]),

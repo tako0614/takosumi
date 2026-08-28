@@ -703,4 +703,21 @@ test("putProviderBindingSet validates the Capsule Workspace", async () => {
       workspaceId: "ws_other",
     }),
   ).rejects.toMatchObject({ code: "invalid_argument" });
+
+  await expect(
+    service.putProviderBindingSet({
+      ...bindingSet,
+      id: "pbind_builtin",
+      bindings: [
+        {
+          provider: "terraform.io/builtin/terraform",
+          moduleLocalName: "terraform",
+          connectionId: "conn_impossible",
+        },
+      ],
+    }),
+  ).rejects.toMatchObject({
+    code: "invalid_argument",
+    message: "OpenTofu builtin providers cannot have ProviderBindings",
+  });
 });

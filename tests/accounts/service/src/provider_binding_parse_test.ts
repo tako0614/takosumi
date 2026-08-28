@@ -36,6 +36,19 @@ test("ProviderBinding parsing rejects credential-shaped run settings", () => {
   ).toMatchObject({ ok: false });
 });
 
+test("ProviderBinding parsing rejects OpenTofu builtin runtime capabilities", () => {
+  expect(
+    parseProviderBinding({
+      provider: "terraform.io/builtin/terraform",
+      moduleLocalName: "terraform",
+      connectionId: "conn_impossible",
+    }),
+  ).toEqual({
+    ok: false,
+    message: "OpenTofu builtin providers cannot have ProviderBindings",
+  });
+});
+
 test("ProviderBinding parsing omits malformed optional strings", () => {
   expect(
     parseProviderBinding({

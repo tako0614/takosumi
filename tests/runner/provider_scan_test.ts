@@ -6,6 +6,7 @@ import {
   assertRunnerPolicyBeforeInit,
   assertProviderSetStableAfterInit,
   generatedRootTreeHasNoProviderUsage,
+  hasProviderUsageBeforeInit,
   requiredProvidersForGeneratedRoot,
   requiredProviderSourcesFromTerraformTree,
 } from "../../runner/lib/providers.ts";
@@ -286,6 +287,102 @@ test("post-init provider observation rejects source growth, alias change, and lo
   });
 });
 
+test("builtin-only provider usage needs no dependency lock but rejects an impossible builtin lock row", async () => {
+  await withRoot(async (root) => {
+    const builtinSource = [
+      'terraform { required_providers { terraform = { source = "terraform.io/builtin/terraform" } } }',
+      'data "terraform_remote_state" "shared" { backend = "local" config = { path = "shared.tfstate" } }',
+      'output "encoded" { value = provider::terraform::encode_expr(data.terraform_remote_state.shared.outputs) }',
+      "",
+    ].join("\n");
+    await writeFile(
+      join(root, "main.tf"),
+      builtinSource,
+    );
+    const scan = await requiredProviderSourcesFromTerraformTree(root);
+    expect(scan).toMatchObject({
+      complete: true,
+      providers: [],
+      requirements: [],
+    });
+    const allowProviderFreeGeneratedRoot =
+      await generatedRootTreeHasNoProviderUsage(root);
+    expect(allowProviderFreeGeneratedRoot).toBe(true);
+    expect(hasProviderUsageBeforeInit(builtinSource)).toBe(false);
+    expect(
+      hasProviderUsageBeforeInit('resource "aws_instance" "external" {}'),
+    ).toBe(true);
+    await expect(
+      requiredProvidersForGeneratedRoot(
+        {
+          planRun: {
+            requiredProviders: ["terraform.io/builtin/terraform"],
+            requiredProviderRequirements: [
+              {
+                source: "terraform.io/builtin/terraform",
+                moduleLocalName: "terraform",
+                allowed: true,
+              },
+            ],
+          },
+        },
+        root,
+      ),
+    ).resolves.toMatchObject({
+      complete: true,
+      providers: [],
+      requirements: [],
+    });
+    expect(() =>
+      assertRunnerPolicyBeforeInit(REQUEST, ALLOWLIST_PROFILE, EMPTY_CONTEXT, {
+        allowProviderFreeGeneratedRoot,
+        requiredProviders: ["terraform.io/builtin/terraform"],
+        providerScanComplete: true,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertProviderSetStableAfterInit(scan, scan, undefined),
+    ).not.toThrow();
+    expect(() =>
+      assertProviderSetStableAfterInit(
+        scan,
+        scan,
+        'provider "terraform.io/builtin/terraform" {}\n',
+      ),
+    ).toThrow(/does not match/);
+  });
+});
+
+test("post-init lock comparison omits builtins but still requires every installable provider", async () => {
+  await withRoot(async (root) => {
+    await writeFile(
+      join(root, "provider.tf"),
+      [
+        'terraform { required_providers { cloudflare = { source = "cloudflare/cloudflare" } terraform = { source = "terraform.io/builtin/terraform" } } }',
+        'output "encoded" { value = provider::terraform::encode_expr("ready") }',
+        "",
+      ].join("\n"),
+    );
+    const scan = await requiredProviderSourcesFromTerraformTree(root);
+    expect(scan.complete).toBe(true);
+    expect(scan.providers).toEqual([
+      "registry.opentofu.org/cloudflare/cloudflare",
+    ]);
+
+    const installableLock =
+      'provider "registry.opentofu.org/cloudflare/cloudflare" {}\n';
+    expect(() =>
+      assertProviderSetStableAfterInit(scan, scan, installableLock),
+    ).not.toThrow();
+
+    const missingInstallableLock =
+      'provider "terraform.io/builtin/terraform" {}\n';
+    expect(() =>
+      assertProviderSetStableAfterInit(scan, scan, missingInstallableLock),
+    ).toThrow(/does not match/);
+  });
+});
+
 test("runner derivation binds every exact compatibility-reviewed provider identity", async () => {
   await withRoot(async (root) => {
     await writeFile(
@@ -343,6 +440,12 @@ test("a JSON config file means the root is not provably provider-free", async ()
   await withRoot(async (root) => {
     await writeFile(join(root, "main.tf"), 'output "ok" { value = 1 }\n');
     expect(await generatedRootTreeHasNoProviderUsage(root)).toBe(true);
+    await writeFile(
+      join(root, "external.tf"),
+      'resource "aws_instance" "external" {}\n',
+    );
+    expect(await generatedRootTreeHasNoProviderUsage(root)).toBe(false);
+    await rm(join(root, "external.tf"));
     await writeFile(
       join(root, "providers.tf.json"),
       JSON.stringify({

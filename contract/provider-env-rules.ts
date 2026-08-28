@@ -96,6 +96,13 @@ export function canonicalProviderSource(provider: string): string {
   return normalizeProviderSourceAddress(provider);
 }
 
+/** OpenTofu runtime capabilities that are not installable provider packages. */
+export function isOpenTofuBuiltinProviderSource(provider: string): boolean {
+  return /^terraform\.io\/builtin\/[a-z0-9][a-z0-9_-]*$/u.test(
+    canonicalProviderSource(provider),
+  );
+}
+
 /** Exact source comparison after default-registry qualification. */
 export function sameProviderSource(left: string, right: string): boolean {
   return (

@@ -1090,6 +1090,73 @@ output "ok" { value = true }
   );
 });
 
+test("compatibility keeps builtin data semantics while locking only installable providers", () => {
+  const files = [
+    {
+      path: "main.tf",
+      text: `
+terraform {
+  required_providers {
+    random = { source = "hashicorp/random" }
+    terraform = { source = "terraform.io/builtin/terraform" }
+  }
+}
+
+data "terraform_remote_state" "shared" {
+  backend = "local"
+  config = { path = "shared.tfstate" }
+}
+
+output "encoded" {
+  value = provider::terraform::encode_expr(data.terraform_remote_state.shared.outputs)
+}
+`,
+    },
+    {
+      path: ".terraform.lock.hcl",
+      text: 'provider "registry.opentofu.org/hashicorp/random" {}\n',
+    },
+  ];
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_builtin_runtime_capability",
+    sourceSnapshot: snapshot,
+    files,
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.providerPackages).toEqual([
+    {
+      source: "registry.opentofu.org/hashicorp/random",
+      allowed: true,
+    },
+  ]);
+  expect(result.rootProviderRequirements).toEqual([
+    {
+      source: "registry.opentofu.org/hashicorp/random",
+      moduleLocalName: "random",
+    },
+  ]);
+  expect(result.dataSources).toEqual([
+    { type: "terraform_remote_state", allowed: true },
+  ]);
+  expect(result.findings.map((finding) => finding.code)).not.toContain(
+    "provider_observation_mismatch",
+  );
+
+  const denied = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_builtin_runtime_capability",
+    sourceSnapshot: snapshot,
+    policy: { allowedDataSourceTypes: [] },
+    files,
+  });
+  expect(denied.dataSources).toEqual([
+    { type: "terraform_remote_state", allowed: false },
+  ]);
+  expect(denied.findings.map((finding) => finding.code)).toContain(
+    "data_source_not_allowed",
+  );
+});
+
 test("detects dependency lockfiles without downgrading reusable modules", () => {
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_test",

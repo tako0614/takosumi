@@ -60,6 +60,7 @@ import { materializeInstallContextVariables } from "../deploy-control/validation
 import { parseInstallConfigPatchV1 } from "./install_config_patch.ts";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { deriveCommittedPostApplyRecoveryProof } from "../deploy-control/committed_post_apply_recovery.ts";
+import { isOpenTofuBuiltinProviderSource } from "takosumi-contract/provider-env-rules";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -834,6 +835,16 @@ export class CapsulesService {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `capsule ${profileCapsuleId} is deleted`,
+      );
+    }
+    if (
+      profile.bindings.some((binding) =>
+        isOpenTofuBuiltinProviderSource(binding.provider),
+      )
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "OpenTofu builtin providers cannot have ProviderBindings",
       );
     }
     return await this.#store.putProviderBindingSet(profile);

@@ -1,4 +1,7 @@
-import { canonicalProviderSource } from "../../../contract/provider-env-rules.ts";
+import {
+  canonicalProviderSource,
+  isOpenTofuBuiltinProviderSource,
+} from "../../../contract/provider-env-rules.ts";
 
 export interface OpenTofuSourceFile {
   readonly path: string;
@@ -53,7 +56,7 @@ export interface OpenTofuConfigurationGraph {
   readonly files: readonly OpenTofuSourceFile[];
   /** Reachable package set used only for install policy, mirrors, and locks. */
   readonly providerPackages: readonly OpenTofuProviderPackage[];
-  /** Exact provider identities declared or used by the selected root directory. */
+  /** Exact installable provider identities used by the selected root directory. */
   readonly rootProviderRequirements: readonly OpenTofuRootProviderRequirement[];
   readonly diagnostics: readonly OpenTofuConfigurationDiagnostic[];
 }
@@ -451,6 +454,7 @@ interface ProviderDeclaration {
 interface CompiledDirectory {
   readonly declarations: readonly ProviderDeclaration[];
   readonly providerLocalNames: readonly string[];
+  readonly providerFunctionLocalNames: readonly string[];
   readonly localModuleSources: readonly Readonly<{
     source: string;
     path: string;
@@ -640,6 +644,7 @@ function compileModuleDirectory(
 ): CompiledDirectory {
   const declarations: ProviderDeclaration[] = [];
   const providerLocalNames = new Set<string>();
+  const providerFunctionNames = new Set<string>();
   const localModuleSources: Array<{ source: string; path: string }> = [];
   const diagnostics: OpenTofuConfigurationDiagnostic[] = [];
   for (const file of files) {
@@ -649,6 +654,9 @@ function compileModuleDirectory(
       declarations.push(...compiled.declarations);
       for (const localName of compiled.providerLocalNames) {
         providerLocalNames.add(localName);
+      }
+      for (const localName of compiled.providerFunctionLocalNames) {
+        providerFunctionNames.add(localName);
       }
       localModuleSources.push(...compiled.localModuleSources);
       diagnostics.push(...compiled.diagnostics);
@@ -660,6 +668,9 @@ function compileModuleDirectory(
       for (const localName of compiled.providerLocalNames) {
         providerLocalNames.add(localName);
       }
+      for (const localName of compiled.providerFunctionLocalNames) {
+        providerFunctionNames.add(localName);
+      }
       localModuleSources.push(...compiled.localModuleSources);
       diagnostics.push(...compiled.diagnostics);
     }
@@ -669,6 +680,15 @@ function compileModuleDirectory(
   );
   for (const localName of [...providerLocalNames].sort(compareCodePoints)) {
     if (declaredLocalNames.has(localName)) continue;
+    if (providerFunctionNames.has(localName)) {
+      diagnostics.push({
+        code: "provider_usage_incomplete",
+        path: files[0]?.path ?? ".",
+        message: `Provider function namespace ${localName} requires an explicit required_providers declaration.`,
+        fatal: true,
+      });
+      continue;
+    }
     const source = implicitProviderSource(localName);
     if (!source) {
       diagnostics.push({
@@ -689,6 +709,9 @@ function compileModuleDirectory(
   return {
     declarations,
     providerLocalNames: [...providerLocalNames].sort(compareCodePoints),
+    providerFunctionLocalNames: [...providerFunctionNames].sort(
+      compareCodePoints,
+    ),
     localModuleSources,
     diagnostics,
   };
@@ -697,6 +720,7 @@ function compileModuleDirectory(
 function compileHclFile(file: OpenTofuSourceFile): CompiledDirectory {
   const declarations: ProviderDeclaration[] = [];
   const providerLocalNames = new Set<string>();
+  const providerFunctionNames = new Set<string>();
   const localModuleSources: Array<{ source: string; path: string }> = [];
   const diagnostics: OpenTofuConfigurationDiagnostic[] = [];
   const masked = maskHclCommentsAndHeredocs(file.text);
@@ -710,6 +734,7 @@ function compileHclFile(file: OpenTofuSourceFile): CompiledDirectory {
     return {
       declarations,
       providerLocalNames: [],
+      providerFunctionLocalNames: [],
       localModuleSources,
       diagnostics,
     };
@@ -821,8 +846,18 @@ function compileHclFile(file: OpenTofuSourceFile): CompiledDirectory {
       providerLocalNames.add(localName);
     }
   }
-  for (const localName of providerFunctionLocalNames(masked.text)) {
+  const providerFunctions = providerFunctionLocalNames(file.text);
+  if (!providerFunctions.complete) {
+    diagnostics.push({
+      code: "hcl_incomplete",
+      path: file.path,
+      message: "HCL template expressions could not be parsed completely.",
+      fatal: true,
+    });
+  }
+  for (const localName of providerFunctions.localNames) {
     providerLocalNames.add(localName);
+    providerFunctionNames.add(localName);
   }
   for (const moduleBlock of modules.blocks) {
     const source = topLevelAssignmentExpression(moduleBlock.body, "source");
@@ -868,6 +903,9 @@ function compileHclFile(file: OpenTofuSourceFile): CompiledDirectory {
   return {
     declarations,
     providerLocalNames: [...providerLocalNames].sort(compareCodePoints),
+    providerFunctionLocalNames: [...providerFunctionNames].sort(
+      compareCodePoints,
+    ),
     localModuleSources,
     diagnostics,
   };
@@ -939,6 +977,7 @@ function providerDeclarationFromHclAssignment(
 function compileJsonFile(file: OpenTofuSourceFile): CompiledDirectory {
   const declarations: ProviderDeclaration[] = [];
   const providerLocalNames = new Set<string>();
+  const providerFunctionNames = new Set<string>();
   const localModuleSources: Array<{ source: string; path: string }> = [];
   const diagnostics: OpenTofuConfigurationDiagnostic[] = [];
   let value: unknown;
@@ -954,6 +993,7 @@ function compileJsonFile(file: OpenTofuSourceFile): CompiledDirectory {
     return {
       declarations,
       providerLocalNames: [],
+      providerFunctionLocalNames: [],
       localModuleSources,
       diagnostics,
     };
@@ -968,6 +1008,7 @@ function compileJsonFile(file: OpenTofuSourceFile): CompiledDirectory {
     return {
       declarations,
       providerLocalNames: [],
+      providerFunctionLocalNames: [],
       localModuleSources,
       diagnostics,
     };
@@ -1051,6 +1092,7 @@ function compileJsonFile(file: OpenTofuSourceFile): CompiledDirectory {
   }
   for (const localName of jsonProviderFunctionLocalNames(value)) {
     providerLocalNames.add(localName);
+    providerFunctionNames.add(localName);
   }
   for (const modules of blockObjects(value.module)) {
     for (const [name, body] of Object.entries(modules)) {
@@ -1089,6 +1131,9 @@ function compileJsonFile(file: OpenTofuSourceFile): CompiledDirectory {
   return {
     declarations,
     providerLocalNames: [...providerLocalNames].sort(compareCodePoints),
+    providerFunctionLocalNames: [...providerFunctionNames].sort(
+      compareCodePoints,
+    ),
     localModuleSources,
     diagnostics,
   };
@@ -1308,26 +1353,207 @@ function implicitProviderSource(localName: string): string | undefined {
   );
 }
 
-function providerFunctionLocalNames(source: string): readonly string[] {
-  const code = maskHclQuotedStrings(source);
+function providerFunctionLocalNames(source: string): Readonly<{
+  localNames: readonly string[];
+  complete: boolean;
+}> {
   const names = new Set<string>();
-  const pattern = /\bprovider::([A-Za-z_][A-Za-z0-9_-]*)::/gu;
-  for (const match of code.matchAll(pattern)) names.add(match[1]!);
-  return [...names].sort(compareCodePoints);
-}
+  let complete = true;
 
-function maskHclQuotedStrings(source: string): string {
-  const output = source.split("");
-  for (let index = 0; index < source.length; index += 1) {
-    if (source[index] !== '"') continue;
-    const end = quotedStringEnd(source, index);
-    if (end === undefined) return "";
-    for (let cursor = index; cursor < end; cursor += 1) {
-      if (output[cursor] !== "\n") output[cursor] = " ";
+  const commentEnd = (index: number, end: number): number | undefined => {
+    if (
+      source[index] === "#" ||
+      (source[index] === "/" && source[index + 1] === "/")
+    ) {
+      const newline = source.indexOf("\n", index);
+      return newline === -1 || newline >= end ? end : newline + 1;
     }
-    index = end - 1;
+    if (source[index] !== "/" || source[index + 1] !== "*") {
+      return undefined;
+    }
+    const close = source.indexOf("*/", index + 2);
+    if (close === -1 || close + 2 > end) {
+      complete = false;
+      return end;
+    }
+    return close + 2;
+  };
+
+  const observeProviderFunction = (index: number, end: number): number => {
+    if (
+      source[index] !== "p" ||
+      !source.startsWith("provider::", index)
+    ) {
+      return index + 1;
+    }
+    const match = /^provider::([A-Za-z_][A-Za-z0-9_-]*)::/u.exec(
+      source.slice(index, end),
+    );
+    if (
+      !match ||
+      (index > 0 && /[A-Za-z0-9_]/u.test(source[index - 1]!))
+    ) {
+      return index + 1;
+    }
+    names.add(match[1]!);
+    return index + match[0].length;
+  };
+
+  const heredocRange = (
+    index: number,
+    end: number,
+  ):
+    | Readonly<{ bodyStart: number; bodyEnd: number; end: number }>
+    | undefined => {
+    if (source[index] !== "<" || source[index + 1] !== "<") {
+      return undefined;
+    }
+    const heredoc = /^<<-?([A-Za-z_][A-Za-z0-9_]*)\r?\n/u.exec(
+      source.slice(index, end),
+    );
+    if (!heredoc) return undefined;
+    const tag = heredoc[1]!;
+    const bodyStart = index + heredoc[0].length;
+    const terminator = new RegExp(
+      `(?:^|\\n)[ \\t]*${tag}[ \\t]*(?:\\r?\\n|$)`,
+      "u",
+    ).exec(source.slice(bodyStart, end));
+    if (!terminator) {
+      complete = false;
+      return { bodyStart, bodyEnd: end, end };
+    }
+    return {
+      bodyStart,
+      bodyEnd: bodyStart + terminator.index,
+      end: bodyStart + terminator.index + terminator[0].length,
+    };
+  };
+
+  function scanTemplateBody(start: number, end: number): void {
+    for (let index = start; index < end;) {
+      if (
+        (source.startsWith("$${", index) ||
+          source.startsWith("%%{", index)) &&
+        index + 3 <= end
+      ) {
+        index += 3;
+        continue;
+      }
+      if (
+        (source.startsWith("${", index) ||
+          source.startsWith("%{", index)) &&
+        index + 2 <= end
+      ) {
+        const expressionEnd = scanTemplateExpression(index + 1, end);
+        if (expressionEnd === undefined) {
+          complete = false;
+          return;
+        }
+        index = expressionEnd;
+        continue;
+      }
+      index += 1;
+    }
   }
-  return output.join("");
+
+  function scanQuotedTemplate(start: number, end: number): number | undefined {
+    if (source[start] !== '"') return undefined;
+    for (let index = start + 1; index < end;) {
+      if (source[index] === "\\") {
+        index += 2;
+        continue;
+      }
+      if (
+        source.startsWith("$${", index) ||
+        source.startsWith("%%{", index)
+      ) {
+        index += 3;
+        continue;
+      }
+      if (
+        source.startsWith("${", index) ||
+        source.startsWith("%{", index)
+      ) {
+        const expressionEnd = scanTemplateExpression(index + 1, end);
+        if (expressionEnd === undefined) return undefined;
+        index = expressionEnd;
+        continue;
+      }
+      if (source[index] === '"') return index + 1;
+      index += 1;
+    }
+    complete = false;
+    return undefined;
+  }
+
+  function scanTemplateExpression(
+    openBrace: number,
+    end: number,
+  ): number | undefined {
+    let depth = 1;
+    for (let index = openBrace + 1; index < end;) {
+      const skippedCommentEnd = commentEnd(index, end);
+      if (skippedCommentEnd !== undefined) {
+        index = skippedCommentEnd;
+        continue;
+      }
+      if (source[index] === '"') {
+        const quotedEnd = scanQuotedTemplate(index, end);
+        if (quotedEnd === undefined) return undefined;
+        index = quotedEnd;
+        continue;
+      }
+      const heredoc = heredocRange(index, end);
+      if (heredoc) {
+        scanTemplateBody(heredoc.bodyStart, heredoc.bodyEnd);
+        index = heredoc.end;
+        continue;
+      }
+      if (source[index] === "{") {
+        depth += 1;
+        index += 1;
+        continue;
+      }
+      if (source[index] === "}") {
+        depth -= 1;
+        index += 1;
+        if (depth === 0) return index;
+        continue;
+      }
+      index = observeProviderFunction(index, end);
+    }
+    complete = false;
+    return undefined;
+  }
+
+  function scanCode(start: number, end: number): void {
+    for (let index = start; index < end;) {
+      const skippedCommentEnd = commentEnd(index, end);
+      if (skippedCommentEnd !== undefined) {
+        index = skippedCommentEnd;
+        continue;
+      }
+      if (source[index] === '"') {
+        const quotedEnd = scanQuotedTemplate(index, end);
+        if (quotedEnd === undefined) return;
+        index = quotedEnd;
+        continue;
+      }
+      const heredoc = heredocRange(index, end);
+      if (heredoc) {
+        scanTemplateBody(heredoc.bodyStart, heredoc.bodyEnd);
+        index = heredoc.end;
+        continue;
+      }
+      index = observeProviderFunction(index, end);
+    }
+  }
+
+  scanCode(0, source.length);
+  return {
+    localNames: [...names].sort(compareCodePoints),
+    complete,
+  };
 }
 
 function jsonProviderFunctionLocalNames(value: unknown): readonly string[] {
@@ -1390,7 +1616,9 @@ function mergeProviderPackages(
 ): readonly OpenTofuProviderPackage[] {
   const exactVersionsBySource = exactProviderVersionsBySource(declarations);
   const sources = new Set(
-    declarations.map((declaration) => declaration.source),
+    declarations
+      .map((declaration) => declaration.source)
+      .filter((source) => !isOpenTofuBuiltinProviderSource(source)),
   );
   return [...sources]
     .sort(compareCodePoints)
@@ -1410,6 +1638,7 @@ function mergeRootProviderRequirements(
 ): readonly OpenTofuRootProviderRequirement[] {
   const requirements = new Map<string, OpenTofuRootProviderRequirement>();
   for (const declaration of declarations) {
+    if (isOpenTofuBuiltinProviderSource(declaration.source)) continue;
     for (const childAlias of [undefined, ...declaration.childAliases]) {
       const key = JSON.stringify([
         declaration.source,

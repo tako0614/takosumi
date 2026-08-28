@@ -11,9 +11,13 @@ import { join, resolve } from "node:path";
 import { expect, test } from "bun:test";
 
 import { handleRunnerRequest, safeRunId } from "../../runner/entrypoint.ts";
+import { analyzeOpenTofuCapsuleFiles } from "../../core/domains/sources/capsule_compatibility.ts";
+import type { SourceSnapshot } from "../../contract/sources.ts";
 import {
   prepareStrictProviderMirrorInit,
+  providerInstallationEvidence,
   providerPluginCacheForWorkspace,
+  providersFromPlanJson,
   withProviderPluginCacheInitLock,
 } from "../../runner/lib/providers.ts";
 import type { RunWorkspace } from "../../runner/lib/types.ts";
@@ -280,6 +284,153 @@ esac
     if (previousCloudflareToken === undefined)
       delete Bun.env.CLOUDFLARE_API_TOKEN;
     else Bun.env.CLOUDFLARE_API_TOKEN = previousCloudflareToken;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("compatibility_check rejects undeclared provider functions in quoted and heredoc templates before init", async () => {
+  const runId = `compat_undeclared_function_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, runId);
+  const sourceRoot = join(root, "source");
+  const fakeBin = await mkdtemp(join(tmpdir(), "takosumi-compat-bin-"));
+  const previousPath = Bun.env.PATH;
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await writeFile(
+      join(sourceRoot, "main.tf"),
+      [
+        'variable "value" { default = "ready" }',
+        'output "quoted" { value = "prefix ${provider::terraform::encode_expr(var.value)}" }',
+        'output "heredoc" {',
+        "  value = <<-EOT",
+        '    prefix ${provider::terraform::encode_expr(var.value)}',
+        "  EOT",
+        "}",
+      ].join("\n"),
+    );
+    const tofuPath = join(fakeBin, "tofu");
+    await writeFile(
+      tofuPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+test "$1" = init
+test ! -e .terraform.lock.hcl
+echo "init ok"
+`,
+    );
+    await chmod(tofuPath, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+
+    const response = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "compatibility_check",
+          runId,
+          request: {},
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as {
+      readonly status: string;
+      readonly stderr?: string;
+    };
+    expect(body.status).toBe("failed");
+    expect(body.stderr).toContain(
+      "Provider function namespace terraform requires an explicit required_providers declaration.",
+    );
+  } finally {
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("compatibility_check carries declared builtin-only configuration through init to an external-free report without a lock", async () => {
+  const runId = `compat_builtin_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, runId);
+  const sourceRoot = join(root, "source");
+  const fakeBin = await mkdtemp(join(tmpdir(), "takosumi-compat-bin-"));
+  const previousPath = Bun.env.PATH;
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    const sourceText = `
+terraform {
+  required_providers {
+    terraform = { source = "terraform.io/builtin/terraform" }
+  }
+}
+
+data "terraform_remote_state" "shared" {
+  backend = "local"
+  config = { path = "shared.tfstate" }
+}
+
+output "encoded" {
+  value = "prefix \${provider::terraform::encode_expr(data.terraform_remote_state.shared.outputs)}"
+}
+
+output "encoded_heredoc" {
+  value = <<-EOT
+    prefix \${provider::terraform::encode_expr(data.terraform_remote_state.shared.outputs)}
+  EOT
+}
+`;
+    await writeFile(join(sourceRoot, "main.tf"), sourceText);
+    const tofuPath = join(fakeBin, "tofu");
+    await writeFile(
+      tofuPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+test "$1" = init
+test ! -e .terraform.lock.hcl
+echo "init ok"
+`,
+    );
+    await chmod(tofuPath, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+
+    const response = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "compatibility_check",
+          runId,
+          request: {},
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      readonly status: string;
+      readonly files: readonly { readonly path: string; readonly text: string }[];
+      readonly providerLockDigest?: string;
+    };
+    expect(body.status).toBe("succeeded");
+    expect(body.providerLockDigest).toBeUndefined();
+    const report = analyzeOpenTofuCapsuleFiles({
+      sourceId: "src_builtin_compatibility",
+      sourceSnapshot: { path: "." } as SourceSnapshot,
+      files: body.files,
+    });
+    expect(report).toMatchObject({
+      level: "ready",
+      providerPackages: [],
+      rootProviderRequirements: [],
+      dataSources: [{ type: "terraform_remote_state", allowed: true }],
+    });
+  } finally {
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
     await rm(root, { recursive: true, force: true });
     await rm(fakeBin, { recursive: true, force: true });
   }
@@ -778,6 +929,43 @@ esac
     await rm(root, { recursive: true, force: true });
     await rm(fakeBin, { recursive: true, force: true });
     await rm(mirrorRoot, { recursive: true, force: true });
+  }
+});
+
+test("plan JSON, strict mirror, and installation evidence omit OpenTofu builtins", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-builtin-boundary-"));
+  const workspace = testWorkspace(root);
+  const external = "registry.opentofu.org/cloudflare/cloudflare";
+  const builtin = "terraform.io/builtin/terraform";
+  try {
+    const planJson = JSON.stringify({
+      configuration: {
+        provider_config: {
+          cloudflare: { full_name: external },
+          terraform: { full_name: builtin },
+        },
+      },
+    });
+    expect(providersFromPlanJson(planJson)).toEqual([external]);
+
+    const init = await prepareStrictProviderMirrorInit(
+      workspace,
+      { env: {} },
+      [builtin, external],
+      { requireMirror: true },
+    );
+    expect(init?.attestation?.providers).toEqual([external]);
+    expect(await readFile(join(root, "takosumi.tofu.rc"), "utf8"))
+      .not.toContain(builtin);
+
+    const evidence = await providerInstallationEvidence(
+      workspace.generatedRootDir,
+      [builtin, external],
+      init?.attestation,
+    );
+    expect(evidence.map((entry) => entry.provider)).toEqual([external]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

@@ -22,6 +22,7 @@ import {
   isWorkspaceBindableOperatorConnection,
 } from "takosumi-contract/connections";
 import {
+  isOpenTofuBuiltinProviderSource,
   normalizeProviderSourceAddress,
   sameProviderSource,
 } from "takosumi-contract/provider-env-rules";
@@ -318,6 +319,16 @@ export class ConnectionsService {
   async resolveProviderBindings(
     capsule: Capsule,
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    const bindings = await this.#validatedProviderBindings(capsule);
+    const policy = await this.#policyForCapsule(capsule);
+    const resolved = await Promise.all(
+      bindings.map((binding) => this.#resolveBinding(capsule, binding, policy)),
+    );
+    assertUniqueProviderBindingIdentities(resolved);
+    return resolved;
+  }
+
+  async #validatedProviderBindings(capsule: Capsule): Promise<ProviderBindings> {
     const set = await this.#store.getProviderBindingSetByCapsule(
       capsule.id,
       capsule.environment,
@@ -326,12 +337,17 @@ export class ConnectionsService {
       set?.bindings ?? [],
       "capsule provider binding set bindings",
     );
-    const policy = await this.#policyForCapsule(capsule);
-    const resolved = await Promise.all(
-      bindings.map((binding) => this.#resolveBinding(capsule, binding, policy)),
+    const builtinBinding = bindings.find((binding) =>
+      isOpenTofuBuiltinProviderSource(binding.provider)
     );
-    assertUniqueProviderBindingIdentities(resolved);
-    return resolved;
+    if (builtinBinding) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `stored ProviderBinding cannot target OpenTofu builtin runtime capability ${normalizeProviderSourceAddress(builtinBinding.provider)}`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+      );
+    }
+    return bindings;
   }
 
   async resolveProviderBindingsForRun(
@@ -367,7 +383,12 @@ export class ConnectionsService {
     allowLegacySourceOnlyDefault: boolean,
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     const required = validateRequiredProviderBindingIdentities(requiredProviders);
-    if (required.length === 0) return [];
+    if (required.length === 0) {
+      // Even a provider-free exact Plan must not let a legacy builtin binding
+      // survive canonical runtime resolution as an apparently valid row.
+      await this.#validatedProviderBindings(capsule);
+      return [];
+    }
     const explicit = await this.resolveProviderBindings(capsule);
     const ambiguous = explicit.find(
       (entry) =>

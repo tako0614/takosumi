@@ -1,13 +1,19 @@
 import { describe, expect, test } from "bun:test";
+import type { CapsuleCompatibilityReport } from "../../../../contract/capsules.ts";
 import type { PolicyConfig } from "../../../../contract/install-configs.ts";
 import type { ProviderCredentialMintEvidence } from "../../../../contract/security.ts";
 import {
+  evaluateCompatibilityReportAgainstPolicy,
   evaluateProviderConnectionCredentialPolicy,
   evaluateProviderCredentialMintPolicy,
+  evaluateProviderInstallationPolicy,
+  evaluateProviderLockfilePolicy,
   mergePolicyConfigs,
+  requiredProvidersFromCompatibilityReport,
 } from "../../../../core/domains/deploy-control/provider_policy.ts";
 
 const PROVIDER = "registry.terraform.io/tako0614/takoform";
+const BUILTIN_PROVIDER = "terraform.io/builtin/terraform";
 
 function evidence(connectionId: string): ProviderCredentialMintEvidence {
   return {
@@ -21,6 +27,74 @@ function evidence(connectionId: string): ProviderCredentialMintEvidence {
     secretValueStored: false,
   };
 }
+
+test("legacy compatibility reports omit OpenTofu builtins from provider policy and supply-chain gates", () => {
+  const report: CapsuleCompatibilityReport = {
+    id: "caprep_legacy_builtin",
+    sourceId: "src_legacy_builtin",
+    sourceSnapshotId: "snap_legacy_builtin",
+    modulePath: ".",
+    level: "unsupported",
+    findings: [
+      {
+        severity: "error",
+        compatibilityImpact: "unsupported",
+        code: "provider_not_allowed",
+        message: `Provider ${BUILTIN_PROVIDER} is not allowed by policy.`,
+      },
+    ],
+    providerPackages: [
+      { source: BUILTIN_PROVIDER, allowed: true },
+      { source: PROVIDER, allowed: true },
+    ],
+    rootProviderRequirements: [
+      { source: BUILTIN_PROVIDER, moduleLocalName: "terraform" },
+      { source: PROVIDER, moduleLocalName: "takoform" },
+    ],
+    resources: [],
+    dataSources: [{ type: "terraform_remote_state", allowed: true }],
+    provisioners: [],
+    createdAt: "2026-08-28T00:00:00.000Z",
+  };
+  const policy: PolicyConfig = {
+    allowedProviders: [PROVIDER],
+    providerLockfile: { requireDigest: true },
+    providerInstallation: { requireMirror: true },
+  };
+
+  expect(evaluateCompatibilityReportAgainstPolicy(report, policy)).toEqual({
+    runnable: true,
+    reasons: [],
+  });
+  const requiredProviders = requiredProvidersFromCompatibilityReport(report, [
+    "*",
+  ]);
+  expect(requiredProviders).toEqual([PROVIDER]);
+  expect(
+    evaluateProviderLockfilePolicy(undefined, policy, [BUILTIN_PROVIDER]),
+  ).toBeUndefined();
+  expect(
+    evaluateProviderInstallationPolicy(
+      [
+        {
+          provider: PROVIDER,
+          mirrored: true,
+          installationMethod: "filesystem_mirror",
+          attested: true,
+          attestationMethod: "forced_filesystem_mirror_init",
+        },
+      ],
+      policy,
+      requiredProviders,
+    ),
+  ).toEqual({
+    requireMirror: true,
+    evidenceCount: 1,
+    missingEvidenceProviders: [],
+    unmirroredProviders: [],
+    reasons: [],
+  });
+});
 
 describe("provider destination policy", () => {
   test("intersects ownership scopes and exact recipe/mode pairs", () => {

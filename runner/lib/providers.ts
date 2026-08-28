@@ -48,7 +48,10 @@ import {
   parseRequiredProviders,
   parseRequiredProviderRequirements,
 } from "./parsing.ts";
-import { canonicalProviderSource } from "../../contract/provider-env-rules.ts";
+import {
+  canonicalProviderSource,
+  isOpenTofuBuiltinProviderSource,
+} from "../../contract/provider-env-rules.ts";
 import { resourceTypeMatchesPattern } from "../../contract/plan-scope.ts";
 import {
   compileOpenTofuConfigurationGraph,
@@ -77,7 +80,10 @@ export async function requiredProvidersForGeneratedRoot(
   rootDir: string,
 ): Promise<TerraformTreeProviderScan> {
   const declared = parseRequiredProviders(request);
-  const declaredRequirements = parseRequiredProviderRequirements(request);
+  const declaredRequirements = parseRequiredProviderRequirements(request)?.filter(
+    (requirement) =>
+      !isOpenTofuBuiltinProviderSource(requirement.source),
+  );
   const observed = await requiredProviderSourcesFromTerraformTree(rootDir);
   if (
     declaredRequirements !== undefined &&
@@ -161,6 +167,9 @@ export function assertProviderSetStableAfterInit(
       "OpenTofu provider package set changed after init and before provider execution",
     );
   }
+  // OpenTofu owns the built-in provider namespace and does not write those
+  // providers to `.terraform.lock.hcl`. Normalize legacy scan projections to
+  // the installable-provider set before comparing them with the actual lock.
   const expectedSources = normalizedProviderList(before.providers);
   if (dependencyLockText === undefined) {
     if (expectedSources.length > 0) {
@@ -176,6 +185,8 @@ export function assertProviderSetStableAfterInit(
       "OpenTofu dependency lock provider set could not be parsed exactly",
     );
   }
+  // A builtin row in an actual dependency lock is impossible output from
+  // OpenTofu. Do not discard it: unexpected lock content remains a mismatch.
   if (JSON.stringify(expectedSources) !== JSON.stringify(observed.sources)) {
     throw new Error(
       "OpenTofu dependency lock provider set does not match the statically derived provider set",
@@ -354,8 +365,9 @@ export function assertRunnerPolicyBeforeInit(
 ): void {
   if (!runnerProfile) return;
   parseLegacySourcelessDestroyRecovery(request) ?? parseSource(request);
-  const requiredProviders =
-    options.requiredProviders ?? parseRequiredProviders(request);
+  const requiredProviders = (
+    options.requiredProviders ?? parseRequiredProviders(request)
+  ).filter((provider) => !isOpenTofuBuiltinProviderSource(provider));
   const allowedProviders = stringArray(
     recordField(runnerProfile, "allowedProviders"),
   );
@@ -409,22 +421,43 @@ export async function generatedRootTreeHasNoProviderUsage(
   rootDir: string,
 ): Promise<boolean> {
   const scan = await requiredProviderSourcesFromTerraformTree(rootDir);
-  if (!scan.complete || scan.files.length === 0) return false;
+  if (!scan.complete || scan.files.length === 0 || scan.providers.length > 0) {
+    return false;
+  }
   for (const file of scan.files) {
-    // The provider graph is exact for JSON, but this helper additionally
-    // proves the absence of resource/data/backend/provider blocks. Until the
-    // JSON semantic classifier covers those blocks, JSON cannot prove a
-    // provider-free generated root.
+    // The canonical graph derives package identities from HCL resource, data,
+    // ephemeral, and provider-function usage. This supplemental gate rejects
+    // runtime configuration that has no package projection but is not the
+    // builtin-only/provider-free case this policy exception represents.
+    // Until JSON compatibility semantics are fully classified, JSON remains
+    // conservative even when its provider package projection is empty.
     if (openTofuConfigurationFileKind(file.path) === "json") return false;
-    if (hasProviderUsageBeforeInit(file.text)) return false;
+    if (hasUnprojectedProviderRuntimeConfiguration(file.text)) return false;
   }
   return true;
 }
 
+function hasUnprojectedProviderRuntimeConfiguration(text: string): boolean {
+  // A complete canonical graph with zero package projections proves every
+  // required_providers entry is an OpenTofu builtin. Provider configuration
+  // and backend blocks remain separate runtime authority and stay excluded
+  // from the provider-free policy exception.
+  return /\bprovider\s+"|\bbackend\s+"/u.test(text);
+}
+
+/**
+ * Single-file compatibility helper retained for callers outside the tree
+ * scanner. The canonical compiler distinguishes installable provider use from
+ * builtin resource, data-source, and declared provider-function capability.
+ */
 export function hasProviderUsageBeforeInit(text: string): boolean {
-  const normalized = text.replace(/\brequired_providers\s*\{\s*\}/gu, "");
-  return /\brequired_providers\b|\bprovider\s+"|\bresource\s+"|\bdata\s+"|\bbackend\s+"/u.test(
-    normalized,
+  const graph = compileOpenTofuConfigurationGraph({
+    files: [{ path: "providers.tf", text }],
+  });
+  return (
+    !graph.complete ||
+    graph.providerPackages.length > 0 ||
+    hasUnprojectedProviderRuntimeConfiguration(text)
   );
 }
 
@@ -432,13 +465,19 @@ export function providersFromPlanJson(planJson: string): readonly string[] {
   const parsed = JSON.parse(planJson) as JsonRecord;
   const providers = new Set<string>();
   collectProviderFullNames(parsed, providers);
-  return Array.from(providers).sort();
+  return normalizedProviderList([...providers]);
 }
 
 export function normalizedProviderList(
   providers: readonly string[],
 ): readonly string[] {
-  return Array.from(new Set(providers.map(canonicalProviderAddress))).sort();
+  return Array.from(
+    new Set(
+      providers
+        .map(canonicalProviderAddress)
+        .filter((provider) => !isOpenTofuBuiltinProviderSource(provider)),
+    ),
+  ).sort();
 }
 
 export async function providerInstallationEvidence(
@@ -462,8 +501,7 @@ export async function providerInstallationEvidence(
     Bun.env.OPENTOFU_PROVIDER_MIRROR ?? DEFAULT_PROVIDER_MIRROR_PATH;
   const attestedProviders = new Set(attestation?.providers ?? []);
   const rows = await Promise.all(
-    providers.map(async (provider) => {
-      const canonical = canonicalProviderAddress(provider);
+    normalizedProviderList(providers).map(async (canonical) => {
       const mirrorPath = join(mirrorRoot, ...canonical.split("/"));
       const installedPath = join(
         moduleDir,

@@ -6,6 +6,7 @@ import {
   DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
   OpenTofuControllerError,
   OpenTofuController,
+  providerInstallationAuditEvents,
   snapshotModuleSource,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import type {
@@ -209,6 +210,30 @@ const AWS_MIRROR_EVIDENCE = {
     "/opt/opentofu/provider-mirror/registry.opentofu.org/hashicorp/aws",
 } as const;
 
+test("apply and destroy audit construction rejects live builtin provider installation evidence", () => {
+  const builtinEvidence = [
+    {
+      provider: "terraform.io/builtin/terraform",
+      mirrored: false,
+      installationMethod: "unknown" as const,
+    },
+  ];
+
+  for (const phase of ["apply", "destroy"] as const) {
+    expect(() =>
+      providerInstallationAuditEvents(
+        `${phase}_builtin_evidence`,
+        phase,
+        1,
+        builtinEvidence,
+        { requireMirror: false },
+      )
+    ).toThrow(
+      /live provider installation evidence cannot target OpenTofu builtin runtime capability terraform\.io\/builtin\/terraform/,
+    );
+  }
+});
+
 async function seedRestoreFixture(
   store: InMemoryOpenTofuControlStore,
   suffix: string,
@@ -352,6 +377,88 @@ test("RunEngine translates rootgen validation at its runtime boundary", async ()
   });
 });
 
+test("legacy stored builtin ProviderBinding cannot become a new Capsule Plan requirement", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { capsule } = await seedCapsuleModel(store);
+  const builtinProvider = "terraform.io/builtin/terraform";
+  const now = "2026-06-06T00:00:00.000Z";
+  await store.putConnection({
+    id: "conn_legacy_builtin",
+    workspaceId: capsule.workspaceId,
+    provider: builtinProvider,
+    providerSource: builtinProvider,
+    credentialRecipe: {
+      id: "legacy-builtin-env",
+      authMode: "env",
+      secretPartition: "provider-credentials",
+    },
+    secretPartition: "provider-credentials",
+    kind: "generic",
+    scope: "workspace",
+    status: "verified",
+    materialization: "secret",
+    envNames: ["BUILTIN_CREDENTIAL_MUST_NOT_BE_EXPOSED"],
+    createdAt: now,
+    updatedAt: now,
+  });
+  const bindingSet = {
+    id: "ipcset_legacy_builtin",
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    environment: capsule.environment,
+    bindings: [
+      {
+        provider: builtinProvider,
+        connectionId: "conn_legacy_builtin",
+      },
+    ],
+    createdAt: now,
+    updatedAt: now,
+  } as const;
+  await store.putProviderBindingSet(bindingSet);
+  let credentialMintCalls = 0;
+  let runnerPlanCalls = 0;
+  const providerVault = fakeProviderVault({
+    provider: builtinProvider,
+    connectionId: "conn_legacy_builtin",
+  });
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    store,
+    vault: {
+      ...providerVault,
+      mintForCapsuleProviderBindings: (...args) => {
+        credentialMintCalls += 1;
+        return providerVault.mintForCapsuleProviderBindings(...args);
+      },
+    } as never,
+    now: () => 1,
+    newId: deterministicIds(),
+    runner: {
+      plan: () => {
+        runnerPlanCalls += 1;
+        return Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: testPlanArtifact("legacy-builtin"),
+        });
+      },
+      apply: () => Promise.resolve({}),
+    },
+  });
+
+  await expect(controller.createCapsulePlan(capsule.id)).rejects.toThrow(
+    /stored ProviderBinding cannot target OpenTofu builtin runtime capability/,
+  );
+  expect(credentialMintCalls).toBe(0);
+  expect(runnerPlanCalls).toBe(0);
+  expect(
+    await store.getProviderBindingSetByCapsule(
+      capsule.id,
+      capsule.environment,
+    ),
+  ).toEqual(bindingSet);
+});
+
 test("plan/apply records Capsule, StateVersion, and explicitly allowlisted Output", async () => {
   const { store, request, capsuleId } = await seedUpdatableCapsule();
   const controller = new OpenTofuController({
@@ -405,6 +512,52 @@ test("plan/apply records Capsule, StateVersion, and explicitly allowlisted Outpu
   expect(stateVersions.stateVersions.map((version) => version.id)).toContain(
     stateVersion!.id,
   );
+});
+
+test("apply rejects live builtin provider installation evidence before audit or state persistence", async () => {
+  const { store, request, capsuleId, currentStateVersionId } =
+    await seedUpdatableCapsule();
+  const baseRunner = fakeRunner();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(10),
+    newId: deterministicIds(),
+    runner: {
+      ...baseRunner,
+      apply: (job) =>
+        Promise.resolve(
+          fixtureStateCommit({
+            rawOutputRef: job.rawOutputRef,
+            providerInstallation: [
+              {
+                provider: "terraform.io/builtin/terraform",
+                mirrored: false,
+                installationMethod: "unknown" as const,
+              },
+            ],
+          }),
+        ),
+    },
+  });
+
+  const { planRun } = await controller.createPlanRun(request);
+  const applied = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  const capsule = await store.getCapsule(capsuleId);
+
+  expect(applied.applyRun.status).toBe("failed");
+  expect(applied.applyRun.diagnostics?.[0]?.message).toContain(
+    "live provider installation evidence cannot target OpenTofu builtin runtime capability",
+  );
+  expect(applied.applyRun.auditEvents.map((event) => event.type)).not.toContain(
+    "apply.provider_installation_evaluated",
+  );
+  expect(capsule?.currentStateVersionId).toBe(currentStateVersionId);
+  expect(capsule?.status).toBe("active");
 });
 
 test("apply treats former runtime declaration names as ordinary allowlisted Outputs", async () => {
@@ -1786,6 +1939,59 @@ test("destroy is recorded as an ApplyRun when the runner succeeds", async () => 
   expect(destroyed.applyRun.auditEvents.map((event) => event.type)).toContain(
     "destroy.completed",
   );
+});
+
+test("destroy rejects live builtin provider installation evidence before audit or teardown persistence", async () => {
+  const { store, capsuleId, currentStateVersionId } =
+    await seedUpdatableCapsule();
+  const baseRunner = fakeRunner();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(40),
+    newId: deterministicIds(),
+    runner: {
+      ...baseRunner,
+      destroy: () =>
+        Promise.resolve(
+          fixtureStateCommit({
+            providerInstallation: [
+              {
+                provider: "terraform.io/builtin/terraform",
+                mirrored: false,
+                installationMethod: "unknown" as const,
+              },
+            ],
+          }),
+        ),
+    },
+  });
+
+  const { planRun } = await controller.createPlanRun({
+    workspaceId: "workspace_test",
+    capsuleId,
+    source: SOURCE,
+    operation: "destroy",
+    requiredProviderRequirements: CLOUDFLARE_REQUIREMENTS,
+    requiredProviders: [CLOUDFLARE_PROVIDER],
+  });
+  await controller.approveRun(planRun.id, { approvedBy: "ops" });
+  const destroyed = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  const capsule = await store.getCapsule(capsuleId);
+
+  expect(destroyed.applyRun.status).toBe("failed");
+  expect(destroyed.applyRun.diagnostics?.[0]?.message).toContain(
+    "live provider installation evidence cannot target OpenTofu builtin runtime capability",
+  );
+  expect(
+    destroyed.applyRun.auditEvents.map((event) => event.type),
+  ).not.toContain("destroy.provider_installation_evaluated");
+  expect(capsule?.currentStateVersionId).toBe(currentStateVersionId);
+  expect(capsule?.status).toBe("active");
 });
 
 test("destroy apply is rejected until the plan is approved (always two-stage, spec §10.6)", async () => {

@@ -153,6 +153,18 @@ test("Git install plan rejects variable values and secret-shaped Git URLs", asyn
       options: {
         providerBindings: [
           {
+            provider: "terraform.io/builtin/terraform",
+            moduleLocalName: "terraform",
+            connectionId: "conn_aaaaaaaa",
+          },
+        ],
+      },
+    },
+    {
+      ...createBody(),
+      options: {
+        providerBindings: [
+          {
             provider: "registry.opentofu.org/hashicorp/aws",
             moduleLocalName: "aws",
             connectionId: "raw-super-secret",

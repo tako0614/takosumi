@@ -196,9 +196,12 @@ export function analyzeOpenTofuCapsuleFiles(
   collectDependencyLockFindings(input.files, providerPackages, findings);
   collectFilesystemSensitiveExpressionFindings(hclFiles, findings);
 
-  const hasProviderBackedBlocks =
-    resources.length > 0 || dataSources.length > 0 || provisioners.length > 0;
-  if (providerPackages.length === 0 && hasProviderBackedBlocks) {
+  const hasInstallableProviderBackedBlocks =
+    resources.some((resource) => resource.type !== "terraform_data") ||
+    dataSources.some(
+      (dataSource) => dataSource.type !== "terraform_remote_state",
+    );
+  if (providerPackages.length === 0 && hasInstallableProviderBackedBlocks) {
     findings.push({
       severity: "warning",
       compatibilityImpact: "needs_patch",

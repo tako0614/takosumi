@@ -269,6 +269,157 @@ test("canonical graph represents zero, one, and N exact identities", () => {
   expect(many.rootProviderRequirements).toHaveLength(2);
 });
 
+test("canonical graph recognizes implicit OpenTofu builtin resources and data without provider projections", () => {
+  const result = compile([
+    {
+      path: "main.tf",
+      text: `
+data "terraform_remote_state" "shared" {
+  backend = "local"
+  config = { path = "shared.tfstate" }
+}
+
+resource "terraform_data" "value" {
+  input = data.terraform_remote_state.shared.outputs
+}
+`,
+    },
+  ]);
+
+  expect(result.complete).toBe(true);
+  expect(result.providerPackages).toEqual([]);
+  expect(result.rootProviderRequirements).toEqual([]);
+  expect(result.diagnostics).toEqual([]);
+});
+
+test("provider functions fail closed without an explicit required_providers declaration", () => {
+  const result = compile([
+    {
+      path: "main.tf",
+      text: `output "encoded" { value = provider::terraform::encode_expr("ready") }`,
+    },
+  ]);
+
+  expect(result.complete).toBe(false);
+  expect(result.providerPackages).toEqual([]);
+  expect(result.rootProviderRequirements).toEqual([]);
+  expect(result.diagnostics).toContainEqual({
+    code: "provider_usage_incomplete",
+    path: "main.tf",
+    message:
+      "Provider function namespace terraform requires an explicit required_providers declaration.",
+    fatal: true,
+  });
+});
+
+test("provider functions in HCL templates and heredocs require explicit declarations without matching literal text", () => {
+  const undeclaredTemplates = [
+    {
+      path: "quoted.tf",
+      text:
+        'variable "value" {}\noutput "encoded" { value = "prefix ${provider::terraform::encode_expr(var.value)}" }',
+    },
+    {
+      path: "heredoc.tf",
+      text: [
+        'variable "value" {}',
+        'output "encoded" {',
+        "  value = <<-EOT",
+        '    prefix ${provider::terraform::encode_expr(var.value)}',
+        "  EOT",
+        "}",
+      ].join("\n"),
+    },
+  ];
+  for (const file of undeclaredTemplates) {
+    const result = compile([file]);
+    expect(result.complete).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "provider_usage_incomplete",
+        message:
+          "Provider function namespace terraform requires an explicit required_providers declaration.",
+        fatal: true,
+      }),
+    );
+  }
+
+  const declared = compile([
+    {
+      path: "main.tf",
+      text: [
+        'terraform { required_providers { terraform = { source = "terraform.io/builtin/terraform" } } }',
+        'variable "value" {}',
+        'output "quoted" { value = "prefix ${provider::terraform::encode_expr(var.value)}" }',
+        'output "heredoc" {',
+        "  value = <<-EOT",
+        '    prefix ${provider::terraform::encode_expr(var.value)}',
+        "  EOT",
+        "}",
+      ].join("\n"),
+    },
+  ]);
+  expect(declared.complete).toBe(true);
+  expect(declared.providerPackages).toEqual([]);
+  expect(declared.rootProviderRequirements).toEqual([]);
+
+  const literalText = compile([
+    {
+      path: "main.tf",
+      text: [
+        'output "quoted" { value = "provider::terraform::encode_expr is documentation" }',
+        'output "escaped_template" { value = "$${provider::terraform::encode_expr(var.value)}" }',
+        'output "heredoc" {',
+        "  value = <<-EOT",
+        "    provider::terraform::encode_expr is documentation",
+        '    $${provider::terraform::encode_expr(var.value)}',
+        "  EOT",
+        "}",
+      ].join("\n"),
+    },
+  ]);
+  expect(literalText.complete).toBe(true);
+  expect(literalText.providerPackages).toEqual([]);
+  expect(literalText.rootProviderRequirements).toEqual([]);
+  expect(literalText.diagnostics).toEqual([]);
+});
+
+test("declared OpenTofu builtin provider functions remain outside installable provider projections", () => {
+  const result = compile([
+    {
+      path: "main.tf",
+      text: `
+terraform {
+  required_providers {
+    terraform = { source = "terraform.io/builtin/terraform" }
+  }
+}
+
+data "terraform_remote_state" "shared" {
+  backend = "local"
+  config = { path = "shared.tfstate" }
+}
+
+resource "terraform_data" "value" {
+  input = "ready"
+}
+
+output "encoded" {
+  value = provider::terraform::encode_expr({
+    state = data.terraform_remote_state.shared.outputs
+    value = terraform_data.value.output
+  })
+}
+`,
+    },
+  ]);
+
+  expect(result.complete).toBe(true);
+  expect(result.providerPackages).toEqual([]);
+  expect(result.rootProviderRequirements).toEqual([]);
+  expect(result.diagnostics).toEqual([]);
+});
+
 test("reachable child exact version belongs to the package set, not the selected-root tuple", () => {
   const result = compile([
     {
@@ -471,7 +622,7 @@ test("module discovery fails closed for ambiguous topology and global scan caps"
   );
 });
 
-test("module discovery derives implicit providers used by resource, data, and provider blocks", () => {
+test("module discovery derives installable providers used by resource, data, and provider blocks", () => {
   const discovered = discoverOpenTofuModules({
     files: [
       {
@@ -480,6 +631,7 @@ test("module discovery derives implicit providers used by resource, data, and pr
 terraform {
   required_providers {
     cloudflare = { source = "cloudflare/cloudflare" }
+    terraform = { source = "terraform.io/builtin/terraform" }
   }
 }
 resource "aws_s3_bucket" "assets" {}
@@ -504,7 +656,6 @@ output "encoded" {
           { source: "registry.opentofu.org/cloudflare/cloudflare" },
           { source: "registry.opentofu.org/hashicorp/aws" },
           { source: "registry.opentofu.org/hashicorp/random" },
-          { source: "terraform.io/builtin/terraform" },
         ],
         rootProviderRequirements: [
           {
@@ -518,10 +669,6 @@ output "encoded" {
           {
             source: "registry.opentofu.org/hashicorp/random",
             moduleLocalName: "random",
-          },
-          {
-            source: "terraform.io/builtin/terraform",
-            moduleLocalName: "terraform",
           },
         ],
       },

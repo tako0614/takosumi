@@ -221,6 +221,10 @@ import {
   isSecretKey,
   redactString,
 } from "takosumi-contract/redaction";
+import {
+  canonicalProviderSource,
+  isOpenTofuBuiltinProviderSource,
+} from "takosumi-contract/provider-env-rules";
 import type { ObservabilitySink } from "../observability/mod.ts";
 import { UsageReportingService } from "./usage_service.ts";
 // The usage input-type vocabulary is owned by the usage service; re-exported here
@@ -2500,6 +2504,15 @@ export function providerInstallationAuditEvents(
 ): readonly DeployControlAuditEvent[] {
   if (!evidence && policy?.requireMirror !== true) return [];
   const rows = evidence ?? [];
+  const builtinEvidence = rows.find((entry) =>
+    isOpenTofuBuiltinProviderSource(entry.provider)
+  );
+  if (builtinEvidence) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `live provider installation evidence cannot target OpenTofu builtin runtime capability ${canonicalProviderSource(builtinEvidence.provider)}`,
+    );
+  }
   const mirroredCount = rows.filter((entry) => entry.mirrored).length;
   const attestedCount = rows.filter((entry) => entry.attested === true).length;
   return [

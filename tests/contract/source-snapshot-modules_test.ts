@@ -119,6 +119,87 @@ test("repository module index parser accepts only canonical bounded observations
   });
 });
 
+test("repository module index normalizes legacy builtin provider projections on read", () => {
+  const legacyIndex = {
+    status: "ready" as const,
+    scopePath: ".",
+    modules: [
+      {
+        path: ".",
+        providerPackages: [
+          { source: "terraform.io/builtin/terraform" },
+          {
+            source: "registry.opentofu.org/cloudflare/cloudflare",
+            version: "5.8.2",
+          },
+        ],
+        rootProviderRequirements: [
+          {
+            source: "terraform.io/builtin/terraform",
+            moduleLocalName: "terraform",
+          },
+          {
+            source: "registry.opentofu.org/cloudflare/cloudflare",
+            moduleLocalName: "cloudflare",
+            version: "5.8.2",
+          },
+        ],
+      },
+    ],
+  };
+
+  expect(parseRepositoryModulesSnapshot(legacyIndex)).toEqual({
+    status: "ready",
+    scopePath: ".",
+    modules: [
+      {
+        path: ".",
+        providerPackages: [
+          {
+            source: "registry.opentofu.org/cloudflare/cloudflare",
+            version: "5.8.2",
+          },
+        ],
+        rootProviderRequirements: [
+          {
+            source: "registry.opentofu.org/cloudflare/cloudflare",
+            moduleLocalName: "cloudflare",
+            version: "5.8.2",
+          },
+        ],
+      },
+    ],
+  });
+  expect(
+    sourceSnapshotInstallModulesProjection({
+      id: "snap_legacy_builtin",
+      repositoryModules: legacyIndex,
+    } as SourceSnapshot),
+  ).toEqual({
+    status: "ready",
+    sourceSnapshotId: "snap_legacy_builtin",
+    scopePath: ".",
+    modules: [
+      {
+        path: ".",
+        providerPackages: [
+          {
+            source: "registry.opentofu.org/cloudflare/cloudflare",
+            version: "5.8.2",
+          },
+        ],
+        rootProviderRequirements: [
+          {
+            source: "registry.opentofu.org/cloudflare/cloudflare",
+            moduleLocalName: "cloudflare",
+            version: "5.8.2",
+          },
+        ],
+      },
+    ],
+  });
+});
+
 test("install-modules projects the immutable file-derived index, including zero modules", () => {
   const snapshot = {
     id: "snap_1",

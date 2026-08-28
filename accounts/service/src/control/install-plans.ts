@@ -12,7 +12,10 @@ import {
   type InstallConfig,
 } from "takosumi-contract/install-configs";
 import type { ProviderBindings } from "takosumi-contract/connections";
-import { normalizeProviderSourceAddress } from "takosumi-contract/provider-env-rules";
+import {
+  isOpenTofuBuiltinProviderSource,
+  normalizeProviderSourceAddress,
+} from "takosumi-contract/provider-env-rules";
 import {
   normalizeCompatibilityReportModulePath,
   type CapsuleCompatibilityReportResponse,
@@ -1348,6 +1351,7 @@ function providerBindingRequests(
       item.provider !== provider ||
       !PROVIDER_SOURCE_PATTERN.test(provider) ||
       normalizeProviderSourceAddress(provider) !== provider ||
+      isOpenTofuBuiltinProviderSource(provider) ||
       !moduleLocalName ||
       item.moduleLocalName !== moduleLocalName ||
       !PROVIDER_IDENTIFIER_PATTERN.test(moduleLocalName) ||

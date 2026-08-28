@@ -25,7 +25,10 @@ import {
   parseRepositoryManifestText,
   type RepositoryManifestDocument,
 } from "./repository-manifest.ts";
-import { canonicalProviderSource } from "./provider-env-rules.ts";
+import {
+  canonicalProviderSource,
+  isOpenTofuBuiltinProviderSource,
+} from "./provider-env-rules.ts";
 
 /**
  * GitHub-agnostic Git coordinate. The only repository identity Takosumi core
@@ -396,21 +399,25 @@ export function parseRepositoryModulesSnapshot(
       return undefined;
     }
     paths.add(module.path);
-    const packages: RepositoryModuleProviderPackage[] = [];
+    const observedPackages: RepositoryModuleProviderPackage[] = [];
     const packageSources = new Set<string>();
     for (const providerPackage of module.providerPackages) {
       const parsed = parseRepositoryModuleProviderPackage(providerPackage);
       if (!parsed || packageSources.has(parsed.source)) return undefined;
       packageSources.add(parsed.source);
-      packages.push(parsed);
+      observedPackages.push(parsed);
     }
-    packages.sort(compareProviderPackage);
+    observedPackages.sort(compareProviderPackage);
+    const packages = observedPackages.filter(
+      (providerPackage) =>
+        !isOpenTofuBuiltinProviderSource(providerPackage.source),
+    );
     const requirements: RepositoryModuleRootProviderRequirement[] = [];
     const requirementKeys = new Set<string>();
     for (const requirement of module.rootProviderRequirements) {
       const parsed = parseRepositoryModuleRootProviderRequirement(requirement);
       const providerPackage = parsed
-        ? packages.find((entry) => entry.source === parsed.source)
+        ? observedPackages.find((entry) => entry.source === parsed.source)
         : undefined;
       if (
         !parsed ||
@@ -423,7 +430,9 @@ export function parseRepositoryModulesSnapshot(
       const key = `${parsed.source}\0${parsed.moduleLocalName}\0${parsed.childAlias ?? ""}`;
       if (requirementKeys.has(key)) return undefined;
       requirementKeys.add(key);
-      requirements.push(parsed);
+      if (!isOpenTofuBuiltinProviderSource(parsed.source)) {
+        requirements.push(parsed);
+      }
     }
     requirements.sort(compareRootProviderRequirement);
     modules.push({
