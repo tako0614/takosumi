@@ -12,6 +12,7 @@ import {
 } from "./credentials.ts";
 import { runCommand } from "./exec.ts";
 import { assertSafeRelativePath } from "./policy.ts";
+import { redactBuildOutput } from "./redaction.ts";
 import { assertDirectory, assertRealPathInsideSourceRoot } from "./util.ts";
 
 const SOURCE_BUILD_ENV_NAMES = [
@@ -20,6 +21,11 @@ const SOURCE_BUILD_ENV_NAMES = [
   "npm_config_cache",
   "XDG_CACHE_HOME",
 ] as const;
+// Source-build output is user-controlled and can be copied into Run failure
+// details. Redact before enforcing the bound so a credential-like assignment
+// cannot be retained by an excerpt boundary.
+const SOURCE_BUILD_OUTPUT_MAX_CHARS = 4_096;
+const SOURCE_BUILD_OUTPUT_OMISSION = "\n... diagnostics omitted ...\n";
 
 export async function runSourceBuild(
   sourceBuild: SourceBuildConfig | undefined,
@@ -66,14 +72,18 @@ export async function runSourceBuild(
       isolateProcessGroup: true,
     });
     const commandLabel = `source build ${index + 1}/${sourceBuild.commands.length} (${command.argv[0]})`;
-    logs.push(
-      [commandLabel, result.stdout.trim(), result.stderr.trim()]
-        .filter(Boolean)
-        .join("\n"),
+    const commandOutput = boundedBuildOutput(
+      [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n"),
     );
+    logs.push([commandLabel, commandOutput].filter(Boolean).join("\n"));
     if (result.exitCode !== 0) {
+      const diagnostic = boundedBuildOutput(
+        result.stderr.trim() || result.stdout.trim(),
+      );
       throw new Error(
-        `${commandLabel} failed with exit code ${result.exitCode}`,
+        `${commandLabel} failed with exit code ${result.exitCode}${
+          diagnostic ? `\noutput: ${diagnostic}` : ""
+        }`,
       );
     }
   }
@@ -98,7 +108,17 @@ export async function runSourceBuild(
     );
   }
 
-  return logs.filter(Boolean).join("\n");
+  return boundedBuildOutput(logs.filter(Boolean).join("\n"));
+}
+
+function boundedBuildOutput(text: string): string {
+  const redacted = redactBuildOutput(text.trim()).trim();
+  if (redacted.length <= SOURCE_BUILD_OUTPUT_MAX_CHARS) return redacted;
+  const retainedLength =
+    SOURCE_BUILD_OUTPUT_MAX_CHARS - SOURCE_BUILD_OUTPUT_OMISSION.length;
+  const headLength = Math.ceil(retainedLength / 2);
+  const tailLength = retainedLength - headLength;
+  return `${redacted.slice(0, headLength)}${SOURCE_BUILD_OUTPUT_OMISSION}${redacted.slice(-tailLength)}`;
 }
 
 async function sourceBuildEnv(): Promise<Record<string, string>> {
