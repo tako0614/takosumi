@@ -144,6 +144,19 @@ successful infrastructure destroy retryable or recreate the client. The port
 never carries provider credentials, passwords, generated encryption keys, or
 the runtime-binding entrypoint. There is no private hosted-profile descriptor or
 provider-specific fallback for this capability.
+
+A stateful Capsule Destroy Plan pins the current StateVersion's exact applied
+PlanRun provenance: its SourceSnapshot, module source coordinate (including
+`modulePath`), and required provider identities are copied into the destroy
+PlanRun, and current ProviderBindings are resolved again before runner
+dispatch. Exact `requiredProviderRequirements` are reused when present; pre-v1
+rows without them use only the conservative provider-type local-name mapping
+from `requiredProviders`, with ambiguous bindings failing closed. The
+Capsule/StateVersion/ApplyRun/PlanRun lineage is scope- and backlink-validated,
+and the Plan request is fenced against the same current StateVersion cursor. A
+missing or changed provenance fails closed. Destroy never stores or reads a
+`CompatibilityReport` id, because compatibility reports are create/update
+admission evidence and never a teardown lock.
 Current Capsule lifecycle code does not release historical public-host
 reservation rows or perform unrelated bulk OIDC-client cleanup; physical
 retirement of those historical rows waits for operator inventory.

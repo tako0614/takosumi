@@ -67,6 +67,10 @@ import type {
   PlanResourceChange,
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
+import type {
+  Capsule,
+  CapsuleCompatibilityReport,
+} from "takosumi-contract/capsules";
 import {
   CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
   CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
@@ -79,6 +83,7 @@ import type {
 } from "takosumi-contract/billing";
 import {
   FIXTURE_ARCHIVE_DIGEST,
+  FIXTURE_CLOUDFLARE_PROVIDER,
   seedCapsuleModel,
   seedProviderConnections,
   type SeedCapsuleModelOptions,
@@ -287,6 +292,49 @@ class FailingNthInstallConfigReadStore extends InMemoryOpenTofuControlStore {
   armInstallConfigReadFailure(read: number): void {
     this.installConfigReads = 0;
     this.failAtInstallConfigRead = read;
+  }
+}
+
+class LegacyFlatCompatibilityReportReadStore extends InMemoryOpenTofuControlStore {
+  failCompatibilityReportReads = false;
+
+  override getCapsuleCompatibilityReport(
+    id: string,
+  ): Promise<CapsuleCompatibilityReport | undefined> {
+    if (this.failCompatibilityReportReads) {
+      return Promise.reject(
+        new TypeError(
+          "stored Capsule compatibility provider graph must be an object",
+        ),
+      );
+    }
+    return super.getCapsuleCompatibilityReport(id);
+  }
+}
+
+class CapsuleStateMutationOnReadStore extends InMemoryOpenTofuControlStore {
+  private capsuleReads = 0;
+  private mutationRead: number | undefined;
+  private mutation: Partial<Capsule> | undefined;
+
+  armCapsuleMutation(read: number, mutation: Partial<Capsule>): void {
+    this.capsuleReads = 0;
+    this.mutationRead = read;
+    this.mutation = mutation;
+  }
+
+  override async getCapsule(id: string): Promise<Capsule | undefined> {
+    const capsule = await super.getCapsule(id);
+    this.capsuleReads += 1;
+    if (
+      capsule &&
+      this.mutation &&
+      this.mutationRead === this.capsuleReads
+    ) {
+      await super.putCapsule({ ...capsule, ...this.mutation });
+      return await super.getCapsule(id);
+    }
+    return capsule;
   }
 }
 
@@ -2800,6 +2848,236 @@ test("capsule destroy-plan pins the active StateVersion source snapshot instead 
   expect(runner.planJobs[1]?.outputAllowlist).toEqual({});
 });
 
+test("stateful Capsule destroy pins the applied PlanRun module path after InstallConfig changes", async () => {
+  const { store, runner, controller } = await seededController({
+    environment: "preview",
+    installConfig: { modulePath: "deploy/opentofu" },
+  });
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const installConfig = await store.getInstallConfig("cfg_fixture");
+  expect(installConfig?.modulePath).toBe("deploy/opentofu");
+  await store.putInstallConfig({
+    ...installConfig!,
+    modulePath: ".",
+    updatedAt: "2026-06-06T00:00:20.000Z",
+  });
+
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+
+  expect(destroy.planRun.source).toMatchObject({
+    kind: "git",
+    modulePath: "deploy/opentofu",
+  });
+  expect(runner.planJobs[1]?.planRun.source).toMatchObject({
+    kind: "git",
+    modulePath: "deploy/opentofu",
+  });
+});
+
+test("stateful Git Capsule destroy ignores a legacy flat CompatibilityReport and reuses applied provider provenance", async () => {
+  const store = new LegacyFlatCompatibilityReportReadStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const create = await controller.createCapsulePlan(seeded.capsule.id);
+  const applied = await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const appliedPlan = await store.getPlanRun(create.planRun.id);
+  expect(appliedPlan?.sourceSnapshotId).toBe("snap_fixture");
+  expect(appliedPlan?.requiredProviders).toEqual([
+    FIXTURE_CLOUDFLARE_PROVIDER,
+  ]);
+  expect(appliedPlan?.requiredProviderRequirements).toBeDefined();
+
+  // Simulate a pre-field applied PlanRun while retaining the source-only
+  // provider mirror. The report id points at a physical legacy flat row; its
+  // parser deliberately throws and must never be reached by destroy.
+  const {
+    requiredProviderRequirements: _exact,
+    appliedApplyRunId: _appliedMarker,
+    ...legacyAppliedPlan
+  } = appliedPlan!;
+  await store.putPlanRun(legacyAppliedPlan);
+  const currentCapsule = await store.getCapsule(seeded.capsule.id);
+  await store.putCapsule({
+    ...currentCapsule!,
+    compatibilityReportId: "caprep_legacy_flat",
+    compatibilityStatus: "ready",
+  });
+  store.failCompatibilityReportReads = true;
+
+  const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+
+  expect(destroy.planRun.status).toBe("waiting_approval");
+  expect(destroy.planRun.compatibilityReportId).toBeUndefined();
+  expect(destroy.planRun.sourceSnapshotId).toBe(
+    appliedPlan?.sourceSnapshotId,
+  );
+  expect(destroy.planRun.requiredProviders).toEqual(
+    appliedPlan?.requiredProviders,
+  );
+  expect(destroy.planRun.requiredProviderRequirements).toEqual([
+    {
+      source: FIXTURE_CLOUDFLARE_PROVIDER,
+      moduleLocalName: "cloudflare",
+      allowed: true,
+      credentialRequired: true,
+    },
+  ]);
+  expect(runner.planJobs).toHaveLength(2);
+  expect(runner.planJobs[1]?.sourceArchive).toEqual({
+    ref: ARCHIVE_KEY,
+    digest: FIXTURE_ARCHIVE_DIGEST,
+  });
+  expect(runner.planJobs[1]?.planRun.requiredProviderRequirements).toEqual(
+    destroy.planRun.requiredProviderRequirements,
+  );
+  expect(runner.planJobs[1]?.generatedRoot?.files["versions.tf"]).toContain(
+    FIXTURE_CLOUDFLARE_PROVIDER,
+  );
+
+  // The same unreadable legacy report must remain irrelevant at apply time:
+  // RunVerification and provider-binding minting both derive teardown inputs
+  // from the persisted destroy PlanRun instead of reopening the report row.
+  await controller.approveRun(destroy.planRun.id);
+  const destroyed = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+  expect(destroyed.applyRun.status).toBe("succeeded");
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect((await store.getCapsule(seeded.capsule.id))?.status).toBe("destroyed");
+
+  // Keep the successful apply in the setup explicit: the current StateVersion
+  // is the provenance source used above, not a report-derived fallback.
+  expect(applied.applyRun.status).toBe("succeeded");
+});
+
+test("stateful Capsule destroy fails closed when current StateVersion PlanRun provenance is missing", async () => {
+  const { store, runner, controller } = await seededController({
+    environment: "preview",
+  });
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  const applied = await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const stateVersion = await store.getStateVersion(
+    applied.applyRun.stateVersionId!,
+  );
+  expect(stateVersion).toBeDefined();
+  await store.putStateVersion({
+    ...stateVersion!,
+    createdByRunId: "apply_missing_provenance",
+  });
+
+  await expect(
+    controller.createCapsuleDestroyPlan("cap_fixture1"),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "destroy_provenance_missing" },
+  });
+  expect(runner.planJobs).toHaveLength(1);
+});
+
+test("stateful Capsule destroy rejects a cross-scope current StateVersion", async () => {
+  const { store, runner, controller } = await seededController({
+    environment: "preview",
+  });
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  const applied = await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const stateVersion = await store.getStateVersion(
+    applied.applyRun.stateVersionId!,
+  );
+  expect(stateVersion).toBeDefined();
+  await store.putStateVersion({
+    ...stateVersion!,
+    workspaceId: "ws_other",
+  });
+
+  await expect(
+    controller.createCapsuleDestroyPlan("cap_fixture1"),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "destroy_provenance_missing" },
+  });
+  expect(runner.planJobs).toHaveLength(1);
+});
+
+test("stateful Capsule destroy fences provenance when the Capsule advances during Plan creation", async () => {
+  const store = new CapsuleStateMutationOnReadStore();
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [multiProviderRunnerProfile()],
+    defaultRunnerProfileId: multiProviderRunnerProfile().id,
+  });
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  const applied = await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const capsule = await store.getCapsule("cap_fixture1");
+  expect(capsule).toBeDefined();
+  store.armCapsuleMutation(2, {
+    currentStateVersionId: "state_intervening_apply",
+    currentStateGeneration: capsule!.currentStateGeneration + 1,
+  });
+
+  await expect(
+    controller.createCapsuleDestroyPlan("cap_fixture1"),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "destroy_provenance_changed" },
+  });
+  expect(runner.planJobs).toHaveLength(1);
+  expect(applied.applyRun.status).toBe("succeeded");
+});
+
+test("unapplied Capsule destroy fences an exact no-state cursor against a 0-to-1 race", async () => {
+  const store = new CapsuleStateMutationOnReadStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+  const capsule = await store.getCapsule(seeded.capsule.id);
+  expect(capsule?.currentStateVersionId).toBeUndefined();
+  expect(capsule?.currentStateGeneration).toBe(0);
+  store.armCapsuleMutation(2, {
+    currentStateVersionId: "state_intervening_apply",
+    currentStateGeneration: 1,
+  });
+
+  await expect(
+    controller.createCapsuleDestroyPlan(seeded.capsule.id),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "destroy_provenance_changed" },
+  });
+  expect(runner.planJobs).toHaveLength(0);
+});
+
 test("pre-v1 Resource Shape backing Capsule destroys from state without rebuilding its retired artifact", async () => {
   const { store, runner, controller } = await seededController({
     installConfigId: "cfg-internal-resource-shape-backing-capsule",
@@ -2814,8 +3092,13 @@ test("pre-v1 Resource Shape backing Capsule destroys from state without rebuildi
   const activeCapsule = await store.getCapsule("cap_fixture1");
   expect(appliedPlan?.appliedApplyRunId).toBeDefined();
   expect(activeCapsule?.currentStateGeneration).toBe(1);
+  const {
+    requiredProviderRequirements: _exact,
+    appliedApplyRunId: _appliedMarker,
+    ...legacyAppliedPlan
+  } = appliedPlan!;
   await store.putPlanRun({
-    ...appliedPlan!,
+    ...legacyAppliedPlan,
     source: {
       kind: "local",
       path: "/resource-shape/cloudflare-kv-store",
@@ -2843,6 +3126,21 @@ test("pre-v1 Resource Shape backing Capsule destroys from state without rebuildi
     subject: { kind: "capsule", id: "cap_fixture1" },
     environment: "preview",
     generation: 1,
+  });
+
+  const historicalBindingSet = await store.getProviderBindingSetByCapsule(
+    "cap_fixture1",
+    "preview",
+  );
+  expect(historicalBindingSet).toBeDefined();
+  await store.putProviderBindingSet({
+    ...historicalBindingSet!,
+    // Pre-v1 rows only carried provider + connection identity. The legacy
+    // mint resolver may match this source-only default to the provider type's
+    // historical local name while exact new runs remain fail-closed.
+    bindings: historicalBindingSet!.bindings.map(
+      ({ moduleLocalName: _moduleLocalName, ...binding }) => binding,
+    ),
   });
 
   await controller.approveRun(destroy.planRun.id);
@@ -2955,7 +3253,7 @@ test("capsule destroy remains runnable when its applied CompatibilityReport is n
   });
 
   const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
-  expect(destroy.planRun.compatibilityReportId).toEqual(reportId);
+  expect(destroy.planRun.compatibilityReportId).toBeUndefined();
   expect(destroy.planRun.policy.reasons).toEqual([]);
   expect(destroy.planRun.diagnostics).toBeUndefined();
   expect(destroy.planRun.status).toEqual("waiting_approval");

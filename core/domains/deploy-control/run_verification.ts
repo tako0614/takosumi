@@ -178,7 +178,10 @@ export class RunVerificationService {
     planRun: PlanRun,
     snapshot: SourceSnapshot,
   ): Promise<DispatchSourceArchive> {
-    if (!planRun.compatibilityReportId) {
+    // Compatibility reports are admission evidence for create/update only;
+    // destroy dispatch is authorized by the applied StateVersion/PlanRun
+    // provenance and must not read a legacy report row.
+    if (planRun.operation === "destroy" || !planRun.compatibilityReportId) {
       return {
         ref: snapshot.archiveRef,
         digest: snapshot.archiveDigest,
@@ -196,10 +199,8 @@ export class RunVerificationService {
       );
     }
     this.#assertCompatibilityReportScopedToRun(report, planRun, snapshot);
-    if (planRun.operation !== "destroy") {
-      const policy = await this.#policyForPlanRun(planRun);
-      this.#assertCompatibilityReportRunnable(report, policy);
-    }
+    const policy = await this.#policyForPlanRun(planRun);
+    this.#assertCompatibilityReportRunnable(report, policy);
     return {
       ref: snapshot.archiveRef,
       digest: snapshot.archiveDigest,
@@ -483,12 +484,16 @@ export class RunVerificationService {
    * Capsule Gate precondition (core-spec §6 / §26): when a PlanRun was created
    * from a Capsule that has a reviewed CompatibilityReport, the queued
    * plan/apply consumer must re-read it before provider credential mint. Only
-   * `ready` reports are runnable for create/update. Destroy verifies the
-   * same immutable report scope but does not reuse its admission verdict:
-   * analyzer or policy drift after apply must never make teardown impossible.
+   * `ready` reports are runnable for create/update. Destroy returns before any
+   * report read: analyzer or policy drift after apply must never make teardown
+   * impossible.
    */
   async assertCapsuleCompatibilityAllowsRun(planRun: PlanRun): Promise<void> {
-    if (!planRun.compatibilityReportId) return;
+    // A CompatibilityReport is never a teardown lock. Return before touching
+    // the report store so a legacy flat providers_json row cannot block destroy.
+    if (planRun.operation === "destroy" || !planRun.compatibilityReportId) {
+      return;
+    }
     const report = await this.#store.getCapsuleCompatibilityReport(
       planRun.compatibilityReportId,
     );
@@ -525,7 +530,6 @@ export class RunVerificationService {
         { reason: "compatibility_report_capsule_mismatch" },
       );
     }
-    if (planRun.operation === "destroy") return;
     const policy = await this.#policyForPlanRun(planRun);
     this.#assertCompatibilityReportRunnable(report, policy);
   }
