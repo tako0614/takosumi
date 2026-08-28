@@ -66,21 +66,42 @@ test("ProviderBinding parsing rejects OpenTofu builtin runtime capabilities", ()
   });
 });
 
-test("ProviderBinding parsing omits malformed optional strings", () => {
+test("public ProviderBinding parsing requires exact OpenTofu provider identities", () => {
+  const baseBinding = {
+    provider: "registry.opentofu.org/hashicorp/aws",
+    moduleLocalName: "primary",
+    connectionId: "conn_1",
+  };
+
   expect(
     parseProviderBinding({
-      provider: "registry.opentofu.org/hashicorp/aws",
-      moduleLocalName: 42,
-      childAlias: null,
-      rootAlias: false,
-      connectionId: "conn_1",
-      region: {},
+      provider: baseBinding.provider,
+      connectionId: baseBinding.connectionId,
     }),
   ).toEqual({
-    ok: true,
-    binding: {
-      provider: "registry.opentofu.org/hashicorp/aws",
-      connectionId: "conn_1",
-    },
+    ok: false,
+    message: "moduleLocalName must be a valid OpenTofu identifier",
   });
+
+  for (const [field, value] of [
+    ["moduleLocalName", 42],
+    ["moduleLocalName", ""],
+    ["moduleLocalName", "invalid.alias"],
+    ["childAlias", null],
+    ["childAlias", ""],
+    ["childAlias", "invalid.alias"],
+    ["rootAlias", false],
+    ["rootAlias", ""],
+    ["rootAlias", "invalid.alias"],
+  ] as const) {
+    expect(parseProviderBinding({ ...baseBinding, [field]: value })).toEqual({
+      ok: false,
+      message: `${field} must be a valid OpenTofu identifier`,
+    });
+  }
+
+  // Unrelated optional fields keep their existing coercion behavior.
+  expect(
+    parseProviderBinding({ ...baseBinding, region: {} }),
+  ).toEqual({ ok: true, binding: baseBinding });
 });

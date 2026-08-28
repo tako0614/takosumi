@@ -724,21 +724,39 @@ export function parseProviderBinding(value: unknown):
       message: "alias is deprecated; use childAlias and rootAlias",
     };
   }
+  const moduleLocalName = providerIdentifierValue(input.moduleLocalName);
+  if (!moduleLocalName) {
+    return {
+      ok: false,
+      message: "moduleLocalName must be a valid OpenTofu identifier",
+    };
+  }
+  const childAlias = optionalProviderIdentifierValue(
+    input,
+    "childAlias",
+  );
+  if (!childAlias.ok) {
+    return childAlias;
+  }
+  const rootAlias = optionalProviderIdentifierValue(input, "rootAlias");
+  if (!rootAlias.ok) {
+    return rootAlias;
+  }
   const binding: {
     provider: string;
-    moduleLocalName?: string;
+    moduleLocalName: string;
     childAlias?: string;
     rootAlias?: string;
     connectionId: string;
     region?: string;
     runCredentialSettings?: Readonly<Record<string, JsonValue>>;
-  } = { provider, connectionId };
-  const moduleLocalName = stringValue(input.moduleLocalName);
-  if (moduleLocalName) binding.moduleLocalName = moduleLocalName;
-  const childAlias = stringValue(input.childAlias);
-  if (childAlias) binding.childAlias = childAlias;
-  const rootAlias = stringValue(input.rootAlias);
-  if (rootAlias) binding.rootAlias = rootAlias;
+  } = {
+    provider,
+    moduleLocalName,
+    ...(childAlias.value ? { childAlias: childAlias.value } : {}),
+    ...(rootAlias.value ? { rootAlias: rootAlias.value } : {}),
+    connectionId,
+  };
   const region = stringValue(input.region);
   if (region) binding.region = region;
   try {
@@ -759,6 +777,32 @@ export function parseProviderBinding(value: unknown):
     };
   }
   return { ok: true, binding };
+}
+
+const PROVIDER_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+
+function providerIdentifierValue(value: unknown): string | undefined {
+  return typeof value === "string" && PROVIDER_IDENTIFIER_PATTERN.test(value)
+    ? value
+    : undefined;
+}
+
+function optionalProviderIdentifierValue(
+  input: Record<string, unknown>,
+  field: "childAlias" | "rootAlias",
+):
+  | { readonly ok: true; readonly value?: string }
+  | { readonly ok: false; readonly message: string } {
+  if (!Object.prototype.hasOwnProperty.call(input, field)) {
+    return { ok: true };
+  }
+  const value = providerIdentifierValue(input[field]);
+  return value
+    ? { ok: true, value }
+    : {
+        ok: false,
+        message: `${field} must be a valid OpenTofu identifier`,
+      };
 }
 
 export function isPlainJsonObject(

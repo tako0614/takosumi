@@ -2828,6 +2828,59 @@ test("Capsule ProviderBindings accept only the canonical route and payload", asy
   ).toBeUndefined();
 });
 
+test("Capsule ProviderBindings reject missing or malformed OpenTofu identities", async () => {
+  const fixture = operationsFixture();
+  const baseBinding = {
+    provider: "registry.opentofu.org/hashicorp/aws",
+    moduleLocalName: "primary",
+    connectionId: "conn_1",
+  };
+  const cases = [
+    {
+      binding: {
+        provider: baseBinding.provider,
+        connectionId: baseBinding.connectionId,
+      },
+      message: "moduleLocalName must be a valid OpenTofu identifier",
+    },
+    {
+      binding: { ...baseBinding, moduleLocalName: "" },
+      message: "moduleLocalName must be a valid OpenTofu identifier",
+    },
+    {
+      binding: { ...baseBinding, childAlias: null },
+      message: "childAlias must be a valid OpenTofu identifier",
+    },
+    {
+      binding: { ...baseBinding, rootAlias: "invalid.alias" },
+      message: "rootAlias must be a valid OpenTofu identifier",
+    },
+  ] as const;
+
+  for (const { binding, message } of cases) {
+    const request = new Request(
+      "https://app.example.test/api/v1/capsules/cap_1/provider-bindings",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bindings: [binding] }),
+      },
+    );
+    const response = await handleCapsules(
+      context(fixture.operations, request),
+      ["capsules", "cap_1", "provider-bindings"],
+      "PUT",
+    );
+    expect(response?.status).toBe(400);
+    expect(await response?.json()).toMatchObject({
+      error: {
+        code: "invalid_request",
+        message: `bindings[0]: ${message}`,
+      },
+    });
+  }
+});
+
 test("Capsule ProviderBindings project current release-owned run policy", async () => {
   const fixture = operationsFixture();
   const provider = "registry.terraform.io/tako0614/takoform";
@@ -2866,6 +2919,7 @@ test("Capsule ProviderBindings project current release-owned run policy", async 
         bindings: [
           {
             provider,
+            moduleLocalName: "takoform",
             connectionId: "conn_release_takoform_policy",
             runCredentialSettings: { requiredAvailableMinor: 100 },
           },
@@ -2886,6 +2940,7 @@ test("Capsule ProviderBindings project current release-owned run policy", async 
       bindings: [
         {
           provider,
+          moduleLocalName: "takoform",
           connectionId: "conn_release_takoform_policy",
           runCredentialSettings: { requiredAvailableMinor: 2300 },
         },
