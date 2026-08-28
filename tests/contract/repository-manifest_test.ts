@@ -448,13 +448,10 @@ test("repository manifest v2 accepts generic Capsule Interface declarations", as
   });
 });
 
-test("every repository manifest version rejects defaultModule", async () => {
+test("versions without the published legacy field reject defaultModule", async () => {
   for (const apiVersion of [
     "takosumi.com/v1",
     "takosumi.com/v2",
-    "takosumi.com/v2.1",
-    "takosumi.com/v2.2",
-    "takosumi.com/v2.3",
     "takosumi.com/v2.4",
   ]) {
     const document = JSON.parse(await fixture("v2-launcher.json"));
@@ -468,6 +465,41 @@ test("every repository manifest version rejects defaultModule", async () => {
       ok: false,
       error: "install.contains unsupported field defaultModule",
     });
+  }
+});
+
+test("published v2.1-v2.3 manifests retain defaultModule as a non-authoritative hint", async () => {
+  const ajv = new Ajv2020({ allErrors: true, strict: false });
+  const validators = {
+    "takosumi.com/v2.1": ajv.compile(repositoryManifestV2_1Schema),
+    "takosumi.com/v2.2": ajv.compile(repositoryManifestV2_2Schema),
+    "takosumi.com/v2.3": ajv.compile(repositoryManifestV2_3Schema),
+  } as const;
+  for (const apiVersion of [
+    "takosumi.com/v2.1",
+    "takosumi.com/v2.2",
+    "takosumi.com/v2.3",
+  ] as const) {
+    const document = JSON.parse(await fixture("v2-launcher.json"));
+    document.apiVersion = apiVersion;
+    document.install.defaultModule = "deploy/takoform";
+
+    const validate = validators[apiVersion];
+    expect(validate(document), JSON.stringify(validate.errors)).toBe(true);
+    const parsed = parseRepositoryManifestText(JSON.stringify(document));
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || parsed.document.apiVersion !== apiVersion) continue;
+    expect(parsed.document.install.defaultModule).toBe("deploy/takoform");
+  }
+
+  for (const defaultModule of ["./deploy/takoform", "deploy/missing"]) {
+    const document = JSON.parse(await fixture("v2-launcher.json"));
+    document.apiVersion = "takosumi.com/v2.3";
+    document.install.defaultModule = defaultModule;
+    expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(
+      false,
+    );
   }
 });
 

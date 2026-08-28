@@ -877,6 +877,74 @@ describe("repository-owned source module selection", () => {
     expect(result.modulePath).toBe("deploy/first");
   });
 
+  test("does not let the legacy defaultModule hint override the scanned explicit selection", async () => {
+    const sourceBuild = {
+      commands: [{ argv: ["bun", "scripts/prepare.ts"] }],
+      outputs: ["deploy/selected/.generated/migrations"],
+    } as const;
+    const document = {
+      apiVersion: "takosumi.com/v2.3",
+      kind: "Repository",
+      install: {
+        defaultModule: ".",
+        modules: {
+          ".": { inputs: [] },
+          "deploy/selected": { inputs: [], sourceBuild },
+        },
+      },
+    } satisfies RepositoryManifestDocument;
+
+    const result = await adopt(baseConfig({ modulePath: "." }), {
+      sourceSnapshot: snapshotWithManifest(
+        {
+          status: "present",
+          digest: MANIFEST_DIGEST,
+          document,
+        },
+        repositoryModules([".", "deploy/selected"]),
+      ),
+      modulePath: "deploy/selected",
+      compatibilityReport: reportForModule("deploy/selected"),
+    });
+
+    expect(result.status).toBe("accepted");
+    if (result.status !== "accepted") return;
+    expect(result.modulePath).toBe("deploy/selected");
+    expect(result.sourceBuild).toEqual(sourceBuild);
+  });
+
+  test("requires an explicit selection when a legacy defaultModule hint accompanies multiple scanned modules", async () => {
+    const document = {
+      apiVersion: "takosumi.com/v2.3",
+      kind: "Repository",
+      install: {
+        defaultModule: ".",
+        modules: {
+          ".": { inputs: [] },
+          "deploy/selected": { inputs: [] },
+        },
+      },
+    } satisfies RepositoryManifestDocument;
+
+    const result = await adopt(baseConfig({ modulePath: "." }), {
+      sourceSnapshot: snapshotWithManifest(
+        {
+          status: "present",
+          digest: MANIFEST_DIGEST,
+          document,
+        },
+        repositoryModules([".", "deploy/selected"]),
+      ),
+      modulePath: undefined,
+      compatibilityReport: reportForModule("deploy/selected"),
+    });
+
+    expect(result).toMatchObject({
+      status: "invalid",
+      diagnostic: { code: "repository_install_module_selection_required" },
+    });
+  });
+
   test("maps nested Source paths only for manifest assistance while keeping execution relative", async () => {
     const nestedSnapshot: SourceSnapshot = {
       ...sourceSnapshot,

@@ -38,9 +38,10 @@ Every version has exactly three root fields:
 | ------------------- | ---------------- | ------------------------------------------- |
 | `takosumi.com/v1`   | `modules`        | `inputs`, `requires`, `features`            |
 | `takosumi.com/v2`   | `modules`        | v1 + `interfaces`                           |
-| `takosumi.com/v2.1` | `modules`        | identical to v2                             |
-| `takosumi.com/v2.2` | `modules`        | v2.1 + `requires[].kind: interface.consume` |
-| `takosumi.com/v2.3` | `modules`        | v2.2 + optional `sourceBuild`               |
+| `takosumi.com/v2.1` | `modules`, optional `defaultModule` | identical to v2                             |
+| `takosumi.com/v2.2` | `modules`, optional `defaultModule` | v2.1 + `requires[].kind: interface.consume` |
+| `takosumi.com/v2.3` | `modules`, optional `defaultModule` | v2.2 + optional `sourceBuild`               |
+| `takosumi.com/v2.4` | `modules`        | v2.3 + runtime OIDC binding delivery        |
 
 Every object is closed. Fields not listed in this document, `$schema`, and the
 retired `schemaVersion: takosumi.install-ux/v1` are rejected.
@@ -50,7 +51,9 @@ The published JSON Schemas are
 and
 [`repository-manifest-v2.2.schema.json`](/schemas/repository-manifest-v2.2.schema.json)
 and
-[`repository-manifest-v2.3.schema.json`](/schemas/repository-manifest-v2.3.schema.json).
+[`repository-manifest-v2.3.schema.json`](/schemas/repository-manifest-v2.3.schema.json)
+and
+[`repository-manifest-v2.4.schema.json`](/schemas/repository-manifest-v2.4.schema.json).
 It is a structural schema, not a claim of JSON Schema/parser equivalence. The
 canonical parser additionally fails closed on constraints that require
 cross-field or value-aware inspection: uniqueness across related declarations,
@@ -89,6 +92,11 @@ install continues. Only an operator Host policy that explicitly requires an
 exact manifest API version fails closed on an absent, invalid, or mismatched
 manifest. This endpoint checks account-session authentication, Source Workspace
 access, and the exact SourceSnapshot-to-Source relationship.
+
+The optional `install.defaultModule` field published in v2.1 through v2.3
+continues to parse and must name an exact `install.modules` key, but it is only
+a compatibility presentation hint. It never skips explicit user selection when
+the scan finds multiple modules and is not execution-module authority.
 
 The v1 scan follows only tracked regular files and vendored local module edges
 (`./` and `../`) inside the immutable archive. A remote module source is not
@@ -344,9 +352,10 @@ Public documents cannot embed secret or authority material:
 ## Migration and versioning
 
 An API identifier names a closed schema. Existing versions do not gain fields
-or new meanings later. v2.1 retains the v2 module metadata, v2.2 adds
-provider-neutral `interface.consume`, and v2.3 adds bounded, credential-free
-`sourceBuild`. Existing module, provided-Interface, and authority semantics are
+or new meanings later. The published v2.1-v2.3 `defaultModule` wire remains a
+compatibility hint. v2.2 adds provider-neutral `interface.consume`, v2.3 adds
+bounded, credential-free `sourceBuild`, and v2.4 adds runtime OIDC binding
+delivery. Existing module, provided-Interface, and authority semantics are
 preserved. Unknown versions or fields fail closed. Incompatible vocabulary or
 authority changes require a separate schema identifier.
 
