@@ -35,9 +35,10 @@ persist 済み InstallConfig であり、manifest を実行時に再読込しま
 | ------------------- | ------------------ | ------------------------------------------- |
 | `takosumi.com/v1`   | `modules`          | `inputs`, `requires`, `features`            |
 | `takosumi.com/v2`   | `modules`          | v1 + `interfaces`                           |
-| `takosumi.com/v2.1` | `modules`          | v2 と同一                                   |
-| `takosumi.com/v2.2` | `modules`          | v2.1 + `requires[].kind: interface.consume` |
-| `takosumi.com/v2.3` | `modules`          | v2.2 + optional `sourceBuild`               |
+| `takosumi.com/v2.1` | `modules`, optional `defaultModule` | v2 と同一                                   |
+| `takosumi.com/v2.2` | `modules`, optional `defaultModule` | v2.1 + `requires[].kind: interface.consume` |
+| `takosumi.com/v2.3` | `modules`, optional `defaultModule` | v2.2 + optional `sourceBuild`               |
+| `takosumi.com/v2.4` | `modules`          | v2.3 + runtime OIDC binding delivery        |
 
 各 object は closed です。表や各 section にない field、`$schema`、旧
 `schemaVersion: takosumi.install-ux/v1` は拒否されます。
@@ -45,7 +46,8 @@ persist 済み InstallConfig であり、manifest を実行時に再読込しま
 公開 JSON Schema は
 [`repository-manifest-v2.1.schema.json`](/schemas/repository-manifest-v2.1.schema.json) と
 [`repository-manifest-v2.2.schema.json`](/schemas/repository-manifest-v2.2.schema.json) と
-[`repository-manifest-v2.3.schema.json`](/schemas/repository-manifest-v2.3.schema.json)
+[`repository-manifest-v2.3.schema.json`](/schemas/repository-manifest-v2.3.schema.json) と
+[`repository-manifest-v2.4.schema.json`](/schemas/repository-manifest-v2.4.schema.json)
 です。これは structural schema であり、JSON Schema と parser の完全な同値性を
 意味しません。cross-field uniqueness、JSON recursive depth（最大32）、下記の
 secret/authority vocabulary 検査は canonical parser が追加で fail closed に検査します。
@@ -77,6 +79,10 @@ typed 4xx で fail closed します。manifest が absent でも scan された 
 API version を明示的に必須化した場合だけ、absent/invalid/version mismatch を fail closed に
 します。この endpoint は account-session 認証、Source Workspace access、SourceSnapshot と
 Source の exact relation を検証します。
+
+公開済み v2.1〜v2.3 の optional `install.defaultModule` は引き続き parse され、
+`install.modules` の exact key であることを検証しますが、互換表示 hint に限定されます。
+scan が複数 module を発見した場合の利用者選択を省略せず、実行 module authority にはなりません。
 
 v1 の scan は immutable archive 内の tracked regular files と vendored local module edge
 （`./` / `../`）だけを辿ります。remote module source は pinned/unpinned を問わず network
@@ -313,8 +319,9 @@ non-canonical module key も無効です。
 ## Migration と versioning
 
 version identifier は closed schema の識別子です。既存 version の field set や意味を
-後から広げません。v2.1 は v2 と同じ module metadata、v2.2 は provider-neutral な
-`interface.consume`、v2.3 は bounded credential-free `sourceBuild` を持ちます。既存の module、
+後から広げません。v2.1〜v2.3 の公開済み `defaultModule` wire は互換 hint として保持します。
+v2.2 は provider-neutral な `interface.consume`、v2.3 は bounded credential-free
+`sourceBuild`、v2.4 は runtime OIDC binding delivery を持ちます。既存の module、
 provided Interface、authority semantics は変えません。未知 version/field は fail closed
 です。incompatible vocabulary や authority model の変更には別の schema identifier が
 必要です。
