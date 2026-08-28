@@ -28,7 +28,10 @@
 import type { DispatchGeneratedRoot } from "@takosumi/internal/deploy-control-api";
 import type { JsonValue } from "takosumi-contract";
 import type { OutputAllowlistEntry } from "takosumi-contract/install-configs";
-import { canonicalProviderSource } from "takosumi-contract/provider-env-rules";
+import {
+  canonicalProviderSource,
+  isOpenTofuBuiltinProviderSource,
+} from "takosumi-contract/provider-env-rules";
 
 const CHILD_MODULE_SOURCE = "./module";
 
@@ -117,8 +120,15 @@ export interface GenerateOpenTofuChildModuleRootInput {
 export function generateOpenTofuChildModuleRoot(
   input: GenerateOpenTofuChildModuleRootInput,
 ): GeneratedRootModule {
-  const providerBindings = input.providerBindings ?? [];
-  const rootProviderRequirements = input.rootProviderRequirements;
+  // Built-in runtime capabilities (for example terraform.io/builtin/terraform)
+  // are available from OpenTofu itself and must never be rendered as provider
+  // packages, configurations, or child-module mappings.
+  const providerBindings = (input.providerBindings ?? []).filter(
+    (binding) => !isOpenTofuBuiltinProviderSource(binding.provider),
+  );
+  const rootProviderRequirements = input.rootProviderRequirements.filter(
+    (requirement) => !isOpenTofuBuiltinProviderSource(requirement.source),
+  );
   return {
     files: {
       "versions.tf": renderProviderVersionsTf(rootProviderRequirements),

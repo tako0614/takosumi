@@ -95,6 +95,69 @@ test("legacy source-less destroy operator modules require the internal drain mar
   }
 });
 
+test("legacy destroy roots keep implicit terraform_data as a built-in runtime capability", async () => {
+  const runId = `legacy-builtin-destroy-${crypto.randomUUID()}`;
+  const workspace = workspaceForRun(runId);
+  try {
+    const generatedRoot = generateOpenTofuChildModuleRoot({
+      rootProviderRequirements: [
+        {
+          source: "terraform.io/builtin/terraform",
+          moduleLocalName: "terraform",
+        },
+      ],
+      inputs: {},
+      outputAllowlist: {},
+    });
+
+    expect(generatedRoot.files["versions.tf"]).not.toContain(
+      "terraform.io/builtin/terraform",
+    );
+    expect(generatedRoot.files["main.tf"]).not.toContain(
+      "terraform = terraform",
+    );
+
+    const result = await runPlan(runId, {
+      legacySourcelessDestroyRecovery: true,
+      planRun: {
+        operation: "destroy",
+        source: {
+          kind: "operator_module",
+          digest:
+            "sha256:123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+        },
+      },
+      generatedRoot,
+      operatorModule: {
+        files: [
+          {
+            path: "main.tf",
+            text: [
+              'resource "terraform_data" "implicit" {',
+              '  input = "runtime-capability"',
+              "}",
+              "",
+            ].join("\n"),
+          },
+        ],
+      },
+      requiredProviders: [],
+      runnerProfile: {
+        id: "legacy-builtin-recovery",
+        allowedProviders: [],
+        requireProviderBindings: false,
+      },
+      outputAllowlist: {},
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(result.planDigest).toMatch(/^sha256:[a-f0-9]{64}$/u);
+  } finally {
+    await rm(workspace.root, { recursive: true, force: true });
+    await rm(workspace.depsDir, { recursive: true, force: true });
+  }
+});
+
 test("restored Git SourceSnapshot modules plan directly as the OpenTofu root", async () => {
   const runId = `direct-root-${crypto.randomUUID()}`;
   const workspace = workspaceForRun(runId);

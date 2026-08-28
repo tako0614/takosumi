@@ -715,12 +715,20 @@ export function parseProviderBinding(value: unknown):
   if (!connectionId) {
     return { ok: false, message: "connectionId is required" };
   }
+  // `alias` remains on the contract for historical stored rows, but this
+  // parser owns the public PUT payload and must not persist the ambiguous
+  // identity into a new ProviderBinding set.
+  if (Object.prototype.hasOwnProperty.call(input, "alias")) {
+    return {
+      ok: false,
+      message: "alias is deprecated; use childAlias and rootAlias",
+    };
+  }
   const binding: {
     provider: string;
     moduleLocalName?: string;
     childAlias?: string;
     rootAlias?: string;
-    alias?: string;
     connectionId: string;
     region?: string;
     runCredentialSettings?: Readonly<Record<string, JsonValue>>;
@@ -731,8 +739,6 @@ export function parseProviderBinding(value: unknown):
   if (childAlias) binding.childAlias = childAlias;
   const rootAlias = stringValue(input.rootAlias);
   if (rootAlias) binding.rootAlias = rootAlias;
-  const alias = stringValue(input.alias);
-  if (alias) binding.alias = alias;
   const region = stringValue(input.region);
   if (region) binding.region = region;
   try {

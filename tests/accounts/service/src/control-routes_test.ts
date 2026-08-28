@@ -2749,7 +2749,6 @@ test("Capsule ProviderBindings accept only the canonical route and payload", asy
       moduleLocalName: "primary",
       childAlias: "archive",
       rootAlias: "production",
-      alias: "legacy",
       connectionId: "conn_1",
       region: "us-east-1",
     },
@@ -2772,6 +2771,36 @@ test("Capsule ProviderBindings accept only the canonical route and payload", asy
     providerBindingSet: { bindings },
   });
 
+  const legacyRequest = new Request(
+    "https://app.example.test/api/v1/capsules/cap_1/provider-bindings",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        bindings: [
+          {
+            provider: "registry.opentofu.org/hashicorp/aws",
+            alias: "legacy",
+            connectionId: "conn_1",
+          },
+        ],
+      }),
+    },
+  );
+  const rejected = await handleCapsules(
+    context(fixture.operations, legacyRequest),
+    ["capsules", "cap_1", "provider-bindings"],
+    "PUT",
+  );
+  expect(rejected?.status).toBe(400);
+  expect(await rejected?.json()).toMatchObject({
+    error: {
+      code: "invalid_request",
+      message:
+        "bindings[0]: alias is deprecated; use childAlias and rootAlias",
+    },
+  });
+
   const read = await handleCapsules(
     context(
       fixture.operations,
@@ -2787,12 +2816,12 @@ test("Capsule ProviderBindings accept only the canonical route and payload", asy
     providerBindingSet: { bindings },
   });
 
-  const legacyRequest = new Request(
+  const legacyRouteRequest = new Request(
     "https://app.example.test/api/v1/capsules/cap_1/provider-connections",
   );
   expect(
     await handleCapsules(
-      context(fixture.operations, legacyRequest),
+      context(fixture.operations, legacyRouteRequest),
       ["capsules", "cap_1", "provider-connections"],
       "GET",
     ),

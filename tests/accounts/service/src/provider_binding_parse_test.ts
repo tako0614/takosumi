@@ -4,13 +4,12 @@ import {
   parseProviderBindings,
 } from "../../../../accounts/service/src/control/parse.ts";
 
-test("ProviderBinding parsing keeps current routing fields and deprecated alias", () => {
+test("ProviderBinding parsing keeps current routing fields", () => {
   const binding = {
     provider: "registry.opentofu.org/hashicorp/aws",
     moduleLocalName: "primary",
     childAlias: "archive",
     rootAlias: "production",
-    alias: "legacy",
     connectionId: "conn_1",
     region: "us-east-1",
     runCredentialSettings: {
@@ -23,6 +22,24 @@ test("ProviderBinding parsing keeps current routing fields and deprecated alias"
   expect(parseProviderBindings([binding])).toEqual({
     ok: true,
     bindings: [binding],
+  });
+});
+
+test("public ProviderBinding parsing rejects the deprecated ambiguous alias", () => {
+  const binding = {
+    provider: "registry.opentofu.org/hashicorp/aws",
+    alias: "legacy",
+    connectionId: "conn_1",
+  };
+
+  expect(parseProviderBinding(binding)).toEqual({
+    ok: false,
+    message: "alias is deprecated; use childAlias and rootAlias",
+  });
+  expect(parseProviderBindings([binding])).toEqual({
+    ok: false,
+    message:
+      "bindings[0]: alias is deprecated; use childAlias and rootAlias",
   });
 });
 
@@ -56,7 +73,6 @@ test("ProviderBinding parsing omits malformed optional strings", () => {
       moduleLocalName: 42,
       childAlias: null,
       rootAlias: false,
-      alias: [],
       connectionId: "conn_1",
       region: {},
     }),

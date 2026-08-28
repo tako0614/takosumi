@@ -237,6 +237,61 @@ test("rootgen keeps every default child provider mapped when one provider needs 
   expect(files["main.tf"]).toContain("tls = tls");
 });
 
+test("rootgen omits built-in runtime capabilities from declarations and mappings", () => {
+  const { files } = generateOpenTofuChildModuleRoot({
+    rootProviderRequirements: [
+      {
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
+      },
+      {
+        source: "registry.opentofu.org/hashicorp/random",
+        moduleLocalName: "random",
+      },
+      {
+        source: "registry.opentofu.org/hashicorp/tls",
+        moduleLocalName: "tls",
+      },
+      {
+        source: "terraform.io/builtin/terraform",
+        moduleLocalName: "terraform",
+      },
+    ],
+    inputs: {},
+    outputAllowlist: {},
+    providerBindings: [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
+      },
+      {
+        provider: "terraform.io/builtin/terraform",
+        moduleLocalName: "terraform",
+      },
+    ],
+  });
+
+  const versions = files["versions.tf"]!;
+  expect(versions).toContain(
+    'source = "registry.opentofu.org/cloudflare/cloudflare"',
+  );
+  expect(versions).toContain(
+    'source = "registry.opentofu.org/hashicorp/random"',
+  );
+  expect(versions).toContain(
+    'source = "registry.opentofu.org/hashicorp/tls"',
+  );
+  expect(versions).not.toContain("terraform.io/builtin/terraform");
+  expect(versions).not.toContain("terraform = {");
+
+  const main = files["main.tf"]!;
+  expect(main).toContain("cloudflare = cloudflare");
+  expect(main).toContain("random = random");
+  expect(main).toContain("tls = tls");
+  expect(main).not.toContain('provider "terraform"');
+  expect(main).not.toContain("terraform = terraform");
+});
+
 test("rootgen rejects two sources claiming the same explicit local name", () => {
   expect(() =>
     generateOpenTofuChildModuleRoot({

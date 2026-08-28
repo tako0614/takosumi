@@ -116,6 +116,37 @@ const STATE_DIGEST =
 const ARCHIVE_KEY =
   "workspaces/ws_test001/sources/src_fixture/snapshots/snap_fixture/source.tar.zst";
 const AWS = "registry.opentofu.org/hashicorp/aws";
+const RANDOM_PROVIDER = "registry.opentofu.org/hashicorp/random";
+const TLS_PROVIDER = "registry.opentofu.org/hashicorp/tls";
+const OPENTOFU_BUILTIN_PROVIDER = "terraform.io/builtin/terraform";
+const LEGACY_DESTROY_PROVIDERS = [
+  FIXTURE_CLOUDFLARE_PROVIDER,
+  RANDOM_PROVIDER,
+  TLS_PROVIDER,
+] as const;
+const LEGACY_DESTROY_REQUIREMENTS = [
+  {
+    source: FIXTURE_CLOUDFLARE_PROVIDER,
+    moduleLocalName: "cloudflare",
+    version: "4.47.0",
+    allowed: true,
+    credentialRequired: true,
+  },
+  {
+    source: RANDOM_PROVIDER,
+    moduleLocalName: "random",
+    version: "3.6.2",
+    allowed: true,
+    credentialRequired: true,
+  },
+  {
+    source: TLS_PROVIDER,
+    moduleLocalName: "tls",
+    version: "4.0.6",
+    allowed: true,
+    credentialRequired: true,
+  },
+] as const;
 const CLOUDFLARE_MIRROR_EVIDENCE = {
   provider: "registry.opentofu.org/cloudflare/cloudflare",
   mirrored: true,
@@ -2966,6 +2997,89 @@ test("stateful Git Capsule destroy ignores a legacy flat CompatibilityReport and
   expect(applied.applyRun.status).toBe("succeeded");
 });
 
+test("stateful Git Capsule destroy omits a legacy OpenTofu builtin from provider inventory", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+  });
+  await seedProviderConnections(store, seeded.capsule, {
+    requiredProviders: LEGACY_DESTROY_PROVIDERS,
+  });
+  const runner = recordingRunner({
+    requiredProviders: LEGACY_DESTROY_PROVIDERS,
+  });
+  // This profile deliberately uses wildcard provider admission so the fixture
+  // does not need synthetic mirror evidence for random/tls; the test focuses
+  // on destroy inventory normalization.
+  const profile = multiProviderRunnerProfile(["*"]);
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const create = await controller.createCapsulePlan(seeded.capsule.id);
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const appliedPlan = await store.getPlanRun(create.planRun.id);
+  expect(appliedPlan).toBeDefined();
+  await store.putPlanRun({
+    ...appliedPlan!,
+    requiredProviders: [
+      ...LEGACY_DESTROY_PROVIDERS,
+      OPENTOFU_BUILTIN_PROVIDER,
+    ],
+    requiredProviderRequirements: [
+      ...LEGACY_DESTROY_REQUIREMENTS,
+      {
+        source: OPENTOFU_BUILTIN_PROVIDER,
+        moduleLocalName: "terraform",
+        allowed: true,
+        credentialRequired: true,
+      },
+    ],
+  });
+
+  const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+
+  expect(destroy.planRun.requiredProviders).toEqual(
+    LEGACY_DESTROY_PROVIDERS,
+  );
+  expect(destroy.planRun.requiredProviderRequirements).toEqual(
+    LEGACY_DESTROY_REQUIREMENTS,
+  );
+  const job = runner.planJobs[1];
+  expect(job?.planRun.requiredProviders).toEqual(LEGACY_DESTROY_PROVIDERS);
+  expect(job?.planRun.requiredProviderRequirements).toEqual(
+    LEGACY_DESTROY_REQUIREMENTS,
+  );
+  const generatedRoot = job?.generatedRoot;
+  expect(generatedRoot).toBeDefined();
+  const versions = generatedRoot?.files["versions.tf"] ?? "";
+  expect(versions).toContain(
+    'source = "registry.opentofu.org/cloudflare/cloudflare"',
+  );
+  expect(versions).toContain(
+    'source = "registry.opentofu.org/hashicorp/random"',
+  );
+  expect(versions).toContain(
+    'source = "registry.opentofu.org/hashicorp/tls"',
+  );
+  expect(versions).toContain('version = "= 4.47.0"');
+  expect(versions).toContain('version = "= 3.6.2"');
+  expect(versions).toContain('version = "= 4.0.6"');
+  expect(versions).not.toContain(OPENTOFU_BUILTIN_PROVIDER);
+  expect(generatedRoot?.files["main.tf"] ?? "").not.toContain(
+    OPENTOFU_BUILTIN_PROVIDER,
+  );
+  expect(
+    job?.credentials?.manifest.bindings.map(
+      (binding) => binding.providerSource,
+    ),
+  ).toEqual(LEGACY_DESTROY_PROVIDERS);
+});
+
 test("stateful Capsule destroy fails closed when current StateVersion PlanRun provenance is missing", async () => {
   const { store, runner, controller } = await seededController({
     environment: "preview",
@@ -3162,6 +3276,248 @@ test("pre-v1 Resource Shape backing Capsule destroys from state without rebuildi
     generation: 2,
   });
   expect((await store.getCapsule("cap_fixture1"))?.status).toBe("destroyed");
+});
+
+test("legacy source-less destroy omits a legacy OpenTofu builtin from provider inventory", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+  });
+  await seedProviderConnections(store, seeded.capsule, {
+    requiredProviders: LEGACY_DESTROY_PROVIDERS,
+  });
+  const runner = recordingRunner({
+    requiredProviders: LEGACY_DESTROY_PROVIDERS,
+  });
+  // This profile deliberately uses wildcard provider admission so the fixture
+  // does not need synthetic mirror evidence for random/tls; the test focuses
+  // on destroy inventory normalization.
+  const profile = multiProviderRunnerProfile(["*"]);
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const create = await controller.createCapsulePlan(seeded.capsule.id);
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const appliedPlan = await store.getPlanRun(create.planRun.id);
+  const activeCapsule = await store.getCapsule(seeded.capsule.id);
+  expect(appliedPlan).toBeDefined();
+  expect(activeCapsule).toBeDefined();
+  await store.putPlanRun({
+    ...appliedPlan!,
+    source: {
+      kind: "local",
+      path: "/resource-shape/legacy-generated-root",
+    } as never,
+    sourceSnapshotId: "snap_legacy_generated_root",
+    requiredProviders: [
+      ...LEGACY_DESTROY_PROVIDERS,
+      OPENTOFU_BUILTIN_PROVIDER,
+    ],
+    requiredProviderRequirements: [
+      ...LEGACY_DESTROY_REQUIREMENTS,
+      {
+        source: OPENTOFU_BUILTIN_PROVIDER,
+        moduleLocalName: "terraform",
+        allowed: true,
+        credentialRequired: true,
+      },
+    ],
+  });
+  await store.putCapsule({
+    ...activeCapsule!,
+    sourceId: undefined as never,
+  });
+
+  const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+
+  expect(destroy.planRun.requiredProviders).toEqual(
+    LEGACY_DESTROY_PROVIDERS,
+  );
+  expect(destroy.planRun.requiredProviderRequirements).toEqual(
+    LEGACY_DESTROY_REQUIREMENTS,
+  );
+  const job = runner.planJobs[1];
+  expect(job?.planRun.requiredProviders).toEqual(LEGACY_DESTROY_PROVIDERS);
+  expect(job?.planRun.requiredProviderRequirements).toEqual(
+    LEGACY_DESTROY_REQUIREMENTS,
+  );
+  const generatedRoot = job?.generatedRoot;
+  expect(generatedRoot).toBeDefined();
+  const versions = generatedRoot?.files["versions.tf"] ?? "";
+  expect(versions).toContain(
+    'source = "registry.opentofu.org/cloudflare/cloudflare"',
+  );
+  expect(versions).toContain(
+    'source = "registry.opentofu.org/hashicorp/random"',
+  );
+  expect(versions).toContain(
+    'source = "registry.opentofu.org/hashicorp/tls"',
+  );
+  expect(versions).toContain('version = "= 4.47.0"');
+  expect(versions).toContain('version = "= 3.6.2"');
+  expect(versions).toContain('version = "= 4.0.6"');
+  expect(versions).not.toContain(OPENTOFU_BUILTIN_PROVIDER);
+  expect(generatedRoot?.files["main.tf"] ?? "").not.toContain(
+    OPENTOFU_BUILTIN_PROVIDER,
+  );
+  expect(
+    job?.credentials?.manifest.bindings.map(
+      (binding) => binding.providerSource,
+    ),
+  ).toEqual(LEGACY_DESTROY_PROVIDERS);
+});
+
+test("legacy source-less destroy filters a builtin from pre-field provider inventory", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+  });
+  await seedProviderConnections(store, seeded.capsule, {
+    requiredProviders: LEGACY_DESTROY_PROVIDERS,
+  });
+  const runner = recordingRunner({
+    requiredProviders: LEGACY_DESTROY_PROVIDERS,
+  });
+  const profile = multiProviderRunnerProfile(["*"]);
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const create = await controller.createCapsulePlan(seeded.capsule.id);
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const appliedPlan = await store.getPlanRun(create.planRun.id);
+  const activeCapsule = await store.getCapsule(seeded.capsule.id);
+  expect(appliedPlan).toBeDefined();
+  expect(activeCapsule).toBeDefined();
+  const {
+    requiredProviderRequirements: _legacyExact,
+    ...preFieldAppliedPlan
+  } = appliedPlan!;
+  await store.putPlanRun({
+    ...preFieldAppliedPlan,
+    source: {
+      kind: "local",
+      path: "/resource-shape/legacy-generated-root",
+    } as never,
+    sourceSnapshotId: "snap_legacy_generated_root",
+    requiredProviders: [
+      ...LEGACY_DESTROY_PROVIDERS,
+      OPENTOFU_BUILTIN_PROVIDER,
+    ],
+  });
+  await store.putCapsule({
+    ...activeCapsule!,
+    sourceId: undefined as never,
+  });
+
+  const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+
+  expect(destroy.planRun.requiredProviders).toEqual(
+    LEGACY_DESTROY_PROVIDERS,
+  );
+  expect(destroy.planRun.requiredProviderRequirements).toEqual([
+    {
+      source: FIXTURE_CLOUDFLARE_PROVIDER,
+      moduleLocalName: "cloudflare",
+      allowed: true,
+      credentialRequired: true,
+    },
+    {
+      source: RANDOM_PROVIDER,
+      moduleLocalName: "random",
+      allowed: true,
+      credentialRequired: true,
+    },
+    {
+      source: TLS_PROVIDER,
+      moduleLocalName: "tls",
+      allowed: true,
+      credentialRequired: true,
+    },
+  ]);
+  const job = runner.planJobs[1];
+  expect(job?.generatedRoot).toBeDefined();
+  expect(job?.generatedRoot?.files["versions.tf"] ?? "").not.toContain(
+    OPENTOFU_BUILTIN_PROVIDER,
+  );
+  expect(
+    job?.credentials?.manifest.bindings.map(
+      (binding) => binding.providerSource,
+    ),
+  ).toEqual(LEGACY_DESTROY_PROVIDERS);
+});
+
+test("legacy source-less destroy keeps an explicit builtin-only inventory eligible", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+  });
+  const bindingSet = await store.getProviderBindingSetByCapsule(
+    seeded.capsule.id,
+    seeded.capsule.environment,
+  );
+  expect(bindingSet).toBeDefined();
+  await store.putProviderBindingSet({ ...bindingSet!, bindings: [] });
+
+  const runner = recordingRunner({ requiredProviders: [] });
+  const profile = multiProviderRunnerProfile(["*"]);
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+  const create = await controller.createCapsulePlan(seeded.capsule.id);
+  expect(create.planRun.requiredProviders).toEqual([]);
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const appliedPlan = await store.getPlanRun(create.planRun.id);
+  const activeCapsule = await store.getCapsule(seeded.capsule.id);
+  expect(appliedPlan).toBeDefined();
+  expect(activeCapsule).toBeDefined();
+  await store.putPlanRun({
+    ...appliedPlan!,
+    source: {
+      kind: "local",
+      path: "/resource-shape/legacy-generated-root",
+    } as never,
+    sourceSnapshotId: "snap_legacy_generated_root",
+    requiredProviders: [OPENTOFU_BUILTIN_PROVIDER],
+    requiredProviderRequirements: [
+      {
+        source: OPENTOFU_BUILTIN_PROVIDER,
+        moduleLocalName: "terraform",
+        allowed: true,
+      },
+    ],
+  });
+  await store.putCapsule({
+    ...activeCapsule!,
+    sourceId: undefined as never,
+  });
+
+  const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+
+  expect(destroy.planRun.requiredProviders).toEqual([]);
+  expect(destroy.planRun.requiredProviderRequirements).toEqual([]);
+  const job = runner.planJobs[1];
+  expect(job?.generatedRoot).toBeDefined();
+  expect(job?.generatedRoot?.files["versions.tf"] ?? "").not.toContain(
+    OPENTOFU_BUILTIN_PROVIDER,
+  );
+  expect(job?.generatedRoot?.files["main.tf"] ?? "").not.toContain(
+    OPENTOFU_BUILTIN_PROVIDER,
+  );
+  expect(job?.credentials?.manifest.bindings ?? []).toEqual([]);
 });
 
 test("pre-v1 upload projection uses the same state-only delete bridge", async () => {

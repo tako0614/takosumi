@@ -43,6 +43,7 @@ import type {
 } from "takosumi-contract/capsules";
 import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
 import { usesDeclaredEnvCredentialRecipe } from "takosumi-contract/connections";
+import { isOpenTofuBuiltinProviderSource } from "takosumi-contract/provider-env-rules";
 import type {
   Dependency,
   DependencySnapshot,
@@ -682,6 +683,35 @@ function providerBindingResolutionRequirements(
         credentialRequired: true,
       }))
     : requirements;
+}
+
+/**
+ * Historical destroy Plans may include OpenTofu's built-in runtime capability
+ * (`terraform.io/builtin/terraform`) in the provider inventory. It is not an
+ * installable package or a bindable credential, so remove it before deriving
+ * the exact requirement set used for provider resolution and root generation.
+ * Every non-built-in source and its exact identity/version are retained.
+ */
+function normalizeDestroyProviderInventory(
+  requiredProviders: readonly string[],
+  exactRequirements: readonly CapsuleProviderRequirement[] | undefined,
+): {
+  readonly requiredProviders: readonly string[];
+  readonly exactRequirements: readonly CapsuleProviderRequirement[];
+} {
+  const installableProviders = normalizeProviders(requiredProviders).filter(
+    (provider) => !isOpenTofuBuiltinProviderSource(provider),
+  );
+  const storedRequirements =
+    exactRequirements ??
+    legacyProviderRequirementsForStoredPlan(installableProviders);
+  return {
+    requiredProviders: installableProviders,
+    exactRequirements: storedRequirements.filter(
+      (requirement) =>
+        !isOpenTofuBuiltinProviderSource(requirement.source),
+    ),
+  };
 }
 
 function requiredProviderRequirementsForNewPlan(
@@ -1924,17 +1954,20 @@ export class RunEngine {
     }
     const destroyProviderRequirements = appliedPlan
       ? (() => {
-          const requiredProviders = normalizeProviders(
+          const inventory = normalizeDestroyProviderInventory(
             appliedPlan.requiredProviders,
+            appliedPlan.requiredProviderRequirements,
           );
           const requiredProviderRequirements =
             requiredProviderRequirementsForNewPlan(
-              requiredProviders,
-              appliedPlan.requiredProviderRequirements ??
-                legacyProviderRequirementsForStoredPlan(requiredProviders),
+              inventory.requiredProviders,
+              inventory.exactRequirements,
               runnerProfile.requireProviderBindings === true,
             );
-          return { requiredProviders, requiredProviderRequirements };
+          return {
+            requiredProviders: inventory.requiredProviders,
+            requiredProviderRequirements,
+          };
         })()
       : undefined;
     const stored = await planCreationStage(
@@ -3331,18 +3364,28 @@ export class RunEngine {
         { reason: "legacy_sourceless_destroy_ineligible" },
       );
     }
-    const requiredProviders = normalizeProviders(appliedPlan.requiredProviders);
-    if (requiredProviders.length === 0) {
+    // Keep the legacy eligibility guard for a genuinely source-less PlanRun
+    // with no provider identity at all. A historical builtin-only inventory is
+    // explicit runtime-capability evidence, though, and must remain eligible
+    // for provider-free teardown (for example a terraform_data-only state).
+    const historicalProviders = normalizeProviders(
+      appliedPlan.requiredProviders,
+    );
+    if (historicalProviders.length === 0) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `capsule ${capsule.id} legacy source-less plan has no provider identity`,
         { reason: "legacy_sourceless_destroy_ineligible" },
       );
     }
+    const inventory = normalizeDestroyProviderInventory(
+      historicalProviders,
+      appliedPlan.requiredProviderRequirements,
+    );
+    const requiredProviders = inventory.requiredProviders;
     const requiredProviderRequirements = requiredProviderRequirementsForNewPlan(
       requiredProviders,
-      appliedPlan.requiredProviderRequirements ??
-        legacyProviderRequirementsForStoredPlan(requiredProviders),
+      inventory.exactRequirements,
       runnerProfile.requireProviderBindings === true,
     );
     const bindingRequirements = providerBindingResolutionRequirements(
