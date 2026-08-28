@@ -64,6 +64,113 @@ writeFileSync("dist/result.json", JSON.stringify({
   }
 });
 
+test("source build failure includes bounded redacted stderr diagnostics", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-source-build-failure-"));
+  const sourceRoot = join(root, "source");
+  const secret = "source-build-token-must-not-leak";
+  const sentinel = "source-build-failure-sentinel";
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    const failure = await runSourceBuild(
+      {
+        commands: [
+          {
+            argv: [
+              process.execPath,
+              "-e",
+              `console.log("stdout-only-marker");
+console.error(${JSON.stringify(`${sentinel} API_TOKEN=${secret}\n${"x".repeat(6000)}`)});
+process.exit(7);`,
+            ],
+          },
+        ],
+        outputs: ["dist/worker.js"],
+      },
+      sourceRoot,
+    ).catch((error) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message =
+      failure instanceof Error ? failure.message : String(failure);
+    const output = message
+      .slice(message.indexOf("output:") + "output:".length)
+      .trim();
+    expect(message).toContain("source build 1/1");
+    expect(message).toContain("failed with exit code 7");
+    expect(message).toContain("output:");
+    expect(message).toContain(sentinel);
+    expect(message).toContain("[redacted]");
+    expect(message).toContain("diagnostics omitted");
+    expect(message).not.toContain(secret);
+    expect(message).not.toContain("stdout-only-marker");
+    expect(output.length).toBeLessThanOrEqual(4_096);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("source build failure falls back to stdout when stderr is empty", async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), "takosumi-source-build-failure-stdout-"),
+  );
+  const sourceRoot = join(root, "source");
+  const sentinel = "source-build-stdout-failure-sentinel";
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    const failure = await runSourceBuild(
+      {
+        commands: [
+          {
+            argv: [
+              process.execPath,
+              "-e",
+              `console.log(${JSON.stringify(sentinel)}); process.exit(3);`,
+            ],
+          },
+        ],
+        outputs: ["dist/worker.js"],
+      },
+      sourceRoot,
+    ).catch((error) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message =
+      failure instanceof Error ? failure.message : String(failure);
+    expect(message).toContain("output:");
+    expect(message).toContain(sentinel);
+    expect(message).toContain("failed with exit code 3");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("source build failure without output retains the concise failure", async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), "takosumi-source-build-failure-empty-"),
+  );
+  const sourceRoot = join(root, "source");
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    const failure = await runSourceBuild(
+      {
+        commands: [
+          {
+            argv: [process.execPath, "-e", "process.exit(2)"],
+          },
+        ],
+        outputs: ["dist/worker.js"],
+      },
+      sourceRoot,
+    ).catch((error) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message =
+      failure instanceof Error ? failure.message : String(failure);
+    expect(message).toContain("source build 1/1");
+    expect(message).toContain("failed with exit code 2");
+    expect(message).not.toContain("output:");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("source build rejects outputs that resolve outside the checkout", async () => {
   const root = await mkdtemp(join(tmpdir(), "takosumi-source-build-link-"));
   const sourceRoot = join(root, "source");
