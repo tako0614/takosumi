@@ -213,13 +213,13 @@ describe("single-screen install surface", () => {
     const restartEnd = view.indexOf("const providerBindings =", restartStart);
     const restart = view.slice(restartStart, restartEnd);
 
-    expect(restart).toContain("await deleteCapsule(failedCapsuleId)");
-    expect(restart).toContain("capsuleAbandonmentCompleted(deleted)");
+    expect(restart).toContain("await abandonUnappliedCapsule(failedCapsuleId)");
+    expect(restart).toContain("capsuleAbandonmentCompleted(deleted, {");
     expect(restart).toContain(
       "resetPreparedSource({ preserveModuleSelection: true });",
     );
     expect(restart).toContain("await prepareInstall();");
-    expect(restart.indexOf("await deleteCapsule")).toBeLessThan(
+    expect(restart.indexOf("await abandonUnappliedCapsule")).toBeLessThan(
       restart.indexOf("resetPreparedSource"),
     );
     expect(restart.indexOf("resetPreparedSource")).toBeLessThan(

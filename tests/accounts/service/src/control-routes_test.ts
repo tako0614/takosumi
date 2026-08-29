@@ -497,6 +497,104 @@ test("no-state Capsule DELETE fails closed without the safe abandon operation", 
   expect(statusPatches).toBe(0);
 });
 
+test("Capsule abandon action is idempotent and never falls through to a destroy Plan", async () => {
+  const fixture = operationsFixture();
+  let capsule = await fixture.operations.capsules.getCapsule("cap_1");
+  let abandonCalls = 0;
+  let destroyPlanCalls = 0;
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      getCapsule: async () => capsule,
+      abandonUnappliedCapsule: async () => {
+        abandonCalls += 1;
+        capsule = { ...capsule, status: "destroyed" as const };
+        return capsule;
+      },
+    },
+    createCapsuleDestroyPlan: async () => {
+      destroyPlanCalls += 1;
+      throw new Error("destroy Plan must not be created");
+    },
+  } as ControlPlaneOperations;
+
+  const request = () =>
+    new Request("https://app.example.test/api/v1/capsules/cap_1/abandon", {
+      method: "POST",
+    });
+  const first = await handleCapsules(
+    context(operations, request()),
+    ["capsules", "cap_1", "abandon"],
+    "POST",
+  );
+  expect(first?.status).toBe(202);
+  expect(await first?.json()).toMatchObject({
+    abandoned: true,
+    capsule: { id: "cap_1", status: "destroyed" },
+  });
+
+  const retry = await handleCapsules(
+    context(operations, request()),
+    ["capsules", "cap_1", "abandon"],
+    "POST",
+  );
+  expect(retry?.status).toBe(200);
+  expect(await retry?.json()).toMatchObject({
+    alreadyDeleted: true,
+    capsule: { id: "cap_1", status: "destroyed" },
+  });
+  expect(abandonCalls).toBe(1);
+  expect(destroyPlanCalls).toBe(0);
+});
+
+test("Capsule abandon action rejects an applied-state race without creating a destroy Plan", async () => {
+  const fixture = operationsFixture();
+  const base = await fixture.operations.capsules.getCapsule("cap_1");
+  let destroyPlanCalls = 0;
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      getCapsule: async () => ({
+        ...base,
+        currentStateVersionId: "state_1",
+        currentStateGeneration: 1,
+        status: "active" as const,
+      }),
+      abandonUnappliedCapsule: async () => {
+        throw Object.assign(new Error("Capsule has applied state"), {
+          code: "failed_precondition",
+          details: { reason: "capsule_applied_state_present" },
+        });
+      },
+    },
+    createCapsuleDestroyPlan: async () => {
+      destroyPlanCalls += 1;
+      throw new Error("destroy Plan must not be created");
+    },
+  } as ControlPlaneOperations;
+  const request = new Request(
+    "https://app.example.test/api/v1/capsules/cap_1/abandon",
+    { method: "POST" },
+  );
+
+  const response = await handleCapsules(
+    context(operations, request),
+    ["capsules", "cap_1", "abandon"],
+    "POST",
+  ).catch(controllerErrorResponse);
+
+  expect(response?.status).toBe(409);
+  expect(await response?.json()).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      details: { reason: "capsule_applied_state_present" },
+    },
+  });
+  expect(destroyPlanCalls).toBe(0);
+});
+
 function operationsFixture() {
   const projects: Array<{
     id: string;

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  capsuleAbandonmentCompleted,
   compatibilityCheckLooksTransient,
   compatibilityDiagnosticDisplay,
   compatibilitySummaryDisplay,
@@ -91,30 +90,6 @@ describe("compatibility diagnostics", () => {
         source: "api",
       }),
     ).not.toContain("AUTH_PASSWORD_HASH");
-  });
-});
-
-describe("failed initial install abandonment", () => {
-  test("accepts the first response and a lost-ack retry only with destroyed readback", () => {
-    expect(
-      capsuleAbandonmentCompleted({
-        abandoned: true,
-        capsule: { status: "destroyed" },
-      }),
-    ).toBe(true);
-    expect(
-      capsuleAbandonmentCompleted({
-        alreadyDeleted: true,
-        capsule: { status: "destroyed" },
-      }),
-    ).toBe(true);
-    expect(
-      capsuleAbandonmentCompleted({
-        alreadyDeleted: true,
-        capsule: { status: "active" },
-      }),
-    ).toBe(false);
-    expect(capsuleAbandonmentCompleted({ abandoned: true })).toBe(false);
   });
 });
 

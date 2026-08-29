@@ -1470,6 +1470,48 @@ export interface DeleteCapsuleResult {
   readonly projectionStatus?: string;
 }
 
+export interface CapsuleAbandonmentExpectation {
+  readonly id: string;
+  readonly workspaceId: string;
+}
+
+/**
+ * Accepts only the authoritative terminal readback for an unapplied Capsule
+ * abandonment. The `alreadyDeleted` branch covers a lost acknowledgement, but
+ * still requires the server to return the destroyed Capsule projection.
+ */
+export function capsuleAbandonmentCompleted(
+  value: unknown,
+  expected: CapsuleAbandonmentExpectation,
+): boolean {
+  if (!isRecord(value) || !isCapsuleResponse(value.capsule)) return false;
+  const firstAcknowledgement =
+    value.abandoned === true && value.alreadyDeleted === undefined;
+  const lostAcknowledgementRetry =
+    value.alreadyDeleted === true && value.abandoned === undefined;
+  return (
+    value.capsule.id === expected.id &&
+    value.capsule.workspaceId === expected.workspaceId &&
+    value.capsule.status === "destroyed" &&
+    value.capsule.currentStateGeneration === 0 &&
+    value.capsule.currentStateVersionId === undefined &&
+    (firstAcknowledgement || lostAcknowledgementRetry)
+  );
+}
+
+/**
+ * Atomically abandons only a never-applied Capsule. The server must reject an
+ * applied Capsule without creating the destroy Plan used by generic DELETE.
+ */
+export async function abandonUnappliedCapsule(
+  capsuleId: string,
+): Promise<DeleteCapsuleResult | unknown> {
+  return await controlFetch<DeleteCapsuleResult | unknown>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/abandon`,
+    { method: "POST" },
+  );
+}
+
 /**
  * Deletes an Capsule from the dashboard flow.
  *

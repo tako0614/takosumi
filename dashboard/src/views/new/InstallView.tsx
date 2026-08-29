@@ -31,13 +31,14 @@ import {
   Spinner,
 } from "../../components/ui/index.ts";
 import {
+  abandonUnappliedCapsule,
   checkCapsuleCompatibility,
+  capsuleAbandonmentCompleted,
   ControlApiError,
   ControlApiIndeterminateError,
   SourceCreateIndeterminateError,
   createCapsule,
   createWorkspace,
-  deleteCapsule,
   extractRunId,
   getInstallConfig,
   listConnectionsWithSignal,
@@ -96,7 +97,6 @@ import { locale, t } from "../../i18n/index.ts";
 import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
 import {
   CAPSULE_NAME_PATTERN,
-  capsuleAbandonmentCompleted,
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultWorkspaceHandle,
   localizedStoreText,
@@ -1190,8 +1190,13 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     });
     if (!accepted) return;
 
-    const deleted = await deleteCapsule(failedCapsuleId);
-    if (!capsuleAbandonmentCompleted(deleted)) {
+    const deleted = await abandonUnappliedCapsule(failedCapsuleId);
+    if (
+      !capsuleAbandonmentCompleted(deleted, {
+        id: failedCapsuleId,
+        workspaceId: workspace,
+      })
+    ) {
       throw new Error(t("installStore.restartUnavailable"));
     }
     clearCapsuleListCache(workspace);
