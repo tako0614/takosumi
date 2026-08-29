@@ -204,6 +204,21 @@ export async function handleCapsules(
       return methodNotAllowed("GET, PATCH, DELETE");
     }
     const leaf = segments[2];
+    if (leaf === "abandon" && segments.length === 3) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      if (capsule.status === "destroyed") {
+        return json({ capsule: publicCapsule(capsule), alreadyDeleted: true });
+      }
+      // This action is deliberately abandonment-only. The domain operation
+      // rechecks durable state under its admission boundary and rejects an
+      // applied Capsule; unlike generic DELETE it can never create a destroy
+      // Plan if state changes while the user confirms the restart.
+      return await abandonUnappliedCapsule({
+        operations,
+        capsule,
+        reason: "restart requested before first successful apply",
+      });
+    }
     if (leaf === "plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       const body = await readJsonObject(request.clone()).catch(() => null);

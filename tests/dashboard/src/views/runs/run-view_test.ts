@@ -115,6 +115,41 @@ describe("RunView", () => {
     expect(source).toContain("planCapsuleUpdate(instId)");
   });
 
+  test("a failed first-install Plan abandons its stale snapshot before rebuilding from latest source", () => {
+    const restart = source.slice(
+      source.indexOf("const restartFailedInitialPlan"),
+      source.indexOf("const retryPlan"),
+    );
+    expect(restart).toContain('currentRun.type !== "plan"');
+    expect(restart).toContain("currentCapsule.currentStateGeneration !== 0");
+    expect(restart).toContain("currentCapsule.currentStateVersionId");
+    expect(restart).toContain("getSource(currentCapsule.sourceId)");
+    expect(restart).toContain("getInstallConfig(currentCapsule.installConfigId)");
+    expect(restart).toContain("installReturnPathFromPrefill({");
+    expect(restart).not.toContain("ref:");
+    expect(restart).toContain("await abandonUnappliedCapsule(instId)");
+    expect(restart).toContain("capsuleAbandonmentCompleted(deleted, {");
+    expect(restart).not.toContain('currentCapsule.status === "destroyed"');
+    expect(restart).toContain("alreadyDeleted");
+    expect(restart.indexOf("getSource(currentCapsule.sourceId)")).toBeLessThan(
+      restart.indexOf("await abandonUnappliedCapsule"),
+    );
+    expect(restart.indexOf("await abandonUnappliedCapsule")).toBeLessThan(
+      restart.indexOf("navigate("),
+    );
+    expect(source).toContain("ordinaryRetryAllowed()");
+    expect(source).toContain("capsule.latest?.id !== r.capsuleId");
+    expect(source).toContain('t("run.restartLatestSource")');
+    expect(ja["run.restartLatestSource"]).toContain("最新のソース");
+    expect(en["run.restartLatestSource"]).toContain("latest source");
+    expect(ja["run.restartLatestSourceConfirm.message"]).toContain(
+      "履歴は残ります",
+    );
+    expect(en["run.restartLatestSourceConfirm.message"]).toContain(
+      "history is preserved",
+    );
+  });
+
   test("destroy retry preserves the destroy operation", () => {
     expect(source).toContain('run.latest?.type === "destroy_plan"');
     expect(source).toContain("await destroyPlanCapsule(instId)");

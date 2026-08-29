@@ -694,6 +694,12 @@ export const en: Record<keyof typeof ja, string> = {
   "run.deploying": "Deploying…",
   "run.deployBlocked": "Deploy blocked",
   "run.retryPlan": "Review changes again",
+  "run.restartLatestSource": "Start over with the latest source",
+  "run.restartLatestSourceConfirm.title": "Start over with the latest source?",
+  "run.restartLatestSourceConfirm.message":
+    "“{name}” has never been deployed. This abandons the incomplete service, removes its old pinned source selection, and fetches the latest contents. The failed change-review history is preserved.",
+  "run.restartLatestSourceUnavailable":
+    "This service cannot be safely rebuilt from here. Reload its status and try again.",
   "run.backToApp": "Back to service",
   "run.appHandoff.open": "Open in {app}",
   "run.destructiveWarning":

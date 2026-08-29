@@ -701,6 +701,12 @@ export const ja = {
   "run.deploying": "実行中…",
   "run.deployBlocked": "実行できません",
   "run.retryPlan": "もう一度変更を確認",
+  "run.restartLatestSource": "最新のソースで最初からやり直す",
+  "run.restartLatestSourceConfirm.title": "最新のソースでやり直しますか？",
+  "run.restartLatestSourceConfirm.message":
+    "「{name}」はまだデプロイされていません。未完了のサービスを破棄し、固定されていた古いソース指定を外して最新の内容を取得し直します。失敗した変更確認の履歴は残ります。",
+  "run.restartLatestSourceUnavailable":
+    "このサービスはここから安全に作り直せません。状態を再読み込みしてからもう一度お試しください。",
   "run.backToApp": "サービスへ戻る",
   "run.appHandoff.open": "{app} で開く",
   "run.destructiveWarning":

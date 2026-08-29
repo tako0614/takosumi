@@ -32,15 +32,19 @@ import { Activity, ExternalLink } from "lucide-solid";
 import { redactString } from "takosumi-contract/redaction";
 import Page from "../account/components/auth/Page.tsx";
 import {
+  abandonUnappliedCapsule,
   approveRun,
+  capsuleAbandonmentCompleted,
   ControlApiError,
   cancelRun,
   createApplyRun,
   extractRunId,
   getCapsule,
+  getInstallConfig,
   getRun,
   getRunCostInfo,
   getRunLogs,
+  getSource,
   listActivity,
   listStateVersions,
   listProviderConnectionsWithSignal,
@@ -111,6 +115,7 @@ import { runFailureHint } from "../../lib/run-errors.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
+import { installReturnPathFromPrefill } from "../../lib/install-return-context.ts";
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
 import {
   formatDateTime,
@@ -782,6 +787,41 @@ function Inner() {
   const capsuleId = () => run.latest?.capsuleId ?? null;
   const [capsule] = createResource(capsuleId, getCapsule);
   const appName = () => capsule.latest?.name;
+  const canRestartFailedInitialPlan = createMemo(() => {
+    const r = run.latest;
+    const currentCapsule = capsule.latest;
+    return Boolean(
+      r &&
+        currentCapsule &&
+        r.type === "plan" &&
+        isTerminalRunStatus(r.status) &&
+        r.status !== "succeeded" &&
+        currentCapsule.id === r.capsuleId &&
+        currentCapsule.currentStateGeneration === 0 &&
+        !currentCapsule.currentStateVersionId &&
+        currentCapsule.sourceId,
+    );
+  });
+  const ordinaryRetryAllowed = createMemo(() => {
+    const r = run.latest;
+    if (
+      !r ||
+      r.type !== "plan" ||
+      !isTerminalRunStatus(r.status) ||
+      r.status === "succeeded"
+    ) {
+      return true;
+    }
+    // A failed first-install Plan is pinned to its reviewed immutable
+    // SourceSnapshot. Never flash or offer the ordinary retry while the
+    // Capsule read is pending: that path would reproduce the same stale
+    // source. Applied update Plans keep their existing re-plan behavior.
+    if (capsule.latest?.id !== r.capsuleId) return false;
+    return Boolean(
+      capsule.latest?.currentStateVersionId ||
+        (capsule.latest?.currentStateGeneration ?? 0) > 0,
+    );
+  });
   const appliedRunStateVersionKey = createMemo(() => {
     const r = run.latest;
     const id = capsuleId();
@@ -1259,6 +1299,73 @@ function Inner() {
     }
   });
 
+  const { confirm } = useConfirmDialog();
+
+  const restartFailedInitialPlan = createAction(async () => {
+    const currentRun = run.latest;
+    const instId = currentRun?.capsuleId;
+    if (
+      !currentRun ||
+      !instId ||
+      currentRun.type !== "plan" ||
+      !isTerminalRunStatus(currentRun.status) ||
+      currentRun.status === "succeeded"
+    ) {
+      throw new Error(t("run.restartLatestSourceUnavailable"));
+    }
+
+    // Re-read every authority immediately before the destructive abandonment.
+    // The Run and old immutable SourceSnapshot remain in history; only the
+    // never-applied Capsule is abandoned and rebuilt from fresh source.
+    const currentCapsule = await getCapsule(instId);
+    if (
+      currentCapsule.currentStateGeneration !== 0 ||
+      currentCapsule.currentStateVersionId ||
+      !currentCapsule.sourceId
+    ) {
+      throw new Error(t("run.restartLatestSourceUnavailable"));
+    }
+    const [source, installConfig] = await Promise.all([
+      getSource(currentCapsule.sourceId),
+      getInstallConfig(currentCapsule.installConfigId),
+    ]);
+    const restartPath = installReturnPathFromPrefill({
+      git: source.url,
+      sourcePath: source.defaultPath,
+      ...(installConfig.modulePath ? { path: installConfig.modulePath } : {}),
+      name: currentCapsule.name,
+    });
+    if (!restartPath) {
+      throw new Error(t("run.restartLatestSourceUnavailable"));
+    }
+
+    const accepted = await confirm({
+      title: t("run.restartLatestSourceConfirm.title"),
+      message: t("run.restartLatestSourceConfirm.message", {
+        name: currentCapsule.name,
+      }),
+      confirmText: t("run.restartLatestSource"),
+      cancelText: t("common.cancel"),
+      danger: true,
+    });
+    if (!accepted) return;
+
+    // Repeating this after a dropped response is intentional. The server may
+    // now report alreadyDeleted; the shared classifier still requires the
+    // authoritative destroyed projection before navigation.
+    const deleted = await abandonUnappliedCapsule(instId);
+    if (
+      !capsuleAbandonmentCompleted(deleted, {
+        id: currentCapsule.id,
+        workspaceId: currentCapsule.workspaceId,
+      })
+    ) {
+      throw new Error(t("run.restartLatestSourceUnavailable"));
+    }
+    clearWorkspaceProjectionCaches(currentCapsule.workspaceId);
+    navigate(appendAppHandoff(restartPath, appHandoff) ?? restartPath);
+  });
+
   const retryPlan = createAction(async () => {
     const instId = run.latest?.capsuleId;
     if (!instId) return;
@@ -1295,7 +1402,6 @@ function Inner() {
   });
   // Cancelling a queued/running apply must never be one stray click — name
   // the run (service + operation) in an explicit ConfirmDialog first.
-  const { confirm } = useConfirmDialog();
   /**
    * Run operations whose approval immediately replaces or removes live state.
    * A plan/apply of ordinary changes is already gated by the destructive-count
@@ -1852,13 +1958,28 @@ function Inner() {
                       </Button>
                     </Show>
 
-                    {/* Any terminal, non-successful run can be re-planned.
-                        The old condition only covered review runs, so a failed
-                        / expired / cancelled apply rendered NO action at all
-                        while its own copy said "try again". */}
+                    {/* A failed first-install Plan must abandon its never-
+                        applied Capsule before resolving fresh source. Retrying
+                        the same Plan would reuse its immutable stale snapshot. */}
+                    <Show when={canRestartFailedInitialPlan()}>
+                      <Button
+                        variant="secondary"
+                        type="button"
+                        busy={restartFailedInitialPlan.busy()}
+                        onClick={() => void restartFailedInitialPlan.run()}
+                      >
+                        {t("run.restartLatestSource")}
+                      </Button>
+                    </Show>
+
+                    {/* Other terminal failures can be re-planned normally.
+                        Failed update Plans refresh source through
+                        planCapsuleUpdate; failed first installs are excluded
+                        until the Capsule read proves they were applied. */}
                     <Show
                       when={
                         Boolean(r().capsuleId) &&
+                        ordinaryRetryAllowed() &&
                         ((isTerminalRunStatus(r().status) &&
                           r().status !== "succeeded") ||
                           isPolicyBlockedReview(r()) ||
@@ -1991,6 +2112,13 @@ function Inner() {
                     )}
                   </Show>
                   <Show when={retryPlan.error()}>
+                    {(m) => (
+                      <p class="wa-error" role="alert">
+                        {m()}
+                      </p>
+                    )}
+                  </Show>
+                  <Show when={restartFailedInitialPlan.error()}>
                     {(m) => (
                       <p class="wa-error" role="alert">
                         {m()}
