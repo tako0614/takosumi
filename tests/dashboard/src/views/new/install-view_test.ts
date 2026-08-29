@@ -206,6 +206,30 @@ describe("single-screen install surface", () => {
     expect(view).toContain("resetPreparedSource();");
   });
 
+  test("a failed initial Plan can abandon the unapplied Capsule and start fresh", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const execution = read("dashboard/src/views/new/InstallExecution.tsx");
+    const restartStart = view.indexOf("const restartFailedInstall = async () =>");
+    const restartEnd = view.indexOf("const providerBindings =", restartStart);
+    const restart = view.slice(restartStart, restartEnd);
+
+    expect(restart).toContain("await deleteCapsule(failedCapsuleId)");
+    expect(restart).toContain("capsuleAbandonmentCompleted(deleted)");
+    expect(restart).toContain(
+      "resetPreparedSource({ preserveModuleSelection: true });",
+    );
+    expect(restart).toContain("await prepareInstall();");
+    expect(restart.indexOf("await deleteCapsule")).toBeLessThan(
+      restart.indexOf("resetPreparedSource"),
+    );
+    expect(restart.indexOf("resetPreparedSource")).toBeLessThan(
+      restart.indexOf("await prepareInstall()"),
+    );
+    expect(execution).toContain('current().type === "plan"');
+    expect(execution).toContain('t("installStore.restartWithLatestSource")');
+    expect(execution).toContain("await props.onRestart();");
+  });
+
   test("workspace and provider discovery stay lazy until an explicit action", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain("const workspace = currentWorkspaceId();");

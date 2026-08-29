@@ -121,6 +121,12 @@ export const ja = {
   "installStore.runFailed": "インストールを完了できませんでした",
   "installStore.runFailedHint":
     "技術的な詳細を確認して、もう一度お試しください。",
+  "installStore.restartWithLatestSource": "最新のソースでやり直す",
+  "installStore.restartConfirmTitle": "最新のソースで最初からやり直しますか？",
+  "installStore.restartConfirmMessage":
+    "未適用のサービスを破棄し、同じ名前でリポジトリを取得し直します。失敗したPlanの履歴は残ります。",
+  "installStore.restartUnavailable":
+    "未適用のサービスを安全に破棄できなかったため、最初からやり直せませんでした。技術的な詳細を確認してください。",
   "installStore.doneTitle": "追加できました",
   "installStore.doneHint": "サービスを開いて使い始められます。",
   "installStore.open": "サービスを開く",

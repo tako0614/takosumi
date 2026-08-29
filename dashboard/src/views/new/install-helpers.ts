@@ -1196,6 +1196,19 @@ function initialAddTab(search: string): "store" | "git" {
     : "git";
 }
 
+function capsuleAbandonmentCompleted(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const response = value as {
+    readonly abandoned?: unknown;
+    readonly alreadyDeleted?: unknown;
+    readonly capsule?: { readonly status?: unknown };
+  };
+  return (
+    response.capsule?.status === "destroyed" &&
+    (response.abandoned === true || response.alreadyDeleted === true)
+  );
+}
+
 export type {
   StepState,
   FlowRun,
@@ -1281,4 +1294,5 @@ export {
   defaultWorkspaceHandle,
   parseInitialTcsHandoff,
   initialAddTab,
+  capsuleAbandonmentCompleted,
 };
