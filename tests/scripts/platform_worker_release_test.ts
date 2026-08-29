@@ -49,9 +49,11 @@ test("production config must bind the isolated production Hosted service", () =>
     includeBroker = true,
     basePath = "/api/v1/account/subscription",
     includeVersionMetadata = true,
+    includeRequestSignal = true,
   ) => `
 name = "takosumi"
 main = "${main}"
+compatibility_flags = ["nodejs_compat"${includeRequestSignal ? ', "enable_request_signal"' : ""}]
 [assets]
 directory = "${resolve(root, "dashboard/dist")}"
 ${includeVersionMetadata ? '[version_metadata]\nbinding = "TAKOSUMI_VERSION_METADATA"' : ""}
@@ -191,6 +193,20 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
         resolve(root, "deploy/platform/entry-worker.ts"),
         true,
         "/api/v1/hosted/subscription",
+        false,
+      ),
+      "/private/wrangler.toml",
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(
+      source(
+        "takosumi-hosted",
+        resolve(root, "deploy/platform/entry-worker.ts"),
+        true,
+        "/api/v1/account/subscription",
+        true,
         false,
       ),
       "/private/wrangler.toml",

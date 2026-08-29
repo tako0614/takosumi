@@ -10,6 +10,7 @@ import {
 } from "takosumi-contract";
 import type { SqlClient, SqlValue } from "../../adapters/storage/sql.ts";
 import { deployControlPostgresTableNames as names } from "../../adapters/storage/drizzle/schema/logical.ts";
+import type { InterfaceMaterializationWriteAuthority } from "../deploy-control/interface_materialization_intent.ts";
 import type {
   InterfaceAuthorizationPageInput,
   InterfaceAuthorizationQuery,
@@ -33,15 +34,25 @@ class SqlInterfaceStore implements InterfaceStore {
 
   constructor(readonly client: SqlClient) {}
 
-  async create(record: Interface): Promise<boolean> {
+  async create(
+    record: Interface,
+    authority?: InterfaceMaterializationWriteAuthority,
+  ): Promise<boolean> {
+    if (authority && !interfaceMatchesAuthority(record, authority)) return false;
+    const parameters = [...interfaceParameters(record, false)];
+    const authorityClause = postgresMaterializationAuthorityClause(
+      parameters,
+      authority,
+    );
     const result = await this.client.query(
       `insert into ${this.#table} (
         id, workspace_id, owner_kind, owner_id, name, interface_type,
         phase, generation, resolved_revision, oauth_resource_uri,
         record_json, created_at, updated_at
-      ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13)
+      ) select $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13
+      where ${authorityClause}
       on conflict do nothing`,
-      interfaceParameters(record, false),
+      parameters,
     );
     return result.rowCount > 0;
   }
@@ -123,8 +134,20 @@ class SqlInterfaceStore implements InterfaceStore {
   async compareAndSet(
     record: Interface,
     expected: InterfaceWriteGuard,
+    authority?: InterfaceMaterializationWriteAuthority,
   ): Promise<boolean> {
+    if (authority && !interfaceMatchesAuthority(record, authority)) return false;
     const p = interfaceParameters(record, true);
+    const parameters: SqlValue[] = [
+      ...p,
+      expected.generation,
+      expected.resolvedRevision,
+      JSON.stringify(expected.record),
+    ];
+    const authorityClause = postgresMaterializationAuthorityClause(
+      parameters,
+      authority,
+    );
     try {
       const result = await this.client.query(
         `update ${this.#table} set
@@ -134,13 +157,8 @@ class SqlInterfaceStore implements InterfaceStore {
             when oauth_resource_uri=$10 then oauth_resource_uri else null end,
           record_json=$11::jsonb, created_at=$12, updated_at=$13
          where id=$1 and generation=$14 and resolved_revision=$15
-           and record_json=$16::jsonb`,
-        [
-          ...p,
-          expected.generation,
-          expected.resolvedRevision,
-          JSON.stringify(expected.record),
-        ],
+           and record_json=$16::jsonb and ${authorityClause}`,
+        parameters,
       );
       return result.rowCount > 0;
     } catch (error) {
@@ -152,26 +170,34 @@ class SqlInterfaceStore implements InterfaceStore {
   async claimOAuth2Resource(input: {
     readonly record: Interface;
     readonly resource: string;
-  }): Promise<boolean> {
+  }, authority?: InterfaceMaterializationWriteAuthority): Promise<boolean> {
     if (interfaceOAuth2ResourceUri(input.record) !== input.resource) {
       return false;
     }
+    if (authority && !interfaceMatchesAuthority(input.record, authority)) {
+      return false;
+    }
+    const parameters: SqlValue[] = [
+      input.resource,
+      input.record.metadata.id,
+      input.record.metadata.workspaceId,
+      input.record.metadata.ownerRef.kind,
+      input.record.metadata.ownerRef.id,
+      input.record.metadata.generation,
+      input.record.status.resolvedRevision,
+      JSON.stringify(input.record),
+    ];
+    const authorityClause = postgresMaterializationAuthorityClause(
+      parameters,
+      authority,
+    );
     try {
       const result = await this.client.query(
         `update ${this.#table} set oauth_resource_uri=$1
          where id=$2 and workspace_id=$3 and owner_kind=$4 and owner_id=$5
            and phase='Resolved' and generation=$6 and resolved_revision=$7
-           and record_json=$8::jsonb`,
-        [
-          input.resource,
-          input.record.metadata.id,
-          input.record.metadata.workspaceId,
-          input.record.metadata.ownerRef.kind,
-          input.record.metadata.ownerRef.id,
-          input.record.metadata.generation,
-          input.record.status.resolvedRevision,
-          JSON.stringify(input.record),
-        ],
+           and record_json=$8::jsonb and ${authorityClause}`,
+        parameters,
       );
       return result.rowCount > 0;
     } catch (error) {
@@ -201,14 +227,27 @@ class SqlInterfaceBindingStore implements InterfaceBindingStore {
 
   constructor(readonly client: SqlClient) {}
 
-  async create(record: InterfaceBinding): Promise<boolean> {
+  async create(
+    record: InterfaceBinding,
+    authority?: InterfaceMaterializationWriteAuthority,
+  ): Promise<boolean> {
+    if (authority && record.metadata.workspaceId !== authority.workspaceId) {
+      return false;
+    }
+    const parameters = [...bindingParameters(record)];
+    const authorityClause = postgresMaterializationAuthorityClause(
+      parameters,
+      authority,
+      record.spec.interfaceId,
+    );
     const result = await this.client.query(
       `insert into ${this.#table} (
         id, workspace_id, interface_id, subject_kind, subject_id,
         phase, generation, record_json, created_at, updated_at
-      ) values ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10)
+      ) select $1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10
+      where ${authorityClause}
       on conflict do nothing`,
-      bindingParameters(record),
+      parameters,
     );
     return result.rowCount > 0;
   }
@@ -237,15 +276,25 @@ class SqlInterfaceBindingStore implements InterfaceBindingStore {
   async compareAndSet(
     record: InterfaceBinding,
     expectedGeneration: number,
+    authority?: InterfaceMaterializationWriteAuthority,
   ): Promise<boolean> {
+    if (authority && record.metadata.workspaceId !== authority.workspaceId) {
+      return false;
+    }
     const p = bindingParameters(record);
+    const parameters: SqlValue[] = [...p, expectedGeneration];
+    const authorityClause = postgresMaterializationAuthorityClause(
+      parameters,
+      authority,
+      record.spec.interfaceId,
+    );
     const result = await this.client.query(
       `update ${this.#table} set
         workspace_id=$2, interface_id=$3, subject_kind=$4, subject_id=$5,
         phase=$6, generation=$7, record_json=$8::jsonb,
         created_at=$9, updated_at=$10
-       where id=$1 and generation=$11`,
-      [...p, expectedGeneration],
+       where id=$1 and generation=$11 and ${authorityClause}`,
+      parameters,
     );
     return result.rowCount > 0;
   }
@@ -383,6 +432,75 @@ function bindingParameters(record: InterfaceBinding): readonly SqlValue[] {
     record.metadata.createdAt,
     record.metadata.updatedAt,
   ];
+}
+
+function interfaceMatchesAuthority(
+  record: Interface,
+  authority: InterfaceMaterializationWriteAuthority,
+): boolean {
+  return (
+    record.metadata.workspaceId === authority.workspaceId &&
+    record.metadata.ownerRef.kind === "Capsule" &&
+    record.metadata.ownerRef.id === authority.capsuleId
+  );
+}
+
+function postgresMaterializationAuthorityClause(
+  parameters: SqlValue[],
+  authority: InterfaceMaterializationWriteAuthority | undefined,
+  interfaceId?: string,
+): string {
+  if (!authority) return "true";
+  const bind = (value: SqlValue): string => {
+    parameters.push(value);
+    return `$${parameters.length}`;
+  };
+  const intentId = bind(authority.intentId);
+  const leaseToken = bind(authority.leaseToken);
+  const nextItemIndex = bind(authority.expectedNextItemIndex);
+  const workspaceId = bind(authority.workspaceId);
+  const capsuleId = bind(authority.capsuleId);
+  const installConfigId = bind(authority.installConfigId);
+  const stateVersionId = bind(authority.stateVersionId);
+  const outputId = bind(authority.outputId);
+  const stateGeneration = bind(authority.stateGeneration);
+  const interfaceOwnership = interfaceId
+    ? `and exists (
+         select 1 from ${names.interfaces} authority_interface
+         where authority_interface.id = ${bind(interfaceId)}
+           and authority_interface.workspace_id = ${workspaceId}
+           and authority_interface.owner_kind = 'Capsule'
+           and authority_interface.owner_id = ${capsuleId}
+       )`
+    : "";
+  return `exists (
+    select 1
+    from ${names.capsuleInterfaceMaterializationIntents} authority_intent
+    join ${names.capsules} authority_capsule
+      on authority_capsule.id = authority_intent.capsule_id
+     and authority_capsule.space_id = authority_intent.workspace_id
+    where authority_intent.id = ${intentId}
+      and authority_intent.status = 'pending'
+      and authority_intent.lease_token = ${leaseToken}
+      and authority_intent.next_item_index = ${nextItemIndex}
+      and authority_intent.lease_expires_at is not null
+      and authority_intent.lease_expires_at::timestamptz > current_timestamp
+      and authority_intent.workspace_id = ${workspaceId}
+      and authority_intent.capsule_id = ${capsuleId}
+      and authority_intent.install_config_id = ${installConfigId}
+      and authority_intent.state_version_id = ${stateVersionId}
+      and authority_intent.output_id = ${outputId}
+      and authority_intent.state_generation = ${stateGeneration}
+      and authority_capsule.install_config_id = ${installConfigId}
+      and authority_capsule.status <> 'destroyed'
+      and authority_capsule.current_state_version_id = ${stateVersionId}
+      and authority_capsule.installation_json->>'currentOutputId' = ${outputId}
+      and coalesce(
+        (authority_capsule.installation_json->>'currentStateGeneration')::integer,
+        0
+      ) = ${stateGeneration}
+      ${interfaceOwnership}
+  )`;
 }
 
 export function createSqlInterfaceStores(client: SqlClient): InterfaceStores {

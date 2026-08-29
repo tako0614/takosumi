@@ -421,16 +421,20 @@ export class SourceLifecycleService {
       ) {
         continue;
       }
-      await this.#store.patchCapsule(capsule.id, {
-        status: "stale",
+      const stale = await this.#store.markCapsuleStale({
+        capsuleId: capsule.id,
+        expected: capsule,
+        reason: "source-revision",
         updatedAt: input.finishedAtIso,
       });
+      if (stale.kind !== "updated") continue;
+      const staleCapsule = stale.capsule;
       await this.#store.putActivityEvent({
         id: this.#newId("act"),
-        workspaceId: capsule.workspaceId,
+        workspaceId: staleCapsule.workspaceId,
         action: "capsule.stale",
         targetType: "capsule",
-        targetId: capsule.id,
+        targetId: staleCapsule.id,
         metadata: {
           reason: "source_ref_changed",
           sourceId: input.running.sourceId,
@@ -447,7 +451,7 @@ export class SourceLifecycleService {
       // one-attempt-per-snapshot backoff) and enqueues the update plan.
       if (input.running.intent !== "manual_plan") {
         await this.#onCapsuleStaleForNewSnapshot?.({
-          capsule,
+          capsule: staleCapsule,
           snapshot: input.snapshot,
         });
       }

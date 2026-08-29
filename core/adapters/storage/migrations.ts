@@ -575,6 +575,47 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [["run_id"]],
     },
     {
+      name: "takosumi_capsule_interface_materialization_intents",
+      domain: "deploy",
+      columns: [
+        "id",
+        "apply_run_id",
+        "restore_run_id",
+        "source_intent_id",
+        "workspace_id",
+        "capsule_id",
+        "install_config_id",
+        "state_version_id",
+        "output_id",
+        "state_generation",
+        "blueprints_digest",
+        "blueprints_json",
+        "total_items",
+        "next_item_index",
+        "status",
+        "attempts",
+        "next_retry_at",
+        "lease_token",
+        "lease_expires_at",
+        "error_json",
+        "receipt_json",
+        "created_at",
+        "updated_at",
+        "completed_at",
+        "dead_lettered_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [
+        ["apply_run_id"],
+        ["restore_run_id"],
+        ["capsule_id", "state_generation"],
+      ],
+      indexes: [
+        ["status", "next_retry_at"],
+        ["workspace_id", "status", "dead_lettered_at", "id"],
+      ],
+    },
+    {
       name: "takosumi_workspaces",
       domain: "deploy",
       columns: [
@@ -4791,5 +4832,56 @@ alter table takosumi_interfaces
   drop column descriptor_name,
   drop column form_schema_digest,
   drop column form_ref_key;`,
+    },
+    {
+      id: "deploy.capsule_interface_materialization_intents.create",
+      version: 111,
+      domain: "deploy",
+      description:
+        "Create the protected, value-free Interface materialization intent lineage atomically adopted with successful non-destroy Apply state.",
+      sql: `create table if not exists takosumi_capsule_interface_materialization_intents (
+  id                text    primary key,
+  apply_run_id      text,
+  restore_run_id    text,
+  source_intent_id  text,
+  workspace_id      text    not null,
+  capsule_id        text    not null,
+  install_config_id text    not null,
+  state_version_id  text    not null,
+  output_id         text    not null,
+  state_generation  integer not null check (state_generation >= 1),
+  blueprints_digest text    not null check (blueprints_digest ~ '^sha256:[0-9a-f]{64}$'),
+  blueprints_json   text    not null check (octet_length(blueprints_json) <= 1048576),
+  total_items       integer not null check (total_items >= 1),
+  next_item_index   integer not null check (next_item_index >= 0 and next_item_index <= total_items),
+  status            text    not null check (status in ('pending', 'completed', 'dead_letter')),
+  attempts          integer not null check (attempts >= 0),
+  next_retry_at     text    not null,
+  lease_token       text,
+  lease_expires_at  text,
+  error_json        jsonb,
+  receipt_json      jsonb,
+  created_at        text    not null,
+  updated_at        text    not null,
+  completed_at      text,
+  dead_lettered_at  text,
+  check (
+    (apply_run_id is not null and restore_run_id is null and source_intent_id is null)
+    or
+    (apply_run_id is null and restore_run_id is not null and source_intent_id is not null)
+  )
+);
+create unique index if not exists takosumi_interface_intents_apply_run_unique
+  on takosumi_capsule_interface_materialization_intents (apply_run_id);
+create unique index if not exists takosumi_interface_intents_restore_run_unique
+  on takosumi_capsule_interface_materialization_intents (restore_run_id);
+create unique index if not exists takosumi_interface_intents_capsule_generation_unique
+  on takosumi_capsule_interface_materialization_intents (capsule_id, state_generation);
+create index if not exists takosumi_interface_intents_pending_idx
+  on takosumi_capsule_interface_materialization_intents (status, next_retry_at);
+create index if not exists takosumi_interface_intents_dead_letter_idx
+  on takosumi_capsule_interface_materialization_intents (
+    workspace_id, status, dead_lettered_at desc, id desc
+  );`,
     },
   ]);

@@ -1,4 +1,6 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type {
   ApplyRun,
   PlanRun,
@@ -25,6 +27,7 @@ import {
   InMemoryOpenTofuControlStore,
   type CapsuleInstallConfigRebindInput,
   type CapsuleInstallConfigRebindResult,
+  type MarkCapsuleStaleCommand,
   type CapsulePatch,
   type OpenTofuControlStore,
 } from "../../../../core/domains/deploy-control/store.ts";
@@ -257,6 +260,95 @@ function isD1CapsuleRebindWrite(sql: string): boolean {
     normalized.includes('"execution_authority_epoch" = "capsules"."execution_authority_epoch" +');
 }
 
+function isPostgresCapsuleStaleWrite(sql: string): boolean {
+  const normalized = sql.trimStart().toLowerCase();
+  return normalized.startsWith('update "takosumi_capsules"') &&
+    normalized.includes('"installation_json" =') &&
+    normalized.includes('"takosumi_capsules"."id" =');
+}
+
+function isD1CapsuleStaleWrite(sql: string): boolean {
+  const normalized = sql.trimStart().toLowerCase();
+  return normalized.startsWith('update "capsules"') &&
+    normalized.includes('"record_json" =') &&
+    normalized.includes('"capsules"."id" =');
+}
+
+function postgresStaleInterleaver(inner: SqlClient): {
+  readonly client: SqlClient;
+  readonly staleWrites: RecordedStatement[];
+  beforeNextStaleWrite(callback: () => Promise<void>): void;
+} {
+  let beforeNext: (() => Promise<void>) | undefined;
+  const staleWrites: RecordedStatement[] = [];
+  return {
+    client: {
+      async query<Row extends Record<string, unknown>>(
+        sql: string,
+        parameters?: SqlParameters,
+      ) {
+        if (isPostgresCapsuleStaleWrite(sql)) {
+          staleWrites.push({ sql, parameters: positional(parameters) });
+          const before = beforeNext;
+          beforeNext = undefined;
+          await before?.();
+        }
+        return await inner.query<Row>(sql, parameters);
+      },
+      transaction: (work) => inner.transaction(work),
+    },
+    staleWrites,
+    beforeNextStaleWrite(callback) {
+      beforeNext = callback;
+    },
+  };
+}
+
+class D1StaleInterleaver implements D1Database {
+  #beforeNext?: () => Promise<void>;
+  readonly staleWrites: RecordedStatement[] = [];
+
+  constructor(private readonly inner: D1Database) {}
+
+  beforeNextStaleWrite(callback: () => Promise<void>): void {
+    this.#beforeNext = callback;
+  }
+
+  prepare(query: string): D1PreparedStatement {
+    return this.#wrapStatement(query, this.inner.prepare(query), []);
+  }
+
+  batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    return this.inner.batch<T>(statements);
+  }
+
+  #wrapStatement(
+    query: string,
+    inner: D1PreparedStatement,
+    parameters: readonly unknown[],
+  ): D1PreparedStatement {
+    const wrapped = {
+      bind: (...values) =>
+        this.#wrapStatement(query, inner.bind(...values), values),
+      first: <T>() => inner.first<T>(),
+      all: <T>() => inner.all<T>(),
+      raw: <T = unknown[]>() => (inner as RawD1PreparedStatement).raw<T>(),
+      run: async <T>() => {
+        if (isD1CapsuleStaleWrite(query)) {
+          this.staleWrites.push({ sql: query, parameters });
+          const before = this.#beforeNext;
+          this.#beforeNext = undefined;
+          await before?.();
+        }
+        return await inner.run<T>();
+      },
+    };
+    return wrapped as D1PreparedStatement;
+  }
+}
+
 function sqlWhere(sql: string): string {
   const index = sql.toLowerCase().indexOf(" where ");
   if (index < 0) throw new Error(`expected UPDATE WHERE clause: ${sql}`);
@@ -282,6 +374,18 @@ function nonAuthorityCapsulePatch(suffix: string): CapsulePatch {
     // Deliberately collide with the observed audit timestamp. updatedAt is not
     // a revision and must not make a changed full record pass the rebind CAS.
     updatedAt: NOW,
+  };
+}
+
+function markStaleInput(
+  expected: Capsule,
+  reason: MarkCapsuleStaleCommand["reason"] = "source-revision",
+): MarkCapsuleStaleCommand {
+  return {
+    capsuleId: expected.id,
+    expected,
+    reason,
+    updatedAt: LATER,
   };
 }
 
@@ -711,6 +815,128 @@ test("rebind cannot erase an observed Capsule's concurrent non-authority JSON pa
       jsonParameterMatches(parameter, d1Seed.capsule)
     ),
   ).toBe(true);
+});
+
+test("markCapsuleStale returns typed exact-record CAS outcomes across every store", async () => {
+  for (const [label, store] of await stores()) {
+    const missing = capsule(`capsule_stale_missing_${label}`, "missing_config");
+    expect(
+      await store.markCapsuleStale(markStaleInput(missing)),
+      `${label}:missing`,
+    ).toEqual({ kind: "not-found" });
+
+    const updateSeed = await seedRebind(store, `stale_update_${label}`);
+    const updated = await store.markCapsuleStale(
+      markStaleInput(updateSeed.capsule),
+    );
+    expect(updated.kind, `${label}:updated`).toBe("updated");
+    expect(updated.kind === "updated" && updated.capsule, label).toEqual({
+      ...updateSeed.capsule,
+      status: "stale",
+      updatedAt: LATER,
+    });
+
+    const conflictSeed = await seedRebind(store, `stale_conflict_${label}`);
+    const newer = (await store.patchCapsule(conflictSeed.capsule.id, {
+      currentStateVersionId: `state_newer_${label}`,
+      currentStateGeneration: 7,
+      status: "error",
+      autoUpdate: true,
+      compatibilityStatus: "needs_patch",
+      updatedAt: NOW,
+    }))!;
+    const conflict = await store.markCapsuleStale(
+      markStaleInput(conflictSeed.capsule, "dependency-output"),
+    );
+    expect(conflict, `${label}:conflict`).toEqual({
+      kind: "conflict",
+      current: newer,
+    });
+    expect(await store.getCapsule(conflictSeed.capsule.id), label).toEqual(
+      newer,
+    );
+  }
+});
+
+test("markCapsuleStale cannot erase a newer Postgres or D1 Capsule committed at its write boundary", async () => {
+  const pg = await PGliteSqlClient.create();
+  pgClients.push(pg);
+  const pgInterleaving = postgresStaleInterleaver(pg);
+  const pgStore = new SqlOpenTofuControlStore({
+    client: pgInterleaving.client,
+  });
+  const pgConcurrentStore = new SqlOpenTofuControlStore({ client: pg });
+  const pgSeed = await seedRebind(pgStore, "stale_race_pg");
+  let pgNewer: Capsule | undefined;
+  pgInterleaving.beforeNextStaleWrite(async () => {
+    pgNewer = await pgConcurrentStore.patchCapsule(pgSeed.capsule.id, {
+      currentStateVersionId: "state_newer_pg",
+      currentStateGeneration: 8,
+      status: "error",
+      autoUpdate: true,
+      compatibilityStatus: "needs_patch",
+      updatedAt: NOW,
+    });
+  });
+  expect(
+    await pgStore.markCapsuleStale(markStaleInput(pgSeed.capsule)),
+  ).toEqual({ kind: "conflict", current: pgNewer });
+  expect(await pgStore.getCapsule(pgSeed.capsule.id)).toEqual(pgNewer);
+  expect(pgInterleaving.staleWrites).toHaveLength(1);
+  expect(sqlWhere(pgInterleaving.staleWrites[0]!.sql)).toContain(
+    '"takosumi_capsules"."installation_json" = $',
+  );
+  expect(
+    pgInterleaving.staleWrites[0]!.parameters.some((parameter) =>
+      jsonParameterMatches(parameter, pgSeed.capsule)
+    ),
+  ).toBe(true);
+
+  const d1 = new SqliteFakeD1();
+  const d1Interleaving = new D1StaleInterleaver(d1);
+  const d1Store = new CloudflareD1OpenTofuControlStore(d1Interleaving);
+  const d1ConcurrentStore = new CloudflareD1OpenTofuControlStore(d1);
+  const d1Seed = await seedRebind(d1Store, "stale_race_d1");
+  let d1Newer: Capsule | undefined;
+  d1Interleaving.beforeNextStaleWrite(async () => {
+    d1Newer = await d1ConcurrentStore.patchCapsule(d1Seed.capsule.id, {
+      currentStateVersionId: "state_newer_d1",
+      currentStateGeneration: 8,
+      status: "error",
+      autoUpdate: true,
+      compatibilityStatus: "needs_patch",
+      updatedAt: NOW,
+    });
+  });
+  expect(
+    await d1Store.markCapsuleStale(markStaleInput(d1Seed.capsule)),
+  ).toEqual({ kind: "conflict", current: d1Newer });
+  expect(await d1Store.getCapsule(d1Seed.capsule.id)).toEqual(d1Newer);
+  expect(d1Interleaving.staleWrites).toHaveLength(1);
+  expect(sqlWhere(d1Interleaving.staleWrites[0]!.sql)).toContain(
+    '"capsules"."record_json" = ?',
+  );
+  expect(
+    d1Interleaving.staleWrites[0]!.parameters.some((parameter) =>
+      jsonParameterMatches(parameter, d1Seed.capsule)
+    ),
+  ).toBe(true);
+});
+
+test("production staleness writers use markCapsuleStale instead of direct patchCapsule status writes", () => {
+  const root = resolve(import.meta.dir, "../../../..");
+  const directStalePatch =
+    /\.patchCapsule\s*\(\s*[^,]+,\s*\{[^}]*\bstatus\s*:\s*["']stale["']/g;
+  const violations: string[] = [];
+  for (const pattern of ["core/**/*.ts", "worker/src/**/*.ts"]) {
+    for (const path of new Bun.Glob(pattern).scanSync({ cwd: root })) {
+      if (directStalePatch.test(readFileSync(resolve(root, path), "utf8"))) {
+        violations.push(path);
+      }
+      directStalePatch.lastIndex = 0;
+    }
+  }
+  expect(violations).toEqual([]);
 });
 
 test("concurrent same-target rebind is one update plus one idempotent replay", async () => {

@@ -36,9 +36,11 @@ import {
 import { validateResourceMigrationDeclaration } from "../deploy-control/resource_migrations.ts";
 import type {
   CapsuleInstallConfigRebindInput,
+  CapsuleLifecycleMutation,
   CapsuleListPageParams,
   OpenTofuControlStore,
 } from "../deploy-control/store.ts";
+import { capsuleLifecycleExpected } from "../deploy-control/store.ts";
 import {
   type IdempotentActivityRecorder,
   type ActivityRecorder,
@@ -439,27 +441,17 @@ export class CapsulesService {
     id: string,
     status: CapsuleStatus,
   ): Promise<Capsule> {
-    await this.#requireCapsule(id);
-    const updated = await this.#store.patchCapsule(id, {
-      status,
-      updatedAt: this.#now().toISOString(),
-    });
-    if (!updated) {
-      throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
-    }
-    return updated;
+    const current = await this.#requireCapsule(id);
+    return await this.#updateCapsuleLifecycle(current, { kind: "status", status });
   }
 
   /** Toggles the auto-update opt-in (see {@link Capsule.autoUpdate}). */
   async setCapsuleAutoUpdate(id: string, enabled: boolean): Promise<Capsule> {
-    await this.#requireCapsule(id);
-    const updated = await this.#store.patchCapsule(id, {
-      autoUpdate: enabled,
-      updatedAt: this.#now().toISOString(),
+    const current = await this.#requireCapsule(id);
+    const updated = await this.#updateCapsuleLifecycle(current, {
+      kind: "auto-update",
+      enabled,
     });
-    if (!updated) {
-      throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
-    }
     await this.#activity.record({
       workspaceId: updated.workspaceId,
       action: enabled
@@ -503,17 +495,10 @@ export class CapsulesService {
           `capsule ${id} has applied state and must use the destroy flow`,
         );
       }
-      const now = this.#now().toISOString();
-      const updated = await this.#store.patchCapsule(current.id, {
+      const updated = await this.#updateCapsuleLifecycle(current, {
+        kind: "status",
         status: "destroyed",
-        updatedAt: now,
       });
-      if (!updated) {
-        throw new OpenTofuControllerError(
-          "not_found",
-          `capsule ${id} not found`,
-        );
-      }
       await this.#store.deleteProviderBindingSet(
         updated.id,
         updated.environment,
@@ -871,6 +856,37 @@ export class CapsulesService {
       throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
     }
     return capsule;
+  }
+
+  async #updateCapsuleLifecycle(
+    current: Capsule,
+    mutation: CapsuleLifecycleMutation,
+  ): Promise<Capsule> {
+    const epoch = await this.#store.getCapsuleExecutionAuthorityEpoch(current.id);
+    if (epoch === undefined) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `capsule ${current.id} not found`,
+      );
+    }
+    const result = await this.#store.updateCapsuleLifecycle({
+      capsuleId: current.id,
+      expected: capsuleLifecycleExpected(current, epoch),
+      mutation,
+      updatedAt: this.#now().toISOString(),
+    });
+    if (result.kind === "updated") return result.capsule;
+    if (result.kind === "not-found") {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `capsule ${current.id} not found`,
+      );
+    }
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `capsule ${current.id} lifecycle changed before the update`,
+      { reason: CAPSULE_LIFECYCLE_BUSY_REASON },
+    );
   }
 }
 

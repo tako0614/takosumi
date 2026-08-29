@@ -4,9 +4,15 @@ import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import {
   applyExpectedGuardFromPlanRun,
+  type OpenTofuRestoreJob,
+  type OpenTofuRestoreResult,
   type OpenTofuRunner,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  type CommitRunStateInput,
+  type CommitRunStateResult,
+  InMemoryOpenTofuControlStore,
+} from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   fakeProviderVault,
@@ -16,6 +22,7 @@ import {
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract/install-configs";
 import { withHistoricalPublicHostReservations } from "../../../helpers/deploy-control/historical_public_host_store.ts";
+import type { CapsuleInterfaceMaterializationIntent } from "../../../../core/domains/deploy-control/interface_materialization_intent.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -32,8 +39,202 @@ const CLOUDFLARE_MIRROR_EVIDENCE = {
     "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
 } as const;
 
+function restoreAck(
+  job: OpenTofuRestoreJob,
+  digest = PLAN_DIGEST,
+): OpenTofuRestoreResult {
+  return {
+    state: {
+      generation: job.stateScope.generation,
+      stateRef: `runner-local://restore/${job.runId}`,
+      logicalTargetStateRef: job.stateScope.stateRef,
+      digest,
+      runId: job.runId,
+      ciphertextLength: 0,
+      restoreAuthority: {
+        kind: "takosumi.runner-restore-ack@v1",
+        version: 1,
+        fence: 1,
+        operationId: `test-restore:${job.runId}`,
+        stateEtag: digest,
+      },
+    },
+  };
+}
+
+class CapturingInterfaceIntentStore extends InMemoryOpenTofuControlStore {
+  interfaceMaterializationIntent?: CapsuleInterfaceMaterializationIntent;
+
+  override commitRunState(
+    input: CommitRunStateInput,
+  ): Promise<CommitRunStateResult> {
+    this.interfaceMaterializationIntent = input.interfaceMaterializationIntent;
+    return super.commitRunState(input);
+  }
+}
+
+test("successful Apply atomically records Plan-pinned Interface materialization before a terminal observer crash", async () => {
+  const store = new CapturingInterfaceIntentStore();
+  const { capsule, installConfig } = await seedCapsuleModel(store, {
+    workspaceId: "workspace_interface_intent_crash",
+    capsuleId: "capsule_interface_intent_crash",
+    name: "intent-app",
+    environment: "preview",
+    installConfig: {
+      interfaceBlueprints: [
+        {
+          key: "runtime-mcp-v1",
+          name: "runtime-mcp",
+          spec: {
+            type: "mcp.server",
+            version: "2025-11-25",
+            document: { transport: "streamable-http" },
+            inputs: {
+              endpoint: {
+                source: "capsule_output",
+                outputName: "endpoint",
+              },
+            },
+            access: {
+              visibility: "workspace",
+              resourceUriInput: "endpoint",
+            },
+          },
+        },
+      ],
+    },
+  });
+  await seedProviderConnections(store, capsule);
+  const runner: OpenTofuRunner = {
+    readCapsuleSourceFiles: () =>
+      Promise.resolve([
+        {
+          path: "main.tf",
+          text: `
+terraform {
+  required_providers {
+    cloudflare = { source = "cloudflare/cloudflare" }
+  }
+}
+
+output "endpoint" {
+  value = "https://intent-crash.example.test/mcp"
+}
+`,
+        },
+      ]),
+    plan: () =>
+      Promise.resolve({
+        planDigest: PLAN_DIGEST,
+        planArtifact: {
+          kind: "runner-local",
+          ref: "runner-local://plan_interface_intent_crash/tfplan",
+          digest: PLAN_DIGEST,
+          contentType: "application/vnd.opentofu.plan",
+        },
+        providerLockDigest: LOCK_DIGEST,
+        requiredProviders: [CLOUDFLARE],
+        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      }),
+    apply: (job) =>
+      Promise.resolve({
+        outputs: {
+          endpoint: {
+            sensitive: false,
+            value: "https://intent-crash.example.test/mcp",
+          },
+        },
+        stateDigest: LOCK_DIGEST,
+        rawOutputRef: job.rawOutputRef,
+        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      }),
+    destroy: () => Promise.resolve({}),
+  };
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    opentofuRunner: runner,
+    opentofuConnectionVault: fakeProviderVault() as never,
+  });
+
+  const { planRun } = await operations.controller.createCapsulePlan(capsule.id);
+  operations.controller.setTerminalRunObserver(async (run) => {
+    if ("planRunId" in run && run.status === "succeeded") {
+      throw new Error("simulated terminal observer crash");
+    }
+  });
+  try {
+    await operations.controller.createApplyRun({
+      planRunId: planRun.id,
+      expected: applyExpectedGuardFromPlanRun(planRun),
+    });
+  } catch (error) {
+    expect(String(error)).toContain("simulated terminal observer crash");
+  }
+
+  expect(store.interfaceMaterializationIntent).toMatchObject({
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    installConfigId: installConfig.id,
+    status: "pending",
+    attempts: 0,
+    blueprints: installConfig.interfaceBlueprints,
+  });
+  expect(store.interfaceMaterializationIntent?.blueprintsDigest).toMatch(
+    /^sha256:[0-9a-f]{64}$/,
+  );
+  expect(
+    await store.getCapsuleInterfaceMaterializationIntent(
+      store.interfaceMaterializationIntent!.id,
+    ),
+  ).toEqual(store.interfaceMaterializationIntent);
+  expect(JSON.stringify(store.interfaceMaterializationIntent)).not.toContain(
+    "https://intent-crash.example.test/mcp",
+  );
+  expect(
+    await operations.interfaces.list({
+      workspaceId: capsule.workspaceId,
+      ownerKind: "Capsule",
+      ownerId: capsule.id,
+      includeRetired: true,
+    }),
+  ).toHaveLength(0);
+
+  const recoveryResult =
+    await operations.drainInterfaceMaterializationIntents({ limit: 1 });
+  expect(recoveryResult).toMatchObject({ claimed: 1, completed: 1 });
+  expect(
+    await operations.interfaces.list({
+      workspaceId: capsule.workspaceId,
+      ownerKind: "Capsule",
+      ownerId: capsule.id,
+      includeRetired: true,
+    }),
+  ).toEqual([
+    expect.objectContaining({
+      metadata: expect.objectContaining({
+        materializedFrom: {
+          source: "capsule_blueprint",
+          key: "runtime-mcp-v1",
+        },
+      }),
+      status: expect.objectContaining({ phase: "Resolved" }),
+    }),
+  ]);
+  expect(
+    await store.getCapsuleInterfaceMaterializationIntent(
+      store.interfaceMaterializationIntent!.id,
+    ),
+  ).toMatchObject({
+    status: "completed",
+    receipt: { disposition: "materialized" },
+  });
+});
+
 test("failed post-apply lifecycle actions never materialize Interface blueprints as Ready", async () => {
-  const store = new InMemoryOpenTofuControlStore();
+  const store = new CapturingInterfaceIntentStore();
   const { capsule } = await seedCapsuleModel(store, {
     workspaceId: "workspace_lifecycle_gate",
     capsuleId: "capsule_lifecycle_gate",
@@ -150,6 +351,7 @@ output "endpoint" {
   expect(failedCapsule?.status).toBe("error");
   expect(applyRun.stateVersionId).toBeDefined();
   expect(applyRun.outputId).toBeDefined();
+  expect(store.interfaceMaterializationIntent).toBeUndefined();
   expect(
     await operations.interfaces.list({
       workspaceId: capsule.workspaceId,
@@ -338,17 +540,12 @@ output "endpoint" {
       }),
     apply: () => Promise.resolve({}),
     destroy: () => Promise.resolve({}),
-    restore: async ({ stateScope }) => {
+    restore: async (job) => {
       restoreAttempt += 1;
       if (restoreAttempt === 1) {
         signalFirstRestoreStarted();
         await firstRestoreCompletion;
-        return {
-          state: {
-            stateRef: stateScope.stateRef,
-            digest: PLAN_DIGEST,
-          },
-        };
+        return restoreAck(job);
       }
       throw new Error("restore provider failed");
     },

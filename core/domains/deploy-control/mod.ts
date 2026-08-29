@@ -109,6 +109,7 @@ import type { Page, PageParams } from "takosumi-contract/pagination";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { log } from "../../shared/log.ts";
 import {
+  capsuleLifecycleExpected,
   InMemoryOpenTofuControlStore,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
@@ -204,6 +205,7 @@ import type {
   CapsuleModuleVariableMaterialization,
   CapsuleModuleVariableMaterializer,
 } from "./module_variable_materializer.ts";
+import type { PlanPinnedCapsuleInterfaceMaterialization } from "./interface_materialization_intent.ts";
 import { ConnectionManagement } from "./connection_management.ts";
 import { CapsuleQuery } from "./capsule_query.ts";
 import { RunQueryService } from "./run_query.ts";
@@ -646,27 +648,79 @@ export interface OpenTofuDestroyResult {
 export interface OpenTofuRestoreJob {
   readonly runId: string;
   readonly stateScope: DispatchStateScope;
-  readonly sourceState: {
-    readonly stateRef: string;
-    readonly digest: string;
-  };
+  /**
+   * Exact immutable source StateVersion selected by Core.  The runner must
+   * verify every identity field against the artifact it reads; a ref/digest
+   * pair alone is not sufficient provenance because an artifact can be
+   * replaced or copied across Capsule scopes.
+   */
+  readonly sourceState: OpenTofuRestoreSourceState;
+}
+
+/** Closed source proof carried by Restore (and service-data Restore) jobs. */
+export interface OpenTofuRestoreSourceState {
+  readonly stateVersionId: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly environment: string;
+  readonly generation: number;
+  readonly stateRef: string;
+  readonly digest: string;
+  readonly createdByRunId: string;
+}
+
+/** Read-only Core authority for re-reading the exact Restore source. */
+export interface OpenTofuRestoreSourceAuthority {
+  readonly readExact: () => Promise<OpenTofuRestoreSourceState | undefined>;
+}
+
+/**
+ * Restore-only execution control. The source authority is required at this
+ * seam and remains outside the serializable Restore job.
+ */
+export interface OpenTofuRestoreExecutionControl extends RunExecutionControl {
+  readonly sourceAuthority: OpenTofuRestoreSourceAuthority;
 }
 
 export interface OpenTofuServiceDataRestoreJob {
   readonly runId: string;
   readonly stateScope: DispatchStateScope;
-  readonly sourceState: {
-    readonly stateRef: string;
-    readonly digest: string;
-  };
+  readonly sourceState: OpenTofuRestoreSourceState;
   readonly serviceData: ServiceDataBackupPointer;
+}
+
+/**
+ * Durable acknowledgement emitted by a Restore runner.
+ *
+ * `stateRef` is the immutable operation-specific artifact that was written by
+ * the runner. `logicalTargetStateRef` is the host-allocated StateVersion
+ * coordinate and is kept separate so the control ledger can remain the sole
+ * current-pointer authority. The nested authority record is deliberately
+ * carried as one unit: callers must not accept an ETag (or fence) without the
+ * corresponding version and operation identity.
+ */
+export interface OpenTofuRestoreAuthority {
+  readonly kind: "takosumi.runner-restore-ack@v1";
+  /** Monotonic committed acknowledgement version for the Restore scope. */
+  readonly version: number;
+  /** Monotonic claimant fence for the Restore scope. */
+  readonly fence: number;
+  readonly operationId: string;
+  /** ETag of the immutable operation artifact, not a mutable pointer. */
+  readonly stateEtag: string;
 }
 
 export interface OpenTofuRestoreResult {
   readonly state: {
     readonly generation: number;
+    /** Immutable operation-specific state artifact reference. */
     readonly stateRef: string;
+    /** Exact host-allocated logical StateVersion reference. */
+    readonly logicalTargetStateRef: string;
     readonly digest: string;
+    readonly runId: string;
+    readonly ciphertextLength: number;
+    readonly restoreAuthority: OpenTofuRestoreAuthority;
   };
   readonly diagnostics?: readonly RunDiagnostic[];
 }
@@ -688,9 +742,13 @@ export interface OpenTofuRunner {
     job: ReleaseCommandRunJob,
     control?: RunExecutionControl,
   ): Promise<ReleaseCommandRunResult>;
-  restore?(job: OpenTofuRestoreJob): Promise<OpenTofuRestoreResult>;
+  restore?(
+    job: OpenTofuRestoreJob,
+    control: OpenTofuRestoreExecutionControl,
+  ): Promise<OpenTofuRestoreResult>;
   restoreServiceData?(
     job: OpenTofuServiceDataRestoreJob,
+    control: OpenTofuRestoreExecutionControl,
   ): Promise<RunServiceDataRestoreResult>;
   /**
    * Resolves a Source to an immutable archive snapshot (Core Specification §6).
@@ -1019,6 +1077,7 @@ export interface GenericRootPlanContext {
   readonly sourceBuild?: InstallConfig["sourceBuild"];
   readonly lifecycleActions?: InstallConfig["lifecycleActions"];
   readonly moduleVariableMaterialization?: CapsuleModuleVariableMaterialization;
+  readonly interfaceMaterialization?: PlanPinnedCapsuleInterfaceMaterialization;
 }
 
 export interface GenericRootDispatchContext {
@@ -1031,6 +1090,7 @@ export interface GenericRootDispatchContext {
   readonly stateAdoption?: DispatchStateAdoption;
   readonly priorState?: DispatchPriorState;
   readonly moduleVariableMaterializationDigest?: string;
+  readonly interfaceMaterialization?: PlanPinnedCapsuleInterfaceMaterialization;
 }
 
 /**
@@ -1888,12 +1948,22 @@ export class OpenTofuController {
       if (capsule.autoUpdateAttemptSourceSnapshotId === input.snapshot.id) {
         return;
       }
-      await this.#store.patchCapsule(capsule.id, {
-        autoUpdateAttemptSourceSnapshotId: input.snapshot.id,
+      const epoch = await this.#store.getCapsuleExecutionAuthorityEpoch(
+        capsule.id,
+      );
+      if (epoch === undefined) return;
+      const claim = await this.#store.updateCapsuleLifecycle({
+        capsuleId: capsule.id,
+        expected: capsuleLifecycleExpected(capsule, epoch),
+        mutation: {
+          kind: "auto-update-claim",
+          sourceSnapshotId: input.snapshot.id,
+        },
         updatedAt: new Date(this.#now()).toISOString(),
       });
+      if (claim.kind !== "updated") return;
       await this.createCapsulePlan(
-        capsule.id,
+        claim.capsule.id,
         { actor: "system:auto-update" },
         {
           autoApplyRequested: true,

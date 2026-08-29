@@ -814,6 +814,10 @@ export default {
       runScheduledAccountsRefreshChainRetention(env),
       context,
     );
+    await schedulePlatformSideEffect(
+      runScheduledInterfaceMaterializationIntentDrain(env),
+      context,
+    );
     const cron =
       typeof event === "object" && event !== null
         ? Reflect.get(event, "cron")
@@ -830,6 +834,68 @@ export default {
     }
   },
 };
+
+const SCHEDULED_INTERFACE_MATERIALIZATION_INTENT_LIMIT = 25;
+const SCHEDULED_INTERFACE_MATERIALIZATION_WORK_ITEM_LIMIT = 64;
+const SCHEDULED_INTERFACE_MATERIALIZATION_TIME_BUDGET_MS = 20_000;
+
+export type ScheduledInterfaceMaterializationIntentOperations = Pick<
+  TakosumiOperations,
+  "drainInterfaceMaterializationIntents"
+>;
+
+/** One globally oldest-first, bounded recovery slice per owning Worker tick. */
+export async function drainInterfaceMaterializationIntents(
+  operations: ScheduledInterfaceMaterializationIntentOperations,
+): ReturnType<
+  ScheduledInterfaceMaterializationIntentOperations["drainInterfaceMaterializationIntents"]
+> {
+  return await operations.drainInterfaceMaterializationIntents({
+    limit: SCHEDULED_INTERFACE_MATERIALIZATION_INTENT_LIMIT,
+    maxWorkItems: SCHEDULED_INTERFACE_MATERIALIZATION_WORK_ITEM_LIMIT,
+    timeBudgetMs: SCHEDULED_INTERFACE_MATERIALIZATION_TIME_BUDGET_MS,
+  });
+}
+
+async function runScheduledInterfaceMaterializationIntentDrain(
+  env: DeployControlEnv,
+): Promise<void> {
+  try {
+    const result = await drainInterfaceMaterializationIntents(
+      await deployControlSeam(env).operations(),
+    );
+    console.log(
+      JSON.stringify({
+        event: "interface_materialization_recovery",
+        claimed: result.claimed,
+        completed: result.completed,
+        progressed: result.progressed,
+        workItemsCompleted: result.workItemsCompleted,
+        retried: result.retried,
+        deadLettered: result.deadLettered,
+        leaseLost: result.leaseLost,
+      }),
+    );
+    if (result.deadLettered > 0) {
+      console.warn(
+        JSON.stringify({
+          event: "interface_materialization_dead_letters",
+          count: result.deadLettered,
+        }),
+      );
+    }
+  } catch (error) {
+    // Failure-isolated: the durable pending/lease-expiry state is the retry
+    // authority, and one unavailable dependency must not suppress other cron
+    // recovery owners on this tick.
+    console.warn(
+      JSON.stringify({
+        event: "interface_materialization_recovery_failed",
+        errorName: error instanceof Error ? error.name : "unknown",
+      }),
+    );
+  }
+}
 
 export interface ScheduledAccountsRefreshChainRetentionResult extends RefreshChainRetentionRunResult {
   readonly failures: number;

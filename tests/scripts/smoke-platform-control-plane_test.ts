@@ -13,12 +13,18 @@ import { expect, test } from "bun:test";
 import {
   CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS,
   PLATFORM_CONTROL_PLANE_SMOKE_KIND,
+  assertInterfaceMaterialization,
+  assertInterfacesRetired,
+  assertSmokeSerializationSafe,
   capsuleFromLedgerResponse,
+  canonicalRunEventSequenceFromActivity,
   createdCapsuleFromCreateResponse,
+  defaultHelloWorkerInterfaceBlueprint,
   dryRunResult,
   failedResult,
   isSmokeProviderConnectionMatch,
   isSelectableCapsuleInstallConfig,
+  interfaceMaterializationEvidence,
   main,
   resolveOptions,
   selectSmokeInstallConfigId,
@@ -72,6 +78,435 @@ test("platform smoke preserves the original pre-apply failure when a projected r
 
 test("Cloudflare public URL verification allows bounded edge propagation", () => {
   expect(CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS).toBe(180_000);
+});
+
+test("platform smoke materializes and retires the Plan-pinned Interface through public routes", async () => {
+  const options = await resolveOptions(
+    {
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      appName: "takosumi-interface-fixture",
+      sourceGitUrl: "https://git.example.test/interface-fixture.git",
+      cloudflareConnectionMode: "guided",
+      verificationMode: "cloudflare-worker",
+      cloudflareAccountId: "acc_test",
+      cloudflareWorkersSubdomain: "workers.example.test",
+      deployTimeoutSeconds: "1",
+      pollIntervalMs: "1",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-secret-fixture",
+      CLOUDFLARE_API_TOKEN: "cloudflare-secret-fixture",
+    },
+  );
+  const blueprint = options.interfaceBlueprints?.[0];
+  expect(blueprint).toBeDefined();
+  const outputDigest = `sha256:${"a".repeat(64)}`;
+  const workerUrl = "https://worker.example.test";
+  const iface = {
+    apiVersion: "takosumi.dev/v1alpha1",
+    kind: "Interface",
+    metadata: {
+      id: "if_fixture",
+      workspaceId: "ws_test",
+      name: blueprint!.name,
+      ownerRef: { kind: "Capsule", id: "cap_fixture" },
+      generation: 1,
+      materializedFrom: { source: "capsule_blueprint", key: blueprint!.key },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    spec: {
+      ...blueprint!.spec,
+      inputs: {
+        endpoint: {
+          source: "capsule_output",
+          capsuleId: "cap_fixture",
+          outputName: "url",
+        },
+      },
+    },
+    status: {
+      phase: "Resolved",
+      observedGeneration: 1,
+      resolvedRevision: 1,
+      resolvedInputs: { endpoint: workerUrl },
+      resourceUri: `${workerUrl}/`,
+      provenance: {
+        endpoint: {
+          source: "capsule_output",
+          runId: "run_apply",
+          stateVersionId: "state_fixture",
+          outputId: "out_fixture",
+          outputDigest,
+          outputName: "url",
+        },
+      },
+    },
+  } as const;
+  const binding = {
+    apiVersion: "takosumi.dev/v1alpha1",
+    kind: "InterfaceBinding",
+    metadata: {
+      id: "ib_fixture",
+      workspaceId: "ws_test",
+      generation: 1,
+      materializedFrom: {
+        source: "capsule_blueprint",
+        interfaceKey: blueprint!.key,
+        key: blueprint!.bindings![0]!.key,
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    spec: {
+      interfaceId: "if_fixture",
+      subjectRef: { kind: "Principal", id: "principal_fixture" },
+      permissions: ["mcp.invoke"],
+      delivery: { type: "none" },
+    },
+    status: {
+      phase: "Ready",
+      observedInterfaceRevision: 1,
+    },
+  } as const;
+  const ledger = {
+    capsuleStatus: "active",
+    stateVersionId: "state_fixture",
+    generation: 3,
+    applyRunId: "run_apply",
+    outputId: "out_fixture",
+    outputDigest,
+    publicOutputNames: ["url"],
+    publicOutputDigest: `sha256:${"b".repeat(64)}`,
+    publicOutputs: { url: workerUrl },
+  } as const;
+  const originalFetch = globalThis.fetch;
+  let retired = false;
+  globalThis.fetch = (async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/api/v1/interfaces") {
+      return Response.json({ interfaces: [retired ? { ...iface, status: { ...iface.status, phase: "Retired" } } : iface] });
+    }
+    if (url.pathname === "/api/v1/interfaces/if_fixture") {
+      return Response.json(retired ? { ...iface, status: { ...iface.status, phase: "Retired" } } : iface);
+    }
+    if (url.pathname === "/api/v1/interfaces/if_fixture/bindings") {
+      return Response.json({ bindings: [retired ? { ...binding, status: { ...binding.status, phase: "Revoked" } } : binding] });
+    }
+    if (url.pathname === "/api/v1/interfaces/if_fixture/bindings/ib_fixture") {
+      return Response.json(retired ? { ...binding, status: { ...binding.status, phase: "Revoked" } } : binding);
+    }
+    if (url.href === `${workerUrl}/`) {
+      return retired ? new Response("gone", { status: 404 }) : Response.json({ ok: true });
+    }
+    throw new Error(`unexpected Interface fixture request: ${url}`);
+  }) as typeof fetch;
+  try {
+    const context = await assertInterfaceMaterialization(options, {
+      workspaceId: "ws_test",
+      capsuleId: "cap_fixture",
+      stateVersionLedger: ledger,
+    });
+    expect(context.records).toHaveLength(1);
+    expect(context.records[0]!.interface.metadata.id).toBe("if_fixture");
+    expect(context.records[0]!.bindings[0]!.metadata.id).toBe("ib_fixture");
+    retired = true;
+    const retiredContext = await assertInterfacesRetired(options, context);
+    expect(retiredContext.records[0]!.interface.status.phase).toBe("Retired");
+    expect(retiredContext.records[0]!.bindings[0]!.status.phase).toBe("Revoked");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("platform smoke canonical Run events are redacted to ids and outcomes", () => {
+  const sequence = canonicalRunEventSequenceFromActivity(
+    [
+      { id: "evt_plan", action: "run.plan_created", targetType: "run", targetId: "plan", runId: "plan", metadata: { capsuleId: "cap", operation: "plan", authorization: "Bearer secret" } },
+      { id: "evt_apply", action: "run.applied", targetType: "run", targetId: "apply", runId: "apply", metadata: { capsuleId: "cap", stateVersionId: "state" } },
+      { id: "evt_destroy_plan", action: "run.plan_created", targetType: "run", targetId: "destroy-plan", runId: "destroy-plan", metadata: { capsuleId: "cap", operation: "destroy" } },
+      { id: "evt_destroy", action: "run.destroyed", targetType: "run", targetId: "destroy", runId: "destroy", metadata: { capsuleId: "cap" } },
+    ],
+    { capsuleId: "cap", planRunId: "plan", applyRunId: "apply", destroyPlanRunId: "destroy-plan", destroyApplyRunId: "destroy" },
+  );
+  expect(sequence?.plan.outcome).toBe("planned");
+  expect(sequence?.apply.outcome).toBe("applied");
+  expect(sequence?.destroyApply.outcome).toBe("destroyed");
+  expect(JSON.stringify(sequence)).not.toContain("authorization");
+  expect(() => assertSmokeSerializationSafe({ authorization: "Bearer secret-fixture" })).toThrow();
+});
+
+test("platform smoke optionally proves an OAuth Interface grant and post-destroy denial", async () => {
+  const runtimeToken = "runtime-secret-fixture";
+  const issuedToken = "issued-interface-secret-fixture";
+  const optionsFromFile = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      appName: "takosumi-interface-oauth-fixture",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      interfaceBlueprintsJson: JSON.stringify([
+        {
+          key: "oauth-service",
+          name: "oauth-service",
+          spec: {
+            type: "mcp.server",
+            version: "2025-11-25",
+            document: { transport: "streamable-http" },
+            inputs: {
+              endpoint: { source: "capsule_output", outputName: "url" },
+            },
+            access: { visibility: "workspace", resourceUriInput: "endpoint" },
+          },
+          bindings: [
+            {
+              key: "oauth-grant",
+              subjectRef: { kind: "Principal", id: "principal_fixture" },
+              permissions: ["mcp.invoke"],
+              delivery: { type: "oauth2" },
+            },
+          ],
+        },
+      ]),
+      interfaceTokenProof: true,
+      interfaceRuntimeTokenFile: "/private/runtime-token",
+      outputAllowlistJson: JSON.stringify({
+        url: { from: "url", type: "url", required: true },
+      }),
+      deployTimeoutSeconds: "1",
+      pollIntervalMs: "1",
+    },
+    { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-secret-fixture" },
+  );
+  const options = {
+    ...optionsFromFile,
+    dryRun: false,
+    interfaceRuntimeToken: runtimeToken,
+  } as const;
+  const blueprint = options.interfaceBlueprints![0]!;
+  const outputDigest = `sha256:${"c".repeat(64)}`;
+  const resource = "https://oauth-resource.example.test/";
+  const iface = {
+    apiVersion: "takosumi.dev/v1alpha1",
+    kind: "Interface",
+    metadata: {
+      id: "if_oauth_fixture",
+      workspaceId: "ws_test",
+      name: blueprint.name,
+      ownerRef: { kind: "Capsule", id: "cap_oauth_fixture" },
+      generation: 1,
+      materializedFrom: { source: "capsule_blueprint", key: blueprint.key },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    spec: {
+      ...blueprint.spec,
+      inputs: {
+        endpoint: {
+          source: "capsule_output",
+          capsuleId: "cap_oauth_fixture",
+          outputName: "url",
+        },
+      },
+    },
+    status: {
+      phase: "Resolved",
+      observedGeneration: 1,
+      resolvedRevision: 1,
+      resolvedInputs: { endpoint: resource },
+      resourceUri: resource,
+      provenance: {
+        endpoint: {
+          source: "capsule_output",
+          runId: "run_apply",
+          stateVersionId: "state_oauth_fixture",
+          outputId: "out_oauth_fixture",
+          outputDigest,
+          outputName: "url",
+        },
+      },
+    },
+  } as const;
+  const binding = {
+    apiVersion: "takosumi.dev/v1alpha1",
+    kind: "InterfaceBinding",
+    metadata: {
+      id: "ib_oauth_fixture",
+      workspaceId: "ws_test",
+      generation: 1,
+      materializedFrom: {
+        source: "capsule_blueprint",
+        interfaceKey: blueprint.key,
+        key: blueprint.bindings![0]!.key,
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    spec: {
+      interfaceId: "if_oauth_fixture",
+      subjectRef: { kind: "Principal", id: "principal_fixture" },
+      permissions: ["mcp.invoke"],
+      delivery: { type: "oauth2" },
+    },
+    status: { phase: "Ready", observedInterfaceRevision: 1 },
+  } as const;
+  const ledger = {
+    capsuleStatus: "active",
+    stateVersionId: "state_oauth_fixture",
+    generation: 2,
+    applyRunId: "run_apply",
+    outputId: "out_oauth_fixture",
+    outputDigest,
+    publicOutputNames: ["url"],
+    publicOutputDigest: `sha256:${"d".repeat(64)}`,
+    publicOutputs: { url: resource },
+  } as const;
+  const originalFetch = globalThis.fetch;
+  let retired = false;
+  const mismatchedResource = "https://oauth-resource-mismatch.example.test/";
+  let tokenResource = mismatchedResource;
+  let mismatchedResourceFetches = 0;
+  let reflectIssuedToken = false;
+  let denyTransportUnavailable = false;
+  globalThis.fetch = (async (input, init) => {
+    const requestUrl = new URL(String(input));
+    const requestPath = requestUrl.pathname;
+    if (requestPath === "/api/v1/interfaces") {
+      return Response.json({
+        interfaces: [retired ? { ...iface, status: { ...iface.status, phase: "Retired" } } : iface],
+      });
+    }
+    if (requestPath === "/api/v1/interfaces/if_oauth_fixture") {
+      return Response.json(retired ? { ...iface, status: { ...iface.status, phase: "Retired" } } : iface);
+    }
+    if (requestPath === "/api/v1/interfaces/if_oauth_fixture/bindings") {
+      return Response.json({
+        bindings: [retired ? { ...binding, status: { ...binding.status, phase: "Revoked" } } : binding],
+      });
+    }
+    if (requestPath === "/api/v1/interfaces/if_oauth_fixture/bindings/ib_oauth_fixture") {
+      return Response.json(retired ? { ...binding, status: { ...binding.status, phase: "Revoked" } } : binding);
+    }
+    if (requestPath === "/api/v1/interfaces/if_oauth_fixture/token") {
+      if (retired) return new Response("denied", { status: 403 });
+      return Response.json({
+        access_token: issuedToken,
+        token_type: "Bearer",
+        expires_in: 30,
+        expires_at: "2026-01-01T00:00:30.000Z",
+        scope: "mcp.invoke",
+        resource: tokenResource,
+      });
+    }
+    if (requestUrl.href === mismatchedResource) {
+      mismatchedResourceFetches += 1;
+      return Response.json({ ok: true });
+    }
+    if (requestUrl.href === resource) {
+      const authorization = new Headers(init?.headers).get("authorization");
+      if (
+        retired &&
+        denyTransportUnavailable &&
+        authorization === `Bearer ${issuedToken}`
+      ) {
+        throw new Error("retired resource transport unavailable");
+      }
+      if (reflectIssuedToken && authorization === `Bearer ${issuedToken}`) {
+        return new Response(`reflected credential ${issuedToken}`, {
+          status: 500,
+        });
+      }
+      return retired || authorization !== `Bearer ${issuedToken}`
+        ? new Response("denied", { status: 401 })
+        : Response.json({ ok: true });
+    }
+    throw new Error(`unexpected OAuth Interface fixture request: ${requestUrl}`);
+  }) as typeof fetch;
+  try {
+    await expect(
+      assertInterfaceMaterialization(options, {
+        workspaceId: "ws_test",
+        capsuleId: "cap_oauth_fixture",
+        stateVersionLedger: ledger,
+      }),
+    ).rejects.toThrow(/canonical Interface resource/u);
+    expect(mismatchedResourceFetches).toBe(0);
+
+    tokenResource = resource;
+    reflectIssuedToken = true;
+    let reflectedFailure = "";
+    try {
+      await assertInterfaceMaterialization(options, {
+        workspaceId: "ws_test",
+        capsuleId: "cap_oauth_fixture",
+        stateVersionLedger: ledger,
+      });
+    } catch (error) {
+      reflectedFailure = error instanceof Error ? error.message : String(error);
+    }
+    expect(reflectedFailure).toContain("reflected credential");
+    expect(reflectedFailure).not.toContain(issuedToken);
+    reflectIssuedToken = false;
+
+    const context = await assertInterfaceMaterialization(options, {
+      workspaceId: "ws_test",
+      capsuleId: "cap_oauth_fixture",
+      stateVersionLedger: ledger,
+    });
+    expect(context.records[0]!.issuedToken?.token).toBe(issuedToken);
+    expect(context.records[0]!.issuedToken?.permission).toBe("mcp.invoke");
+    retired = true;
+    denyTransportUnavailable = true;
+    await expect(assertInterfacesRetired(options, context)).rejects.toThrow(
+      "retired resource transport unavailable",
+    );
+    denyTransportUnavailable = false;
+    const retiredContext = await assertInterfacesRetired(options, context);
+    expect(retiredContext.records[0]!.tokenRevoked).toBe(true);
+    expect(retiredContext.records[0]!.tokenUseDenied).toBe(true);
+    const evidence = interfaceMaterializationEvidence(
+      retiredContext.records[0]!,
+    );
+    expect(JSON.stringify(evidence)).not.toContain(issuedToken);
+    expect(evidence.tokenProof?.tokenDigest).toMatch(/^sha256:/u);
+    assertSmokeSerializationSafe(evidence, options);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("platform smoke failure redaction includes raw issued Interface access tokens", async () => {
+  const issuedToken = "issued-interface-token-reflected-by-provider";
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+    },
+    { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token" },
+  );
+  const startedAtMs = Date.now();
+  const result = failedResult(options, {
+    startedAt: new Date(startedAtMs).toISOString(),
+    startedAtMs,
+    workspaceId: "ws_test",
+    completedSteps: [],
+    stepTimings: [],
+    runTimings: [],
+    capsuleGateStatus: "not_reached",
+    policyStatus: "not_reached",
+    serviceIdentitySampleCount: 0,
+    redactedValues: [issuedToken],
+    error: new Error(`provider reflected ${issuedToken}`),
+  });
+
+  expect(result.error).toContain("provider reflected");
+  expect(JSON.stringify(result)).not.toContain(issuedToken);
 });
 
 test("platform smoke binds compatibility checks to the current Capsule", () => {
@@ -180,7 +615,10 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
     "runtimeVerified",
     "publicUrlVerified",
     "stateVersionLedgerVerified",
+    "interfaceMaterializationVerified",
     "destroy",
+    "runEventSequenceVerified",
+    "interfaceRetiredVerified",
     "connectionRevoked",
   ]);
   expect(result.workerUrl).toBe(
@@ -195,9 +633,21 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
     stateVersionId: "state_dry_run",
     generation: 1,
     applyRunId: "apply_dry_run",
+    outputId: "output_dry_run",
+    outputDigest: `sha256:${"0".repeat(64)}`,
     publicOutputNames: ["url", "worker_name"],
     publicOutputDigest: `sha256:${"0".repeat(64)}`,
   });
+  expect(result.interfaceMaterializations).toHaveLength(1);
+  expect(result.interfaceMaterialization?.interfacePhase).toBe("Resolved");
+  expect(result.interfaceMaterialization?.bindingPhase).toBe("Ready");
+  expect(result.interfaceMaterialization?.retiredPhase).toBe("Retired");
+  expect(result.interfaceMaterialization?.revokedBindingPhase).toBe("Revoked");
+  expect(result.runEventSequence?.plan.runId).toBe("plan_dry_run");
+  expect(result.runEventSequence?.apply.runId).toBe("apply_dry_run");
+  expect(result.runEventSequence?.destroyApply.runId).toBe(
+    "destroy_apply_dry_run",
+  );
   expect(result.inputs.accountSessionTokenSource).toBe("file");
   expect(result.inputs.cloudflareApiTokenSource).toBe("file");
   expect(result.inputs.cloudflareAccountIdSource).toBe("file");

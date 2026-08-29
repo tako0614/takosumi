@@ -30,6 +30,7 @@ import {
   NOOP_ACTIVITY_RECORDER,
   type ActivityRecorder,
 } from "../activity/mod.ts";
+import type { InterfaceMaterializationWriteAuthority } from "../deploy-control/interface_materialization_intent.ts";
 import type {
   InterfaceListFilter,
   InterfaceStores,
@@ -232,8 +233,18 @@ export interface InterfaceServiceOptions {
   readonly projectionSink?: InterfaceProjectionSink;
 }
 
+/** Internal cooperative fence checked immediately before canonical writes. */
+export interface InterfaceAuthorityWriteFence {
+  readonly signal: AbortSignal;
+  assertCurrent(): Promise<InterfaceMaterializationWriteAuthority>;
+}
+
 export type InterfaceServiceMaterialization =
-  | { readonly capsuleBlueprintKey: string }
+  | {
+      readonly capsuleBlueprintKey: string;
+      /** Internal deterministic record identity for replay-safe hydration. */
+      readonly recordId?: string;
+    }
   | {
       readonly portableIac: true;
       readonly descriptorName: string;
@@ -244,6 +255,8 @@ export type InterfaceBindingServiceMaterialization =
   | {
       readonly capsuleBlueprintKey: string;
       readonly bindingBlueprintKey: string;
+      /** Internal deterministic record identity for replay-safe hydration. */
+      readonly recordId?: string;
     }
   | {
       readonly requiredInterfaceCapsuleId: string;
@@ -297,6 +310,7 @@ export class InterfaceService {
     request: CreateInterfaceRequest,
     actor?: ActorContext,
     materialization?: InterfaceServiceMaterialization,
+    authorityFence?: InterfaceAuthorityWriteFence,
   ): Promise<Interface> {
     validateCreate(request);
     const workspaceId = requireText(request.workspaceId, "workspaceId");
@@ -315,7 +329,7 @@ export class InterfaceService {
       apiVersion: TAKOSUMI_API_VERSION,
       kind: "Interface",
       metadata: {
-        id: this.#newId("if"),
+        id: materializationRecordId(materialization) ?? this.#newId("if"),
         workspaceId,
         name: request.name.trim(),
         ownerRef,
@@ -337,7 +351,8 @@ export class InterfaceService {
         ],
       },
     };
-    if (!(await this.#stores.interfaces.create(record))) {
+    const authority = await assertInterfaceAuthorityWriteFence(authorityFence);
+    if (!(await this.#stores.interfaces.create(record, authority))) {
       throw new InterfaceServiceError(
         "already_exists",
         "an active Interface with this owner and name already exists",
@@ -358,14 +373,14 @@ export class InterfaceService {
         interfaceVersion: record.spec.version,
       },
     });
-    return await this.reconcile(record.metadata.id);
+    return await this.reconcile(record.metadata.id, { authorityFence });
   }
 
   async ensureCapsuleBlueprints(input: {
     readonly workspaceId: string;
     readonly capsuleId: string;
     readonly blueprints: readonly CapsuleInterfaceBlueprint[];
-  }): Promise<readonly Interface[]> {
+  }, authorityFence?: InterfaceAuthorityWriteFence): Promise<readonly Interface[]> {
     validateCapsuleInterfaceBlueprints(input.blueprints);
     const records: Interface[] = [];
     const history = await this.list({
@@ -393,20 +408,50 @@ export class InterfaceService {
           blueprintInputs,
           input.capsuleId,
         );
-        materialized = await this.create(
-          {
-            workspaceId: input.workspaceId,
-            name,
-            ownerRef: { kind: "Capsule", id: input.capsuleId },
-            ...(blueprint.labels ? { labels: blueprint.labels } : {}),
-            spec: {
-              ...blueprintSpec,
-              ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+        const recordId = await capsuleBlueprintRecordId("if", {
+          workspaceId: input.workspaceId,
+          capsuleId: input.capsuleId,
+          interfaceKey: key,
+        });
+        try {
+          materialized = await this.create(
+            {
+              workspaceId: input.workspaceId,
+              name,
+              ownerRef: { kind: "Capsule", id: input.capsuleId },
+              ...(blueprint.labels ? { labels: blueprint.labels } : {}),
+              spec: {
+                ...blueprintSpec,
+                ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+              },
             },
-          },
-          undefined,
-          { capsuleBlueprintKey: key },
-        );
+            undefined,
+            { capsuleBlueprintKey: key, recordId },
+            authorityFence,
+          );
+        } catch (error) {
+          if (
+            !(error instanceof InterfaceServiceError) ||
+            error.code !== "already_exists"
+          ) {
+            throw error;
+          }
+          const concurrentlyCreated = await this.#stores.interfaces.get(
+            recordId,
+          );
+          if (
+            !concurrentlyCreated ||
+            concurrentlyCreated.metadata.workspaceId !== input.workspaceId ||
+            concurrentlyCreated.metadata.ownerRef.kind !== "Capsule" ||
+            concurrentlyCreated.metadata.ownerRef.id !== input.capsuleId ||
+            concurrentlyCreated.metadata.materializedFrom?.source !==
+              "capsule_blueprint" ||
+            concurrentlyCreated.metadata.materializedFrom.key !== key
+          ) {
+            throw error;
+          }
+          materialized = concurrentlyCreated;
+        }
       }
       records.push(materialized);
       if (materialized.status.phase !== "Retired") {
@@ -414,6 +459,7 @@ export class InterfaceService {
           materialized,
           key,
           blueprint.bindings ?? [],
+          authorityFence,
         );
       }
     }
@@ -424,6 +470,7 @@ export class InterfaceService {
     iface: Interface,
     interfaceKey: string,
     proposals: NonNullable<CapsuleInterfaceBlueprint["bindings"]>,
+    authorityFence?: InterfaceAuthorityWriteFence,
   ): Promise<void> {
     const history = [
       ...(await this.#stores.bindings.listByInterface(iface.metadata.id)),
@@ -453,6 +500,18 @@ export class InterfaceService {
       ) {
         continue;
       }
+      if (iface.metadata.ownerRef.kind !== "Capsule") {
+        throw new InterfaceServiceError(
+          "failed_precondition",
+          "Capsule blueprint Interface owner is invalid",
+        );
+      }
+      const recordId = await capsuleBlueprintRecordId("ifb", {
+        workspaceId: iface.metadata.workspaceId,
+        capsuleId: iface.metadata.ownerRef.id,
+        interfaceKey,
+        bindingKey: key,
+      });
       try {
         const created = await this.createBinding(
           iface.metadata.id,
@@ -465,7 +524,9 @@ export class InterfaceService {
           {
             capsuleBlueprintKey: interfaceKey,
             bindingBlueprintKey: key,
+            recordId,
           },
+          authorityFence,
         );
         history.push(created);
       } catch (error) {
@@ -1251,14 +1312,20 @@ export class InterfaceService {
 
   async reconcile(
     id: string,
-    options: { readonly allowSafetyRecovery?: boolean } = {},
+    options: {
+      readonly allowSafetyRecovery?: boolean;
+      readonly authorityFence?: InterfaceAuthorityWriteFence;
+    } = {},
   ): Promise<Interface> {
     return await this.#reconcile(id, options);
   }
 
   async #reconcile(
     id: string,
-    options: { readonly allowSafetyRecovery?: boolean } = {},
+    options: {
+      readonly allowSafetyRecovery?: boolean;
+      readonly authorityFence?: InterfaceAuthorityWriteFence;
+    } = {},
   ): Promise<Interface> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const current = await this.get(id);
@@ -1376,7 +1443,10 @@ export class InterfaceService {
         ? await resolvedStatus(current, resolution, now, observedResourceUri)
         : unresolvedStatus(current, resolution, now);
       if (await statusSemanticallyEqual(current.status, nextStatus)) {
-        await this.#refreshBindings(current.metadata.id);
+        await this.#refreshBindings(
+          current.metadata.id,
+          options.authorityFence,
+        );
         await this.#projectInterface(current);
         return current;
       }
@@ -1385,8 +1455,17 @@ export class InterfaceService {
         metadata: { ...current.metadata, updatedAt: now },
         status: nextStatus,
       };
-      if (await this.#stores.interfaces.compareAndSet(next, guard(current))) {
-        await this.#refreshBindings(next.metadata.id);
+      const authority = await assertInterfaceAuthorityWriteFence(
+        options.authorityFence,
+      );
+      if (
+        await this.#stores.interfaces.compareAndSet(
+          next,
+          guard(current),
+          authority,
+        )
+      ) {
+        await this.#refreshBindings(next.metadata.id, options.authorityFence);
         await this.#projectInterface(next);
         return next;
       }
@@ -1745,6 +1824,7 @@ export class InterfaceService {
     request: CreateInterfaceBindingRequest,
     actor?: ActorContext,
     materialization?: InterfaceBindingServiceMaterialization,
+    authorityFence?: InterfaceAuthorityWriteFence,
   ): Promise<InterfaceBinding> {
     validateBindingRequest(request);
     // Binding issuance is a runtime authority boundary too. Reconcile against
@@ -1752,6 +1832,7 @@ export class InterfaceService {
     // old Resolved row into a newly Ready grant.
     const iface = await this.reconcile(interfaceId, {
       allowSafetyRecovery: true,
+      authorityFence,
     });
     if (iface.status.phase === "Retired") {
       throw new InterfaceServiceError(
@@ -1776,7 +1857,7 @@ export class InterfaceService {
       apiVersion: TAKOSUMI_API_VERSION,
       kind: "InterfaceBinding",
       metadata: {
-        id: this.#newId("ifb"),
+        id: materializationRecordId(materialization) ?? this.#newId("ifb"),
         workspaceId: iface.metadata.workspaceId,
         generation: 1,
         ...(materialization
@@ -1823,7 +1904,8 @@ export class InterfaceService {
         ],
       },
     };
-    if (!(await this.#stores.bindings.create(record))) {
+    const authority = await assertInterfaceAuthorityWriteFence(authorityFence);
+    if (!(await this.#stores.bindings.create(record, authority))) {
       throw new InterfaceServiceError(
         "already_exists",
         "an active binding already exists for this subject",
@@ -1843,7 +1925,7 @@ export class InterfaceService {
         deliveryType: record.spec.delivery.type,
       },
     });
-    await this.#refreshBinding(record.metadata.id);
+    await this.#refreshBinding(record.metadata.id, authorityFence);
     await this.#projectInterface(await this.get(interfaceId));
     return await this.getBinding(interfaceId, record.metadata.id);
   }
@@ -2081,10 +2163,13 @@ export class InterfaceService {
     );
   }
 
-  async #refreshBindings(interfaceId: string): Promise<void> {
+  async #refreshBindings(
+    interfaceId: string,
+    authorityFence?: InterfaceAuthorityWriteFence,
+  ): Promise<void> {
     const bindings = await this.#stores.bindings.listByInterface(interfaceId);
     for (const binding of bindings) {
-      await this.#refreshBinding(binding.metadata.id);
+      await this.#refreshBinding(binding.metadata.id, authorityFence);
     }
   }
 
@@ -2115,7 +2200,10 @@ export class InterfaceService {
     }
   }
 
-  async #refreshBinding(bindingId: string): Promise<void> {
+  async #refreshBinding(
+    bindingId: string,
+    authorityFence?: InterfaceAuthorityWriteFence,
+  ): Promise<void> {
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const current = await this.#stores.bindings.get(bindingId);
       if (!current || current.status.phase === "Revoked") return;
@@ -2129,7 +2217,11 @@ export class InterfaceService {
       if (readiness.ready && current.spec.delivery.type === "oauth2") {
         const resource = resolvedOAuth2Resource(iface);
         const claim = resource
-          ? await this.#claimOAuth2Resource(iface, resource)
+          ? await this.#claimOAuth2Resource(
+              iface,
+              resource,
+              authorityFence,
+            )
           : "changed";
         if (claim === "changed") continue;
         if (claim === "conflict") {
@@ -2195,10 +2287,14 @@ export class InterfaceService {
                 ],
         },
       };
+      const authority = await assertInterfaceAuthorityWriteFence(
+        authorityFence,
+      );
       if (
         await this.#stores.bindings.compareAndSet(
           next,
           current.metadata.generation,
+          authority,
         )
       )
         return;
@@ -2231,13 +2327,18 @@ export class InterfaceService {
   async #claimOAuth2Resource(
     iface: Interface,
     resource: string,
+    authorityFence?: InterfaceAuthorityWriteFence,
   ): Promise<"claimed" | "conflict" | "changed"> {
     if (interfaceOAuth2ResourceUri(iface) !== resource) return "changed";
+    const authority = await assertInterfaceAuthorityWriteFence(authorityFence);
     if (
-      await this.#stores.interfaces.claimOAuth2Resource({
-        record: iface,
-        resource,
-      })
+      await this.#stores.interfaces.claimOAuth2Resource(
+        {
+          record: iface,
+          resource,
+        },
+        authority,
+      )
     ) {
       return "claimed";
     }
@@ -2251,6 +2352,20 @@ export class InterfaceService {
       ? "conflict"
       : "changed";
   }
+}
+
+async function assertInterfaceAuthorityWriteFence(
+  fence: InterfaceAuthorityWriteFence | undefined,
+): Promise<InterfaceMaterializationWriteAuthority | undefined> {
+  if (!fence) return undefined;
+  if (fence.signal.aborted) {
+    throw fence.signal.reason ?? new Error("Interface authority fence lost");
+  }
+  const authority = await fence.assertCurrent();
+  if (fence.signal.aborted) {
+    throw fence.signal.reason ?? new Error("Interface authority fence lost");
+  }
+  return authority;
 }
 
 async function resolvedStatus(
@@ -3040,6 +3155,44 @@ function interfaceMaterialization(
     "invalid_argument",
     "unsupported Interface materialization",
   );
+}
+
+function materializationRecordId(
+  materialization:
+    | InterfaceServiceMaterialization
+    | InterfaceBindingServiceMaterialization
+    | undefined,
+): string | undefined {
+  if (
+    !materialization ||
+    !("recordId" in materialization) ||
+    materialization.recordId === undefined
+  ) {
+    return undefined;
+  }
+  return requireText(materialization.recordId, "materialization.recordId");
+}
+
+async function capsuleBlueprintRecordId(
+  prefix: "if" | "ifb",
+  input: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly interfaceKey: string;
+    readonly bindingKey?: string;
+  },
+): Promise<string> {
+  const digest = await stableJsonDigest({
+    source: "capsule_blueprint",
+    recordKind: prefix === "if" ? "Interface" : "InterfaceBinding",
+    workspaceId: requireText(input.workspaceId, "workspaceId"),
+    capsuleId: requireText(input.capsuleId, "capsuleId"),
+    interfaceKey: requireText(input.interfaceKey, "interfaceKey"),
+    ...(input.bindingKey === undefined
+      ? {}
+      : { bindingKey: requireText(input.bindingKey, "bindingKey") }),
+  });
+  return `${prefix}_${digest.slice("sha256:".length, "sha256:".length + 32)}`;
 }
 
 function interfaceBindingMaterialization(

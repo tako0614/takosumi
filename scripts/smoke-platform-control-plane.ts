@@ -18,6 +18,14 @@ import process from "node:process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
+import type {
+  CapsuleInterfaceBindingProposal,
+  CapsuleInterfaceBlueprint,
+  CapsuleInterfaceBlueprintInput,
+  Interface,
+  InterfaceBinding,
+} from "../contract/interfaces.ts";
+import type { JsonObject, JsonValue } from "../contract/types.ts";
 import { canonicalProviderSource } from "../contract/provider-env-rules.ts";
 import {
   assertNewOwnerPrivateEvidenceTarget,
@@ -50,6 +58,11 @@ const EXACT_PROVIDER_SOURCE_PATTERN =
   /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\/[a-z0-9][a-z0-9_-]*\/[a-z0-9][a-z0-9_-]*$/u;
 const OPENTOFU_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const MAX_SMOKE_PROVIDER_BINDINGS = 64;
+const MAX_SMOKE_INTERFACE_BLUEPRINTS = 64;
+const MAX_SMOKE_INTERFACE_TOKEN_BYTES = 16 * 1024;
+const HELLO_WORKER_INTERFACE_TYPE = "mcp.server";
+const HELLO_WORKER_INTERFACE_VERSION = "2025-11-25";
+const HELLO_WORKER_INTERFACE_PERMISSION = "mcp.invoke";
 const NODE_HTTP_TRANSPORT_SCRIPT = String.raw`
 const chunks = [];
 function finish(payload) {
@@ -258,6 +271,17 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly sourcePath?: string;
   readonly modulePath?: string;
   readonly installConfigId?: string;
+  /** Install-time Interface declarations sent with the Capsule create call. */
+  readonly interfaceBlueprints?: readonly CapsuleInterfaceBlueprint[];
+  /** True when the operator explicitly supplied or disabled Interface proof. */
+  readonly interfaceBlueprintsExplicit?: boolean;
+  /** Skip the built-in Cloudflare hello-worker Interface proof explicitly. */
+  readonly noInterfaceProof?: boolean;
+  /** Request an optional OAuth Interface token exchange (never implicit). */
+  readonly interfaceTokenProofRequested?: boolean;
+  /** Runtime OAuth credential loaded from a private file; never serialized. */
+  readonly interfaceRuntimeToken?: string;
+  readonly interfaceRuntimeTokenSource?: SecretInputSource;
   readonly storeMetadata?: Readonly<Record<string, JsonSmokeValue>>;
   readonly sourceName?: string;
   readonly timeoutSeconds: number;
@@ -321,6 +345,9 @@ export interface PlatformControlPlaneSmokeResult {
   readonly destroyPlanRunId?: string;
   readonly destroyApplyRunId?: string;
   readonly stateVersionLedger?: StateVersionLedgerVerificationResult;
+  readonly interfaceMaterialization?: InterfaceMaterializationVerificationResult;
+  readonly interfaceMaterializations?: readonly InterfaceMaterializationVerificationResult[];
+  readonly runEventSequence?: CanonicalRunEventSequenceVerificationResult;
   readonly releaseActivation?: ReleaseActivationVerificationResult;
   readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
   readonly publicUrlChecks?: readonly PublicUrlCheckResult[];
@@ -370,6 +397,11 @@ export interface PlatformControlPlaneSmokeResult {
     readonly sourcePath?: string;
     readonly modulePath?: string;
     readonly installConfigId?: string;
+    readonly interfaceBlueprintCount: number;
+    readonly interfaceBlueprintsExplicit: boolean;
+    readonly interfaceProof: "required" | "disabled" | "not_requested";
+    readonly interfaceTokenProofRequested: boolean;
+    readonly interfaceRuntimeTokenSource?: SecretInputSource;
     readonly storeMetadataDigest?: string;
   };
 }
@@ -418,6 +450,11 @@ interface CliArgs {
   readonly sourcePath?: string;
   readonly modulePath?: string;
   readonly installConfigId?: string;
+  readonly interfaceBlueprintsJson?: string;
+  readonly interfaceBlueprintsJsonFile?: string;
+  readonly noInterfaceProof?: boolean;
+  readonly interfaceTokenProof?: boolean;
+  readonly interfaceRuntimeTokenFile?: string;
   readonly storeMetadataJson?: string;
   readonly storeMetadataJsonFile?: string;
   readonly sourceName?: string;
@@ -498,6 +535,20 @@ class CloudflareResourcePreflightError extends Error {
   }
 }
 
+class InterfaceEndpointStillReachableError extends Error {
+  constructor(readonly resource: string, readonly status: number) {
+    super(`Interface public endpoint remained reachable after destroy`);
+    this.name = "InterfaceEndpointStillReachableError";
+  }
+}
+
+class InterfaceTokenUseStillAuthorizedError extends Error {
+  constructor(readonly resource: string, readonly status: number) {
+    super(`retired Interface resource remained authorized after destroy`);
+    this.name = "InterfaceTokenUseStillAuthorizedError";
+  }
+}
+
 interface RunRecord {
   readonly id: string;
   readonly status: string;
@@ -572,9 +623,66 @@ interface StateVersionLedgerVerificationResult {
   readonly stateVersionId: string;
   readonly generation: number;
   readonly applyRunId: string;
+  readonly outputId?: string;
+  readonly outputDigest?: string;
   readonly publicOutputNames: readonly string[];
   readonly publicOutputDigest: string;
   readonly publicOutputs?: Readonly<Record<string, unknown>>;
+}
+
+/** Credential-free proof that a Plan-pinned Capsule blueprint materialized. */
+export interface InterfaceMaterializationVerificationResult {
+  readonly interfaceId: string;
+  readonly interfaceName: string;
+  readonly interfaceKey: string;
+  readonly interfaceType: string;
+  readonly interfaceVersion: string;
+  readonly interfacePhase: string;
+  readonly interfaceGeneration: number;
+  readonly resolvedRevision: number;
+  readonly stateVersionId: string;
+  readonly stateGeneration: number;
+  readonly outputId?: string;
+  readonly outputGeneration: number;
+  readonly outputDigest: string;
+  readonly bindingId?: string;
+  readonly bindingPhase?: string;
+  readonly bindingGeneration?: number;
+  readonly bindingPermission?: string;
+  readonly bindingDelivery?: string;
+  readonly endpointUse?: "passed" | "skipped";
+  readonly tokenProof?: InterfaceTokenProofEvidence;
+  readonly retiredPhase?: string;
+  readonly revokedBindingPhase?: string;
+  readonly tokenRevoked?: boolean;
+  readonly endpointRetired?: boolean;
+}
+
+export interface InterfaceTokenProofEvidence {
+  readonly status: "passed" | "skipped";
+  readonly permission?: string;
+  readonly resourceDigest?: string;
+  readonly tokenDigest?: string;
+  readonly expiresIn?: number;
+  readonly postDestroyTokenDenied?: boolean;
+  readonly postDestroyUseDenied?: boolean;
+}
+
+export interface CanonicalRunEventEvidence {
+  readonly id: string;
+  readonly action: string;
+  readonly outcome: "planned" | "approved" | "applied" | "destroyed";
+  readonly runId: string;
+  readonly targetId: string;
+  readonly operation?: string;
+  readonly metadataKeys: readonly string[];
+}
+
+export interface CanonicalRunEventSequenceVerificationResult {
+  readonly plan: CanonicalRunEventEvidence;
+  readonly apply: CanonicalRunEventEvidence;
+  readonly destroyPlan: CanonicalRunEventEvidence;
+  readonly destroyApply: CanonicalRunEventEvidence;
 }
 
 interface ReleaseActivationVerificationResult {
@@ -906,6 +1014,100 @@ export async function resolveOptions(
       fallback: defaultSmokeOutputAllowlist(providerlessOpenTofuSmoke),
     }),
   );
+  const noInterfaceProof =
+    args.noInterfaceProof === true ||
+    env.TAKOSUMI_SMOKE_NO_INTERFACE_PROOF === "1";
+  const interfaceBlueprintsInline =
+    args.interfaceBlueprintsJson ??
+    env.TAKOSUMI_SMOKE_INTERFACE_BLUEPRINTS_JSON;
+  const interfaceBlueprintsFile =
+    args.interfaceBlueprintsJsonFile ??
+    env.TAKOSUMI_SMOKE_INTERFACE_BLUEPRINTS_JSON_FILE;
+  if (
+    interfaceBlueprintsInline !== undefined &&
+    interfaceBlueprintsFile !== undefined
+  ) {
+    throw new Error(
+      "--interface-blueprints-json cannot be combined with --interface-blueprints-json-file",
+    );
+  }
+  const customInterfaceBlueprints = parseSmokeInterfaceBlueprints(
+    await readJsonValueInput({
+      inline: interfaceBlueprintsInline,
+      file: interfaceBlueprintsFile,
+      label: "interface blueprints",
+      fallback: [],
+    }),
+  );
+  const builtInInterfaceBlueprints =
+    verificationMode === "cloudflare-worker" && !noInterfaceProof
+      ? [
+          defaultHelloWorkerInterfaceBlueprint(
+            resolvedAppName,
+            (() => {
+              const configured =
+                args.runtimePublicUrlOutput ??
+                env.TAKOSUMI_SMOKE_RUNTIME_PUBLIC_URL_OUTPUT;
+              if (
+                configured &&
+                outputAllowlist[configured]?.type === "url"
+              ) {
+                return configured;
+              }
+              return (
+                Object.entries(outputAllowlist).find(
+                  ([, projection]) => projection.type === "url",
+                )?.[0] ?? "url"
+              );
+            })(),
+          ),
+        ]
+      : [];
+  const interfaceBlueprints = mergeSmokeInterfaceBlueprints(
+    builtInInterfaceBlueprints,
+    customInterfaceBlueprints,
+  );
+  if (
+    verificationMode === "cloudflare-worker" &&
+    !noInterfaceProof &&
+    !Object.values(outputAllowlist).some(
+      (projection) => projection.type === "url",
+    )
+  ) {
+    throw new Error(
+      "Cloudflare hello-worker Interface proof requires a public URL output in the output allowlist",
+    );
+  }
+  const interfaceRuntimeTokenFile =
+    args.interfaceRuntimeTokenFile ??
+    env.TAKOSUMI_SMOKE_INTERFACE_RUNTIME_TOKEN_FILE;
+  const hasOAuthInterfaceBinding = interfaceBlueprints.some((blueprint) =>
+    (blueprint.bindings ?? []).some(
+      (proposal) => proposal.delivery.type === "oauth2",
+    ),
+  );
+  const interfaceTokenProofRequested =
+    args.interfaceTokenProof === true || interfaceRuntimeTokenFile !== undefined;
+  if (interfaceTokenProofRequested && !hasOAuthInterfaceBinding) {
+    throw new Error(
+      "--interface-token-proof or --interface-runtime-token-file requires an OAuth Interface blueprint binding",
+    );
+  }
+  if (interfaceTokenProofRequested && !interfaceRuntimeTokenFile) {
+    throw new Error(
+      "Interface token proof was requested but --interface-runtime-token-file is missing",
+    );
+  }
+  const interfaceRuntimeToken = interfaceRuntimeTokenFile
+      ? await readSecret({
+        file: interfaceRuntimeTokenFile,
+        envValue: undefined,
+        envName: "TAKOSUMI_SMOKE_INTERFACE_RUNTIME_TOKEN_FILE",
+        label: "Interface runtime token",
+        dryRun: args.dryRun === true,
+        maxBytes: MAX_SMOKE_INTERFACE_TOKEN_BYTES,
+      })
+    : undefined;
   const publicUrlChecks = parsePublicUrlChecks(
     await readJsonValueInput({
       inline:
@@ -1007,6 +1209,19 @@ export async function resolveOptions(
     ...(sourceGitUrl ? { sourcePath } : {}),
     ...(modulePath ? { modulePath } : {}),
     ...(installConfigId ? { installConfigId } : {}),
+    interfaceBlueprints,
+    interfaceBlueprintsExplicit:
+      interfaceBlueprintsInline !== undefined ||
+      interfaceBlueprintsFile !== undefined ||
+      noInterfaceProof,
+    noInterfaceProof,
+    interfaceTokenProofRequested,
+    ...(interfaceRuntimeToken
+      ? {
+          interfaceRuntimeToken: interfaceRuntimeToken.value,
+          interfaceRuntimeTokenSource: interfaceRuntimeToken.source,
+        }
+      : {}),
     ...(Object.keys(storeMetadata).length > 0 ? { storeMetadata } : {}),
     ...(sourceGitUrl && sourceName ? { sourceName } : {}),
     timeoutSeconds: parsePositiveInteger(
@@ -1045,6 +1260,10 @@ export function dryRunResult(
   assertBackupRestoreRehearsalUnavailable(options);
   const generatedAt = new Date().toISOString();
   const steps = requiredSteps(options);
+  const dryRunInterfaces = dryRunInterfaceEvidence(options);
+  const dryRunRunEvents = dryRunInterfaces
+    ? dryRunCanonicalRunEventSequence()
+    : undefined;
   return {
     kind: PLATFORM_CONTROL_PLANE_SMOKE_KIND,
     status: "dry_run",
@@ -1114,9 +1333,18 @@ export function dryRunResult(
       stateVersionId: "state_dry_run",
       generation: 1,
       applyRunId: "apply_dry_run",
+      outputId: "output_dry_run",
+      outputDigest: `sha256:${"0".repeat(64)}`,
       publicOutputNames: Object.keys(options.outputAllowlist).sort(),
       publicOutputDigest: `sha256:${"0".repeat(64)}`,
     },
+    ...(dryRunInterfaces
+      ? {
+          interfaceMaterializations: dryRunInterfaces,
+          interfaceMaterialization: dryRunInterfaces[0],
+        }
+      : {}),
+    ...(dryRunRunEvents ? { runEventSequence: dryRunRunEvents } : {}),
     ...(options.publicUrlChecks.length > 0
       ? {
           publicUrlChecks: options.publicUrlChecks.map((check) => ({
@@ -1207,6 +1435,94 @@ function dryRunRunTimings(timestamp: string): readonly SmokeRunTiming[] {
   }));
 }
 
+function dryRunInterfaceEvidence(
+  options: PlatformControlPlaneSmokeOptions,
+): readonly InterfaceMaterializationVerificationResult[] | undefined {
+  const blueprints = options.interfaceBlueprints ?? [];
+  if (blueprints.length === 0) return undefined;
+  const outputDigest = `sha256:${"0".repeat(64)}`;
+  return blueprints.map((blueprint, index) => {
+    const proposal = blueprint.bindings?.[0];
+    return {
+      interfaceId: `interface_dry_run_${index + 1}`,
+      interfaceName: blueprint.name,
+      interfaceKey: blueprint.key,
+      interfaceType: blueprint.spec.type,
+      interfaceVersion: blueprint.spec.version,
+      interfacePhase: "Resolved",
+      interfaceGeneration: 1,
+      resolvedRevision: 1,
+      stateVersionId: "state_dry_run",
+      stateGeneration: 1,
+      outputId: "output_dry_run",
+      outputGeneration: 1,
+      outputDigest,
+      ...(proposal
+        ? {
+            bindingId: `interface_binding_dry_run_${index + 1}`,
+            bindingPhase: "Ready",
+            bindingGeneration: 1,
+            bindingPermission: proposal.permissions[0],
+            bindingDelivery: proposal.delivery.type,
+          }
+        : {}),
+      endpointUse: "skipped",
+      ...(options.interfaceTokenProofRequested
+        ? {
+            tokenProof: {
+              status: "skipped" as const,
+              ...(proposal?.permissions[0]
+                ? { permission: proposal.permissions[0] }
+                : {}),
+            },
+          }
+        : {}),
+      retiredPhase: "Retired",
+      ...(proposal ? { revokedBindingPhase: "Revoked" } : {}),
+    };
+  });
+}
+
+function dryRunCanonicalRunEventSequence(): CanonicalRunEventSequenceVerificationResult {
+  const metadataKeys = ["capsuleId", "operation"] as const;
+  return {
+    plan: {
+      id: "event_plan_dry_run",
+      action: "run.plan_created",
+      outcome: "planned",
+      runId: "plan_dry_run",
+      targetId: "plan_dry_run",
+      operation: "plan",
+      metadataKeys,
+    },
+    apply: {
+      id: "event_apply_dry_run",
+      action: "run.applied",
+      outcome: "applied",
+      runId: "apply_dry_run",
+      targetId: "apply_dry_run",
+      metadataKeys: ["capsuleId"],
+    },
+    destroyPlan: {
+      id: "event_destroy_plan_dry_run",
+      action: "run.plan_created",
+      outcome: "planned",
+      runId: "destroy_plan_dry_run",
+      targetId: "destroy_plan_dry_run",
+      operation: "destroy",
+      metadataKeys,
+    },
+    destroyApply: {
+      id: "event_destroy_apply_dry_run",
+      action: "run.destroyed",
+      outcome: "destroyed",
+      runId: "destroy_apply_dry_run",
+      targetId: "destroy_apply_dry_run",
+      metadataKeys: ["capsuleId"],
+    },
+  };
+}
+
 function smokeRunTiming(name: string, run: RunRecord): SmokeRunTiming {
   const createdAtMs =
     typeof run.createdAt === "string" ? Date.parse(run.createdAt) : undefined;
@@ -1290,6 +1606,18 @@ export async function runPlatformControlPlaneSmoke(
   let destroyPlanRunId: string | undefined;
   let destroyApplyRunId: string | undefined;
   let stateVersionLedger: StateVersionLedgerVerificationResult | undefined;
+  let interfaceMaterialization:
+    | InterfaceMaterializationVerificationResult
+    | undefined;
+  let interfaceMaterializations:
+    | readonly InterfaceMaterializationVerificationResult[]
+    | undefined;
+  let interfaceMaterializationContext:
+    | InterfaceMaterializationContext
+    | undefined;
+  let runEventSequence:
+    | CanonicalRunEventSequenceVerificationResult
+    | undefined;
   let releaseActivation: ReleaseActivationVerificationResult | undefined;
   let publicUrlChecks: readonly PublicUrlCheckResult[] | undefined;
   let functionalProbe: CapsuleFunctionalProbeEvidence | undefined;
@@ -1481,6 +1809,26 @@ export async function runPlatformControlPlaneSmoke(
       );
       completeStep("functionalProbe");
     }
+    if ((options.interfaceBlueprints ?? []).length > 0) {
+      beginStep("interfaceMaterializationVerified");
+      interfaceMaterializationContext = await assertInterfaceMaterialization(
+        options,
+        {
+          workspaceId,
+          capsuleId,
+          stateVersionLedger,
+        },
+      );
+      interfaceMaterializations = interfaceMaterializationContext.records.map(
+        interfaceMaterializationEvidence,
+      );
+      interfaceMaterialization = interfaceMaterializations[0];
+      completeStep("interfaceMaterializationVerified");
+      if (options.interfaceTokenProofRequested) {
+        beginStep("interfaceTokenProofVerified");
+        completeStep("interfaceTokenProofVerified");
+      }
+    }
     beginStep("destroy");
     const destroyResult = await destroySmokeCapsule(options, {
       capsuleId,
@@ -1499,6 +1847,31 @@ export async function runPlatformControlPlaneSmoke(
     );
     functionalProbe = finalizeFunctionalProbeCleanup(functionalProbe);
     completeStep("destroy");
+
+    if (interfaceMaterializationContext) {
+      beginStep("interfaceRetiredVerified");
+      interfaceMaterializationContext = await assertInterfacesRetired(
+        options,
+        interfaceMaterializationContext,
+      );
+      interfaceMaterializations = interfaceMaterializationContext.records.map(
+        interfaceMaterializationEvidence,
+      );
+      interfaceMaterialization = interfaceMaterializations[0];
+      completeStep("interfaceRetiredVerified");
+    }
+    if (interfaceMaterializationContext) {
+      beginStep("runEventSequenceVerified");
+      runEventSequence = await assertCanonicalRunEventSequence(options, {
+        workspaceId,
+        capsuleId,
+        planRunId,
+        applyRunId,
+        destroyPlanRunId,
+        destroyApplyRunId,
+      });
+      completeStep("runEventSequenceVerified");
+    }
 
     if (connectionId && !options.keepConnection) {
       beginStep("connectionRevoked");
@@ -1559,6 +1932,9 @@ export async function runPlatformControlPlaneSmoke(
       destroyPlanRunId,
       destroyApplyRunId,
       stateVersionLedger,
+      interfaceMaterialization,
+      interfaceMaterializations,
+      runEventSequence,
       releaseActivation,
       cloudflareResourcePreflight,
       publicUrlChecks,
@@ -1685,6 +2061,9 @@ export async function runPlatformControlPlaneSmoke(
     destroyPlanRunId,
     destroyApplyRunId,
     stateVersionLedger,
+    interfaceMaterialization,
+    interfaceMaterializations,
+    runEventSequence,
     releaseActivation,
     cloudflareResourcePreflight,
     publicUrlChecks,
@@ -1698,6 +2077,10 @@ export async function runPlatformControlPlaneSmoke(
     connectionRevokeSkippedReason,
     failureCleanup,
     serviceIdentitySampleCount,
+    redactedValues:
+      interfaceMaterializationContext?.records.flatMap((record) =>
+        record.issuedToken ? [record.issuedToken.token] : [],
+      ) ?? [],
     error: failure,
   });
 }
@@ -1725,6 +2108,9 @@ export function failedResult(
     readonly destroyPlanRunId?: string;
     readonly destroyApplyRunId?: string;
     readonly stateVersionLedger?: StateVersionLedgerVerificationResult;
+    readonly interfaceMaterialization?: InterfaceMaterializationVerificationResult;
+    readonly interfaceMaterializations?: readonly InterfaceMaterializationVerificationResult[];
+    readonly runEventSequence?: CanonicalRunEventSequenceVerificationResult;
     readonly releaseActivation?: ReleaseActivationVerificationResult;
     readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
     readonly publicUrlChecks?: readonly PublicUrlCheckResult[];
@@ -1739,12 +2125,17 @@ export function failedResult(
     readonly connectionRevokeSkippedReason?: string;
     readonly failureCleanup?: FailureCleanupResult;
     readonly serviceIdentitySampleCount: number;
+    readonly redactedValues?: readonly string[];
     readonly error: unknown;
   },
 ): PlatformControlPlaneSmokeResult {
   const finishedAtMs = Date.now();
   const finishedAt = new Date(finishedAtMs).toISOString();
-  return {
+  const redactedValues = smokeRedactedValues(
+    options,
+    input.redactedValues,
+  );
+  const result: PlatformControlPlaneSmokeResult = {
     kind: PLATFORM_CONTROL_PLANE_SMOKE_KIND,
     status: "failed",
     generatedAt: finishedAt,
@@ -1787,6 +2178,9 @@ export function failedResult(
     destroyPlanRunId: input.destroyPlanRunId,
     destroyApplyRunId: input.destroyApplyRunId,
     stateVersionLedger: input.stateVersionLedger,
+    interfaceMaterialization: input.interfaceMaterialization,
+    interfaceMaterializations: input.interfaceMaterializations,
+    runEventSequence: input.runEventSequence,
     releaseActivation: input.releaseActivation,
     cloudflareResourcePreflight: input.cloudflareResourcePreflight,
     publicUrlChecks: input.publicUrlChecks,
@@ -1816,20 +2210,41 @@ export function failedResult(
         ? undefined
         : publicErrorMessage(
             input.runCancellationError,
-            options.providerBindings.map((binding) => binding.connectionId),
+            redactedValues,
           ),
     connectionRevokeSkippedReason: input.connectionRevokeSkippedReason,
     failureCleanup: redactFailureCleanup(
       input.failureCleanup,
-      options.providerBindings.map((binding) => binding.connectionId),
+      redactedValues,
     ),
-    error: publicErrorMessage(
-      input.error,
-      options.providerBindings.map((binding) => binding.connectionId),
-    ),
+    error: publicErrorMessage(input.error, redactedValues),
     nextAction: failedNextAction(input),
     inputs: publicInputSummary(options),
   };
+  assertSmokeSerializationSafe(result, options, input.redactedValues);
+  return result;
+}
+
+function smokeRedactedValues(
+  options: Pick<
+    PlatformControlPlaneSmokeOptions,
+    | "providerBindings"
+    | "accountSessionToken"
+    | "cloudflareApiToken"
+    | "interfaceRuntimeToken"
+  >,
+  additionalValues: readonly string[] = [],
+): readonly string[] {
+  return [
+    ...options.providerBindings.map((binding) => binding.connectionId),
+    options.accountSessionToken,
+    options.cloudflareApiToken,
+    options.interfaceRuntimeToken,
+    ...additionalValues,
+  ].filter(
+    (value): value is string =>
+      typeof value === "string" && value.length > 0 && value !== "<redacted>",
+  );
 }
 
 function failedNextAction(input: {
@@ -2509,6 +2924,7 @@ export function smokeSourceCapsuleCreateBody(
     | "runnerProfileId"
     | "outputAllowlist"
     | "vars"
+    | "interfaceBlueprints"
     | "storeMetadata"
   >,
   input: {
@@ -2527,6 +2943,9 @@ export function smokeSourceCapsuleCreateBody(
       : {}),
     outputAllowlist: options.outputAllowlist,
     vars: options.vars,
+    ...(options.interfaceBlueprints && options.interfaceBlueprints.length > 0
+      ? { interfaceBlueprints: options.interfaceBlueprints }
+      : {}),
     ...(options.storeMetadata ? { store: options.storeMetadata } : {}),
   };
 }
@@ -3213,6 +3632,14 @@ async function readStateVersionAndOutputLedger(
   if (output.capsuleId !== input.capsuleId) {
     throw new Error("Output ledger returned an unexpected Capsule id");
   }
+  if (
+    typeof output.id !== "string" ||
+    output.id.trim() === "" ||
+    typeof output.outputDigest !== "string" ||
+    output.outputDigest.trim() === ""
+  ) {
+    throw new Error("Output ledger did not expose a stable id and digest");
+  }
   if (output.stateGeneration !== stateVersion.generation) {
     throw new Error(
       "Output stateGeneration did not match StateVersion generation",
@@ -3228,10 +3655,889 @@ async function readStateVersionAndOutputLedger(
     stateVersionId: stateVersion.id,
     generation: stateVersion.generation,
     applyRunId: input.applyRunId,
+    outputId: output.id,
+    outputDigest: output.outputDigest,
     publicOutputNames,
     publicOutputDigest: digestJson(publicOutputs),
     publicOutputs,
   };
+}
+
+export interface InterfaceMaterializationRecord {
+  readonly blueprint: CapsuleInterfaceBlueprint;
+  readonly interface: Interface;
+  readonly bindings: readonly InterfaceBinding[];
+  readonly stateVersionId: string;
+  readonly stateGeneration: number;
+  readonly outputId?: string;
+  readonly outputGeneration: number;
+  readonly outputDigest: string;
+  readonly endpointUrl?: string;
+  readonly endpointUse?: "passed" | "skipped";
+  readonly issuedToken?: {
+    readonly token: string;
+    readonly resource: string;
+    readonly permission: string;
+    readonly expiresIn: number;
+  };
+  readonly retiredPhase?: string;
+  readonly revokedBindingPhase?: string;
+  readonly tokenRevoked?: boolean;
+  readonly tokenUseDenied?: boolean;
+  readonly endpointRetired?: boolean;
+}
+
+export interface InterfaceMaterializationContext {
+  readonly records: readonly InterfaceMaterializationRecord[];
+}
+
+/**
+ * Reads the public Interface API until every Plan-pinned blueprint is
+ * materialized.  Only ids, generations, digests, and contract metadata are
+ * retained in the returned evidence; resolved output values and credentials
+ * never leave this function.
+ */
+export async function assertInterfaceMaterialization(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly stateVersionLedger: StateVersionLedgerVerificationResult;
+  },
+): Promise<InterfaceMaterializationContext> {
+  const blueprints = options.interfaceBlueprints ?? [];
+  if (blueprints.length === 0) {
+    throw new Error("Interface materialization proof requested without blueprints");
+  }
+  const deadline = Date.now() + options.deployTimeoutSeconds * 1000;
+  let lastMissing = blueprints.map((blueprint) => blueprint.key);
+  while (Date.now() <= deadline) {
+    const listed = await listCapsuleInterfaces(options, input);
+    const records: InterfaceMaterializationRecord[] = [];
+    const missing: string[] = [];
+    for (const blueprint of blueprints) {
+      const listedInterface = listed.find((candidate) =>
+        interfaceMatchesBlueprint(candidate, blueprint, input.capsuleId),
+      );
+      if (!listedInterface) {
+        missing.push(blueprint.key);
+        continue;
+      }
+      const iface = await readInterface(options, listedInterface.metadata.id);
+      if (!interfaceMatchesBlueprint(iface, blueprint, input.capsuleId)) {
+        throw new Error(
+          `Interface ${listedInterface.metadata.id} did not retain the Plan-pinned ${blueprint.key} declaration`,
+        );
+      }
+      if (iface.metadata.workspaceId !== input.workspaceId) {
+        throw new Error(
+          `Interface ${iface.metadata.id} was returned from an unexpected Workspace`,
+        );
+      }
+      if (iface.status.phase !== "Resolved") {
+        missing.push(blueprint.key);
+        continue;
+      }
+      assertInterfaceGeneration(
+        iface,
+        blueprint,
+        input.stateVersionLedger,
+      );
+      assertInterfaceInputs(iface, blueprint, input.stateVersionLedger);
+      const bindings = await listInterfaceBindings(options, iface.metadata.id);
+      assertInterfaceBindings(iface, blueprint, bindings);
+      const endpointUrl = interfaceEndpointUrl(iface);
+      records.push({
+        blueprint,
+        interface: iface,
+        bindings,
+        stateVersionId: input.stateVersionLedger.stateVersionId,
+        stateGeneration: input.stateVersionLedger.generation,
+        ...(input.stateVersionLedger.outputId
+          ? { outputId: input.stateVersionLedger.outputId }
+          : {}),
+        outputGeneration: input.stateVersionLedger.generation,
+        outputDigest:
+          input.stateVersionLedger.outputDigest ??
+          input.stateVersionLedger.publicOutputDigest,
+        ...(endpointUrl ? { endpointUrl } : {}),
+      });
+    }
+    if (missing.length === 0 && records.length === blueprints.length) {
+      const verifiedRecords: InterfaceMaterializationRecord[] = [];
+      for (const record of records) {
+        const noneBinding = record.bindings.find(
+          (binding) =>
+            binding.spec.delivery.type === "none" &&
+            binding.status.phase !== "Revoked",
+        );
+        const endpointUse = noneBinding && record.endpointUrl
+          ? await assertInterfaceEndpointUse(record.endpointUrl)
+          : "skipped" as const;
+        const issuedToken =
+          options.interfaceTokenProofRequested === true
+            ? await issueInterfaceTokenProof(
+                options,
+                record.interface,
+                record.bindings,
+              )
+            : undefined;
+        verifiedRecords.push({
+          ...record,
+          ...(endpointUse ? { endpointUse } : {}),
+          ...(issuedToken ? { issuedToken } : {}),
+        });
+      }
+      return { records: verifiedRecords };
+    }
+    lastMissing = missing;
+    await sleep(options.pollIntervalMs);
+  }
+  throw new Error(
+    `Capsule ${input.capsuleId} did not materialize Interface blueprint(s): ${lastMissing.join(", ")}`,
+  );
+}
+
+async function listCapsuleInterfaces(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly includeRetired?: boolean;
+  },
+): Promise<readonly Interface[]> {
+  const response = await requestJson<{ readonly interfaces?: readonly Interface[] }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path:
+      `${API_PREFIX}/interfaces?workspaceId=${encodeURIComponent(input.workspaceId)}` +
+      `&ownerKind=Capsule&ownerId=${encodeURIComponent(input.capsuleId)}` +
+      `&includeRetired=${input.includeRetired === true ? "true" : "false"}`,
+  });
+  return (response.interfaces ?? []).filter((candidate) =>
+    candidate?.metadata?.ownerRef?.id === input.capsuleId,
+  );
+}
+
+async function readInterface(
+  options: PlatformControlPlaneSmokeOptions,
+  interfaceId: string,
+): Promise<Interface> {
+  return await requestJson<Interface>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/interfaces/${encodeURIComponent(interfaceId)}`,
+  });
+}
+
+async function listInterfaceBindings(
+  options: PlatformControlPlaneSmokeOptions,
+  interfaceId: string,
+): Promise<readonly InterfaceBinding[]> {
+  const response = await requestJson<{
+    readonly bindings?: readonly InterfaceBinding[];
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/interfaces/${encodeURIComponent(interfaceId)}/bindings`,
+  });
+  return response.bindings ?? [];
+}
+
+function interfaceMatchesBlueprint(
+  iface: Interface,
+  blueprint: CapsuleInterfaceBlueprint,
+  capsuleId: string,
+): boolean {
+  const metadata = iface?.metadata;
+  const source = metadata?.materializedFrom;
+  return (
+    metadata?.ownerRef?.kind === "Capsule" &&
+    metadata.ownerRef.id === capsuleId &&
+    metadata.name === blueprint.name &&
+    source?.source === "capsule_blueprint" &&
+    source.key === blueprint.key &&
+    iface.spec.type === blueprint.spec.type &&
+    iface.spec.version === blueprint.spec.version
+  );
+}
+
+function assertInterfaceGeneration(
+  iface: Interface,
+  blueprint: CapsuleInterfaceBlueprint,
+  ledger: StateVersionLedgerVerificationResult,
+): void {
+  if (!Number.isSafeInteger(iface.metadata.generation) || iface.metadata.generation < 1) {
+    throw new Error(`Interface ${iface.metadata.id} has an invalid generation`);
+  }
+  if (iface.status.observedGeneration !== iface.metadata.generation) {
+    throw new Error(`Interface ${iface.metadata.id} observedGeneration is stale`);
+  }
+  if (!Number.isSafeInteger(iface.status.resolvedRevision) || iface.status.resolvedRevision < 1) {
+    throw new Error(`Interface ${iface.metadata.id} has no resolved revision`);
+  }
+  const provenance = Object.values(iface.status.provenance ?? {});
+  const expectedCapsuleOutputInputs = Object.entries(
+    blueprint.spec.inputs ?? {},
+  ).filter(([, input]) => input.source === "capsule_output");
+  if (
+    expectedCapsuleOutputInputs.length > 0 &&
+    provenance.filter((entry) => entry.source === "capsule_output").length === 0
+  ) {
+    throw new Error(
+      `Interface ${iface.metadata.id} did not expose capsule-output provenance for the Plan-pinned Output`,
+    );
+  }
+  for (const entry of provenance) {
+    if (entry.source !== "capsule_output") continue;
+    if (
+      entry.stateVersionId !== ledger.stateVersionId ||
+      entry.outputId !== ledger.outputId ||
+      entry.outputDigest !== ledger.outputDigest ||
+      entry.runId !== ledger.applyRunId
+    ) {
+      throw new Error(`Interface ${iface.metadata.id} provenance is not pinned to the current StateVersion`);
+    }
+  }
+  for (const [name, input] of expectedCapsuleOutputInputs) {
+    const entry = iface.status.provenance?.[name];
+    if (!entry || entry.source !== "capsule_output") {
+      throw new Error(
+        `Interface ${iface.metadata.id} input ${name} did not retain capsule-output provenance`,
+      );
+    }
+  }
+}
+
+function assertInterfaceInputs(
+  iface: Interface,
+  blueprint: CapsuleInterfaceBlueprint,
+  ledger: StateVersionLedgerVerificationResult,
+): void {
+  for (const [name, declaration] of Object.entries(blueprint.spec.inputs ?? {})) {
+    if (declaration.source === "literal") {
+      if (stableJson(iface.status.resolvedInputs?.[name]) !== stableJson(declaration.value)) {
+        throw new Error(`Interface ${iface.metadata.id} literal input ${name} was not retained`);
+      }
+      continue;
+    }
+    const rawOutput = ledger.publicOutputs?.[declaration.outputName];
+    if (
+      ledger.publicOutputs === undefined ||
+      !Object.prototype.hasOwnProperty.call(
+        ledger.publicOutputs,
+        declaration.outputName,
+      )
+    ) {
+      throw new Error(
+        `Interface ${iface.metadata.id} input ${name} referenced missing Output ${declaration.outputName}`,
+      );
+    }
+    const expected = declaration.pointer
+      ? resolveSmokeJsonPointer(rawOutput, declaration.pointer)
+      : rawOutput;
+    if (stableJson(iface.status.resolvedInputs?.[name]) !== stableJson(expected)) {
+      throw new Error(`Interface ${iface.metadata.id} input ${name} did not resolve from the current Output`);
+    }
+    const provenance = iface.status.provenance?.[name];
+    if (!provenance || provenance.source !== "capsule_output") {
+      throw new Error(`Interface ${iface.metadata.id} input ${name} has no capsule-output provenance`);
+    }
+    if (provenance.outputName !== declaration.outputName) {
+      throw new Error(`Interface ${iface.metadata.id} input ${name} provenance output mismatch`);
+    }
+    if (provenance.pointer !== declaration.pointer) {
+      throw new Error(
+        `Interface ${iface.metadata.id} input ${name} provenance pointer mismatch`,
+      );
+    }
+  }
+  const resourceInput = iface.spec.access.resourceUriInput;
+  if (resourceInput !== undefined) {
+    const expectedResource = iface.status.resolvedInputs?.[resourceInput];
+    const canonicalExpected =
+      typeof expectedResource === "string"
+        ? new URL(expectedResource).href
+        : undefined;
+    if (iface.status.resourceUri !== canonicalExpected) {
+      throw new Error(`Interface ${iface.metadata.id} resourceUri did not match its resolved endpoint input`);
+    }
+  }
+}
+
+function resolveSmokeJsonPointer(value: unknown, pointer: string): unknown {
+  if (!pointer.startsWith("/")) {
+    throw new Error(`Interface capsule-output pointer ${pointer} must start with /`);
+  }
+  let current: unknown = value;
+  for (const token of pointer.slice(1).split("/")) {
+    const key = token.replaceAll("~1", "/").replaceAll("~0", "~");
+    if (Array.isArray(current) && /^\d+$/u.test(key)) {
+      current = current[Number(key)];
+    } else if (isRecord(current)) {
+      current = current[key];
+    } else {
+      return undefined;
+    }
+  }
+  return current;
+}
+
+function assertInterfaceBindings(
+  iface: Interface,
+  blueprint: CapsuleInterfaceBlueprint,
+  bindings: readonly InterfaceBinding[],
+): void {
+  for (const proposal of blueprint.bindings ?? []) {
+    const binding = bindings.find(
+      (candidate) =>
+        candidate.metadata.materializedFrom?.source === "capsule_blueprint" &&
+        candidate.metadata.materializedFrom.interfaceKey === blueprint.key &&
+        candidate.metadata.materializedFrom.key === proposal.key,
+    );
+    if (!binding) {
+      throw new Error(`Interface ${iface.metadata.id} did not materialize binding ${proposal.key}`);
+    }
+    if (binding.spec.interfaceId !== iface.metadata.id) {
+      throw new Error(`InterfaceBinding ${binding.metadata.id} points at a different Interface`);
+    }
+    if (binding.metadata.workspaceId !== iface.metadata.workspaceId) {
+      throw new Error(
+        `InterfaceBinding ${binding.metadata.id} belongs to a different Workspace`,
+      );
+    }
+    if (binding.status.phase !== "Ready") {
+      throw new Error(
+        `InterfaceBinding ${binding.metadata.id} was not Ready before destroy`,
+      );
+    }
+    if (
+      binding.status.observedInterfaceRevision !==
+      iface.status.resolvedRevision
+    ) {
+      throw new Error(
+        `InterfaceBinding ${binding.metadata.id} observed a stale Interface revision`,
+      );
+    }
+    if (binding.spec.permissions.slice().sort().join(" ") !== proposal.permissions.slice().sort().join(" ")) {
+      throw new Error(`InterfaceBinding ${binding.metadata.id} permissions did not match the blueprint`);
+    }
+    if (binding.spec.delivery.type !== proposal.delivery.type) {
+      throw new Error(`InterfaceBinding ${binding.metadata.id} delivery did not match the blueprint`);
+    }
+    if (binding.spec.subjectRef.kind !== "Principal" || !binding.spec.subjectRef.id) {
+      throw new Error(`InterfaceBinding ${binding.metadata.id} did not resolve an exact Principal subject`);
+    }
+  }
+}
+
+function interfaceEndpointUrl(iface: Interface): string | undefined {
+  const resource = iface.status.resourceUri;
+  if (typeof resource !== "string" || resource.trim() === "") return undefined;
+  try {
+    const parsed = new URL(resource);
+    if (parsed.protocol !== "https:") return undefined;
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) return undefined;
+    return parsed.href;
+  } catch {
+    return undefined;
+  }
+}
+
+async function assertInterfaceEndpointUse(url: string): Promise<"passed"> {
+  const response = await fetch(url, { headers: { accept: "text/html,application/json" } });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`Interface public endpoint returned HTTP ${response.status}: ${redactResponseSnippet(body)}`);
+  }
+  return "passed";
+}
+
+async function issueInterfaceTokenProof(
+  options: PlatformControlPlaneSmokeOptions,
+  iface: Interface,
+  bindings: readonly InterfaceBinding[],
+): Promise<NonNullable<InterfaceMaterializationRecord["issuedToken"]>> {
+  const runtimeToken = options.interfaceRuntimeToken;
+  if (!runtimeToken) {
+    throw new Error("Interface token proof was requested but no runtime token was loaded");
+  }
+  const binding = bindings.find(
+    (candidate) =>
+      candidate.spec.delivery.type === "oauth2" &&
+      candidate.status.phase !== "Revoked",
+  );
+  if (!binding) {
+    throw new Error(`Interface ${iface.metadata.id} has no usable oauth2 binding for token proof`);
+  }
+  const permission = binding.spec.permissions[0];
+  if (!permission) throw new Error(`InterfaceBinding ${binding.metadata.id} has no permission`);
+  const issued = await requestJson<{
+    readonly access_token?: unknown;
+    readonly token_type?: unknown;
+    readonly expires_in?: unknown;
+    readonly resource?: unknown;
+  }>({
+    baseUrl: options.url,
+    token: runtimeToken,
+    method: "POST",
+    path: `${API_PREFIX}/interfaces/${encodeURIComponent(iface.metadata.id)}/token`,
+    body: { permission },
+  });
+  if (
+    typeof issued.access_token !== "string" ||
+    issued.access_token.length === 0 ||
+    issued.access_token === runtimeToken ||
+    issued.token_type !== "Bearer" ||
+    typeof issued.expires_in !== "number" ||
+    !Number.isSafeInteger(issued.expires_in) ||
+    issued.expires_in < 1 ||
+    issued.expires_in > 60 ||
+    typeof issued.resource !== "string" ||
+    issued.resource.length === 0
+  ) {
+    throw new Error("Interface token endpoint returned an invalid short-lived grant");
+  }
+  const resource = safeInterfaceResource(issued.resource);
+  const canonicalResource = interfaceEndpointUrl(iface);
+  if (!canonicalResource || resource !== canonicalResource) {
+    throw new Error(
+      `Interface token endpoint resource did not match the canonical Interface resource for ${iface.metadata.id}`,
+    );
+  }
+  const response = await fetch(resource, {
+    headers: { authorization: `Bearer ${issued.access_token}`, accept: "application/json" },
+  });
+  const responseBody = await response.text();
+  if (!response.ok) {
+    throw new Error(`Interface token could not use ${resource} (HTTP ${response.status}): ${redactResponseSnippet(responseBody, [issued.access_token])}`);
+  }
+  return {
+    token: issued.access_token,
+    resource,
+    permission,
+    expiresIn: issued.expires_in,
+  };
+}
+
+export function interfaceMaterializationEvidence(
+  record: InterfaceMaterializationRecord,
+): InterfaceMaterializationVerificationResult {
+  const binding = record.bindings.find(
+    (candidate) =>
+      candidate.metadata.materializedFrom?.source === "capsule_blueprint" &&
+      candidate.metadata.materializedFrom.interfaceKey === record.blueprint.key,
+  );
+  const tokenProof = record.issuedToken
+    ? {
+        status: "passed" as const,
+        permission: record.issuedToken.permission,
+        resourceDigest: sha256(record.issuedToken.resource),
+        tokenDigest: sha256(record.issuedToken.token),
+        expiresIn: record.issuedToken.expiresIn,
+        ...(record.tokenRevoked !== undefined
+          ? { postDestroyTokenDenied: record.tokenRevoked }
+          : {}),
+        ...(record.tokenUseDenied !== undefined
+          ? { postDestroyUseDenied: record.tokenUseDenied }
+          : {}),
+      }
+    : undefined;
+  return {
+    interfaceId: record.interface.metadata.id,
+    interfaceName: record.interface.metadata.name,
+    interfaceKey: record.blueprint.key,
+    interfaceType: record.interface.spec.type,
+    interfaceVersion: record.interface.spec.version,
+    interfacePhase: record.interface.status.phase,
+    interfaceGeneration: record.interface.metadata.generation,
+    resolvedRevision: record.interface.status.resolvedRevision,
+    stateVersionId: record.stateVersionId,
+    stateGeneration: record.stateGeneration,
+    ...(record.outputId ? { outputId: record.outputId } : {}),
+    outputGeneration: record.outputGeneration,
+    outputDigest: record.outputDigest,
+    ...(binding
+      ? {
+          bindingId: binding.metadata.id,
+          bindingPhase: binding.status.phase,
+          bindingGeneration: binding.metadata.generation,
+          bindingPermission: binding.spec.permissions[0],
+          bindingDelivery: binding.spec.delivery.type,
+        }
+      : {}),
+    ...(record.endpointUse ? { endpointUse: record.endpointUse } : {}),
+    ...(tokenProof ? { tokenProof } : {}),
+    ...(record.retiredPhase ? { retiredPhase: record.retiredPhase } : {}),
+    ...(record.revokedBindingPhase
+      ? { revokedBindingPhase: record.revokedBindingPhase }
+      : {}),
+    ...(record.tokenRevoked !== undefined
+      ? { tokenRevoked: record.tokenRevoked }
+      : {}),
+    ...(record.endpointRetired !== undefined
+      ? { endpointRetired: record.endpointRetired }
+      : {}),
+  };
+}
+
+export async function assertInterfacesRetired(
+  options: PlatformControlPlaneSmokeOptions,
+  context: InterfaceMaterializationContext,
+): Promise<InterfaceMaterializationContext> {
+  const records: InterfaceMaterializationRecord[] = [];
+  for (const record of context.records) {
+    const retirementDeadline =
+      Date.now() + options.deployTimeoutSeconds * 1000;
+    let iface: Interface | undefined;
+    let bindings: readonly InterfaceBinding[] | undefined;
+    let lastPhase = "missing";
+    while (Date.now() <= retirementDeadline) {
+      const listedRetired = await listCapsuleInterfaces(options, {
+        workspaceId: record.interface.metadata.workspaceId,
+        capsuleId: record.interface.metadata.ownerRef.id,
+        includeRetired: true,
+      });
+      if (
+        !listedRetired.some(
+          (candidate) =>
+            candidate.metadata.id === record.interface.metadata.id,
+        )
+      ) {
+        lastPhase = "missing-from-list";
+        await sleep(options.pollIntervalMs);
+        continue;
+      }
+      const candidate = await readInterface(
+        options,
+        record.interface.metadata.id,
+      );
+      if (
+        candidate.metadata.workspaceId !==
+          record.interface.metadata.workspaceId ||
+        candidate.metadata.ownerRef.kind !== "Capsule" ||
+        candidate.metadata.ownerRef.id !== record.interface.metadata.ownerRef.id
+      ) {
+        throw new Error(
+          `Interface ${candidate.metadata.id} changed Workspace or Capsule ownership after destroy`,
+        );
+      }
+      lastPhase = candidate.status.phase;
+      if (candidate.status.phase !== "Retired") {
+        await sleep(options.pollIntervalMs);
+        continue;
+      }
+      const candidateBindings = await listInterfaceBindings(
+        options,
+        candidate.metadata.id,
+      );
+      const bindingsReady = (record.blueprint.bindings ?? []).every((proposal) =>
+        candidateBindings.some(
+          (binding) =>
+            binding.metadata.materializedFrom?.source ===
+              "capsule_blueprint" &&
+            binding.metadata.materializedFrom.interfaceKey ===
+              record.blueprint.key &&
+            binding.metadata.materializedFrom.key === proposal.key &&
+            binding.status.phase === "Revoked",
+        ),
+      );
+      if (!bindingsReady) {
+        lastPhase = "Retired/BindingsPending";
+        await sleep(options.pollIntervalMs);
+        continue;
+      }
+      iface = candidate;
+      bindings = candidateBindings;
+      break;
+    }
+    if (!iface || !bindings) {
+      throw new Error(
+        `Interface ${record.interface.metadata.id} did not prove Retired/Revoked after destroy (last phase ${lastPhase})`,
+      );
+    }
+    for (const proposal of record.blueprint.bindings ?? []) {
+      const binding = bindings.find(
+        (candidate) =>
+          candidate.metadata.materializedFrom?.source === "capsule_blueprint" &&
+          candidate.metadata.materializedFrom.interfaceKey === record.blueprint.key &&
+          candidate.metadata.materializedFrom.key === proposal.key,
+      );
+      if (!binding) {
+        throw new Error(
+          `Interface ${iface.metadata.id} did not retain binding ${proposal.key} after destroy`,
+        );
+      }
+      if (binding.metadata.workspaceId !== iface.metadata.workspaceId) {
+        throw new Error(
+          `InterfaceBinding ${binding.metadata.id} changed Workspace ownership after destroy`,
+        );
+      }
+      if (binding.status.phase !== "Revoked") {
+        throw new Error(
+          `InterfaceBinding ${binding.metadata.id} remained ${binding.status.phase} after destroy`,
+        );
+      }
+      const fetched = await requestJson<InterfaceBinding>({
+        baseUrl: options.url,
+        token: options.accountSessionToken,
+        path: `${API_PREFIX}/interfaces/${encodeURIComponent(
+          iface.metadata.id,
+        )}/bindings/${encodeURIComponent(binding.metadata.id)}`,
+      });
+      if (
+        fetched.metadata.id !== binding.metadata.id ||
+        fetched.metadata.workspaceId !== iface.metadata.workspaceId ||
+        fetched.spec.interfaceId !== iface.metadata.id
+      ) {
+        throw new Error(
+          `InterfaceBinding ${binding.metadata.id} GET changed its Interface or Workspace owner`,
+        );
+      }
+      if (fetched.status.phase !== "Revoked") {
+        throw new Error(
+          `InterfaceBinding ${binding.metadata.id} GET did not prove Revoked`,
+        );
+      }
+    }
+    let endpointRetired: boolean | undefined;
+    if (record.endpointUrl) {
+      endpointRetired = await assertInterfaceEndpointRetired(record.endpointUrl);
+    }
+    let tokenRevoked: boolean | undefined;
+    let tokenUseDenied: boolean | undefined;
+    const tokenProof = record.issuedToken;
+    if (tokenProof) {
+      const runtimeToken = options.interfaceRuntimeToken;
+      if (!runtimeToken) {
+        throw new Error("Interface token was issued but runtime token is unavailable for revocation proof");
+      }
+      tokenRevoked = await assertInterfaceTokenDenied(options, iface.metadata.id, runtimeToken, tokenProof.permission);
+      tokenUseDenied = await assertInterfaceUseDenied(tokenProof.resource, tokenProof.token);
+    }
+    records.push({
+      ...record,
+      interface: iface,
+      bindings,
+      retiredPhase: iface.status.phase,
+      ...(bindings.find((binding) => binding.status.phase === "Revoked")
+        ? {
+            revokedBindingPhase: "Revoked",
+          }
+        : {}),
+      ...(endpointRetired !== undefined ? { endpointRetired } : {}),
+      ...(tokenRevoked !== undefined ? { tokenRevoked } : {}),
+      ...(tokenUseDenied !== undefined ? { tokenUseDenied } : {}),
+      ...(tokenProof
+        ? {
+            issuedToken: tokenProof,
+          }
+        : {}),
+    });
+  }
+  return { records };
+}
+
+async function assertInterfaceEndpointRetired(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, {
+      headers: { accept: "text/html,application/json" },
+    });
+    await response.body?.cancel().catch(() => undefined);
+    if (response.ok) {
+      throw new InterfaceEndpointStillReachableError(url, response.status);
+    }
+    return true;
+  } catch (error) {
+    if (error instanceof InterfaceEndpointStillReachableError) throw error;
+    return true;
+  }
+}
+
+async function assertInterfaceTokenDenied(
+  options: PlatformControlPlaneSmokeOptions,
+  interfaceId: string,
+  runtimeToken: string,
+  permission: string,
+): Promise<boolean> {
+  const response = await fetch(
+    `${options.url}${API_PREFIX}/interfaces/${encodeURIComponent(interfaceId)}/token`,
+    {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        authorization: `Bearer ${runtimeToken}`,
+      },
+      body: JSON.stringify({ permission }),
+    },
+  );
+  await response.body?.cancel().catch(() => undefined);
+  if (![401, 403, 404].includes(response.status)) {
+    throw new Error(
+      `retired Interface ${interfaceId} token endpoint returned HTTP ${response.status}`,
+    );
+  }
+  return true;
+}
+
+async function assertInterfaceUseDenied(
+  resource: string,
+  token: string,
+): Promise<boolean> {
+  const response = await fetch(resource, {
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${token}`,
+    },
+  });
+  await response.body?.cancel().catch(() => undefined);
+  if (![401, 403, 404].includes(response.status)) {
+    throw new InterfaceTokenUseStillAuthorizedError(resource, response.status);
+  }
+  return true;
+}
+
+async function assertCanonicalRunEventSequence(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly planRunId: string;
+    readonly applyRunId: string;
+    readonly destroyPlanRunId: string;
+    readonly destroyApplyRunId: string;
+  },
+): Promise<CanonicalRunEventSequenceVerificationResult> {
+  const deadline = Date.now() + options.deployTimeoutSeconds * 1000;
+  let latest: readonly ActivityEventRecord[] = [];
+  while (Date.now() <= deadline) {
+    const response = await requestJson<{
+      readonly events?: readonly ActivityEventRecord[];
+    }>({
+      baseUrl: options.url,
+      token: options.accountSessionToken,
+      path: `${API_PREFIX}/workspaces/${encodeURIComponent(input.workspaceId)}/activity?limit=500`,
+    });
+    latest = response.events ?? [];
+    const result = canonicalRunEventSequenceFromActivity(latest, input);
+    if (result) return result;
+    await sleep(options.pollIntervalMs);
+  }
+  throw new Error(
+    `Workspace activity did not expose canonical plan/apply/destroy events for Runs ${input.planRunId}, ${input.applyRunId}, ${input.destroyPlanRunId}, ${input.destroyApplyRunId}; observed ${latest.length} events`,
+  );
+}
+
+export function canonicalRunEventSequenceFromActivity(
+  events: readonly ActivityEventRecord[],
+  input: {
+    readonly capsuleId: string;
+    readonly planRunId: string;
+    readonly applyRunId: string;
+    readonly destroyPlanRunId: string;
+    readonly destroyApplyRunId: string;
+  },
+): CanonicalRunEventSequenceVerificationResult | undefined {
+  const plan = findCanonicalRunEvent(events, {
+    action: "run.plan_created",
+    runId: input.planRunId,
+    operation: "plan",
+    capsuleId: input.capsuleId,
+  });
+  const apply = findCanonicalRunEvent(events, {
+    action: "run.applied",
+    runId: input.applyRunId,
+    capsuleId: input.capsuleId,
+  });
+  const destroyPlan = findCanonicalRunEvent(events, {
+    action: "run.plan_created",
+    runId: input.destroyPlanRunId,
+    operation: "destroy",
+    capsuleId: input.capsuleId,
+  });
+  const destroyApply = findCanonicalRunEvent(events, {
+    action: "run.destroyed",
+    runId: input.destroyApplyRunId,
+    capsuleId: input.capsuleId,
+  });
+  if (!plan || !apply || !destroyPlan || !destroyApply) return undefined;
+  return { plan, apply, destroyPlan, destroyApply };
+}
+
+function findCanonicalRunEvent(
+  events: readonly ActivityEventRecord[],
+  input: {
+    readonly action: string;
+    readonly runId: string;
+    readonly capsuleId: string;
+    readonly operation?: string;
+  },
+): CanonicalRunEventEvidence | undefined {
+  const event = events.find(
+    (candidate) =>
+      candidate.action === input.action &&
+      candidate.runId === input.runId &&
+      candidate.targetType === "run" &&
+      candidate.targetId === input.runId &&
+      typeof candidate.id === "string" &&
+      candidate.id.length > 0 &&
+      isRecord(candidate.metadata) &&
+      candidate.metadata.capsuleId === input.capsuleId &&
+      (input.operation === undefined ||
+        candidate.metadata.operation === input.operation),
+  );
+  if (!event) return undefined;
+  const metadata = event.metadata ?? {};
+  return {
+    id: event.id!,
+    action: event.action ?? input.action,
+    outcome:
+      input.action === "run.plan_created"
+        ? "planned"
+        : input.action === "run.approved"
+          ? "approved"
+          : input.action === "run.applied"
+            ? "applied"
+            : "destroyed",
+    runId: event.runId ?? input.runId,
+    targetId: event.targetId ?? input.runId,
+    ...(typeof metadata.operation === "string"
+      ? { operation: metadata.operation }
+      : {}),
+    metadataKeys: safeActivityMetadataKeys(metadata),
+  };
+}
+
+function safeActivityMetadataKeys(
+  metadata: Record<string, unknown>,
+): readonly string[] {
+  return Object.keys(metadata)
+    .filter(
+      (key) =>
+        !/(?:authorization|bearer|token|secret|credential|password|cookie)/iu.test(
+          key,
+        ),
+    )
+    .sort();
+}
+
+function safeInterfaceResource(value: string): string {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    ) {
+      throw new Error("unsafe resource");
+    }
+    return url.href;
+  } catch {
+    throw new Error("Interface token response contained an unsafe resource URI");
+  }
 }
 
 async function assertReleaseActivation(
@@ -3342,7 +4648,7 @@ function releaseActivationVerificationResult(
     ...(typeof metadata.outputCount === "number"
       ? { outputCount: metadata.outputCount }
       : {}),
-    metadataKeys: Object.keys(metadata).sort(),
+    metadataKeys: safeActivityMetadataKeys(metadata),
   };
 }
 
@@ -3688,8 +4994,14 @@ function parseResponseBody(text: string, label: string): unknown {
   };
 }
 
-function redactResponseSnippet(value: string): string {
-  return publicErrorMessage(value.replace(/\s+/g, " ").slice(0, 240));
+function redactResponseSnippet(
+  value: string,
+  redactedValues: readonly string[] = [],
+): string {
+  return publicErrorMessage(
+    value.replace(/\s+/g, " ").slice(0, 240),
+    redactedValues,
+  );
 }
 
 function apiErrorMessage(body: unknown, fallback: string): string {
@@ -3729,8 +5041,16 @@ function publicErrorMessage(
   let redacted = message
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer <redacted>")
     .replace(
+      /authorization\s*[:=]\s*(?:Bearer\s+)?[^\s,;}]+/giu,
+      "<redacted-header>",
+    )
+    .replace(
       /\b((?:token|secret|authorization|cookie)=)[^\s&]+/giu,
       "$1<redacted>",
+    )
+    .replace(
+      /(?:^|[\s"'(])(?:[A-Za-z]:[\\/]|\/)[^\s"'(){};,]*(?:token|secret|credential|password|api[_-]?key)[^\s"'(){};,]*/giu,
+      "$1<private-file>",
     )
     .replace(/(takosumi_session=)[^;\s]+/giu, "$1<redacted>");
   for (const value of [...new Set(redactedValues)].filter(Boolean)) {
@@ -3813,13 +5133,14 @@ async function readSecret(input: {
   readonly envName: string;
   readonly label: string;
   readonly dryRun: boolean;
+  readonly maxBytes?: number;
 }): Promise<{ readonly value: string; readonly source: "env" | "file" }> {
   if (input.file) {
     if (input.dryRun) return { value: "<redacted>", source: "file" };
     const value = (
       await readOwnerPrivateTextFile(input.file, {
         sourceRoots: [TAKOSUMI_ROOT],
-        maxBytes: PRIVATE_INPUT_MAX_BYTES,
+        maxBytes: input.maxBytes ?? PRIVATE_INPUT_MAX_BYTES,
         label: input.label,
       })
     ).trim();
@@ -4273,6 +5594,301 @@ function defaultSmokeOutputAllowlist(
   };
 }
 
+/**
+ * The Cloudflare hello-worker smoke has one deterministic, credential-free
+ * Interface declaration.  Its name/key are derived from the Capsule name so
+ * repeated smoke runs cannot accidentally compare a previous Capsule's
+ * Interface.  The binding uses `none`: the public Worker Output is the
+ * invocation surface, while the binding still proves the installer grant.
+ */
+export function defaultHelloWorkerInterfaceBlueprint(
+  appName: string,
+  endpointOutputName = "url",
+): CapsuleInterfaceBlueprint {
+  const identity = smokeInterfaceIdentity(appName);
+  const key = `${identity}.hello-worker`;
+  return {
+    key,
+    name: `${identity}.hello-worker`,
+    labels: { component: "platform-control-plane-smoke" },
+    spec: {
+      type: HELLO_WORKER_INTERFACE_TYPE,
+      version: HELLO_WORKER_INTERFACE_VERSION,
+      document: {
+        transport: "streamable-http",
+        display: { title: `${identity} public Worker` },
+      },
+      inputs: {
+        endpoint: {
+          source: "capsule_output",
+          outputName: endpointOutputName,
+        },
+      },
+      access: { visibility: "public", resourceUriInput: "endpoint" },
+    },
+    bindings: [
+      {
+        key: `${key}.installer`,
+        subject: { source: "installing_principal" },
+        permissions: [HELLO_WORKER_INTERFACE_PERMISSION],
+        delivery: { type: "none" },
+      },
+    ],
+  };
+}
+
+function smokeInterfaceIdentity(value: string): string {
+  const normalized = value
+    .trim()
+    .replace(/[^A-Za-z0-9_.-]+/gu, "-")
+    .replace(/^[^A-Za-z]+/u, "");
+  const bounded = normalized.slice(0, 96).replace(/[-_.]+$/u, "");
+  return bounded || "takosumi-smoke";
+}
+
+export function parseSmokeInterfaceBlueprints(
+  value: JsonSmokeValue,
+): readonly CapsuleInterfaceBlueprint[] {
+  if (!Array.isArray(value)) {
+    throw new Error("interface blueprints must be a JSON array");
+  }
+  if (value.length > MAX_SMOKE_INTERFACE_BLUEPRINTS) {
+    throw new Error(
+      `interface blueprints must contain at most ${MAX_SMOKE_INTERFACE_BLUEPRINTS} entries`,
+    );
+  }
+  const seenKeys = new Set<string>();
+  const blueprints = value.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`interface blueprints[${index}] must be an object`);
+    }
+    const key = requiredTrimmedString(
+      entry.key,
+      `interface blueprints[${index}].key`,
+    );
+    const name = requiredTrimmedString(
+      entry.name,
+      `interface blueprints[${index}].name`,
+    );
+    if (seenKeys.has(key)) {
+      throw new Error(`interface blueprints contains duplicate key ${key}`);
+    }
+    seenKeys.add(key);
+    const spec = parseSmokeInterfaceSpec(
+      entry.spec,
+      `interface blueprints[${index}].spec`,
+    );
+    const labels = entry.labels === undefined
+      ? undefined
+      : parseSmokeInterfaceLabels(
+          entry.labels,
+          `interface blueprints[${index}].labels`,
+        );
+    const bindings = entry.bindings === undefined
+      ? undefined
+      : parseSmokeInterfaceBindings(
+          entry.bindings,
+          `interface blueprints[${index}].bindings`,
+        );
+    return {
+      key,
+      name,
+      ...(labels ? { labels } : {}),
+      spec,
+      ...(bindings ? { bindings } : {}),
+    } satisfies CapsuleInterfaceBlueprint;
+  });
+  return blueprints;
+}
+
+function mergeSmokeInterfaceBlueprints(
+  base: readonly CapsuleInterfaceBlueprint[],
+  overrides: readonly CapsuleInterfaceBlueprint[],
+): readonly CapsuleInterfaceBlueprint[] {
+  const merged = new Map(base.map((blueprint) => [blueprint.key, blueprint]));
+  for (const blueprint of overrides) merged.set(blueprint.key, blueprint);
+  return [...merged.values()];
+}
+
+function parseSmokeInterfaceSpec(
+  value: unknown,
+  label: string,
+): CapsuleInterfaceBlueprint["spec"] {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  const type = requiredTrimmedString(value.type, `${label}.type`);
+  const version = requiredTrimmedString(value.version, `${label}.version`);
+  if (!isJsonSmokeValue(value.document)) {
+    throw new Error(`${label}.document must be JSON-compatible`);
+  }
+  if (!isRecord(value.access)) throw new Error(`${label}.access must be an object`);
+  const visibility = value.access.visibility;
+  if (
+    visibility !== "private" &&
+    visibility !== "workspace" &&
+    visibility !== "public"
+  ) {
+    throw new Error(`${label}.access.visibility must be private, workspace, or public`);
+  }
+  const resourceUriInput = value.access.resourceUriInput;
+  if (
+    resourceUriInput !== undefined &&
+    (typeof resourceUriInput !== "string" || resourceUriInput.trim() === "")
+  ) {
+    throw new Error(`${label}.access.resourceUriInput must be a non-empty string`);
+  }
+  const inputs = value.inputs === undefined
+    ? undefined
+    : parseSmokeInterfaceInputs(value.inputs, `${label}.inputs`);
+  return {
+    type,
+    version,
+    document: value.document as unknown as JsonValue,
+    ...(inputs ? { inputs } : {}),
+    access: {
+      visibility,
+      ...(typeof resourceUriInput === "string"
+        ? { resourceUriInput: resourceUriInput.trim() }
+        : {}),
+    },
+  };
+}
+
+function parseSmokeInterfaceInputs(
+  value: unknown,
+  label: string,
+): NonNullable<CapsuleInterfaceBlueprint["spec"]["inputs"]> {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  const inputs: Record<string, CapsuleInterfaceBlueprintInput> = {};
+  for (const [name, raw] of Object.entries(value)) {
+    if (!/^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u.test(name)) {
+      throw new Error(`${label}.${name} is not a valid input name`);
+    }
+    if (!isRecord(raw)) throw new Error(`${label}.${name} must be an object`);
+    const source = raw.source;
+    if (source === "literal") {
+      if (!isJsonSmokeValue(raw.value)) {
+        throw new Error(`${label}.${name}.value must be JSON-compatible`);
+      }
+      inputs[name] = {
+        source,
+        value: raw.value as unknown as JsonValue,
+      };
+      continue;
+    }
+    if (source !== "capsule_output") {
+      throw new Error(`${label}.${name}.source must be literal or capsule_output`);
+    }
+    const outputName = requiredTrimmedString(
+      raw.outputName,
+      `${label}.${name}.outputName`,
+    );
+    const pointer = raw.pointer;
+    if (
+      pointer !== undefined &&
+      (typeof pointer !== "string" || pointer.trim() === "")
+    ) {
+      throw new Error(`${label}.${name}.pointer must be a non-empty string`);
+    }
+    inputs[name] = {
+      source,
+      outputName,
+      ...(typeof pointer === "string" ? { pointer: pointer.trim() } : {}),
+    };
+  }
+  return inputs;
+}
+
+function parseSmokeInterfaceLabels(
+  value: unknown,
+  label: string,
+): Readonly<Record<string, string>> {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  const labels: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (!/^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u.test(key)) {
+      throw new Error(`${label}.${key} is not a valid label name`);
+    }
+    labels[key] = requiredTrimmedString(raw, `${label}.${key}`);
+  }
+  return labels;
+}
+
+function parseSmokeInterfaceBindings(
+  value: unknown,
+  label: string,
+): readonly CapsuleInterfaceBindingProposal[] {
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  const seenKeys = new Set<string>();
+  return value.map<CapsuleInterfaceBindingProposal>((raw, index) => {
+    const itemLabel = `${label}[${index}]`;
+    if (!isRecord(raw)) throw new Error(`${itemLabel} must be an object`);
+    const key = requiredTrimmedString(raw.key, `${itemLabel}.key`);
+    if (seenKeys.has(key)) throw new Error(`${label} contains duplicate key ${key}`);
+    seenKeys.add(key);
+    if (!Array.isArray(raw.permissions) || raw.permissions.length === 0) {
+      throw new Error(`${itemLabel}.permissions must be a non-empty string array`);
+    }
+    const permissions = raw.permissions.map((permission, permissionIndex) =>
+      requiredTrimmedString(
+        permission,
+        `${itemLabel}.permissions[${permissionIndex}]`,
+      ),
+    );
+    if (!isRecord(raw.delivery)) throw new Error(`${itemLabel}.delivery must be an object`);
+    const deliveryType = requiredTrimmedString(
+      raw.delivery.type,
+      `${itemLabel}.delivery.type`,
+    );
+    const delivery = {
+      type: deliveryType,
+      ...(raw.delivery.credentialRef !== undefined
+        ? {
+            credentialRef: requiredTrimmedString(
+              raw.delivery.credentialRef,
+              `${itemLabel}.delivery.credentialRef`,
+            ),
+          }
+        : {}),
+      ...(raw.delivery.options !== undefined
+        ? {
+              options: isRecord(raw.delivery.options)
+              ? (raw.delivery.options as unknown as JsonObject)
+              : (() => {
+                  throw new Error(`${itemLabel}.delivery.options must be an object`);
+                })(),
+          }
+        : {}),
+    };
+    if (raw.subject !== undefined) {
+      if (!isRecord(raw.subject) || raw.subject.source !== "installing_principal") {
+        throw new Error(`${itemLabel}.subject must be installing_principal`);
+      }
+      const proposal = {
+        key,
+        permissions,
+        delivery,
+        subject: { source: "installing_principal" },
+      } as CapsuleInterfaceBindingProposal;
+      return proposal;
+    }
+    if (!isRecord(raw.subjectRef)) {
+      throw new Error(`${itemLabel} must include subject or subjectRef`);
+    }
+    const subjectKind = raw.subjectRef.kind;
+    if (subjectKind !== "Principal" && subjectKind !== "ServiceAccount" && subjectKind !== "Capsule") {
+      throw new Error(`${itemLabel}.subjectRef.kind is invalid`);
+    }
+    const subjectId = requiredTrimmedString(raw.subjectRef.id, `${itemLabel}.subjectRef.id`);
+    const proposal = {
+      key,
+      permissions,
+      delivery,
+      subjectRef: { kind: subjectKind, id: subjectId },
+    } as CapsuleInterfaceBindingProposal;
+    return proposal;
+  });
+}
+
 async function readJsonRecordInput(input: {
   readonly inline?: string;
   readonly file?: string;
@@ -4569,8 +6185,20 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly sourceGitUrlDigest?: string;
   readonly sourceRef?: string;
   readonly sourcePath?: string;
+  readonly interfaceBlueprintCount: number;
+  readonly interfaceBlueprintsExplicit: boolean;
+  readonly interfaceProof: "required" | "disabled" | "not_requested";
+  readonly interfaceTokenProofRequested: boolean;
+  readonly interfaceRuntimeTokenSource?: SecretInputSource;
   readonly storeMetadataDigest?: string;
 } {
+  const interfaceBlueprints = options.interfaceBlueprints ?? [];
+  const interfaceProof =
+    options.noInterfaceProof === true
+      ? "disabled"
+      : interfaceBlueprints.length > 0
+        ? "required"
+        : "not_requested";
   return {
     accountSessionTokenSource: options.accountSessionTokenSource,
     accountAuthTokenKind: options.accountAuthTokenKind,
@@ -4624,6 +6252,14 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
             ? { storeMetadataDigest: digestJson(options.storeMetadata) }
             : {}),
         }
+      : {}),
+    interfaceBlueprintCount: interfaceBlueprints.length,
+    interfaceBlueprintsExplicit: options.interfaceBlueprintsExplicit === true,
+    interfaceProof,
+    interfaceTokenProofRequested:
+      options.interfaceTokenProofRequested === true,
+    ...(options.interfaceRuntimeTokenSource
+      ? { interfaceRuntimeTokenSource: options.interfaceRuntimeTokenSource }
       : {}),
   };
 }
@@ -4838,6 +6474,8 @@ function requiredSteps(
     | "publicUrlChecks"
     | "outputAllowlist"
     | "functionalProbeScript"
+    | "interfaceBlueprints"
+    | "interfaceTokenProofRequested"
   >,
 ): readonly string[] {
   const steps = [
@@ -4884,7 +6522,17 @@ function requiredSteps(
   if (options?.functionalProbeScript) {
     steps.push("functionalProbe");
   }
+  if (options?.interfaceBlueprints && options.interfaceBlueprints.length > 0) {
+    steps.push("interfaceMaterializationVerified");
+    if (options.interfaceTokenProofRequested) {
+      steps.push("interfaceTokenProofVerified");
+    }
+  }
   steps.push("destroy");
+  if (options?.interfaceBlueprints && options.interfaceBlueprints.length > 0) {
+    steps.push("runEventSequenceVerified");
+    steps.push("interfaceRetiredVerified");
+  }
   if (
     options &&
     !options.keepConnection &&
@@ -4905,6 +6553,7 @@ async function writeResult(
   result: PlatformControlPlaneSmokeResult,
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<void> {
+  assertSmokeSerializationSafe(result, options);
   if (options.outFile) {
     await writeResultFile(options.outFile, result);
   }
@@ -4942,6 +6591,14 @@ async function writeResult(
   if (result.destroyApplyRunId) {
     console.log(`destroy apply run: ${result.destroyApplyRunId}`);
   }
+  if (result.interfaceMaterializations?.length) {
+    console.log(
+      `interfaces verified: ${result.interfaceMaterializations.length}`,
+    );
+  }
+  if (result.runEventSequence) {
+    console.log("run events verified: plan/apply/destroy");
+  }
   if (result.connectionRevoked !== undefined) {
     console.log(
       `connection revoked: ${result.connectionRevoked ? "yes" : "no"}`,
@@ -4955,7 +6612,51 @@ async function writeResultFile(
   outFile: string,
   result: PlatformControlPlaneSmokeResult,
 ): Promise<void> {
+  assertSmokeSerializationSafe(result);
   await writeNewPrivateEvidenceJson(outFile, result);
+}
+
+/** Fail closed if an evidence/result object ever acquires credential material. */
+export function assertSmokeSerializationSafe(
+  result: unknown,
+  options?: Pick<
+    PlatformControlPlaneSmokeOptions,
+    "accountSessionToken" | "cloudflareApiToken" | "interfaceRuntimeToken"
+  >,
+  additionalForbiddenValues: readonly string[] = [],
+): void {
+  const serialized = JSON.stringify(result);
+  const forbiddenValues = [
+    options?.accountSessionToken,
+    options?.cloudflareApiToken,
+    options?.interfaceRuntimeToken,
+    ...additionalForbiddenValues,
+  ].filter(
+    (value): value is string =>
+      typeof value === "string" && value.length > 0 && value !== "<redacted>",
+  );
+  for (const value of forbiddenValues) {
+    if (serialized.includes(value)) {
+      throw new Error("smoke serialization contained a credential value");
+    }
+  }
+  if (/(?:^|[\s"'])authorization\s*[:=]/iu.test(serialized)) {
+    throw new Error("smoke serialization contained an Authorization header");
+  }
+  if (/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/iu.test(serialized)) {
+    throw new Error("smoke serialization contained a bearer credential");
+  }
+}
+
+function expectSafeSerializationSelfTest(): void {
+  try {
+    assertSmokeSerializationSafe({
+      authorization: "Bearer interface-secret-selftest",
+    });
+  } catch {
+    return;
+  }
+  throw new Error("self-test serialization guard accepted Authorization");
 }
 
 async function runSelfTest(): Promise<void> {
@@ -5078,6 +6779,64 @@ async function runSelfTest(): Promise<void> {
   if (!result.steps.includes("destroy")) {
     throw new Error("self-test result is missing destroy step");
   }
+  if (
+    options.interfaceBlueprints?.length !== 1 ||
+    result.inputs.interfaceProof !== "required" ||
+    !result.steps.includes("interfaceMaterializationVerified") ||
+    !result.steps.includes("interfaceRetiredVerified") ||
+    result.interfaceMaterializations?.length !== 1 ||
+    result.interfaceMaterialization?.bindingPhase !== "Ready" ||
+    result.interfaceMaterialization?.retiredPhase !== "Retired" ||
+    result.interfaceMaterialization?.revokedBindingPhase !== "Revoked" ||
+    result.runEventSequence?.plan.runId !== "plan_dry_run" ||
+    result.runEventSequence?.apply.runId !== "apply_dry_run" ||
+    result.runEventSequence?.destroyApply.runId !== "destroy_apply_dry_run"
+  ) {
+    throw new Error("self-test did not require the built-in Interface proof");
+  }
+  const builtInBlueprint = options.interfaceBlueprints[0]!;
+  if (
+    builtInBlueprint.spec.inputs?.endpoint?.source !== "capsule_output" ||
+    builtInBlueprint.spec.inputs.endpoint.outputName !== "url" ||
+    builtInBlueprint.bindings?.[0]?.delivery.type !== "none"
+  ) {
+    throw new Error("self-test built-in Interface blueprint is not credential-free");
+  }
+  const capsuleCreateBody = smokeSourceCapsuleCreateBody(options, {
+    sourceId: "src_selftest",
+    installConfigId: "cfg_selftest",
+  });
+  if (
+    !Array.isArray(capsuleCreateBody.interfaceBlueprints) ||
+    capsuleCreateBody.interfaceBlueprints.length !== 1
+  ) {
+    throw new Error("self-test Capsule create body omitted Interface blueprints");
+  }
+  assertSmokeSerializationSafe(result, options);
+  expectSafeSerializationSelfTest();
+  const eventFixture = canonicalRunEventSequenceFromActivity(
+    [
+      { id: "evt_destroyed", action: "run.destroyed", targetType: "run", targetId: "run_destroy_apply", runId: "run_destroy_apply", metadata: { capsuleId: "cap_selftest" } },
+      { id: "evt_destroy_plan", action: "run.plan_created", targetType: "run", targetId: "run_destroy_plan", runId: "run_destroy_plan", metadata: { capsuleId: "cap_selftest", operation: "destroy" } },
+      { id: "evt_applied", action: "run.applied", targetType: "run", targetId: "run_apply", runId: "run_apply", metadata: { capsuleId: "cap_selftest", stateGeneration: 1 } },
+      { id: "evt_plan", action: "run.plan_created", targetType: "run", targetId: "run_plan", runId: "run_plan", metadata: { capsuleId: "cap_selftest", operation: "plan" } },
+    ],
+    {
+      capsuleId: "cap_selftest",
+      planRunId: "run_plan",
+      applyRunId: "run_apply",
+      destroyPlanRunId: "run_destroy_plan",
+      destroyApplyRunId: "run_destroy_apply",
+    },
+  );
+  if (
+    !eventFixture ||
+    eventFixture.plan.runId !== "run_plan" ||
+    eventFixture.apply.outcome !== "applied" ||
+    eventFixture.destroyApply.outcome !== "destroyed"
+  ) {
+    throw new Error("self-test canonical Run event fixture did not tie exact ids");
+  }
   const genericEnvOptions = await resolveOptions(
     {
       dryRun: true,
@@ -5183,8 +6942,42 @@ async function runSelfTest(): Promise<void> {
   if (providerlessResult.connectionRevoked !== undefined) {
     throw new Error("providerless self-test should not report revocation");
   }
+  if (
+    providerlessResult.inputs.interfaceProof !== "not_requested" ||
+    providerlessResult.steps.some((step) => step.startsWith("interface"))
+  ) {
+    throw new Error("providerless self-test unexpectedly enabled Interface proof");
+  }
   if (serializedProviderless.includes("keyless-selftest")) {
     throw new Error("providerless self-test leaked vars content");
+  }
+  const noInterfaceProofOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_selftest",
+      cloudflareAccountIdFile: "/private/cloudflare-account-id",
+      cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
+      appName: "takosumi-no-interface-selftest",
+      ensureWorkspace: true,
+      sessionTokenFile: "/private/account-session-token",
+      cloudflareApiTokenFile: "/private/cloudflare-token",
+      cloudflareConnectionMode: "guided",
+      verificationMode: "cloudflare-worker",
+      noInterfaceProof: true,
+    },
+    {},
+  );
+  const noInterfaceProofResult = dryRunResult(noInterfaceProofOptions);
+  if (
+    noInterfaceProofOptions.noInterfaceProof !== true ||
+    noInterfaceProofResult.inputs.interfaceProof !== "disabled" ||
+    noInterfaceProofResult.inputs.interfaceBlueprintCount !== 0 ||
+    noInterfaceProofResult.steps.some((step) => step.startsWith("interface"))
+  ) {
+    throw new Error(
+      "self-test --no-interface-proof did not produce an explicit non-GA result",
+    );
   }
   const managedCloudflareOptions = await resolveOptions(
     {
@@ -5661,6 +7454,11 @@ Options:
   --source-path <path>                            Source archive path inside the Git repo, default .
   --module-path <path>                            OpenTofu Capsule module path inside the SourceSnapshot archive
   --install-config-id <id>                        install config to use for the Capsule, default selectable generic Capsule
+  --interface-blueprints-json <json>              optional Interface blueprint array; merged over the built-in Cloudflare hello-worker blueprint
+  --interface-blueprints-json-file <path>         read Interface blueprints from one non-secret JSON file; or TAKOSUMI_SMOKE_INTERFACE_BLUEPRINTS_JSON_FILE
+  --no-interface-proof                             explicitly disable the built-in Cloudflare Interface lifecycle proof (non-GA/providerless use)
+  --interface-token-proof                         opt into OAuth Interface token/use proof; requires --interface-runtime-token-file
+  --interface-runtime-token-file <path>           private runtime OAuth token file for the explicit token proof; or TAKOSUMI_SMOKE_INTERFACE_RUNTIME_TOKEN_FILE
   --store-metadata-json <json>                    repository/store presentation metadata copied into Capsule creation
   --store-metadata-json-file <path>               read repository/store presentation metadata from JSON
   --source-name <name>                            Source display name, default <app-name>-source

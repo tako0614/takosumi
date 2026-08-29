@@ -6,7 +6,15 @@ import {
   UI_SURFACE_INTERFACE_VERSION,
 } from "takosumi-contract";
 import { freezeClone } from "../../shared/freeze.ts";
+import type { InterfaceMaterializationWriteAuthority } from "../deploy-control/interface_materialization_intent.ts";
 import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
+
+export interface InterfaceMaterializationAuthorityValidator {
+  isCapsuleInterfaceMaterializationWriteAuthorityCurrent(
+    authority: InterfaceMaterializationWriteAuthority,
+    checkedAt: string,
+  ): boolean;
+}
 
 export interface InterfaceListFilter {
   readonly workspaceId: string;
@@ -29,7 +37,10 @@ export interface InterfaceWriteGuard {
 }
 
 export interface InterfaceStore {
-  create(record: Interface): Promise<boolean>;
+  create(
+    record: Interface,
+    authority?: InterfaceMaterializationWriteAuthority,
+  ): Promise<boolean>;
   get(id: string): Promise<Interface | undefined>;
   getByName(input: {
     readonly workspaceId: string;
@@ -46,6 +57,7 @@ export interface InterfaceStore {
   compareAndSet(
     record: Interface,
     expected: InterfaceWriteGuard,
+    authority?: InterfaceMaterializationWriteAuthority,
   ): Promise<boolean>;
   /**
    * Atomically reserves one canonical OAuth resource for this exact current
@@ -55,7 +67,7 @@ export interface InterfaceStore {
   claimOAuth2Resource(input: {
     readonly record: Interface;
     readonly resource: string;
-  }): Promise<boolean>;
+  }, authority?: InterfaceMaterializationWriteAuthority): Promise<boolean>;
   findOAuth2ResourceClaim(input: {
     readonly workspaceId: string;
     readonly ownerKind: Interface["metadata"]["ownerRef"]["kind"];
@@ -65,12 +77,16 @@ export interface InterfaceStore {
 }
 
 export interface InterfaceBindingStore {
-  create(record: InterfaceBinding): Promise<boolean>;
+  create(
+    record: InterfaceBinding,
+    authority?: InterfaceMaterializationWriteAuthority,
+  ): Promise<boolean>;
   get(id: string): Promise<InterfaceBinding | undefined>;
   listByInterface(interfaceId: string): Promise<readonly InterfaceBinding[]>;
   compareAndSet(
     record: InterfaceBinding,
     expectedGeneration: number,
+    authority?: InterfaceMaterializationWriteAuthority,
   ): Promise<boolean>;
 }
 
@@ -112,7 +128,16 @@ export class InMemoryInterfaceStore implements InterfaceStore {
   readonly #oauthResourceClaims = new Map<string, string>();
   readonly #oauthResourceClaimKeys = new Map<string, string>();
 
-  create(record: Interface): Promise<boolean> {
+  constructor(
+    private readonly materializationAuthority?: InterfaceMaterializationAuthorityValidator,
+    private readonly now: () => string = () => new Date().toISOString(),
+  ) {}
+
+  create(
+    record: Interface,
+    authority?: InterfaceMaterializationWriteAuthority,
+  ): Promise<boolean> {
+    if (!this.#writeAuthorized(record, authority)) return Promise.resolve(false);
     if (this.#records.has(record.metadata.id)) return Promise.resolve(false);
     for (const existing of this.#records.values()) {
       if (sameName(existing, record) && existing.status.phase !== "Retired") {
@@ -125,6 +150,11 @@ export class InMemoryInterfaceStore implements InterfaceStore {
 
   get(id: string): Promise<Interface | undefined> {
     return Promise.resolve(this.#records.get(id));
+  }
+
+  /** Internal synchronous lookup used to keep in-memory Binding fencing atomic. */
+  getCurrent(id: string): Interface | undefined {
+    return this.#records.get(id);
   }
 
   getByName(input: {
@@ -180,7 +210,9 @@ export class InMemoryInterfaceStore implements InterfaceStore {
   compareAndSet(
     record: Interface,
     expected: InterfaceWriteGuard,
+    authority?: InterfaceMaterializationWriteAuthority,
   ): Promise<boolean> {
+    if (!this.#writeAuthorized(record, authority)) return Promise.resolve(false);
     const current = this.#records.get(record.metadata.id);
     if (
       !current ||
@@ -220,7 +252,10 @@ export class InMemoryInterfaceStore implements InterfaceStore {
   claimOAuth2Resource(input: {
     readonly record: Interface;
     readonly resource: string;
-  }): Promise<boolean> {
+  }, authority?: InterfaceMaterializationWriteAuthority): Promise<boolean> {
+    if (!this.#writeAuthorized(input.record, authority)) {
+      return Promise.resolve(false);
+    }
     const current = this.#records.get(input.record.metadata.id);
     if (
       !current ||
@@ -244,6 +279,22 @@ export class InMemoryInterfaceStore implements InterfaceStore {
     return Promise.resolve(true);
   }
 
+  #writeAuthorized(
+    record: Interface,
+    authority: InterfaceMaterializationWriteAuthority | undefined,
+  ): boolean {
+    if (!authority) return true;
+    return (
+      record.metadata.workspaceId === authority.workspaceId &&
+      record.metadata.ownerRef.kind === "Capsule" &&
+      record.metadata.ownerRef.id === authority.capsuleId &&
+      this.materializationAuthority?.isCapsuleInterfaceMaterializationWriteAuthorityCurrent(
+        authority,
+        this.now(),
+      ) === true
+    );
+  }
+
   findOAuth2ResourceClaim(input: {
     readonly workspaceId: string;
     readonly ownerKind: Interface["metadata"]["ownerRef"]["kind"];
@@ -259,7 +310,17 @@ export class InMemoryInterfaceStore implements InterfaceStore {
 export class InMemoryInterfaceBindingStore implements InterfaceBindingStore {
   readonly #records = new Map<string, InterfaceBinding>();
 
-  create(record: InterfaceBinding): Promise<boolean> {
+  constructor(
+    private readonly interfaces: InMemoryInterfaceStore,
+    private readonly materializationAuthority?: InterfaceMaterializationAuthorityValidator,
+    private readonly now: () => string = () => new Date().toISOString(),
+  ) {}
+
+  create(
+    record: InterfaceBinding,
+    authority?: InterfaceMaterializationWriteAuthority,
+  ): Promise<boolean> {
+    if (!this.#writeAuthorized(record, authority)) return Promise.resolve(false);
     if (this.#records.has(record.metadata.id)) return Promise.resolve(false);
     for (const existing of this.#records.values()) {
       if (
@@ -293,7 +354,9 @@ export class InMemoryInterfaceBindingStore implements InterfaceBindingStore {
   compareAndSet(
     record: InterfaceBinding,
     expectedGeneration: number,
+    authority?: InterfaceMaterializationWriteAuthority,
   ): Promise<boolean> {
+    if (!this.#writeAuthorized(record, authority)) return Promise.resolve(false);
     const current = this.#records.get(record.metadata.id);
     if (!current || current.metadata.generation !== expectedGeneration) {
       return Promise.resolve(false);
@@ -301,11 +364,43 @@ export class InMemoryInterfaceBindingStore implements InterfaceBindingStore {
     this.#records.set(record.metadata.id, freezeClone(record));
     return Promise.resolve(true);
   }
+
+  #writeAuthorized(
+    record: InterfaceBinding,
+    authority: InterfaceMaterializationWriteAuthority | undefined,
+  ): boolean {
+    if (!authority) return true;
+    const currentInterface = this.interfaces.getCurrent(
+      record.spec.interfaceId,
+    );
+    if (!currentInterface) return false;
+    return (
+      record.metadata.workspaceId === authority.workspaceId &&
+      currentInterface.metadata.workspaceId === authority.workspaceId &&
+      currentInterface.metadata.ownerRef.kind === "Capsule" &&
+      currentInterface.metadata.ownerRef.id === authority.capsuleId &&
+      this.materializationAuthority?.isCapsuleInterfaceMaterializationWriteAuthorityCurrent(
+        authority,
+        this.now(),
+      ) === true
+    );
+  }
 }
 
-export function createInMemoryInterfaceStores(): InterfaceStores {
-  const interfaces = new InMemoryInterfaceStore();
-  const bindings = new InMemoryInterfaceBindingStore();
+export function createInMemoryInterfaceStores(options: {
+  readonly materializationAuthority?: InterfaceMaterializationAuthorityValidator;
+  readonly now?: () => string;
+} = {}): InterfaceStores {
+  const now = options.now ?? (() => new Date().toISOString());
+  const interfaces = new InMemoryInterfaceStore(
+    options.materializationAuthority,
+    now,
+  );
+  const bindings = new InMemoryInterfaceBindingStore(
+    interfaces,
+    options.materializationAuthority,
+    now,
+  );
   return {
     persistence: "ephemeral",
     interfaces,

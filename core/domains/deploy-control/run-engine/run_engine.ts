@@ -159,6 +159,7 @@ import {
   APPLY_RUNTIME_SECRET_RETIREMENT_PENDING_EVENT,
   applyRunBillingCapturePending,
   applyRunRuntimeSecretRetirementPending,
+  capsuleLifecycleExpected,
   CapsuleStateVersionGuardConflict,
   type OpenTofuControlStore,
   type PlanRunInputs,
@@ -186,6 +187,14 @@ import type {
   CapsuleModuleVariableMaterialization,
   CapsuleModuleVariableMaterializer,
 } from "../module_variable_materializer.ts";
+import {
+  capsuleInterfaceMaterializationIntentId,
+  createCapsuleInterfaceMaterializationIntent,
+  createRestoredCapsuleInterfaceMaterializationIntent,
+  pinCapsuleInterfaceBlueprints,
+  restoredCapsuleInterfaceMaterializationIntentId,
+  type CapsuleInterfaceMaterializationIntent,
+} from "../interface_materialization_intent.ts";
 import type {
   RuntimeSecretFileBundle,
   RuntimeSecretFileMaterializer,
@@ -268,6 +277,8 @@ import type {
   OpenTofuCapsuleSourceFile,
   OpenTofuDestroyResult,
   OpenTofuPlanResult,
+  OpenTofuRestoreResult,
+  OpenTofuRestoreSourceState,
   OpenTofuRunDispatch,
   OpenTofuRunner,
   OpenTofuRunnerExecutorRegistry,
@@ -1053,6 +1064,62 @@ function latestOutputAtGeneration(
     )[0];
 }
 
+function assertRestoreRunnerResult(
+  result: OpenTofuRestoreResult | undefined,
+  runId: string,
+  logicalTargetStateRef: string,
+  generation: number,
+): asserts result is OpenTofuRestoreResult {
+  const state = result?.state;
+  const authority = state?.restoreAuthority;
+  const validAuthority =
+    authority !== undefined &&
+    authority.kind === "takosumi.runner-restore-ack@v1" &&
+    Number.isSafeInteger(authority.version) &&
+    authority.version > 0 &&
+    Number.isSafeInteger(authority.fence) &&
+    authority.fence > 0 &&
+    typeof authority.operationId === "string" &&
+    authority.operationId.trim().length > 0 &&
+    typeof authority.stateEtag === "string" &&
+    authority.stateEtag.trim().length > 0;
+  if (
+    !state ||
+    state.generation !== generation ||
+    typeof state.stateRef !== "string" ||
+    state.stateRef.trim().length === 0 ||
+    typeof state.logicalTargetStateRef !== "string" ||
+    state.logicalTargetStateRef !== logicalTargetStateRef ||
+    typeof state.digest !== "string" ||
+    state.digest.trim().length === 0 ||
+    state.runId !== runId ||
+    !Number.isSafeInteger(state.ciphertextLength) ||
+    state.ciphertextLength < 0 ||
+    !validAuthority
+  ) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `runner restore returned an incomplete or non-authoritative acknowledgement for run ${runId}`,
+      { reason: "restore_acknowledgement_invalid" },
+    );
+  }
+}
+
+function restoreSourceStateFromStateVersion(
+  state: StateVersion,
+): OpenTofuRestoreSourceState {
+  return {
+    stateVersionId: state.id,
+    workspaceId: state.workspaceId,
+    capsuleId: state.capsuleId,
+    environment: state.environment,
+    generation: state.generation,
+    stateRef: state.stateRef,
+    digest: state.digest,
+    createdByRunId: state.createdByRunId,
+  };
+}
+
 async function stateVersionIdForApplyRun(applyRunId: string): Promise<string> {
   // One ApplyRun owns at most one StateVersion. Derive its ledger identity from
   // a domain-separated digest so a non-landed commit tail reconstructs the
@@ -1768,6 +1835,8 @@ export class RunEngine {
     const priorState = genericRootDispatch?.priorState;
     const moduleVariableMaterializationDigest =
       genericRootDispatch?.moduleVariableMaterializationDigest;
+    const interfaceMaterialization =
+      genericRootDispatch?.interfaceMaterialization;
     const lifecycleActions =
       internal.lifecycleActions ?? genericRootDispatch?.lifecycleActions;
     if (
@@ -1780,6 +1849,7 @@ export class RunEngine {
       stateAdoption !== undefined ||
       priorState !== undefined ||
       moduleVariableMaterializationDigest !== undefined ||
+      interfaceMaterialization !== undefined ||
       lifecycleActions !== undefined
     ) {
       // A sensitive dependency-injected value flows into `variables` and may
@@ -1803,6 +1873,7 @@ export class RunEngine {
           ...(moduleVariableMaterializationDigest
             ? { moduleVariableMaterializationDigest }
             : {}),
+          ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
           ...(lifecycleActions ? { lifecycleActions } : {}),
         },
         sealSidecar,
@@ -2550,11 +2621,7 @@ export class RunEngine {
       )
     ) {
       this.#assertCompatibilityReportRunnable(preflight, policy);
-      await this.#store.patchCapsule(capsule.id, {
-        compatibilityReportId: preflight.id,
-        compatibilityStatus: preflight.level,
-        updatedAt: new Date(this.#now()).toISOString(),
-      });
+      await this.#recordCapsuleCompatibility(capsule, preflight);
       return preflight;
     }
     if (!this.#sourcesService) {
@@ -2578,11 +2645,7 @@ export class RunEngine {
       },
     );
     this.#assertCompatibilityReportRunnable(report, policy);
-    await this.#store.patchCapsule(capsule.id, {
-      compatibilityReportId: report.id,
-      compatibilityStatus: report.level,
-      updatedAt: new Date(this.#now()).toISOString(),
-    });
+    await this.#recordCapsuleCompatibility(capsule, report);
     return report;
   }
 
@@ -2611,13 +2674,40 @@ export class RunEngine {
     const policy = await this.#policyForCapsule(capsule);
     this.#assertCompatibilityReportRunnable(report, policy);
     if (capsule.compatibilityReportId !== report.id) {
-      await this.#store.patchCapsule(capsule.id, {
-        compatibilityReportId: report.id,
-        compatibilityStatus: report.level,
-        updatedAt: new Date(this.#now()).toISOString(),
-      });
+      await this.#recordCapsuleCompatibility(capsule, report);
     }
     return report;
+  }
+
+  async #recordCapsuleCompatibility(
+    capsule: Capsule,
+    report: CapsuleCompatibilityReport,
+  ): Promise<void> {
+    const epoch = await this.#store.getCapsuleExecutionAuthorityEpoch(
+      capsule.id,
+    );
+    if (epoch === undefined) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `capsule ${capsule.id} not found`,
+      );
+    }
+    const result = await this.#store.updateCapsuleLifecycle({
+      capsuleId: capsule.id,
+      expected: capsuleLifecycleExpected(capsule, epoch),
+      mutation: {
+        kind: "compatibility",
+        reportId: report.id,
+        status: report.level,
+      },
+      updatedAt: new Date(this.#now()).toISOString(),
+    });
+    if (result.kind === "updated") return;
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `capsule ${capsule.id} lifecycle changed while recording compatibility`,
+      { reason: "capsule_lifecycle_changed" },
+    );
   }
 
   #isCompatibilityReportScopedToCapsulePlan(
@@ -2998,6 +3088,12 @@ export class RunEngine {
       ...baseVariables,
       ...(moduleVariableMaterialization?.variables ?? {}),
     });
+    const interfaceMaterialization = input.operation === "destroy"
+      ? undefined
+      : await pinCapsuleInterfaceBlueprints({
+          installConfigId: input.installConfig.id,
+          blueprints: input.installConfig.interfaceBlueprints,
+        });
     return {
       capsulePlan,
       requiredProviderRequirements,
@@ -3036,6 +3132,7 @@ export class RunEngine {
         ...(moduleVariableMaterialization
           ? { moduleVariableMaterialization }
           : {}),
+        ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
       },
     };
   }
@@ -3224,6 +3321,9 @@ export class RunEngine {
               context.moduleVariableMaterialization.digest,
           }
         : {}),
+      ...(context.interfaceMaterialization
+        ? { interfaceMaterialization: context.interfaceMaterialization }
+        : {}),
     };
   }
 
@@ -3256,6 +3356,12 @@ export class RunEngine {
       request.runnerProfileId ?? this.#defaultRunnerProfileId,
     );
     const lifecycleActions = lifecycleActionsForPlan(installConfig, profile);
+    const interfaceMaterialization = request.operation === "destroy"
+      ? undefined
+      : await pinCapsuleInterfaceBlueprints({
+          installConfigId: installConfig.id,
+          blueprints: installConfig.interfaceBlueprints,
+        });
     const resolved = await this.#resolveCapsuleProviderBindingsForRun(
       capsule,
       providerBindingResolutionRequirements(
@@ -3272,6 +3378,7 @@ export class RunEngine {
           ? { sourceBuild: installConfig.sourceBuild }
           : {}),
         ...(lifecycleActions ? { lifecycleActions } : {}),
+        ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
       },
       compatibilityReport,
     );
@@ -3937,7 +4044,8 @@ export class RunEngine {
         claim.run,
         claim.leaseToken,
         lease,
-        (_signal) => this.#completeRestoreRun(claim.run, claim.leaseToken),
+        (signal) =>
+          this.#completeRestoreRun(claim.run, claim.leaseToken, signal),
       );
     } catch (error) {
       await this.#failRestoreRun(claim.run, claim.leaseToken, error);
@@ -3945,7 +4053,12 @@ export class RunEngine {
     }
   }
 
-  async #completeRestoreRun(run: Run, leaseToken: string): Promise<Run> {
+  async #completeRestoreRun(
+    run: Run,
+    leaseToken: string,
+    signal: AbortSignal,
+  ): Promise<Run> {
+    signal.throwIfAborted();
     if (!run.backupId || run.restoreStateGeneration === undefined) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -3981,22 +4094,116 @@ export class RunEngine {
     }
     const environment =
       run.environment ?? backup.environment ?? capsule.environment;
-    const source = (
-      await this.#store.listStateVersions(capsule.id, environment)
-    ).find((snapshot) => snapshot.generation === run.restoreStateGeneration);
-    if (!source) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `state generation ${run.restoreStateGeneration} is not available for restore`,
-      );
-    }
+    // Restore provenance is an exact StateVersion identity, never a
+    // generation-only lookup.  Generation numbers are scoped cursors and a
+    // stale/replayed run must not be allowed to select another row that merely
+    // happens to have the same generation.
     if (
-      run.restoredFromStateVersionId &&
-      run.restoredFromStateVersionId !== source.id
+      typeof run.restoredFromStateVersionId !== "string" ||
+      run.restoredFromStateVersionId.trim() === ""
     ) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "restore source StateVersion changed before dispatch",
+        "restore run is missing its exact source StateVersion identity",
+      );
+    }
+    const source = await this.#store.getStateVersion(
+      run.restoredFromStateVersionId,
+    );
+    if (
+      !source ||
+      source.id !== run.restoredFromStateVersionId ||
+      source.workspaceId !== capsule.workspaceId ||
+      source.capsuleId !== capsule.id ||
+      source.environment !== environment ||
+      source.generation !== run.restoreStateGeneration ||
+      typeof source.stateRef !== "string" ||
+      source.stateRef.trim() === "" ||
+      typeof source.digest !== "string" ||
+      source.digest.trim() === "" ||
+      typeof source.createdByRunId !== "string" ||
+      source.createdByRunId.trim() === ""
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `exact restore source StateVersion ${run.restoredFromStateVersionId} is missing or changed before dispatch`,
+      );
+    }
+    const sourceState = restoreSourceStateFromStateVersion(source);
+    // Bind the read-only authority to the selected StateVersion id, rather
+    // than closing over its first read. Restore adapters must re-read this
+    // exact row immediately before writing a target artifact so a source
+    // update, deletion, or store outage fails closed.
+    const sourceAuthority = {
+      readExact: async () => {
+        const exact = await this.#store.getStateVersion(source.id);
+        return exact ? restoreSourceStateFromStateVersion(exact) : undefined;
+      },
+    };
+    const sourceInterfaceMaterializationIntent =
+      await this.#interfaceMaterializationIntentForState(source);
+    if (!sourceInterfaceMaterializationIntent && capsule.currentStateVersionId) {
+      const currentState = await this.#store.getStateVersion(
+        capsule.currentStateVersionId,
+      );
+      const currentIntent = currentState
+        ? await this.#interfaceMaterializationIntentForState(currentState)
+        : undefined;
+      if (currentIntent) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "restore_interface_snapshot_missing: the selected StateVersion has no exact durable Interface declaration; run a fresh Apply before restoring it",
+        );
+      }
+    }
+    const sourceOutput = sourceInterfaceMaterializationIntent
+      ? await this.#store.getOutput(
+          sourceInterfaceMaterializationIntent.outputId,
+        )
+      : latestOutputAtGeneration(
+          await this.#store.listOutputs(capsule.id),
+          source.generation,
+        );
+    if (sourceInterfaceMaterializationIntent) {
+      if (!sourceOutput) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "restore_interface_output_missing: the selected Interface declaration has no exact Output snapshot; run a fresh Apply",
+        );
+      }
+      if (
+        sourceOutput.id !== sourceInterfaceMaterializationIntent.outputId ||
+        sourceOutput.workspaceId !== sourceInterfaceMaterializationIntent.workspaceId ||
+        sourceOutput.capsuleId !== sourceInterfaceMaterializationIntent.capsuleId ||
+        sourceOutput.stateGeneration !==
+          sourceInterfaceMaterializationIntent.stateGeneration ||
+        sourceOutput.stateGeneration !== source.generation
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "restore_interface_output_mismatch: the exact Output snapshot does not match its durable Interface declaration",
+        );
+      }
+    }
+    const restoreServiceData = run.restoreServiceData === true;
+    const restoreProfile = await this.#requireRunnerProfile(
+      this.#defaultRunnerProfileId,
+    );
+    const restoreRunner = this.#runnerExecutors.get(restoreProfile.executorId);
+    // Restore is a destructive state transition. A composed runner that does
+    // not implement the exact capability must fail before allocating or
+    // committing a target StateVersion; an absent method is never a successful
+    // no-op and must not be replaced with a synthetic source digest.
+    if (!restoreRunner || typeof restoreRunner.restore !== "function") {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "restore requires a restore-capable runner",
+      );
+    }
+    if (restoreServiceData && typeof restoreRunner.restoreServiceData !== "function") {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "service-data restore requires a service-data restore-capable runner",
       );
     }
     const latest = await this.#store.getLatestStateVersion(
@@ -4034,53 +4241,39 @@ export class RunEngine {
       generation: nextGeneration,
       stateRef,
     };
-    const restoreServiceData = run.restoreServiceData === true;
     if (restoreServiceData && !backup.serviceData) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "backup service-data artifact disappeared before restore dispatch",
       );
     }
-    const restoreProfile = await this.#requireRunnerProfile(
-      this.#defaultRunnerProfileId,
+    const restoreResult = await restoreRunner.restore(
+      {
+        runId: run.id,
+        stateScope,
+        sourceState,
+      },
+      { signal, sourceAuthority },
     );
-    const restoreRunner = this.#runnerExecutors.get(restoreProfile.executorId);
-    if (restoreServiceData && !restoreRunner?.restoreServiceData) {
-      throw new OpenTofuControllerError(
-        "not_implemented",
-        "service-data restore requires a service-data restore-capable runner",
-      );
-    }
-    const restoreResult = restoreRunner?.restore
-      ? await restoreRunner.restore({
-          runId: run.id,
-          stateScope,
-          sourceState: {
-            stateRef: source.stateRef,
-            digest: source.digest,
-          },
-        })
-      : undefined;
-    if (
-      restoreResult?.state.stateRef &&
-      restoreResult.state.stateRef !== stateRef
-    ) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `runner returned a state reference different from the allocated reference for restore run ${run.id}`,
-      );
-    }
+    signal.throwIfAborted();
+    assertRestoreRunnerResult(
+      restoreResult,
+      run.id,
+      stateRef,
+      nextGeneration,
+    );
     const restoredServiceData = restoreServiceData
-      ? await restoreRunner!.restoreServiceData!({
-          runId: run.id,
-          stateScope,
-          sourceState: {
-            stateRef: source.stateRef,
-            digest: source.digest,
+      ? await restoreRunner.restoreServiceData!(
+          {
+            runId: run.id,
+            stateScope,
+            sourceState,
+            serviceData: backup.serviceData!,
           },
-          serviceData: backup.serviceData!,
-        })
+          { signal, sourceAuthority },
+        )
       : undefined;
+    signal.throwIfAborted();
     if (restoreServiceData && restoredServiceData?.status !== "restored") {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -4093,15 +4286,14 @@ export class RunEngine {
       capsuleId: capsule.id,
       environment,
       generation: nextGeneration,
-      stateRef,
-      digest: restoreResult?.state.digest ?? source.digest,
+      // The DB row points at the immutable operation artifact attested by the
+      // runner. `stateRef` above is only the host-allocated logical target
+      // coordinate and is intentionally not used as the physical artifact ref.
+      stateRef: restoreResult.state.stateRef,
+      digest: restoreResult.state.digest,
       createdByRunId: run.id,
       createdAt: now,
     };
-    const sourceOutput = latestOutputAtGeneration(
-      await this.#store.listOutputs(capsule.id),
-      source.generation,
-    );
     const restoredOutput: Output | undefined = sourceOutput
       ? {
           ...sourceOutput,
@@ -4121,6 +4313,7 @@ export class RunEngine {
       ...(restoredServiceData ? { restoredServiceData } : {}),
       finishedAt: now,
     };
+    signal.throwIfAborted();
     const committed = await this.#store.commitRestoredState({
       stateVersion: restoredState,
       ...(restoredOutput ? { output: restoredOutput } : {}),
@@ -4134,15 +4327,37 @@ export class RunEngine {
           updatedAt: now,
         },
         guard: {
+          currentStateVersionId: capsule.currentStateVersionId,
           currentStateGeneration: capsule.currentStateGeneration,
           status: capsule.status,
         },
       },
       restoreRunTerminal: completed,
       restoreRunLeaseToken: leaseToken,
+      ...(sourceInterfaceMaterializationIntent && restoredOutput
+        ? {
+            interfaceMaterializationReplacement: {
+              sourceIntentId: sourceInterfaceMaterializationIntent.id,
+              intent: createRestoredCapsuleInterfaceMaterializationIntent({
+                restoreRunId: run.id,
+                sourceIntent: sourceInterfaceMaterializationIntent,
+                stateVersionId: restoredState.id,
+                outputId: restoredOutput.id,
+                stateGeneration: nextGeneration,
+                createdAt: now,
+              }),
+            },
+          }
+        : {}),
     });
     if (committed.restoreRunLeaseLost) {
       return (await this.#store.getBackupRun(run.id)) ?? run;
+    }
+    if (!committed.capsule) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `Capsule ${capsule.id} disappeared before Restore commit`,
+      );
     }
     await this.#notifyRestore({ phase: "succeeded", run: completed });
     if (restoredOutput) {
@@ -4177,6 +4392,33 @@ export class RunEngine {
       },
     });
     return completed;
+  }
+
+  async #interfaceMaterializationIntentForState(
+    state: StateVersion,
+  ): Promise<CapsuleInterfaceMaterializationIntent | undefined> {
+    const candidateIds = [
+      capsuleInterfaceMaterializationIntentId(state.createdByRunId),
+      restoredCapsuleInterfaceMaterializationIntentId(state.createdByRunId),
+    ];
+    for (const id of candidateIds) {
+      const intent =
+        await this.#store.getCapsuleInterfaceMaterializationIntent(id);
+      if (!intent) continue;
+      if (
+        intent.workspaceId !== state.workspaceId ||
+        intent.capsuleId !== state.capsuleId ||
+        intent.stateVersionId !== state.id ||
+        intent.stateGeneration !== state.generation
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "restore_interface_snapshot_mismatch: the durable Interface declaration does not match its StateVersion",
+        );
+      }
+      return intent;
+    }
+    return undefined;
   }
 
   /**
@@ -4599,6 +4841,12 @@ export class RunEngine {
               inputs.moduleVariableMaterializationDigest,
           }
         : {}),
+      ...(inputs.interfaceMaterialization
+        ? {
+            interfaceMaterialization:
+              inputs.interfaceMaterialization as unknown as JsonValue,
+          }
+        : {}),
     };
     const sealed = await this.#dependencyValueSealer.seal(payload);
     // Cleartext sealable fields are dropped; only `planRunId` + `sealed` persist.
@@ -4654,6 +4902,8 @@ export class RunEngine {
       PlanRunInputs["priorState"] | undefined;
     const moduleVariableMaterializationDigest =
       payload.moduleVariableMaterializationDigest as string | undefined;
+    const interfaceMaterialization = payload.interfaceMaterialization as unknown as
+      PlanRunInputs["interfaceMaterialization"] | undefined;
     return {
       planRunId,
       variables,
@@ -4668,6 +4918,7 @@ export class RunEngine {
       ...(moduleVariableMaterializationDigest
         ? { moduleVariableMaterializationDigest }
         : {}),
+      ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
     };
   }
 
@@ -4817,8 +5068,8 @@ export class RunEngine {
    * `active` consumers are moved: `pending` / `error` / `destroyed` are left
    * untouched (a stale flag on a not-yet-applied or torn-down Capsule is
    * meaningless). No-ops when the digest is unchanged, or when there are no
-   * downstream consumers. Each patch carries no guard: stale is an advisory flag,
-   * not a state-generation move, so it never races the current StateVersion pointer.
+   * downstream consumers. The lifecycle transition is exact-record CAS-fenced,
+   * so a concurrent state or status commit wins without a stale activity.
    */
   async #propagateStale(input: {
     readonly capsule: Capsule;
@@ -4853,26 +5104,30 @@ export class RunEngine {
       // Only an active consumer becomes stale; skip the rest (and a consumer the
       // ledger no longer holds).
       if (!consumer || consumer.status !== "active") continue;
-      await this.#store.patchCapsule(consumerId, {
-        status: "stale",
+      const stale = await this.#store.markCapsuleStale({
+        capsuleId: consumerId,
+        expected: consumer,
+        reason: "dependency-output",
         updatedAt,
       });
+      if (stale.kind !== "updated") continue;
+      const staleConsumer = stale.capsule;
       // Activity (§27 / §34): a downstream consumer was marked stale by the
       // producer's changed outputs (§24). One event per affected consumer.
       const directOutputNames = directChangedDependencyOutputs({
         edges,
         producerCapsuleId: input.capsule.id,
-        consumerCapsuleId: consumer.id,
+        consumerCapsuleId: staleConsumer.id,
         changedOutputNames,
       });
       const directReasons = directOutputNames.map(
         (outputName) => `${input.capsule.name}.${outputName} changed`,
       );
       await this.#recordActivity({
-        workspaceId: consumer.workspaceId,
+        workspaceId: staleConsumer.workspaceId,
         action: "capsule.stale",
         targetType: "capsule",
-        targetId: consumer.id,
+        targetId: staleConsumer.id,
         metadata: {
           producerCapsuleId: input.capsule.id,
           producerCapsuleName: input.capsule.name,
@@ -7176,6 +7431,7 @@ export class RunEngine {
         planRunApplied: appliedPlan,
         applyRunLeaseToken: leaseToken,
         capsuleStatus: completed.status === "succeeded" ? "active" : "error",
+        inputs,
         now,
       });
       if (patched === "lease_lost") {
@@ -7633,6 +7889,7 @@ export class RunEngine {
     readonly planRunApplied: PlanRun;
     readonly applyRunLeaseToken: string;
     readonly capsuleStatus: "active" | "error";
+    readonly inputs: PlanRunInputs | undefined;
     readonly now: number;
   }): Promise<Capsule | "lease_lost" | undefined> {
     const { planRun, capsule, stateVersion, output, now } = input;
@@ -7662,6 +7919,22 @@ export class RunEngine {
         applyRunTerminal: input.applyRunTerminal,
         planRunApplied: input.planRunApplied,
         applyRunLeaseToken: input.applyRunLeaseToken,
+        ...(input.applyRunTerminal.status === "succeeded" &&
+        input.inputs?.interfaceMaterialization
+          ? {
+              interfaceMaterializationIntent:
+                createCapsuleInterfaceMaterializationIntent({
+                  applyRunId: input.applyRunTerminal.id,
+                  workspaceId: capsule.workspaceId,
+                  capsuleId: capsule.id,
+                  stateVersionId: stateVersion.id,
+                  outputId: output.id,
+                  stateGeneration: input.nextStateGeneration,
+                  pinned: input.inputs.interfaceMaterialization,
+                  createdAt: new Date(now).toISOString(),
+                }),
+            }
+          : {}),
       });
     } catch (error) {
       if (error instanceof CapsuleStateVersionGuardConflict) throw error;

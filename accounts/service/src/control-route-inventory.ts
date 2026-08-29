@@ -186,6 +186,18 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
+      path: "/api/v1/workspaces/{workspaceId}/interface-materialization-failures",
+      summary: "List value-free Interface materialization failures",
+      auth: "account-session",
+    },
+    {
+      method: "POST",
+      path: "/api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intentId}/retries",
+      summary: "Retry one exact Interface materialization failure",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
       path: "/api/v1/workspaces/{workspaceId}/backups",
       summary: "List Workspace partial control exports",
       auth: "account-session",

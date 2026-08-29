@@ -18,6 +18,7 @@ test("platform worker wrangler wires D1/R2 and the OpenTofu runner container", a
   // The single composed worker: accounts ledger + control-plane ledger.
   assert.match(wrangler, /name = "takosumi-platform"/);
   assert.match(wrangler, /main = "entry-worker\.ts"/);
+  assert.match(wrangler, /enable_request_signal/);
   assert.match(wrangler, /binding = "TAKOSUMI_ACCOUNTS_DB"/);
   assert.match(wrangler, /binding = "TAKOSUMI_CONTROL_DB"/);
   assert.match(wrangler, /binding = "R2_ARTIFACTS"/);
@@ -125,7 +126,7 @@ test("OpenTofu runner DO routes M2 state through R2_STATE with at-rest encryptio
   assert.match(container, /\.tfstate\.enc/);
   assert.match(container, /current\.json/);
   assert.match(container, /padStart\(8, "0"\)/);
-  assert.match(container, /readCanonicalPriorState/);
+  assert.match(container, /readLedgerPriorState/);
   assert.doesNotMatch(container, /recoverCurrentState/);
   assert.match(container, /etagDoesNotMatch:\s*"\*"/);
   assert.match(container, /takosumi-cache-only/);

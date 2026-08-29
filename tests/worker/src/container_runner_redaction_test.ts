@@ -11,6 +11,16 @@ import { RUNNER_MUTATION_INDETERMINATE_CODE } from "../../../worker/src/runner_p
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+// The remote/container adapter does not execute this closure, but Restore's
+// public runner boundary requires Core's source authority control. Keep the
+// control explicit in direct adapter tests so they cannot regress to a
+// one-argument Restore call.
+const RESTORE_CONTROL = {
+  sourceAuthority: {
+    readExact: async () => undefined,
+  },
+};
+
 test("container runner redacts stderr before plan diagnostics are returned", async () => {
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning({
@@ -329,6 +339,169 @@ test("container runner isolates apply and destroy from the plan runner object", 
     { id: "apply_cache", path: "/runs/plan_cache" },
     { id: "destroy_cache", path: "/runs/destroy_plan_cache" },
   ]);
+});
+
+test("container runner routes Restore successors for one state scope through the same fencing Durable Object", async () => {
+  const runnerIds: string[] = [];
+  const restoreRunIds = ["restore_old", "restore_successor"];
+  let restoreCall = 0;
+  const stateScope = {
+    workspaceId: "space_1",
+    subject: { kind: "capsule" as const, id: "capsule_1" },
+    environment: "production",
+    generation: 2,
+    stateRef:
+      "workspaces/space_1/capsules/capsule_1/environments/production/state-versions/00000002.tfstate.enc",
+  };
+  const runner = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName: (name: string) => {
+        runnerIds.push(name);
+        return name;
+      },
+      get: () => ({
+        fetch: async () => {
+          const runId = restoreRunIds[restoreCall] ?? "restore_unknown";
+          restoreCall += 1;
+          return Response.json({
+            state: {
+              generation: stateScope.generation,
+              stateRef: `runner-local://restore/${runId}`,
+              logicalTargetStateRef: stateScope.stateRef,
+              digest: PLAN_DIGEST,
+              runId,
+              ciphertextLength: 0,
+              restoreAuthority: {
+                kind: "takosumi.runner-restore-ack@v1",
+                version: restoreCall,
+                fence: restoreCall,
+                operationId: `restore-operation-${runId}`,
+                stateEtag: `etag-${restoreCall}`,
+              },
+            },
+          });
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv);
+
+  const acknowledgements = [];
+  for (const runId of restoreRunIds) {
+    acknowledgements.push(
+      await runner.restore(
+        {
+          runId,
+          stateScope,
+          sourceState: {
+            stateVersionId: "state-version-1",
+            workspaceId: "space_1",
+            capsuleId: "capsule_1",
+            environment: "production",
+            generation: 1,
+            stateRef:
+              "workspaces/space_1/capsules/capsule_1/environments/production/state-versions/00000001.tfstate.enc",
+            digest: PLAN_DIGEST,
+            createdByRunId: "apply_source",
+          },
+        },
+        RESTORE_CONTROL,
+      ),
+    );
+  }
+
+  expect(runnerIds).toHaveLength(2);
+  expect(runnerIds[0]).toBe(runnerIds[1]);
+  expect(runnerIds[0]).not.toBe("restore_old");
+  expect(runnerIds[0]).not.toBe("restore_successor");
+  expect(acknowledgements.map((ack) => ack.state)).toEqual([
+    {
+      generation: stateScope.generation,
+      stateRef: "runner-local://restore/restore_old",
+      logicalTargetStateRef: stateScope.stateRef,
+      digest: PLAN_DIGEST,
+      runId: "restore_old",
+      ciphertextLength: 0,
+      restoreAuthority: {
+        kind: "takosumi.runner-restore-ack@v1",
+        version: 1,
+        fence: 1,
+        operationId: "restore-operation-restore_old",
+        stateEtag: "etag-1",
+      },
+    },
+    {
+      generation: stateScope.generation,
+      stateRef: "runner-local://restore/restore_successor",
+      logicalTargetStateRef: stateScope.stateRef,
+      digest: PLAN_DIGEST,
+      runId: "restore_successor",
+      ciphertextLength: 0,
+      restoreAuthority: {
+        kind: "takosumi.runner-restore-ack@v1",
+        version: 2,
+        fence: 2,
+        operationId: "restore-operation-restore_successor",
+        stateEtag: "etag-2",
+      },
+    },
+  ]);
+});
+
+test("container runner rejects a Restore acknowledgement without authoritative version and fence", async () => {
+  const stateScope = {
+    workspaceId: "space_invalid_restore_ack",
+    subject: { kind: "capsule" as const, id: "capsule_invalid_restore_ack" },
+    environment: "production",
+    generation: 2,
+    stateRef:
+      "workspaces/space_invalid_restore_ack/capsules/capsule_invalid_restore_ack/environments/production/state-versions/00000002.tfstate.enc",
+  };
+  const runner = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async () =>
+          Response.json({
+            state: {
+              generation: stateScope.generation,
+              stateRef: "runner-local://restore/restore_invalid_ack",
+              logicalTargetStateRef: stateScope.stateRef,
+              digest: PLAN_DIGEST,
+              runId: "restore_invalid_ack",
+              ciphertextLength: 0,
+              restoreAuthority: {
+                kind: "takosumi.runner-restore-ack@v1",
+                version: 0,
+                fence: 0,
+                operationId: "",
+                stateEtag: "etag-invalid",
+              },
+            },
+          }),
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv);
+
+  await expect(
+    runner.restore(
+      {
+        runId: "restore_invalid_ack",
+        stateScope,
+        sourceState: {
+          stateVersionId: "state-version-invalid",
+          workspaceId: "space_invalid_restore_ack",
+          capsuleId: "capsule_invalid_restore_ack",
+          environment: "production",
+          generation: 1,
+          stateRef:
+            "workspaces/space_invalid_restore_ack/capsules/capsule_invalid_restore_ack/environments/production/state-versions/00000001.tfstate.enc",
+          digest: PLAN_DIGEST,
+          createdByRunId: "apply_source",
+        },
+      },
+      RESTORE_CONTROL,
+    ),
+  ).rejects.toThrow("runner restore returned an incomplete state result");
 });
 
 test("container runner retries transient Cloudflare container capacity exhaustion", async () => {

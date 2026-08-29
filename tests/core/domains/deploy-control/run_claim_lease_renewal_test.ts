@@ -5,10 +5,17 @@ import {
   type OpenTofuApplyJob,
   type OpenTofuPlanResult,
   type OpenTofuApplyResult,
+  type OpenTofuRestoreJob,
+  type OpenTofuRestoreResult,
+  type OpenTofuServiceDataRestoreJob,
+  type RunExecutionControl,
+  type RunServiceDataRestoreResult,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   type AcquireCapsuleLeaseInput,
+  capsuleLeaseScope,
   type CapsuleCoordination,
+  DEFAULT_CAPSULE_LEASE_TTL_MS,
   InMemoryCapsuleCoordination,
   type CapsuleLease,
   type RenewCapsuleLeaseInput,
@@ -32,6 +39,29 @@ import type {
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+function restoreAck(
+  job: OpenTofuRestoreJob,
+  digest = PLAN_DIGEST,
+): OpenTofuRestoreResult {
+  return {
+    state: {
+      generation: job.stateScope.generation,
+      stateRef: `runner-local://restore/${job.runId}`,
+      logicalTargetStateRef: job.stateScope.stateRef,
+      digest,
+      runId: job.runId,
+      ciphertextLength: 0,
+      restoreAuthority: {
+        kind: "takosumi.runner-restore-ack@v1",
+        version: 1,
+        fence: 1,
+        operationId: `test-restore:${job.runId}`,
+        stateEtag: digest,
+      },
+    },
+  };
+}
 
 function planArtifact() {
   return {
@@ -147,6 +177,15 @@ function controllerWith(
     now?: () => number;
     plan?: () => Promise<OpenTofuPlanResult>;
     apply?: (job: OpenTofuApplyJob) => Promise<OpenTofuApplyResult>;
+    restore?: (
+      job: OpenTofuRestoreJob,
+      control?: RunExecutionControl,
+    ) => Promise<OpenTofuRestoreResult>;
+    restoreServiceData?: (
+      job: OpenTofuServiceDataRestoreJob,
+      control?: RunExecutionControl,
+    ) => Promise<RunServiceDataRestoreResult>;
+    disableEnqueue?: boolean;
     runRenewalIntervalMs?: number;
     runnerProfiles?: readonly RunnerProfile[];
     defaultRunnerProfileId?: string;
@@ -168,6 +207,9 @@ function controllerWith(
     ...(options.runRenewalIntervalMs !== undefined
       ? { runRenewalIntervalMs: options.runRenewalIntervalMs }
       : {}),
+    ...(options.disableEnqueue
+      ? { enqueueRun: () => Promise.resolve() }
+      : {}),
     now: options.now ?? (() => 1),
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     newId: ((): ((p: string) => string) => {
@@ -180,8 +222,82 @@ function controllerWith(
         ...(await apply(job)),
         rawOutputRef: job.rawOutputRef,
       }),
+      ...(options.restore ? { restore: options.restore } : {}),
+      ...(options.restoreServiceData
+        ? { restoreServiceData: options.restoreServiceData }
+        : {}),
     },
   });
+}
+
+async function seedQueuedRestore(
+  store: InMemoryOpenTofuControlStore,
+  controller: OpenTofuController,
+  label: string,
+  restoreServiceData = false,
+): Promise<{
+  readonly runId: string;
+  readonly capsuleId: string;
+  readonly environment: string;
+}> {
+  const { capsule } = await seedCapsuleModel(store, {
+    workspaceId: `ws_restore_renewal_${label}`,
+    capsuleId: `cap_restore_renewal_${label}`,
+  });
+  await store.putStateVersion({
+    id: `state_restore_renewal_${label}`,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    environment: capsule.environment,
+    generation: 1,
+    stateRef: `state/restore-renewal/${label}`,
+    digest: PLAN_DIGEST,
+    createdByRunId: `apply_restore_renewal_${label}`,
+    createdAt: "2026-08-29T00:00:00.000Z",
+  });
+  const serviceData = {
+    ref: `backup/restore-renewal/${label}/service-data`,
+    digest: PLAN_DIGEST,
+    sizeBytes: 1,
+    exportedCount: 1,
+    unsupportedCount: 0,
+    missingCount: 0,
+  } as const;
+  const backupId = `backup_restore_renewal_${label}`;
+  await store.putBackupRecord({
+    id: backupId,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    environment: capsule.environment,
+    ref: `backup/restore-renewal/${label}/control`,
+    digest: PLAN_DIGEST,
+    sizeBytes: 1,
+    ...(restoreServiceData ? { serviceData } : {}),
+    createdAt: "2026-08-29T00:00:00.000Z",
+  });
+  await store.putCapsule({
+    ...capsule,
+    status: "destroyed",
+    currentStateGeneration: 2,
+    updatedAt: "2026-08-29T00:00:01.000Z",
+  });
+  const restore = await controller.createRestoreRun(
+    capsule.workspaceId,
+    backupId,
+    {
+      capsuleId: capsule.id,
+      environment: capsule.environment,
+      stateGeneration: 1,
+      expectedBackupDigest: PLAN_DIGEST,
+      ...(restoreServiceData ? { restoreServiceData: true } : {}),
+    },
+  );
+  await controller.approveRun(restore.id, { approvedBy: "ops" });
+  return {
+    runId: restore.id,
+    capsuleId: capsule.id,
+    environment: capsule.environment,
+  };
 }
 
 function isApplyHeartbeatRenewal(input: TransitionRunInput): boolean {
@@ -678,6 +794,109 @@ test("the run heartbeat is re-stamped AND the lease renewed while a long apply b
   // capsule lease while the apply was blocked in the runner.
   expect(renewCalls).toBeGreaterThan(0);
   expect(midFlightHeartbeat).toBeGreaterThan(claimHeartbeat);
+});
+
+test("restore transport aborts before external mutation after Capsule lease loss and successor takeover", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let coordinationNow = 1_000;
+  let leaseSequence = 0;
+  const coordination = new InMemoryCapsuleCoordination({
+    now: () => coordinationNow,
+    newToken: () => `restore_coordination_${++leaseSequence}`,
+  });
+  let observedSignal: AbortSignal | undefined;
+  let externalMutationCompleted = false;
+  let successorAcquired = false;
+  let target:
+    | { readonly capsuleId: string; readonly environment: string }
+    | undefined;
+  const controller = controllerWith(store, {
+    coordination,
+    disableEnqueue: true,
+    runRenewalIntervalMs: 1,
+    now: (() => {
+      let now = 10_000;
+      return () => ++now;
+    })(),
+    restore: async (job, control) => {
+      observedSignal = control?.signal;
+      coordinationNow += DEFAULT_CAPSULE_LEASE_TTL_MS + 1;
+      const successor = await coordination.acquireLease({
+        scope: capsuleLeaseScope(target!.capsuleId, target!.environment),
+        holderId: "restore-successor",
+        ttlMs: DEFAULT_CAPSULE_LEASE_TTL_MS,
+      });
+      successorAcquired = successor.acquired;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      if (!control?.signal?.aborted) externalMutationCompleted = true;
+      return restoreAck(job);
+    },
+  });
+  target = await seedQueuedRestore(store, controller, "state");
+
+  await expect(controller.runQueuedRestore(target.runId)).rejects.toThrow(
+    /capsule_lease_lost/u,
+  );
+  expect(successorAcquired).toBe(true);
+  expect(observedSignal).toBeDefined();
+  expect(observedSignal?.aborted).toBe(true);
+  expect(externalMutationCompleted).toBe(false);
+  expect((await store.getBackupRun(target.runId))?.status).toBe("failed");
+});
+
+test("service-data restore aborts before external mutation after Capsule lease loss and successor takeover", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let coordinationNow = 2_000;
+  let leaseSequence = 0;
+  const coordination = new InMemoryCapsuleCoordination({
+    now: () => coordinationNow,
+    newToken: () => `restore_service_coordination_${++leaseSequence}`,
+  });
+  let observedSignal: AbortSignal | undefined;
+  let externalMutationCompleted = false;
+  let successorAcquired = false;
+  let target:
+    | { readonly capsuleId: string; readonly environment: string }
+    | undefined;
+  const controller = controllerWith(store, {
+    coordination,
+    disableEnqueue: true,
+    runRenewalIntervalMs: 1,
+    now: (() => {
+      let now = 20_000;
+      return () => ++now;
+    })(),
+    restore: (job) => Promise.resolve(restoreAck(job)),
+    restoreServiceData: async (job, control) => {
+      observedSignal = control?.signal;
+      coordinationNow += DEFAULT_CAPSULE_LEASE_TTL_MS + 1;
+      const successor = await coordination.acquireLease({
+        scope: capsuleLeaseScope(target!.capsuleId, target!.environment),
+        holderId: "restore-service-successor",
+        ttlMs: DEFAULT_CAPSULE_LEASE_TTL_MS,
+      });
+      successorAcquired = successor.acquired;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      if (!control?.signal?.aborted) externalMutationCompleted = true;
+      return {
+        status: "restored",
+        ref: job.serviceData.ref,
+        digest: job.serviceData.digest,
+        sizeBytes: job.serviceData.sizeBytes,
+        restoredCount: job.serviceData.exportedCount,
+      };
+    },
+  });
+  target = await seedQueuedRestore(store, controller, "service_data", true);
+
+  await expect(controller.runQueuedRestore(target.runId)).rejects.toThrow(
+    /capsule_lease_lost/u,
+  );
+  expect(successorAcquired).toBe(true);
+  expect(observedSignal).toBeDefined();
+  expect(observedSignal?.aborted).toBe(true);
+  expect(externalMutationCompleted).toBe(false);
+  expect((await store.getBackupRun(target.runId))?.status).toBe("failed");
 });
 
 test("the plan heartbeat is re-stamped while a long plan blocks in the runner", async () => {

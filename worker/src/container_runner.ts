@@ -13,6 +13,8 @@ import type {
   OpenTofuDestroyResult,
   OpenTofuPlanJob,
   OpenTofuPlanResult,
+  OpenTofuRestoreAuthority,
+  OpenTofuRestoreExecutionControl,
   OpenTofuRestoreJob,
   OpenTofuRestoreResult,
   OpenTofuRunner,
@@ -273,20 +275,92 @@ export class CloudflareContainerOpenTofuRunner
     };
   }
 
-  async restore(job: OpenTofuRestoreJob): Promise<OpenTofuRestoreResult> {
-    const result = await this.#runContainer("restore", job.runId, {
-      stateScope: job.stateScope,
-      restoreState: job.sourceState,
-    });
+  async restore(
+    job: OpenTofuRestoreJob,
+    control: OpenTofuRestoreExecutionControl,
+  ): Promise<OpenTofuRestoreResult> {
+    const result = await this.#runContainer(
+      "restore",
+      job.runId,
+      {
+        stateScope: job.stateScope,
+        restoreState: job.sourceState,
+      },
+      {
+        signal: control?.signal,
+        // Restore attempts for one logical state scope must rendezvous on one
+        // DO so its durable monotonic fence can reject a lease-lost predecessor
+        // even when the successor has a different Run id.
+        runnerObjectName: restoreRunnerObjectName(job.stateScope),
+      },
+    );
     const state = recordFromRecord(result, "state");
     const generation = state?.generation;
     const stateRef = state ? stringFromRecord(state, "stateRef") : undefined;
+    const logicalTargetStateRef = state
+      ? stringFromRecord(state, "logicalTargetStateRef")
+      : undefined;
     const digest = state ? stringFromRecord(state, "digest") : undefined;
-    if (typeof generation !== "number" || !stateRef || !digest) {
+    const runId = state ? stringFromRecord(state, "runId") : undefined;
+    const ciphertextLength = state?.ciphertextLength;
+    const authorityRecord = state
+      ? recordFromRecord(state, "restoreAuthority")
+      : undefined;
+    const authorityKind = authorityRecord
+      ? stringFromRecord(authorityRecord, "kind")
+      : undefined;
+    const authorityVersion = authorityRecord?.version;
+    const authorityFence = authorityRecord?.fence;
+    const authorityOperationId = authorityRecord
+      ? stringFromRecord(authorityRecord, "operationId")
+      : undefined;
+    const authorityStateEtag = authorityRecord
+      ? stringFromRecord(authorityRecord, "stateEtag")
+      : undefined;
+    if (
+      typeof generation !== "number" ||
+      generation !== job.stateScope.generation ||
+      !stateRef ||
+      stateRef.trim().length === 0 ||
+      !logicalTargetStateRef ||
+      logicalTargetStateRef !== job.stateScope.stateRef ||
+      !digest ||
+      digest.trim().length === 0 ||
+      digest !== job.sourceState.digest ||
+      runId !== job.runId ||
+      typeof ciphertextLength !== "number" ||
+      !Number.isSafeInteger(ciphertextLength) ||
+      ciphertextLength < 0 ||
+      authorityKind !== "takosumi.runner-restore-ack@v1" ||
+      typeof authorityVersion !== "number" ||
+      !Number.isSafeInteger(authorityVersion) ||
+      authorityVersion <= 0 ||
+      typeof authorityFence !== "number" ||
+      !Number.isSafeInteger(authorityFence) ||
+      authorityFence <= 0 ||
+      !authorityOperationId ||
+      authorityOperationId.trim().length === 0 ||
+      !authorityStateEtag ||
+      authorityStateEtag.trim().length === 0
+    ) {
       throw new Error("runner restore returned an incomplete state result");
     }
     return {
-      state: { generation, stateRef, digest },
+      state: {
+        generation,
+        stateRef,
+        logicalTargetStateRef,
+        digest,
+        runId,
+        ciphertextLength,
+        restoreAuthority: {
+          kind: "takosumi.runner-restore-ack@v1",
+          version: authorityVersion,
+          fence: authorityFence,
+          operationId: authorityOperationId,
+          stateEtag: authorityStateEtag,
+        } satisfies OpenTofuRestoreAuthority,
+      },
       diagnostics: diagnosticsFromContainerResult(result),
     };
   }
@@ -663,6 +737,20 @@ export class CloudflareContainerOpenTofuRunner
       tags: { operation_kind: action, status: "running" },
     });
   }
+}
+
+function restoreRunnerObjectName(
+  scope: OpenTofuRestoreJob["stateScope"],
+): string {
+  if (!scope.subject) {
+    throw new Error("Restore state scope requires a Capsule/Resource subject");
+  }
+  return `restore-fence:${JSON.stringify([
+    scope.workspaceId,
+    scope.subject.kind,
+    scope.subject.id,
+    scope.environment,
+  ])}`;
 }
 
 function providerExecutionFailureFromContainerResult(

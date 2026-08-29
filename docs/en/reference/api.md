@@ -166,7 +166,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 86
+`accounts/service/src/control-route-inventory.ts`; it currently contains 88
 public route descriptors. Representative operations from that inventory are:
 
 ```http
@@ -211,6 +211,8 @@ POST /api/v1/runs/{runId}/cancel
 GET /api/v1/capsules/{capsuleId}/state-versions
 GET /api/v1/capsules/{capsuleId}/outputs
 GET /api/v1/workspaces/{workspaceId}/activity
+GET /api/v1/workspaces/{workspaceId}/interface-materialization-failures
+POST /api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intentId}/retries
 ```
 
 Creating a Git install plan requires `Idempotency-Key`. Replaying the same

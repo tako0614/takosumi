@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 import type {
   CloudflareWorkerEnv,
+  D1Database,
+  D1PreparedStatement,
+  D1Result,
   R2Bucket,
   R2ListOptions,
   R2Object,
@@ -21,6 +24,7 @@ import {
   StateArtifactCrypto,
 } from "../../../../worker/src/state_crypto.ts";
 import { createRunCredentialToken } from "../../../../core/shared/run_credential_tokens.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 
 const PLAN_BYTES = new TextEncoder().encode("reviewed tfplan bytes");
 const PLAN_DIGEST =
@@ -31,6 +35,21 @@ const RUN_CREDENTIAL_SIGNING_SECRET =
   "0123456789abcdef0123456789abcdef0123456789abcdef";
 const RUN_CREDENTIAL_PROVIDER =
   "registry.opentofu.org/example/ephemeral";
+const RESTORE_STATE_PREFIX =
+  "workspaces/space_1/capsules/inst_1/environments/production/state-versions";
+const RESTORE_TARGET_KEY = `${RESTORE_STATE_PREFIX}/00000002.tfstate.enc`;
+const RESTORE_CURRENT_KEY = `${RESTORE_STATE_PREFIX}/current.json`;
+
+interface RestoreSourceDescriptor {
+  readonly stateVersionId: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly environment: string;
+  readonly generation: number;
+  readonly stateRef: string;
+  readonly digest: string;
+  readonly createdByRunId: string;
+}
 
 test("local runner proxy Durable Object refuses non-local composition", () => {
   assert.throws(
@@ -3023,16 +3042,8 @@ test("OpenTofu runner Durable Object restores and persists operator-managed stat
 test("OpenTofu runner Durable Object restores a verified R2_STATE object into a new generation", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
-  const crypto = StateArtifactCrypto.fromEnv({
-    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
-  });
-  const sourceKey =
-    "workspaces/space_1/capsules/inst_1/environments/production/state-versions/00000001.tfstate.enc";
-  const sealed = await crypto.seal(STATE_BYTES);
-  await state.put(sourceKey, sealed.ciphertext, {
-    httpMetadata: { contentType: "application/octet-stream" },
-    customMetadata: { "takosumi-content-digest": sealed.contentDigest },
-  });
+  const crypto = restoreTestCrypto();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
   const runner = runnerWithContainer(
     artifacts,
     {
@@ -3065,10 +3076,7 @@ test("OpenTofu runner Durable Object restores a verified R2_STATE object into a 
             stateRef:
               "workspaces/space_1/capsules/inst_1/environments/production/state-versions/00000002.tfstate.enc",
           },
-          restoreState: {
-            stateRef: sourceKey,
-            digest: sealed.contentDigest,
-          },
+          restoreState: source,
         },
       }),
     }),
@@ -3076,27 +3084,1104 @@ test("OpenTofu runner Durable Object restores a verified R2_STATE object into a 
 
   assert.equal(response.status, 200);
   const payload = (await response.json()) as {
-    state: { generation: number; stateRef: string; digest: string };
+    state: {
+      generation: number;
+      stateRef: string;
+      logicalTargetStateRef: string;
+      digest: string;
+      restoreAuthority: {
+        kind: string;
+        version: number;
+        fence: number;
+        operationId: string;
+        stateEtag: string;
+      };
+    };
   };
   assert.equal(payload.state.generation, 2);
   assert.equal(
-    payload.state.stateRef,
+    payload.state.logicalTargetStateRef,
     "workspaces/space_1/capsules/inst_1/environments/production/state-versions/00000002.tfstate.enc",
   );
+  assert.match(payload.state.stateRef, /\/restore-operations\//u);
   const restored = state.body(payload.state.stateRef);
   assert.ok(restored);
   assert.deepEqual(
     await crypto.open(restored, payload.state.digest),
     STATE_BYTES,
   );
-  const current = state.body(
-    "workspaces/space_1/capsules/inst_1/environments/production/state-versions/current.json",
-  );
-  assert.ok(current);
+  assert.equal(state.body(RESTORE_TARGET_KEY), undefined);
+  assert.equal(state.body(RESTORE_CURRENT_KEY), undefined);
   assert.equal(
-    JSON.parse(new TextDecoder().decode(current)).objectKey,
-    payload.state.stateRef,
+    payload.state.restoreAuthority.kind,
+    "takosumi.runner-restore-ack@v1",
   );
+  assert.equal(payload.state.restoreAuthority.version, 1);
+  assert.equal(payload.state.restoreAuthority.fence, 1);
+  assert.match(
+    payload.state.restoreAuthority.operationId,
+    /^00000001-/u,
+  );
+  assert.equal(
+    payload.state.restoreAuthority.stateEtag,
+    (await state.head(payload.state.stateRef))?.etag,
+  );
+});
+
+test("OpenTofu runner Restore rejects an incomplete or mismatched canonical source StateVersion proof", async () => {
+  const scenarios: readonly {
+    readonly name: string;
+    readonly change: (
+      source: RestoreSourceDescriptor,
+    ) => Readonly<Record<string, unknown>> | RestoreSourceDescriptor;
+  }[] = [
+    {
+      name: "missing exact StateVersion identity",
+      change: (source) => ({
+        stateRef: source.stateRef,
+        digest: source.digest,
+      }),
+    },
+    {
+      name: "wrong earlier generation",
+      change: (source) => ({ ...source, generation: source.generation - 1 }),
+    },
+    {
+      name: "wrong canonical StateVersion id",
+      change: (source) => ({
+        ...source,
+        stateVersionId: "state_different_apply_authority",
+      }),
+    },
+    {
+      name: "wrong creator Run",
+      change: (source) => ({
+        ...source,
+        createdByRunId: "apply_different_creator",
+      }),
+    },
+    {
+      name: "cross-workspace descriptor",
+      change: (source) => ({ ...source, workspaceId: "space_2" }),
+    },
+    {
+      name: "cross-capsule descriptor",
+      change: (source) => ({ ...source, capsuleId: "inst_2" }),
+    },
+    {
+      name: "cross-environment descriptor",
+      change: (source) => ({ ...source, environment: "staging" }),
+    },
+  ];
+
+  for (const [index, scenario] of scenarios.entries()) {
+    const state = new HookedR2Bucket();
+    const source = await seedRestoreSource(state, 1, STATE_BYTES);
+    const runner = restoreRunner(state);
+
+    const response = await runner.fetch(
+      restoreRequest(
+        `restore_canonical_proof_${index}`,
+        scenario.change(source),
+      ),
+    );
+
+    assert.notEqual(response.status, 200, scenario.name);
+    assert.equal(state.restoreStageKeys().length, 0, scenario.name);
+  }
+});
+
+test("OpenTofu runner Restore rejects a Restore-origin StateVersion id not bound to its object", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const ledger = new FakeRestoreLedgerDatabase();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const runner = restoreRunner(state, storage, ledger);
+  const restored = await runner.fetch(
+    restoreRequest("restore_origin_source", source),
+  );
+  assert.equal(restored.status, 200);
+  const payload = (await restored.json()) as {
+    state: { stateRef: string; digest: string; runId: string };
+  };
+  const exactRestoreOrigin: RestoreSourceDescriptor = {
+    stateVersionId: "state_restore_origin_exact",
+    workspaceId: "space_1",
+    capsuleId: "inst_1",
+    environment: "production",
+    generation: 2,
+    stateRef: payload.state.stateRef,
+    digest: payload.state.digest,
+    createdByRunId: payload.state.runId,
+  };
+  ledger.referenceExactStateVersion(exactRestoreOrigin);
+  const forgedRestoreOrigin = {
+    ...exactRestoreOrigin,
+    stateVersionId: "state_restore_origin_forged",
+  };
+  const originObject = await state.head(payload.state.stateRef);
+  assert.equal(
+    originObject?.customMetadata?.["takosumi-restored-from-state-version-id"],
+    source.stateVersionId,
+  );
+  assert.notEqual(
+    originObject?.customMetadata?.["takosumi-restored-from-state-version-id"],
+    exactRestoreOrigin.stateVersionId,
+  );
+
+  const replayed = await runner.fetch(
+    restoreRequest("restore_from_origin", forgedRestoreOrigin, undefined, {
+      generation: 3,
+    }),
+  );
+
+  assert.notEqual(replayed.status, 200);
+  assert.equal(state.restoreStageKeys().length, 1);
+  assert.equal(ledger.sourceQueryCount, 1);
+});
+
+test("OpenTofu runner Restore accepts the exact ledger-bound Restore-origin StateVersion", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const ledger = new FakeRestoreLedgerDatabase();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const runner = restoreRunner(state, storage, ledger);
+  const restored = await runner.fetch(
+    restoreRequest("restore_origin_exact_source", source),
+  );
+  assert.equal(restored.status, 200);
+  const payload = (await restored.json()) as {
+    state: { stateRef: string; digest: string; runId: string };
+  };
+  const restoreOrigin: RestoreSourceDescriptor = {
+    stateVersionId: "state_restore_origin_exact",
+    workspaceId: "space_1",
+    capsuleId: "inst_1",
+    environment: "production",
+    generation: 2,
+    stateRef: payload.state.stateRef,
+    digest: payload.state.digest,
+    createdByRunId: payload.state.runId,
+  };
+  ledger.referenceExactStateVersion(restoreOrigin);
+
+  const replayed = await runner.fetch(
+    restoreRequest("restore_from_exact_origin", restoreOrigin, undefined, {
+      generation: 3,
+    }),
+  );
+
+  assert.equal(replayed.status, 200);
+  assert.equal(state.restoreStageKeys().length, 2);
+  assert.equal(ledger.sourceQueryCount, 1);
+});
+
+test("OpenTofu runner Restore rejects mismatched Restore-origin object authority proof", async () => {
+  const scenarios = [
+    ["takosumi-run-id", "restore_different_creator"],
+    ["takosumi-generation", "1"],
+    ["takosumi-workspace-id", "space_2"],
+    ["takosumi-capsule-id", "inst_2"],
+    ["takosumi-environment", "staging"],
+    [
+      "takosumi-logical-target-state-ref",
+      `${RESTORE_STATE_PREFIX}/00000001.tfstate.enc`,
+    ],
+    ["takosumi-restore-fence", "999"],
+    [
+      "takosumi-restored-from-object",
+      "workspaces/space_2/capsules/inst_1/environments/production/state-versions/00000001.tfstate.enc",
+    ],
+  ] as const;
+
+  for (const [index, [metadataName, invalidValue]] of scenarios.entries()) {
+    const state = new HookedR2Bucket();
+    const storage = new FakeDoStorage();
+    const ledger = new FakeRestoreLedgerDatabase();
+    const canonical = await seedRestoreSource(state, 1, STATE_BYTES);
+    const runner = restoreRunner(state, storage, ledger);
+    const restored = await runner.fetch(
+      restoreRequest(`restore_origin_seed_${index}`, canonical),
+    );
+    assert.equal(restored.status, 200);
+    const payload = (await restored.json()) as {
+      state: { stateRef: string; digest: string; runId: string };
+    };
+    const object = await state.get(payload.state.stateRef);
+    assert.ok(object);
+    await state.put(payload.state.stateRef, await object.arrayBuffer(), {
+      httpMetadata: object.httpMetadata,
+      customMetadata: {
+        ...object.customMetadata,
+        "takosumi-workspace-id": "space_1",
+        "takosumi-capsule-id": "inst_1",
+        "takosumi-environment": "production",
+        [metadataName]: invalidValue,
+      },
+    });
+    const restoreOrigin: RestoreSourceDescriptor = {
+      stateVersionId: `state_restore_origin_${index}`,
+      workspaceId: "space_1",
+      capsuleId: "inst_1",
+      environment: "production",
+      generation: 2,
+      stateRef: payload.state.stateRef,
+      digest: payload.state.digest,
+      createdByRunId: payload.state.runId,
+    };
+    ledger.referenceExactStateVersion(restoreOrigin);
+
+    const response = await runner.fetch(
+      restoreRequest(
+        `restore_from_tampered_origin_${index}`,
+        restoreOrigin,
+        undefined,
+        { generation: 3 },
+      ),
+    );
+
+    assert.notEqual(response.status, 200, metadataName);
+    assert.equal(ledger.sourceQueryCount, 1, metadataName);
+  }
+});
+
+test("OpenTofu runner Restore fails closed on uncertain Restore-origin StateVersion authority", async () => {
+  const scenarios = [
+    {
+      name: "missing",
+      arrange: (_ledger: FakeRestoreLedgerDatabase) => {},
+    },
+    {
+      name: "multiple",
+      arrange: (ledger: FakeRestoreLedgerDatabase) => {
+        ledger.exactStateVersionCountOverride = 2;
+      },
+    },
+    {
+      name: "malformed",
+      arrange: (ledger: FakeRestoreLedgerDatabase) => {
+        ledger.exactStateVersionCountOverride = "1";
+      },
+    },
+    {
+      name: "unavailable",
+      arrange: (ledger: FakeRestoreLedgerDatabase) => {
+        ledger.unavailable = true;
+      },
+    },
+  ] as const;
+
+  for (const [index, scenario] of scenarios.entries()) {
+    const state = new HookedR2Bucket();
+    const storage = new FakeDoStorage();
+    const ledger = new FakeRestoreLedgerDatabase();
+    const canonical = await seedRestoreSource(state, 1, STATE_BYTES);
+    const runner = restoreRunner(state, storage, ledger);
+    const restored = await runner.fetch(
+      restoreRequest(`restore_uncertain_source_${index}`, canonical),
+    );
+    assert.equal(restored.status, 200, scenario.name);
+    const payload = (await restored.json()) as {
+      state: { stateRef: string; digest: string; runId: string };
+    };
+    const restoreOrigin: RestoreSourceDescriptor = {
+      stateVersionId: `state_restore_uncertain_${index}`,
+      workspaceId: "space_1",
+      capsuleId: "inst_1",
+      environment: "production",
+      generation: 2,
+      stateRef: payload.state.stateRef,
+      digest: payload.state.digest,
+      createdByRunId: payload.state.runId,
+    };
+    scenario.arrange(ledger);
+
+    const response = await runner.fetch(
+      restoreRequest(
+        `restore_from_uncertain_origin_${index}`,
+        restoreOrigin,
+        undefined,
+        { generation: 3 },
+      ),
+    );
+
+    assert.notEqual(response.status, 200, scenario.name);
+    assert.equal(state.restoreStageKeys().length, 1, scenario.name);
+    assert.equal(ledger.sourceQueryCount, 1, scenario.name);
+  }
+});
+
+test("OpenTofu runner uses the exact immutable Restore StateVersion ref for the next Plan", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const calls: string[] = [];
+  const runner = runnerWithContainer(
+    artifacts,
+    {
+      async containerFetch(request) {
+        const path = new URL(request.url).pathname;
+        calls.push(`${request.method} ${path}`);
+        if (
+          request.method === "PUT" &&
+          path === "/runs/plan_after_restore/artifacts/tfstate"
+        ) {
+          assert.deepEqual(
+            new Uint8Array(await request.arrayBuffer()),
+            STATE_BYTES,
+          );
+          return Response.json({ ok: true });
+        }
+        if (
+          request.method === "POST" &&
+          path === "/runs/plan_after_restore"
+        ) {
+          return Response.json({
+            status: "succeeded",
+            exitCode: 0,
+            planDigest: PLAN_DIGEST,
+            planArtifact: {
+              kind: "runner-local",
+              ref: "runner-local://plan_after_restore/tfplan",
+              digest: PLAN_DIGEST,
+            },
+          });
+        }
+        if (
+          request.method === "GET" &&
+          path === "/runs/plan_after_restore/artifacts/tfplan"
+        ) {
+          return new Response(PLAN_BYTES, {
+            headers: { "content-type": "application/vnd.opentofu.plan" },
+          });
+        }
+        if (
+          request.method === "GET" &&
+          path === "/runs/plan_after_restore/artifacts/tfplan-json"
+        ) {
+          return Response.json({ error: "not found" }, { status: 404 });
+        }
+        return Response.json({ error: "unexpected" }, { status: 500 });
+      },
+    },
+    { stateBucket: state, storage },
+  );
+  const restored = await runner.fetch(
+    restoreRequest("restore_then_plan", source),
+  );
+  assert.equal(restored.status, 200);
+  const restorePayload = (await restored.json()) as {
+    state: { stateRef: string; digest: string; runId: string };
+  };
+
+  const planned = await runner.fetch(
+    planRequestWithPriorState("plan_after_restore", {
+      generation: 2,
+      stateRef: restorePayload.state.stateRef,
+      digest: restorePayload.state.digest,
+      createdByRunId: restorePayload.state.runId,
+    }),
+  );
+
+  assert.equal(planned.status, 200);
+  assert.deepEqual(calls, [
+    "PUT /runs/plan_after_restore/artifacts/tfstate",
+    "POST /runs/plan_after_restore",
+    "GET /runs/plan_after_restore/artifacts/tfplan",
+    "GET /runs/plan_after_restore/artifacts/tfplan-json",
+  ]);
+});
+
+test("OpenTofu runner rejects an immutable Restore StateVersion ref outside its exact state scope", async () => {
+  const state = new HookedR2Bucket();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  let containerCalls = 0;
+  const runner = runnerWithContainer(
+    new FakeR2Bucket(),
+    {
+      async containerFetch() {
+        containerCalls += 1;
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      },
+    },
+    { stateBucket: state },
+  );
+  const restored = await runner.fetch(
+    restoreRequest("restore_scope_jail", source),
+  );
+  assert.equal(restored.status, 200);
+  const restorePayload = (await restored.json()) as {
+    state: { stateRef: string; digest: string; runId: string };
+  };
+  const exactObject = await state.get(restorePayload.state.stateRef);
+  assert.ok(exactObject);
+  const crossWorkspaceRef = restorePayload.state.stateRef.replace(
+    "workspaces/space_1/",
+    "workspaces/space_2/",
+  );
+  await state.put(crossWorkspaceRef, await exactObject.arrayBuffer(), {
+    httpMetadata: { contentType: "application/octet-stream" },
+    customMetadata: exactObject.customMetadata,
+  });
+
+  const planned = await runner.fetch(
+    planRequestWithPriorState("plan_cross_scope_restore", {
+      generation: 2,
+      stateRef: crossWorkspaceRef,
+      digest: restorePayload.state.digest,
+      createdByRunId: restorePayload.state.runId,
+    }),
+  );
+
+  assert.equal(planned.status, 500);
+  assert.equal(containerCalls, 0);
+});
+
+test("OpenTofu runner Restore stops after the exact source read when its request is aborted", async () => {
+  const controller = new AbortController();
+  const state = new HookedR2Bucket();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  state.afterGet = (key) => {
+    if (key === source.stateRef) controller.abort("capsule lease lost");
+  };
+  const runner = restoreRunner(state);
+
+  const response = await runner.fetch(
+    restoreRequest("restore_abort_after_read", source, controller.signal),
+  );
+
+  assert.notEqual(response.status, 200);
+  assert.equal(state.body(RESTORE_TARGET_KEY), undefined);
+  assert.equal(state.body(RESTORE_CURRENT_KEY), undefined);
+  assert.deepEqual(state.restoreStageKeys(), []);
+});
+
+test("OpenTofu runner Restore does not retry an R2 state write after abort", async () => {
+  const controller = new AbortController();
+  const state = new HookedR2Bucket();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  state.beforePut = (key) => {
+    if (!isRestoreStateWrite(key)) return;
+    controller.abort("capsule lease lost");
+    throw new Error("internal error after lease loss");
+  };
+  const runner = restoreRunner(state);
+
+  const response = await runner.fetch(
+    restoreRequest("restore_abort_during_put", source, controller.signal),
+  );
+
+  assert.notEqual(response.status, 200);
+  assert.equal(state.restoreStatePutAttempts, 1);
+  assert.equal(state.body(RESTORE_TARGET_KEY), undefined);
+  assert.equal(state.body(RESTORE_CURRENT_KEY), undefined);
+});
+
+test("OpenTofu runner Restore leaves a late-completing aborted state stage harmless", async () => {
+  const controller = new AbortController();
+  const state = new HookedR2Bucket();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const statePutGate = deferredGate();
+  state.beforePut = async (key) => {
+    if (!isRestoreStateWrite(key)) return;
+    statePutGate.enter();
+    await statePutGate.wait;
+  };
+  const runner = restoreRunner(state);
+
+  const pending = runner.fetch(
+    restoreRequest("restore_abort_late_stage", source, controller.signal),
+  );
+  await statePutGate.entered;
+  controller.abort("capsule lease lost");
+  statePutGate.release();
+  const response = await pending;
+
+  assert.notEqual(response.status, 200);
+  assert.equal(state.restoreStatePutAttempts, 1);
+  assert.equal(state.body(RESTORE_TARGET_KEY), undefined);
+  assert.equal(state.body(RESTORE_CURRENT_KEY), undefined);
+  assert.equal(state.restoreStageKeys().length, 1);
+});
+
+test("OpenTofu runner Restore checks abort after the state write and before DO authority commit", async () => {
+  const controller = new AbortController();
+  const state = new HookedR2Bucket();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  state.afterPut = (key) => {
+    if (key.includes("/restore-operations/")) {
+      controller.abort("capsule lease lost");
+    }
+  };
+  const runner = restoreRunner(state);
+
+  const response = await runner.fetch(
+    restoreRequest("restore_abort_before_pointer", source, controller.signal),
+  );
+
+  assert.notEqual(response.status, 200);
+  assert.equal(state.body(RESTORE_CURRENT_KEY), undefined);
+});
+
+test("OpenTofu runner Restore keeps the prior ack when a stale PUT lands after an aborted successor claim", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const priorSource = await seedRestoreSource(state, 1, STATE_BYTES);
+  const successorSource = await seedRestoreSource(state, 0, UPDATED_STATE_BYTES);
+  const runner = restoreRunner(state, storage);
+  const priorResponse = await runner.fetch(
+    restoreRequest("restore_prior", priorSource),
+  );
+  assert.equal(priorResponse.status, 200);
+  const priorPayload = (await priorResponse.json()) as {
+    state: {
+      stateRef: string;
+      restoreAuthority: { version: number; fence: number };
+    };
+  };
+  const oldPutGate = deferredGate();
+  state.beforePut = async (key, options) => {
+    if (
+      key.includes("/restore-operations/") &&
+      options?.customMetadata?.["takosumi-run-id"] === "restore_old"
+    ) {
+      oldPutGate.enter();
+      await oldPutGate.wait;
+    }
+  };
+
+  const old = runner.fetch(restoreRequest("restore_old", priorSource));
+  await oldPutGate.entered;
+
+  const successorController = new AbortController();
+  state.afterGet = (key) => {
+    if (key === successorSource.stateRef) {
+      successorController.abort("successor lease lost");
+    }
+  };
+  const successor = await runner.fetch(
+    restoreRequest(
+      "restore_successor",
+      successorSource,
+      successorController.signal,
+    ),
+  );
+  assert.notEqual(successor.status, 200);
+
+  oldPutGate.release();
+  const oldResponse = await old;
+  assert.notEqual(oldResponse.status, 200);
+
+  const authority = storage.valueByPrefix(
+    "runner-restore-authority@v2:",
+  ) as {
+    nextFence: number;
+    claimant: { runId: string; phase: string; fence: number };
+    lastCommitted: { runId: string; stateRef: string; version: number };
+  };
+  assert.equal(authority.nextFence, 3);
+  assert.equal(authority.claimant.runId, "restore_successor");
+  assert.equal(authority.claimant.phase, "abandoned");
+  assert.equal(authority.claimant.fence, 3);
+  assert.equal(authority.lastCommitted.runId, "restore_prior");
+  assert.equal(authority.lastCommitted.stateRef, priorPayload.state.stateRef);
+  assert.equal(authority.lastCommitted.version, 1);
+  assert.equal(priorPayload.state.restoreAuthority.version, 1);
+  assert.equal(priorPayload.state.restoreAuthority.fence, 1);
+  assert.ok(state.body(priorPayload.state.stateRef));
+  assert.equal(state.body(RESTORE_TARGET_KEY), undefined);
+  assert.equal(state.body(RESTORE_CURRENT_KEY), undefined);
+  assert.equal(state.restoreStageKeys().length, 2);
+});
+
+test("OpenTofu runner Restore refuses a committed ack after a successor claim reenters before response", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const oldSource = await seedRestoreSource(state, 1, STATE_BYTES);
+  const successorSource = await seedRestoreSource(state, 0, UPDATED_STATE_BYTES);
+  const runner = restoreRunner(state, storage);
+  const successorController = new AbortController();
+  state.afterGet = (key) => {
+    if (key === successorSource.stateRef) {
+      successorController.abort("successor lease lost");
+    }
+  };
+  let successorResponse: Response | undefined;
+  state.afterHead = async (_key, object) => {
+    if (
+      successorResponse ||
+      object?.customMetadata?.["takosumi-run-id"] !== "restore_old_ack"
+    ) {
+      return;
+    }
+    state.afterHead = undefined;
+    successorResponse = await runner.fetch(
+      restoreRequest(
+        "restore_successor_ack",
+        successorSource,
+        successorController.signal,
+      ),
+    );
+  };
+
+  const oldResponse = await runner.fetch(
+    restoreRequest("restore_old_ack", oldSource),
+  );
+
+  assert.ok(successorResponse);
+  assert.notEqual(successorResponse.status, 200);
+  assert.notEqual(oldResponse.status, 200);
+  const authority = storage.valueByPrefix(
+    "runner-restore-authority@v2:",
+  ) as {
+    nextFence: number;
+    claimant: { runId: string; phase: string; fence: number };
+    lastCommitted: { runId: string; version: number; stateRef: string };
+  };
+  assert.equal(authority.nextFence, 2);
+  assert.equal(authority.claimant.runId, "restore_successor_ack");
+  assert.equal(authority.claimant.phase, "abandoned");
+  assert.equal(authority.claimant.fence, 2);
+  assert.equal(authority.lastCommitted.runId, "restore_old_ack");
+  assert.equal(authority.lastCommitted.version, 1);
+  assert.ok(state.body(authority.lastCommitted.stateRef));
+  assert.equal(state.body(RESTORE_TARGET_KEY), undefined);
+  assert.equal(state.body(RESTORE_CURRENT_KEY), undefined);
+});
+
+test("OpenTofu runner Restore replays the exact committed DO acknowledgement", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const runner = restoreRunner(state, storage);
+
+  const first = await runner.fetch(restoreRequest("restore_replay", source));
+  const second = await runner.fetch(restoreRequest("restore_replay", source));
+
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  const firstPayload = (await first.json()) as { state: unknown };
+  const secondPayload = (await second.json()) as { state: unknown };
+  assert.deepEqual(secondPayload.state, firstPayload.state);
+  assert.equal(state.restoreStageKeys().length, 1);
+  const authority = storage.valueByPrefix(
+    "runner-restore-authority@v2:",
+  ) as { nextFence: number };
+  assert.equal(authority.nextFence, 1);
+});
+
+test("OpenTofu runner Restore rolls back a partial DO acknowledgement transaction", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  // Claim writes authority + collection record. Fail the second commit write
+  // after the tentative authority update; the explicit transaction must roll
+  // both back before abandonment is recorded.
+  storage.failPutBeforeCommit(4);
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const runner = restoreRunner(state, storage);
+
+  const failed = await runner.fetch(
+    restoreRequest("restore_ack_transaction_failure", source),
+  );
+
+  assert.notEqual(failed.status, 200);
+  const failedAuthority = storage.valueByPrefix(
+    "runner-restore-authority@v2:",
+  ) as {
+    claimant: { phase: string; fence: number };
+    lastCommitted?: unknown;
+  };
+  assert.equal(failedAuthority.claimant.phase, "abandoned");
+  assert.equal(failedAuthority.claimant.fence, 1);
+  assert.equal(failedAuthority.lastCommitted, undefined);
+
+  const successor = await runner.fetch(
+    restoreRequest("restore_after_ack_transaction_failure", source),
+  );
+  assert.equal(successor.status, 200);
+  const payload = (await successor.json()) as {
+    state: { restoreAuthority: { version: number; fence: number } };
+  };
+  assert.equal(payload.state.restoreAuthority.version, 1);
+  assert.equal(payload.state.restoreAuthority.fence, 2);
+});
+
+test("OpenTofu runner production export owns the Restore collection alarm handler", () => {
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      OpenTofuRunnerObject.prototype,
+      "alarm",
+    ),
+    true,
+  );
+  assert.equal(typeof OpenTofuRunnerObject.prototype.alarm, "function");
+  assert.equal(
+    typeof restoreRunner(new HookedR2Bucket()).alarm,
+    "function",
+  );
+});
+
+test("OpenTofu runner Restore alarm cannot collect the current claimant during upload", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const ledger = new FakeRestoreLedgerDatabase();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const putGate = deferredGate();
+  state.beforePut = async (key, options) => {
+    if (
+      key.includes("/restore-operations/") &&
+      options?.customMetadata?.["takosumi-run-id"] === "restore_alarm_race"
+    ) {
+      putGate.enter();
+      await putGate.wait;
+    }
+  };
+  ledger.setRunStatus("restore_alarm_race", "running");
+  const runner = restoreRunner(state, storage, ledger);
+  const pending = runner.fetch(restoreRequest("restore_alarm_race", source));
+  await putGate.entered;
+  storage.makeRestoreStagesDue();
+
+  await runner.alarm();
+
+  assert.equal(storage.restoreStageTrackingCount(), 1);
+  assert.equal(state.restoreStageKeys().length, 0);
+  putGate.release();
+  const response = await pending;
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as { state: { stateRef: string } };
+  assert.ok(state.body(payload.state.stateRef));
+});
+
+test("OpenTofu runner Restore collector delegates to the Containers runtime alarm handler", async () => {
+  const source = await Bun.file(
+    new URL(
+      "../../../../worker/src/durable/OpenTofuRunnerObject.ts",
+      import.meta.url,
+    ),
+  ).text();
+
+  assert.match(
+    source,
+    /async alarm\(alarmProps\?: unknown\)[\s\S]*?await super\.alarm\(alarmProps\)/u,
+  );
+});
+
+test("OpenTofu runner Restore collector deletes a crashed current claimant only after its Run is terminal non-committing", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const ledger = new FakeRestoreLedgerDatabase();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const stagePutGate = deferredGate();
+  state.afterPut = async (key, options) => {
+    if (
+      key.includes("/restore-operations/") &&
+      options?.customMetadata?.["takosumi-run-id"] ===
+        "restore_crashed_claim"
+    ) {
+      stagePutGate.enter();
+      await stagePutGate.wait;
+    }
+  };
+  ledger.setRunStatus("restore_crashed_claim", "failed");
+  const runner = restoreRunner(state, storage, ledger);
+  const pending = runner.fetch(
+    restoreRequest("restore_crashed_claim", source),
+  );
+  await stagePutGate.entered;
+  assert.equal(state.restoreStageKeys().length, 1);
+  assert.equal(storage.restoreStageTrackingCount(), 1);
+  storage.makeRestoreStagesDue();
+
+  await runner.alarm();
+
+  assert.equal(state.restoreStageKeys().length, 0);
+  assert.equal(storage.restoreStageTrackingCount(), 0);
+  stagePutGate.release();
+  const response = await pending;
+  assert.notEqual(response.status, 200);
+});
+
+test("OpenTofu runner Restore collector preserves a referenced pending stage when its authority record is missing", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const ledger = new FakeRestoreLedgerDatabase();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const controller = new AbortController();
+  state.afterPut = (key) => {
+    if (key.includes("/restore-operations/")) {
+      controller.abort("lease lost after immutable upload");
+    }
+  };
+  const runner = restoreRunner(state, storage, ledger);
+  const response = await runner.fetch(
+    restoreRequest("restore_missing_authority", source, controller.signal),
+  );
+  assert.notEqual(response.status, 200);
+  const stage = storage.valueByPrefix("runner-restore-stage@v1:") as {
+    stateRef: string;
+    runId: string;
+  };
+  assert.ok(state.body(stage.stateRef));
+  storage.deleteByPrefix("runner-restore-authority@v2:");
+  ledger.referenceState(stage.stateRef, stage.runId);
+  storage.makeRestoreStagesDue();
+
+  await runner.alarm();
+
+  assert.ok(state.body(stage.stateRef));
+  assert.equal(storage.restoreStageTrackingCount(), 0);
+  assert.equal(ledger.queryCount, 1);
+});
+
+test("OpenTofu runner Restore collector retains malformed pending authority when the ledger is unavailable", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const ledger = new FakeRestoreLedgerDatabase();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const controller = new AbortController();
+  state.afterPut = (key) => {
+    if (key.includes("/restore-operations/")) {
+      controller.abort("lease lost after immutable upload");
+    }
+  };
+  const runner = restoreRunner(state, storage, ledger);
+  const response = await runner.fetch(
+    restoreRequest("restore_malformed_authority", source, controller.signal),
+  );
+  assert.notEqual(response.status, 200);
+  const stage = storage.valueByPrefix("runner-restore-stage@v1:") as {
+    stateRef: string;
+  };
+  storage.replaceValueByPrefix("runner-restore-authority@v2:", {
+    kind: "malformed",
+  });
+  ledger.unavailable = true;
+  storage.makeRestoreStagesDue();
+
+  await runner.alarm();
+
+  assert.ok(state.body(stage.stateRef));
+  assert.equal(storage.restoreStageTrackingCount(), 1);
+  assert.ok((await storage.getAlarm()) !== null);
+  assert.equal(ledger.queryCount, 1);
+});
+
+test("OpenTofu runner Restore collector checks the exact ledger reference for a stale pending claimant", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const ledger = new FakeRestoreLedgerDatabase();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const controller = new AbortController();
+  state.afterPut = (key) => {
+    if (key.includes("/restore-operations/")) {
+      controller.abort("lease lost after immutable upload");
+    }
+  };
+  const runner = restoreRunner(state, storage, ledger);
+  const response = await runner.fetch(
+    restoreRequest("restore_stale_authority", source, controller.signal),
+  );
+  assert.notEqual(response.status, 200);
+  const stage = storage.valueByPrefix("runner-restore-stage@v1:") as {
+    stateRef: string;
+    runId: string;
+  };
+  const authority = storage.valueByPrefix(
+    "runner-restore-authority@v2:",
+  ) as {
+    nextFence: number;
+    claimant: Record<string, unknown>;
+  };
+  storage.replaceValueByPrefix("runner-restore-authority@v2:", {
+    ...authority,
+    nextFence: authority.nextFence + 1,
+    claimant: {
+      ...authority.claimant,
+      fence: authority.nextFence + 1,
+      operationId: "00000002-aaaaaaaaaaaaaaaaaaaaaaaa",
+      runId: "restore_newer_claimant",
+      stageStateRef: `${RESTORE_STATE_PREFIX}/restore-operations/00000002-aaaaaaaaaaaaaaaaaaaaaaaa.tfstate.enc`,
+      phase: "abandoned",
+    },
+  });
+  ledger.referenceState(stage.stateRef, stage.runId);
+  storage.makeRestoreStagesDue();
+
+  await runner.alarm();
+
+  assert.ok(state.body(stage.stateRef));
+  assert.equal(storage.restoreStageTrackingCount(), 0);
+  assert.equal(ledger.queryCount, 1);
+});
+
+test("OpenTofu runner Restore collector HEAD-verifies an authority-uncertain stage after terminal ledger proof", async () => {
+  const state = new HeadObservedR2Bucket();
+  const storage = new FakeDoStorage();
+  const ledger = new FakeRestoreLedgerDatabase();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const controller = new AbortController();
+  state.afterPut = (key) => {
+    if (key.includes("/restore-operations/")) {
+      controller.abort("lease lost after immutable upload");
+    }
+  };
+  const runner = restoreRunner(state, storage, ledger);
+  const response = await runner.fetch(
+    restoreRequest("restore_missing_authority_failed", source, controller.signal),
+  );
+  assert.notEqual(response.status, 200);
+  const stage = storage.valueByPrefix("runner-restore-stage@v1:") as {
+    stateRef: string;
+    runId: string;
+  };
+  storage.deleteByPrefix("runner-restore-authority@v2:");
+  ledger.setRunStatus(stage.runId, "failed");
+  storage.makeRestoreStagesDue();
+  state.resetEvents();
+
+  await runner.alarm();
+
+  assert.deepEqual(state.events, [
+    `head:${stage.stateRef}`,
+    `delete:${stage.stateRef}`,
+    `head:${stage.stateRef}`,
+  ]);
+  assert.equal(ledger.queryCount, 1);
+  assert.equal(storage.restoreStageTrackingCount(), 0);
+});
+
+test("OpenTofu runner Restore collector preserves exact StateVersion references and drops tracking", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const ledger = new FakeRestoreLedgerDatabase();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const runner = restoreRunner(state, storage, ledger);
+  const response = await runner.fetch(
+    restoreRequest("restore_referenced", source),
+  );
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as {
+    state: { stateRef: string; runId: string };
+  };
+  ledger.referenceState(payload.state.stateRef, payload.state.runId);
+  storage.makeRestoreStagesDue();
+
+  await runner.alarm();
+
+  assert.ok(state.body(payload.state.stateRef));
+  assert.equal(storage.restoreStageTrackingCount(), 0);
+});
+
+test("OpenTofu runner Restore collector lets a core StateVersion commit race an acknowledged-stage alarm", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const ledger = new FakeRestoreLedgerDatabase();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const runner = restoreRunner(state, storage, ledger);
+  const response = await runner.fetch(
+    restoreRequest("restore_commit_race", source),
+  );
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as {
+    state: { stateRef: string; runId: string };
+  };
+  ledger.setRunStatus(payload.state.runId, "running");
+  storage.makeRestoreStagesDue();
+
+  await runner.alarm();
+
+  assert.ok(state.body(payload.state.stateRef));
+  assert.equal(storage.restoreStageTrackingCount(), 1);
+  ledger.referenceState(payload.state.stateRef, payload.state.runId);
+  storage.makeRestoreStagesDue();
+  await runner.alarm();
+  assert.ok(state.body(payload.state.stateRef));
+  assert.equal(storage.restoreStageTrackingCount(), 0);
+});
+
+test("OpenTofu runner Restore collector deletes an unreferenced failed Run ack", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const ledger = new FakeRestoreLedgerDatabase();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const runner = restoreRunner(state, storage, ledger);
+  const response = await runner.fetch(
+    restoreRequest("restore_failed_orphan", source),
+  );
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as {
+    state: { stateRef: string; runId: string };
+  };
+  ledger.referenceState(payload.state.stateRef, "different_restore_run");
+  ledger.setRunStatus(payload.state.runId, "failed");
+  storage.makeRestoreStagesDue();
+
+  await runner.alarm();
+
+  assert.equal(state.body(payload.state.stateRef), undefined);
+  assert.equal(storage.restoreStageTrackingCount(), 0);
+});
+
+test("OpenTofu runner Restore collector retains succeeded-missing and DB-unavailable acknowledgements", async () => {
+  for (const scenario of ["succeeded", "unavailable"] as const) {
+    const state = new HookedR2Bucket();
+    const storage = new FakeDoStorage();
+    const ledger = new FakeRestoreLedgerDatabase();
+    const source = await seedRestoreSource(state, 1, STATE_BYTES);
+    const runId = `restore_retained_${scenario}`;
+    const runner = restoreRunner(state, storage, ledger);
+    const response = await runner.fetch(restoreRequest(runId, source));
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as {
+      state: { stateRef: string; runId: string };
+    };
+    if (scenario === "unavailable") ledger.unavailable = true;
+    else ledger.setRunStatus(payload.state.runId, "succeeded");
+    storage.makeRestoreStagesDue();
+
+    await runner.alarm();
+
+    assert.ok(state.body(payload.state.stateRef), scenario);
+    assert.equal(storage.restoreStageTrackingCount(), 1, scenario);
+    assert.ok((await storage.getAlarm()) !== null, scenario);
+  }
+});
+
+test("OpenTofu runner Restore collector bounds each alarm and resumes later stages", async () => {
+  const state = new HookedR2Bucket();
+  const storage = new FakeDoStorage();
+  const ledger = new FakeRestoreLedgerDatabase();
+  const source = await seedRestoreSource(state, 1, STATE_BYTES);
+  const runner = restoreRunner(state, storage, ledger);
+  const controllers = new Map<string, AbortController>();
+  state.afterPut = (key, options) => {
+    if (!key.includes("/restore-operations/")) return;
+    const runId = options?.customMetadata?.["takosumi-run-id"];
+    if (runId) controllers.get(runId)?.abort("lease lost after upload");
+  };
+  for (let index = 0; index < 17; index += 1) {
+    const runId = `restore_collect_${String(index).padStart(2, "0")}`;
+    ledger.setRunStatus(runId, "failed");
+    const controller = new AbortController();
+    controllers.set(runId, controller);
+    const response = await runner.fetch(
+      restoreRequest(runId, source, controller.signal),
+    );
+    assert.notEqual(response.status, 200);
+  }
+  assert.equal(state.restoreStageKeys().length, 17);
+  assert.equal(storage.restoreStageTrackingCount(), 17);
+  storage.makeRestoreStagesDue();
+
+  await runner.alarm();
+
+  assert.equal(state.restoreStageKeys().length, 1);
+  assert.equal(storage.restoreStageTrackingCount(), 1);
+  await runner.alarm();
+  assert.equal(state.restoreStageKeys().length, 0);
+  assert.equal(storage.restoreStageTrackingCount(), 0);
 });
 
 test("OpenTofu runner Durable Object uses the configured R2 bucket name in artifact refs", async () => {
@@ -3167,6 +4252,181 @@ async function testStateBackendPrefix(ref: string): Promise<string> {
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
   return `opentofu-state/backends/${hex}`;
+}
+
+function restoreTestCrypto(): StateArtifactCrypto {
+  return StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+}
+
+async function seedRestoreSource(
+  state: FakeR2Bucket,
+  generation: number,
+  plaintext: Uint8Array,
+): Promise<RestoreSourceDescriptor> {
+  const stateRef = `${RESTORE_STATE_PREFIX}/${String(generation).padStart(
+    8,
+    "0",
+  )}.tfstate.enc`;
+  const sealed = await restoreTestCrypto().seal(plaintext);
+  const createdByRunId = `apply_source_${generation}`;
+  await state.put(stateRef, sealed.ciphertext, {
+    httpMetadata: { contentType: "application/octet-stream" },
+    customMetadata: {
+      "takosumi-run-id": createdByRunId,
+      "takosumi-action": "apply",
+      "takosumi-content-digest": sealed.contentDigest,
+      "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+      "takosumi-encryption-format": sealed.format,
+      "takosumi-generation": String(generation),
+      "takosumi-workspace-id": "space_1",
+      "takosumi-capsule-id": "inst_1",
+      "takosumi-environment": "production",
+      "takosumi-logical-target-state-ref": stateRef,
+    },
+  });
+  return {
+    stateVersionId: await testStateVersionIdForApplyRun(createdByRunId),
+    workspaceId: "space_1",
+    capsuleId: "inst_1",
+    environment: "production",
+    generation,
+    stateRef,
+    digest: sealed.contentDigest,
+    createdByRunId,
+  };
+}
+
+async function testStateVersionIdForApplyRun(
+  applyRunId: string,
+): Promise<string> {
+  const digest = await stableJsonDigest({
+    kind: "takosumi.state-version-id@v1",
+    applyRunId,
+  });
+  return `state_${digest.slice("sha256:".length)}`;
+}
+
+function restoreRequest(
+  runId: string,
+  source: Readonly<Record<string, unknown>> | RestoreSourceDescriptor,
+  signal?: AbortSignal,
+  target: {
+    readonly workspaceId?: string;
+    readonly capsuleId?: string;
+    readonly environment?: string;
+    readonly generation?: number;
+  } = {},
+): Request {
+  const workspaceId = target.workspaceId ?? "space_1";
+  const capsuleId = target.capsuleId ?? "inst_1";
+  const environment = target.environment ?? "production";
+  const generation = target.generation ?? 2;
+  const targetStateRef = `workspaces/${workspaceId}/capsules/${capsuleId}/environments/${environment}/state-versions/${String(
+    generation,
+  ).padStart(8, "0")}.tfstate.enc`;
+  return new Request(`https://runner/runs/${encodeURIComponent(runId)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run@v1",
+      action: "restore",
+      runId,
+      request: {
+        stateScope: {
+          workspaceId,
+          subject: { kind: "capsule", id: capsuleId },
+          environment,
+          generation,
+          stateRef: targetStateRef,
+        },
+        restoreState: source,
+      },
+    }),
+    ...(signal ? { signal } : {}),
+  });
+}
+
+function planRequestWithPriorState(
+  runId: string,
+  priorState: {
+    readonly generation: number;
+    readonly stateRef: string;
+    readonly digest: string;
+    readonly createdByRunId: string;
+  },
+): Request {
+  return new Request(`https://runner/runs/${encodeURIComponent(runId)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run@v1",
+      action: "plan",
+      runId,
+      request: {
+        stateScope: {
+          workspaceId: "space_1",
+          subject: { kind: "capsule", id: "inst_1" },
+          environment: "production",
+          generation: 2,
+          stateRef: RESTORE_TARGET_KEY,
+          priorState,
+        },
+      },
+    }),
+  });
+}
+
+function restoreRunner(
+  state: R2Bucket,
+  storage = new FakeDoStorage(),
+  controlDb?: D1Database,
+): OpenTofuRunnerObject {
+  return runnerWithContainer(
+    new FakeR2Bucket(),
+    {
+      async containerFetch() {
+        return Response.json(
+          { error: "restore should not reach container" },
+          { status: 500 },
+        );
+      },
+    },
+    {
+      stateBucket: state,
+      storage,
+      ...(controlDb
+        ? { env: { TAKOSUMI_CONTROL_DB: controlDb } }
+        : {}),
+    },
+  );
+}
+
+function isRestoreStateWrite(key: string): boolean {
+  return (
+    key === RESTORE_TARGET_KEY || key.includes("/restore-operations/")
+  );
+}
+
+function deferredGate(): {
+  readonly entered: Promise<void>;
+  readonly enter: () => void;
+  readonly wait: Promise<void>;
+  readonly release: () => void;
+} {
+  let enter!: () => void;
+  let release!: () => void;
+  return {
+    entered: new Promise<void>((resolve) => {
+      enter = resolve;
+    }),
+    enter: () => enter(),
+    wait: new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+    release: () => release(),
+  };
 }
 
 // At-rest encryption (M2) requires a secret-store passphrase; supply a fixed one
@@ -3606,7 +4866,9 @@ function assertReleaseIndeterminateResponse(text: string): void {
 
 class FakeDoStorage {
   #values = new Map<string, unknown>();
+  #alarm: number | null = null;
   #putCalls = 0;
+  #transactionTail: Promise<void> = Promise.resolve();
   readonly #putFailuresBeforeCommit = new Set<number>();
   readonly #putFailuresAfterCommit = new Set<number>();
   #nextGetGate:
@@ -3646,8 +4908,137 @@ class FakeDoStorage {
     return Promise.resolve(this.#values.delete(key));
   }
 
+  list<T = unknown>(options: {
+    readonly prefix?: string;
+    readonly limit?: number;
+    readonly startAfter?: string;
+  } = {}): Promise<Map<string, T>> {
+    const entries = Array.from(this.#values.entries())
+      .filter(
+        ([key]) =>
+          (!options.prefix || key.startsWith(options.prefix)) &&
+          (!options.startAfter || key > options.startAfter),
+      )
+      .sort(([left], [right]) => left.localeCompare(right))
+      .slice(0, options.limit);
+    return Promise.resolve(new Map(entries) as Map<string, T>);
+  }
+
+  async transaction<T>(
+    callback: (transaction: {
+      get<V = unknown>(key: string): Promise<V | undefined>;
+      put<V = unknown>(key: string, value: V): Promise<void>;
+      delete(key: string): Promise<boolean>;
+      getAlarm(): Promise<number | null>;
+      setAlarm(scheduledTime: number | Date): Promise<void>;
+    }) => Promise<T>,
+  ): Promise<T> {
+    const previous = this.#transactionTail;
+    let release!: () => void;
+    this.#transactionTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    const values = new Map(this.#values);
+    let alarm = this.#alarm;
+    let failAfterCommit = false;
+    const transaction = {
+      get: <V = unknown>(key: string): Promise<V | undefined> =>
+        Promise.resolve(values.get(key) as V | undefined),
+      put: <V = unknown>(key: string, value: V): Promise<void> => {
+        this.#putCalls += 1;
+        if (this.#putFailuresBeforeCommit.delete(this.#putCalls)) {
+          return Promise.reject(
+            new Error("simulated Durable Object storage pre-commit failure"),
+          );
+        }
+        values.set(key, value);
+        if (this.#putFailuresAfterCommit.delete(this.#putCalls)) {
+          failAfterCommit = true;
+        }
+        return Promise.resolve();
+      },
+      delete: (key: string): Promise<boolean> =>
+        Promise.resolve(values.delete(key)),
+      getAlarm: (): Promise<number | null> => Promise.resolve(alarm),
+      setAlarm: (scheduledTime: number | Date): Promise<void> => {
+        alarm =
+          scheduledTime instanceof Date
+            ? scheduledTime.getTime()
+            : scheduledTime;
+        return Promise.resolve();
+      },
+    };
+    try {
+      const result = await callback(transaction);
+      this.#values = values;
+      this.#alarm = alarm;
+      if (failAfterCommit) {
+        throw new Error(
+          "simulated Durable Object storage acknowledgement loss",
+        );
+      }
+      return result;
+    } finally {
+      release();
+    }
+  }
+
+  getAlarm(): Promise<number | null> {
+    return Promise.resolve(this.#alarm);
+  }
+
+  setAlarm(scheduledTime: number | Date): Promise<void> {
+    this.#alarm =
+      scheduledTime instanceof Date ? scheduledTime.getTime() : scheduledTime;
+    return Promise.resolve();
+  }
+
   entries(): readonly (readonly [string, unknown])[] {
     return Array.from(this.#values.entries());
+  }
+
+  valueByPrefix(prefix: string): unknown {
+    const matches = Array.from(this.#values.entries()).filter(([key]) =>
+      key.startsWith(prefix),
+    );
+    assert.equal(matches.length, 1);
+    return matches[0]![1];
+  }
+
+  deleteByPrefix(prefix: string): void {
+    const matches = Array.from(this.#values.keys()).filter((key) =>
+      key.startsWith(prefix),
+    );
+    assert.equal(matches.length, 1);
+    this.#values.delete(matches[0]!);
+  }
+
+  replaceValueByPrefix(prefix: string, value: unknown): void {
+    const matches = Array.from(this.#values.keys()).filter((key) =>
+      key.startsWith(prefix),
+    );
+    assert.equal(matches.length, 1);
+    this.#values.set(matches[0]!, value);
+  }
+
+  makeRestoreStagesDue(now = Date.now()): void {
+    for (const [key, raw] of this.#values) {
+      if (
+        !key.startsWith("runner-restore-stage@v1:") ||
+        typeof raw !== "object" ||
+        raw === null
+      ) {
+        continue;
+      }
+      this.#values.set(key, { ...raw, collectAfter: now - 1 });
+    }
+  }
+
+  restoreStageTrackingCount(): number {
+    return Array.from(this.#values.keys()).filter((key) =>
+      key.startsWith("runner-restore-stage@v1:"),
+    ).length;
   }
 
   failPutAfterCommit(call: number): void {
@@ -3678,16 +5069,150 @@ class FakeDoStorage {
   }
 }
 
+class FakeRestoreLedgerDatabase implements D1Database {
+  readonly #stateVersions = new Map<string, string>();
+  readonly #exactStateVersions = new Map<string, RestoreSourceDescriptor>();
+  readonly #runStatuses = new Map<string, string>();
+  unavailable = false;
+  queryCount = 0;
+  sourceQueryCount = 0;
+  exactStateVersionCountOverride: unknown | undefined;
+
+  referenceState(stateRef: string, runId: string): void {
+    this.#stateVersions.set(stateRef, runId);
+  }
+
+  referenceExactStateVersion(source: RestoreSourceDescriptor): void {
+    this.#exactStateVersions.set(source.stateVersionId, source);
+  }
+
+  setRunStatus(runId: string, status: string): void {
+    this.#runStatuses.set(runId, status);
+  }
+
+  prepare(query: string): D1PreparedStatement {
+    assert.match(query, /from state_versions/u);
+    if (!query.includes("exact_state_version_count")) {
+      assert.match(query, /from runs/u);
+    }
+    return new FakeRestoreLedgerStatement(this, query, []);
+  }
+
+  batch<T = unknown>(
+    _statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    throw new Error("batch is not used by Restore stage collection");
+  }
+
+  result(query: string, values: readonly unknown[]): unknown {
+    if (query.includes("exact_state_version_count")) {
+      this.sourceQueryCount += 1;
+      if (this.unavailable) throw new Error("simulated D1 unavailable");
+      if (this.exactStateVersionCountOverride !== undefined) {
+        return {
+          exact_state_version_count: this.exactStateVersionCountOverride,
+        };
+      }
+      const [
+        stateVersionId,
+        workspaceId,
+        capsuleId,
+        environment,
+        generation,
+        stateRef,
+        digest,
+        createdByRunId,
+      ] = values;
+      const exact =
+        typeof stateVersionId === "string"
+          ? this.#exactStateVersions.get(stateVersionId)
+          : undefined;
+      return {
+        exact_state_version_count:
+          exact?.workspaceId === workspaceId &&
+            exact.capsuleId === capsuleId &&
+            exact.environment === environment &&
+            exact.generation === generation &&
+            exact.stateRef === stateRef &&
+            exact.digest === digest &&
+            exact.createdByRunId === createdByRunId
+            ? 1
+            : 0,
+      };
+    }
+    this.queryCount += 1;
+    if (this.unavailable) throw new Error("simulated D1 unavailable");
+    const [stateRef, createdByRunId, runId] = values;
+    return {
+      referenced:
+        typeof stateRef === "string" &&
+        typeof createdByRunId === "string" &&
+        this.#stateVersions.get(stateRef) === createdByRunId
+          ? 1
+          : 0,
+      run_status:
+        typeof runId === "string"
+          ? (this.#runStatuses.get(runId) ?? null)
+          : null,
+    };
+  }
+}
+
+class FakeRestoreLedgerStatement implements D1PreparedStatement {
+  constructor(
+    readonly database: FakeRestoreLedgerDatabase,
+    readonly query: string,
+    readonly values: readonly unknown[],
+  ) {}
+
+  bind(...values: readonly unknown[]): D1PreparedStatement {
+    return new FakeRestoreLedgerStatement(this.database, this.query, values);
+  }
+
+  first<T = unknown>(): Promise<T | null> {
+    return Promise.resolve(this.database.result(this.query, this.values) as T);
+  }
+
+  all<T = unknown>(): Promise<D1Result<T>> {
+    throw new Error("all is not used by Restore stage collection");
+  }
+
+  run<T = unknown>(): Promise<D1Result<T>> {
+    throw new Error("run is not used by Restore stage collection");
+  }
+}
+
 class FakeR2Bucket implements R2Bucket {
   readonly #objects = new Map<string, FakeR2ObjectBody>();
+  #nextEtag = 1;
 
   async put(
     key: string,
     value: ReadableStream | ArrayBuffer | ArrayBufferView | string | null,
     options?: R2PutOptions,
-  ): Promise<R2Object> {
+  ): Promise<R2Object | null> {
     const bytes = await bytesFromR2PutValue(value);
-    const object = new FakeR2ObjectBody(key, bytes, options);
+    const existing = this.#objects.get(key);
+    if (
+      options?.onlyIf?.etagMatches !== undefined &&
+      existing?.etag !== options.onlyIf.etagMatches
+    ) {
+      return null;
+    }
+    if (
+      options?.onlyIf?.etagDoesNotMatch !== undefined &&
+      (options.onlyIf.etagDoesNotMatch === "*"
+        ? existing !== undefined
+        : existing?.etag === options.onlyIf.etagDoesNotMatch)
+    ) {
+      return null;
+    }
+    const object = new FakeR2ObjectBody(
+      key,
+      bytes,
+      `etag-${this.#nextEtag++}`,
+      options,
+    );
     this.#objects.set(key, object);
     return object;
   }
@@ -3717,6 +5242,64 @@ class FakeR2Bucket implements R2Bucket {
   body(key: string): Uint8Array | undefined {
     return this.#objects.get(key)?.bytes;
   }
+
+  keys(): readonly string[] {
+    return Array.from(this.#objects.keys());
+  }
+}
+
+class HookedR2Bucket extends FakeR2Bucket {
+  beforePut?: (key: string, options?: R2PutOptions) => void | Promise<void>;
+  afterPut?: (key: string, options?: R2PutOptions) => void | Promise<void>;
+  afterGet?: (key: string) => void | Promise<void>;
+  afterHead?: (key: string, object: R2Object | null) => void | Promise<void>;
+  restoreStatePutAttempts = 0;
+
+  override async put(
+    key: string,
+    value: ReadableStream | ArrayBuffer | ArrayBufferView | string | null,
+    options?: R2PutOptions,
+  ): Promise<R2Object | null> {
+    if (isRestoreStateWrite(key)) this.restoreStatePutAttempts += 1;
+    await this.beforePut?.(key, options);
+    const result = await super.put(key, value, options);
+    await this.afterPut?.(key, options);
+    return result;
+  }
+
+  override async get(key: string): Promise<R2ObjectBody | null> {
+    const result = await super.get(key);
+    await this.afterGet?.(key);
+    return result;
+  }
+
+  override async head(key: string): Promise<R2Object | null> {
+    const result = await super.head(key);
+    await this.afterHead?.(key, result);
+    return result;
+  }
+
+  restoreStageKeys(): readonly string[] {
+    return this.keys().filter((key) => key.includes("/restore-operations/"));
+  }
+}
+
+class HeadObservedR2Bucket extends HookedR2Bucket {
+  readonly events: string[] = [];
+
+  override async head(key: string): Promise<R2Object | null> {
+    this.events.push(`head:${key}`);
+    return await super.head(key);
+  }
+
+  override async delete(key: string): Promise<void> {
+    this.events.push(`delete:${key}`);
+    await super.delete(key);
+  }
+
+  resetEvents(): void {
+    this.events.length = 0;
+  }
 }
 
 class FlakyR2Bucket extends FakeR2Bucket {
@@ -3736,7 +5319,7 @@ class FlakyR2Bucket extends FakeR2Bucket {
     key: string,
     value: ReadableStream | ArrayBuffer | ArrayBufferView | string | null,
     options?: R2PutOptions,
-  ): Promise<R2Object> {
+  ): Promise<R2Object | null> {
     const attempts = (this.#attempts.get(key) ?? 0) + 1;
     this.#attempts.set(key, attempts);
     if (key === this.options.failKey && attempts <= this.options.failTimes) {
@@ -3762,7 +5345,6 @@ class FailingR2Bucket extends FakeR2Bucket {
 
 class FakeR2ObjectBody implements R2ObjectBody {
   readonly size: number;
-  readonly etag = "etag";
   readonly uploaded = new Date("2026-06-03T00:00:00.000Z");
   readonly httpMetadata?: R2Object["httpMetadata"];
   readonly customMetadata?: Record<string, string>;
@@ -3770,6 +5352,7 @@ class FakeR2ObjectBody implements R2ObjectBody {
   constructor(
     readonly key: string,
     readonly bytes: Uint8Array,
+    readonly etag: string,
     options?: R2PutOptions,
   ) {
     this.size = bytes.byteLength;

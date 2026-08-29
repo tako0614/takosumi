@@ -412,6 +412,68 @@ export async function handleWorkspaces(
       if (method !== "GET") return methodNotAllowed("GET");
       return await workspaceActivity(operations, workspaceId, url);
     }
+    if (
+      leaf === "interface-materialization-failures" &&
+      segments.length === 3
+    ) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      const limit = parseLimit(url.searchParams.get("limit"));
+      if (limit === "invalid" || (limit !== undefined && limit > 100)) {
+        return errorJson(
+          "invalid_request",
+          "limit must be an integer from 1 to 100",
+          400,
+        );
+      }
+      return json({
+        failures: await operations.listInterfaceMaterializationFailures(
+          workspaceId,
+          limit ? { limit } : {},
+        ),
+      });
+    }
+    if (
+      leaf === "interface-materialization-failures" &&
+      segments.length === 5 &&
+      segments[4] === "retries"
+    ) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      const intentId = decodeURIComponent(segments[3] ?? "");
+      const body = await readJsonObject(request);
+      const failureDigest = body
+        ? stringValue(body.failureDigest)
+        : undefined;
+      const stateVersionId = body
+        ? stringValue(body.stateVersionId)
+        : undefined;
+      const stateGeneration = body?.stateGeneration;
+      if (
+        !failureDigest ||
+        !stateVersionId ||
+        typeof stateGeneration !== "number" ||
+        !Number.isSafeInteger(stateGeneration) ||
+        stateGeneration < 1 ||
+        Object.keys(body!).some(
+          (key) =>
+            key !== "failureDigest" &&
+            key !== "stateVersionId" &&
+            key !== "stateGeneration",
+        )
+      ) {
+        return errorJson(
+          "invalid_request",
+          "body must contain failureDigest, stateVersionId, and a positive stateGeneration",
+          400,
+        );
+      }
+      return json({
+        retry: await operations.retryInterfaceMaterializationFailure(
+          workspaceId,
+          intentId,
+          { failureDigest, stateVersionId, stateGeneration },
+        ),
+      });
+    }
     if (leaf === "backups" && segments.length === 3) {
       if (method === "GET") {
         const page = parseControlPageParams(url);

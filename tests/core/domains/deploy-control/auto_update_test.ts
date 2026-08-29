@@ -22,7 +22,13 @@ import {
   type OpenTofuSourceSyncJob,
   type OpenTofuSourceSyncResult,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  type CapsulePatch,
+  type CapsuleStateVersionGuard,
+  type UpdateCapsuleLifecycleCommand,
+  type UpdateCapsuleLifecycleResult,
+} from "../../../../core/domains/deploy-control/store.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import type { PlanResourceChange } from "@takosumi/internal/deploy-control-api";
@@ -106,8 +112,60 @@ class FullStubRunner implements OpenTofuRunner {
   }
 }
 
-async function buildActiveCapsule(options: { readonly autoUpdate: boolean }) {
-  const store = new InMemoryOpenTofuControlStore();
+class AutoUpdateClaimBarrierStore extends InMemoryOpenTofuControlStore {
+  claimAttempts = 0;
+  readonly #firstClaimReached: Promise<void>;
+  readonly #releaseClaims: Promise<void>;
+  #resolveFirstClaim!: () => void;
+  #resolveClaims!: () => void;
+
+  constructor() {
+    super();
+    this.#firstClaimReached = new Promise((resolve) => {
+      this.#resolveFirstClaim = resolve;
+    });
+    this.#releaseClaims = new Promise((resolve) => {
+      this.#resolveClaims = resolve;
+    });
+  }
+
+  waitForFirstClaim(): Promise<void> {
+    return this.#firstClaimReached;
+  }
+
+  override async patchCapsule(
+    id: string,
+    patch: CapsulePatch,
+    guard?: CapsuleStateVersionGuard,
+  ) {
+    if (patch.autoUpdateAttemptSourceSnapshotId !== undefined) {
+      await this.#claimBarrier();
+    }
+    return await super.patchCapsule(id, patch, guard);
+  }
+
+  override async updateCapsuleLifecycle(
+    input: UpdateCapsuleLifecycleCommand,
+  ): Promise<UpdateCapsuleLifecycleResult> {
+    if ((input.mutation as { readonly kind: string }).kind === "auto-update-claim") {
+      await this.#claimBarrier();
+    }
+    return await super.updateCapsuleLifecycle(input);
+  }
+
+  async #claimBarrier(): Promise<void> {
+    this.claimAttempts += 1;
+    if (this.claimAttempts === 1) this.#resolveFirstClaim();
+    if (this.claimAttempts === 2) this.#resolveClaims();
+    await this.#releaseClaims;
+  }
+}
+
+async function buildActiveCapsule(options: {
+  readonly autoUpdate: boolean;
+  readonly store?: InMemoryOpenTofuControlStore;
+}) {
+  const store = options.store ?? new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(store, {
     workspaceId: "ws_test001",
     capsuleId: "cap_auto0001",
@@ -283,4 +341,29 @@ test("manual-plan source sync never races an enabled auto-update policy", async 
   expect(
     planRuns.some((candidate) => candidate.autoApplyRequested === true),
   ).toBe(false);
+});
+
+test("two source sync completions create exactly one auto-update claim and Plan", async () => {
+  const store = new AutoUpdateClaimBarrierStore();
+  const { controller, runner, initialPlanCalls } = await buildActiveCapsule({
+    autoUpdate: true,
+    store,
+  });
+  const first = await controller.createSourceSync("src_a");
+  const second = await controller.createSourceSync("src_a");
+
+  const firstCompletion = controller.runQueuedSourceSync(first.run.id);
+  await store.waitForFirstClaim();
+  const secondCompletion = controller.runQueuedSourceSync(second.run.id);
+  await Promise.all([firstCompletion, secondCompletion]);
+
+  expect(store.claimAttempts).toBe(2);
+  const plans = await planRunsOf(controller, store);
+  const autoPlans = plans.filter((run) => run.autoApplyRequested === true);
+  expect(autoPlans).toHaveLength(1);
+  expect(autoPlans[0]?.sourceSnapshotId).toBe(
+    (await store.getCapsule("cap_auto0001"))
+      ?.autoUpdateAttemptSourceSnapshotId,
+  );
+  expect(runner.planCalls).toBe(initialPlanCalls + 1);
 });

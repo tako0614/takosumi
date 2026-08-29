@@ -70,9 +70,38 @@ test("OpenTofu run owner alarm dispatches once and records success", async () =>
   ]);
   const record = await storage.get<Record<string, unknown>>("run");
   assert.equal(record?.status, "succeeded");
+  assert.equal(record?.observedRunStatus, "succeeded");
   assert.equal(record?.attempts, 1);
   assert.equal(storage.alarmAt, undefined);
 });
+
+for (const terminalStatus of [
+  "failed",
+  "cancelled",
+  "expired",
+  "waiting_approval",
+] as const) {
+  test(`OpenTofu run owner records the exact ${terminalStatus} ledger outcome without claiming success`, async () => {
+    const storage = new FakeDoStorage();
+    const owner = new OpenTofuRunOwnerObject(
+      { storage },
+      {} as CloudflareWorkerEnv,
+      {
+        now: () => Date.parse("2026-06-22T08:00:00.000Z"),
+        dispatch: () => Promise.resolve(),
+        readRunStatus: () => Promise.resolve(terminalStatus),
+      },
+    );
+
+    await start(owner, "apply");
+    await owner.alarm();
+
+    const record = await storage.get<Record<string, unknown>>("run");
+    assert.equal(record?.status, terminalStatus);
+    assert.equal(record?.observedRunStatus, terminalStatus);
+    assert.equal(storage.alarmAt, undefined);
+  });
+}
 
 test("OpenTofu run owner debug and drain expose operator-safe state", async () => {
   const storage = new FakeDoStorage();

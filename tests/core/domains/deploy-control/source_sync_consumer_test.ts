@@ -1,20 +1,25 @@
 import { expect, test } from "bun:test";
 
 import {
-  OpenTofuController,
   type ApplyRun,
+  OpenTofuController,
   type OpenTofuApplyJob,
   type PlanRun,
   type OpenTofuPlanJob,
   type OpenTofuSourceSyncJob,
   type OpenTofuSourceSyncResult,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  type MarkCapsuleStaleCommand,
+  type MarkCapsuleStaleResult,
+} from "../../../../core/domains/deploy-control/store.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 import { REFERENCE_SOURCE_CREDENTIAL_DRIVERS } from "../../../../providers/git/source-credential-driver.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import type { Capsule } from "takosumi-contract/capsules";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 
@@ -51,13 +56,31 @@ class StubRunner {
   }
 }
 
+class StaleConflictStore extends InMemoryOpenTofuControlStore {
+  #replacement?: Capsule;
+
+  replaceBeforeNextMarkCapsuleStale(replacement: Capsule): void {
+    this.#replacement = replacement;
+  }
+
+  override async markCapsuleStale(
+    input: MarkCapsuleStaleCommand,
+  ): Promise<MarkCapsuleStaleResult> {
+    const replacement = this.#replacement;
+    this.#replacement = undefined;
+    if (replacement) await this.putCapsule(replacement);
+    return await super.markCapsuleStale(input);
+  }
+}
+
 function build(
   options: {
     readonly now?: () => number;
     readonly runRenewalIntervalMs?: number;
+    readonly store?: InMemoryOpenTofuControlStore;
   } = {},
 ) {
-  const store = new InMemoryOpenTofuControlStore();
+  const store = options.store ?? new InMemoryOpenTofuControlStore();
   let counter = 0;
   const newId = (prefix: string) =>
     `${prefix}_test${(counter += 1).toString().padStart(8, "0")}`;
@@ -374,6 +397,56 @@ test("source_sync consumer marks active source Capsules stale when the resolved 
       }),
     }),
   );
+});
+
+test("source_sync leaves a concurrently advanced Capsule and its hooks untouched when staleness CAS conflicts", async () => {
+  const store = new StaleConflictStore();
+  const { sourcesService, runner, controller } = build({ store });
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+  });
+  await seedActiveCapsuleOnSnapshot({
+    store,
+    sourceId: source.id,
+    snapshot: sourceSnapshot({ sourceId: source.id }),
+  });
+  const observed = (await store.patchCapsule("capsule_active", {
+    autoUpdate: true,
+  }))!;
+  const newer: Capsule = {
+    ...observed,
+    currentStateVersionId: "state_concurrent",
+    currentStateGeneration: 9,
+    status: "error",
+    compatibilityStatus: "needs_patch",
+    updatedAt: "2026-06-06T00:00:01.000Z",
+  };
+  store.replaceBeforeNextMarkCapsuleStale(newer);
+  runner.result = {
+    resolvedCommit: "new123",
+    archiveDigest: "sha256:" + "c".repeat(64),
+    archiveSizeBytes: 2048,
+  };
+
+  const { run } = await controller.createSourceSync(source.id);
+  await controller.runQueuedSourceSync(run.id);
+
+  expect(await store.getCapsule("capsule_active")).toEqual(newer);
+  expect(
+    await store.listActivityEvents("workspace_1", { limit: 10 }),
+  ).not.toContainEqual(
+    expect.objectContaining({
+      action: "capsule.stale",
+      targetId: "capsule_active",
+    }),
+  );
+  expect(
+    (await store.getCapsule("capsule_active"))
+      ?.autoUpdateAttemptSourceSnapshotId,
+  ).toBeUndefined();
 });
 
 test("source_sync does not stale a Capsule adopted on a different Git ref lane", async () => {

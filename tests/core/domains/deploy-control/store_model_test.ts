@@ -1248,6 +1248,7 @@ test("commitRestoredState persists the rebased Output with terminal restore stat
           updatedAt: TS,
         },
         guard: {
+          currentStateVersionId: seeded.capsule.currentStateVersionId,
           currentStateGeneration: seeded.capsule.currentStateGeneration,
           status: seeded.capsule.status,
         },
@@ -1276,6 +1277,98 @@ test("commitRestoredState persists the rebased Output with terminal restore stat
     expect((await store.getBackupRun(queued.id))?.status, label).toBe(
       "succeeded",
     );
+  }
+});
+
+test("commitRestoredState fences a same-generation current-pointer change across stores", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_restore_pointer_${label}`,
+      capsuleId: `capsule_restore_pointer_${label}`,
+    });
+    const queued = {
+      id: `restore_pointer_${label}`,
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      environment: seeded.capsule.environment,
+      type: "restore" as const,
+      status: "queued" as const,
+      backupId: `backup_pointer_${label}`,
+      restoreStateGeneration: 0,
+      createdBy: "operator",
+      createdAt: TS,
+    };
+    await store.putBackupRun(queued);
+    const running = {
+      ...queued,
+      status: "running" as const,
+      startedAt: TS,
+    };
+    expect(
+      (
+        await store.transitionRun({
+          id: queued.id,
+          kind: "restore",
+          expectFrom: ["queued"],
+          run: running,
+          setLeaseToken: `restore_pointer_lease_${label}`,
+          heartbeatAt: 1,
+        })
+      ).won,
+      label,
+    ).toBe(true);
+
+    // Deliberately move only the opaque pointer. The generation stays at zero,
+    // so a generation-only guard would incorrectly allow the stale Restore to
+    // overwrite this newer pointer.
+    await store.patchCapsule(seeded.capsule.id, {
+      currentStateVersionId: `pointer_only_${label}`,
+      updatedAt: "2026-06-07T00:00:00.000Z",
+    });
+    const restoredState = stateVersion(seeded.capsule.id, {
+      id: `state_restore_pointer_${label}`,
+      createdByRunId: queued.id,
+    });
+    const restoredOutput = output(seeded.capsule.id, {
+      id: `output_restore_pointer_${label}`,
+    });
+
+    await expect(
+      store.commitRestoredState({
+        stateVersion: restoredState,
+        output: restoredOutput,
+        capsulePatch: {
+          id: seeded.capsule.id,
+          patch: {
+            currentStateVersionId: restoredState.id,
+            currentStateGeneration: restoredState.generation,
+            currentOutputId: restoredOutput.id,
+            status: "stale",
+            updatedAt: TS,
+          },
+          guard: {
+            currentStateVersionId: seeded.capsule.currentStateVersionId,
+            currentStateGeneration: seeded.capsule.currentStateGeneration,
+            status: seeded.capsule.status,
+          },
+        },
+        restoreRunTerminal: {
+          ...running,
+          status: "succeeded",
+          restoredStateVersionId: restoredState.id,
+          finishedAt: TS,
+        },
+        restoreRunLeaseToken: `restore_pointer_lease_${label}`,
+      }),
+      label,
+    ).rejects.toBeInstanceOf(CapsuleStateVersionGuardConflict);
+    expect(
+      (await store.getCapsule(seeded.capsule.id))?.currentStateVersionId,
+      label,
+    ).toBe(`pointer_only_${label}`);
+    expect(await store.getStateVersion(restoredState.id), label).toBeUndefined();
+    expect(await store.getOutput(restoredOutput.id), label).toBeUndefined();
+    expect((await store.getBackupRun(queued.id))?.status, label).toBe("running");
   }
 });
 

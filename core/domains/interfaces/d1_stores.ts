@@ -10,6 +10,7 @@ import {
 } from "takosumi-contract";
 import { deployControlD1TableNames as names } from "../../adapters/storage/drizzle/schema/logical.ts";
 import type { D1Like } from "../../adapters/storage/d1.ts";
+import type { InterfaceMaterializationWriteAuthority } from "../deploy-control/interface_materialization_intent.ts";
 import type {
   InterfaceAuthorizationPageInput,
   InterfaceAuthorizationQuery,
@@ -30,16 +31,26 @@ class D1InterfaceStore implements InterfaceStore {
 
   constructor(readonly db: D1Like) {}
 
-  async create(record: Interface): Promise<boolean> {
+  async create(
+    record: Interface,
+    authority?: InterfaceMaterializationWriteAuthority,
+  ): Promise<boolean> {
+    if (authority && !interfaceMatchesAuthority(record, authority)) return false;
+    const parameters = [...interfaceParameters(record, false)];
+    const authorityClause = d1MaterializationAuthorityClause(
+      parameters,
+      authority,
+    );
     const result = await this.db
       .prepare(
         `insert or ignore into ${this.#table} (
         id, workspace_id, owner_kind, owner_id, name, interface_type,
         phase, generation, resolved_revision, oauth_resource_uri,
         record_json, created_at, updated_at
-      ) values (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      ) select ?,?,?,?,?,?,?,?,?,?,?,?,?
+      where ${authorityClause}`,
       )
-      .bind(...interfaceParameters(record, false))
+      .bind(...parameters)
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
@@ -121,7 +132,20 @@ class D1InterfaceStore implements InterfaceStore {
   async compareAndSet(
     record: Interface,
     expected: InterfaceWriteGuard,
+    authority?: InterfaceMaterializationWriteAuthority,
   ): Promise<boolean> {
+    if (authority && !interfaceMatchesAuthority(record, authority)) return false;
+    const parameters = [
+      ...interfaceParameters(record, true).slice(1),
+      record.metadata.id,
+      expected.generation,
+      expected.resolvedRevision,
+      JSON.stringify(expected.record),
+    ];
+    const authorityClause = d1MaterializationAuthorityClause(
+      parameters,
+      authority,
+    );
     try {
       const result = await this.db
         .prepare(
@@ -132,15 +156,10 @@ class D1InterfaceStore implements InterfaceStore {
             when oauth_resource_uri=? then oauth_resource_uri else null end,
           record_json=?,
           created_at=?, updated_at=?
-         where id=? and generation=? and resolved_revision=? and record_json=?`,
+         where id=? and generation=? and resolved_revision=? and record_json=?
+           and ${authorityClause}`,
         )
-        .bind(
-          ...interfaceParameters(record, true).slice(1),
-          record.metadata.id,
-          expected.generation,
-          expected.resolvedRevision,
-          JSON.stringify(expected.record),
-        )
+        .bind(...parameters)
         .run();
       return (result.meta?.changes ?? 0) > 0;
     } catch (error) {
@@ -152,28 +171,36 @@ class D1InterfaceStore implements InterfaceStore {
   async claimOAuth2Resource(input: {
     readonly record: Interface;
     readonly resource: string;
-  }): Promise<boolean> {
+  }, authority?: InterfaceMaterializationWriteAuthority): Promise<boolean> {
     if (interfaceOAuth2ResourceUri(input.record) !== input.resource) {
       return false;
     }
+    if (authority && !interfaceMatchesAuthority(input.record, authority)) {
+      return false;
+    }
+    const parameters = [
+      input.resource,
+      input.record.metadata.id,
+      input.record.metadata.workspaceId,
+      input.record.metadata.ownerRef.kind,
+      input.record.metadata.ownerRef.id,
+      input.record.metadata.generation,
+      input.record.status.resolvedRevision,
+      JSON.stringify(input.record),
+    ];
+    const authorityClause = d1MaterializationAuthorityClause(
+      parameters,
+      authority,
+    );
     try {
       const result = await this.db
         .prepare(
           `update ${this.#table} set oauth_resource_uri=?
            where id=? and workspace_id=? and owner_kind=? and owner_id=?
              and phase='Resolved' and generation=? and resolved_revision=?
-             and record_json=?`,
+             and record_json=? and ${authorityClause}`,
         )
-        .bind(
-          input.resource,
-          input.record.metadata.id,
-          input.record.metadata.workspaceId,
-          input.record.metadata.ownerRef.kind,
-          input.record.metadata.ownerRef.id,
-          input.record.metadata.generation,
-          input.record.status.resolvedRevision,
-          JSON.stringify(input.record),
-        )
+        .bind(...parameters)
         .run();
       return (result.meta?.changes ?? 0) > 0;
     } catch (error) {
@@ -205,15 +232,28 @@ class D1InterfaceBindingStore implements InterfaceBindingStore {
 
   constructor(readonly db: D1Like) {}
 
-  async create(record: InterfaceBinding): Promise<boolean> {
+  async create(
+    record: InterfaceBinding,
+    authority?: InterfaceMaterializationWriteAuthority,
+  ): Promise<boolean> {
+    if (authority && record.metadata.workspaceId !== authority.workspaceId) {
+      return false;
+    }
+    const parameters = [...bindingParameters(record)];
+    const authorityClause = d1MaterializationAuthorityClause(
+      parameters,
+      authority,
+      record.spec.interfaceId,
+    );
     const result = await this.db
       .prepare(
         `insert or ignore into ${this.#table} (
         id, workspace_id, interface_id, subject_kind, subject_id,
         phase, generation, record_json, created_at, updated_at
-      ) values (?,?,?,?,?,?,?,?,?,?)`,
+      ) select ?,?,?,?,?,?,?,?,?,?
+      where ${authorityClause}`,
       )
-      .bind(...bindingParameters(record))
+      .bind(...parameters)
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
@@ -244,18 +284,29 @@ class D1InterfaceBindingStore implements InterfaceBindingStore {
   async compareAndSet(
     record: InterfaceBinding,
     expectedGeneration: number,
+    authority?: InterfaceMaterializationWriteAuthority,
   ): Promise<boolean> {
+    if (authority && record.metadata.workspaceId !== authority.workspaceId) {
+      return false;
+    }
+    const parameters = [
+      ...bindingParameters(record).slice(1),
+      record.metadata.id,
+      expectedGeneration,
+    ];
+    const authorityClause = d1MaterializationAuthorityClause(
+      parameters,
+      authority,
+      record.spec.interfaceId,
+    );
     const result = await this.db
       .prepare(
         `update ${this.#table} set workspace_id=?, interface_id=?,
         subject_kind=?, subject_id=?, phase=?, generation=?, record_json=?,
-        created_at=?, updated_at=? where id=? and generation=?`,
+        created_at=?, updated_at=? where id=? and generation=?
+          and ${authorityClause}`,
       )
-      .bind(
-        ...bindingParameters(record).slice(1),
-        record.metadata.id,
-        expectedGeneration,
-      )
+      .bind(...parameters)
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
@@ -394,6 +445,71 @@ function bindingParameters(record: InterfaceBinding): readonly unknown[] {
     record.metadata.createdAt,
     record.metadata.updatedAt,
   ];
+}
+
+function interfaceMatchesAuthority(
+  record: Interface,
+  authority: InterfaceMaterializationWriteAuthority,
+): boolean {
+  return (
+    record.metadata.workspaceId === authority.workspaceId &&
+    record.metadata.ownerRef.kind === "Capsule" &&
+    record.metadata.ownerRef.id === authority.capsuleId
+  );
+}
+
+function d1MaterializationAuthorityClause(
+  parameters: unknown[],
+  authority: InterfaceMaterializationWriteAuthority | undefined,
+  interfaceId?: string,
+): string {
+  if (!authority) return "true";
+  parameters.push(
+    authority.intentId,
+    authority.leaseToken,
+    authority.expectedNextItemIndex,
+    authority.workspaceId,
+    authority.capsuleId,
+    authority.installConfigId,
+    authority.stateVersionId,
+    authority.outputId,
+    authority.stateGeneration,
+  );
+  const interfaceOwnership = interfaceId
+    ? `and exists (
+         select 1 from ${names.interfaces} authority_interface
+         where authority_interface.id = ?
+           and authority_interface.workspace_id = authority_intent.workspace_id
+           and authority_interface.owner_kind = 'Capsule'
+           and authority_interface.owner_id = authority_intent.capsule_id
+       )`
+    : "";
+  if (interfaceId) parameters.push(interfaceId);
+  return `exists (
+    select 1
+    from ${names.capsuleInterfaceMaterializationIntents} authority_intent
+    join ${names.capsules} authority_capsule
+      on authority_capsule.id = authority_intent.capsule_id
+     and authority_capsule.space_id = authority_intent.workspace_id
+    where authority_intent.id = ?
+      and authority_intent.status = 'pending'
+      and authority_intent.lease_token = ?
+      and authority_intent.next_item_index = ?
+      and authority_intent.lease_expires_at is not null
+      and julianday(authority_intent.lease_expires_at) > julianday('now')
+      and authority_intent.workspace_id = ?
+      and authority_intent.capsule_id = ?
+      and authority_intent.install_config_id = ?
+      and authority_intent.state_version_id = ?
+      and authority_intent.output_id = ?
+      and authority_intent.state_generation = ?
+      and authority_capsule.install_config_id = authority_intent.install_config_id
+      and authority_capsule.status <> 'destroyed'
+      and authority_capsule.current_state_version_id = authority_intent.state_version_id
+      and authority_capsule.current_output_snapshot_id = authority_intent.output_id
+      and authority_capsule.current_state_generation = authority_intent.state_generation
+      ${interfaceOwnership}
+  )`;
 }
 
 export function createD1InterfaceStores(db: D1Like): InterfaceStores {

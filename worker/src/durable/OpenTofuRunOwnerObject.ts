@@ -68,7 +68,14 @@ interface RunOwnerRecord {
   readonly requestedAction: OpenTofuRunAction;
   readonly runId: string;
   readonly workspaceId: string;
-  readonly status: "scheduled" | "running" | "succeeded" | "failed";
+  readonly status:
+    | "scheduled"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "cancelled"
+    | "expired"
+    | "waiting_approval";
   readonly attempts: number;
   readonly maxAttempts: number;
   readonly createdAt: string;
@@ -80,6 +87,8 @@ interface RunOwnerRecord {
   readonly messageId?: string;
   readonly lastScheduleCause?: "controller_retry";
   readonly lastError?: string;
+  /** Exact terminal status observed from the canonical Run ledger. */
+  readonly observedRunStatus?: Exclude<RunStatus, "queued" | "running">;
   /**
    * Controller/ledger poll bookkeeping. Absent on records written before the
    * poll budget existed; treated as "no poll in flight", which restarts the
@@ -216,8 +225,9 @@ export class OpenTofuRunOwnerObject {
     if (existing) {
       if (input.cause === "controller_retry") {
         const now = this.#now();
-        const { finishedAt, ...retryBase } = existing;
+        const { finishedAt, observedRunStatus, ...retryBase } = existing;
         void finishedAt;
+        void observedRunStatus;
         const retryRecord: RunOwnerRecord = {
           ...retryBase,
           status: "scheduled",
@@ -234,7 +244,7 @@ export class OpenTofuRunOwnerObject {
         await this.#scheduleAlarm(now);
         return retryRecord;
       }
-      if (existing.status === "succeeded" || existing.status === "failed") {
+      if (isTerminalOwnerStatus(existing.status)) {
         const runStatus = await this.#readRunStatus(
           {
             action,
@@ -245,8 +255,9 @@ export class OpenTofuRunOwnerObject {
         ).catch(() => undefined);
         if (isRunStillDispatchable(runStatus)) {
           const now = this.#now();
-          const { finishedAt, ...retryBase } = existing;
+          const { finishedAt, observedRunStatus, ...retryBase } = existing;
           void finishedAt;
+          void observedRunStatus;
           const retryRecord: RunOwnerRecord = {
             ...retryBase,
             action,
@@ -304,7 +315,7 @@ export class OpenTofuRunOwnerObject {
   ): Promise<void> {
     const record = await this.#readRecord();
     if (!record) return;
-    if (record.status === "succeeded" || record.status === "failed") {
+    if (isTerminalOwnerStatus(record.status)) {
       await this.state.storage.deleteAlarm?.();
       return;
     }
@@ -340,7 +351,7 @@ export class OpenTofuRunOwnerObject {
       const runStatus = await this.#readRunStatus(dispatch, this.env).catch(
         () => "unknown" as const,
       );
-      if (runStatus === "unknown") {
+      if (runStatus === undefined || runStatus === "unknown") {
         await this.#pollController({
           record,
           base,
@@ -363,7 +374,8 @@ export class OpenTofuRunOwnerObject {
       const finishedAt = new Date(this.#now()).toISOString();
       await this.#writeRecord({
         ...base,
-        status: "succeeded",
+        status: runStatus,
+        observedRunStatus: runStatus,
         attempts: record.attempts + 1,
         startedAt: record.startedAt ?? startedAt,
         finishedAt,
@@ -796,6 +808,12 @@ function isRunStillDispatchable(
   status: RunStatus | undefined,
 ): status is "queued" | "running" {
   return status === "queued" || status === "running";
+}
+
+function isTerminalOwnerStatus(
+  status: RunOwnerRecord["status"],
+): status is Exclude<RunOwnerRecord["status"], "scheduled" | "running"> {
+  return status !== "scheduled" && status !== "running";
 }
 
 function parseIsoMs(value: string, fallback: number): number {

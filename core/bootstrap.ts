@@ -89,6 +89,17 @@ import {
   type InterfaceOAuth2ResourceAuthorizer,
   type InterfaceStores,
 } from "./domains/interfaces/mod.ts";
+import {
+  CapsuleInterfaceMaterializationIntentDrainer,
+  InterfaceServiceCapsuleMaterializationTarget,
+  type CapsuleInterfaceMaterializationDrainResult,
+} from "./domains/interfaces/materialization_intent_drain.ts";
+import {
+  CapsuleInterfaceMaterializationFailureService,
+  type CapsuleInterfaceMaterializationFailure,
+  type CapsuleInterfaceMaterializationRetryReceipt,
+  type RetryCapsuleInterfaceMaterializationFailureInput,
+} from "./domains/interfaces/materialization_intent_failures.ts";
 import { createSqlInterfaceStores } from "./domains/interfaces/sql_stores.ts";
 import {
   type BackupArtifactStore,
@@ -641,6 +652,21 @@ export interface TakosumiOperations {
   readonly runGroups: RunGroupsService;
   /** Runtime declarations shared by Capsule and OpenTofu authoring flows. */
   readonly interfaces: InterfaceService;
+  /** Internal scheduled recovery; never mounted on the public API. */
+  drainInterfaceMaterializationIntents(options?: {
+    readonly limit?: number;
+    readonly maxWorkItems?: number;
+    readonly timeBudgetMs?: number;
+  }): Promise<CapsuleInterfaceMaterializationDrainResult>;
+  listInterfaceMaterializationFailures(
+    workspaceId: string,
+    options?: { readonly limit?: number },
+  ): Promise<readonly CapsuleInterfaceMaterializationFailure[]>;
+  retryInterfaceMaterializationFailure(
+    workspaceId: string,
+    intentId: string,
+    input: RetryCapsuleInterfaceMaterializationFailureInput,
+  ): Promise<CapsuleInterfaceMaterializationRetryReceipt>;
   /**
    * Activity domain service (Core Specification §27 / §34): the Workspace-scoped
    * audit trail over the same shared ledger.
@@ -1205,7 +1231,11 @@ export async function createTakosumiService(
     options.interfaceStores ??
     (options.sqlClient
       ? createSqlInterfaceStores(options.sqlClient)
-      : createInMemoryInterfaceStores());
+      : createInMemoryInterfaceStores({
+          ...(durableOpenTofuStore instanceof InMemoryOpenTofuControlStore
+            ? { materializationAuthority: durableOpenTofuStore }
+            : {}),
+        }));
   const interfaceProjectionSink = options.interfaceProjectionSink;
   let interfaceService: InterfaceService;
   interfaceService = new InterfaceService({
@@ -1330,6 +1360,22 @@ export async function createTakosumiService(
       return undefined;
     },
   });
+  const interfaceMaterializationIntentDrainer =
+    new CapsuleInterfaceMaterializationIntentDrainer({
+      store: sharedOpenTofuStore,
+      coordination: capsuleCoordination,
+      target: new InterfaceServiceCapsuleMaterializationTarget(
+        interfaceService,
+      ),
+      activity: activityService,
+      observability: context.adapters.observability,
+    });
+  const interfaceMaterializationFailureService =
+    new CapsuleInterfaceMaterializationFailureService({
+      store: sharedOpenTofuStore,
+      activity: activityService,
+      observability: context.adapters.observability,
+    });
   const legacyOutputInterfaceMigrationService =
     new LegacyOutputInterfaceMigrationService({
       opentofu: sharedOpenTofuStore,
@@ -1371,52 +1417,6 @@ export async function createTakosumiService(
       run.id,
     );
   });
-  const reconcileCapsuleInterfacesAfterApply = async (
-    workspaceId: string,
-    capsuleId: string,
-  ): Promise<void> => {
-    let interfaces = await interfaceService.reconcileCapsule(
-      workspaceId,
-      capsuleId,
-    );
-    for (const delayMs of [250, 750, 2_000] as const) {
-      const bindings = await Promise.all(
-        interfaces.map(async (iface) => ({
-          iface,
-          bindings: await interfaceService.listBindings(iface.metadata.id),
-        })),
-      );
-      const authorityMayFollowApply = bindings.some(({ iface, bindings }) => {
-        const resourceInputName = iface.spec.access.resourceUriInput;
-        const resourceInput = resourceInputName
-          ? iface.spec.inputs?.[resourceInputName]
-          : undefined;
-        if (
-          resourceInput?.source !== "capsule_output" ||
-          resourceInput.capsuleId !== capsuleId
-        ) {
-          return false;
-        }
-        return bindings.some(
-          (binding) =>
-            binding.status.phase === "NotReady" &&
-            binding.status.conditions?.some(
-              (condition) =>
-                condition.type === "Ready" &&
-                condition.reason === "OAuthResourceUnauthorized",
-            ),
-        );
-      });
-      if (!authorityMayFollowApply) return;
-      await new Promise<void>((resolvePromise) =>
-        setTimeout(resolvePromise, delayMs),
-      );
-      interfaces = await interfaceService.reconcileCapsule(
-        workspaceId,
-        capsuleId,
-      );
-    }
-  };
   opentofuController.setTerminalRunObserver(async (run) => {
     if (!run.capsuleId) return;
     if (!("planRunId" in run)) {
@@ -1440,34 +1440,6 @@ export async function createTakosumiService(
     if (run.status === "succeeded") {
       if (run.operation === "destroy") {
         await interfaceService.retireCapsule(run.workspaceId, run.capsuleId);
-      } else {
-        const capsule = await sharedOpenTofuStore.getCapsule(run.capsuleId);
-        let config;
-        if (capsule) {
-          try {
-            config = await capsulesService.getInstallConfig(
-              capsule.installConfigId,
-            );
-          } catch (error) {
-            if (
-              !(error instanceof OpenTofuControllerError) ||
-              error.code !== "not_found"
-            ) {
-              throw error;
-            }
-          }
-        }
-        if (config?.interfaceBlueprints?.length) {
-          await interfaceService.ensureCapsuleBlueprints({
-            workspaceId: run.workspaceId,
-            capsuleId: run.capsuleId,
-            blueprints: config.interfaceBlueprints,
-          });
-        }
-        await reconcileCapsuleInterfacesAfterApply(
-          run.workspaceId,
-          run.capsuleId,
-        );
       }
       return;
     }
@@ -1657,6 +1629,16 @@ export async function createTakosumiService(
     outputShares: outputSharesService,
     runGroups: runGroupsService,
     interfaces: interfaceService,
+    drainInterfaceMaterializationIntents: (options) =>
+      interfaceMaterializationIntentDrainer.drain(options),
+    listInterfaceMaterializationFailures: (workspaceId, options) =>
+      interfaceMaterializationFailureService.list(workspaceId, options),
+    retryInterfaceMaterializationFailure: (workspaceId, intentId, input) =>
+      interfaceMaterializationFailureService.retry(
+        workspaceId,
+        intentId,
+        input,
+      ),
     activity: activityService,
     getWorkspaceBilling: (workspaceId) =>
       opentofuController.getWorkspaceBilling(workspaceId),

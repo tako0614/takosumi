@@ -118,6 +118,11 @@ import type {
   Interface,
 } from "takosumi-contract/interfaces";
 import type { GitInstallPlanStore } from "../../../core/domains/install-plans/store.ts";
+import type {
+  CapsuleInterfaceMaterializationFailure,
+  CapsuleInterfaceMaterializationRetryReceipt,
+  RetryCapsuleInterfaceMaterializationFailureInput,
+} from "../../../core/domains/interfaces/materialization_intent_failures.ts";
 
 interface CapsuleListPageParams extends PageParams {
   readonly includeDestroyed?: boolean;
@@ -388,6 +393,15 @@ export interface ControlPlaneOperations {
     getRunGroup(id: string): Promise<RunGroupWithRunsLike | undefined>;
     approveRunGroup(id: string): Promise<RunGroupWithRunsLike | undefined>;
   };
+  listInterfaceMaterializationFailures(
+    workspaceId: string,
+    options?: { readonly limit?: number },
+  ): Promise<readonly CapsuleInterfaceMaterializationFailure[]>;
+  retryInterfaceMaterializationFailure(
+    workspaceId: string,
+    intentId: string,
+    input: RetryCapsuleInterfaceMaterializationFailureInput,
+  ): Promise<CapsuleInterfaceMaterializationRetryReceipt>;
   // --- Activity (§27 / §34) ---
   readonly activity: {
     record?(

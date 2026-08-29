@@ -97,6 +97,14 @@ import {
   exactRecoveryProofsEqual,
   type CommittedPostApplyRecoveryRows,
 } from "./committed_post_apply_recovery.ts";
+import {
+  capsuleInterfaceMaterializationIntentContentKey,
+  type CapsuleInterfaceMaterializationIntent,
+  type CapsuleInterfaceMaterializationIntentDisposition,
+  type InterfaceMaterializationWriteAuthority,
+  type PlanPinnedCapsuleInterfaceMaterialization,
+  validateCapsuleInterfaceMaterializationIntent,
+} from "./interface_materialization_intent.ts";
 
 export interface CapsuleListPageParams extends PageParams {
   readonly includeDestroyed?: boolean;
@@ -303,6 +311,8 @@ export interface PlanRunInputs {
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly sourceBuild?: SourceBuildConfig;
   readonly lifecycleActions?: readonly InstallConfigLifecycleAction[];
+  /** Exact value-free Interface blueprint authority captured at Plan time. */
+  readonly interfaceMaterialization?: PlanPinnedCapsuleInterfaceMaterialization;
   /**
    * At-rest seal of the SENSITIVE-bearing sidecar payload (spec §11 / §18). A
    * sensitive `published_output` value injected into a plan flows into
@@ -468,6 +478,165 @@ export type CapsulePatch = Partial<
   >
 >;
 
+export interface MarkCapsuleStaleCommand {
+  readonly capsuleId: string;
+  /** Exact canonical Capsule record observed by the lifecycle caller. */
+  readonly expected: Capsule;
+  readonly reason: "source-revision" | "dependency-output";
+  readonly updatedAt: string;
+}
+
+export type MarkCapsuleStaleResult =
+  | { readonly kind: "updated"; readonly capsule: Capsule }
+  | { readonly kind: "conflict"; readonly current: Capsule }
+  | { readonly kind: "not-found" };
+
+/**
+ * Private lifecycle revision observed before a metadata mutation. State/output
+ * cursor ownership remains with the Apply/restore commits; lifecycle writers
+ * may only proceed while this exact revision is still current.
+ */
+export interface CapsuleLifecycleExpected {
+  readonly executionAuthorityEpoch: number;
+  readonly currentStateVersionId: string | undefined;
+  readonly currentStateGeneration: number;
+  readonly currentOutputId: string | undefined;
+  readonly status: Capsule["status"];
+  readonly autoUpdate: boolean | undefined;
+  readonly autoUpdateAttemptSourceSnapshotId: string | undefined;
+  readonly compatibilityReportId: string | undefined;
+  readonly compatibilityStatus: Capsule["compatibilityStatus"];
+}
+
+export type CapsuleLifecycleMutation =
+  | {
+      readonly kind: "status";
+      readonly status: Capsule["status"];
+    }
+  | {
+      readonly kind: "auto-update";
+      readonly enabled: boolean;
+    }
+  | {
+      readonly kind: "auto-update-claim";
+      readonly sourceSnapshotId: string;
+    }
+  | {
+      readonly kind: "compatibility";
+      readonly reportId: string;
+      readonly status: CapsuleCompatibilityLevel;
+    };
+
+/** One typed mutation boundary for Capsule lifecycle-owned metadata. */
+export interface UpdateCapsuleLifecycleCommand {
+  readonly capsuleId: string;
+  readonly expected: CapsuleLifecycleExpected;
+  readonly mutation: CapsuleLifecycleMutation;
+  readonly updatedAt: string;
+}
+
+export type UpdateCapsuleLifecycleResult =
+  | { readonly kind: "updated"; readonly capsule: Capsule }
+  | { readonly kind: "unchanged"; readonly capsule: Capsule }
+  | { readonly kind: "conflict"; readonly current: Capsule }
+  | { readonly kind: "not-found" };
+
+export function capsuleLifecycleExpected(
+  capsule: Capsule,
+  executionAuthorityEpoch: number,
+): CapsuleLifecycleExpected {
+  return {
+    executionAuthorityEpoch,
+    currentStateVersionId: capsule.currentStateVersionId,
+    currentStateGeneration: capsule.currentStateGeneration,
+    currentOutputId: capsule.currentOutputId,
+    status: capsule.status,
+    autoUpdate: capsule.autoUpdate,
+    autoUpdateAttemptSourceSnapshotId:
+      capsule.autoUpdateAttemptSourceSnapshotId,
+    compatibilityReportId: capsule.compatibilityReportId,
+    compatibilityStatus: capsule.compatibilityStatus,
+  };
+}
+
+export function capsuleLifecycleMutationPatch(
+  mutation: CapsuleLifecycleMutation,
+  updatedAt: string,
+): Partial<
+  Pick<
+    Capsule,
+    | "status"
+    | "autoUpdate"
+    | "autoUpdateAttemptSourceSnapshotId"
+    | "compatibilityReportId"
+    | "compatibilityStatus"
+    | "updatedAt"
+  >
+> {
+  switch (mutation.kind) {
+    case "status":
+      return { status: mutation.status, updatedAt };
+    case "auto-update":
+      return { autoUpdate: mutation.enabled, updatedAt };
+    case "auto-update-claim":
+      if (mutation.sourceSnapshotId.trim().length === 0) {
+        throw new TypeError("sourceSnapshotId must be a non-empty string");
+      }
+      return {
+        autoUpdateAttemptSourceSnapshotId: mutation.sourceSnapshotId,
+        updatedAt,
+      };
+    case "compatibility":
+      if (mutation.reportId.trim().length === 0) {
+        throw new TypeError("reportId must be a non-empty string");
+      }
+      return {
+        compatibilityReportId: mutation.reportId,
+        compatibilityStatus: mutation.status,
+        updatedAt,
+      };
+  }
+}
+
+function capsuleLifecycleRevisionMatches(
+  capsule: Capsule,
+  executionAuthorityEpoch: number,
+  expected: CapsuleLifecycleExpected,
+): boolean {
+  return executionAuthorityEpoch === expected.executionAuthorityEpoch &&
+    capsule.currentStateVersionId === expected.currentStateVersionId &&
+    capsule.currentStateGeneration === expected.currentStateGeneration &&
+    capsule.currentOutputId === expected.currentOutputId &&
+    capsule.status === expected.status &&
+    capsule.autoUpdate === expected.autoUpdate &&
+    capsule.autoUpdateAttemptSourceSnapshotId ===
+      expected.autoUpdateAttemptSourceSnapshotId &&
+    capsule.compatibilityReportId === expected.compatibilityReportId &&
+    capsule.compatibilityStatus === expected.compatibilityStatus;
+}
+
+export function capsuleLifecycleMutationAlreadyApplied(
+  capsule: Capsule,
+  executionAuthorityEpoch: number,
+  input: UpdateCapsuleLifecycleCommand,
+): boolean {
+  if (
+    input.mutation.kind !== "auto-update-claim" ||
+    capsule.autoUpdateAttemptSourceSnapshotId !==
+      input.mutation.sourceSnapshotId
+  ) {
+    return false;
+  }
+  return executionAuthorityEpoch === input.expected.executionAuthorityEpoch &&
+    capsule.currentStateVersionId === input.expected.currentStateVersionId &&
+    capsule.currentStateGeneration === input.expected.currentStateGeneration &&
+    capsule.currentOutputId === input.expected.currentOutputId &&
+    capsule.status === input.expected.status &&
+    capsule.autoUpdate === input.expected.autoUpdate &&
+    capsule.compatibilityReportId === input.expected.compatibilityReportId &&
+    capsule.compatibilityStatus === input.expected.compatibilityStatus;
+}
+
 export interface CapsuleInstallConfigRebindInput {
   readonly capsuleId: string;
   readonly targetInstallConfigId: string;
@@ -525,6 +694,271 @@ export interface CommitRunStateInput {
    * Source PlanRun with its `appliedApplyRunId` marker (apply-once).
    */
   readonly planRunApplied?: PlanRun;
+  /** Created only by a successful, non-destroy Apply with pinned blueprints. */
+  readonly interfaceMaterializationIntent?: CapsuleInterfaceMaterializationIntent;
+}
+
+export interface ClaimCapsuleInterfaceMaterializationIntentInput {
+  readonly leaseToken: string;
+  readonly claimedAt: string;
+  readonly leaseExpiresAt: string;
+}
+
+export function assertCapsuleInterfaceMaterializationIntentClaimInput(
+  input: ClaimCapsuleInterfaceMaterializationIntentInput,
+): void {
+  requiredIntentLifecycleTimestamp(input.claimedAt, "claimedAt");
+  requiredIntentLifecycleTimestamp(input.leaseExpiresAt, "leaseExpiresAt");
+  if (typeof input.leaseToken !== "string" || input.leaseToken.trim().length === 0) {
+    throw new TypeError("leaseToken must be a non-empty string");
+  }
+  if (Date.parse(input.leaseExpiresAt) <= Date.parse(input.claimedAt)) {
+    throw new TypeError("leaseExpiresAt must be after claimedAt");
+  }
+}
+
+export interface RenewCapsuleInterfaceMaterializationIntentLeaseInput {
+  readonly id: string;
+  readonly leaseToken: string;
+  readonly expectedNextItemIndex: number;
+  readonly renewedAt: string;
+  readonly leaseExpiresAt: string;
+}
+
+export type RenewCapsuleInterfaceMaterializationIntentLeaseResult =
+  | {
+      readonly kind: "updated";
+      readonly intent: CapsuleInterfaceMaterializationIntent;
+    }
+  | { readonly kind: "lease-lost" }
+  | { readonly kind: "not-found" };
+
+export function assertRenewCapsuleInterfaceMaterializationIntentLeaseInput(
+  input: RenewCapsuleInterfaceMaterializationIntentLeaseInput,
+): void {
+  if (typeof input.id !== "string" || input.id.trim() === "") {
+    throw new TypeError("id must be a non-empty string");
+  }
+  if (
+    typeof input.leaseToken !== "string" ||
+    input.leaseToken.trim() === ""
+  ) {
+    throw new TypeError("leaseToken must be a non-empty string");
+  }
+  if (
+    !Number.isSafeInteger(input.expectedNextItemIndex) ||
+    input.expectedNextItemIndex < 0
+  ) {
+    throw new TypeError("expectedNextItemIndex is invalid");
+  }
+  requiredIntentLifecycleTimestamp(input.renewedAt, "renewedAt");
+  requiredIntentLifecycleTimestamp(input.leaseExpiresAt, "leaseExpiresAt");
+  if (Date.parse(input.leaseExpiresAt) <= Date.parse(input.renewedAt)) {
+    throw new TypeError("leaseExpiresAt must be after renewedAt");
+  }
+}
+
+export type SettleCapsuleInterfaceMaterializationIntentOutcome =
+  | {
+      readonly kind: "completed";
+      readonly disposition: CapsuleInterfaceMaterializationIntentDisposition;
+    }
+  | {
+      readonly kind: "progress";
+      readonly nextItemIndex: number;
+      readonly releaseLease: boolean;
+      /** Required when releasing; equal time is allowed for fair immediate work. */
+      readonly nextRetryAt?: string;
+    }
+  | {
+      readonly kind: "retry";
+      readonly code: string;
+      readonly detailDigest: string;
+      readonly nextRetryAt: string;
+    }
+  | {
+      readonly kind: "dead-letter";
+      readonly code: string;
+      readonly detailDigest: string;
+    };
+
+export interface SettleCapsuleInterfaceMaterializationIntentInput {
+  readonly id: string;
+  readonly leaseToken: string;
+  readonly expectedNextItemIndex: number;
+  readonly settledAt: string;
+  readonly outcome: SettleCapsuleInterfaceMaterializationIntentOutcome;
+}
+
+export type SettleCapsuleInterfaceMaterializationIntentResult =
+  | {
+      readonly kind: "updated";
+      readonly intent: CapsuleInterfaceMaterializationIntent;
+    }
+  | { readonly kind: "lease-lost" }
+  | { readonly kind: "not-found" };
+
+export const CAPSULE_INTERFACE_MATERIALIZATION_FAILURE_LIST_LIMIT = 100;
+
+/** Exact ledger CAS used by the authorized dead-letter forward-retry command. */
+export interface RetryCapsuleInterfaceMaterializationIntentInput {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly expected: CapsuleInterfaceMaterializationIntent;
+  readonly expectedStateVersionId: string;
+  readonly expectedStateGeneration: number;
+  readonly retriedAt: string;
+}
+
+export type RetryCapsuleInterfaceMaterializationIntentResult =
+  | {
+      readonly kind: "updated";
+      readonly intent: CapsuleInterfaceMaterializationIntent;
+    }
+  | { readonly kind: "not-found" }
+  | { readonly kind: "conflict" };
+
+export function assertRetryCapsuleInterfaceMaterializationIntentInput(
+  input: RetryCapsuleInterfaceMaterializationIntentInput,
+): void {
+  if (
+    typeof input.id !== "string" ||
+    input.id.trim() === "" ||
+    typeof input.workspaceId !== "string" ||
+    input.workspaceId.trim() === ""
+  ) {
+    throw new TypeError("retry intent id and workspaceId are required");
+  }
+  requiredIntentLifecycleTimestamp(input.retriedAt, "retriedAt");
+  if (
+    input.expected.id !== input.id ||
+    input.expected.workspaceId !== input.workspaceId ||
+    input.expected.status !== "dead_letter" ||
+    !input.expected.error ||
+    !input.expected.deadLetteredAt ||
+    input.expected.leaseToken !== undefined ||
+    input.expected.leaseExpiresAt !== undefined ||
+    input.expected.stateVersionId !== input.expectedStateVersionId ||
+    input.expected.stateGeneration !== input.expectedStateGeneration
+  ) {
+    throw new TypeError("retry expectation is not an exact dead-letter snapshot");
+  }
+}
+
+export function capsuleInterfaceMaterializationFailureListLimit(
+  value: number | undefined,
+): number {
+  const limit = value ?? 50;
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > CAPSULE_INTERFACE_MATERIALIZATION_FAILURE_LIST_LIMIT
+  ) {
+    throw new TypeError(
+      `limit must be an integer from 1 to ${CAPSULE_INTERFACE_MATERIALIZATION_FAILURE_LIST_LIMIT}`,
+    );
+  }
+  return limit;
+}
+
+export function assertCapsuleInterfaceMaterializationIntentSettlementInput(
+  input: SettleCapsuleInterfaceMaterializationIntentInput,
+): void {
+  if (typeof input.id !== "string" || input.id.trim().length === 0) {
+    throw new TypeError("id must be a non-empty string");
+  }
+  if (
+    typeof input.leaseToken !== "string" ||
+    input.leaseToken.trim().length === 0
+  ) {
+    throw new TypeError("leaseToken must be a non-empty string");
+  }
+  requiredIntentLifecycleTimestamp(input.settledAt, "settledAt");
+  if (
+    !Number.isSafeInteger(input.expectedNextItemIndex) ||
+    input.expectedNextItemIndex < 0
+  ) {
+    throw new TypeError("expectedNextItemIndex is invalid");
+  }
+  if (input.outcome.kind === "completed") {
+    if (
+      input.outcome.disposition !== "materialized" &&
+      input.outcome.disposition !== "retired_before_materialization" &&
+      input.outcome.disposition !== "superseded_before_materialization"
+    ) {
+      throw new TypeError("disposition is invalid");
+    }
+    return;
+  }
+  if (input.outcome.kind === "progress") {
+    if (
+      !Number.isSafeInteger(input.outcome.nextItemIndex) ||
+      input.outcome.nextItemIndex <= input.expectedNextItemIndex
+    ) {
+      throw new TypeError("progress nextItemIndex must advance the cursor");
+    }
+    if (input.outcome.releaseLease) {
+      requiredIntentLifecycleTimestamp(
+        input.outcome.nextRetryAt!,
+        "nextRetryAt",
+      );
+      if (
+        Date.parse(input.outcome.nextRetryAt!) < Date.parse(input.settledAt)
+      ) {
+        throw new TypeError("progress nextRetryAt must not precede settledAt");
+      }
+    } else if (input.outcome.nextRetryAt !== undefined) {
+      throw new TypeError("retained progress lease cannot change nextRetryAt");
+    }
+    return;
+  }
+  if (!/^[a-z][a-z0-9_]{0,127}$/u.test(input.outcome.code)) {
+    throw new TypeError("outcome code is invalid");
+  }
+  if (!/^sha256:[0-9a-f]{64}$/u.test(input.outcome.detailDigest)) {
+    throw new TypeError("outcome detailDigest is invalid");
+  }
+  if (input.outcome.kind === "retry") {
+    requiredIntentLifecycleTimestamp(input.outcome.nextRetryAt, "nextRetryAt");
+    if (Date.parse(input.outcome.nextRetryAt) <= Date.parse(input.settledAt)) {
+      throw new TypeError("nextRetryAt must be after settledAt");
+    }
+  }
+}
+
+/** Shared fail-closed validation used before any substrate commit writes. */
+export async function validateCommitRunStateInterfaceMaterializationIntent(
+  input: CommitRunStateInput,
+): Promise<void> {
+  const intent = input.interfaceMaterializationIntent;
+  if (!intent) return;
+  await validateCapsuleInterfaceMaterializationIntent(intent);
+  if (
+    !input.applyRunTerminal ||
+    input.applyRunTerminal.status !== "succeeded" ||
+    input.applyRunTerminal.operation === "destroy" ||
+    !input.stateVersion ||
+    !input.output
+  ) {
+    throw new TypeError(
+      "Interface materialization intent requires a succeeded non-destroy Apply commit",
+    );
+  }
+  if (
+    intent.applyRunId !== input.applyRunTerminal.id ||
+    intent.workspaceId !== input.applyRunTerminal.workspaceId ||
+    intent.capsuleId !== input.applyRunTerminal.capsuleId ||
+    intent.capsuleId !== input.capsulePatch.id ||
+    intent.stateVersionId !== input.stateVersion.id ||
+    intent.outputId !== input.output.id ||
+    intent.stateGeneration !== input.stateVersion.generation ||
+    intent.stateGeneration !== input.output.stateGeneration ||
+    intent.stateGeneration !== input.capsulePatch.patch.currentStateGeneration
+  ) {
+    throw new TypeError(
+      "Interface materialization intent does not match the atomic Apply ledger commit",
+    );
+  }
 }
 
 export interface CommitRestoredStateResult {
@@ -548,12 +982,53 @@ export interface CommitRestoredStateInput {
     readonly id: string;
     readonly patch: CapsulePatch;
     readonly guard: {
+      /** Exact current-pointer CAS; generation alone is not sufficient. */
+      readonly currentStateVersionId: string | undefined;
       readonly currentStateGeneration: number;
       readonly status?: Capsule["status"];
     };
   };
   readonly restoreRunTerminal: Run;
   readonly restoreRunLeaseToken: string;
+  /**
+   * Exact source snapshot copied onto the restored generation. Stores retire
+   * prior pending obligations and adopt this replacement in the same commit.
+   */
+  readonly interfaceMaterializationReplacement?: {
+    readonly sourceIntentId: string;
+    readonly intent: CapsuleInterfaceMaterializationIntent;
+  };
+}
+
+export async function validateCommitRestoredStateInterfaceMaterialization(
+  input: CommitRestoredStateInput,
+): Promise<void> {
+  const replacement = input.interfaceMaterializationReplacement;
+  if (!replacement) return;
+  const intent = replacement.intent;
+  await validateCapsuleInterfaceMaterializationIntent(intent);
+  if (
+    input.restoreRunTerminal.type !== "restore" ||
+    input.restoreRunTerminal.status !== "succeeded" ||
+    typeof input.restoreRunTerminal.restoredFromStateVersionId !== "string" ||
+    input.restoreRunTerminal.restoredFromStateVersionId.trim() === "" ||
+    !input.output ||
+    intent.applyRunId !== undefined ||
+    intent.restoreRunId !== input.restoreRunTerminal.id ||
+    intent.sourceIntentId !== replacement.sourceIntentId ||
+    intent.workspaceId !== input.restoreRunTerminal.workspaceId ||
+    intent.capsuleId !== input.restoreRunTerminal.capsuleId ||
+    intent.capsuleId !== input.capsulePatch.id ||
+    intent.stateVersionId !== input.stateVersion.id ||
+    intent.outputId !== input.output.id ||
+    intent.stateGeneration !== input.stateVersion.generation ||
+    intent.stateGeneration !== input.output.stateGeneration ||
+    intent.stateGeneration !== input.capsulePatch.patch.currentStateGeneration
+  ) {
+    throw new TypeError(
+      "Interface materialization replacement does not match the atomic Restore commit",
+    );
+  }
 }
 
 /**
@@ -1002,6 +1477,14 @@ export interface OpenTofuControlStore {
     patch: CapsulePatch,
     guard?: CapsuleStateVersionGuard,
   ): Promise<Capsule | undefined>;
+  /** Exact-record CAS for lifecycle-owned transitions to `stale`. */
+  markCapsuleStale(
+    input: MarkCapsuleStaleCommand,
+  ): Promise<MarkCapsuleStaleResult>;
+  /** Exact Apply-cursor/epoch CAS for lifecycle-owned metadata. */
+  updateCapsuleLifecycle(
+    input: UpdateCapsuleLifecycleCommand,
+  ): Promise<UpdateCapsuleLifecycleResult>;
   /** Private epoch read that does not reinterpret current Run safety. */
   getCapsuleExecutionAuthorityEpoch(
     capsuleId: string,
@@ -1013,6 +1496,31 @@ export interface OpenTofuControlStore {
 
   /** Atomically commits terminal Run + StateVersion + optional Output + Capsule cursor. */
   commitRunState(input: CommitRunStateInput): Promise<CommitRunStateResult>;
+  /** Internal recovery/test read; this is never projected through the public API. */
+  getCapsuleInterfaceMaterializationIntent(
+    id: string,
+  ): Promise<CapsuleInterfaceMaterializationIntent | undefined>;
+  /** Bounded newest-first read of the same ledger's Workspace dead letters. */
+  listDeadLetteredCapsuleInterfaceMaterializationIntents(
+    workspaceId: string,
+    limit?: number,
+  ): Promise<readonly CapsuleInterfaceMaterializationIntent[]>;
+  /** Atomically claims the globally oldest due/expired materialization intent. */
+  claimCapsuleInterfaceMaterializationIntent(
+    input: ClaimCapsuleInterfaceMaterializationIntentInput,
+  ): Promise<CapsuleInterfaceMaterializationIntent | undefined>;
+  /** Extends one still-live exact lease/cursor; never reacquires an expired row. */
+  renewCapsuleInterfaceMaterializationIntentLease(
+    input: RenewCapsuleInterfaceMaterializationIntentLeaseInput,
+  ): Promise<RenewCapsuleInterfaceMaterializationIntentLeaseResult>;
+  /** Lease-token CAS for retry or one durable terminal disposition. */
+  settleCapsuleInterfaceMaterializationIntent(
+    input: SettleCapsuleInterfaceMaterializationIntentInput,
+  ): Promise<SettleCapsuleInterfaceMaterializationIntentResult>;
+  /** Exact failure-snapshot + Capsule-state CAS that reopens the same row. */
+  retryCapsuleInterfaceMaterializationIntent(
+    input: RetryCapsuleInterfaceMaterializationIntentInput,
+  ): Promise<RetryCapsuleInterfaceMaterializationIntentResult>;
 
   commitRestoredState(
     input: CommitRestoredStateInput,
@@ -1385,6 +1893,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   readonly #dependencies = new Map<string, Dependency>();
   readonly #dependencySnapshots = new Map<string, DependencySnapshot>();
   readonly #outputs = new Map<string, Output>();
+  readonly #capsuleInterfaceMaterializationIntents = new Map<
+    string,
+    CapsuleInterfaceMaterializationIntent
+  >();
   readonly #outputShares = new Map<string, OutputShare>();
   readonly #runGroups = new Map<string, RunGroup>();
   readonly #activityEvents = new Map<string, ActivityEvent>();
@@ -1396,6 +1908,43 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   constructor() {
     maybeWarnInMemoryStore("InMemoryOpenTofuControlStore");
+  }
+
+  /**
+   * Synchronous half of the in-memory Interface authority transaction. The
+   * Interface adapter invokes this immediately before mutating its own Map, so
+   * no task boundary exists between the durable-fence check and the write.
+   */
+  isCapsuleInterfaceMaterializationWriteAuthorityCurrent(
+    authority: InterfaceMaterializationWriteAuthority,
+    checkedAt: string,
+  ): boolean {
+    const intent = this.#capsuleInterfaceMaterializationIntents.get(
+      authority.intentId,
+    );
+    const capsule = this.#capsules.get(authority.capsuleId);
+    return Boolean(
+      intent &&
+        capsule &&
+        intent.status === "pending" &&
+        intent.leaseToken === authority.leaseToken &&
+        intent.nextItemIndex === authority.expectedNextItemIndex &&
+        intent.leaseExpiresAt !== undefined &&
+        Date.parse(intent.leaseExpiresAt) > Date.parse(checkedAt) &&
+        intent.workspaceId === authority.workspaceId &&
+        intent.capsuleId === authority.capsuleId &&
+        intent.installConfigId === authority.installConfigId &&
+        intent.stateVersionId === authority.stateVersionId &&
+        intent.outputId === authority.outputId &&
+        intent.stateGeneration === authority.stateGeneration &&
+        capsule.workspaceId === authority.workspaceId &&
+        capsule.id === authority.capsuleId &&
+        capsule.installConfigId === authority.installConfigId &&
+        capsule.status !== "destroyed" &&
+        capsule.currentStateVersionId === authority.stateVersionId &&
+        capsule.currentOutputId === authority.outputId &&
+        capsule.currentStateGeneration === authority.stateGeneration,
+    );
   }
 
   putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile> {
@@ -2189,6 +2738,48 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(updated);
   }
 
+  markCapsuleStale(
+    input: MarkCapsuleStaleCommand,
+  ): Promise<MarkCapsuleStaleResult> {
+    const current = this.#capsules.get(input.capsuleId);
+    if (!current) return Promise.resolve({ kind: "not-found" });
+    if (
+      stableStringify(current) !== stableStringify(input.expected)
+    ) {
+      return Promise.resolve({ kind: "conflict", current });
+    }
+    const updated = normalizeCapsule({
+      ...current,
+      status: "stale",
+      updatedAt: input.updatedAt,
+    });
+    this.#setCapsule(updated);
+    return Promise.resolve({ kind: "updated", capsule: updated });
+  }
+
+  updateCapsuleLifecycle(
+    input: UpdateCapsuleLifecycleCommand,
+  ): Promise<UpdateCapsuleLifecycleResult> {
+    const current = this.#capsules.get(input.capsuleId);
+    if (!current) return Promise.resolve({ kind: "not-found" });
+    const epoch = this.#capsuleExecutionAuthorityEpochs.get(current.id) ?? 1;
+    if (!capsuleLifecycleRevisionMatches(current, epoch, input.expected)) {
+      if (capsuleLifecycleMutationAlreadyApplied(current, epoch, input)) {
+        return Promise.resolve({ kind: "unchanged", capsule: current });
+      }
+      return Promise.resolve({ kind: "conflict", current });
+    }
+    if (capsuleLifecycleMutationAlreadyApplied(current, epoch, input)) {
+      return Promise.resolve({ kind: "unchanged", capsule: current });
+    }
+    const updated = normalizeCapsule({
+      ...current,
+      ...capsuleLifecycleMutationPatch(input.mutation, input.updatedAt),
+    });
+    this.#setCapsule(updated);
+    return Promise.resolve({ kind: "updated", capsule: updated });
+  }
+
   getCapsuleExecutionAuthorityEpoch(
     capsuleId: string,
   ): Promise<number | undefined> {
@@ -2342,7 +2933,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
    * evaluated FIRST so a guard miss/conflict short-circuits before any
    * StateVersion / Output write lands.
    */
-  commitRunState(input: CommitRunStateInput): Promise<CommitRunStateResult> {
+  async commitRunState(
+    input: CommitRunStateInput,
+  ): Promise<CommitRunStateResult> {
+    await validateCommitRunStateInterfaceMaterializationIntent(input);
     const { capsulePatch } = input;
     if (
       input.applyRunTerminal &&
@@ -2350,26 +2944,52 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       this.#runLeases.get(input.applyRunTerminal.id) !==
         input.applyRunLeaseToken
     ) {
-      return Promise.resolve({ applyRunLeaseLost: true });
+      return { applyRunLeaseLost: true };
     }
     const existing = this.#capsules.get(capsulePatch.id);
     if (!existing) {
-      return Promise.resolve({ capsule: undefined });
+      return { capsule: undefined };
     }
     const guard = capsulePatch.guard;
     if (
       existing.currentStateVersionId !== guard.currentStateVersionId ||
       (guard.status !== undefined && existing.status !== guard.status)
     ) {
-      return Promise.reject(
-        new CapsuleStateVersionGuardConflict({
-          id: capsulePatch.id,
-          expectedCurrentStateVersionId: guard.currentStateVersionId,
-          actualCurrentStateVersionId: existing.currentStateVersionId,
-          expectedStatus: guard.status,
-          actualStatus: existing.status,
-        }),
+      throw new CapsuleStateVersionGuardConflict({
+        id: capsulePatch.id,
+        expectedCurrentStateVersionId: guard.currentStateVersionId,
+        actualCurrentStateVersionId: existing.currentStateVersionId,
+        expectedStatus: guard.status,
+        actualStatus: existing.status,
+      });
+    }
+    const intent = input.interfaceMaterializationIntent;
+    if (intent) {
+      const candidateKey = capsuleInterfaceMaterializationIntentContentKey(intent);
+      const collisions = [
+        this.#capsuleInterfaceMaterializationIntents.get(intent.id),
+        ...[...this.#capsuleInterfaceMaterializationIntents.values()].filter(
+          (current) =>
+            current.applyRunId === intent.applyRunId ||
+            (current.capsuleId === intent.capsuleId &&
+              current.stateGeneration === intent.stateGeneration),
+        ),
+      ].filter(
+        (current): current is CapsuleInterfaceMaterializationIntent =>
+          current !== undefined,
       );
+      if (
+        collisions.some(
+          (current) =>
+            current.id !== intent.id ||
+            capsuleInterfaceMaterializationIntentContentKey(current) !==
+              candidateKey,
+        )
+      ) {
+        throw new Error(
+          "capsule Interface materialization intent identity/content conflict",
+        );
+      }
     }
     if (input.stateVersion) {
       this.#stateVersions.set(input.stateVersion.id, input.stateVersion);
@@ -2389,42 +3009,340 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (input.planRunApplied) {
       this.#runs.set(input.planRunApplied.id, input.planRunApplied);
     }
+    if (intent && !this.#capsuleInterfaceMaterializationIntents.has(intent.id)) {
+      this.#capsuleInterfaceMaterializationIntents.set(intent.id, intent);
+    }
     const updated = normalizeCapsule({
       ...existing,
       ...capsulePatch.patch,
     });
     this.#setCapsule(updated);
-    return Promise.resolve({ capsule: updated });
+    return { capsule: updated };
   }
 
-  commitRestoredState(
+  getCapsuleInterfaceMaterializationIntent(
+    id: string,
+  ): Promise<CapsuleInterfaceMaterializationIntent | undefined> {
+    return Promise.resolve(this.#capsuleInterfaceMaterializationIntents.get(id));
+  }
+
+  listDeadLetteredCapsuleInterfaceMaterializationIntents(
+    workspaceId: string,
+    limit?: number,
+  ): Promise<readonly CapsuleInterfaceMaterializationIntent[]> {
+    if (typeof workspaceId !== "string" || workspaceId.trim() === "") {
+      throw new TypeError("workspaceId is required");
+    }
+    const boundedLimit = capsuleInterfaceMaterializationFailureListLimit(limit);
+    return Promise.resolve(
+      [...this.#capsuleInterfaceMaterializationIntents.values()]
+        .filter(
+          (intent) =>
+            intent.workspaceId === workspaceId &&
+            intent.status === "dead_letter",
+        )
+        .sort(
+          (left, right) =>
+            (right.deadLetteredAt ?? "").localeCompare(
+              left.deadLetteredAt ?? "",
+            ) || right.id.localeCompare(left.id),
+        )
+        .slice(0, boundedLimit),
+    );
+  }
+
+  claimCapsuleInterfaceMaterializationIntent(
+    input: ClaimCapsuleInterfaceMaterializationIntentInput,
+  ): Promise<CapsuleInterfaceMaterializationIntent | undefined> {
+    assertCapsuleInterfaceMaterializationIntentClaimInput(input);
+    const { claimedAt, leaseExpiresAt, leaseToken } = input;
+    const candidate = [...this.#capsuleInterfaceMaterializationIntents.values()]
+      .filter(
+        (intent) =>
+          intent.status === "pending" &&
+          Date.parse(intent.nextRetryAt) <= Date.parse(claimedAt) &&
+          (intent.leaseExpiresAt === undefined ||
+            Date.parse(intent.leaseExpiresAt) <= Date.parse(claimedAt)),
+      )
+      .sort(
+        (left, right) =>
+          left.nextRetryAt.localeCompare(right.nextRetryAt) ||
+          left.createdAt.localeCompare(right.createdAt) ||
+          left.id.localeCompare(right.id),
+      )[0];
+    if (!candidate) return Promise.resolve(undefined);
+    const claimed: CapsuleInterfaceMaterializationIntent = {
+      ...candidate,
+      attempts: candidate.attempts + 1,
+      leaseToken,
+      leaseExpiresAt,
+      updatedAt: claimedAt,
+    };
+    this.#capsuleInterfaceMaterializationIntents.set(claimed.id, claimed);
+    return Promise.resolve(claimed);
+  }
+
+  async renewCapsuleInterfaceMaterializationIntentLease(
+    input: RenewCapsuleInterfaceMaterializationIntentLeaseInput,
+  ): Promise<RenewCapsuleInterfaceMaterializationIntentLeaseResult> {
+    assertRenewCapsuleInterfaceMaterializationIntentLeaseInput(input);
+    const current = this.#capsuleInterfaceMaterializationIntents.get(input.id);
+    if (!current) return { kind: "not-found" };
+    if (
+      current.status !== "pending" ||
+      current.leaseToken !== input.leaseToken ||
+      current.nextItemIndex !== input.expectedNextItemIndex ||
+      current.leaseExpiresAt === undefined ||
+      Date.parse(current.leaseExpiresAt) <= Date.parse(input.renewedAt) ||
+      Date.parse(input.leaseExpiresAt) <= Date.parse(current.leaseExpiresAt)
+    ) {
+      return { kind: "lease-lost" };
+    }
+    const renewed: CapsuleInterfaceMaterializationIntent = {
+      ...current,
+      leaseExpiresAt: input.leaseExpiresAt,
+      updatedAt: input.renewedAt,
+    };
+    await validateCapsuleInterfaceMaterializationIntent(renewed);
+    this.#capsuleInterfaceMaterializationIntents.set(renewed.id, renewed);
+    return { kind: "updated", intent: renewed };
+  }
+
+  async settleCapsuleInterfaceMaterializationIntent(
+    input: SettleCapsuleInterfaceMaterializationIntentInput,
+  ): Promise<SettleCapsuleInterfaceMaterializationIntentResult> {
+    assertCapsuleInterfaceMaterializationIntentSettlementInput(input);
+    const current = this.#capsuleInterfaceMaterializationIntents.get(input.id);
+    if (!current) return { kind: "not-found" };
+    if (
+      current.status !== "pending" ||
+      current.leaseToken !== input.leaseToken ||
+      current.nextItemIndex !== input.expectedNextItemIndex ||
+      current.leaseExpiresAt === undefined ||
+      Date.parse(current.leaseExpiresAt) <= Date.parse(input.settledAt)
+    ) {
+      return { kind: "lease-lost" };
+    }
+    if (input.outcome.kind === "progress") {
+      if (input.outcome.nextItemIndex > current.totalItems) {
+        throw new TypeError("progress nextItemIndex exceeds totalItems");
+      }
+      const progressed: CapsuleInterfaceMaterializationIntent = {
+        ...current,
+        nextItemIndex: input.outcome.nextItemIndex,
+        updatedAt: input.settledAt,
+        error: undefined,
+        ...(input.outcome.releaseLease
+          ? {
+              leaseToken: undefined,
+              leaseExpiresAt: undefined,
+              nextRetryAt: input.outcome.nextRetryAt!,
+            }
+          : {}),
+      };
+      await validateCapsuleInterfaceMaterializationIntent(progressed);
+      this.#capsuleInterfaceMaterializationIntents.set(
+        progressed.id,
+        progressed,
+      );
+      return { kind: "updated", intent: progressed };
+    }
+    const {
+      leaseToken: _leaseToken,
+      leaseExpiresAt: _leaseExpiresAt,
+      error: _error,
+      receipt: _receipt,
+      completedAt: _completedAt,
+      deadLetteredAt: _deadLetteredAt,
+      ...base
+    } = current;
+    void _leaseToken;
+    void _leaseExpiresAt;
+    void _error;
+    void _receipt;
+    void _completedAt;
+    void _deadLetteredAt;
+    const updated: CapsuleInterfaceMaterializationIntent =
+      input.outcome.kind === "completed"
+        ? {
+            ...base,
+            status: "completed",
+            nextItemIndex:
+              input.outcome.disposition === "materialized"
+                ? current.totalItems
+                : current.nextItemIndex,
+            updatedAt: input.settledAt,
+            completedAt: input.settledAt,
+            receipt: {
+              disposition: input.outcome.disposition,
+              blueprintsDigest: current.blueprintsDigest,
+              completedAt: input.settledAt,
+            },
+          }
+        : input.outcome.kind === "retry"
+          ? {
+              ...base,
+              status: "pending",
+              nextRetryAt: input.outcome.nextRetryAt,
+              updatedAt: input.settledAt,
+              error: {
+                code: input.outcome.code,
+                detailDigest: input.outcome.detailDigest,
+                recordedAt: input.settledAt,
+              },
+            }
+          : {
+              ...base,
+              status: "dead_letter",
+              updatedAt: input.settledAt,
+              deadLetteredAt: input.settledAt,
+              error: {
+                code: input.outcome.code,
+                detailDigest: input.outcome.detailDigest,
+                recordedAt: input.settledAt,
+              },
+            };
+    await validateCapsuleInterfaceMaterializationIntent(updated);
+    this.#capsuleInterfaceMaterializationIntents.set(updated.id, updated);
+    return { kind: "updated", intent: updated };
+  }
+
+  async retryCapsuleInterfaceMaterializationIntent(
+    input: RetryCapsuleInterfaceMaterializationIntentInput,
+  ): Promise<RetryCapsuleInterfaceMaterializationIntentResult> {
+    assertRetryCapsuleInterfaceMaterializationIntentInput(input);
+    const current = this.#capsuleInterfaceMaterializationIntents.get(input.id);
+    if (!current || current.workspaceId !== input.workspaceId) {
+      return { kind: "not-found" };
+    }
+    const capsule = this.#capsules.get(current.capsuleId);
+    if (
+      capsuleInterfaceMaterializationIntentContentKey(current) !==
+        capsuleInterfaceMaterializationIntentContentKey(input.expected) ||
+      stableStringify(current) !== stableStringify(input.expected) ||
+      !capsule ||
+      capsule.workspaceId !== input.workspaceId ||
+      capsule.status === "destroyed" ||
+      capsule.currentStateVersionId !== input.expectedStateVersionId ||
+      capsule.currentStateGeneration !== input.expectedStateGeneration ||
+      capsule.currentOutputId !== current.outputId
+    ) {
+      return { kind: "conflict" };
+    }
+    const {
+      error: _error,
+      deadLetteredAt: _deadLetteredAt,
+      ...base
+    } = current;
+    void _error;
+    void _deadLetteredAt;
+    const retried: CapsuleInterfaceMaterializationIntent = {
+      ...base,
+      status: "pending",
+      nextRetryAt: input.retriedAt,
+      updatedAt: input.retriedAt,
+    };
+    await validateCapsuleInterfaceMaterializationIntent(retried);
+    this.#capsuleInterfaceMaterializationIntents.set(retried.id, retried);
+    return { kind: "updated", intent: retried };
+  }
+
+  async commitRestoredState(
     input: CommitRestoredStateInput,
   ): Promise<CommitRestoredStateResult> {
+    await validateCommitRestoredStateInterfaceMaterialization(input);
     if (
       this.#runLeases.get(input.restoreRunTerminal.id) !==
       input.restoreRunLeaseToken
     ) {
-      return Promise.resolve({ restoreRunLeaseLost: true });
+      return { restoreRunLeaseLost: true };
     }
     const { capsulePatch } = input;
     const existing = this.#capsules.get(capsulePatch.id);
     if (!existing) {
-      return Promise.resolve({ capsule: undefined });
+      return { capsule: undefined };
     }
     const guard = capsulePatch.guard;
+    if (existing.currentStateVersionId !== guard.currentStateVersionId) {
+      throw new CapsuleStateVersionGuardConflict({
+        id: capsulePatch.id,
+        expectedCurrentStateVersionId: guard.currentStateVersionId,
+        actualCurrentStateVersionId: existing.currentStateVersionId,
+        expectedStatus: guard.status,
+        actualStatus: existing.status,
+      });
+    }
     if (
       existing.currentStateGeneration !== guard.currentStateGeneration ||
       (guard.status !== undefined && existing.status !== guard.status)
     ) {
-      return Promise.reject(
-        new CapsuleStateGenerationGuardConflict({
-          id: capsulePatch.id,
-          expectedCurrentStateGeneration: guard.currentStateGeneration,
-          actualCurrentStateGeneration: existing.currentStateGeneration,
-          expectedStatus: guard.status,
-          actualStatus: existing.status,
-        }),
+      throw new CapsuleStateGenerationGuardConflict({
+        id: capsulePatch.id,
+        expectedCurrentStateGeneration: guard.currentStateGeneration,
+        actualCurrentStateGeneration: existing.currentStateGeneration,
+        expectedStatus: guard.status,
+        actualStatus: existing.status,
+      });
+    }
+    const replacement = input.interfaceMaterializationReplacement;
+    if (replacement) {
+      const source = this.#capsuleInterfaceMaterializationIntents.get(
+        replacement.sourceIntentId,
       );
+      const sourceState = source
+        ? this.#stateVersions.get(source.stateVersionId)
+        : undefined;
+      const sourceOutput = source
+        ? this.#outputs.get(source.outputId)
+        : undefined;
+      if (
+        !source ||
+        source.workspaceId !== replacement.intent.workspaceId ||
+        source.capsuleId !== replacement.intent.capsuleId ||
+        source.installConfigId !== replacement.intent.installConfigId ||
+        source.stateVersionId !==
+          input.restoreRunTerminal.restoredFromStateVersionId ||
+        !sourceState ||
+        sourceState.workspaceId !== source.workspaceId ||
+        sourceState.capsuleId !== source.capsuleId ||
+        sourceState.generation !== source.stateGeneration ||
+        !sourceOutput ||
+        sourceOutput.workspaceId !== source.workspaceId ||
+        sourceOutput.capsuleId !== source.capsuleId ||
+        sourceOutput.stateGeneration !== source.stateGeneration ||
+        source.blueprintsDigest !== replacement.intent.blueprintsDigest ||
+        stableStringify(source.blueprints) !==
+          stableStringify(replacement.intent.blueprints)
+      ) {
+        throw new TypeError(
+          "Restore Interface materialization source snapshot is missing or changed",
+        );
+      }
+      const candidateKey = capsuleInterfaceMaterializationIntentContentKey(
+        replacement.intent,
+      );
+      const collisions = [
+        ...this.#capsuleInterfaceMaterializationIntents.values(),
+      ].filter(
+        (candidate) =>
+          candidate.id === replacement.intent.id ||
+          (replacement.intent.restoreRunId !== undefined &&
+            candidate.restoreRunId === replacement.intent.restoreRunId) ||
+          (replacement.intent.applyRunId !== undefined &&
+            candidate.applyRunId === replacement.intent.applyRunId) ||
+          (candidate.capsuleId === replacement.intent.capsuleId &&
+            candidate.stateGeneration === replacement.intent.stateGeneration),
+      );
+      if (
+        collisions.length > 1 ||
+        (collisions[0] &&
+          capsuleInterfaceMaterializationIntentContentKey(collisions[0]) !==
+            candidateKey)
+      ) {
+        throw new TypeError(
+          "Restore Interface materialization replacement identity/content conflict",
+        );
+      }
     }
     const updated = normalizeCapsule({
       ...existing,
@@ -2437,7 +3355,40 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     this.#runs.set(input.restoreRunTerminal.id, input.restoreRunTerminal);
     this.#runLeases.delete(input.restoreRunTerminal.id);
     this.#setCapsule(updated);
-    return Promise.resolve({ capsule: updated });
+    if (replacement) {
+      const completedAt = replacement.intent.createdAt;
+      for (const [id, current] of this.#capsuleInterfaceMaterializationIntents) {
+        if (
+          current.capsuleId !== replacement.intent.capsuleId ||
+          current.status !== "pending" ||
+          id === replacement.intent.id
+        ) {
+          continue;
+        }
+        this.#capsuleInterfaceMaterializationIntents.set(id, {
+          ...current,
+          status: "completed",
+          leaseToken: undefined,
+          leaseExpiresAt: undefined,
+          error: undefined,
+          receipt: {
+            disposition: "superseded_before_materialization",
+            blueprintsDigest: current.blueprintsDigest,
+            completedAt,
+          },
+          updatedAt: completedAt,
+          completedAt,
+          deadLetteredAt: undefined,
+        });
+      }
+      if (!this.#capsuleInterfaceMaterializationIntents.has(replacement.intent.id)) {
+        this.#capsuleInterfaceMaterializationIntents.set(
+          replacement.intent.id,
+          replacement.intent,
+        );
+      }
+    }
+    return { capsule: updated };
   }
 
   putConnection(connection: ProviderConnection): Promise<ProviderConnection> {
@@ -3595,6 +4546,17 @@ function normalizeUsageEvent(event: UsageEvent): UsageEvent {
 
 function workspaceMemberKey(workspaceId: string, accountId: string): string {
   return `${workspaceId}\u0000${accountId}`;
+}
+
+function requiredIntentLifecycleTimestamp(value: string, field: string): string {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    !Number.isFinite(Date.parse(value))
+  ) {
+    throw new TypeError(`${field} must be a valid timestamp`);
+  }
+  return value;
 }
 
 function isArchivedWorkspace(workspace: Workspace): boolean {

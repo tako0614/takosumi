@@ -17,6 +17,11 @@ import type {
   OpenTofuDestroyResult,
   OpenTofuPlanJob,
   OpenTofuPlanResult,
+  OpenTofuRestoreAuthority,
+  OpenTofuRestoreExecutionControl,
+  OpenTofuRestoreJob,
+  OpenTofuRestoreResult,
+  OpenTofuRestoreSourceState,
   OpenTofuRunner,
   OpenTofuSourceSyncJob,
   OpenTofuSourceSyncResult,
@@ -68,10 +73,13 @@ export interface LocalOpenTofuStateArtifact {
   readonly environment: string;
   readonly generation: number;
   readonly createdByRunId: string;
-  readonly action: "apply" | "destroy";
+  readonly action: "apply" | "destroy" | "restore";
   readonly stateDigest: string;
   readonly stateBytes: Uint8Array;
-  readonly result: OpenTofuApplyResult | OpenTofuDestroyResult;
+  readonly result:
+    | OpenTofuApplyResult
+    | OpenTofuDestroyResult
+    | OpenTofuRestoreResult;
 }
 
 export interface LocalOpenTofuRawOutputArtifact {
@@ -585,6 +593,122 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       normalizedResult,
     );
     return committed.result as OpenTofuDestroyResult;
+  }
+
+  async restore(
+    job: OpenTofuRestoreJob,
+    control: OpenTofuRestoreExecutionControl,
+  ): Promise<OpenTofuRestoreResult> {
+    control?.signal?.throwIfAborted();
+    const scope = job.stateScope;
+    const subject = requiredStateSubject(scope, job.runId);
+    const sourceDescriptor = job.sourceState;
+    const sourceAuthority = control?.sourceAuthority;
+    if (!sourceAuthority || typeof sourceAuthority.readExact !== "function") {
+      throw new Error(
+        "local OpenTofu restore requires Core source authority",
+      );
+    }
+    let authoritativeSource: OpenTofuRestoreSourceState | undefined;
+    try {
+      authoritativeSource = await sourceAuthority.readExact();
+    } catch (error) {
+      throw new Error(
+        "local OpenTofu restore source authority is unavailable",
+        { cause: error },
+      );
+    }
+    assertExactRestoreSourceAuthority(authoritativeSource, sourceDescriptor);
+    control?.signal?.throwIfAborted();
+
+    const source = await this.stateStore.read(sourceDescriptor.stateRef);
+    if (!source) {
+      throw new Error(
+        `local OpenTofu restore source ${sourceDescriptor.stateRef} was not found`,
+      );
+    }
+    const targetSubject = parseStateSubject(scope.subject);
+    if (
+      !sourceDescriptor.stateVersionId.trim() ||
+      sourceDescriptor.workspaceId !== scope.workspaceId ||
+      sourceDescriptor.capsuleId.trim() === "" ||
+      sourceDescriptor.environment !== scope.environment ||
+      !targetSubject ||
+      targetSubject.kind !== "capsule" ||
+      targetSubject.id !== sourceDescriptor.capsuleId ||
+      sourceDescriptor.generation >= scope.generation ||
+      source.workspaceId !== sourceDescriptor.workspaceId ||
+      source.subject.kind !== "capsule" ||
+      source.subject.id !== sourceDescriptor.capsuleId ||
+      source.environment !== sourceDescriptor.environment ||
+      source.generation !== sourceDescriptor.generation ||
+      source.stateRef !== sourceDescriptor.stateRef ||
+      source.stateDigest !== sourceDescriptor.digest ||
+      source.createdByRunId !== sourceDescriptor.createdByRunId
+    ) {
+      throw new Error(
+        `local OpenTofu restore source ${job.sourceState.stateRef} does not match the exact StateVersion descriptor and restore scope`,
+      );
+    }
+    control?.signal?.throwIfAborted();
+
+    // The host allocates the target reference in the StateScope. The local
+    // state store's no-replace commit is the immutable acknowledgement fence;
+    // retries of the same Restore adopt this exact record.
+    const stateRef = scope.stateRef;
+    const restoreAuthority: OpenTofuRestoreAuthority = {
+      kind: "takosumi.runner-restore-ack@v1",
+      version: 1,
+      fence: 1,
+      operationId: `local-restore:${job.runId}`,
+      // Local state artifacts are addressed by content digest rather than an
+      // R2 ETag. Keeping the digest as the opaque tag still lets the shared
+      // contract carry an exact immutable-object acknowledgement.
+      stateEtag: source.stateDigest,
+    };
+    const result: OpenTofuRestoreResult = {
+      state: {
+        generation: scope.generation,
+        stateRef,
+        logicalTargetStateRef: scope.stateRef,
+        digest: source.stateDigest,
+        runId: job.runId,
+        ciphertextLength: source.stateBytes.byteLength,
+        restoreAuthority,
+      },
+    };
+    const candidate: LocalOpenTofuStateArtifact = {
+      stateRef,
+      workspaceId: scope.workspaceId,
+      subject,
+      environment: scope.environment,
+      generation: scope.generation,
+      createdByRunId: job.runId,
+      action: "restore",
+      stateDigest: source.stateDigest,
+      stateBytes: source.stateBytes,
+      result,
+    };
+    const existing = await this.stateStore.read(stateRef);
+    if (existing) {
+      await assertLocalStateArtifact(existing);
+      if (
+        existing.action !== "restore" ||
+        existing.createdByRunId !== job.runId
+      ) {
+        throw new Error(
+          `local OpenTofu restore target ${stateRef} is already owned by a different mutation`,
+        );
+      }
+      assertSameStateMutation(existing, candidate);
+      return existing.result as OpenTofuRestoreResult;
+    }
+    const committed = await this.stateStore.commit(candidate);
+    await assertLocalStateArtifact(committed);
+    if (committed.action !== "restore") {
+      throw new Error("local OpenTofu restore commit returned a non-restore artifact");
+    }
+    return committed.result as OpenTofuRestoreResult;
   }
 
   async release(
@@ -1392,7 +1516,9 @@ async function parseStateArtifactEnvelope(
     !Number.isSafeInteger(envelope.generation) ||
     (envelope.generation as number) < 0 ||
     !stringValue(envelope, "createdByRunId") ||
-    (envelope.action !== "apply" && envelope.action !== "destroy") ||
+    (envelope.action !== "apply" &&
+      envelope.action !== "destroy" &&
+      envelope.action !== "restore") ||
     !stringValue(envelope, "stateDigest") ||
     !stringValue(envelope, "ciphertextBase64")
   ) {
@@ -1444,7 +1570,8 @@ async function parseStateArtifactEnvelope(
     stateBytes,
     result: result as unknown as
       | OpenTofuApplyResult
-      | OpenTofuDestroyResult,
+      | OpenTofuDestroyResult
+      | OpenTofuRestoreResult,
   };
   await assertLocalStateArtifact(artifact);
   return artifact;
@@ -1458,7 +1585,7 @@ function localStateArtifactAad(metadata: {
   readonly environment: string;
   readonly generation: number;
   readonly createdByRunId: string;
-  readonly action: "apply" | "destroy";
+  readonly action: "apply" | "destroy" | "restore";
   readonly stateDigest: string;
 }): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(metadata));
@@ -1569,7 +1696,15 @@ async function assertLocalStateArtifact(
   ) {
     throw new Error("local OpenTofu state artifact metadata is invalid");
   }
-  if (artifact.result.stateDigest !== artifact.stateDigest) {
+  if (artifact.action === "restore") {
+    assertLocalRestoreResult(artifact);
+  }
+  const resultDigest =
+    artifact.action === "restore"
+      ? (artifact.result as OpenTofuRestoreResult).state.digest
+      : (artifact.result as OpenTofuApplyResult | OpenTofuDestroyResult)
+          .stateDigest;
+  if (resultDigest !== artifact.stateDigest) {
     throw new Error(
       `local OpenTofu state artifact ${artifact.stateRef} result digest does not match its state`,
     );
@@ -1579,6 +1714,67 @@ async function assertLocalStateArtifact(
     artifact.stateDigest,
     `local OpenTofu state ${artifact.stateRef}`,
   );
+}
+
+function assertLocalRestoreResult(
+  artifact: LocalOpenTofuStateArtifact,
+): void {
+  const state = (artifact.result as OpenTofuRestoreResult).state;
+  const authority = state?.restoreAuthority;
+  if (
+    !state ||
+    state.generation !== artifact.generation ||
+    state.stateRef !== artifact.stateRef ||
+    typeof state.logicalTargetStateRef !== "string" ||
+    state.logicalTargetStateRef.trim().length === 0 ||
+    typeof state.digest !== "string" ||
+    state.digest !== artifact.stateDigest ||
+    state.runId !== artifact.createdByRunId ||
+    !Number.isSafeInteger(state.ciphertextLength) ||
+    state.ciphertextLength < 0 ||
+    authority?.kind !== "takosumi.runner-restore-ack@v1" ||
+    !Number.isSafeInteger(authority.version) ||
+    authority.version <= 0 ||
+    !Number.isSafeInteger(authority.fence) ||
+    authority.fence <= 0 ||
+    typeof authority.operationId !== "string" ||
+    authority.operationId.trim().length === 0 ||
+    typeof authority.stateEtag !== "string" ||
+    authority.stateEtag !== artifact.stateDigest
+  ) {
+    throw new Error(
+      `local OpenTofu restore artifact ${artifact.stateRef} acknowledgement is malformed`,
+    );
+  }
+}
+
+function assertExactRestoreSourceAuthority(
+  actual: OpenTofuRestoreSourceState | undefined,
+  expected: OpenTofuRestoreSourceState,
+): asserts actual is OpenTofuRestoreSourceState {
+  if (
+    !actual ||
+    typeof actual.stateVersionId !== "string" ||
+    typeof actual.workspaceId !== "string" ||
+    typeof actual.capsuleId !== "string" ||
+    typeof actual.environment !== "string" ||
+    !Number.isSafeInteger(actual.generation) ||
+    typeof actual.stateRef !== "string" ||
+    typeof actual.digest !== "string" ||
+    typeof actual.createdByRunId !== "string" ||
+    actual.stateVersionId !== expected.stateVersionId ||
+    actual.workspaceId !== expected.workspaceId ||
+    actual.capsuleId !== expected.capsuleId ||
+    actual.environment !== expected.environment ||
+    actual.generation !== expected.generation ||
+    actual.stateRef !== expected.stateRef ||
+    actual.digest !== expected.digest ||
+    actual.createdByRunId !== expected.createdByRunId
+  ) {
+    throw new Error(
+      `local OpenTofu restore source ${expected.stateRef} is not authorized by the exact Core StateVersion authority`,
+    );
+  }
 }
 
 async function assertLocalRawOutputArtifact(
@@ -1619,7 +1815,9 @@ function assertSameStateMutation(
     existing.environment !== candidate.environment ||
     existing.generation !== candidate.generation ||
     existing.action !== candidate.action ||
-    existing.stateDigest !== candidate.stateDigest
+    existing.stateDigest !== candidate.stateDigest ||
+    (existing.action === "restore" &&
+      JSON.stringify(existing.result) !== JSON.stringify(candidate.result))
   ) {
     throw new Error(
       `local OpenTofu state target ${candidate.stateRef} is already committed by a different mutation`,
@@ -1689,7 +1887,7 @@ function assertLocalMutationScope(
   artifact: LocalOpenTofuStateArtifact,
   scope: DispatchStateScope,
   runId: string,
-  action: "apply" | "destroy",
+  action: "apply" | "destroy" | "restore",
 ): void {
   const subject = requiredStateSubject(scope, runId);
   if (

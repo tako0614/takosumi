@@ -154,7 +154,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 86 件です。
+次の 88 件です。
 
 **Account views**
 
@@ -183,6 +183,8 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | DELETE   | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーを外す                          |
 | GET      | `/api/v1/workspaces/{workspaceId}/graph`             | Capsule の依存グラフを読む              |
 | GET      | `/api/v1/workspaces/{workspaceId}/activity`          | 操作履歴を一覧する                      |
+| GET      | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures` | Interface materialization の value-free な失敗を一覧する |
+| POST     | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intentId}/retries` | exact failure/state CAS で再試行する |
 | GET      | `/api/v1/workspaces/{workspaceId}/usage`             | 利用量を一覧する                        |
 | GET      | `/api/v1/workspaces/{workspaceId}/billing`           | 課金状態を読む                          |
 | GET      | `/api/v1/workspaces/{workspaceId}/backups`           | 制御情報の書き出しを一覧する            |

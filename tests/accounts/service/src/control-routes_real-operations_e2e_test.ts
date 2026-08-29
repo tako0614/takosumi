@@ -2874,6 +2874,20 @@ test("authenticated repository Interface review persists exact proposals and app
   );
   expect(apply.run.status).toBe("succeeded");
 
+  // Apply commits only the Plan-pinned durable intent. The owning scheduled
+  // recovery path materializes canonical Interface/Binding rows after that
+  // transaction, so an isolate loss between the two cannot drop authority.
+  expect(
+    await operations.interfaces.list({
+      workspaceId: seeded.workspace.id,
+      ownerKind: "Capsule",
+      ownerId: capsule.id,
+    }),
+  ).toHaveLength(0);
+  expect(
+    await operations.drainInterfaceMaterializationIntents({ limit: 1 }),
+  ).toMatchObject({ claimed: 1, completed: 1 });
+
   const interfaces = await operations.interfaces.list({
     workspaceId: seeded.workspace.id,
     ownerKind: "Capsule",

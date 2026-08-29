@@ -19,6 +19,7 @@ export const deployControlLogicalTables = [
   "runGroups",
   "runs",
   "planRunInputs",
+  "capsuleInterfaceMaterializationIntents",
   "stateVersions",
   "artifacts",
   "usageEvents",
@@ -56,6 +57,8 @@ export const deployControlD1TableNames = {
   runGroups: "run_groups",
   runs: "runs",
   planRunInputs: "runs_inputs",
+  capsuleInterfaceMaterializationIntents:
+    "capsule_interface_materialization_intents",
   stateVersions: "state_versions",
   artifacts: "artifacts",
   usageEvents: "usage_events",
@@ -89,6 +92,8 @@ export const deployControlPostgresTableNames = {
   runGroups: "takosumi_run_groups",
   runs: "takosumi_runs",
   planRunInputs: "takosumi_plan_run_inputs",
+  capsuleInterfaceMaterializationIntents:
+    "takosumi_capsule_interface_materialization_intents",
   stateVersions: "takosumi_state_versions",
   artifacts: "takosumi_artifacts",
   usageEvents: "takosumi_usage_events",

@@ -88,6 +88,11 @@ import type {
   CapsuleExecutionAuthorityInput,
   CapsuleInstallConfigRebindInput,
   CapsuleInstallConfigRebindResult,
+  ClaimCapsuleInterfaceMaterializationIntentInput,
+  MarkCapsuleStaleCommand,
+  MarkCapsuleStaleResult,
+  UpdateCapsuleLifecycleCommand,
+  UpdateCapsuleLifecycleResult,
   CapsuleRuntimeSafety,
   CapsulePatch,
   CapsuleStateVersionGuard,
@@ -95,7 +100,13 @@ import type {
   PlanRunInputs,
   PublicHostReservation,
   RecoverableOpenTofuRunListOptions,
+  RenewCapsuleInterfaceMaterializationIntentLeaseInput,
+  RenewCapsuleInterfaceMaterializationIntentLeaseResult,
+  RetryCapsuleInterfaceMaterializationIntentInput,
+  RetryCapsuleInterfaceMaterializationIntentResult,
   RuntimeSecretRetirementDispatchClaimInput,
+  SettleCapsuleInterfaceMaterializationIntentInput,
+  SettleCapsuleInterfaceMaterializationIntentResult,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
@@ -105,10 +116,17 @@ import type {
 } from "./store.ts";
 import {
   assertSourceSyncSuccessCommit,
+  assertCapsuleInterfaceMaterializationIntentClaimInput,
+  assertCapsuleInterfaceMaterializationIntentSettlementInput,
+  assertRetryCapsuleInterfaceMaterializationIntentInput,
+  assertRenewCapsuleInterfaceMaterializationIntentLeaseInput,
   boundedActivityWorkspaceIds,
+  capsuleInterfaceMaterializationFailureListLimit,
   clampActivityLimit,
   clampRecoverableOpenTofuRunListLimit,
   clampRunListLimit,
+  capsuleLifecycleMutationAlreadyApplied,
+  capsuleLifecycleMutationPatch,
   capsuleRuntimeSafetyFromRun,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
@@ -123,7 +141,14 @@ import {
   sourceSnapshotsExactlyMatch,
   storedCapsuleCompatibilityProviderGraph,
   SourceSnapshotConflictError,
+  validateCommitRestoredStateInterfaceMaterialization,
+  validateCommitRunStateInterfaceMaterializationIntent,
 } from "./store.ts";
+import {
+  capsuleInterfaceBlueprintsJson,
+  type CapsuleInterfaceMaterializationIntent,
+  validateCapsuleInterfaceMaterializationIntent,
+} from "./interface_materialization_intent.ts";
 import {
   artifactRecordFromRow,
   coerceRunRowStatus,
@@ -2418,6 +2443,125 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     });
   }
 
+  async markCapsuleStale(
+    input: MarkCapsuleStaleCommand,
+  ): Promise<MarkCapsuleStaleResult> {
+    const expected = normalizeCapsuleRecord(input.expected);
+    const updated = normalizeCapsuleRecord({
+      ...expected,
+      status: "stale",
+      updatedAt: input.updatedAt,
+    });
+    const rows = await this.#db
+      .update(pgSchema.capsules)
+      .set({
+        status: updated.status,
+        capsuleJson: updated,
+        updatedAt: updated.updatedAt,
+      })
+      .where(
+        and(
+          eq(pgSchema.capsules.id, input.capsuleId),
+          eq(pgSchema.capsules.capsuleJson, expected),
+        ),
+      )
+      .returning({ json: pgSchema.capsules.capsuleJson });
+    if (rows[0]) {
+      return {
+        kind: "updated",
+        capsule: normalizeCapsuleRecord(parseRow(rows[0]) as Capsule),
+      };
+    }
+    const current = await this.getCapsule(input.capsuleId);
+    return current
+      ? { kind: "conflict", current }
+      : { kind: "not-found" };
+  }
+
+  async updateCapsuleLifecycle(
+    input: UpdateCapsuleLifecycleCommand,
+  ): Promise<UpdateCapsuleLifecycleResult> {
+    const patch = capsuleLifecycleMutationPatch(
+      input.mutation,
+      input.updatedAt,
+    );
+    const expectedStateVersion = input.expected.currentStateVersionId ===
+        undefined
+      ? isNull(pgSchema.capsules.currentStateVersionId)
+      : eq(
+          pgSchema.capsules.currentStateVersionId,
+          input.expected.currentStateVersionId,
+        );
+    const expectedOutput = input.expected.currentOutputId === undefined
+      ? sql`${pgSchema.capsules.capsuleJson} ->> 'currentOutputId' IS NULL`
+      : sql`${pgSchema.capsules.capsuleJson} ->> 'currentOutputId' = ${input.expected.currentOutputId}`;
+    const expectedAutoUpdate = input.expected.autoUpdate === undefined
+      ? sql`${pgSchema.capsules.capsuleJson} ->> 'autoUpdate' IS NULL`
+      : sql`${pgSchema.capsules.capsuleJson} ->> 'autoUpdate' = ${String(input.expected.autoUpdate)}`;
+    const expectedAutoUpdateAttempt =
+      input.expected.autoUpdateAttemptSourceSnapshotId === undefined
+        ? sql`${pgSchema.capsules.capsuleJson} ->> 'autoUpdateAttemptSourceSnapshotId' IS NULL`
+        : sql`${pgSchema.capsules.capsuleJson} ->> 'autoUpdateAttemptSourceSnapshotId' = ${input.expected.autoUpdateAttemptSourceSnapshotId}`;
+    const expectedCompatibilityReport =
+      input.expected.compatibilityReportId === undefined
+        ? sql`${pgSchema.capsules.capsuleJson} ->> 'compatibilityReportId' IS NULL`
+        : sql`${pgSchema.capsules.capsuleJson} ->> 'compatibilityReportId' = ${input.expected.compatibilityReportId}`;
+    const expectedCompatibilityStatus =
+      input.expected.compatibilityStatus === undefined
+        ? sql`${pgSchema.capsules.capsuleJson} ->> 'compatibilityStatus' IS NULL`
+        : sql`${pgSchema.capsules.capsuleJson} ->> 'compatibilityStatus' = ${input.expected.compatibilityStatus}`;
+    const claimNotAlreadyApplied = input.mutation.kind === "auto-update-claim"
+      ? sql`${pgSchema.capsules.capsuleJson} ->> 'autoUpdateAttemptSourceSnapshotId' IS DISTINCT FROM ${input.mutation.sourceSnapshotId}`
+      : sql`true`;
+    const rows = await this.#db
+      .update(pgSchema.capsules)
+      .set({
+        ...(patch.status ? { status: patch.status } : {}),
+        capsuleJson:
+          sql`${pgSchema.capsules.capsuleJson} || ${JSON.stringify(patch)}::jsonb`,
+        updatedAt: input.updatedAt,
+      })
+      .where(
+        and(
+          eq(pgSchema.capsules.id, input.capsuleId),
+          eq(
+            pgSchema.capsules.executionAuthorityEpoch,
+            input.expected.executionAuthorityEpoch,
+          ),
+          expectedStateVersion,
+          sql`COALESCE((${pgSchema.capsules.capsuleJson} ->> 'currentStateGeneration')::integer, 0) = ${input.expected.currentStateGeneration}`,
+          expectedOutput,
+          eq(pgSchema.capsules.status, input.expected.status),
+          expectedAutoUpdate,
+          expectedAutoUpdateAttempt,
+          expectedCompatibilityReport,
+          expectedCompatibilityStatus,
+          claimNotAlreadyApplied,
+        ),
+      )
+      .returning({ json: pgSchema.capsules.capsuleJson });
+    if (rows[0]) {
+      return {
+        kind: "updated",
+        capsule: normalizeCapsuleRecord(parseRow(rows[0]) as Capsule),
+      };
+    }
+    const current = await this.getCapsule(input.capsuleId);
+    const epoch = current
+      ? await this.getCapsuleExecutionAuthorityEpoch(current.id)
+      : undefined;
+    if (
+      current &&
+      epoch !== undefined &&
+      capsuleLifecycleMutationAlreadyApplied(current, epoch, input)
+    ) {
+      return { kind: "unchanged", capsule: current };
+    }
+    return current
+      ? { kind: "conflict", current }
+      : { kind: "not-found" };
+  }
+
   /**
    * Atomic provider-applied / destroy-apply ledger commit (spec §20 / §21 / §16). All
    * writes — StateVersion, (apply) Output,
@@ -2435,6 +2579,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   async commitRunState(
     input: CommitRunStateInput,
   ): Promise<CommitRunStateResult> {
+    await validateCommitRunStateInterfaceMaterializationIntent(input);
     return await this.#client.transaction(
       async (transaction: SqlTransaction) => {
         const txDb = this.#drizzleForClient(transaction);
@@ -2446,26 +2591,23 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   async commitRestoredState(
     input: CommitRestoredStateInput,
   ): Promise<CommitRestoredStateResult> {
+    await validateCommitRestoredStateInterfaceMaterialization(input);
     return await this.#client.transaction(
       async (transaction: SqlTransaction) => {
         const db = this.#drizzleForClient(transaction);
-        const restoreRunCommitted = await pgUpdateTerminalRunWithLease(
-          db,
-          RUN_KIND_RESTORE,
-          [RUN_KIND_RESTORE],
-          input.restoreRunTerminal,
-          input.restoreRunLeaseToken,
-        );
-        if (!restoreRunCommitted) return { restoreRunLeaseLost: true };
-        await pgUpsertStateVersion(db, input.stateVersion);
-        if (input.output) {
-          await pgUpsertOutput(db, input.output);
-        }
-
         const { capsulePatch } = input;
         const current = await this.#getCapsuleOn(db, capsulePatch.id);
         if (!current) return { capsule: undefined };
         const guard = capsulePatch.guard;
+        if (current.currentStateVersionId !== guard.currentStateVersionId) {
+          throw new CapsuleStateVersionGuardConflict({
+            id: capsulePatch.id,
+            expectedCurrentStateVersionId: guard.currentStateVersionId,
+            actualCurrentStateVersionId: current.currentStateVersionId,
+            expectedStatus: guard.status,
+            actualStatus: current.status,
+          });
+        }
         if (
           current.currentStateGeneration !== guard.currentStateGeneration ||
           (guard.status !== undefined && current.status !== guard.status)
@@ -2477,6 +2619,90 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             expectedStatus: guard.status,
             actualStatus: current.status,
           });
+        }
+        const restoreRunCommitted = await pgUpdateTerminalRunWithLease(
+          db,
+          RUN_KIND_RESTORE,
+          [RUN_KIND_RESTORE],
+          input.restoreRunTerminal,
+          input.restoreRunLeaseToken,
+        );
+        if (!restoreRunCommitted) return { restoreRunLeaseLost: true };
+        const replacement = input.interfaceMaterializationReplacement;
+        if (replacement) {
+          const table = pgSchema.capsuleInterfaceMaterializationIntents;
+          const [source] = await db
+            .select()
+            .from(table)
+            .where(eq(table.id, replacement.sourceIntentId));
+          const [sourceState] = source
+            ? await db
+                .select()
+                .from(pgSchema.stateVersions)
+                .where(eq(pgSchema.stateVersions.id, source.stateVersionId))
+            : [];
+          const [sourceOutput] = source
+            ? await db
+                .select()
+                .from(pgSchema.outputs)
+                .where(eq(pgSchema.outputs.id, source.outputId))
+            : [];
+          const sourceBlueprintsJson = capsuleInterfaceBlueprintsJson(
+            replacement.intent.blueprints,
+          );
+          if (
+            !source ||
+            source.workspaceId !== replacement.intent.workspaceId ||
+            source.capsuleId !== replacement.intent.capsuleId ||
+            source.installConfigId !== replacement.intent.installConfigId ||
+            source.stateVersionId !==
+              input.restoreRunTerminal.restoredFromStateVersionId ||
+            !sourceState ||
+            sourceState.workspaceId !== source.workspaceId ||
+            sourceState.capsuleId !== source.capsuleId ||
+            sourceState.generation !== source.stateGeneration ||
+            !sourceOutput ||
+            sourceOutput.workspaceId !== source.workspaceId ||
+            sourceOutput.capsuleId !== source.capsuleId ||
+            sourceOutput.stateGeneration !== source.stateGeneration ||
+            source.blueprintsDigest !== replacement.intent.blueprintsDigest ||
+            source.blueprintsJson !== sourceBlueprintsJson
+          ) {
+            throw new TypeError(
+              "Restore Interface materialization source snapshot is missing or changed",
+            );
+          }
+          await pgInsertOrAdoptCapsuleInterfaceMaterializationIntent(
+            db,
+            replacement.intent,
+          );
+          await db
+            .update(table)
+            .set({
+              status: "completed",
+              leaseToken: null,
+              leaseExpiresAt: null,
+              errorJson: null,
+              receiptJson: sql`jsonb_build_object(
+                'disposition', 'superseded_before_materialization',
+                'blueprintsDigest', ${table.blueprintsDigest},
+                'completedAt', ${replacement.intent.createdAt}::text
+              )`,
+              updatedAt: replacement.intent.createdAt,
+              completedAt: replacement.intent.createdAt,
+              deadLetteredAt: null,
+            })
+            .where(
+              and(
+                eq(table.capsuleId, replacement.intent.capsuleId),
+                eq(table.status, "pending"),
+                ne(table.id, replacement.intent.id),
+              ),
+            );
+        }
+        await pgUpsertStateVersion(db, input.stateVersion);
+        if (input.output) {
+          await pgUpsertOutput(db, input.output);
         }
 
         const updated: Capsule = {
@@ -2500,6 +2726,12 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           .where(
             and(
               eq(pgSchema.capsules.id, updated.id),
+              guard.currentStateVersionId === undefined
+                ? isNull(pgSchema.capsules.currentStateVersionId)
+                : eq(
+                    pgSchema.capsules.currentStateVersionId,
+                    guard.currentStateVersionId,
+                  ),
               sql`COALESCE((${pgSchema.capsules.capsuleJson}->>'currentStateGeneration')::integer, 0) = ${guard.currentStateGeneration}`,
               guard.status === undefined
                 ? sql`true`
@@ -2512,7 +2744,20 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         );
         if (patched) return { capsule: patched };
         const actual = await this.#getCapsuleOn(db, capsulePatch.id);
-        if (!actual) return { capsule: undefined };
+        if (!actual) {
+          throw new Error(
+            `Capsule ${capsulePatch.id} disappeared during Restore commit`,
+          );
+        }
+        if (actual.currentStateVersionId !== guard.currentStateVersionId) {
+          throw new CapsuleStateVersionGuardConflict({
+            id: capsulePatch.id,
+            expectedCurrentStateVersionId: guard.currentStateVersionId,
+            actualCurrentStateVersionId: actual.currentStateVersionId,
+            expectedStatus: guard.status,
+            actualStatus: actual.status,
+          });
+        }
         throw new CapsuleStateGenerationGuardConflict({
           id: capsulePatch.id,
           expectedCurrentStateGeneration: guard.currentStateGeneration,
@@ -2553,6 +2798,12 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     }
     if (input.output) {
       await pgUpsertOutput(db, input.output);
+    }
+    if (input.interfaceMaterializationIntent) {
+      await pgInsertOrAdoptCapsuleInterfaceMaterializationIntent(
+        db,
+        input.interfaceMaterializationIntent,
+      );
     }
     // Commit-tail fold (S2): the succeeded ApplyRun + the applied PlanRun land in
     // the SAME interactive transaction as the StateVersion. The apply terminal
@@ -3465,6 +3716,272 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async getCapsuleInterfaceMaterializationIntent(
+    id: string,
+  ): Promise<CapsuleInterfaceMaterializationIntent | undefined> {
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.capsuleInterfaceMaterializationIntents)
+      .where(eq(pgSchema.capsuleInterfaceMaterializationIntents.id, id))
+      .limit(1);
+    if (!rows[0]) return undefined;
+    const intent = capsuleInterfaceMaterializationIntentFromPgRow(rows[0]);
+    await validateCapsuleInterfaceMaterializationIntent(intent);
+    return intent;
+  }
+
+  async listDeadLetteredCapsuleInterfaceMaterializationIntents(
+    workspaceId: string,
+    limit?: number,
+  ): Promise<readonly CapsuleInterfaceMaterializationIntent[]> {
+    if (typeof workspaceId !== "string" || workspaceId.trim() === "") {
+      throw new TypeError("workspaceId is required");
+    }
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.capsuleInterfaceMaterializationIntents)
+      .where(
+        and(
+          eq(
+            pgSchema.capsuleInterfaceMaterializationIntents.workspaceId,
+            workspaceId,
+          ),
+          eq(
+            pgSchema.capsuleInterfaceMaterializationIntents.status,
+            "dead_letter",
+          ),
+        ),
+      )
+      .orderBy(
+        desc(pgSchema.capsuleInterfaceMaterializationIntents.deadLetteredAt),
+        desc(pgSchema.capsuleInterfaceMaterializationIntents.id),
+      )
+      .limit(capsuleInterfaceMaterializationFailureListLimit(limit));
+    const intents = rows.map(capsuleInterfaceMaterializationIntentFromPgRow);
+    await Promise.all(intents.map(validateCapsuleInterfaceMaterializationIntent));
+    return intents;
+  }
+
+  async claimCapsuleInterfaceMaterializationIntent(
+    input: ClaimCapsuleInterfaceMaterializationIntentInput,
+  ): Promise<CapsuleInterfaceMaterializationIntent | undefined> {
+    assertCapsuleInterfaceMaterializationIntentClaimInput(input);
+    const table = pgSchema.capsuleInterfaceMaterializationIntents;
+    const candidateId = sql<string>`(
+      select ${table.id}
+      from ${table}
+      where ${table.status} = 'pending'
+        and ${table.nextRetryAt} <= ${input.claimedAt}
+        and (
+          ${table.leaseExpiresAt} is null
+          or ${table.leaseExpiresAt} <= ${input.claimedAt}
+        )
+      order by ${table.nextRetryAt}, ${table.createdAt}, ${table.id}
+      for update skip locked
+      limit 1
+    )`;
+    const rows = await this.#db
+      .update(table)
+      .set({
+        attempts: sql`${table.attempts} + 1`,
+        leaseToken: input.leaseToken,
+        leaseExpiresAt: input.leaseExpiresAt,
+        updatedAt: input.claimedAt,
+      })
+      .where(eq(table.id, candidateId))
+      .returning();
+    if (!rows[0]) return undefined;
+    const intent = capsuleInterfaceMaterializationIntentFromPgRow(rows[0]);
+    await validateCapsuleInterfaceMaterializationIntent(intent);
+    return intent;
+  }
+
+  async renewCapsuleInterfaceMaterializationIntentLease(
+    input: RenewCapsuleInterfaceMaterializationIntentLeaseInput,
+  ): Promise<RenewCapsuleInterfaceMaterializationIntentLeaseResult> {
+    assertRenewCapsuleInterfaceMaterializationIntentLeaseInput(input);
+    const table = pgSchema.capsuleInterfaceMaterializationIntents;
+    const rows = await this.#db
+      .update(table)
+      .set({
+        leaseExpiresAt: input.leaseExpiresAt,
+        updatedAt: input.renewedAt,
+      })
+      .where(
+        and(
+          eq(table.id, input.id),
+          eq(table.status, "pending"),
+          eq(table.leaseToken, input.leaseToken),
+          eq(table.nextItemIndex, input.expectedNextItemIndex),
+          gt(table.leaseExpiresAt, input.renewedAt),
+          sql`${input.leaseExpiresAt} > ${table.leaseExpiresAt}`,
+        ),
+      )
+      .returning();
+    if (rows[0]) {
+      const intent = capsuleInterfaceMaterializationIntentFromPgRow(rows[0]);
+      await validateCapsuleInterfaceMaterializationIntent(intent);
+      return { kind: "updated", intent };
+    }
+    return (await this.getCapsuleInterfaceMaterializationIntent(input.id))
+      ? { kind: "lease-lost" }
+      : { kind: "not-found" };
+  }
+
+  async settleCapsuleInterfaceMaterializationIntent(
+    input: SettleCapsuleInterfaceMaterializationIntentInput,
+  ): Promise<SettleCapsuleInterfaceMaterializationIntentResult> {
+    assertCapsuleInterfaceMaterializationIntentSettlementInput(input);
+    const table = pgSchema.capsuleInterfaceMaterializationIntents;
+    const error =
+      input.outcome.kind === "completed" || input.outcome.kind === "progress"
+      ? null
+      : {
+          code: input.outcome.code,
+          detailDigest: input.outcome.detailDigest,
+          recordedAt: input.settledAt,
+        };
+    const rows = await this.#db
+      .update(table)
+      .set({
+        status: input.outcome.kind === "completed"
+          ? "completed"
+          : input.outcome.kind === "retry" || input.outcome.kind === "progress"
+            ? "pending"
+            : "dead_letter",
+        ...(input.outcome.kind !== "progress" || input.outcome.releaseLease
+          ? { leaseToken: null, leaseExpiresAt: null }
+          : {}),
+        errorJson: error,
+        updatedAt: input.settledAt,
+        ...(input.outcome.kind === "completed"
+          ? {
+              receiptJson: sql`jsonb_build_object(
+                'disposition', ${input.outcome.disposition}::text,
+                'blueprintsDigest', ${table.blueprintsDigest},
+                'completedAt', ${input.settledAt}::text
+              )`,
+              completedAt: input.settledAt,
+              deadLetteredAt: null,
+              nextItemIndex:
+                input.outcome.disposition === "materialized"
+                  ? sql`${table.totalItems}`
+                  : sql`${table.nextItemIndex}`,
+            }
+          : input.outcome.kind === "progress"
+            ? {
+                nextItemIndex: input.outcome.nextItemIndex,
+                ...(input.outcome.releaseLease
+                  ? { nextRetryAt: input.outcome.nextRetryAt! }
+                  : {}),
+                receiptJson: null,
+                completedAt: null,
+                deadLetteredAt: null,
+              }
+          : input.outcome.kind === "retry"
+            ? {
+                nextRetryAt: input.outcome.nextRetryAt,
+                receiptJson: null,
+                completedAt: null,
+                deadLetteredAt: null,
+              }
+            : {
+                receiptJson: null,
+                completedAt: null,
+                deadLetteredAt: input.settledAt,
+              }),
+      })
+      .where(
+        and(
+          eq(table.id, input.id),
+          eq(table.status, "pending"),
+          eq(table.leaseToken, input.leaseToken),
+          eq(table.nextItemIndex, input.expectedNextItemIndex),
+          gt(table.leaseExpiresAt, input.settledAt),
+          input.outcome.kind === "progress"
+            ? sql`${table.totalItems} >= ${input.outcome.nextItemIndex}`
+            : sql`true`,
+        ),
+      )
+      .returning();
+    if (rows[0]) {
+      const intent = capsuleInterfaceMaterializationIntentFromPgRow(rows[0]);
+      await validateCapsuleInterfaceMaterializationIntent(intent);
+      return { kind: "updated", intent };
+    }
+    return (await this.getCapsuleInterfaceMaterializationIntent(input.id))
+      ? { kind: "lease-lost" }
+      : { kind: "not-found" };
+  }
+
+  async retryCapsuleInterfaceMaterializationIntent(
+    input: RetryCapsuleInterfaceMaterializationIntentInput,
+  ): Promise<RetryCapsuleInterfaceMaterializationIntentResult> {
+    assertRetryCapsuleInterfaceMaterializationIntentInput(input);
+    const table = pgSchema.capsuleInterfaceMaterializationIntents;
+    const capsule = pgSchema.capsules;
+    const expected = input.expected;
+    const rows = await this.#db
+      .update(table)
+      .set({
+        status: "pending",
+        nextRetryAt: input.retriedAt,
+        leaseToken: null,
+        leaseExpiresAt: null,
+        errorJson: null,
+        receiptJson: null,
+        completedAt: null,
+        deadLetteredAt: null,
+        updatedAt: input.retriedAt,
+      })
+      .where(
+        and(
+          eq(table.id, input.id),
+          eq(table.workspaceId, input.workspaceId),
+          eq(table.status, "dead_letter"),
+          eq(table.stateVersionId, input.expectedStateVersionId),
+          eq(table.stateGeneration, input.expectedStateGeneration),
+          eq(table.outputId, expected.outputId),
+          eq(table.blueprintsDigest, expected.blueprintsDigest),
+          eq(table.totalItems, expected.totalItems),
+          eq(table.nextItemIndex, expected.nextItemIndex),
+          eq(table.attempts, expected.attempts),
+          eq(table.updatedAt, expected.updatedAt),
+          eq(table.deadLetteredAt, expected.deadLetteredAt!),
+          sql`${table.errorJson}->>'code' = ${expected.error!.code}`,
+          sql`${table.errorJson}->>'detailDigest' = ${expected.error!.detailDigest}`,
+          sql`${table.errorJson}->>'recordedAt' = ${expected.error!.recordedAt}`,
+          exists(
+            this.#db
+              .select({ id: capsule.id })
+              .from(capsule)
+              .where(
+                and(
+                  eq(capsule.id, table.capsuleId),
+                  eq(capsule.workspaceId, input.workspaceId),
+                  ne(capsule.status, "destroyed"),
+                  eq(
+                    capsule.currentStateVersionId,
+                    input.expectedStateVersionId,
+                  ),
+                  sql`(${capsule.capsuleJson}->>'currentStateGeneration')::integer = ${input.expectedStateGeneration}`,
+                  sql`${capsule.capsuleJson}->>'currentOutputId' = ${expected.outputId}`,
+                ),
+              ),
+          ),
+        ),
+      )
+      .returning();
+    if (rows[0]) {
+      const intent = capsuleInterfaceMaterializationIntentFromPgRow(rows[0]);
+      await validateCapsuleInterfaceMaterializationIntent(intent);
+      return { kind: "updated", intent };
+    }
+    return (await this.getCapsuleInterfaceMaterializationIntent(input.id))
+      ? { kind: "conflict" }
+      : { kind: "not-found" };
+  }
+
   async getLatestOutput(capsuleId: string): Promise<Output | undefined> {
     const rows = await this.#pgManyJson<Output>(
       pgSchema.outputs,
@@ -4221,6 +4738,126 @@ async function pgUpsertOutput(
         createdAt: snapshot.createdAt,
       },
     });
+}
+
+async function pgInsertOrAdoptCapsuleInterfaceMaterializationIntent(
+  db: PgRemoteDatabase<typeof pgSchema>,
+  intent: CapsuleInterfaceMaterializationIntent,
+): Promise<void> {
+  const blueprintsJson = capsuleInterfaceBlueprintsJson(intent.blueprints);
+  await db
+    .insert(pgSchema.capsuleInterfaceMaterializationIntents)
+    .values({
+      id: intent.id,
+      applyRunId: intent.applyRunId ?? null,
+      restoreRunId: intent.restoreRunId ?? null,
+      sourceIntentId: intent.sourceIntentId ?? null,
+      workspaceId: intent.workspaceId,
+      capsuleId: intent.capsuleId,
+      installConfigId: intent.installConfigId,
+      stateVersionId: intent.stateVersionId,
+      outputId: intent.outputId,
+      stateGeneration: intent.stateGeneration,
+      blueprintsDigest: intent.blueprintsDigest,
+      blueprintsJson,
+      totalItems: intent.totalItems,
+      nextItemIndex: intent.nextItemIndex,
+      status: intent.status,
+      attempts: intent.attempts,
+      nextRetryAt: intent.nextRetryAt,
+      leaseToken: intent.leaseToken ?? null,
+      leaseExpiresAt: intent.leaseExpiresAt ?? null,
+      errorJson: intent.error ?? null,
+      receiptJson: intent.receipt ?? null,
+      createdAt: intent.createdAt,
+      updatedAt: intent.updatedAt,
+      completedAt: intent.completedAt ?? null,
+      deadLetteredAt: intent.deadLetteredAt ?? null,
+    })
+    .onConflictDoNothing();
+  const table = pgSchema.capsuleInterfaceMaterializationIntents;
+  const collisions = await db
+    .select()
+    .from(table)
+    .where(
+      or(
+        eq(table.id, intent.id),
+        ...(intent.applyRunId
+          ? [eq(table.applyRunId, intent.applyRunId)]
+          : []),
+        ...(intent.restoreRunId
+          ? [eq(table.restoreRunId, intent.restoreRunId)]
+          : []),
+        and(
+          eq(table.capsuleId, intent.capsuleId),
+          eq(table.stateGeneration, intent.stateGeneration),
+        ),
+      ),
+    );
+  if (
+    collisions.length !== 1 ||
+    collisions[0]?.id !== intent.id ||
+    (collisions[0].applyRunId ?? undefined) !== intent.applyRunId ||
+    (collisions[0].restoreRunId ?? undefined) !== intent.restoreRunId ||
+    (collisions[0].sourceIntentId ?? undefined) !== intent.sourceIntentId ||
+    collisions[0].workspaceId !== intent.workspaceId ||
+    collisions[0].capsuleId !== intent.capsuleId ||
+    collisions[0].installConfigId !== intent.installConfigId ||
+    collisions[0].stateVersionId !== intent.stateVersionId ||
+    collisions[0].outputId !== intent.outputId ||
+    collisions[0].stateGeneration !== intent.stateGeneration ||
+    collisions[0].blueprintsDigest !== intent.blueprintsDigest ||
+    collisions[0].blueprintsJson !== blueprintsJson ||
+    collisions[0].totalItems !== intent.totalItems
+  ) {
+    throw new Error(
+      "capsule Interface materialization intent identity/content conflict",
+    );
+  }
+}
+
+function capsuleInterfaceMaterializationIntentFromPgRow(
+  row: typeof pgSchema.capsuleInterfaceMaterializationIntents.$inferSelect,
+): CapsuleInterfaceMaterializationIntent {
+  return {
+    id: row.id,
+    ...(row.applyRunId ? { applyRunId: row.applyRunId } : {}),
+    ...(row.restoreRunId ? { restoreRunId: row.restoreRunId } : {}),
+    ...(row.sourceIntentId ? { sourceIntentId: row.sourceIntentId } : {}),
+    workspaceId: row.workspaceId,
+    capsuleId: row.capsuleId,
+    installConfigId: row.installConfigId,
+    stateVersionId: row.stateVersionId,
+    outputId: row.outputId,
+    stateGeneration: row.stateGeneration,
+    blueprintsDigest: row.blueprintsDigest,
+    blueprints: parseJson(row.blueprintsJson) as CapsuleInterfaceMaterializationIntent["blueprints"],
+    totalItems: row.totalItems,
+    nextItemIndex: row.nextItemIndex,
+    status: row.status as CapsuleInterfaceMaterializationIntent["status"],
+    attempts: row.attempts,
+    nextRetryAt: row.nextRetryAt,
+    ...(row.leaseToken ? { leaseToken: row.leaseToken } : {}),
+    ...(row.leaseExpiresAt ? { leaseExpiresAt: row.leaseExpiresAt } : {}),
+    ...(row.errorJson
+      ? {
+          error: row.errorJson as NonNullable<
+            CapsuleInterfaceMaterializationIntent["error"]
+          >,
+        }
+      : {}),
+    ...(row.receiptJson
+      ? {
+          receipt: row.receiptJson as NonNullable<
+            CapsuleInterfaceMaterializationIntent["receipt"]
+          >,
+        }
+      : {}),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    ...(row.completedAt ? { completedAt: row.completedAt } : {}),
+    ...(row.deadLetteredAt ? { deadLetteredAt: row.deadLetteredAt } : {}),
+  };
 }
 
 function selectedDriverColumns(query: string): readonly string[] {

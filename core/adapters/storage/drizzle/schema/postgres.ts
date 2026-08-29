@@ -434,6 +434,58 @@ export const planRunInputs = pgTable(names.planRunInputs, {
   inputsJson: json("inputs_json").notNull(),
 });
 
+export const capsuleInterfaceMaterializationIntents = pgTable(
+  names.capsuleInterfaceMaterializationIntents,
+  {
+    id: text("id").primaryKey(),
+    applyRunId: text("apply_run_id"),
+    restoreRunId: text("restore_run_id"),
+    sourceIntentId: text("source_intent_id"),
+    workspaceId: text("workspace_id").notNull(),
+    capsuleId: text("capsule_id").notNull(),
+    installConfigId: text("install_config_id").notNull(),
+    stateVersionId: text("state_version_id").notNull(),
+    outputId: text("output_id").notNull(),
+    stateGeneration: integer("state_generation").notNull(),
+    blueprintsDigest: text("blueprints_digest").notNull(),
+    blueprintsJson: text("blueprints_json").notNull(),
+    totalItems: integer("total_items").notNull(),
+    nextItemIndex: integer("next_item_index").notNull(),
+    status: text("status").notNull(),
+    attempts: integer("attempts").notNull(),
+    nextRetryAt: text("next_retry_at").notNull(),
+    leaseToken: text("lease_token"),
+    leaseExpiresAt: text("lease_expires_at"),
+    errorJson: json("error_json"),
+    receiptJson: json("receipt_json"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    completedAt: text("completed_at"),
+    deadLetteredAt: text("dead_lettered_at"),
+  },
+  (table) => [
+    uniqueIndex(
+      "takosumi_interface_intents_apply_run_unique",
+    ).on(table.applyRunId),
+    uniqueIndex(
+      "takosumi_interface_intents_restore_run_unique",
+    ).on(table.restoreRunId),
+    uniqueIndex(
+      "takosumi_interface_intents_capsule_generation_unique",
+    ).on(table.capsuleId, table.stateGeneration),
+    index("takosumi_interface_intents_pending_idx").on(
+      table.status,
+      table.nextRetryAt,
+    ),
+    index("takosumi_interface_intents_dead_letter_idx").on(
+      table.workspaceId,
+      table.status,
+      table.deadLetteredAt,
+      table.id,
+    ),
+  ],
+);
+
 export const stateVersions = pgTable(
   names.stateVersions,
   {

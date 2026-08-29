@@ -3568,8 +3568,13 @@ export function assertConfigTargetsSource(
   const hostedServices = services.filter((entry) => entry[1] === "HOSTED");
   let hostedRouteValid = false;
   let versionMetadataValid = false;
+  let requestSignalEnabled = false;
   try {
     const parsed = Bun.TOML.parse(source) as Record<string, unknown>;
+    const compatibilityFlags = parsed.compatibility_flags;
+    requestSignalEnabled =
+      Array.isArray(compatibilityFlags) &&
+      compatibilityFlags.some((flag) => flag === "enable_request_signal");
     const versionMetadata = parsed.version_metadata;
     versionMetadataValid =
       record(versionMetadata) &&
@@ -3601,6 +3606,7 @@ export function assertConfigTargetsSource(
     hostedServices[0]?.[2] !== target.hostedService ||
     !hostedRouteValid ||
     !versionMetadataValid ||
+    !requestSignalEnabled ||
     !main ||
     !assets ||
     resolve(dirname(path), main) !==

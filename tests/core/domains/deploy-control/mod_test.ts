@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import type { OpenTofuRunner } from "../../../../core/domains/deploy-control/mod.ts";
+import type {
+  OpenTofuRestoreJob,
+  OpenTofuRestoreResult,
+  OpenTofuRunner,
+  OpenTofuRestoreSourceState,
+} from "../../../../core/domains/deploy-control/mod.ts";
 import {
   applyExpectedGuardFromPlanRun,
   createDefaultRunnerProfiles,
@@ -191,6 +196,29 @@ const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const LOCK_DIGEST =
   "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
+function restoreAck(
+  job: OpenTofuRestoreJob,
+  digest = PLAN_DIGEST,
+): OpenTofuRestoreResult {
+  return {
+    state: {
+      generation: job.stateScope.generation,
+      stateRef: `runner-local://restore/${job.runId}`,
+      logicalTargetStateRef: job.stateScope.stateRef,
+      digest,
+      runId: job.runId,
+      ciphertextLength: 0,
+      restoreAuthority: {
+        kind: "takosumi.runner-restore-ack@v1",
+        version: 1,
+        fence: 1,
+        operationId: `test-restore:${job.runId}`,
+        stateEtag: digest,
+      },
+    },
+  };
+}
 const CLOUDFLARE_MIRROR_EVIDENCE = {
   provider: "registry.opentofu.org/cloudflare/cloudflare",
   mirrored: true,
@@ -2037,6 +2065,9 @@ test("destroy apply is rejected until the plan is approved (always two-stage, sp
 
 test("restore rebases StateVersion and Output cursors and marks the Capsule stale", async () => {
   const { store, capsuleId } = await seedUpdatableCapsule();
+  let restoreJob: OpenTofuRestoreJob | undefined;
+  let sourceAuthorityReads = 0;
+  let authoritativeSource: OpenTofuRestoreSourceState | undefined;
   const controller = new OpenTofuController({
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
@@ -2044,13 +2075,12 @@ test("restore rebases StateVersion and Output cursors and marks the Capsule stal
     now: sequenceNow(70),
     newId: deterministicIds(),
     runner: {
-      restore: ({ stateScope }) =>
-        Promise.resolve({
-          state: {
-            stateRef: stateScope.stateRef,
-            digest: PLAN_DIGEST,
-          },
-        }),
+      restore: async (job, control) => {
+        restoreJob = job;
+        authoritativeSource = await control?.sourceAuthority?.readExact();
+        sourceAuthorityReads += 1;
+        return Promise.resolve(restoreAck(job));
+      },
     },
   });
   const lifecycle: string[] = [];
@@ -2145,6 +2175,19 @@ test("restore rebases StateVersion and Output cursors and marks the Capsule stal
   await controller.approveRun(restore.id, { approvedBy: "ops" });
   await controller.runQueuedRestore(restore.id);
 
+  expect(restoreJob?.sourceState).toEqual({
+    stateVersionId: "state_restore_source",
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    environment: capsule!.environment,
+    generation: 1,
+    stateRef: "states/1.tfstate.enc",
+    digest: LOCK_DIGEST,
+    createdByRunId: "apply_seed",
+  });
+  expect(sourceAuthorityReads).toBe(1);
+  expect(authoritativeSource).toEqual(restoreJob?.sourceState);
+
   const restored = await store.getCapsule(capsuleId);
   const restoreRun = await store.getBackupRun(restore.id);
   const restoredState = restoreRun?.restoredStateVersionId
@@ -2159,6 +2202,7 @@ test("restore rebases StateVersion and Output cursors and marks the Capsule stal
   );
   expect(restored?.currentStateGeneration).toBe(3);
   expect(restoredState?.generation).toBe(3);
+  expect(restoredState?.stateRef).toBe(`runner-local://restore/${restore.id}`);
   expect(restoredOutput?.id).not.toBe(sourceOutput.id);
   expect(restoredOutput?.id).not.toBe(latestSourceOutput.id);
   expect(restoredOutput?.id).not.toBe(previousOutput.id);
@@ -2178,6 +2222,57 @@ test("restore rebases StateVersion and Output cursors and marks the Capsule stal
     "started:running:running",
     "succeeded:succeeded:succeeded",
   ]);
+});
+
+test("restore fails closed when the configured runner has no restore capability", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { capsule, backupId } = await seedRestoreFixture(
+    store,
+    "missing_runner_restore",
+  );
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(70),
+    newId: deterministicIds(),
+    // The ordinary fake runner intentionally has plan/apply/destroy only.
+    // Restore must not be synthesized from the source StateVersion.
+    runner: fakeRunner(),
+    enqueueRun: () => Promise.resolve(),
+  });
+  const restore = await controller.createRestoreRun(
+    capsule.workspaceId,
+    backupId,
+    {
+      capsuleId: capsule.id,
+      environment: capsule.environment,
+      stateGeneration: 1,
+      expectedBackupDigest: PLAN_DIGEST,
+    },
+  );
+  await controller.approveRun(restore.id, { approvedBy: "ops" });
+
+  let restoreError: unknown;
+  try {
+    await controller.runQueuedRestore(restore.id);
+  } catch (error) {
+    restoreError = error;
+  }
+  expect(restoreError).toBeInstanceOf(Error);
+  expect((restoreError as Error).message).toContain(
+    "restore requires a restore-capable runner",
+  );
+
+  const after = await store.getCapsule(capsule.id);
+  expect(after?.currentStateGeneration).toBe(2);
+  expect(after?.currentStateVersionId).toBe(capsule.currentStateVersionId);
+  expect(
+    (await store.listStateVersions(capsule.id, capsule.environment)).filter(
+      (snapshot) => snapshot.generation >= 3,
+    ),
+  ).toEqual([]);
+  expect((await store.getBackupRun(restore.id))?.status).toBe("failed");
 });
 
 test("restore clears the current Output cursor when the source generation has no Output", async () => {
@@ -2210,13 +2305,7 @@ test("restore clears the current Output cursor when the source generation has no
     now: sequenceNow(71),
     newId: deterministicIds(),
     runner: {
-      restore: ({ stateScope }) =>
-        Promise.resolve({
-          state: {
-            stateRef: stateScope.stateRef,
-            digest: PLAN_DIGEST,
-          },
-        }),
+      restore: (job) => Promise.resolve(restoreAck(job)),
     },
   });
 
@@ -2303,13 +2392,7 @@ test("restore DLQ failure is observed after its terminal transition", async () =
     now: sequenceNow(80),
     newId: deterministicIds(),
     runner: {
-      restore: ({ stateScope }) =>
-        Promise.resolve({
-          state: {
-            stateRef: stateScope.stateRef,
-            digest: PLAN_DIGEST,
-          },
-        }),
+      restore: (job) => Promise.resolve(restoreAck(job)),
     },
     enqueueRun: () => Promise.resolve(),
   });
@@ -2376,7 +2459,8 @@ test("restore does not publish state after losing its run lease", async () => {
     now: sequenceNow(700),
     newId: deterministicIds(),
     runner: {
-      restore: async ({ stateScope }) => {
+      restore: async (job) => {
+        const { stateScope } = job;
         const current = await store.getBackupRun(restoreRunId);
         expect(current?.status).toBe("running");
         const takeover = await store.transitionRun({
@@ -2393,12 +2477,7 @@ test("restore does not publish state after losing its run lease", async () => {
           heartbeatAt: 999_000,
         });
         expect(takeover.won).toBe(true);
-        return {
-          state: {
-            stateRef: stateScope.stateRef,
-            digest: PLAN_DIGEST,
-          },
-        };
+        return restoreAck(job);
       },
     },
   });
@@ -2465,7 +2544,8 @@ test("restore renews the run heartbeat while the runner blocks", async () => {
     newId: deterministicIds(),
     runRenewalIntervalMs: 5,
     runner: {
-      restore: async ({ stateScope }) => {
+      restore: async (job) => {
+        const { stateScope } = job;
         claimHeartbeat =
           (await store.getBackupRun(restoreRunId))?.heartbeatAt ?? 0;
         const deadline = Date.now() + 1000;
@@ -2478,12 +2558,7 @@ test("restore renews the run heartbeat while the runner blocks", async () => {
           }
           await new Promise((resolve) => setTimeout(resolve, 5));
         }
-        return {
-          state: {
-            stateRef: stateScope.stateRef,
-            digest: PLAN_DIGEST,
-          },
-        };
+        return restoreAck(job);
       },
     },
   });
@@ -2525,15 +2600,7 @@ test("restore dispatches service-data artifacts only when requested and acknowle
     now: sequenceNow(75),
     newId: deterministicIds(),
     runner: {
-      restore: (job) => {
-        return Promise.resolve({
-          state: {
-            generation: job.stateScope.generation,
-            stateRef: job.stateScope.stateRef,
-            digest: PLAN_DIGEST,
-          },
-        });
-      },
+      restore: (job) => Promise.resolve(restoreAck(job)),
       restoreServiceData: (job) => {
         restoreJobs.push({ serviceData: job.serviceData });
         return Promise.resolve({

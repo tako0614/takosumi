@@ -22,6 +22,7 @@ import {
   verifyRunCredentialTokenAuthority,
   type RunCredentialTokenPayload,
 } from "../../../core/shared/run_credential_tokens.ts";
+import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import { redactString } from "takosumi-contract/redaction";
 
 const DEFAULT_PLAN_ARTIFACT_BUCKET = "takos-artifacts";
@@ -225,8 +226,14 @@ interface DepState {
 }
 
 interface RestoreState {
+  readonly stateVersionId: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly environment: string;
+  readonly generation: number;
   readonly stateRef: string;
   readonly digest: string;
+  readonly createdByRunId: string;
 }
 
 export interface ContainerRequestFetcher {
@@ -258,11 +265,32 @@ interface ContainerDestroyer {
 }
 
 export interface ContainerHostContext {
-  readonly storage: {
+  readonly storage: ContainerHostStorage;
+}
+
+interface ContainerHostStorageTransaction {
+  get<T = unknown>(key: string): Promise<T | undefined>;
+  put<T = unknown>(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<boolean | void>;
+  getAlarm(): Promise<number | null>;
+  setAlarm(scheduledTime: number | Date): Promise<void>;
+}
+
+interface ContainerHostStorage
+  extends ContainerHostStorageTransaction {
     get<T = unknown>(key: string): Promise<T | undefined>;
     put<T = unknown>(key: string, value: T): Promise<void>;
     delete(key: string): Promise<boolean | void>;
-  };
+    list<T = unknown>(options?: {
+      readonly prefix?: string;
+      readonly limit?: number;
+      readonly startAfter?: string;
+    }): Promise<Map<string, T>>;
+    transaction<T>(
+      callback: (transaction: ContainerHostStorageTransaction) => Promise<T>,
+    ): Promise<T>;
+    getAlarm(): Promise<number | null>;
+    setAlarm(scheduledTime: number | Date): Promise<void>;
 }
 
 class LocalContainerRuntime<Env = unknown> {
@@ -277,6 +305,10 @@ class LocalContainerRuntime<Env = unknown> {
   constructor(ctx: ContainerHostContext, env: Env) {
     this.ctx = ctx;
     this.env = env;
+  }
+
+  alarm(_alarmProps?: unknown): Promise<void> {
+    return Promise.resolve();
   }
 
   containerFetch(_request: Request, _port?: number): Promise<Response> {
@@ -326,6 +358,15 @@ const RUNNER_MUTATION_AUTHORITY_STORAGE_KEY = "runner-mutation-authority";
 const RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX = "runner-mutation-dispatch@v2:";
 const RUNNER_RELEASE_AUTHORITY_STORAGE_KEY = "runner-release-authority";
 const RUNNER_RELEASE_DISPATCH_STORAGE_PREFIX = "runner-release-dispatch@v1:";
+const RUNNER_RESTORE_AUTHORITY_STORAGE_PREFIX =
+  "runner-restore-authority@v2:";
+const RUNNER_RESTORE_STAGE_STORAGE_PREFIX = "runner-restore-stage@v1:";
+const RUNNER_RESTORE_STAGE_CURSOR_STORAGE_KEY =
+  "runner-restore-stage-collector-cursor@v1";
+const RUNNER_RESTORE_STAGE_COLLECT_AFTER_MS = 60 * 60 * 1_000;
+const RUNNER_RESTORE_STAGE_COLLECT_LIMIT = 16;
+const RUNNER_RESTORE_STAGE_COLLECT_RETRY_MS = 5 * 60 * 1_000;
+const RUNNER_RESTORE_STAGE_COLLECT_CONTINUE_MS = 1_000;
 
 interface RunnerMutationDispatchRecord {
   readonly kind: "takosumi.runner-mutation-dispatch@v2";
@@ -385,6 +426,60 @@ type RunnerReleaseAuthorityClaim =
     }
   | { readonly kind: "blocked" };
 
+interface RunnerRestoreClaim {
+  readonly fence: number;
+  readonly operationId: string;
+  readonly requestDigest: string;
+  readonly runId: string;
+  readonly scopeKey: string;
+  readonly generation: number;
+  readonly targetStateRef: string;
+  readonly sourceStateRef: string;
+  readonly sourceDigest: string;
+  readonly stageStateRef: string;
+  readonly phase: "claimed" | "committed" | "abandoned";
+}
+
+interface RunnerRestoreCommittedAck {
+  readonly kind: "takosumi.runner-restore-ack@v1";
+  readonly version: number;
+  readonly fence: number;
+  readonly operationId: string;
+  readonly scopeKey: string;
+  readonly runId: string;
+  readonly generation: number;
+  readonly stateRef: string;
+  readonly logicalTargetStateRef: string;
+  readonly digest: string;
+  readonly ciphertextLength: number;
+  readonly stateEtag: string;
+}
+
+interface RunnerRestoreAuthorityRecord {
+  readonly kind: "takosumi.runner-restore-authority@v2";
+  readonly nextFence: number;
+  readonly claimant: RunnerRestoreClaim;
+  /** Last DO acknowledgement only; Core remains current StateVersion authority. */
+  readonly lastCommitted?: RunnerRestoreCommittedAck;
+}
+
+interface RunnerRestoreStageRecord {
+  readonly kind: "takosumi.runner-restore-stage@v1";
+  readonly storageKey: string;
+  readonly scopeKey: string;
+  readonly fence: number;
+  readonly operationId: string;
+  readonly runId: string;
+  readonly stateRef: string;
+  readonly collectAfter: number;
+  readonly status: "pending" | "acknowledged";
+  readonly authorityVersion?: number;
+}
+
+type RunnerRestoreClaimResult =
+  | { readonly kind: "claimed"; readonly claim: RunnerRestoreClaim }
+  | { readonly kind: "replay"; readonly ack: RunnerRestoreCommittedAck };
+
 export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<CloudflareWorkerEnv> {
   defaultPort = 8080;
   requiredPorts = [8080];
@@ -396,6 +491,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   #lastStartupSeconds: number | undefined;
   readonly #activeMutationPreparations = new Set<string>();
   readonly #activeReleasePreparations = new Set<string>();
+  readonly #restoreAuthorityLock = new AsyncSerialLock();
   readonly #localRunnerProxyUrl: URL | undefined;
   readonly #artifactLimits: RunnerArtifactLimits;
 
@@ -463,6 +559,207 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   async onActivityExpired(): Promise<void> {
     console.log("OpenTofu runner container activity expired; shutting down");
     await this.#shutdownContainerIfSupported();
+  }
+
+  /**
+   * Bounded collector for operation-unique Restore uploads. Core's
+   * StateVersion row is the only durable reachability authority for an
+   * acknowledged object; unacknowledged superseded stages need no DB proof.
+   *
+   * The Containers base alarm remains the lifecycle owner. Restore collection
+   * runs only after it settles and uses earlier-only alarm updates, so it never
+   * postpones a container activity alarm.
+   */
+  async alarm(alarmProps?: unknown): Promise<void> {
+    let inheritedError: unknown;
+    try {
+      await super.alarm(alarmProps);
+    } catch (error) {
+      inheritedError = error;
+    }
+    try {
+      await this.#collectRestoreStages();
+    } catch (error) {
+      console.error("OpenTofu runner Restore stage collection failed", {
+        reason: "restore_stage_collection_failed",
+        errorName: safeRunnerErrorName(error),
+      });
+      await scheduleEarlierAlarm(
+        this.ctx.storage,
+        Date.now() + RUNNER_RESTORE_STAGE_COLLECT_RETRY_MS,
+      );
+    }
+    if (inheritedError !== undefined) throw inheritedError;
+  }
+
+  async #collectRestoreStages(): Promise<void> {
+    const now = Date.now();
+    const cursor = await this.ctx.storage.get<string>(
+      RUNNER_RESTORE_STAGE_CURSOR_STORAGE_KEY,
+    );
+    const listed = await this.ctx.storage.list<unknown>({
+      prefix: RUNNER_RESTORE_STAGE_STORAGE_PREFIX,
+      limit: RUNNER_RESTORE_STAGE_COLLECT_LIMIT,
+      ...(cursor ? { startAfter: cursor } : {}),
+    });
+    if (listed.size === 0) {
+      if (cursor) {
+        await this.ctx.storage.delete(
+          RUNNER_RESTORE_STAGE_CURSOR_STORAGE_KEY,
+        );
+        await scheduleEarlierAlarm(
+          this.ctx.storage,
+          now + RUNNER_RESTORE_STAGE_COLLECT_CONTINUE_MS,
+        );
+      }
+      return;
+    }
+    let nextAlarm: number | undefined;
+    let lastKey: string | undefined;
+    for (const [key, raw] of listed) {
+      lastKey = key;
+      const stage = parseRunnerRestoreStageRecord(raw);
+      if (!stage || stage.storageKey !== key) {
+        console.error("OpenTofu runner Restore stage record is malformed", {
+          reason: "restore_stage_record_malformed",
+        });
+        nextAlarm = earlierTime(
+          nextAlarm,
+          now + RUNNER_RESTORE_STAGE_COLLECT_RETRY_MS,
+        );
+        continue;
+      }
+      if (stage.collectAfter > now) {
+        nextAlarm = earlierTime(nextAlarm, stage.collectAfter);
+        continue;
+      }
+      const outcome = await this.#collectRestoreStage(stage, now);
+      if (outcome === "retained") {
+        nextAlarm = earlierTime(
+          nextAlarm,
+          now + RUNNER_RESTORE_STAGE_COLLECT_RETRY_MS,
+        );
+      }
+    }
+    if (listed.size === RUNNER_RESTORE_STAGE_COLLECT_LIMIT && lastKey) {
+      await this.ctx.storage.put(
+        RUNNER_RESTORE_STAGE_CURSOR_STORAGE_KEY,
+        lastKey,
+      );
+      nextAlarm = earlierTime(
+        nextAlarm,
+        now + RUNNER_RESTORE_STAGE_COLLECT_CONTINUE_MS,
+      );
+    } else if (cursor) {
+      await this.ctx.storage.delete(RUNNER_RESTORE_STAGE_CURSOR_STORAGE_KEY);
+      nextAlarm = earlierTime(
+        nextAlarm,
+        now + RUNNER_RESTORE_STAGE_COLLECT_CONTINUE_MS,
+      );
+    }
+    if (nextAlarm !== undefined) {
+      await scheduleEarlierAlarm(this.ctx.storage, nextAlarm);
+    }
+  }
+
+  async #collectRestoreStage(
+    stage: RunnerRestoreStageRecord,
+    now: number,
+  ): Promise<"removed" | "retained"> {
+    if (stage.status === "pending") {
+      const authority = parseRunnerRestoreAuthorityRecord(
+        await this.ctx.storage.get<unknown>(
+          restoreAuthorityStorageKeyFromScopeKey(stage.scopeKey),
+        ),
+      );
+      if (
+        authority?.claimant.phase === "abandoned" &&
+        sameRestoreStageClaimant(stage, authority.claimant)
+      ) {
+        // An exact durable abandoned claimant proves that this operation never
+        // published a DO acknowledgement. All other pending records — live,
+        // crashed, missing/malformed authority, and superseded claimants — are
+        // authority-uncertain and must consult Core's exact ledger disposition.
+        return await this.#deleteUnreachableRestoreStage(stage, now);
+      }
+    }
+    let disposition: "referenced" | "deletable" | "retain";
+    try {
+      disposition = await restoreStageLedgerDisposition(
+        this.env.TAKOSUMI_CONTROL_DB,
+        stage,
+      );
+    } catch (error) {
+      console.warn("OpenTofu runner Restore stage ledger check deferred", {
+        reason: "restore_stage_ledger_unavailable",
+        errorName: safeRunnerErrorName(error),
+      });
+      await this.#rescheduleRestoreStage(stage, now);
+      return "retained";
+    }
+    if (disposition === "referenced") {
+      await this.#removeRestoreStageTracking(stage);
+      return "removed";
+    }
+    if (disposition === "deletable") {
+      return await this.#deleteUnreachableRestoreStage(stage, now);
+    }
+    await this.#rescheduleRestoreStage(stage, now);
+    return "retained";
+  }
+
+  async #deleteUnreachableRestoreStage(
+    stage: RunnerRestoreStageRecord,
+    now: number,
+  ): Promise<"removed" | "retained"> {
+    const bucket = this.#r2State();
+    const object = await bucket.head(stage.stateRef);
+    if (object && !isExactTrackedRestoreStageObject(object, stage)) {
+      console.error("OpenTofu runner Restore stage deletion refused", {
+        reason: "restore_stage_identity_conflict",
+      });
+      await this.#rescheduleRestoreStage(stage, now);
+      return "retained";
+    }
+    if (object) await bucket.delete(stage.stateRef);
+    if (await bucket.head(stage.stateRef)) {
+      await this.#rescheduleRestoreStage(stage, now);
+      return "retained";
+    }
+    await this.#removeRestoreStageTracking(stage);
+    return "removed";
+  }
+
+  async #rescheduleRestoreStage(
+    expected: RunnerRestoreStageRecord,
+    now: number,
+  ): Promise<void> {
+    await this.#restoreAuthorityLock.run(async () => {
+      await this.ctx.storage.transaction(async (transaction) => {
+        const current = parseRunnerRestoreStageRecord(
+          await transaction.get<unknown>(expected.storageKey),
+        );
+        if (!current || !sameRestoreStageRecord(current, expected)) return;
+        await transaction.put(expected.storageKey, {
+          ...current,
+          collectAfter: now + RUNNER_RESTORE_STAGE_COLLECT_RETRY_MS,
+        } satisfies RunnerRestoreStageRecord);
+      });
+    });
+  }
+
+  async #removeRestoreStageTracking(
+    expected: RunnerRestoreStageRecord,
+  ): Promise<void> {
+    await this.#restoreAuthorityLock.run(async () => {
+      await this.ctx.storage.transaction(async (transaction) => {
+        const current = parseRunnerRestoreStageRecord(
+          await transaction.get<unknown>(expected.storageKey),
+        );
+        if (!current || !sameRestoreStageRecord(current, expected)) return;
+        await transaction.delete(expected.storageKey);
+      });
+    });
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -1111,6 +1408,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         runId,
         stateScope,
         restoreState,
+        request.signal,
       );
     }
     // M2: when the dispatch carries an environment-scoped state location, route
@@ -1671,9 +1969,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
   }
 
-  // M2 state restore: fetch only the exact canonical descriptor supplied by the
-  // control ledger. R2 object history and current.json are never discovery or
-  // downgrade authority. First-create plans have no prior descriptor.
+  // M2 state restore: fetch only the exact descriptor supplied by the control
+  // ledger. It may identify the canonical generation object written by Apply,
+  // or an immutable operation-specific object acknowledged by Restore. R2
+  // object history and current.json are never discovery or downgrade
+  // authority. First-create plans have no prior descriptor.
   async #restoreStateFromR2State(
     runId: string,
     scope: StateScope,
@@ -1706,7 +2006,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const resolved =
       adopted ??
       (scope.priorState
-        ? await readCanonicalPriorState(
+        ? await readLedgerPriorState(
             bucket,
             scope,
             scope.priorState,
@@ -1841,6 +2141,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             "takosumi-ciphertext-length": String(sealed.ciphertextLength),
             "takosumi-encryption-format": sealed.format,
             "takosumi-generation": String(scope.generation),
+            "takosumi-workspace-id": scope.workspaceId,
+            ...(scope.subjectKind === "capsule"
+              ? { "takosumi-capsule-id": scope.subjectId }
+              : { "takosumi-resource-id": scope.subjectId }),
+            "takosumi-environment": scope.environment,
+            "takosumi-logical-target-state-ref": objectKey,
             ...(preparedRawOutputs
               ? { "takosumi-raw-output-ref": preparedRawOutputs.key }
               : { "takosumi-raw-output-status": "none" }),
@@ -2158,77 +2464,395 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     scope: StateScope,
     restoreState: RestoreState,
+    signal: AbortSignal,
   ): Promise<Response> {
-    assertRestoreStateRef(scope, restoreState.stateRef);
-    const bucket = this.#r2State();
-    const object = await bucket.get(restoreState.stateRef);
-    if (!object) {
-      throw new Error(
-        `restore state object not found: ${restoreState.stateRef}`,
+    assertRequestNotAborted(signal);
+    assertStateRefForScope(scope);
+    const sourceRefKind = await validateRestoreSourceDescriptor(
+      scope,
+      restoreState,
+    );
+    if (sourceRefKind.kind === "restore_stage") {
+      await assertExactRestoreOriginStateVersion(
+        this.env.TAKOSUMI_CONTROL_DB,
+        restoreState,
       );
     }
-    const plaintext = await this.#stateCrypto().open(
-      await readBoundedR2ObjectBytes(
-        object,
-        "state",
-        maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
-      ),
-      restoreState.digest,
-    );
-    assertArtifactSize(
-      "state",
-      this.#artifactLimits.state,
-      plaintext.byteLength,
-    );
-    const sealed = await this.#stateCrypto().seal(plaintext);
-    assertStateRefForScope(scope);
-    const objectKey = scope.stateRef;
-    await putR2ObjectWithRetry(
-      bucket,
-      objectKey,
-      sealed.ciphertext,
-      {
-        httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
-        customMetadata: {
-          "takosumi-run-id": runId,
-          "takosumi-content-digest": sealed.contentDigest,
-          "takosumi-ciphertext-length": String(sealed.ciphertextLength),
-          "takosumi-encryption-format": sealed.format,
-          "takosumi-generation": String(scope.generation),
-          "takosumi-restored-from-object": restoreState.stateRef,
-        },
-      },
-      "restored state object",
-    );
-    const current = {
-      generation: scope.generation,
-      objectKey,
-      digest: sealed.contentDigest,
+    assertRequestNotAborted(signal);
+    const claimed = await this.#claimRestoreAuthority(
       runId,
-      ciphertextLength: sealed.ciphertextLength,
-    };
-    await putR2ObjectWithRetry(
-      bucket,
-      currentStateKey(scope),
-      JSON.stringify(current),
-      {
-        httpMetadata: { contentType: "application/json" },
-        customMetadata: { "takosumi-run-id": runId },
-      },
-      "restored state pointer",
+      scope,
+      restoreState,
+      signal,
     );
+    if (claimed.kind === "replay") {
+      return await this.#acknowledgeCommittedRestore(
+        claimed.ack,
+        signal,
+      );
+    }
+    const claim = claimed.claim;
+    const bucket = this.#r2State();
+    try {
+      const object = await this.#restoreFencedStep(
+        claim,
+        signal,
+        async () => bucket.get(restoreState.stateRef),
+      );
+      if (!object) {
+        throw new Error(
+          `restore state object not found: ${restoreState.stateRef}`,
+        );
+      }
+      await this.#restoreFencedStep(claim, signal, async () => {
+        assertExactRestoreSourceObject(
+          object,
+          restoreState,
+          sourceRefKind,
+        );
+      });
+      const ciphertext = await this.#restoreFencedStep(
+        claim,
+        signal,
+        async () =>
+          readBoundedR2ObjectBytes(
+            object,
+            "state",
+            maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
+            signal,
+          ),
+      );
+      const plaintext = await this.#restoreFencedStep(
+        claim,
+        signal,
+        async () => this.#stateCrypto().open(ciphertext, restoreState.digest),
+      );
+      assertArtifactSize(
+        "state",
+        this.#artifactLimits.state,
+        plaintext.byteLength,
+      );
+      const sealed = await this.#restoreFencedStep(
+        claim,
+        signal,
+        async () => this.#stateCrypto().seal(plaintext),
+      );
+      const stageObject = await putR2ObjectWithRetry(
+        bucket,
+        claim.stageStateRef,
+        sealed.ciphertext,
+        {
+          httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
+          customMetadata: {
+            "takosumi-run-id": runId,
+            "takosumi-content-digest": sealed.contentDigest,
+            "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+            "takosumi-encryption-format": sealed.format,
+            "takosumi-generation": String(scope.generation),
+            "takosumi-workspace-id": scope.workspaceId,
+            "takosumi-capsule-id": scope.subjectId,
+            "takosumi-environment": scope.environment,
+            "takosumi-logical-target-state-ref": scope.stateRef,
+            "takosumi-restored-from-object": restoreState.stateRef,
+            "takosumi-restored-from-state-version-id":
+              restoreState.stateVersionId,
+            "takosumi-restore-fence": String(claim.fence),
+            "takosumi-restore-operation-id": claim.operationId,
+            "takosumi-restore-stage": "true",
+          },
+          onlyIf: { etagDoesNotMatch: "*" },
+        },
+        "restored state stage",
+        {
+          signal,
+          assertAuthority: async () =>
+            this.#assertRestoreClaimCurrent(claim, signal, "claimed"),
+        },
+      );
+      const ack = await this.#commitRestoreAck(
+        claim,
+        sealed,
+        stageObject,
+        signal,
+      );
+      return await this.#acknowledgeCommittedRestore(ack, signal);
+    } catch (error) {
+      await this.#abandonRestoreClaim(claim);
+      throw error;
+    }
+  }
+
+  async #claimRestoreAuthority(
+    runId: string,
+    scope: StateScope,
+    restoreState: RestoreState,
+    signal: AbortSignal,
+  ): Promise<RunnerRestoreClaimResult> {
+    assertRequestNotAborted(signal);
+    const requestDigest = await digestText(
+      JSON.stringify({
+        runId,
+        scopeKey: logicalStateScopeKey(scope),
+        generation: scope.generation,
+        targetStateRef: scope.stateRef,
+        sourceStateRef: restoreState.stateRef,
+        sourceDigest: restoreState.digest,
+        sourceStateVersionId: restoreState.stateVersionId,
+        sourceWorkspaceId: restoreState.workspaceId,
+        sourceCapsuleId: restoreState.capsuleId,
+        sourceEnvironment: restoreState.environment,
+        sourceGeneration: restoreState.generation,
+        sourceCreatedByRunId: restoreState.createdByRunId,
+      }),
+    );
+    assertRequestNotAborted(signal);
+    return await this.#restoreAuthorityLock.run(async () => {
+      assertRequestNotAborted(signal);
+      return await this.ctx.storage.transaction(async (transaction) => {
+        const key = restoreAuthorityStorageKey(scope);
+        const raw = await transaction.get<unknown>(key);
+        assertRequestNotAborted(signal);
+        const current = parseRunnerRestoreAuthorityRecord(raw);
+        if (raw !== undefined && !current) {
+          throw new Error("runner Restore authority record is malformed");
+        }
+        if (
+          current?.claimant.phase === "committed" &&
+          current.claimant.requestDigest === requestDigest &&
+          current.lastCommitted &&
+          sameRestoreAckClaim(current.lastCommitted, current.claimant)
+        ) {
+          return { kind: "replay", ack: current.lastCommitted };
+        }
+        const nextFence = (current?.nextFence ?? 0) + 1;
+        if (!Number.isSafeInteger(nextFence) || nextFence <= 0) {
+          throw new Error("runner Restore fence is exhausted");
+        }
+        const operationId = `${formatGeneration(
+          nextFence,
+        )}-${requestDigest.slice("sha256:".length, "sha256:".length + 24)}`;
+        const claim: RunnerRestoreClaim = {
+          fence: nextFence,
+          operationId,
+          requestDigest,
+          runId,
+          scopeKey: logicalStateScopeKey(scope),
+          generation: scope.generation,
+          targetStateRef: scope.stateRef,
+          sourceStateRef: restoreState.stateRef,
+          sourceDigest: restoreState.digest,
+          stageStateRef: restoreStageKey(scope, {
+            operationId,
+          }),
+          phase: "claimed",
+        };
+        const collectAfter = Date.now() + RUNNER_RESTORE_STAGE_COLLECT_AFTER_MS;
+        const stageRecord: RunnerRestoreStageRecord = {
+          kind: "takosumi.runner-restore-stage@v1",
+          storageKey: restoreStageStorageKey(claim),
+          scopeKey: claim.scopeKey,
+          fence: claim.fence,
+          operationId: claim.operationId,
+          runId: claim.runId,
+          stateRef: claim.stageStateRef,
+          collectAfter,
+          status: "pending",
+        };
+        await transaction.put(key, {
+          kind: "takosumi.runner-restore-authority@v2",
+          nextFence,
+          claimant: claim,
+          ...(current?.lastCommitted
+            ? { lastCommitted: current.lastCommitted }
+            : {}),
+        } satisfies RunnerRestoreAuthorityRecord);
+        await transaction.put(stageRecord.storageKey, stageRecord);
+        await scheduleEarlierAlarm(transaction, collectAfter);
+        return { kind: "claimed", claim };
+      });
+    });
+  }
+
+  async #assertRestoreClaimCurrent(
+    expected: RunnerRestoreClaim,
+    signal: AbortSignal,
+    phase?: RunnerRestoreClaim["phase"],
+  ): Promise<void> {
+    assertRequestNotAborted(signal);
+    const current = parseRunnerRestoreAuthorityRecord(
+      await this.ctx.storage.get<unknown>(
+        restoreAuthorityStorageKeyFromScopeKey(expected.scopeKey),
+      ),
+    );
+    assertRequestNotAborted(signal);
+    if (
+      !current ||
+      !sameRestoreClaimIdentity(current.claimant, expected) ||
+      (phase !== undefined && current.claimant.phase !== phase)
+    ) {
+      throw new RunnerRestoreFenceLostError();
+    }
+  }
+
+  async #restoreFencedStep<T>(
+    claim: RunnerRestoreClaim,
+    signal: AbortSignal,
+    step: () => Promise<T>,
+  ): Promise<T> {
+    await this.#assertRestoreClaimCurrent(claim, signal, "claimed");
+    try {
+      const result = await step();
+      assertRequestNotAborted(signal);
+      await this.#assertRestoreClaimCurrent(claim, signal, "claimed");
+      return result;
+    } catch (error) {
+      assertRequestNotAborted(signal);
+      await this.#assertRestoreClaimCurrent(claim, signal, "claimed");
+      throw error;
+    }
+  }
+
+  async #commitRestoreAck(
+    claim: RunnerRestoreClaim,
+    sealed: SealedArtifact,
+    stageObject: R2Object,
+    signal: AbortSignal,
+  ): Promise<RunnerRestoreCommittedAck> {
+    if (!isExactRestoreStageObject(stageObject, sealed, claim)) {
+      throw new Error("Restore stage acknowledgement is malformed");
+    }
+    return await this.#restoreAuthorityLock.run(async () => {
+      assertRequestNotAborted(signal);
+      return await this.ctx.storage.transaction(async (transaction) => {
+        const key = restoreAuthorityStorageKeyFromScopeKey(claim.scopeKey);
+        const current = parseRunnerRestoreAuthorityRecord(
+          await transaction.get<unknown>(key),
+        );
+        assertRequestNotAborted(signal);
+        if (
+          !current ||
+          !sameRestoreClaimIdentity(current.claimant, claim) ||
+          current.claimant.phase !== "claimed"
+        ) {
+          throw new RunnerRestoreFenceLostError();
+        }
+        const stageStorageKey = restoreStageStorageKey(claim);
+        const stage = parseRunnerRestoreStageRecord(
+          await transaction.get<unknown>(stageStorageKey),
+        );
+        assertRequestNotAborted(signal);
+        if (!stage || !sameRestoreStageClaim(stage, claim)) {
+          throw new RunnerRestoreFenceLostError();
+        }
+        const version = (current.lastCommitted?.version ?? 0) + 1;
+        if (!Number.isSafeInteger(version) || version <= 0) {
+          throw new Error("runner Restore authority version is exhausted");
+        }
+        const ack: RunnerRestoreCommittedAck = {
+          kind: "takosumi.runner-restore-ack@v1",
+          version,
+          fence: claim.fence,
+          operationId: claim.operationId,
+          scopeKey: claim.scopeKey,
+          runId: claim.runId,
+          generation: claim.generation,
+          stateRef: claim.stageStateRef,
+          logicalTargetStateRef: claim.targetStateRef,
+          digest: sealed.contentDigest,
+          ciphertextLength: sealed.ciphertextLength,
+          stateEtag: stageObject.etag,
+        };
+        assertRequestNotAborted(signal);
+        await transaction.put(key, {
+          ...current,
+          claimant: { ...claim, phase: "committed" },
+          lastCommitted: ack,
+        } satisfies RunnerRestoreAuthorityRecord);
+        await transaction.put(stageStorageKey, {
+          ...stage,
+          status: "acknowledged",
+          authorityVersion: version,
+        } satisfies RunnerRestoreStageRecord);
+        assertRequestNotAborted(signal);
+        return ack;
+      });
+    });
+  }
+
+  async #acknowledgeCommittedRestore(
+    expected: RunnerRestoreCommittedAck,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    assertRequestNotAborted(signal);
+    const object = await this.#r2State().head(expected.stateRef);
+    assertRequestNotAborted(signal);
+    if (!object || !isExactRestoreAckObject(object, expected)) {
+      throw new Error("Restore acknowledged state object is missing or changed");
+    }
+    const current = parseRunnerRestoreAuthorityRecord(
+      await this.ctx.storage.get<unknown>(
+        restoreAuthorityStorageKeyFromScopeKey(expected.scopeKey),
+      ),
+    );
+    assertRequestNotAborted(signal);
+    if (
+      !current ||
+      current.claimant.phase !== "committed" ||
+      !sameRestoreAckClaim(expected, current.claimant) ||
+      !current.lastCommitted ||
+      !sameRestoreAck(current.lastCommitted, expected)
+    ) {
+      throw new RunnerRestoreFenceLostError();
+    }
     return jsonResponse(
       {
         state: {
-          generation: current.generation,
-          stateRef: current.objectKey,
-          digest: current.digest,
-          runId: current.runId,
-          ciphertextLength: current.ciphertextLength,
+          generation: expected.generation,
+          stateRef: expected.stateRef,
+          logicalTargetStateRef: expected.logicalTargetStateRef,
+          digest: expected.digest,
+          runId: expected.runId,
+          ciphertextLength: expected.ciphertextLength,
+          restoreAuthority: {
+            kind: expected.kind,
+            version: expected.version,
+            fence: expected.fence,
+            operationId: expected.operationId,
+            stateEtag: expected.stateEtag,
+          },
         },
       },
       200,
     );
+  }
+
+  async #abandonRestoreClaim(claim: RunnerRestoreClaim): Promise<void> {
+    try {
+      await this.#restoreAuthorityLock.run(async () => {
+        await this.ctx.storage.transaction(async (transaction) => {
+          const key = restoreAuthorityStorageKeyFromScopeKey(claim.scopeKey);
+          const current = parseRunnerRestoreAuthorityRecord(
+            await transaction.get<unknown>(key),
+          );
+          if (
+            !current ||
+            !sameRestoreClaimIdentity(current.claimant, claim) ||
+            current.claimant.phase !== "claimed"
+          ) {
+            return;
+          }
+          await transaction.put(key, {
+            ...current,
+            claimant: { ...claim, phase: "abandoned" },
+          } satisfies RunnerRestoreAuthorityRecord);
+        });
+      });
+    } catch (error) {
+      console.error("OpenTofu runner Restore abandonment record failed", {
+        reason: "restore_abandonment_record_failed",
+        errorName: safeRunnerErrorName(error),
+      });
+    }
   }
 
   async #persistPlanArtifact(
@@ -2564,15 +3188,22 @@ async function putR2ObjectWithRetry(
   value: ReadableStream | ArrayBuffer | ArrayBufferView | string | null,
   options: R2PutOptions | undefined,
   context: string,
+  control?: {
+    readonly signal?: AbortSignal;
+    readonly assertAuthority?: () => Promise<void>;
+  },
 ): Promise<R2Object> {
   for (let attempt = 1; attempt <= R2_PUT_RETRY_ATTEMPTS; attempt += 1) {
+    await assertR2PutAuthority(control);
     try {
       const object = await bucket.put(key, value, options);
+      await assertR2PutAuthority(control);
       if (!object) {
         throw new R2ConditionalPutConflictError();
       }
       return object;
     } catch (error) {
+      await assertR2PutAuthority(control);
       if (error instanceof R2ConditionalPutConflictError) throw error;
       if (options?.onlyIf?.etagDoesNotMatch === "*") {
         throw new RunnerArtifactRelayInfrastructureError();
@@ -2591,21 +3222,68 @@ async function putR2ObjectWithRetry(
         reason: RUNNER_R2_LOG_REASON.putRetryable,
         errorName: safeRunnerErrorName(error),
       });
-      await sleep(
+      await abortableRunnerSleep(
         Math.min(
           R2_PUT_RETRY_MAX_MS,
           R2_PUT_RETRY_BASE_MS * 2 ** (attempt - 1),
         ),
+        control?.signal,
       );
+      await assertR2PutAuthority(control);
     }
   }
   throw new Error("runner R2 put retry budget exhausted");
+}
+
+async function assertR2PutAuthority(control?: {
+  readonly signal?: AbortSignal;
+  readonly assertAuthority?: () => Promise<void>;
+}): Promise<void> {
+  if (!control) return;
+  if (control.signal) assertRequestNotAborted(control.signal);
+  await control.assertAuthority?.();
+  if (control.signal) assertRequestNotAborted(control.signal);
 }
 
 class R2ConditionalPutConflictError extends Error {
   constructor() {
     super("runner R2 conditional put conflict");
     this.name = "R2ConditionalPutConflictError";
+  }
+}
+
+class RunnerRestoreFenceLostError extends Error {
+  constructor() {
+    super("runner Restore fence is no longer current");
+    this.name = "RunnerRestoreFenceLostError";
+  }
+}
+
+class AsyncSerialLock {
+  #tail: Promise<void> = Promise.resolve();
+
+  async run<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.#tail;
+    let release!: () => void;
+    this.#tail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+}
+
+async function scheduleEarlierAlarm(
+  storage: Pick<ContainerHostStorageTransaction, "getAlarm" | "setAlarm">,
+  scheduledTime: number,
+): Promise<void> {
+  const current = await storage.getAlarm();
+  if (current === null || current > scheduledTime) {
+    await storage.setAlarm(scheduledTime);
   }
 }
 
@@ -2651,7 +3329,7 @@ function runnerR2LogArtifact(context: string, key: string): string {
       return RUNNER_R2_LOG_ARTIFACT.stateObject;
     case "raw outputs":
       return RUNNER_R2_LOG_ARTIFACT.rawOutputs;
-    case "restored state object":
+    case "restored state stage":
       return RUNNER_R2_LOG_ARTIFACT.restoredStateObject;
     case "plan artifact":
       return RUNNER_R2_LOG_ARTIFACT.planArtifact;
@@ -2659,7 +3337,6 @@ function runnerR2LogArtifact(context: string, key: string): string {
       return RUNNER_R2_LOG_ARTIFACT.planJsonArtifact;
     case "state artifact":
       return RUNNER_R2_LOG_ARTIFACT.stateArtifact;
-    case "restored state pointer":
     case "state pointer cache":
       return RUNNER_R2_LOG_ARTIFACT.statePointer;
     default:
@@ -2734,7 +3411,9 @@ export async function readBoundedResponseBytes(
   response: Response,
   artifact: RunnerArtifactKind,
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
+  if (signal) assertRequestNotAborted(signal);
   const declaredLength = parseContentLength(
     response.headers.get("content-length"),
   );
@@ -2751,9 +3430,15 @@ export async function readBoundedResponseBytes(
   let buffer = new Uint8Array(initialCapacity);
   let length = 0;
   const reader = response.body.getReader();
+  const abortRead = (): void => {
+    void reader.cancel().catch(() => undefined);
+  };
+  signal?.addEventListener("abort", abortRead, { once: true });
   try {
     while (true) {
+      if (signal) assertRequestNotAborted(signal);
       const { done, value } = await reader.read();
+      if (signal) assertRequestNotAborted(signal);
       if (done) break;
       const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
       const nextLength = length + chunk.byteLength;
@@ -2783,8 +3468,10 @@ export async function readBoundedResponseBytes(
       length = nextLength;
     }
   } finally {
+    signal?.removeEventListener("abort", abortRead);
     reader.releaseLock();
   }
+  if (signal) assertRequestNotAborted(signal);
   return buffer.subarray(0, length);
 }
 
@@ -2792,7 +3479,9 @@ async function readBoundedR2ObjectBytes(
   object: R2ObjectBody,
   artifact: RunnerArtifactKind,
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
+  if (signal) assertRequestNotAborted(signal);
   if (!Number.isSafeInteger(object.size) || object.size < 0) {
     throw new RunnerArtifactSizeLimitError(artifact, maxBytes, maxBytes + 1);
   }
@@ -2812,9 +3501,12 @@ async function readBoundedR2ObjectBytes(
       }),
       artifact,
       maxBytes,
+      signal,
     );
   }
+  if (signal) assertRequestNotAborted(signal);
   const bytes = new Uint8Array(await object.arrayBuffer());
+  if (signal) assertRequestNotAborted(signal);
   // R2's size is authoritative in production; checking the materialized bytes
   // as well keeps test doubles and future adapters fail-closed.
   assertArtifactSize(artifact, maxBytes, bytes.byteLength);
@@ -2884,6 +3576,9 @@ function safeRunnerFailureReason(error: unknown): string {
   if (error instanceof R2ConditionalPutConflictError) {
     return "artifact_authority_conflict";
   }
+  if (error instanceof RunnerRestoreFenceLostError) {
+    return "restore_fence_lost";
+  }
   if (error instanceof DOMException && error.name === "AbortError") {
     return "request_aborted";
   }
@@ -2895,6 +3590,35 @@ function safeRunnerFailureReason(error: unknown): string {
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function abortableRunnerSleep(
+  ms: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (!signal) {
+    await sleep(ms);
+    return;
+  }
+  assertRequestNotAborted(signal);
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timeout);
+      reject(new DOMException("runner request aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  assertRequestNotAborted(signal);
+}
+
+function assertRequestNotAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw new DOMException("runner request aborted", "AbortError");
+  }
 }
 
 function stateArtifactUrl(baseUrl: URL, runId: string): string {
@@ -2967,6 +3691,67 @@ function currentStateKey(scope: StateScope): string {
   return `${stateScopePrefix(scope)}/current.json`;
 }
 
+function logicalStateScopeKey(scope: StateScope): string {
+  return stateScopePrefix(scope);
+}
+
+function restoreScopeIdentityFromKey(scopeKey: string):
+  | {
+      readonly workspaceId: string;
+      readonly capsuleId: string;
+      readonly environment: string;
+    }
+  | undefined {
+  const match =
+    /^workspaces\/([a-zA-Z0-9._-]+)\/capsules\/([a-zA-Z0-9._-]+)\/environments\/([a-zA-Z0-9._-]+)\/state-versions$/u.exec(
+      scopeKey,
+    );
+  if (!match) return undefined;
+  return {
+    workspaceId: match[1]!,
+    capsuleId: match[2]!,
+    environment: match[3]!,
+  };
+}
+
+function hasExactRestoreScopeMetadata(
+  metadata: Record<string, string> | undefined,
+  scopeKey: string,
+): boolean {
+  const identity = restoreScopeIdentityFromKey(scopeKey);
+  return Boolean(
+    identity &&
+      metadata?.["takosumi-workspace-id"] === identity.workspaceId &&
+      metadata?.["takosumi-capsule-id"] === identity.capsuleId &&
+      metadata?.["takosumi-environment"] === identity.environment,
+  );
+}
+
+function restoreAuthorityStorageKey(scope: StateScope): string {
+  return restoreAuthorityStorageKeyFromScopeKey(logicalStateScopeKey(scope));
+}
+
+function restoreAuthorityStorageKeyFromScopeKey(scopeKey: string): string {
+  return `${RUNNER_RESTORE_AUTHORITY_STORAGE_PREFIX}${scopeKey}`;
+}
+
+function restoreStageKey(
+  scope: StateScope,
+  claim: Pick<RunnerRestoreClaim, "operationId">,
+): string {
+  return `${stateScopePrefix(scope)}/restore-operations/${safeKeySegment(
+    claim.operationId,
+  )}.tfstate.enc`;
+}
+
+function restoreStageStorageKey(
+  claim: Pick<RunnerRestoreClaim, "scopeKey" | "operationId">,
+): string {
+  return `${RUNNER_RESTORE_STAGE_STORAGE_PREFIX}${claim.scopeKey}:${safeKeySegment(
+    claim.operationId,
+  )}`;
+}
+
 function assertStateRefForScope(scope: StateScope): void {
   const expected = `${stateScopePrefix(scope)}/${formatGeneration(
     scope.generation,
@@ -3008,6 +3793,102 @@ interface CurrentStatePointer {
   readonly digest?: string;
   readonly runId?: string;
   readonly ciphertextLength?: number;
+}
+
+function isExactRestoreStageObject(
+  object: R2Object,
+  sealed: SealedArtifact,
+  claim: RunnerRestoreClaim,
+): boolean {
+  const metadata = object.customMetadata;
+  return (
+    object.key === claim.stageStateRef &&
+    metadata?.["takosumi-run-id"] === claim.runId &&
+    metadata?.["takosumi-content-digest"] === sealed.contentDigest &&
+    metadata?.["takosumi-ciphertext-length"] ===
+      String(sealed.ciphertextLength) &&
+    metadata?.["takosumi-generation"] === String(claim.generation) &&
+    hasExactRestoreScopeMetadata(metadata, claim.scopeKey) &&
+    metadata?.["takosumi-logical-target-state-ref"] ===
+      claim.targetStateRef &&
+    metadata?.["takosumi-restored-from-object"] === claim.sourceStateRef &&
+    metadata?.["takosumi-restore-fence"] === String(claim.fence) &&
+    metadata?.["takosumi-restore-operation-id"] === claim.operationId &&
+    metadata?.["takosumi-restore-stage"] === "true"
+  );
+}
+
+function isExactRestoreAckObject(
+  object: R2Object,
+  ack: RunnerRestoreCommittedAck,
+): boolean {
+  const metadata = object.customMetadata;
+  return (
+    object.key === ack.stateRef &&
+    object.etag === ack.stateEtag &&
+    metadata?.["takosumi-run-id"] === ack.runId &&
+    metadata?.["takosumi-content-digest"] === ack.digest &&
+    metadata?.["takosumi-ciphertext-length"] ===
+      String(ack.ciphertextLength) &&
+    metadata?.["takosumi-generation"] === String(ack.generation) &&
+    hasExactRestoreScopeMetadata(metadata, ack.scopeKey) &&
+    metadata?.["takosumi-logical-target-state-ref"] ===
+      ack.logicalTargetStateRef &&
+    metadata?.["takosumi-restore-fence"] === String(ack.fence) &&
+    metadata?.["takosumi-restore-operation-id"] === ack.operationId &&
+    metadata?.["takosumi-restore-stage"] === "true"
+  );
+}
+
+function isExactTrackedRestoreStageObject(
+  object: R2Object,
+  stage: RunnerRestoreStageRecord,
+): boolean {
+  const metadata = object.customMetadata;
+  return (
+    object.key === stage.stateRef &&
+    metadata?.["takosumi-run-id"] === stage.runId &&
+    hasExactRestoreScopeMetadata(metadata, stage.scopeKey) &&
+    metadata?.["takosumi-restore-fence"] === String(stage.fence) &&
+    metadata?.["takosumi-restore-operation-id"] === stage.operationId &&
+    metadata?.["takosumi-restore-stage"] === "true"
+  );
+}
+
+async function restoreStageLedgerDisposition(
+  database: CloudflareWorkerEnv["TAKOSUMI_CONTROL_DB"],
+  stage: RunnerRestoreStageRecord,
+): Promise<"referenced" | "deletable" | "retain"> {
+  const row = await database
+    .prepare(
+      `select
+         exists(
+           select 1
+           from state_versions
+           where object_key = ? and created_by_run_id = ?
+         ) as referenced,
+         (
+           select status
+           from runs
+           where id = ? and type = 'restore'
+           limit 1
+         ) as run_status`,
+    )
+    .bind(stage.stateRef, stage.runId, stage.runId)
+    .first<{ readonly referenced: number | boolean; readonly run_status: unknown }>();
+  if (!row) {
+    throw new Error("Restore stage ledger query returned no result");
+  }
+  if (row.referenced === 1 || row.referenced === true) return "referenced";
+  return row.run_status === "failed" ||
+    row.run_status === "cancelled" ||
+    row.run_status === "expired"
+    ? "deletable"
+    : "retain";
+}
+
+function earlierTime(current: number | undefined, candidate: number): number {
+  return current === undefined ? candidate : Math.min(current, candidate);
 }
 
 async function writeCurrentStateCache(
@@ -3089,7 +3970,7 @@ async function readConfirmedStateAdoption(
   };
 }
 
-async function readCanonicalPriorState(
+async function readLedgerPriorState(
   bucket: NonNullable<CloudflareWorkerEnv["R2_STATE"]>,
   scope: StateScope,
   descriptor: StateVersionDescriptor,
@@ -3100,31 +3981,35 @@ async function readCanonicalPriorState(
 }> {
   if (descriptor.generation !== expectedGeneration) {
     throw new Error(
-      `canonical priorState generation mismatch: expected ${expectedGeneration}`,
+      `ledger priorState generation mismatch: expected ${expectedGeneration}`,
     );
   }
-  const expectedRef = stateRefForGeneration(scope, expectedGeneration);
-  if (descriptor.stateRef !== expectedRef) {
-    throw new Error("canonical priorState ref does not match stateScope");
-  }
+  const refKind = classifyLedgerPriorStateRef(
+    scope,
+    descriptor,
+    expectedGeneration,
+  );
   const object = await bucket.get(descriptor.stateRef);
   if (!object) {
     throw new Error(
-      `canonical priorState object not found: ${descriptor.stateRef}`,
+      `ledger priorState object not found: ${descriptor.stateRef}`,
     );
+  }
+  if (object.key !== descriptor.stateRef) {
+    throw new Error("ledger priorState R2 object key does not match descriptor");
   }
   if (
     descriptor.digest &&
     object.customMetadata?.["takosumi-content-digest"] !== descriptor.digest
   ) {
-    throw new Error("canonical priorState digest does not match R2 metadata");
+    throw new Error("ledger priorState digest does not match R2 metadata");
   }
   const metadataRunId = object.customMetadata?.["takosumi-run-id"];
   if (
     (descriptor.digest || metadataRunId) &&
     metadataRunId !== descriptor.createdByRunId
   ) {
-    throw new Error("canonical priorState creator does not match R2 metadata");
+    throw new Error("ledger priorState creator does not match R2 metadata");
   }
   const metadataGeneration = object.customMetadata?.["takosumi-generation"];
   if (
@@ -3132,8 +4017,25 @@ async function readCanonicalPriorState(
     Number(metadataGeneration) !== descriptor.generation
   ) {
     throw new Error(
-      "canonical priorState generation does not match R2 metadata",
+      "ledger priorState generation does not match R2 metadata",
     );
+  }
+  if (refKind.kind === "restore_stage") {
+    const metadata = object.customMetadata;
+    const restoredFromObject = metadata?.["takosumi-restored-from-object"];
+    if (
+      metadata?.["takosumi-restore-stage"] !== "true" ||
+      metadata?.["takosumi-restore-operation-id"] !== refKind.operationId ||
+      metadata?.["takosumi-restore-fence"] !== String(refKind.fence) ||
+      metadata?.["takosumi-logical-target-state-ref"] !==
+        stateRefForGeneration(scope, expectedGeneration) ||
+      !restoredFromObject
+    ) {
+      throw new Error(
+        "ledger priorState Restore object authority metadata is invalid",
+      );
+    }
+    assertRestoreStateRef(scope, restoredFromObject);
   }
   const ciphertextLength = Number(
     object.customMetadata?.["takosumi-ciphertext-length"],
@@ -3159,6 +4061,258 @@ async function readCanonicalPriorState(
     },
     object,
   };
+}
+
+type LedgerPriorStateRefKind =
+  | { readonly kind: "canonical" }
+  | {
+      readonly kind: "restore_stage";
+      readonly operationId: string;
+      readonly fence: number;
+    };
+
+function classifyLedgerPriorStateRef(
+  scope: StateScope,
+  descriptor: StateVersionDescriptor,
+  expectedGeneration: number,
+): LedgerPriorStateRefKind {
+  assertSafeArtifactObjectKey(descriptor.stateRef, "ledger priorState");
+  const canonicalRef = stateRefForGeneration(scope, expectedGeneration);
+  if (descriptor.stateRef === canonicalRef) return { kind: "canonical" };
+  const prefix = `${stateScopePrefix(scope)}/restore-operations/`;
+  if (!descriptor.stateRef.startsWith(prefix)) {
+    throw new Error("ledger priorState ref escapes the stateScope key grammar");
+  }
+  const suffix = descriptor.stateRef.slice(prefix.length);
+  const match = /^([0-9]{8,16})-([0-9a-f]{24})\.tfstate\.enc$/u.exec(
+    suffix,
+  );
+  if (!match) {
+    throw new Error("ledger priorState Restore ref has invalid key grammar");
+  }
+  if (!descriptor.digest || descriptor.legacyDigestMissing) {
+    throw new Error("ledger priorState Restore ref requires an exact digest");
+  }
+  const fence = Number(match[1]);
+  if (!Number.isSafeInteger(fence) || fence <= 0) {
+    throw new Error("ledger priorState Restore fence is invalid");
+  }
+  return {
+    kind: "restore_stage",
+    operationId: suffix.slice(0, -".tfstate.enc".length),
+    fence,
+  };
+}
+
+type RestoreSourceRefKind =
+  | { readonly kind: "canonical"; readonly logicalTargetStateRef: string }
+  | {
+      readonly kind: "restore_stage";
+      readonly logicalTargetStateRef: string;
+      readonly operationId: string;
+      readonly fence: number;
+    };
+
+async function validateRestoreSourceDescriptor(
+  target: StateScope,
+  source: RestoreState,
+): Promise<RestoreSourceRefKind> {
+  if (target.subjectKind !== "capsule") {
+    throw new Error("Restore source proof requires a Capsule state scope");
+  }
+  for (const [label, value] of [
+    ["source StateVersion id", source.stateVersionId],
+    ["source creator Run id", source.createdByRunId],
+    ["source Workspace id", source.workspaceId],
+    ["source Capsule id", source.capsuleId],
+    ["source environment", source.environment],
+  ] as const) {
+    if (
+      value.length > 512 ||
+      value.trim() !== value ||
+      safeKeySegment(value) !== value
+    ) {
+      throw new Error(`${label} is not an exact safe identity`);
+    }
+  }
+  if (
+    source.workspaceId !== target.workspaceId ||
+    source.capsuleId !== target.subjectId ||
+    source.environment !== target.environment
+  ) {
+    throw new Error("Restore source StateVersion escapes the target state scope");
+  }
+  if (
+    !Number.isSafeInteger(source.generation) ||
+    source.generation < 0 ||
+    source.generation >= target.generation
+  ) {
+    throw new Error("Restore source StateVersion generation is not earlier than the target");
+  }
+  if (!/^sha256:[0-9a-f]{64}$/u.test(source.digest)) {
+    throw new Error("Restore source StateVersion digest is invalid");
+  }
+  assertSafeArtifactObjectKey(source.stateRef, "Restore source StateVersion");
+  const logicalTargetStateRef = stateRefForGeneration(
+    target,
+    source.generation,
+  );
+  if (source.stateRef === logicalTargetStateRef) {
+    const expectedStateVersionId = await stateVersionIdForApplyRun(
+      source.createdByRunId,
+    );
+    if (source.stateVersionId !== expectedStateVersionId) {
+      throw new Error(
+        "canonical Restore source StateVersion id does not match its creator ApplyRun",
+      );
+    }
+    return { kind: "canonical", logicalTargetStateRef };
+  }
+  const prefix = `${stateScopePrefix(target)}/restore-operations/`;
+  if (!source.stateRef.startsWith(prefix)) {
+    throw new Error("Restore source StateVersion ref escapes its exact key grammar");
+  }
+  const suffix = source.stateRef.slice(prefix.length);
+  const match = /^([0-9]{8,16})-([0-9a-f]{24})\.tfstate\.enc$/u.exec(
+    suffix,
+  );
+  if (!match) {
+    throw new Error("Restore-origin source StateVersion ref has invalid key grammar");
+  }
+  const fence = Number(match[1]);
+  if (!Number.isSafeInteger(fence) || fence <= 0) {
+    throw new Error("Restore-origin source StateVersion fence is invalid");
+  }
+  return {
+    kind: "restore_stage",
+    logicalTargetStateRef,
+    operationId: suffix.slice(0, -".tfstate.enc".length),
+    fence,
+  };
+}
+
+async function assertExactRestoreOriginStateVersion(
+  database: CloudflareWorkerEnv["TAKOSUMI_CONTROL_DB"],
+  source: RestoreState,
+): Promise<void> {
+  // A Restore stage is uploaded before Core allocates the StateVersion id that
+  // will reference it, so that id cannot truthfully be embedded in the
+  // immutable object's upload metadata. Core's StateVersion ledger is the sole
+  // authority for that later binding: require one exact row tying the supplied
+  // id to every immutable object/scope/provenance field before using the stage.
+  const row = await database
+    .prepare(
+      `select count(*) as exact_state_version_count
+       from state_versions
+       where id = ?
+         and space_id = ?
+         and installation_id = ?
+         and environment = ?
+         and generation = ?
+         and object_key = ?
+         and digest = ?
+         and created_by_run_id = ?`,
+    )
+    .bind(
+      source.stateVersionId,
+      source.workspaceId,
+      source.capsuleId,
+      source.environment,
+      source.generation,
+      source.stateRef,
+      source.digest,
+      source.createdByRunId,
+    )
+    .first<{ readonly exact_state_version_count: unknown }>();
+  if (!row || row.exact_state_version_count !== 1) {
+    throw new Error(
+      "Restore-origin source StateVersion is not exactly bound to its immutable object",
+    );
+  }
+}
+
+function assertExactRestoreSourceObject(
+  object: R2Object,
+  source: RestoreState,
+  refKind: RestoreSourceRefKind,
+): void {
+  const metadata = object.customMetadata;
+  const ciphertextLength = Number(
+    metadata?.["takosumi-ciphertext-length"],
+  );
+  if (
+    object.key !== source.stateRef ||
+    object.httpMetadata?.contentType !== ENCRYPTED_ARTIFACT_CONTENT_TYPE ||
+    metadata?.["takosumi-encryption-format"] !== "aes-gcm-bytes-v2" ||
+    metadata?.["takosumi-content-digest"] !== source.digest ||
+    metadata?.["takosumi-run-id"] !== source.createdByRunId ||
+    metadata?.["takosumi-generation"] !== String(source.generation) ||
+    metadata?.["takosumi-workspace-id"] !== source.workspaceId ||
+    metadata?.["takosumi-capsule-id"] !== source.capsuleId ||
+    metadata?.["takosumi-environment"] !== source.environment ||
+    metadata?.["takosumi-logical-target-state-ref"] !==
+      refKind.logicalTargetStateRef ||
+    !Number.isSafeInteger(ciphertextLength) ||
+    ciphertextLength !== object.size
+  ) {
+    throw new Error(
+      "Restore source StateVersion does not match encrypted object authority metadata",
+    );
+  }
+  if (
+    refKind.kind === "canonical" &&
+    metadata?.["takosumi-action"] !== "apply" &&
+    metadata?.["takosumi-action"] !== "destroy"
+  ) {
+    throw new Error(
+      "canonical Restore source StateVersion has no Apply authority metadata",
+    );
+  }
+  if (
+    refKind.kind === "restore_stage" &&
+    (metadata?.["takosumi-restore-stage"] !== "true" ||
+      metadata?.["takosumi-restore-operation-id"] !== refKind.operationId ||
+      metadata?.["takosumi-restore-fence"] !== String(refKind.fence) ||
+      !metadata?.["takosumi-restored-from-object"] ||
+      !metadata?.["takosumi-restored-from-state-version-id"])
+  ) {
+    throw new Error(
+      "Restore-origin source StateVersion fence metadata is invalid",
+    );
+  }
+  if (refKind.kind === "restore_stage") {
+    const restoredFromObject = metadata?.["takosumi-restored-from-object"]!;
+    const restoredFromStateVersionId =
+      metadata?.["takosumi-restored-from-state-version-id"]!;
+    if (
+      restoredFromStateVersionId.length > 512 ||
+      safeKeySegment(restoredFromStateVersionId) !==
+        restoredFromStateVersionId
+    ) {
+      throw new Error(
+        "Restore-origin source StateVersion lineage identity is invalid",
+      );
+    }
+    assertRestoreStateRef(
+      {
+        workspaceId: source.workspaceId,
+        subjectKind: "capsule",
+        subjectId: source.capsuleId,
+        environment: source.environment,
+        generation: source.generation,
+        stateRef: refKind.logicalTargetStateRef,
+      },
+      restoredFromObject,
+    );
+  }
+}
+
+async function stateVersionIdForApplyRun(applyRunId: string): Promise<string> {
+  const digest = await stableJsonDigest({
+    kind: "takosumi.state-version-id@v1",
+    applyRunId,
+  });
+  return `state_${digest.slice("sha256:".length)}`;
 }
 
 function priorStateGeneration(
@@ -3357,10 +4511,37 @@ function parseDepStates(requestPayload: unknown): readonly DepState[] {
 function parseRestoreState(requestPayload: unknown): RestoreState | undefined {
   const restoreState = recordField(requestPayload, "restoreState");
   if (!restoreState) return undefined;
+  const stateVersionId = stringField(restoreState, "stateVersionId");
+  const workspaceId = stringField(restoreState, "workspaceId");
+  const capsuleId = stringField(restoreState, "capsuleId");
+  const environment = stringField(restoreState, "environment");
+  const generation = restoreState.generation;
   const stateRef = stringField(restoreState, "stateRef");
   const digest = stringField(restoreState, "digest");
-  if (!stateRef || !digest) return undefined;
-  return { stateRef, digest };
+  const createdByRunId = stringField(restoreState, "createdByRunId");
+  if (
+    !stateVersionId ||
+    !workspaceId ||
+    !capsuleId ||
+    !environment ||
+    !Number.isSafeInteger(generation) ||
+    (generation as number) < 0 ||
+    !stateRef ||
+    !digest ||
+    !createdByRunId
+  ) {
+    return undefined;
+  }
+  return {
+    stateVersionId,
+    workspaceId,
+    capsuleId,
+    environment,
+    generation: generation as number,
+    stateRef,
+    digest,
+    createdByRunId,
+  };
 }
 
 function assertRestoreStateRef(scope: StateScope, key: string): void {
@@ -3722,6 +4903,294 @@ function parseRunnerMutationDispatchRecord(
     phase,
     redispatchBlocked: true,
   };
+}
+
+function parseRunnerRestoreClaim(
+  value: unknown,
+): RunnerRestoreClaim | undefined {
+  if (!isRecord(value)) return undefined;
+  const fence = value.fence;
+  const operationId = stringField(value, "operationId");
+  const requestDigest = stringField(value, "requestDigest");
+  const runId = stringField(value, "runId");
+  const scopeKey = stringField(value, "scopeKey");
+  const generation = value.generation;
+  const targetStateRef = stringField(value, "targetStateRef");
+  const sourceStateRef = stringField(value, "sourceStateRef");
+  const sourceDigest = stringField(value, "sourceDigest");
+  const stageStateRef = stringField(value, "stageStateRef");
+  const phase = stringField(value, "phase");
+  if (
+    typeof fence !== "number" ||
+    !Number.isSafeInteger(fence) ||
+    fence <= 0 ||
+    !operationId ||
+    !requestDigest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(requestDigest) ||
+    !runId ||
+    !scopeKey ||
+    typeof generation !== "number" ||
+    !Number.isSafeInteger(generation) ||
+    generation < 0 ||
+    !targetStateRef ||
+    !sourceStateRef ||
+    !sourceDigest ||
+    !stageStateRef ||
+    (phase !== "claimed" &&
+      phase !== "committed" &&
+      phase !== "abandoned")
+  ) {
+    return undefined;
+  }
+  return {
+    fence,
+    operationId,
+    requestDigest,
+    runId,
+    scopeKey,
+    generation,
+    targetStateRef,
+    sourceStateRef,
+    sourceDigest,
+    stageStateRef,
+    phase,
+  };
+}
+
+function parseRunnerRestoreCommittedAck(
+  value: unknown,
+): RunnerRestoreCommittedAck | undefined {
+  if (!isRecord(value)) return undefined;
+  const version = value.version;
+  const fence = value.fence;
+  const generation = value.generation;
+  const ciphertextLength = value.ciphertextLength;
+  const operationId = stringField(value, "operationId");
+  const scopeKey = stringField(value, "scopeKey");
+  const runId = stringField(value, "runId");
+  const stateRef = stringField(value, "stateRef");
+  const logicalTargetStateRef = stringField(value, "logicalTargetStateRef");
+  const digest = stringField(value, "digest");
+  const stateEtag = stringField(value, "stateEtag");
+  if (
+    value.kind !== "takosumi.runner-restore-ack@v1" ||
+    typeof version !== "number" ||
+    !Number.isSafeInteger(version) ||
+    version <= 0 ||
+    typeof fence !== "number" ||
+    !Number.isSafeInteger(fence) ||
+    fence <= 0 ||
+    typeof generation !== "number" ||
+    !Number.isSafeInteger(generation) ||
+    generation < 0 ||
+    typeof ciphertextLength !== "number" ||
+    !Number.isSafeInteger(ciphertextLength) ||
+    ciphertextLength < 0 ||
+    !operationId ||
+    !scopeKey ||
+    !runId ||
+    !stateRef ||
+    !logicalTargetStateRef ||
+    !digest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(digest) ||
+    !stateEtag
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "takosumi.runner-restore-ack@v1",
+    version,
+    fence,
+    operationId,
+    scopeKey,
+    runId,
+    generation,
+    stateRef,
+    logicalTargetStateRef,
+    digest,
+    ciphertextLength,
+    stateEtag,
+  };
+}
+
+function parseRunnerRestoreAuthorityRecord(
+  value: unknown,
+): RunnerRestoreAuthorityRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  const nextFence = value.nextFence;
+  const claimant = parseRunnerRestoreClaim(value.claimant);
+  const lastCommitted =
+    value.lastCommitted === undefined
+      ? undefined
+      : parseRunnerRestoreCommittedAck(value.lastCommitted);
+  if (
+    value.kind !== "takosumi.runner-restore-authority@v2" ||
+    typeof nextFence !== "number" ||
+    !Number.isSafeInteger(nextFence) ||
+    nextFence <= 0 ||
+    !claimant ||
+    nextFence < claimant.fence ||
+    (value.lastCommitted !== undefined && !lastCommitted) ||
+    (claimant.phase === "committed" &&
+      (!lastCommitted || !sameRestoreAckClaim(lastCommitted, claimant)))
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "takosumi.runner-restore-authority@v2",
+    nextFence,
+    claimant,
+    ...(lastCommitted ? { lastCommitted } : {}),
+  };
+}
+
+function parseRunnerRestoreStageRecord(
+  value: unknown,
+): RunnerRestoreStageRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  const storageKey = stringField(value, "storageKey");
+  const scopeKey = stringField(value, "scopeKey");
+  const fence = value.fence;
+  const operationId = stringField(value, "operationId");
+  const runId = stringField(value, "runId");
+  const stateRef = stringField(value, "stateRef");
+  const collectAfter = value.collectAfter;
+  const status = stringField(value, "status");
+  const authorityVersion = value.authorityVersion;
+  if (
+    value.kind !== "takosumi.runner-restore-stage@v1" ||
+    !storageKey ||
+    !storageKey.startsWith(RUNNER_RESTORE_STAGE_STORAGE_PREFIX) ||
+    !scopeKey ||
+    typeof fence !== "number" ||
+    !Number.isSafeInteger(fence) ||
+    fence <= 0 ||
+    !operationId ||
+    !runId ||
+    !stateRef ||
+    typeof collectAfter !== "number" ||
+    !Number.isSafeInteger(collectAfter) ||
+    collectAfter <= 0 ||
+    (status !== "pending" && status !== "acknowledged") ||
+    (status === "pending" && authorityVersion !== undefined) ||
+    (status === "acknowledged" &&
+      (typeof authorityVersion !== "number" ||
+        !Number.isSafeInteger(authorityVersion) ||
+        authorityVersion <= 0))
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "takosumi.runner-restore-stage@v1",
+    storageKey,
+    scopeKey,
+    fence,
+    operationId,
+    runId,
+    stateRef,
+    collectAfter,
+    status,
+    ...(typeof authorityVersion === "number" ? { authorityVersion } : {}),
+  };
+}
+
+function sameRestoreClaimIdentity(
+  left: RunnerRestoreClaim,
+  right: RunnerRestoreClaim,
+): boolean {
+  return (
+    left.fence === right.fence &&
+    left.operationId === right.operationId &&
+    left.requestDigest === right.requestDigest &&
+    left.runId === right.runId &&
+    left.scopeKey === right.scopeKey &&
+    left.generation === right.generation &&
+    left.targetStateRef === right.targetStateRef &&
+    left.sourceStateRef === right.sourceStateRef &&
+    left.sourceDigest === right.sourceDigest &&
+    left.stageStateRef === right.stageStateRef
+  );
+}
+
+function sameRestoreAckClaim(
+  ack: RunnerRestoreCommittedAck,
+  claim: RunnerRestoreClaim,
+): boolean {
+  return (
+    ack.fence === claim.fence &&
+    ack.operationId === claim.operationId &&
+    ack.scopeKey === claim.scopeKey &&
+    ack.runId === claim.runId &&
+    ack.generation === claim.generation &&
+    ack.stateRef === claim.stageStateRef &&
+    ack.logicalTargetStateRef === claim.targetStateRef
+  );
+}
+
+function sameRestoreAck(
+  left: RunnerRestoreCommittedAck,
+  right: RunnerRestoreCommittedAck,
+): boolean {
+  return (
+    left.kind === right.kind &&
+    left.version === right.version &&
+    left.fence === right.fence &&
+    left.operationId === right.operationId &&
+    left.scopeKey === right.scopeKey &&
+    left.runId === right.runId &&
+    left.generation === right.generation &&
+    left.stateRef === right.stateRef &&
+    left.logicalTargetStateRef === right.logicalTargetStateRef &&
+    left.digest === right.digest &&
+    left.ciphertextLength === right.ciphertextLength &&
+    left.stateEtag === right.stateEtag
+  );
+}
+
+function sameRestoreStageClaim(
+  stage: RunnerRestoreStageRecord,
+  claim: RunnerRestoreClaim,
+): boolean {
+  return (
+    stage.storageKey === restoreStageStorageKey(claim) &&
+    stage.scopeKey === claim.scopeKey &&
+    stage.fence === claim.fence &&
+    stage.operationId === claim.operationId &&
+    stage.runId === claim.runId &&
+    stage.stateRef === claim.stageStateRef &&
+    stage.status === "pending"
+  );
+}
+
+function sameRestoreStageClaimant(
+  stage: RunnerRestoreStageRecord,
+  claim: RunnerRestoreClaim,
+): boolean {
+  return (
+    stage.scopeKey === claim.scopeKey &&
+    stage.fence === claim.fence &&
+    stage.operationId === claim.operationId &&
+    stage.runId === claim.runId &&
+    stage.stateRef === claim.stageStateRef
+  );
+}
+
+function sameRestoreStageRecord(
+  left: RunnerRestoreStageRecord,
+  right: RunnerRestoreStageRecord,
+): boolean {
+  return (
+    left.kind === right.kind &&
+    left.storageKey === right.storageKey &&
+    left.scopeKey === right.scopeKey &&
+    left.fence === right.fence &&
+    left.operationId === right.operationId &&
+    left.runId === right.runId &&
+    left.stateRef === right.stateRef &&
+    left.collectAfter === right.collectAfter &&
+    left.status === right.status &&
+    left.authorityVersion === right.authorityVersion
+  );
 }
 
 function parseRunnerReleaseDispatchRecord(

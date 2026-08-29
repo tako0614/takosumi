@@ -302,6 +302,7 @@ test("d1 restore atomically commits the rebased Output with state, Capsule, and 
         updatedAt: TS,
       },
       guard: {
+        currentStateVersionId: seeded.capsule.currentStateVersionId,
         currentStateGeneration: seeded.capsule.currentStateGeneration,
         status: seeded.capsule.status,
       },
@@ -405,6 +406,7 @@ test("d1 restore rolls back state, Output, terminal Run, and lease clear when th
           updatedAt: TS,
         },
         guard: {
+          currentStateVersionId: seeded.capsule.currentStateVersionId,
           currentStateGeneration: seeded.capsule.currentStateGeneration,
           status: seeded.capsule.status,
         },
