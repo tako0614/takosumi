@@ -114,6 +114,12 @@ export const en: Record<keyof typeof ja, string> = {
     "The service was applied, but its launch link is not ready yet. Retry the check or open the service details.",
   "installStore.runFailed": "Service setup did not finish",
   "installStore.runFailedHint": "Open the technical details and try again.",
+  "installStore.restartWithLatestSource": "Start again from the latest source",
+  "installStore.restartConfirmTitle": "Start again from the latest source?",
+  "installStore.restartConfirmMessage":
+    "Takosumi will abandon the unapplied service and fetch the repository again with the same name. The failed Plan remains in history.",
+  "installStore.restartUnavailable":
+    "Takosumi could not safely abandon the unapplied service, so it did not start again. Open the technical details for more information.",
   "installStore.doneTitle": "Service added",
   "installStore.doneHint": "Open the service and start using it.",
   "installStore.open": "Open service",

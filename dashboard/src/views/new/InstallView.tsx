@@ -37,6 +37,7 @@ import {
   SourceCreateIndeterminateError,
   createCapsule,
   createWorkspace,
+  deleteCapsule,
   extractRunId,
   getInstallConfig,
   listConnectionsWithSignal,
@@ -90,10 +91,12 @@ import {
   providerConnectionDisplayName,
 } from "../../lib/provider-connections.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
+import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
 import {
   CAPSULE_NAME_PATTERN,
+  capsuleAbandonmentCompleted,
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultWorkspaceHandle,
   localizedStoreText,
@@ -186,6 +189,7 @@ export default function InstallView() {
 
 function Inner(props: { readonly installingPrincipalId: string }) {
   const location = useLocation();
+  const { confirm } = useConfirmDialog();
   const initial = parseInstallPrefill(location.search);
   // A query path is only a user hint. It is accepted as install authority only
   // after the exact SourceSnapshot module projection proves that path exists.
@@ -206,6 +210,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   // immutable evidence; shortening them for an input display changes the
   // Source/compatibility request and can select a different commit.
   const [gitRef, setGitRef] = createSignal(initial?.ref ?? "");
+  const [gitRefResolvedFromListing, setGitRefResolvedFromListing] =
+    createSignal(false);
   const [sourcePath, setSourcePath] = createSignal(initial?.sourcePath ?? ".");
   const [modulePath, setModulePath] = createSignal(initial?.path || ".");
   const [modulePathExplicit, setModulePathExplicit] = createSignal(
@@ -744,6 +750,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setListing(selected);
     setGitUrl(selected.source.url);
     setGitRef("");
+    setGitRefResolvedFromListing(false);
     setSourcePath(".");
     setModulePath(".");
     setModulePathExplicit(false);
@@ -879,6 +886,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           // retain the immutable evidence for all later compatibility/plan
           // requests in this install attempt.
           setGitRef(prepared.snapshot.resolvedCommit);
+          setGitRefResolvedFromListing(true);
         }
         setSourceId(prepared.sourceId);
         setSourceSnapshotId(prepared.sourceSnapshotId);
@@ -1163,6 +1171,49 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     }
   };
 
+  const restartFailedInstall = async () => {
+    const workspace = workspaceId();
+    const failedCapsuleId = capsuleId();
+    if (
+      !workspace ||
+      !failedCapsuleId ||
+      !workspaceIsCurrent(workspace)
+    ) {
+      throw new Error(t("installStore.restartUnavailable"));
+    }
+    const accepted = await confirm({
+      title: t("installStore.restartConfirmTitle"),
+      message: t("installStore.restartConfirmMessage"),
+      confirmText: t("installStore.restartWithLatestSource"),
+      cancelText: t("common.cancel"),
+      danger: true,
+    });
+    if (!accepted) return;
+
+    const deleted = await deleteCapsule(failedCapsuleId);
+    if (!capsuleAbandonmentCompleted(deleted)) {
+      throw new Error(t("installStore.restartUnavailable"));
+    }
+    clearCapsuleListCache(workspace);
+    clearCurrentStateVersionCache(workspace);
+    clearDashboardOverviewCache(workspace);
+
+    // A listing may have resolved an omitted ref to the previous stable tag.
+    // Restore the omission so the new Source resolves the latest stable tag;
+    // an operator-supplied explicit ref remains exact.
+    if (gitRefResolvedFromListing()) {
+      setGitRef("");
+      setGitRefResolvedFromListing(false);
+    }
+    // The failed Plan and immutable SourceSnapshot remain as history. The old
+    // unapplied Capsule is abandoned, so rebuilding from the same inputs can
+    // safely create a new Source/InstallConfig/Capsule with the same name.
+    resetPreparedSource({ preserveModuleSelection: true });
+    setError(undefined);
+    setPhase("configure");
+    await prepareInstall();
+  };
+
   const confirmInstallModule = () => {
     const catalog = installModuleCatalog();
     if (
@@ -1312,6 +1363,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setListing(null);
     setGitUrl("");
     setGitRef("");
+    setGitRefResolvedFromListing(false);
     setSourcePath(".");
     setModulePath(".");
     setModulePathExplicit(false);
@@ -1680,6 +1732,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                       value={gitRef()}
                       onInput={(event) => {
                         resetPreparedSource();
+                        setGitRefResolvedFromListing(false);
                         setGitRef(event.currentTarget.value);
                       }}
                     />
@@ -1989,6 +2042,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
             planRunId={planRunId()!}
             capsuleId={capsuleId()!}
             onDone={() => void finishInstallation()}
+            onRestart={() => restartFailedInstall()}
           />
         </section>
       </Show>

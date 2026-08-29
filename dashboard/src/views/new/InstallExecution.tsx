@@ -29,6 +29,7 @@ interface Props {
   readonly planRunId: string;
   readonly capsuleId: string;
   readonly onDone: () => void;
+  readonly onRestart: () => Promise<void>;
 }
 
 const READINESS_READ_ATTEMPTS = 3;
@@ -121,6 +122,7 @@ export default function InstallExecution(props: Props) {
   const [applying, setApplying] = createSignal(false);
   const [approving, setApproving] = createSignal(false);
   const [confirmed, setConfirmed] = createSignal(false);
+  const [restarting, setRestarting] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
   createEffect(() => {
@@ -228,6 +230,18 @@ export default function InstallExecution(props: Props) {
   const retryReadiness = () => {
     setError(null);
     void refetchReadiness();
+  };
+
+  const restartWithLatestSource = async () => {
+    setRestarting(true);
+    setError(null);
+    try {
+      await props.onRestart();
+    } catch (cause) {
+      setError(friendlyError(cause, t).message);
+    } finally {
+      setRestarting(false);
+    }
   };
 
   const failed = () => {
@@ -437,13 +451,26 @@ export default function InstallExecution(props: Props) {
               <div class="iv-error" role="alert">
                 <strong>{t("installStore.runFailed")}</strong>
                 <p>{current().errorCode ?? t("installStore.runFailedHint")}</p>
-                <Button
-                  href={`/runs/${encodeURIComponent(current().id)}`}
-                  variant="secondary"
-                  icon={<ExternalLink size={16} />}
-                >
-                  {t("installStore.runDetails")}
-                </Button>
+                <div class="iv-action-row">
+                  <Show when={current().type === "plan"}>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      busy={restarting()}
+                      disabled={restarting()}
+                      onClick={() => void restartWithLatestSource()}
+                    >
+                      {t("installStore.restartWithLatestSource")}
+                    </Button>
+                  </Show>
+                  <Button
+                    href={`/runs/${encodeURIComponent(current().id)}`}
+                    variant="secondary"
+                    icon={<ExternalLink size={16} />}
+                  >
+                    {t("installStore.runDetails")}
+                  </Button>
+                </div>
               </div>
             </Show>
           </>
