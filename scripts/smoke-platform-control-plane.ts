@@ -992,16 +992,25 @@ export async function resolveOptions(
     label: "vars",
     fallback: {},
   });
-  const defaultVars =
-    args.noDefaultVars === true ||
-    (providerlessOpenTofuSmoke && Object.keys(explicitVars).length > 0)
-      ? {}
-      : defaultSmokeVars({
-          accountId: cloudflareAccountId.value,
-          appName: resolvedAppName,
-          workersSubdomain: cloudflareWorkersSubdomain.value,
-          providerless: providerlessOpenTofuSmoke,
-        });
+  const defaultVars = (() => {
+    if (args.noDefaultVars === true) return {};
+    if (providerlessOpenTofuSmoke) {
+      return Object.keys(explicitVars).length > 0
+        ? {}
+        : defaultSmokeVars({
+            accountId: "",
+            appName: resolvedAppName,
+            workersSubdomain: "",
+            providerless: true,
+          });
+    }
+    if (cloudflareConnectionMode === "none") return {};
+    return defaultSmokeVars({
+      accountId: cloudflareAccountId.value,
+      appName: resolvedAppName,
+      workersSubdomain: cloudflareWorkersSubdomain.value,
+    });
+  })();
   const vars = mergeJsonRecords(defaultVars, explicitVars);
   const outputAllowlist = parseOutputAllowlist(
     await readJsonRecordInput({

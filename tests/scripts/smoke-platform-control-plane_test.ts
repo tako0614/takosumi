@@ -1067,6 +1067,75 @@ test("platform control-plane smoke accepts a deterministic 0..N explicit Provide
   expect(JSON.stringify(result)).not.toContain("pcn_aws");
 });
 
+test("existing non-Cloudflare ProviderBindings do not inject Cloudflare hello-module variables", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      appName: "generic-service-e2e",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      sourceGitUrl: "https://github.com/example/generic-service.git",
+      modulePath: "deploy/service",
+      providerBindingsJson: JSON.stringify([
+        {
+          provider: "registry.terraform.io/tako0614/takoform",
+          moduleLocalName: "takoform",
+          connectionId: "pcn_takoform",
+        },
+      ]),
+      varsJson: JSON.stringify({
+        service_name: "generic-service-e2e",
+      }),
+    },
+    { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token" },
+  );
+
+  const expectedVars = {
+    service_name: "generic-service-e2e",
+  };
+  expect(options.vars).toEqual(expectedVars);
+  expect(
+    smokeSourceCapsuleCreateBody(options, {
+      sourceId: "src_generic_service",
+      installConfigId: "cfg_generic",
+    }),
+  ).toMatchObject({ vars: expectedVars });
+});
+
+test("Yurucommu Takoform smoke sends no reviewed variables and leaves project_name to capsule_name", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      appName: "yurucommu-e2e",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      sourceGitUrl: "https://github.com/tako0614/yurucommu.git",
+      modulePath: "deploy/takoform",
+      noDefaultVars: true,
+      providerBindingsJson: JSON.stringify([
+        {
+          provider: "registry.terraform.io/tako0614/takoform",
+          moduleLocalName: "takoform",
+          connectionId: "pcn_takoform",
+        },
+      ]),
+    },
+    { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token" },
+  );
+
+  expect(options.vars).toEqual({});
+  expect(
+    smokeSourceCapsuleCreateBody(options, {
+      sourceId: "src_yurucommu",
+      installConfigId: "cfg_yurucommu_takoform",
+    }),
+  ).toMatchObject({ name: "yurucommu-e2e", vars: {} });
+});
+
 test("an explicit empty ProviderBinding set remains authoritative zero", async () => {
   const base = {
     dryRun: true,
