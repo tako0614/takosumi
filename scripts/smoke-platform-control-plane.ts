@@ -765,7 +765,20 @@ interface FailureCleanupResult {
   readonly destroyApplyRunId?: string;
   readonly destroySucceeded?: boolean;
   readonly destroyError?: string;
+  readonly destroyVerification?: SmokeDestroyVerification;
   readonly error?: string;
+}
+
+interface SmokeDestroyVerification {
+  readonly status: "passed" | "inconclusive";
+  readonly cloudflareWorkerGone: boolean;
+  readonly error?: string;
+}
+
+interface DestroySmokeCapsuleResult {
+  readonly destroyPlanRun: RunRecord;
+  readonly destroyApplyRun: RunRecord;
+  readonly destroyVerification?: SmokeDestroyVerification;
 }
 
 interface ActivityEventRecord {
@@ -1864,6 +1877,12 @@ export async function runPlatformControlPlaneSmoke(
     );
     functionalProbe = finalizeFunctionalProbeCleanup(functionalProbe);
     completeStep("destroy");
+    if (destroyResult.destroyVerification?.status === "inconclusive") {
+      failureCleanup = destroyFailureCleanupResult(destroyResult);
+      throw new Error(
+        `destroy completed but external Worker verification was inconclusive: ${destroyResult.destroyVerification.error ?? "unknown verification error"}`,
+      );
+    }
 
     if (interfaceMaterializationContext) {
       beginStep("interfaceRetiredVerified");
@@ -2007,20 +2026,7 @@ export async function runPlatformControlPlaneSmoke(
         );
         functionalProbe = finalizeFunctionalProbeCleanup(functionalProbe);
         completeStep("destroy");
-        failureCleanup = {
-          attempted: true,
-          cloudflareWorkerGone: verifyCloudflareWorkerGone
-            ? await assertCloudflareWorkerGoneForCleanup(
-                options,
-                stateVersionLedger?.publicOutputs,
-              )
-            : false,
-          capsuleMarkedError: false,
-          destroyAttempted: true,
-          destroyPlanRunId,
-          destroyApplyRunId,
-          destroySucceeded: true,
-        };
+        failureCleanup = destroyFailureCleanupResult(destroyResult);
       } catch (destroyError) {
         connectionRevokeSkippedReason =
           "post-apply cleanup destroy failed; keeping ProviderConnection so the Capsule can be destroyed after the blocker is fixed";
@@ -2038,7 +2044,7 @@ export async function runPlatformControlPlaneSmoke(
               : String(destroyError),
         };
       }
-    } else {
+    } else if (!destroyApplyRunId) {
       await markPendingSmokeCapsuleError(options, {
         workspaceId,
         capsuleId,
@@ -3175,10 +3181,7 @@ async function destroySmokeCapsule(
     readonly verifyCloudflareWorkerGone: boolean;
     readonly publicOutputs?: Readonly<Record<string, unknown>>;
   },
-): Promise<{
-  readonly destroyPlanRun: RunRecord;
-  readonly destroyApplyRun: RunRecord;
-}> {
+): Promise<DestroySmokeCapsuleResult> {
   const destroyPlan = await requestJson<{ readonly run: RunRecord }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
@@ -3214,13 +3217,46 @@ async function destroySmokeCapsule(
   });
   const completedDestroy = await pollRun(options, destroyApply.run.id);
   assertRunSucceeded(completedDestroy, "destroy apply");
+  let destroyVerification: SmokeDestroyVerification | undefined;
   if (input.verifyCloudflareWorkerGone) {
-    await assertCloudflareWorkerGone(options, input.publicOutputs);
-    await assertPublicWorkerUrlGone(options, input.publicOutputs);
+    let cloudflareWorkerGone = false;
+    try {
+      await assertCloudflareWorkerGone(options, input.publicOutputs);
+      cloudflareWorkerGone = true;
+      await assertPublicWorkerUrlGone(options, input.publicOutputs);
+      destroyVerification = {
+        status: "passed",
+        cloudflareWorkerGone,
+      };
+    } catch (error) {
+      destroyVerification = {
+        status: "inconclusive",
+        cloudflareWorkerGone,
+        error: errorMessage(error),
+      };
+    }
   }
   return {
     destroyPlanRun: reviewedDestroyPlan,
     destroyApplyRun: completedDestroy,
+    ...(destroyVerification ? { destroyVerification } : {}),
+  };
+}
+
+function destroyFailureCleanupResult(
+  destroyResult: DestroySmokeCapsuleResult,
+): FailureCleanupResult {
+  const verification = destroyResult.destroyVerification;
+  return {
+    attempted: true,
+    cloudflareWorkerGone: verification?.cloudflareWorkerGone ?? false,
+    capsuleMarkedError: false,
+    destroyAttempted: true,
+    destroyPlanRunId: destroyResult.destroyPlanRun.id,
+    destroyApplyRunId: destroyResult.destroyApplyRun.id,
+    destroySucceeded: true,
+    ...(verification ? { destroyVerification: verification } : {}),
+    ...(verification?.error ? { error: verification.error } : {}),
   };
 }
 
@@ -3324,25 +3360,6 @@ async function cleanupAppliedSmokeFailure(
     capsuleMarkedError,
     ...(cleanupError ? { error: cleanupError } : {}),
   };
-}
-
-async function assertCloudflareWorkerGoneForCleanup(
-  options: PlatformControlPlaneSmokeOptions,
-  publicOutputs?: Readonly<Record<string, unknown>>,
-): Promise<boolean> {
-  try {
-    const workerName = cloudflareWorkerName(options, publicOutputs);
-    const deleted = await cloudflareScriptRequest(
-      options,
-      "DELETE",
-      workerName,
-    );
-    if (deleted.status === 404 || deleted.ok) return true;
-    await assertCloudflareWorkerGone(options, publicOutputs);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function pollRun(
@@ -5192,6 +5209,21 @@ function redactFailureCleanup(
   if (cleanup === undefined) return undefined;
   return {
     ...cleanup,
+    ...(cleanup.destroyVerification === undefined
+      ? {}
+      : {
+          destroyVerification: {
+            ...cleanup.destroyVerification,
+            ...(cleanup.destroyVerification.error === undefined
+              ? {}
+              : {
+                  error: publicErrorMessage(
+                    cleanup.destroyVerification.error,
+                    redactedValues,
+                  ),
+                }),
+          },
+        }),
     ...(cleanup.destroyError === undefined
       ? {}
       : {

@@ -28,6 +28,7 @@ import {
   main,
   resolveSmokeProviderBindingsFromCompatibility,
   resolveOptions,
+  runPlatformControlPlaneSmoke,
   selectSmokeInstallConfigId,
   shouldMarkPendingSmokeCapsuleError,
   smokeCapsuleProviderBindingsBody,
@@ -2136,4 +2137,297 @@ test("platform control-plane smoke cleanup only marks failed pending upload remn
       "takosumi-smoke-test",
     ),
   ).toBe(false);
+});
+
+test("platform smoke keeps a successfully destroyed Capsule terminal when post-destroy Worker verification lacks Outputs", async () => {
+  const appName = "takosumi-destroy-output-fixture";
+  const rawConnectionId = "conn_destroy_output_fixture";
+  const providerConnectionId = "pcn_destroy_output_fixture";
+  const capsuleId = "cap_destroy_output_fixture";
+  const sourceId = "src_destroy_output_fixture";
+  const sourceSnapshotId = "snap_destroy_output_fixture";
+  const runRecords = {
+    sync: {
+      id: "run_sync_destroy_output_fixture",
+      status: "succeeded",
+      type: "source_sync",
+      sourceSnapshotId,
+    },
+    planWaitingApproval: {
+      id: "run_plan_destroy_output_fixture",
+      status: "waiting_approval",
+      type: "plan",
+    },
+    planSucceeded: {
+      id: "run_plan_destroy_output_fixture",
+      status: "succeeded",
+      type: "plan",
+    },
+    applyFailed: {
+      id: "run_apply_destroy_output_fixture",
+      status: "failed",
+      type: "apply",
+    },
+    destroyPlanWaitingApproval: {
+      id: "run_destroy_plan_output_fixture",
+      status: "waiting_approval",
+      type: "destroy",
+    },
+    destroySucceeded: {
+      id: "run_destroy_apply_output_fixture",
+      status: "succeeded",
+      type: "destroy",
+    },
+  } as const;
+  const options = await resolveOptions(
+    {
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_destroyoutput",
+      appName,
+      sourceGitUrl: "https://git.example.test/destroy-output-fixture.git",
+      cloudflareConnectionMode: "guided",
+      verificationMode: "cloudflare-worker",
+      noInterfaceProof: true,
+      cloudflareWorkerNameOutput: "service_runtime_name",
+      runtimePublicUrlOutput: "launch_url",
+      outputAllowlistJson: JSON.stringify({
+        launch_url: { from: "launch_url", type: "url", required: true },
+        service_runtime_name: {
+          from: "service_runtime_name",
+          type: "string",
+        },
+      }),
+      timeoutSeconds: "1",
+      deployTimeoutSeconds: "1",
+      pollIntervalMs: "1",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+      CLOUDFLARE_ACCOUNT_ID: "account-fixture",
+      CLOUDFLARE_WORKERS_SUBDOMAIN: "workers.example.test",
+    },
+  );
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{
+    readonly method: string;
+    readonly url: string;
+    readonly body?: string;
+  }> = [];
+  globalThis.fetch = (async (input, init) => {
+    const requestUrl = new URL(String(input));
+    const method = init?.method ?? "GET";
+    const body = typeof init?.body === "string" ? init.body : undefined;
+    requests.push({ method, url: requestUrl.toString(), ...(body ? { body } : {}) });
+    if (requestUrl.origin !== options.url) {
+      throw new Error(`unexpected external fixture request: ${requestUrl}`);
+    }
+    const path = requestUrl.pathname;
+    if (method === "POST" && path === "/api/v1/connections") {
+      return Response.json({ connection: { id: rawConnectionId } });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/connections/${rawConnectionId}/test`
+    ) {
+      return Response.json({ status: "verified" });
+    }
+    if (method === "GET" && path === "/api/v1/provider-connections") {
+      return Response.json({
+        providerConnections: [
+          {
+            id: providerConnectionId,
+            providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+            displayName: `Layer-2 smoke ${appName}`,
+          },
+        ],
+      });
+    }
+    if (method === "POST" && path === "/api/v1/sources") {
+      return Response.json({ source: { id: sourceId } });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/sources/${sourceId}/sync`
+    ) {
+      return Response.json({ run: runRecords.sync });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/runs/${runRecords.sync.id}`
+    ) {
+      return Response.json({ run: runRecords.sync });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/sources/${sourceId}/snapshots`
+    ) {
+      return Response.json({
+        snapshots: [
+          {
+            id: sourceSnapshotId,
+            resolvedCommit: "a".repeat(40),
+            archiveRef: "r2://fixture/source.tar.zst",
+            archiveDigest: `sha256:${"b".repeat(64)}`,
+            archiveSizeBytes: 1,
+            fetchedByRunId: runRecords.sync.id,
+          },
+        ],
+      });
+    }
+    if (method === "GET" && path === "/api/v1/capsule-configs") {
+      return Response.json({
+        installConfigs: [{ id: "cfg_destroy_output_fixture", workspaceId: options.workspace }],
+      });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/workspaces/${options.workspace}/capsules`
+    ) {
+      return Response.json({ capsule: { id: capsuleId, name: appName } });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/sources/${sourceId}/compatibility-check`
+    ) {
+      return Response.json({
+        report: {
+          id: "compat_destroy_output_fixture",
+          rootProviderRequirements: [
+            {
+              source: "registry.opentofu.org/cloudflare/cloudflare",
+              moduleLocalName: "cloudflare",
+            },
+          ],
+        },
+      });
+    }
+    if (
+      method === "PUT" &&
+      path === `/api/v1/capsules/${capsuleId}/provider-bindings`
+    ) {
+      return Response.json({});
+    }
+    if (method === "POST" && path === `/api/v1/capsules/${capsuleId}/plan`) {
+      return Response.json({ run: runRecords.planWaitingApproval });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/runs/${runRecords.planWaitingApproval.id}`
+    ) {
+      const planPolls = requests.filter(
+        (request) =>
+          request.method === "GET" &&
+          request.url.endsWith(`/api/v1/runs/${runRecords.planWaitingApproval.id}`),
+      ).length;
+      return Response.json({
+        run:
+          planPolls === 1
+            ? runRecords.planWaitingApproval
+            : runRecords.planSucceeded,
+      });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/runs/${runRecords.planWaitingApproval.id}/approve`
+    ) {
+      return Response.json({ run: runRecords.planSucceeded });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/runs/${runRecords.planWaitingApproval.id}/apply`
+    ) {
+      return Response.json({ run: runRecords.applyFailed });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/runs/${runRecords.applyFailed.id}`
+    ) {
+      return Response.json({ run: runRecords.applyFailed });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/capsules/${capsuleId}/destroy-plan`
+    ) {
+      return Response.json({ run: runRecords.destroyPlanWaitingApproval });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/runs/${runRecords.destroyPlanWaitingApproval.id}`
+    ) {
+      return Response.json({ run: runRecords.destroyPlanWaitingApproval });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/runs/${runRecords.destroyPlanWaitingApproval.id}/approve`
+    ) {
+      return Response.json({});
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/runs/${runRecords.destroyPlanWaitingApproval.id}/apply`
+    ) {
+      return Response.json({ run: runRecords.destroySucceeded });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/runs/${runRecords.destroySucceeded.id}`
+    ) {
+      return Response.json({ run: runRecords.destroySucceeded });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/connections/${rawConnectionId}/revoke`
+    ) {
+      return Response.json({});
+    }
+    if (method === "PATCH" && path === `/api/v1/capsules/${capsuleId}`) {
+      throw new Error("destroyed Capsule must not be patched to error");
+    }
+    throw new Error(`unexpected Takosumi fixture request: ${method} ${requestUrl}`);
+  }) as typeof fetch;
+  try {
+    const result = await runPlatformControlPlaneSmoke(options);
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("apply run run_apply_destroy_output_fixture ended as failed");
+    expect(result.capsuleId).toBe(capsuleId);
+    expect(result.applyRunId).toBe(runRecords.applyFailed.id);
+    expect(result.destroyPlanRunId).toBe(runRecords.destroyPlanWaitingApproval.id);
+    expect(result.destroyApplyRunId).toBe(runRecords.destroySucceeded.id);
+    expect(result.destroyVerified).toBe(true);
+    expect(result.connectionRevoked).toBe(true);
+    expect(result.connectionRevokeSkippedReason).toBeUndefined();
+    expect(result.failureCleanup).toMatchObject({
+      attempted: true,
+      cloudflareWorkerGone: false,
+      capsuleMarkedError: false,
+      destroyAttempted: true,
+      destroyPlanRunId: runRecords.destroyPlanWaitingApproval.id,
+      destroyApplyRunId: runRecords.destroySucceeded.id,
+      destroySucceeded: true,
+      destroyVerification: {
+        status: "inconclusive",
+        cloudflareWorkerGone: false,
+      },
+    });
+    expect(result.failureCleanup?.error).toContain(
+      'Cloudflare Worker name output "service_runtime_name" is missing',
+    );
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "PATCH" &&
+          request.url.endsWith(`/api/v1/capsules/${capsuleId}`),
+      ),
+    ).toBe(false);
+    expect(
+      requests.filter(
+        (request) =>
+          request.method === "POST" &&
+          request.url.endsWith(`/api/v1/connections/${rawConnectionId}/revoke`),
+      ),
+    ).toHaveLength(1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
