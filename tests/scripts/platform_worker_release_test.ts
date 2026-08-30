@@ -124,7 +124,7 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
       handlerKey: "HOSTED",
       authDelivery: "context",
       ownsPathSubtree: true,
-      workspaceContext: "query-required",
+      workspaceContext: "query-optional",
       selfServicePatScopes: ["ai.models.read", "ai.chat"],
       requestScopeRules: [
         {
@@ -149,6 +149,26 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
       "production",
     ),
   ).not.toThrow();
+  expect(() =>
+    assertConfigTargetsSource(
+      source("takosumi-hosted").replace(
+        '"workspaceContext":"query-optional"',
+        '"workspaceContext":"query-required"',
+      ),
+      "/private/wrangler.toml",
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(
+      source("takosumi-hosted").replace(
+        '"workspaceContext":"query-required"',
+        '"workspaceContext":"query-optional"',
+      ),
+      "/private/wrangler.toml",
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
   expect(() =>
     assertConfigTargetsSource(
       source("takosumi-hosted-staging"),
