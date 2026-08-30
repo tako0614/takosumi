@@ -37,7 +37,11 @@ import type { SourcesService } from "../sources/mod.ts";
 import type { OpenTofuControlStore, StoredSource } from "./store.ts";
 import type { OpenTofuRunner, OpenTofuSourceSyncResult } from "./mod.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "./capsule_source_revision.ts";
-import { mapVaultError, OpenTofuControllerError } from "./errors.ts";
+import {
+  mapVaultError,
+  OpenTofuControllerError,
+  structuredErrorReason,
+} from "./errors.ts";
 import { errorMessage } from "./projection.ts";
 
 /**
@@ -622,17 +626,9 @@ export class SourceLifecycleService {
 }
 
 function sourceSyncErrorCode(error: unknown): string {
-  if (error instanceof OpenTofuControllerError) {
-    const details = error.details;
-    if (details && typeof details === "object" && !Array.isArray(details)) {
-      const reason = (details as { readonly reason?: unknown }).reason;
-      if (
-        typeof reason === "string" &&
-        /^[a-z][a-z0-9_]{2,63}$/u.test(reason)
-      ) {
-        return reason;
-      }
-    }
+  const reason = structuredErrorReason(error);
+  if (reason && /^[a-z][a-z0-9_]{2,63}$/u.test(reason)) {
+    return reason;
   }
   return "source_sync_failed";
 }

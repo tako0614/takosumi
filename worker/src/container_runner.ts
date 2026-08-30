@@ -29,6 +29,7 @@ import type {
 import {
   OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
+  SOURCE_REF_NOT_FOUND_REASON,
 } from "../../core/domains/deploy-control/mod.ts";
 import type { CloudflareWorkerEnv, OpenTofuRunAction } from "./bindings.ts";
 import { redactString } from "takosumi-contract/redaction";
@@ -975,6 +976,19 @@ function runnerExecutionErrorFromPayload(
   action: ContainerRunnerAction,
 ): OpenTofuRunnerExecutionError | undefined {
   const errorCode = stringFromRecord(payload, "errorCode");
+  if (
+    action === "source_sync" &&
+    errorCode === SOURCE_REF_NOT_FOUND_REASON
+  ) {
+    // Source ref diagnostics are runner-owned and may contain command output
+    // or credential material. Preserve only the fixed machine reason across
+    // the adapter boundary; Core's structuredErrorReason reads this reason and
+    // the public SourceSyncRun stores the code without the raw detail.
+    return new OpenTofuRunnerExecutionError(
+      runnerFailureMessage(SOURCE_REF_NOT_FOUND_REASON),
+      { reason: SOURCE_REF_NOT_FOUND_REASON },
+    );
+  }
   if (
     action === "release" &&
     errorCode === RUNNER_RELEASE_COMMAND_FAILED_CODE &&

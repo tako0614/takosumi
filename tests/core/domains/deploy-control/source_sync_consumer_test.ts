@@ -8,6 +8,7 @@ import {
   type OpenTofuPlanJob,
   type OpenTofuSourceSyncJob,
   type OpenTofuSourceSyncResult,
+  OpenTofuRunnerExecutionError,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   InMemoryOpenTofuControlStore,
@@ -1295,6 +1296,39 @@ test("source_sync consumer records the run failed when the runner errors", async
   const finished = await store.getSourceSyncRun(run.id);
   expect(finished?.status).toBe("failed");
   expect(finished?.error).toContain("runner exploded");
+  expect(await store.listSourceSnapshots(source.id)).toHaveLength(0);
+});
+
+test("source_sync consumer persists a structured source ref-not-found code without detail", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const secret = "source-ref-lifecycle-secret";
+  runner.sourceSync = async () => {
+    throw new OpenTofuRunnerExecutionError(
+      "runner request failed (source_ref_not_found)",
+      {
+        reason: "source_ref_not_found",
+        detail: `git output password=${secret}`,
+      },
+    );
+  };
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "missing",
+  });
+  const { run } = await controller.createSourceSync(source.id);
+  await controller.dispatchQueuedRun({
+    action: "source_sync",
+    runId: run.id,
+    workspaceId: "workspace_1",
+  });
+
+  const failed = await store.getSourceSyncRun(run.id);
+  expect(failed?.status).toBe("failed");
+  expect(failed?.errorCode).toBe("source_ref_not_found");
+  expect(failed?.error).toBe("runner failure (source_ref_not_found)");
+  expect(JSON.stringify(failed)).not.toContain(secret);
   expect(await store.listSourceSnapshots(source.id)).toHaveLength(0);
 });
 

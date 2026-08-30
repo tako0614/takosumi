@@ -276,6 +276,7 @@ export {
   OpenTofuRunnerInfrastructureError,
   isRunnerInfrastructureRequeueError,
   RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
+  SOURCE_REF_NOT_FOUND_REASON,
   type OpenTofuControllerErrorCode,
 } from "./errors.ts";
 export {

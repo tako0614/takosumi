@@ -94,6 +94,23 @@ const SOURCE_SNAPSHOT_UNSUPPORTED_TRACKED_GITLINK =
 const SOURCE_SNAPSHOT_TREE_METADATA_SCAN_FAILED =
   "source snapshot tree metadata scan failed";
 
+/** Stable machine reason for a Git selector that resolved to no commit. */
+export const SOURCE_REF_NOT_FOUND_CODE = "source_ref_not_found" as const;
+
+/**
+ * Typed source-sync failure emitted when Git returned no commit for the
+ * requested selector. The message remains useful to the runner log boundary,
+ * while adapters use {@link code} instead of parsing it.
+ */
+export class SourceRefNotFoundError extends Error {
+  readonly code = SOURCE_REF_NOT_FOUND_CODE;
+
+  constructor(readonly ref: string) {
+    super(`source ref did not resolve to a commit: ${ref}`);
+    this.name = "SourceRefNotFoundError";
+  }
+}
+
 export async function ensureSourceAvailable(
   source: OpenTofuModuleSource,
   sourceRoot: string,
@@ -873,8 +890,7 @@ export async function resolveSourceCommit(
     );
   }
   const commit = parseLsRemoteCommit(result.stdout, source.ref);
-  if (!commit)
-    throw new Error(`source ref did not resolve to a commit: ${source.ref}`);
+  if (!commit) throw new SourceRefNotFoundError(source.ref);
   return commit;
 }
 

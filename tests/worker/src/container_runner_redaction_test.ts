@@ -1018,6 +1018,50 @@ test("container runner maps finite plan failures to non-retryable execution erro
   );
 });
 
+test("container runner preserves source ref-not-found code without runner detail", async () => {
+  const secret = "source-ref-adapter-secret";
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        status: "failed",
+        errorCode: "source_ref_not_found",
+        stderr: `source ref did not resolve to a commit: missing password=${secret}`,
+        stdout: `git output token=${secret}`,
+      },
+      undefined,
+      500,
+    ),
+  );
+
+  let error: unknown;
+  try {
+    await runner.sourceSync({
+      runId: "source_ref_missing",
+      workspaceId: "workspace_1",
+      sourceId: "source_1",
+      source: {
+        url: "https://github.com/acme/repo.git",
+        ref: "missing",
+        path: ".",
+      },
+      archiveRef:
+        "workspaces/workspace_1/sources/source_1/snapshots/snapshot_1/source.tar.zst",
+    });
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(OpenTofuRunnerExecutionError);
+  expect((error as OpenTofuRunnerExecutionError).reason).toBe(
+    "source_ref_not_found",
+  );
+  expect((error as OpenTofuRunnerExecutionError).detail).toBeUndefined();
+  expect((error as Error).message).toBe(
+    "runner request failed (source_ref_not_found)",
+  );
+  expect(JSON.stringify(error)).not.toContain(secret);
+});
+
 test("container runner maps terminal release command failures to bounded execution diagnostics", async () => {
   const secret = "release-command-adapter-secret";
   const materializerFailure = JSON.stringify({

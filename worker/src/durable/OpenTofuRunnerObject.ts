@@ -41,6 +41,7 @@ const RUNNER_ARTIFACT_RELAY_FAILED_CODE = "runner_artifact_relay_failed";
 const RUNNER_REJECTED_CODE = "runner_rejected";
 const RUNNER_RELEASE_COMMAND_FAILED_CODE = "release_command_failed";
 const RUNNER_PROVIDER_EXECUTION_FAILED_CODE = "provider_execution_failed";
+const RUNNER_SOURCE_REF_NOT_FOUND_CODE = "source_ref_not_found";
 const RUNNER_PROVIDER_FAILURE_CODES = new Set([
   "apply_failed",
   RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
@@ -6199,6 +6200,7 @@ function finiteRunnerFailureCode(
   | typeof RUNNER_MUTATION_INDETERMINATE_CODE
   | typeof RUNNER_RELEASE_COMMAND_FAILED_CODE
   | typeof RUNNER_PROVIDER_EXECUTION_FAILED_CODE
+  | typeof RUNNER_SOURCE_REF_NOT_FOUND_CODE
   | "apply_failed"
   | "runner_artifact_relay_ambiguous"
   | "runner_artifact_relay_failed"
@@ -6217,6 +6219,12 @@ function finiteRunnerFailureCode(
     return RUNNER_RELEASE_COMMAND_FAILED_CODE;
   }
   const value = stringField(payload, "errorCode");
+  if (
+    phase === "source_sync" &&
+    value === RUNNER_SOURCE_REF_NOT_FOUND_CODE
+  ) {
+    return value;
+  }
   const providerFailure = recordField(payload, "providerExecutionFailure");
   if (
     isRecord(providerFailure) &&

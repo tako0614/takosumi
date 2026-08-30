@@ -1069,6 +1069,52 @@ test("OpenTofu runner Durable Object labels compatibility failures with a finite
   assert.equal(body.includes(marker), false);
 });
 
+test("OpenTofu runner Durable Object preserves source ref-not-found without runner detail", async () => {
+  const marker = "source-ref-failure-marker-7K4";
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch() {
+      return Response.json(
+        {
+          status: "failed",
+          errorCode: "source_ref_not_found",
+          stderr: `source ref did not resolve password=${marker}`,
+          stdout: `git output token=${marker}`,
+        },
+        { status: 500 },
+      );
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/source_ref_missing", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "source_sync",
+        runId: "source_ref_missing",
+        request: {
+          action: "source_sync",
+          archiveRef:
+            "workspaces/workspace_1/sources/source_1/snapshots/snapshot_1/source.tar.zst",
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 500);
+  const body = JSON.stringify(await response.json());
+  assert.equal(
+    body,
+    JSON.stringify({
+      status: "failed",
+      errorCode: "source_ref_not_found",
+      phase: "source_sync",
+    }),
+  );
+  assert.equal(body.includes(marker), false);
+});
+
 test("OpenTofu runner Durable Object destroys a successful run container by default", async () => {
   const calls: string[] = [];
   const runner = runnerWithContainer(

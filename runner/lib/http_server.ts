@@ -7,10 +7,14 @@
 import type { RunRequest } from "./types.ts";
 import { readJsonObject, parseAction } from "./util.ts";
 import { redactRunnerOutput } from "./redaction.ts";
-import { redactionValuesFromRequest } from "./credentials.ts";
+import {
+  redactionValuesFromRequest,
+  sourceCredentialRedactionValuesFromRequest,
+} from "./credentials.ts";
 import {
   isSourceSyncRequest,
   isStableSemverTagRequest,
+  SourceRefNotFoundError,
   runSourceSync,
   runStableSemverTagResolution,
   handleSourceArchiveArtifactRequest,
@@ -118,7 +122,13 @@ export async function handleRunnerRequestWithDependencies(
     // resolves a commit, builds a deterministic archive of source.path, PUTs the
     // bytes to the DO source-archive route, and returns resolution metadata. It
     // never runs tofu and never restores/persists OpenTofu state.
-    const requestRedactionValues = redactionValuesFromRequest(body.request);
+    // Source credentials use a separate git-only envelope without the provider
+    // credential manifest. Keep this redaction boundary source-aware so a
+    // malformed source-sync failure can never echo minted git material while
+    // the provider-only parser rejects an undeclared credential map.
+    const requestRedactionValues = isSourceSyncRequest(body.request)
+      ? sourceCredentialRedactionValuesFromRequest(body.request)
+      : redactionValuesFromRequest(body.request);
     if (isSourceSyncRequest(body.request)) {
       try {
         const result = await runSourceSync(runId, body.request);
@@ -130,6 +140,9 @@ export async function handleRunnerRequestWithDependencies(
             action: "source_sync",
             status: "failed",
             exitCode: 1,
+            ...(error instanceof SourceRefNotFoundError
+              ? { errorCode: error.code }
+              : {}),
             stderr: redactRunnerOutput(
               error instanceof Error ? error.message : String(error),
               requestRedactionValues,

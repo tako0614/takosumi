@@ -29,6 +29,8 @@ import {
   runSourceSync,
   shellQuote,
   shallowCloneAtCommit,
+  SOURCE_REF_NOT_FOUND_CODE,
+  SourceRefNotFoundError,
 } from "../../../runner/lib/source_sync.ts";
 
 const decoder = new TextDecoder();
@@ -276,6 +278,69 @@ test("resolveSourceCommit keeps an explicit branch exact", async () => {
         { context: { env: commandEnv() } },
       ),
     ).rejects.toThrow("source ref did not resolve to a commit: main");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveSourceCommit bypasses remote lookup for an exact 40-character commit", async () => {
+  const commit = "A".repeat(40);
+  await expect(
+    resolveSourceCommit(
+      { url: "https://github.com/acme/repo.git", ref: commit, path: "." },
+      { context: { env: commandEnv() } },
+    ),
+  ).resolves.toBe(commit.toLowerCase());
+});
+
+test("resolveSourceCommit reports an unresolved selector with a stable code", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-source-sync-missing-"));
+  try {
+    git(root, ["init", "-b", "main", "repo"]);
+    const repo = join(root, "repo");
+    await writeFile(join(repo, "main.tf"), "terraform {}\n");
+    git(repo, ["add", "main.tf"]);
+    git(repo, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Takosumi Test",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+    const expectedCommit = git(repo, ["rev-parse", "HEAD"]);
+    const legalHexBranch = "b".repeat(41);
+    git(repo, ["branch", legalHexBranch]);
+    await expect(
+      resolveSourceCommit(
+        { url: repo, ref: legalHexBranch, path: "." },
+        { context: { env: commandEnv() } },
+      ),
+    ).resolves.toBe(expectedCommit);
+
+    const missingRef = "a".repeat(41);
+    await expect(
+      resolveSourceCommit(
+        { url: repo, ref: missingRef, path: "." },
+        { context: { env: commandEnv() } },
+      ),
+    ).rejects.toBeInstanceOf(SourceRefNotFoundError);
+    try {
+      await resolveSourceCommit(
+        { url: repo, ref: missingRef, path: "." },
+        { context: { env: commandEnv() } },
+      );
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: SOURCE_REF_NOT_FOUND_CODE,
+        ref: missingRef,
+      });
+      expect(error).toHaveProperty(
+        "message",
+        `source ref did not resolve to a commit: ${missingRef}`,
+      );
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -80,6 +80,9 @@ export class OpenTofuRunnerExecutionError extends Error {
 /** Stable reason used when a Run must wait for an immutable SourceSnapshot. */
 export const SOURCE_SYNC_REQUIRED_REASON = "source_sync_required";
 
+/** Stable reason used when Source Sync cannot resolve the requested Git ref. */
+export const SOURCE_REF_NOT_FOUND_REASON = "source_ref_not_found";
+
 export function sourceSyncRequiredError(
   message: string,
 ): OpenTofuControllerError {
