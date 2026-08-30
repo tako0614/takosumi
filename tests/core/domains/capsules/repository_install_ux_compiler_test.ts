@@ -367,6 +367,21 @@ describe("repository install UX compiler", () => {
     ]);
   });
 
+  test("rejects capsule_name-derived values as reviewed user input", () => {
+    const result = compile({
+      reviewedVariables: { project_name: "manual-project-name" },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostic: {
+        code: "repository_install_ux_variable_value_unsupported",
+        message:
+          'The reviewed value "project_name" is not a declared user input.',
+      },
+    });
+  });
+
   test("compiles a v2.3 sourceBuild proposal into the DB-owned result", () => {
     const sourceBuildDocument = {
       apiVersion: "takosumi.com/v2.3",
