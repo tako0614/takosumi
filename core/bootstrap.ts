@@ -62,6 +62,7 @@ import {
 } from "./domains/sources/mod.ts";
 import {
   CAPSULE_LIFECYCLE_BUSY_REASON,
+  type CapsuleLifecycleAdmission,
   CapsulesService,
 } from "./domains/capsules/mod.ts";
 import { WorkspacesService } from "./domains/workspaces/mod.ts";
@@ -1094,11 +1095,10 @@ export async function createTakosumiService(
     allowOperatorScopedProviderConnections:
       options.allowOperatorScopedProviderConnections === true,
   });
-  const capsulesService = new CapsulesService({
-    store: sharedOpenTofuStore,
-    activity: activityService,
-    projects: projectsService,
-    capsuleAbandonAdmission: async ({ capsule, holderId }, work) => {
+  const capsuleLifecycleAdmission: CapsuleLifecycleAdmission = async (
+    { capsule, holderId, joinExistingHolder },
+    work,
+  ) => {
       try {
         return await withCapsuleLease(
           capsuleCoordination,
@@ -1106,6 +1106,9 @@ export async function createTakosumiService(
             capsuleId: capsule.id,
             environment: capsule.environment,
             holderId,
+            ...(joinExistingHolder === true
+              ? { joinExistingHolder: true }
+              : {}),
           },
           async () => {
             const current = await sharedOpenTofuStore.getCapsule(capsule.id);
@@ -1119,7 +1122,7 @@ export async function createTakosumiService(
             ) {
               throw new OpenTofuControllerError(
                 "failed_precondition",
-                `capsule ${capsule.id} lifecycle changed before abandonment`,
+                `capsule ${capsule.id} lifecycle changed before admission`,
                 { reason: CAPSULE_LIFECYCLE_BUSY_REASON },
               );
             }
@@ -1136,7 +1139,12 @@ export async function createTakosumiService(
         }
         throw error;
       }
-    },
+    };
+  const capsulesService = new CapsulesService({
+    store: sharedOpenTofuStore,
+    activity: activityService,
+    projects: projectsService,
+    capsuleLifecycleAdmission,
   });
   const dependenciesService = new DependenciesService({
     store: sharedOpenTofuStore,
@@ -1478,6 +1486,13 @@ export async function createTakosumiService(
       await interfaceService.reconcileCapsule(run.workspaceId, run.capsuleId);
     }
   });
+  opentofuController.setPostApplyLeaseReleasedObserver(
+    async (run, materializationSourceApplyRunId = run.id) => {
+      await interfaceMaterializationIntentDrainer.drainIntent(
+        `cimi_${materializationSourceApplyRunId}`,
+      );
+    },
+  );
   opentofuController.setApplyRunQueuedObserver(async (run) => {
     if (run.operation === "destroy" && run.capsuleId) {
       await interfaceService.markCapsuleTerminating(

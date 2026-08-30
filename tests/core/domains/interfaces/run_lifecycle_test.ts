@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 
-import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
+import type {
+  ApplyRun,
+  Capsule,
+  PlanRun,
+} from "@takosumi/internal/deploy-control-api";
+import type { Output } from "takosumi-contract/outputs";
+import type { StateVersion } from "takosumi-contract/state-versions";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import {
   applyExpectedGuardFromPlanRun,
@@ -9,10 +15,23 @@ import {
   type OpenTofuRunner,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
+  capsuleInterfaceMaterializationIntentId,
+  createCapsuleInterfaceMaterializationIntent,
+  pinCapsuleInterfaceBlueprints,
+  type CapsuleInterfaceMaterializationIntent,
+} from "../../../../core/domains/deploy-control/interface_materialization_intent.ts";
+import {
+  capsuleLeaseScope,
+  InMemoryCapsuleCoordination,
+  type ReleaseCapsuleLeaseInput,
+} from "../../../../core/domains/deploy-control/capsule_lease.ts";
+import {
   type CommitRunStateInput,
   type CommitRunStateResult,
+  type ClaimCapsuleInterfaceMaterializationIntentInput,
   InMemoryOpenTofuControlStore,
 } from "../../../../core/domains/deploy-control/store.ts";
+import { createInMemoryInterfaceStores } from "../../../../core/domains/interfaces/stores.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   fakeProviderVault,
@@ -22,7 +41,6 @@ import {
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract/install-configs";
 import { withHistoricalPublicHostReservations } from "../../../helpers/deploy-control/historical_public_host_store.ts";
-import type { CapsuleInterfaceMaterializationIntent } from "../../../../core/domains/deploy-control/interface_materialization_intent.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -72,6 +90,383 @@ class CapturingInterfaceIntentStore extends InMemoryOpenTofuControlStore {
     return super.commitRunState(input);
   }
 }
+
+class LeaseTrackingCapsuleCoordination extends InMemoryCapsuleCoordination {
+  readonly releasedScopes: string[] = [];
+
+  override async releaseLease(
+    input: ReleaseCapsuleLeaseInput,
+  ): Promise<boolean> {
+    this.releasedScopes.push(input.scope);
+    return await super.releaseLease(input);
+  }
+}
+
+class LeaseAwareInterfaceIntentStore extends CapturingInterfaceIntentStore {
+  readonly claimEvents: Array<{
+    readonly intentId: string | undefined;
+    readonly capsuleLeaseReleased: boolean;
+  }> = [];
+
+  constructor(
+    private readonly coordination: LeaseTrackingCapsuleCoordination,
+    private readonly capsuleScope: string,
+  ) {
+    super();
+  }
+
+  override claimCapsuleInterfaceMaterializationIntent(
+    input: ClaimCapsuleInterfaceMaterializationIntentInput,
+  ): Promise<CapsuleInterfaceMaterializationIntent | undefined> {
+    this.claimEvents.push({
+      intentId: input.intentId,
+      capsuleLeaseReleased: this.coordination.releasedScopes.includes(
+        this.capsuleScope,
+      ),
+    });
+    return super.claimCapsuleInterfaceMaterializationIntent(input);
+  }
+}
+
+async function seedPendingIntent(
+  store: InMemoryOpenTofuControlStore,
+  capsule: Capsule,
+  applyRunId: string,
+  committedAt: string,
+): Promise<CapsuleInterfaceMaterializationIntent> {
+  const state: StateVersion = {
+    id: `state_${applyRunId}`,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    environment: capsule.environment,
+    generation: 1,
+    stateRef: `state/${applyRunId}`,
+    digest: LOCK_DIGEST,
+    createdByRunId: applyRunId,
+    createdAt: committedAt,
+  };
+  const output: Output = {
+    id: `output_${applyRunId}`,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    stateGeneration: 1,
+    rawArtifactRef: `raw/${applyRunId}`,
+    publicOutputs: { endpoint: "https://older-intent.example.test/mcp" },
+    workspaceOutputs: { endpoint: "https://older-intent.example.test/mcp" },
+    outputDigest: PLAN_DIGEST,
+    createdAt: committedAt,
+  };
+  const planRunId = `plan_${applyRunId}`;
+  const applyRun: ApplyRun = {
+    id: applyRunId,
+    planRunId,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    operation: "update",
+    runnerProfileId: "opentofu-default",
+    status: "succeeded",
+    expected: {
+      planRunId,
+      capsuleId: capsule.id,
+      runnerProfileId: "opentofu-default",
+      sourceDigest: PLAN_DIGEST,
+      variablesDigest: PLAN_DIGEST,
+      policyDecisionDigest: PLAN_DIGEST,
+      planDigest: PLAN_DIGEST,
+      planArtifactDigest: PLAN_DIGEST,
+    },
+    stateBackend: { kind: "managed", ref: "state" } as never,
+    stateLock: { status: "recorded", backendRef: "state" },
+    auditEvents: [],
+    createdAt: Date.parse(committedAt),
+    updatedAt: Date.parse(committedAt),
+    startedAt: Date.parse(committedAt),
+    finishedAt: Date.parse(committedAt),
+  };
+  const pinned = await pinCapsuleInterfaceBlueprints({
+    installConfigId: capsule.installConfigId,
+    blueprints: [
+      {
+        key: "older-runtime-mcp-v1",
+        name: "older-runtime-mcp",
+        spec: {
+          type: "mcp.server",
+          version: "2025-11-25",
+          document: { transport: "streamable-http" },
+          inputs: {
+            endpoint: {
+              source: "capsule_output",
+              outputName: "endpoint",
+            },
+          },
+          access: {
+            visibility: "workspace",
+            resourceUriInput: "endpoint",
+          },
+        },
+      },
+    ],
+  });
+  const intent = createCapsuleInterfaceMaterializationIntent({
+    applyRunId,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    stateVersionId: state.id,
+    outputId: output.id,
+    stateGeneration: 1,
+    pinned: pinned!,
+    createdAt: committedAt,
+  });
+  await store.commitRunState({
+    stateVersion: state,
+    output,
+    capsulePatch: {
+      id: capsule.id,
+      patch: {
+        currentStateVersionId: state.id,
+        currentStateGeneration: 1,
+        currentOutputId: output.id,
+        status: "active",
+        updatedAt: committedAt,
+      },
+      guard: {
+        currentStateVersionId: capsule.currentStateVersionId,
+        status: capsule.status,
+      },
+    },
+    applyRunTerminal: applyRun,
+    interfaceMaterializationIntent: intent,
+  });
+  return intent;
+}
+
+test("successful Apply promptly drains its Interface materialization intent", async () => {
+  const capsuleId = "capsule_interface_intent_fast_path";
+  const coordination = new LeaseTrackingCapsuleCoordination();
+  const store = new LeaseAwareInterfaceIntentStore(
+    coordination,
+    capsuleLeaseScope(capsuleId, "preview"),
+  );
+  const { capsule } = await seedCapsuleModel(store, {
+    workspaceId: "workspace_interface_intent_fast_path",
+    capsuleId,
+    name: "intent-app",
+    environment: "preview",
+    installConfig: {
+      interfaceBlueprints: [
+        {
+          key: "runtime-mcp-v1",
+          name: "runtime-mcp",
+          spec: {
+            type: "mcp.server",
+            version: "2025-11-25",
+            document: { transport: "streamable-http" },
+            inputs: {
+              endpoint: {
+                source: "capsule_output",
+                outputName: "endpoint",
+              },
+            },
+            access: {
+              visibility: "workspace",
+              resourceUriInput: "endpoint",
+            },
+          },
+        },
+      ],
+    },
+  });
+  const { capsule: olderCapsule } = await seedCapsuleModel(store, {
+    workspaceId: "workspace_interface_intent_fast_path_older",
+    capsuleId: "capsule_interface_intent_fast_path_older",
+    sourceId: "src_interface_intent_fast_path_older",
+    snapshotId: "snap_interface_intent_fast_path_older",
+    installConfigId: "cfg_interface_intent_fast_path_older",
+    name: "older-intent-app",
+    environment: "preview",
+  });
+  const olderIntent = await seedPendingIntent(
+    store,
+    olderCapsule,
+    "apply_interface_intent_fast_path_older",
+    "2026-06-06T00:00:01.000Z",
+  );
+  await seedProviderConnections(store, capsule);
+  const runner: OpenTofuRunner = {
+    readCapsuleSourceFiles: () =>
+      Promise.resolve([
+        {
+          path: "main.tf",
+          text: `
+terraform {
+  required_providers {
+    cloudflare = { source = "cloudflare/cloudflare" }
+  }
+}
+
+output "endpoint" {
+  value = "https://intent-fast-path.example.test/mcp"
+}
+`,
+        },
+      ]),
+    plan: () =>
+      Promise.resolve({
+        planDigest: PLAN_DIGEST,
+        planArtifact: {
+          kind: "runner-local",
+          ref: "runner-local://plan_interface_intent_fast_path/tfplan",
+          digest: PLAN_DIGEST,
+          contentType: "application/vnd.opentofu.plan",
+        },
+        providerLockDigest: LOCK_DIGEST,
+        requiredProviders: [CLOUDFLARE],
+        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      }),
+    apply: (job) =>
+      Promise.resolve({
+        outputs: {
+          endpoint: {
+            sensitive: false,
+            value: "https://intent-fast-path.example.test/mcp",
+          },
+        },
+        stateDigest: LOCK_DIGEST,
+        rawOutputRef: job.rawOutputRef,
+        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      }),
+    destroy: () => Promise.resolve({}),
+  };
+  const interfaceStores = createInMemoryInterfaceStores({
+    materializationAuthority: store,
+  });
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: store,
+    interfaceStores,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    opentofuRunner: runner,
+    opentofuConnectionVault: fakeProviderVault() as never,
+    capsuleCoordination: coordination,
+  });
+
+  const { planRun } = await operations.controller.createCapsulePlan(capsule.id);
+  const { applyRun } = await operations.controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(store.claimEvents).toEqual([
+    {
+      intentId: capsuleInterfaceMaterializationIntentId(applyRun.id),
+      capsuleLeaseReleased: true,
+    },
+  ]);
+  expect(
+    await store.getCapsuleInterfaceMaterializationIntent(olderIntent.id),
+  ).toMatchObject({ status: "pending", attempts: 0 });
+  expect(
+    await store.getCapsuleInterfaceMaterializationIntent(`cimi_${applyRun.id}`),
+  ).toMatchObject({
+    capsuleId: capsule.id,
+    status: "completed",
+    receipt: { disposition: "materialized" },
+  });
+  expect(
+    await operations.interfaces.list({
+      workspaceId: capsule.workspaceId,
+      ownerKind: "Capsule",
+      ownerId: capsule.id,
+      includeRetired: true,
+    }),
+  ).toEqual([
+    expect.objectContaining({
+      metadata: expect.objectContaining({
+        materializedFrom: {
+          source: "capsule_blueprint",
+          key: "runtime-mcp-v1",
+        },
+      }),
+      status: expect.objectContaining({ phase: "Resolved" }),
+    }),
+  ]);
+
+  operations.controller.setPostApplyLeaseReleasedObserver(async () => {
+    throw new Error("simulated post-lease fast-path failure");
+  });
+  const { planRun: failedFastPathPlan } =
+    await operations.controller.createCapsulePlan(capsule.id);
+  const { applyRun: failedFastPathApply } =
+    await operations.controller.createApplyRun({
+      planRunId: failedFastPathPlan.id,
+      expected: applyExpectedGuardFromPlanRun(failedFastPathPlan),
+    });
+  expect(failedFastPathApply.status).toBe("succeeded");
+  expect(
+    await store.getCapsuleInterfaceMaterializationIntent(
+      capsuleInterfaceMaterializationIntentId(failedFastPathApply.id),
+    ),
+  ).toMatchObject({ status: "pending", attempts: 0 });
+
+  // A second queued ApplyRun can reach the serialized executor after the
+  // original Apply already marked the Plan applied. Its idempotent replay must
+  // drain the original durable intent, not a cimi row derived from the replay
+  // ApplyRun id.
+  const replayApply: ApplyRun = {
+    ...failedFastPathApply,
+    id: "apply_interface_intent_fast_path_replay",
+    status: "queued",
+    stateVersionId: undefined,
+    outputId: undefined,
+    startedAt: undefined,
+    finishedAt: undefined,
+    heartbeatAt: undefined,
+    diagnostics: undefined,
+    auditEvents: [],
+    createdAt: failedFastPathApply.createdAt + 1,
+    updatedAt: failedFastPathApply.updatedAt + 1,
+  };
+  await store.putApplyRun(replayApply);
+  const replayService = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: store,
+    interfaceStores,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    opentofuRunner: runner,
+    opentofuConnectionVault: fakeProviderVault() as never,
+    capsuleCoordination: coordination,
+  });
+  const claimsBeforeReplay = store.claimEvents.length;
+  const replayed = await replayService.operations.controller.runQueuedApply(
+    replayApply.id,
+  );
+
+  expect(replayed.applyRun.status).toBe("succeeded");
+  expect(store.claimEvents.slice(claimsBeforeReplay)).toEqual([
+    {
+      intentId: capsuleInterfaceMaterializationIntentId(
+        failedFastPathApply.id,
+      ),
+      capsuleLeaseReleased: true,
+    },
+  ]);
+  expect(
+    await store.getCapsuleInterfaceMaterializationIntent(
+      capsuleInterfaceMaterializationIntentId(failedFastPathApply.id),
+    ),
+  ).toMatchObject({
+    status: "completed",
+    receipt: { disposition: "materialized" },
+  });
+  expect(
+    await store.getCapsuleInterfaceMaterializationIntent(
+      capsuleInterfaceMaterializationIntentId(replayApply.id),
+    ),
+  ).toBeUndefined();
+});
 
 test("successful Apply atomically records Plan-pinned Interface materialization before a terminal observer crash", async () => {
   const store = new CapturingInterfaceIntentStore();
@@ -165,6 +560,7 @@ output "endpoint" {
       throw new Error("simulated terminal observer crash");
     }
   });
+  operations.controller.setPostApplyLeaseReleasedObserver(undefined);
   try {
     await operations.controller.createApplyRun({
       planRunId: planRun.id,

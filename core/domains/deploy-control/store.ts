@@ -699,6 +699,8 @@ export interface CommitRunStateInput {
 }
 
 export interface ClaimCapsuleInterfaceMaterializationIntentInput {
+  /** Restricts the lease CAS to one exact obligation instead of global order. */
+  readonly intentId?: string;
   readonly leaseToken: string;
   readonly claimedAt: string;
   readonly leaseExpiresAt: string;
@@ -711,6 +713,12 @@ export function assertCapsuleInterfaceMaterializationIntentClaimInput(
   requiredIntentLifecycleTimestamp(input.leaseExpiresAt, "leaseExpiresAt");
   if (typeof input.leaseToken !== "string" || input.leaseToken.trim().length === 0) {
     throw new TypeError("leaseToken must be a non-empty string");
+  }
+  if (
+    input.intentId !== undefined &&
+    (typeof input.intentId !== "string" || input.intentId.trim().length === 0)
+  ) {
+    throw new TypeError("intentId must be a non-empty string when provided");
   }
   if (Date.parse(input.leaseExpiresAt) <= Date.parse(input.claimedAt)) {
     throw new TypeError("leaseExpiresAt must be after claimedAt");
@@ -843,6 +851,38 @@ export function assertRetryCapsuleInterfaceMaterializationIntentInput(
   ) {
     throw new TypeError("retry expectation is not an exact dead-letter snapshot");
   }
+}
+
+function supersededCapsuleInterfaceMaterializationIntent(
+  current: CapsuleInterfaceMaterializationIntent,
+  completedAt: string,
+): CapsuleInterfaceMaterializationIntent {
+  const {
+    leaseToken: _leaseToken,
+    leaseExpiresAt: _leaseExpiresAt,
+    error: _error,
+    receipt: _receipt,
+    completedAt: _completedAt,
+    deadLetteredAt: _deadLetteredAt,
+    ...base
+  } = current;
+  void _leaseToken;
+  void _leaseExpiresAt;
+  void _error;
+  void _receipt;
+  void _completedAt;
+  void _deadLetteredAt;
+  return {
+    ...base,
+    status: "completed",
+    receipt: {
+      disposition: "superseded_before_materialization",
+      blueprintsDigest: current.blueprintsDigest,
+      completedAt,
+    },
+    updatedAt: completedAt,
+    completedAt,
+  };
 }
 
 export function capsuleInterfaceMaterializationFailureListLimit(
@@ -1505,7 +1545,10 @@ export interface OpenTofuControlStore {
     workspaceId: string,
     limit?: number,
   ): Promise<readonly CapsuleInterfaceMaterializationIntent[]>;
-  /** Atomically claims the globally oldest due/expired materialization intent. */
+  /**
+   * Atomically claims the globally oldest due/expired intent, or only the exact
+   * `intentId` when supplied. Exact mode never falls through to another row.
+   */
   claimCapsuleInterfaceMaterializationIntent(
     input: ClaimCapsuleInterfaceMaterializationIntentInput,
   ): Promise<CapsuleInterfaceMaterializationIntent | undefined>;
@@ -2916,6 +2959,25 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       installConfigId: input.targetInstallConfigId,
       updatedAt: input.updatedAt,
     });
+    const supersededIntents = [
+      ...this.#capsuleInterfaceMaterializationIntents.entries(),
+    ].flatMap(([id, intent]) =>
+      intent.capsuleId === capsule.id && intent.status !== "completed"
+        ? [[
+            id,
+            supersededCapsuleInterfaceMaterializationIntent(
+              intent,
+              input.updatedAt,
+            ),
+          ] as const]
+        : []
+    );
+    // From the authority re-read above through these writes there is no await:
+    // the epoch/config transition and retirement of every unresolved projection
+    // obligation therefore form one in-memory commit boundary.
+    for (const [id, intent] of supersededIntents) {
+      this.#capsuleInterfaceMaterializationIntents.set(id, intent);
+    }
     this.#capsuleExecutionAuthorityEpochs.set(capsule.id, epoch + 1);
     this.#capsules.set(capsule.id, updated);
     return { status: "updated", capsule: updated };
@@ -3059,6 +3121,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const candidate = [...this.#capsuleInterfaceMaterializationIntents.values()]
       .filter(
         (intent) =>
+          (input.intentId === undefined || intent.id === input.intentId) &&
           intent.status === "pending" &&
           Date.parse(intent.nextRetryAt) <= Date.parse(claimedAt) &&
           (intent.leaseExpiresAt === undefined ||
@@ -3130,6 +3193,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       const progressed: CapsuleInterfaceMaterializationIntent = {
         ...current,
         nextItemIndex: input.outcome.nextItemIndex,
+        // Attempts count consecutive failed claims for retry backoff. A
+        // durable progress checkpoint proves this claim made forward progress,
+        // so the next claim starts a fresh failure streak.
+        attempts: 0,
         updatedAt: input.settledAt,
         error: undefined,
         ...(input.outcome.releaseLease
@@ -3223,6 +3290,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       !capsule ||
       capsule.workspaceId !== input.workspaceId ||
       capsule.status === "destroyed" ||
+      capsule.installConfigId !== current.installConfigId ||
       capsule.currentStateVersionId !== input.expectedStateVersionId ||
       capsule.currentStateGeneration !== input.expectedStateGeneration ||
       capsule.currentOutputId !== current.outputId
@@ -3243,6 +3311,15 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       updatedAt: input.retriedAt,
     };
     await validateCapsuleInterfaceMaterializationIntent(retried);
+    // Validation digests asynchronously. A re-adoption or another lifecycle
+    // transition may have retired/replaced either authority row while it was
+    // awaiting, so re-read both references before the synchronous write.
+    if (
+      this.#capsuleInterfaceMaterializationIntents.get(current.id) !== current ||
+      this.#capsules.get(capsule.id) !== capsule
+    ) {
+      return { kind: "conflict" };
+    }
     this.#capsuleInterfaceMaterializationIntents.set(retried.id, retried);
     return { kind: "updated", intent: retried };
   }

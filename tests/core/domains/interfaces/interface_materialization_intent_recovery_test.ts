@@ -1,9 +1,15 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
-import type { ApplyRun, Capsule, Run } from "@takosumi/internal/deploy-control-api";
+import type {
+  ApplyRun,
+  Capsule,
+  InstallConfig,
+  Run,
+} from "@takosumi/internal/deploy-control-api";
 import type { CapsuleInterfaceBlueprint } from "takosumi-contract";
 import type { Output } from "takosumi-contract/outputs";
 import type { StateVersion } from "takosumi-contract/state-versions";
 import type { RecordActivityInput } from "../../../../core/domains/activity/mod.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 
 import {
   createCapsuleInterfaceMaterializationIntent,
@@ -38,6 +44,8 @@ import { fakeProviderVault } from "../../../helpers/deploy-control/model_fixture
 setDefaultTimeout(30_000);
 
 const APPLY_AT = "2026-08-29T11:00:00.000Z";
+const RE_ADOPT_AT = "2026-08-29T11:05:00.000Z";
+const RE_ADOPT_BACK_AT = "2026-08-29T11:06:00.000Z";
 const RESTORE_AT = "2026-08-29T11:10:00.000Z";
 const pgClients: PGliteSqlClient[] = [];
 
@@ -194,6 +202,52 @@ async function commitApplyIntent(
     interfaceMaterializationIntent: intent,
   });
   return intent;
+}
+
+async function reAdoptCapsule(input: {
+  readonly store: OpenTofuControlStore;
+  readonly capsuleId: string;
+  readonly currentInstallConfig: InstallConfig;
+  readonly targetInstallConfig: InstallConfig;
+  readonly label: string;
+  readonly updatedAt?: string;
+}): Promise<Capsule> {
+  const current = await input.store.getCapsule(input.capsuleId);
+  if (!current) throw new Error(`${input.label}: current Capsule is missing`);
+  await input.store.putInstallConfig(input.targetInstallConfig);
+  const result = await input.store.rebindCapsuleInstallConfig({
+    capsuleId: current.id,
+    targetInstallConfigId: input.targetInstallConfig.id,
+    expected: {
+      installConfigId: current.installConfigId,
+      installConfigDigest: await stableJsonDigest(input.currentInstallConfig),
+      targetInstallConfigDigest: await stableJsonDigest(
+        input.targetInstallConfig,
+      ),
+      currentStateGeneration: current.currentStateGeneration,
+      currentStateVersionId: current.currentStateVersionId,
+      status: current.status,
+      executionAuthorityEpoch:
+        (await input.store.getCapsuleExecutionAuthorityEpoch(current.id)) ?? 1,
+    },
+    updatedAt: input.updatedAt ?? RE_ADOPT_AT,
+  });
+  if (result.status !== "updated") {
+    throw new Error(`${input.label}: re-adoption returned ${result.status}`);
+  }
+  return result.capsule;
+}
+
+function reAdoptedInstallConfig(
+  current: InstallConfig,
+  label: string,
+): InstallConfig {
+  return {
+    ...current,
+    id: `cfg_re_adopted_${label}`,
+    name: `re-adopted-${label}`,
+    updatedAt: RE_ADOPT_AT,
+  };
 }
 
 async function claimRestore(
@@ -811,6 +865,150 @@ test("a maximal declaration checkpoints bounded item work and resumes without re
   );
 });
 
+test("exact intent drain continues past one claim without consuming another intent", async () => {
+  for (const [label, store] of await stores()) {
+    const olderSeed = await seedCapsuleModel(store, {
+      workspaceId: `workspace_intent_exact_loop_older_${label}`,
+      capsuleId: `capsule_intent_exact_loop_older_${label}`,
+    });
+    const targetSeed = await seedCapsuleModel(store, {
+      workspaceId: `workspace_intent_exact_loop_target_${label}`,
+      capsuleId: `capsule_intent_exact_loop_target_${label}`,
+    });
+    const older = await commitApplyIntent(
+      store,
+      olderSeed.capsule,
+      `exact_loop_older_${label}`,
+    );
+    const target = await commitApplyIntent(
+      store,
+      targetSeed.capsule,
+      `exact_loop_target_${label}`,
+      Array.from({ length: 10 }, (_, index) => ({
+        ...blueprint(),
+        key: `runtime-${index}`,
+        name: `runtime-${index}`,
+      })),
+    );
+    const visited: Array<{
+      readonly intentId: string;
+      readonly itemIndex: number;
+    }> = [];
+    let lease = 0;
+    const drainer = new CapsuleInterfaceMaterializationIntentDrainer({
+      store,
+      coordination: new InMemoryCapsuleCoordination({
+        now: () => Date.parse(RESTORE_AT),
+      }),
+      target: {
+        materializeItem: (input) => {
+          visited.push({
+            intentId: input.intentId,
+            itemIndex: input.itemIndex,
+          });
+          return Promise.resolve({ kind: "materialized" });
+        },
+      },
+      now: () => RESTORE_AT,
+      newLeaseToken: () => `lease_intent_exact_loop_${label}_${lease++}`,
+    });
+
+    expect(
+      await drainer.drainIntent(target.id, { timeBudgetMs: 10_000 }),
+      label,
+    ).toMatchObject({
+      claimed: 2,
+      progressed: 1,
+      completed: 1,
+      workItemsCompleted: 10,
+    });
+    expect(visited, `${label}: exact target work`).toEqual(
+      Array.from({ length: 10 }, (_, itemIndex) => ({
+        intentId: target.id,
+        itemIndex,
+      })),
+    );
+    expect(
+      await store.getCapsuleInterfaceMaterializationIntent(target.id),
+      `${label}: exact target complete`,
+    ).toMatchObject({ status: "completed", attempts: 0, nextItemIndex: 10 });
+    expect(
+      await store.getCapsuleInterfaceMaterializationIntent(older.id),
+      `${label}: peer remains untouched`,
+    ).toMatchObject({ status: "pending", attempts: 0, nextItemIndex: 0 });
+  }
+});
+
+test("successful progress resets the retry streak before a later transient failure", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_intent_attempt_reset_${label}`,
+      capsuleId: `capsule_intent_attempt_reset_${label}`,
+    });
+    const intent = await commitApplyIntent(store, seeded.capsule, `attempt_reset_${label}`, [
+      {
+        ...blueprint(),
+        bindings: Array.from({ length: 64 }, (_, bindingIndex) => ({
+          key: `principal-${bindingIndex}`,
+          subjectRef: {
+            kind: "Principal" as const,
+            id: `principal_${label}_${bindingIndex}`,
+          },
+          permissions: ["mcp.invoke"],
+          delivery: { type: "none" as const },
+        })),
+      },
+    ]);
+    const visited: number[] = [];
+    const drainer = new CapsuleInterfaceMaterializationIntentDrainer({
+      store,
+      coordination: new InMemoryCapsuleCoordination({
+        now: () => Date.parse(RESTORE_AT),
+      }),
+      target: {
+        materializeItem: (input) => {
+          visited.push(input.itemIndex);
+          return input.itemIndex === 64
+            ? Promise.resolve({
+                kind: "retry" as const,
+                code: "interface_materialization_unavailable",
+              })
+            : Promise.resolve({ kind: "materialized" as const });
+        },
+      },
+      now: () => RESTORE_AT,
+      newLeaseToken: (() => {
+        let lease = 0;
+        return () => `lease_intent_attempt_reset_${label}_${lease++}`;
+      })(),
+    });
+
+    expect(
+      await drainer.drain({ limit: 9, maxWorkItems: 65, timeBudgetMs: 10_000 }),
+      label,
+    ).toMatchObject({
+      claimed: 9,
+      progressed: 8,
+      retried: 1,
+      completed: 0,
+      workItemsCompleted: 64,
+    });
+    expect(visited, `${label}: visited work items`).toEqual(
+      Array.from({ length: 65 }, (_, itemIndex) => itemIndex),
+    );
+    expect(
+      await store.getCapsuleInterfaceMaterializationIntent(intent.id),
+      label,
+    ).toMatchObject({
+      status: "pending",
+      attempts: 1,
+      nextItemIndex: 64,
+      nextRetryAt: "2026-08-29T11:10:30.000Z",
+      error: { code: "interface_materialization_unavailable" },
+    });
+  }
+});
+
 test("a progress checkpoint rotates behind already-due intents across stores", async () => {
   for (const [label, store] of await stores()) {
     const firstSeed = await seedCapsuleModel(store, {
@@ -874,6 +1072,162 @@ test("a progress checkpoint rotates behind already-due intents across stores", a
       }),
       label,
     ).toMatchObject({ id: second.id });
+  }
+});
+
+test("InstallConfig re-adoption supersedes the old pending materialization before any target write", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_intent_re_adopt_${label}`,
+      capsuleId: `capsule_intent_re_adopt_${label}`,
+    });
+    const intent = await commitApplyIntent(
+      store,
+      seeded.capsule,
+      `re_adopt_${label}`,
+    );
+    const before = (await store.getCapsule(seeded.capsule.id))!;
+    const targetInstallConfig = reAdoptedInstallConfig(
+      seeded.installConfig,
+      label,
+    );
+    const rebound = await reAdoptCapsule({
+      store,
+      capsuleId: seeded.capsule.id,
+      currentInstallConfig: seeded.installConfig,
+      targetInstallConfig,
+      label,
+    });
+    expect(rebound, `${label}: preserved applied state`).toMatchObject({
+      currentStateVersionId: before.currentStateVersionId,
+      currentStateGeneration: before.currentStateGeneration,
+      currentOutputId: before.currentOutputId,
+      status: before.status,
+    });
+    expect(rebound.installConfigId, `${label}: adopted config`).not.toBe(
+      intent.installConfigId,
+    );
+    expect(
+      await store.getCapsuleExecutionAuthorityEpoch(rebound.id),
+      `${label}: epoch`,
+    ).toBe(2);
+
+    let targetWrites = 0;
+    const target: CapsuleInterfaceMaterializationTarget = {
+      materializeItem: () => {
+        targetWrites += 1;
+        return Promise.resolve({ kind: "materialized" });
+      },
+    };
+    const result = await new CapsuleInterfaceMaterializationIntentDrainer({
+      store,
+      coordination: new InMemoryCapsuleCoordination({
+        now: () => Date.parse(RESTORE_AT),
+      }),
+      target,
+      now: () => RESTORE_AT,
+      newLeaseToken: () => `lease_intent_re_adopt_${label}`,
+    }).drain({ limit: 1 });
+
+    expect(result, label).toMatchObject({
+      claimed: 0,
+      completed: 0,
+      workItemsCompleted: 0,
+      retried: 0,
+      deadLettered: 0,
+    });
+    expect(targetWrites, `${label}: stale target writes`).toBe(0);
+    const settled = await store.getCapsuleInterfaceMaterializationIntent(
+      intent.id,
+    );
+    expect(settled, label).toMatchObject({
+      status: "completed",
+      nextItemIndex: 0,
+      receipt: {
+        disposition: "superseded_before_materialization",
+        blueprintsDigest: intent.blueprintsDigest,
+        completedAt: RE_ADOPT_AT,
+      },
+    });
+    expect(JSON.stringify(settled), `${label}: value-free receipt`).not.toContain(
+      "source.example.test",
+    );
+  }
+});
+
+test("InstallConfig A to B to A re-adoption cannot revive an old A materialization intent", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_intent_re_adopt_roundtrip_${label}`,
+      capsuleId: `capsule_intent_re_adopt_roundtrip_${label}`,
+    });
+    const intent = await commitApplyIntent(
+      store,
+      seeded.capsule,
+      `re_adopt_roundtrip_${label}`,
+    );
+    const before = (await store.getCapsule(seeded.capsule.id))!;
+    const installConfigB = reAdoptedInstallConfig(
+      seeded.installConfig,
+      `roundtrip_${label}`,
+    );
+    await reAdoptCapsule({
+      store,
+      capsuleId: seeded.capsule.id,
+      currentInstallConfig: seeded.installConfig,
+      targetInstallConfig: installConfigB,
+      label: `roundtrip_to_b_${label}`,
+    });
+    const rebound = await reAdoptCapsule({
+      store,
+      capsuleId: seeded.capsule.id,
+      currentInstallConfig: installConfigB,
+      targetInstallConfig: seeded.installConfig,
+      label: `roundtrip_to_a_${label}`,
+      updatedAt: RE_ADOPT_BACK_AT,
+    });
+
+    expect(rebound, `${label}: preserved applied state`).toMatchObject({
+      installConfigId: seeded.installConfig.id,
+      currentStateVersionId: before.currentStateVersionId,
+      currentStateGeneration: before.currentStateGeneration,
+      currentOutputId: before.currentOutputId,
+      status: before.status,
+    });
+    expect(
+      await store.getCapsuleExecutionAuthorityEpoch(rebound.id),
+      `${label}: epoch`,
+    ).toBe(3);
+    expect(
+      await store.getCapsuleInterfaceMaterializationIntent(intent.id),
+      `${label}: terminal intent`,
+    ).toMatchObject({
+      status: "completed",
+      nextItemIndex: 0,
+      receipt: {
+        disposition: "superseded_before_materialization",
+        blueprintsDigest: intent.blueprintsDigest,
+        completedAt: RE_ADOPT_AT,
+      },
+    });
+
+    let targetWrites = 0;
+    const result = await new CapsuleInterfaceMaterializationIntentDrainer({
+      store,
+      coordination: new InMemoryCapsuleCoordination({
+        now: () => Date.parse(RESTORE_AT),
+      }),
+      target: {
+        materializeItem: () => {
+          targetWrites += 1;
+          return Promise.resolve({ kind: "materialized" });
+        },
+      },
+      now: () => RESTORE_AT,
+      newLeaseToken: () => `lease_intent_re_adopt_roundtrip_${label}`,
+    }).drain({ limit: 1 });
+    expect(result, label).toMatchObject({ claimed: 0, completed: 0 });
+    expect(targetWrites, `${label}: stale target writes`).toBe(0);
   }
 });
 
@@ -1008,5 +1362,136 @@ test("dead-letter forward retry cannot revive an intent after Capsule state adva
       await store.getCapsuleInterfaceMaterializationIntent(intent.id),
       label,
     ).toMatchObject({ status: "dead_letter" });
+  }
+});
+
+test("in-memory retry rechecks Capsule authority after asynchronous intent validation", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "workspace_intent_retry_authority_race_memory",
+    capsuleId: "capsule_intent_retry_authority_race_memory",
+  });
+  const intent = await commitApplyIntent(
+    store,
+    seeded.capsule,
+    "retry_authority_race_memory",
+  );
+  const leaseToken = "lease_intent_retry_authority_race_memory";
+  await store.claimCapsuleInterfaceMaterializationIntent({
+    leaseToken,
+    claimedAt: RESTORE_AT,
+    leaseExpiresAt: "2026-08-29T11:11:00.000Z",
+  });
+  await store.settleCapsuleInterfaceMaterializationIntent({
+    id: intent.id,
+    leaseToken,
+    expectedNextItemIndex: 0,
+    settledAt: RESTORE_AT,
+    outcome: {
+      kind: "dead-letter",
+      code: "interface_provenance_conflict",
+      detailDigest: `sha256:${"6".repeat(64)}`,
+    },
+  });
+  const deadLetter = (await store.getCapsuleInterfaceMaterializationIntent(
+    intent.id,
+  ))!;
+  const currentCapsule = (await store.getCapsule(seeded.capsule.id))!;
+  const targetInstallConfig = reAdoptedInstallConfig(
+    seeded.installConfig,
+    "retry_authority_race_memory",
+  );
+  await store.putInstallConfig(targetInstallConfig);
+
+  // retry() has entered its asynchronous canonical-digest validation before
+  // this synchronous in-memory authority-row replacement lands.
+  const retry = store.retryCapsuleInterfaceMaterializationIntent({
+    id: intent.id,
+    workspaceId: seeded.capsule.workspaceId,
+    expected: deadLetter,
+    expectedStateVersionId: intent.stateVersionId,
+    expectedStateGeneration: intent.stateGeneration,
+    retriedAt: RE_ADOPT_BACK_AT,
+  });
+  await store.putCapsule({
+    ...currentCapsule,
+    installConfigId: targetInstallConfig.id,
+    updatedAt: RE_ADOPT_AT,
+  });
+
+  expect(await retry).toEqual({ kind: "conflict" });
+  expect(
+    await store.getCapsuleInterfaceMaterializationIntent(intent.id),
+  ).toEqual(deadLetter);
+});
+
+test("dead-letter forward retry cannot revive an intent after InstallConfig re-adoption", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_intent_re_adopt_dlq_${label}`,
+      capsuleId: `capsule_intent_re_adopt_dlq_${label}`,
+    });
+    const intent = await commitApplyIntent(
+      store,
+      seeded.capsule,
+      `re_adopt_dlq_${label}`,
+    );
+    const leaseToken = `lease_intent_re_adopt_dlq_${label}`;
+    await store.claimCapsuleInterfaceMaterializationIntent({
+      leaseToken,
+      claimedAt: RESTORE_AT,
+      leaseExpiresAt: "2026-08-29T11:11:00.000Z",
+    });
+    await store.settleCapsuleInterfaceMaterializationIntent({
+      id: intent.id,
+      leaseToken,
+      expectedNextItemIndex: 0,
+      settledAt: RESTORE_AT,
+      outcome: {
+        kind: "dead-letter",
+        code: "interface_provenance_conflict",
+        detailDigest: `sha256:${"7".repeat(64)}`,
+      },
+    });
+    const service = new CapsuleInterfaceMaterializationFailureService({
+      store,
+      now: () => RESTORE_AT,
+    });
+    const [failure] = await service.list(seeded.capsule.workspaceId);
+    expect(failure, `${label}: failure`).toBeDefined();
+
+    const rebound = await reAdoptCapsule({
+      store,
+      capsuleId: seeded.capsule.id,
+      currentInstallConfig: seeded.installConfig,
+      targetInstallConfig: reAdoptedInstallConfig(
+        seeded.installConfig,
+        `dlq_${label}`,
+      ),
+      label: `dlq_${label}`,
+    });
+    expect(rebound.installConfigId, `${label}: adopted config`).not.toBe(
+      intent.installConfigId,
+    );
+    await expect(
+      service.retry(seeded.capsule.workspaceId, intent.id, {
+        failureDigest: failure!.failureDigest,
+        stateVersionId: intent.stateVersionId,
+        stateGeneration: intent.stateGeneration,
+      }),
+      label,
+    ).rejects.toMatchObject({ code: "failed_precondition" });
+    expect(
+      await store.getCapsuleInterfaceMaterializationIntent(intent.id),
+      label,
+    ).toMatchObject({
+      status: "completed",
+      receipt: {
+        disposition: "superseded_before_materialization",
+        blueprintsDigest: intent.blueprintsDigest,
+        completedAt: RE_ADOPT_AT,
+      },
+    });
+    expect(await service.list(seeded.capsule.workspaceId), label).toEqual([]);
   }
 });

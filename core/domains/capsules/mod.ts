@@ -36,6 +36,7 @@ import {
 import { validateResourceMigrationDeclaration } from "../deploy-control/resource_migrations.ts";
 import type {
   CapsuleInstallConfigRebindInput,
+  CapsuleInstallConfigRebindResult,
   CapsuleLifecycleMutation,
   CapsuleListPageParams,
   OpenTofuControlStore,
@@ -113,15 +114,16 @@ export const REPOSITORY_INSTALL_UX_IMMUTABLE_REASON =
   "repository_install_ux_immutable";
 
 /**
- * Host-owned admission for abandoning a no-state Capsule. Abandonment must
- * serialize with ordinary provider Runs for the same Capsule/environment. The
- * host therefore receives the full current Capsule and re-reads it while the
- * shared lifecycle lease is held.
+ * Host-owned admission shared by every Capsule lifecycle transition that can
+ * race provider execution or post-Apply projection. The host receives the
+ * observed Capsule and re-reads it while the common lifecycle lease is held.
  */
-export type CapsuleAbandonAdmission = <T>(
+export type CapsuleLifecycleAdmission = <T>(
   input: {
     readonly capsule: Capsule;
     readonly holderId: string;
+    /** Only an exact, proven-idempotent logical operation may opt in. */
+    readonly joinExistingHolder?: boolean;
   },
   work: (capsule: Capsule) => Promise<T>,
 ) => Promise<T>;
@@ -133,8 +135,8 @@ export interface CapsulesServiceDependencies {
   /** Workspace-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
   readonly activity?: ActivityRecorder & Partial<IdempotentActivityRecorder>;
   readonly projects?: ProjectsService;
-  /** Optional host-owned lifecycle admission for serialized abandonment. */
-  readonly capsuleAbandonAdmission?: CapsuleAbandonAdmission;
+  /** Optional host-owned lease shared by every Capsule lifecycle transition. */
+  readonly capsuleLifecycleAdmission?: CapsuleLifecycleAdmission;
 }
 
 export class CapsulesService {
@@ -143,7 +145,7 @@ export class CapsulesService {
   readonly #now: () => Date;
   readonly #activity: ActivityRecorder & Partial<IdempotentActivityRecorder>;
   readonly #projects: ProjectsService;
-  #capsuleAbandonAdmission?: CapsuleAbandonAdmission;
+  #capsuleLifecycleAdmission?: CapsuleLifecycleAdmission;
 
   constructor(deps: CapsulesServiceDependencies) {
     this.#store = deps.store;
@@ -152,14 +154,14 @@ export class CapsulesService {
     this.#activity = deps.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#projects =
       deps.projects ?? new ProjectsService({ store: deps.store });
-    this.#capsuleAbandonAdmission = deps.capsuleAbandonAdmission;
+    this.#capsuleLifecycleAdmission = deps.capsuleLifecycleAdmission;
   }
 
-  /** Late-binds the host-owned ordered abandon admission after composition. */
-  setCapsuleAbandonAdmission(
-    admission: CapsuleAbandonAdmission | undefined,
+  /** Late-binds the host-owned ordered lifecycle admission after composition. */
+  setCapsuleLifecycleAdmission(
+    admission: CapsuleLifecycleAdmission | undefined,
   ): void {
-    this.#capsuleAbandonAdmission = admission;
+    this.#capsuleLifecycleAdmission = admission;
   }
 
   // --- Capsule (§5) ---------------------------------------------------------
@@ -358,15 +360,35 @@ export class CapsulesService {
       );
     }
     const targetInstallConfigDigest = await stableJsonDigest(target);
-    const result = await this.#store.rebindCapsuleInstallConfig({
+    const rebind = async (): Promise<CapsuleInstallConfigRebindResult> =>
+      await this.#store.rebindCapsuleInstallConfig({
+        capsuleId: request.capsuleId,
+        targetInstallConfigId: target.id,
+        expected: {
+          ...request.expected,
+          targetInstallConfigDigest,
+        },
+        updatedAt: this.#now().toISOString(),
+      });
+    const admission = this.#capsuleLifecycleAdmission;
+    const operationDigest = await stableJsonDigest({
+      operation: "capsule_install_config_rebind_v1",
       capsuleId: request.capsuleId,
       targetInstallConfigId: target.id,
-      expected: {
-        ...request.expected,
-        targetInstallConfigDigest,
-      },
-      updatedAt: this.#now().toISOString(),
+      targetInstallConfigDigest,
+      requestDigest: request.requestDigest,
+      expected: request.expected,
     });
+    const result = admission
+      ? await admission(
+          {
+            capsule: before,
+            holderId: `capsule-rebind_${operationDigest.slice("sha256:".length)}`,
+            joinExistingHolder: true,
+          },
+          async () => await rebind(),
+        )
+      : await rebind();
     if (result.status === "not_found") {
       throw new OpenTofuControllerError(
         "not_found",
@@ -516,7 +538,7 @@ export class CapsulesService {
       });
       return updated;
     };
-    const admission = this.#capsuleAbandonAdmission;
+    const admission = this.#capsuleLifecycleAdmission;
     return admission
       ? await admission(
           { capsule: existing, holderId: this.#newId("capsule-abandon") },

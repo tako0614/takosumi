@@ -376,6 +376,10 @@ function isSafeMutatingRunnerInfrastructureRetryError(
 const RUNNER_INFRASTRUCTURE_RETRY_LIMIT = 1;
 const PLAN_CREATION_STAGE_TIMEOUT_MS = 25_000;
 const RUN_EXECUTION_LEASE_LOST_REASON = "run_execution_lease_lost";
+const APPLY_EXECUTION_LEASE_LOST = Symbol("apply_execution_lease_lost");
+const APPLY_MATERIALIZATION_SOURCE_RUN_ID = Symbol(
+  "apply_materialization_source_run_id",
+);
 const RUN_EXECUTION_RENEWAL_UNAVAILABLE_REASON =
   "run_execution_renewal_unavailable";
 const RUN_RENEWAL_TRANSPORT_RETRY_LIMIT = 1;
@@ -383,6 +387,11 @@ const RUN_RENEWAL_TRANSPORT_RETRY_MAX_DELAY_MS = 250;
 
 type RunRenewalTarget = "run_heartbeat" | "capsule_lease";
 type RunRenewalFailure = "lost" | "unavailable";
+type ApplyRunExecutionResponse = ApplyRunResponse & {
+  readonly [APPLY_EXECUTION_LEASE_LOST]?: true;
+  /** Internal-only provenance for the post-lease Interface intent drain. */
+  readonly [APPLY_MATERIALIZATION_SOURCE_RUN_ID]?: string;
+};
 
 async function planCreationStage<T>(
   stage: string,
@@ -1248,6 +1257,10 @@ export class RunEngine {
   readonly #runSerialized: RunSerialized;
   #connectionsService?: ConnectionsService;
   #terminalObserver?: (run: PlanRun | ApplyRun) => Promise<void>;
+  #postApplyLeaseReleasedObserver?: (
+    run: ApplyRun,
+    materializationSourceApplyRunId?: string,
+  ) => Promise<void>;
   #planQueuedObserver?: (run: PlanRun) => Promise<void>;
   #applyQueuedObserver?: (run: ApplyRun) => Promise<void>;
   #restoreObserver?: (event: RestoreRunLifecycleEvent) => Promise<void>;
@@ -1300,6 +1313,23 @@ export class RunEngine {
     this.#terminalObserver = observer;
   }
 
+  /**
+   * Installs the fast-path hook for a successful Apply after its outer
+   * Capsule/plan lease has fully released. This remains separate from the
+   * terminal observer, whose existing lifecycle notifications run inside the
+   * lease and must retain their current semantics.
+   */
+  setPostApplyLeaseReleasedObserver(
+    observer:
+      | ((
+          run: ApplyRun,
+          materializationSourceApplyRunId?: string,
+        ) => Promise<void>)
+      | undefined,
+  ): void {
+    this.#postApplyLeaseReleasedObserver = observer;
+  }
+
   setPlanQueuedObserver(
     observer: ((run: PlanRun) => Promise<void>) | undefined,
   ): void {
@@ -1347,6 +1377,36 @@ export class RunEngine {
       await this.#terminalObserver(run);
     } catch (error) {
       log.warn("service.deploy_control.terminal_observer_failed", {
+        runId: run.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async #notifyPostApplyLeaseReleased(
+    response: ApplyRunExecutionResponse,
+  ): Promise<void> {
+    const run = response.applyRun;
+    const materializationSourceApplyRunId =
+      response[APPLY_MATERIALIZATION_SOURCE_RUN_ID] ?? run.id;
+    if (
+      response[APPLY_EXECUTION_LEASE_LOST] === true ||
+      run.status !== "succeeded" ||
+      run.operation === "destroy" ||
+      !this.#postApplyLeaseReleasedObserver
+    ) {
+      return;
+    }
+    try {
+      await this.#postApplyLeaseReleasedObserver(
+        run,
+        materializationSourceApplyRunId,
+      );
+    } catch (error) {
+      // The Apply commit is already authoritative. A transient fast-path
+      // failure must leave the durable intent for the scheduled recovery
+      // drainer rather than rewriting or failing the committed run.
+      log.warn("service.deploy_control.post_apply_lease_released_failed", {
         runId: run.id,
         message: error instanceof Error ? error.message : String(error),
       });
@@ -4672,11 +4732,12 @@ export class RunEngine {
           handle,
         ),
       );
+    let response: ApplyRunExecutionResponse;
     if (this.#capsuleCoordination && planRun.capsuleId) {
       const environment =
         planRun.capsuleContext?.environment ??
         (await this.#requireCapsule(planRun.capsuleId)).environment;
-      return await withCapsuleLease(
+      response = await withCapsuleLease(
         this.#capsuleCoordination,
         {
           capsuleId: planRun.capsuleId,
@@ -4685,22 +4746,26 @@ export class RunEngine {
         },
         runWork,
       );
+    } else {
+      // SECURITY (apply-once / S5): a `create` plan has no capsuleId yet, so
+      // the capsule lease above cannot cover it. Without a cross-isolate
+      // guard two concurrent create-applies of the SAME plan both observe
+      // `appliedApplyRunId` undefined and each allocate a brand-new Capsule +
+      // apply (real duplicate cloud resources). Take the `plan:{planRunId}`
+      // lease so create-applies serialize; the inner #executeApply re-reads the
+      // persisted PlanRun and rejects a sibling that already marked it applied.
+      if (this.#capsuleCoordination) {
+        response = await withPlanLease(
+          this.#capsuleCoordination,
+          { planRunId: planRun.id, holderId: applyRun.id },
+          runWork,
+        );
+      } else {
+        response = await runWork();
+      }
     }
-    // SECURITY (apply-once / S5): a `create` plan has no capsuleId yet, so
-    // the capsule lease above cannot cover it. Without a cross-isolate
-    // guard two concurrent create-applies of the SAME plan both observe
-    // `appliedApplyRunId` undefined and each allocate a brand-new Capsule +
-    // apply (real duplicate cloud resources). Take the `plan:{planRunId}`
-    // lease so create-applies serialize; the inner #executeApply re-reads the
-    // persisted PlanRun and rejects a sibling that already marked it applied.
-    if (this.#capsuleCoordination) {
-      return await withPlanLease(
-        this.#capsuleCoordination,
-        { planRunId: planRun.id, holderId: applyRun.id },
-        runWork,
-      );
-    }
-    return await runWork();
+    await this.#notifyPostApplyLeaseReleased(response);
+    return response;
   }
 
   /**
@@ -6325,7 +6390,7 @@ export class RunEngine {
     readonly startedAt: number;
     readonly leaseToken: string;
     readonly existingApplyRunId: string;
-  }): Promise<ApplyRunResponse> {
+  }): Promise<ApplyRunExecutionResponse> {
     const existing = await this.#store.getApplyRun(input.existingApplyRunId);
     if (!existing || existing.status !== "succeeded") {
       const failed = await this.#failApplyRun(
@@ -6400,7 +6465,11 @@ export class RunEngine {
         },
       });
     }
-    return await this.getApplyRun(applyRun.id);
+    const response = await this.getApplyRun(applyRun.id);
+    return {
+      ...response,
+      [APPLY_MATERIALIZATION_SOURCE_RUN_ID]: input.existingApplyRunId,
+    };
   }
 
   async #requeueApplyRunAfterRunnerInfrastructureError(
@@ -7214,7 +7283,7 @@ export class RunEngine {
     dispatch: RunModuleDispatch,
     inputs: PlanRunInputs | undefined,
     lease?: LeaseHandle,
-  ): Promise<ApplyRunResponse> {
+  ): Promise<ApplyRunExecutionResponse> {
     const startedAt = this.#now();
     const claim = await this.#markApplyRunning(applyRun, profile, startedAt);
     if (!claim.won) {
@@ -7325,7 +7394,10 @@ export class RunEngine {
             now,
           });
         if (committedFailure === "lease_lost") {
-          return { applyRun: (await this.getApplyRun(applyRun.id)).applyRun };
+          return {
+            applyRun: (await this.getApplyRun(applyRun.id)).applyRun,
+            [APPLY_EXECUTION_LEASE_LOST]: true,
+          };
         }
         ledgerCommitted = true;
         return await this.#completeFailedProviderMutation({
@@ -7435,7 +7507,10 @@ export class RunEngine {
         now,
       });
       if (patched === "lease_lost") {
-        return { applyRun: (await this.getApplyRun(applyRun.id)).applyRun };
+        return {
+          applyRun: (await this.getApplyRun(applyRun.id)).applyRun,
+          [APPLY_EXECUTION_LEASE_LOST]: true,
+        };
       }
       ledgerCommitted = true;
       // §24 stale propagation: when this apply's projected outputs changed

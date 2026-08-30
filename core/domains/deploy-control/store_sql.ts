@@ -2176,6 +2176,30 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         )
         .returning({ json: pgSchema.capsules.capsuleJson });
       if (rows[0]) {
+        const intentTable =
+          pgSchema.capsuleInterfaceMaterializationIntents;
+        await db
+          .update(intentTable)
+          .set({
+            status: "completed",
+            leaseToken: null,
+            leaseExpiresAt: null,
+            errorJson: null,
+            receiptJson: sql`jsonb_build_object(
+              'disposition', 'superseded_before_materialization',
+              'blueprintsDigest', ${intentTable.blueprintsDigest},
+              'completedAt', ${input.updatedAt}::text
+            )`,
+            updatedAt: input.updatedAt,
+            completedAt: input.updatedAt,
+            deadLetteredAt: null,
+          })
+          .where(
+            and(
+              eq(intentTable.capsuleId, input.capsuleId),
+              inArray(intentTable.status, ["pending", "dead_letter"]),
+            ),
+          );
         return {
           status: "updated" as const,
           capsule: normalizeCapsuleRecord(parseRow(rows[0]) as Capsule),
@@ -3771,6 +3795,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       select ${table.id}
       from ${table}
       where ${table.status} = 'pending'
+        and ${input.intentId === undefined
+          ? sql`true`
+          : sql`${table.id} = ${input.intentId}`}
         and ${table.nextRetryAt} <= ${input.claimedAt}
         and (
           ${table.leaseExpiresAt} is null
@@ -3849,6 +3876,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           : input.outcome.kind === "retry" || input.outcome.kind === "progress"
             ? "pending"
             : "dead_letter",
+        ...(input.outcome.kind === "progress" ? { attempts: 0 } : {}),
         ...(input.outcome.kind !== "progress" || input.outcome.releaseLease
           ? { leaseToken: null, leaseExpiresAt: null }
           : {}),
@@ -3960,6 +3988,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
                   eq(capsule.id, table.capsuleId),
                   eq(capsule.workspaceId, input.workspaceId),
                   ne(capsule.status, "destroyed"),
+                  eq(capsule.installConfigId, table.installConfigId),
                   eq(
                     capsule.currentStateVersionId,
                     input.expectedStateVersionId,

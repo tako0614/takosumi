@@ -1529,6 +1529,23 @@ export class OpenTofuController {
     this.#runEngine.setTerminalObserver(observer);
   }
 
+  /**
+   * Installs the post-lease fast-path hook for successful non-destroy Apply
+   * runs. This callback is invoked only after the RunEngine's outer Capsule
+   * (or create-plan) lease has fully released; terminal lifecycle observers
+   * continue to run with their existing timing and authority.
+   */
+  setPostApplyLeaseReleasedObserver(
+    observer:
+      | ((
+          run: ApplyRun,
+          materializationSourceApplyRunId?: string,
+        ) => Promise<void>)
+      | undefined,
+  ): void {
+    this.#runEngine.setPostApplyLeaseReleasedObserver(observer);
+  }
+
   setPlanRunQueuedObserver(
     observer: ((run: PlanRun) => Promise<void>) | undefined,
   ): void {

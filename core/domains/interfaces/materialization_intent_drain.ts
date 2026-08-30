@@ -341,6 +341,87 @@ export class CapsuleInterfaceMaterializationIntentDrainer {
     return result;
   }
 
+  /**
+   * Processes one exact durable obligation until it completes or reaches the
+   * caller's work/time budget. Missing, terminal, not-yet-due, and still-live
+   * leased rows are bounded no-ops; every claim remains exact and cannot fall
+   * through to the globally oldest different row.
+   */
+  async drainIntent(
+    intentId: string,
+    options: {
+      readonly maxWorkItems?: number;
+      readonly timeBudgetMs?: number;
+    } = {},
+  ): Promise<CapsuleInterfaceMaterializationDrainResult> {
+    const exactIntentId = requiredText(intentId, "intentId");
+    const maxWorkItems = boundedInteger(
+      options.maxWorkItems,
+      DEFAULT_DRAIN_WORK_ITEMS,
+      1,
+      MAX_DRAIN_WORK_ITEMS,
+      "maxWorkItems",
+    );
+    const timeBudgetMs = boundedInteger(
+      options.timeBudgetMs,
+      DEFAULT_DRAIN_TIME_BUDGET_MS,
+      1,
+      MAX_DRAIN_TIME_BUDGET_MS,
+      "timeBudgetMs",
+    );
+    const deadline = this.#monotonicNow() + timeBudgetMs;
+    const result = {
+      claimed: 0,
+      completed: 0,
+      progressed: 0,
+      workItemsCompleted: 0,
+      retried: 0,
+      deadLettered: 0,
+      leaseLost: 0,
+    };
+    while (
+      result.workItemsCompleted < maxWorkItems &&
+      this.#monotonicNow() < deadline
+    ) {
+      const claimedAt = requiredTimestamp(this.#now(), "now");
+      const leaseToken = requiredText(this.#newLeaseToken(), "leaseToken");
+      const intent =
+        await this.#store.claimCapsuleInterfaceMaterializationIntent({
+          intentId: exactIntentId,
+          leaseToken,
+          claimedAt,
+          leaseExpiresAt: new Date(
+            Date.parse(claimedAt) + this.#intentLeaseMs,
+          ).toISOString(),
+        });
+      if (!intent) break;
+      result.claimed += 1;
+      const outcome = await this.#process(
+        intent,
+        leaseToken,
+        Math.min(
+          this.#maxItemsPerClaim,
+          maxWorkItems - result.workItemsCompleted,
+        ),
+        deadline,
+      );
+      result.workItemsCompleted += outcome.workItemsCompleted;
+      if (outcome.kind === "completed") result.completed += 1;
+      else if (outcome.kind === "progressed") result.progressed += 1;
+      else if (outcome.kind === "retried") result.retried += 1;
+      else if (outcome.kind === "dead-lettered") result.deadLettered += 1;
+      else result.leaseLost += 1;
+
+      // A second exact claim is safe only after a durable checkpoint advanced
+      // the cursor. Any terminal/error/lost-lease outcome, or a malformed
+      // no-progress result, leaves the row for normal recovery.
+      if (outcome.kind !== "progressed" || outcome.workItemsCompleted === 0) {
+        break;
+      }
+    }
+    return result;
+  }
+
   async #process(
     intent: CapsuleInterfaceMaterializationIntent,
     leaseToken: string,
@@ -748,6 +829,7 @@ function lineageDisposition(
     return "retired_before_materialization";
   }
   if (
+    capsule.installConfigId !== intent.installConfigId ||
     capsule.currentStateGeneration !== intent.stateGeneration ||
     capsule.currentStateVersionId !== intent.stateVersionId ||
     capsule.currentOutputId !== intent.outputId

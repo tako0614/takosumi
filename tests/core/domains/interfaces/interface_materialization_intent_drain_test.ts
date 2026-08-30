@@ -246,6 +246,7 @@ async function commitPendingIntent(
   capsule: Capsule,
   applyRunId: string,
   generation = 1,
+  committedAt = COMMITTED_AT,
 ): Promise<CapsuleInterfaceMaterializationIntent> {
   const state: StateVersion = {
     id: `state_${applyRunId}`,
@@ -256,7 +257,7 @@ async function commitPendingIntent(
     stateRef: `state/${applyRunId}`,
     digest: `sha256:${"a".repeat(64)}`,
     createdByRunId: applyRunId,
-    createdAt: COMMITTED_AT,
+    createdAt: committedAt,
   };
   const output: Output = {
     id: `output_${applyRunId}`,
@@ -267,7 +268,7 @@ async function commitPendingIntent(
     publicOutputs: { endpoint: "https://runtime.example.test/mcp" },
     workspaceOutputs: { endpoint: "https://runtime.example.test/mcp" },
     outputDigest: `sha256:${"b".repeat(64)}`,
-    createdAt: COMMITTED_AT,
+    createdAt: committedAt,
   };
   const planRunId = `plan_${applyRunId}`;
   const applyRun: ApplyRun = {
@@ -291,10 +292,10 @@ async function commitPendingIntent(
     stateBackend: { kind: "managed", ref: "state" } as never,
     stateLock: { status: "recorded", backendRef: "state" },
     auditEvents: [],
-    createdAt: Date.parse(COMMITTED_AT),
-    updatedAt: Date.parse(COMMITTED_AT),
-    startedAt: Date.parse(COMMITTED_AT),
-    finishedAt: Date.parse(COMMITTED_AT),
+    createdAt: Date.parse(committedAt),
+    updatedAt: Date.parse(committedAt),
+    startedAt: Date.parse(committedAt),
+    finishedAt: Date.parse(committedAt),
   };
   const pinned = await pinCapsuleInterfaceBlueprints({
     installConfigId: capsule.installConfigId,
@@ -308,7 +309,7 @@ async function commitPendingIntent(
     outputId: output.id,
     stateGeneration: generation,
     pinned: pinned!,
-    createdAt: COMMITTED_AT,
+    createdAt: committedAt,
   });
   await store.commitRunState({
     stateVersion: state,
@@ -320,7 +321,7 @@ async function commitPendingIntent(
         currentStateGeneration: generation,
         currentOutputId: output.id,
         status: "active",
-        updatedAt: COMMITTED_AT,
+        updatedAt: committedAt,
       },
       guard: {
         currentStateVersionId: capsule.currentStateVersionId,
@@ -332,6 +333,191 @@ async function commitPendingIntent(
   });
   return intent;
 }
+
+test("exact intent drain cannot claim an older due row across stores", async () => {
+  for (const [label, store] of await stores()) {
+    const olderSeed = await seedCapsuleModel(store, {
+      workspaceId: `workspace_intent_exact_older_${label}`,
+      capsuleId: `capsule_intent_exact_older_${label}`,
+    });
+    const targetSeed = await seedCapsuleModel(store, {
+      workspaceId: `workspace_intent_exact_target_${label}`,
+      capsuleId: `capsule_intent_exact_target_${label}`,
+    });
+    const older = await commitPendingIntent(
+      store,
+      olderSeed.capsule,
+      `apply_intent_exact_older_${label}`,
+      1,
+      "2026-08-29T09:59:00.000Z",
+    );
+    const target = await commitPendingIntent(
+      store,
+      targetSeed.capsule,
+      `apply_intent_exact_target_${label}`,
+    );
+    const materializedIntentIds: string[] = [];
+    let lease = 0;
+    const drainer = new CapsuleInterfaceMaterializationIntentDrainer({
+      store,
+      coordination: new InMemoryCapsuleCoordination({
+        now: () => Date.parse(CLAIMED_AT),
+      }),
+      target: {
+        materializeItem: (input) => {
+          materializedIntentIds.push(input.intentId);
+          return Promise.resolve({ kind: "materialized" });
+        },
+      },
+      now: () => CLAIMED_AT,
+      newLeaseToken: () => `lease_intent_exact_${label}_${lease++}`,
+    });
+
+    expect(await drainer.drainIntent(target.id), `${label}: exact`).toMatchObject(
+      {
+        claimed: 1,
+        completed: 1,
+        workItemsCompleted: 1,
+      },
+    );
+    expect(materializedIntentIds, `${label}: exact target`).toEqual([target.id]);
+    expect(
+      await store.getCapsuleInterfaceMaterializationIntent(older.id),
+      `${label}: older untouched`,
+    ).toMatchObject({ status: "pending", attempts: 0 });
+
+    expect(await drainer.drain({ limit: 1 }), `${label}: global`).toMatchObject({
+      claimed: 1,
+      completed: 1,
+      workItemsCompleted: 1,
+    });
+    expect(materializedIntentIds, `${label}: global remains oldest-first`).toEqual(
+      [target.id, older.id],
+    );
+  }
+});
+
+test("exact intent drain no-ops ineligible rows and reclaims only its expired row across stores", async () => {
+  for (const [label, store] of await stores()) {
+    const delayedSeed = await seedCapsuleModel(store, {
+      workspaceId: `workspace_intent_exact_delayed_${label}`,
+      capsuleId: `capsule_intent_exact_delayed_${label}`,
+    });
+    const delayed = await commitPendingIntent(
+      store,
+      delayedSeed.capsule,
+      `apply_intent_exact_delayed_${label}`,
+    );
+    const delayedLease = `lease_intent_exact_delayed_${label}`;
+    expect(
+      await store.claimCapsuleInterfaceMaterializationIntent({
+        intentId: delayed.id,
+        leaseToken: delayedLease,
+        claimedAt: CLAIMED_AT,
+        leaseExpiresAt: LEASE_EXPIRES_AT,
+      }),
+      `${label}: exact seed claim`,
+    ).toMatchObject({ id: delayed.id });
+    await store.settleCapsuleInterfaceMaterializationIntent({
+      id: delayed.id,
+      leaseToken: delayedLease,
+      expectedNextItemIndex: 0,
+      settledAt: SETTLED_AT,
+      outcome: {
+        kind: "retry",
+        code: "interface_materialization_unavailable",
+        detailDigest: ERROR_DIGEST,
+        nextRetryAt: RETRY_AT,
+      },
+    });
+
+    const leasedSeed = await seedCapsuleModel(store, {
+      workspaceId: `workspace_intent_exact_leased_${label}`,
+      capsuleId: `capsule_intent_exact_leased_${label}`,
+    });
+    const leased = await commitPendingIntent(
+      store,
+      leasedSeed.capsule,
+      `apply_intent_exact_leased_${label}`,
+    );
+    const liveLeaseToken = `lease_intent_exact_live_${label}`;
+    expect(
+      await store.claimCapsuleInterfaceMaterializationIntent({
+        intentId: leased.id,
+        leaseToken: liveLeaseToken,
+        claimedAt: CLAIMED_AT,
+        leaseExpiresAt: LEASE_EXPIRES_AT,
+      }),
+      `${label}: live seed claim`,
+    ).toMatchObject({ id: leased.id });
+
+    let now = SETTLED_AT;
+    const materializedIntentIds: string[] = [];
+    const drainer = new CapsuleInterfaceMaterializationIntentDrainer({
+      store,
+      coordination: new InMemoryCapsuleCoordination({
+        now: () => Date.parse(now),
+      }),
+      target: {
+        materializeItem: (input) => {
+          materializedIntentIds.push(input.intentId);
+          return Promise.resolve({ kind: "materialized" });
+        },
+      },
+      now: () => now,
+      newLeaseToken: () => `lease_intent_exact_noop_${label}`,
+    });
+    const noClaim = {
+      claimed: 0,
+      completed: 0,
+      progressed: 0,
+      workItemsCompleted: 0,
+      retried: 0,
+      deadLettered: 0,
+      leaseLost: 0,
+    };
+    expect(
+      await drainer.drainIntent(`cimi_unknown_${label}`),
+      `${label}: unknown`,
+    ).toEqual(noClaim);
+    expect(
+      await drainer.drainIntent(delayed.id),
+      `${label}: not due`,
+    ).toEqual(noClaim);
+    expect(
+      await drainer.drainIntent(leased.id),
+      `${label}: live lease`,
+    ).toEqual(noClaim);
+    expect(materializedIntentIds, `${label}: no target writes`).toEqual([]);
+    expect(
+      await store.getCapsuleInterfaceMaterializationIntent(leased.id),
+      `${label}: lease preserved`,
+    ).toMatchObject({
+      status: "pending",
+      attempts: 1,
+      leaseToken: liveLeaseToken,
+      leaseExpiresAt: LEASE_EXPIRES_AT,
+    });
+
+    now = RETRY_AT;
+    expect(
+      await drainer.drainIntent(`cimi_unknown_due_peer_${label}`),
+      `${label}: unknown never falls through to a due peer`,
+    ).toEqual(noClaim);
+    expect(
+      await drainer.drainIntent(leased.id),
+      `${label}: expired exact lease`,
+    ).toMatchObject({ claimed: 1, completed: 1, workItemsCompleted: 1 });
+    expect(
+      materializedIntentIds,
+      `${label}: expired exact target only`,
+    ).toEqual([leased.id]);
+    expect(
+      await store.getCapsuleInterfaceMaterializationIntent(delayed.id),
+      `${label}: older due delayed row remains untouched`,
+    ).toMatchObject({ status: "pending", attempts: 1 });
+  }
+});
 
 test("two Interface intent claimants produce exactly one lease owner", async () => {
   for (const [label, store] of await stores()) {
@@ -373,6 +559,40 @@ test("two Interface intent claimants produce exactly one lease owner", async () 
       [`lease_claim_a_${label}`, `lease_claim_b_${label}`],
       label,
     ).toContain(winners[0]!.leaseToken);
+  }
+});
+
+test("two exact Interface intent claimants preserve the same single-winner lease CAS", async () => {
+  for (const [label, store] of await stores()) {
+    const { capsule } = await seedCapsuleModel(store, {
+      workspaceId: `workspace_intent_exact_claim_${label}`,
+      capsuleId: `capsule_intent_exact_claim_${label}`,
+    });
+    const intent = await commitPendingIntent(
+      store,
+      capsule,
+      `apply_intent_exact_claim_${label}`,
+    );
+    const [first, second] = await Promise.all([
+      store.claimCapsuleInterfaceMaterializationIntent({
+        intentId: intent.id,
+        leaseToken: `lease_exact_claim_a_${label}`,
+        claimedAt: CLAIMED_AT,
+        leaseExpiresAt: LEASE_EXPIRES_AT,
+      }),
+      store.claimCapsuleInterfaceMaterializationIntent({
+        intentId: intent.id,
+        leaseToken: `lease_exact_claim_b_${label}`,
+        claimedAt: CLAIMED_AT,
+        leaseExpiresAt: LEASE_EXPIRES_AT,
+      }),
+    ]);
+    const winners = [first, second].filter(
+      (candidate): candidate is CapsuleInterfaceMaterializationIntent =>
+        candidate !== undefined,
+    );
+    expect(winners, label).toHaveLength(1);
+    expect(winners[0], label).toMatchObject({ id: intent.id, attempts: 1 });
   }
 });
 

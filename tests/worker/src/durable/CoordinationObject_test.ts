@@ -86,6 +86,191 @@ test("CoordinationObject cancels the real alarm when no logical alarms remain", 
   assert.equal(storage.alarmAt, undefined);
 });
 
+test("CoordinationObject retains a joinable generation until every exact-operation reference releases", async () => {
+  const coordination = new CoordinationObject(
+    { storage: new FakeDoStorage() },
+    {} as CloudflareWorkerEnv,
+  );
+  const input = {
+    scope: "capsule:cap_joinable:production",
+    holderId: "capsule-rebind_exact-operation",
+    ttlMs: 60_000,
+    joinExistingHolder: true,
+  } as const;
+
+  const leader = await coordination.acquireLease(input);
+  const follower = await coordination.acquireLease(input);
+  assert.equal(leader.acquired, true);
+  assert.equal(follower.acquired, true);
+  assert.equal(follower.token, leader.token);
+  assert.notEqual(follower.referenceId, leader.referenceId);
+
+  assert.equal(
+    await coordination.releaseLease({
+      scope: input.scope,
+      holderId: input.holderId,
+      token: leader.token,
+      referenceId: leader.referenceId!,
+    }),
+    true,
+  );
+  assert.equal(
+    (
+      await coordination.acquireLease({
+        scope: input.scope,
+        holderId: "interface-materializer",
+        ttlMs: 60_000,
+        joinExistingHolder: true,
+      })
+    ).acquired,
+    false,
+  );
+  assert.equal(
+    await coordination.releaseLease({
+      scope: input.scope,
+      holderId: input.holderId,
+      token: leader.token,
+      referenceId: leader.referenceId!,
+    }),
+    false,
+  );
+  assert.equal(
+    await coordination.releaseLease({
+      scope: input.scope,
+      holderId: input.holderId,
+      token: follower.token,
+      referenceId: follower.referenceId!,
+    }),
+    true,
+  );
+  assert.equal(
+    (
+      await coordination.acquireLease({
+        scope: input.scope,
+        holderId: "interface-materializer",
+        ttlMs: 60_000,
+      })
+    ).acquired,
+    true,
+  );
+});
+
+test("CoordinationObject never upgrades an existing exclusive same-holder lease into a joinable lease", async () => {
+  const coordination = new CoordinationObject(
+    { storage: new FakeDoStorage() },
+    {} as CloudflareWorkerEnv,
+  );
+  const scope = "capsule:cap_exclusive:production";
+  assert.equal(
+    (
+      await coordination.acquireLease({
+        scope,
+        holderId: "apply_same_holder",
+        ttlMs: 60_000,
+      })
+    ).acquired,
+    true,
+  );
+  assert.equal(
+    (
+      await coordination.acquireLease({
+        scope,
+        holderId: "apply_same_holder",
+        ttlMs: 60_000,
+        joinExistingHolder: true,
+      })
+  ).acquired,
+    false,
+  );
+});
+
+test("CoordinationObject keeps ordinary leases renewable and releasable without a reference", async () => {
+  const storage = new FakeDoStorage();
+  const coordination = new CoordinationObject(
+    { storage },
+    {} as CloudflareWorkerEnv,
+  );
+  const input = {
+    scope: "capsule:cap_ordinary:production",
+    holderId: "ordinary-holder",
+    ttlMs: 60_000,
+  } as const;
+
+  const lease = await coordination.acquireLease(input);
+  assert.equal(lease.acquired, true);
+  assert.equal(lease.referenceId, undefined);
+  const stored = await storage.get<Record<string, unknown>>(
+    `lease:${input.scope}`,
+  );
+  assert.equal(stored?.joinable, false);
+  assert.equal("activeReferenceIds" in (stored ?? {}), false);
+
+  const renewed = await coordination.renewLease({
+    scope: input.scope,
+    holderId: input.holderId,
+    token: lease.token,
+    ttlMs: input.ttlMs,
+  });
+  assert.equal(renewed.acquired, true);
+  assert.equal(renewed.referenceId, undefined);
+  assert.equal(
+    await coordination.releaseLease({
+      scope: input.scope,
+      holderId: input.holderId,
+      token: lease.token,
+    }),
+    true,
+  );
+  assert.equal(await storage.get(`lease:${input.scope}`), undefined);
+});
+
+test("CoordinationObject normalizes a persisted legacy lease as exclusive", async () => {
+  const storage = new FakeDoStorage();
+  const coordination = new CoordinationObject(
+    { storage },
+    {} as CloudflareWorkerEnv,
+  );
+  const scope = "capsule:cap_legacy_persisted:production";
+  const holderId = "legacy-holder";
+  const token = "legacy-generation";
+  await storage.put(`lease:${scope}`, {
+    scope,
+    holderId,
+    token,
+    acquired: true,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+
+  const busy = await coordination.acquireLease({
+    scope,
+    holderId,
+    ttlMs: 60_000,
+    joinExistingHolder: true,
+  });
+  assert.equal(busy.acquired, false);
+  assert.equal(busy.referenceId, undefined);
+
+  const renewed = await coordination.renewLease({
+    scope,
+    holderId,
+    token,
+    ttlMs: 60_000,
+  });
+  assert.equal(renewed.acquired, true);
+  assert.equal(renewed.referenceId, undefined);
+  const normalized = await storage.get<Record<string, unknown>>(
+    `lease:${scope}`,
+  );
+  assert.equal(normalized?.joinable, false);
+  assert.deepEqual(normalized?.activeReferenceIds, []);
+
+  assert.equal(
+    await coordination.releaseLease({ scope, holderId, token }),
+    true,
+  );
+  assert.equal(await storage.get(`lease:${scope}`), undefined);
+});
+
 test("CoordinationObject does not echo invalid request details", async () => {
   const coordination = new CoordinationObject(
     { storage: new FakeDoStorage() },
@@ -221,6 +406,69 @@ test("Worker coordination adapter returns not-held but throws retryable unavaila
       return true;
     },
   );
+});
+
+test("Worker coordination adapter preserves join and member-release identity", async () => {
+  const requests: Array<{
+    readonly path: string;
+    readonly body: Record<string, unknown>;
+  }> = [];
+  const coordination = durableObjectCapsuleCoordination(
+    coordinationEnv(async (request) => {
+      const path = new URL(request.url).pathname;
+      const body = (await request.json()) as Record<string, unknown>;
+      requests.push({ path, body });
+      if (path.endsWith("/acquire-lease")) {
+        return Response.json({
+          result: {
+            scope: body.scope,
+            holderId: body.holderId,
+            token: "generation-token",
+            referenceId: "reference-1",
+            acquired: true,
+            expiresAt: "2026-08-30T17:00:00.000Z",
+          },
+        });
+      }
+      return Response.json({ result: true });
+    }),
+  );
+  assert.ok(coordination);
+  const lease = await coordination.acquireLease({
+    scope: "capsule:cap_joinable:production",
+    holderId: "capsule-rebind_exact-operation",
+    ttlMs: 60_000,
+    joinExistingHolder: true,
+  });
+  assert.equal(
+    await coordination.releaseLease({
+      scope: lease.scope,
+      holderId: lease.holderId,
+      token: lease.token,
+      referenceId: lease.referenceId!,
+    }),
+    true,
+  );
+  assert.deepEqual(requests, [
+    {
+      path: "/acquire-lease",
+      body: {
+        scope: "capsule:cap_joinable:production",
+        holderId: "capsule-rebind_exact-operation",
+        ttlMs: 60_000,
+        joinExistingHolder: true,
+      },
+    },
+    {
+      path: "/release-lease",
+      body: {
+        scope: "capsule:cap_joinable:production",
+        holderId: "capsule-rebind_exact-operation",
+        token: "generation-token",
+        referenceId: "reference-1",
+      },
+    },
+  ]);
 });
 
 function coordinationEnv(

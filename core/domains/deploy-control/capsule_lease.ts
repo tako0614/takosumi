@@ -49,6 +49,8 @@ export interface CapsuleLease {
   readonly scope: string;
   readonly holderId: string;
   readonly token: string;
+  /** One successful acquisition/join within this lease generation. */
+  readonly referenceId?: string;
   readonly acquired: boolean;
   readonly expiresAt: string;
 }
@@ -57,18 +59,27 @@ export interface AcquireCapsuleLeaseInput {
   readonly scope: string;
   readonly holderId: string;
   readonly ttlMs: number;
+  /**
+   * Allows another acquisition of the same explicitly joinable logical
+   * operation. Both the existing lease and this request must opt in.
+   */
+  readonly joinExistingHolder?: boolean;
 }
 
 export interface ReleaseCapsuleLeaseInput {
   readonly scope: string;
   readonly holderId: string;
   readonly token: string;
+  /** Idempotent member release for a joinable lease generation. */
+  readonly referenceId?: string;
 }
 
 export interface RenewCapsuleLeaseInput {
   readonly scope: string;
   readonly holderId: string;
   readonly token: string;
+  /** Active member identity for a reference-tracked generation. */
+  readonly referenceId?: string;
   readonly ttlMs: number;
 }
 
@@ -105,15 +116,22 @@ export interface CapsuleCoordination {
  */
 export class CapsuleLeaseBusyError extends Error {
   readonly scope: string;
-  constructor(scope: string) {
+  /** The active logical holder only; the private generation token is omitted. */
+  readonly activeHolderId: string;
+  constructor(scope: string, activeHolderId = "unknown") {
     super(`capsule lease busy: ${scope}`);
     this.name = "CapsuleLeaseBusyError";
     this.scope = scope;
+    this.activeHolderId = activeHolderId;
   }
 }
 
 /** Default lease TTL: long enough to cover a slow runner dispatch. */
 export const DEFAULT_CAPSULE_LEASE_TTL_MS = 15 * 60 * 1000;
+const MAX_JOINED_CAPSULE_LEASE_REFERENCES = 64;
+const JOINED_LEASE_WAIT_TOTAL_MS = 5_000;
+const JOINED_LEASE_WAIT_INITIAL_MS = 50;
+const JOINED_LEASE_WAIT_MAX_MS = 250;
 
 /**
  * The held-lease handle threaded into a leased `work` fn so a long-running run
@@ -144,11 +162,19 @@ export async function withCapsuleLease<T>(
     readonly environment: string;
     readonly holderId: string;
     readonly ttlMs?: number;
+    readonly joinExistingHolder?: boolean;
   },
   work: (handle: LeaseHandle) => Promise<T>,
 ): Promise<T> {
   const scope = capsuleLeaseScope(input.capsuleId, input.environment);
-  return await withScopedLease(coordination, scope, input.holderId, input.ttlMs, work);
+  return await withScopedLease(
+    coordination,
+    scope,
+    input.holderId,
+    input.ttlMs,
+    input.joinExistingHolder,
+    work,
+  );
 }
 
 /**
@@ -168,7 +194,14 @@ export async function withPlanLease<T>(
   work: (handle: LeaseHandle) => Promise<T>,
 ): Promise<T> {
   const scope = planLeaseScope(input.planRunId);
-  return await withScopedLease(coordination, scope, input.holderId, input.ttlMs, work);
+  return await withScopedLease(
+    coordination,
+    scope,
+    input.holderId,
+    input.ttlMs,
+    undefined,
+    work,
+  );
 }
 
 /**
@@ -189,7 +222,14 @@ export async function withWorkspaceLease<T>(
   work: (handle: LeaseHandle) => Promise<T>,
 ): Promise<T> {
   const scope = workspaceLeaseScope(input.workspaceId);
-  return await withScopedLease(coordination, scope, input.holderId, input.ttlMs, work);
+  return await withScopedLease(
+    coordination,
+    scope,
+    input.holderId,
+    input.ttlMs,
+    undefined,
+    work,
+  );
 }
 
 /**
@@ -203,16 +243,19 @@ async function withScopedLease<T>(
   scope: string,
   holderId: string,
   ttlMs: number | undefined,
+  joinExistingHolder: boolean | undefined,
   work: (handle: LeaseHandle) => Promise<T>,
 ): Promise<T> {
   const leaseTtl = ttlMs ?? DEFAULT_CAPSULE_LEASE_TTL_MS;
-  const lease = await coordination.acquireLease({
+  const lease = await acquireScopedLease(
+    coordination,
     scope,
     holderId,
-    ttlMs: leaseTtl,
-  });
+    leaseTtl,
+    joinExistingHolder,
+  );
   if (!lease.acquired) {
-    throw new CapsuleLeaseBusyError(scope);
+    throw new CapsuleLeaseBusyError(scope, lease.holderId);
   }
   const handle: LeaseHandle = {
     scope,
@@ -223,6 +266,7 @@ async function withScopedLease<T>(
         scope,
         holderId,
         token: lease.token,
+        ...(lease.referenceId ? { referenceId: lease.referenceId } : {}),
         ttlMs: renewTtlMs ?? leaseTtl,
       }),
   };
@@ -233,33 +277,87 @@ async function withScopedLease<T>(
       scope,
       holderId,
       token: lease.token,
+      ...(lease.referenceId ? { referenceId: lease.referenceId } : {}),
     });
   }
+}
+
+/**
+ * Acquire a scoped lease, waiting only for the old-DO compatibility case where
+ * an explicitly joinable request is denied by the same stable holder. Older
+ * CoordinationObject versions do not understand `joinExistingHolder` and
+ * report an ordinary busy lease instead; a bounded retry lets that generation
+ * drain without ever running while it is held. A different holder remains an
+ * immediate busy result.
+ */
+async function acquireScopedLease(
+  coordination: CapsuleCoordination,
+  scope: string,
+  holderId: string,
+  ttlMs: number,
+  joinExistingHolder: boolean | undefined,
+): Promise<CapsuleLease> {
+  const input: AcquireCapsuleLeaseInput = {
+    scope,
+    holderId,
+    ttlMs,
+    ...(joinExistingHolder === true ? { joinExistingHolder: true } : {}),
+  };
+  let lease = await coordination.acquireLease(input);
+  if (
+    lease.acquired ||
+    joinExistingHolder !== true ||
+    lease.holderId !== holderId
+  ) {
+    return lease;
+  }
+
+  const startedAt = Date.now();
+  let delayMs = JOINED_LEASE_WAIT_INITIAL_MS;
+  while (Date.now() - startedAt < JOINED_LEASE_WAIT_TOTAL_MS) {
+    const remainingMs = JOINED_LEASE_WAIT_TOTAL_MS - (Date.now() - startedAt);
+    await delay(Math.min(delayMs, remainingMs));
+    lease = await coordination.acquireLease(input);
+    if (lease.acquired || lease.holderId !== holderId) return lease;
+    delayMs = Math.min(delayMs * 2, JOINED_LEASE_WAIT_MAX_MS);
+  }
+  return lease;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 interface StoredLease {
   readonly holderId: string;
   readonly token: string;
   readonly expiresAt: number;
+  readonly joinable: boolean;
+  readonly referenceIds: ReadonlySet<string>;
 }
 
 /**
  * In-memory {@link CapsuleCoordination} for tests / single-process
- * substrates. Mirrors the CoordinationObject semantics: a non-expired lease held
- * by another holder cannot be re-acquired; the holder's own re-acquire returns
- * `acquired=false` too (one holder, one run). Release is holder+token gated.
+ * substrates. Mirrors the CoordinationObject semantics: a non-expired lease
+ * remains exclusive unless both the stored generation and a same-holder
+ * acquisition explicitly opt into logical-operation joining. Release is
+ * holder+generation-token+member-reference gated.
  */
 export class InMemoryCapsuleCoordination implements CapsuleCoordination {
   readonly #leases = new Map<string, StoredLease>();
   readonly #now: () => number;
   readonly #newToken: () => string;
+  readonly #newReferenceId: () => string;
 
   constructor(deps: {
     readonly now?: () => number;
     readonly newToken?: () => string;
+    readonly newReferenceId?: () => string;
   } = {}) {
     this.#now = deps.now ?? (() => Date.now());
     this.#newToken = deps.newToken ?? (() => crypto.randomUUID());
+    this.#newReferenceId =
+      deps.newReferenceId ?? (() => crypto.randomUUID());
   }
 
   acquireLease(
@@ -268,6 +366,28 @@ export class InMemoryCapsuleCoordination implements CapsuleCoordination {
     const now = this.#now();
     const existing = this.#leases.get(input.scope);
     if (existing && existing.expiresAt > now) {
+      if (
+        input.joinExistingHolder === true &&
+        existing.joinable &&
+        existing.holderId === input.holderId &&
+        existing.referenceIds.size < MAX_JOINED_CAPSULE_LEASE_REFERENCES
+      ) {
+        const referenceId = this.#newReferenceId();
+        const expiresAt = Math.max(existing.expiresAt, now + input.ttlMs);
+        this.#leases.set(input.scope, {
+          ...existing,
+          expiresAt,
+          referenceIds: new Set([...existing.referenceIds, referenceId]),
+        });
+        return Promise.resolve({
+          scope: input.scope,
+          holderId: existing.holderId,
+          token: existing.token,
+          referenceId,
+          acquired: true,
+          expiresAt: new Date(expiresAt).toISOString(),
+        });
+      }
       return Promise.resolve({
         scope: input.scope,
         holderId: existing.holderId,
@@ -277,16 +397,21 @@ export class InMemoryCapsuleCoordination implements CapsuleCoordination {
       });
     }
     const token = this.#newToken();
+    const joinable = input.joinExistingHolder === true;
+    const referenceId = joinable ? this.#newReferenceId() : undefined;
     const expiresAt = now + input.ttlMs;
     this.#leases.set(input.scope, {
       holderId: input.holderId,
       token,
       expiresAt,
+      joinable,
+      referenceIds: referenceId ? new Set([referenceId]) : new Set(),
     });
     return Promise.resolve({
       scope: input.scope,
       holderId: input.holderId,
       token,
+      ...(referenceId ? { referenceId } : {}),
       acquired: true,
       expiresAt: new Date(expiresAt).toISOString(),
     });
@@ -302,6 +427,9 @@ export class InMemoryCapsuleCoordination implements CapsuleCoordination {
       !existing ||
       existing.holderId !== input.holderId ||
       existing.token !== input.token ||
+      (existing.referenceIds.size > 0 &&
+        (input.referenceId === undefined ||
+          !existing.referenceIds.has(input.referenceId))) ||
       existing.expiresAt <= now
     ) {
       return Promise.resolve({
@@ -312,10 +440,9 @@ export class InMemoryCapsuleCoordination implements CapsuleCoordination {
         expiresAt: new Date(existing?.expiresAt ?? now).toISOString(),
       });
     }
-    const expiresAt = now + input.ttlMs;
+    const expiresAt = Math.max(existing.expiresAt, now + input.ttlMs);
     this.#leases.set(input.scope, {
-      holderId: existing.holderId,
-      token: existing.token,
+      ...existing,
       expiresAt,
     });
     return Promise.resolve({
@@ -335,6 +462,23 @@ export class InMemoryCapsuleCoordination implements CapsuleCoordination {
       existing.token !== input.token
     ) {
       return Promise.resolve(false);
+    }
+    if (existing.referenceIds.size > 0) {
+      if (
+        input.referenceId === undefined ||
+        !existing.referenceIds.has(input.referenceId)
+      ) {
+        return Promise.resolve(false);
+      }
+      const remaining = new Set(existing.referenceIds);
+      remaining.delete(input.referenceId);
+      if (remaining.size > 0) {
+        this.#leases.set(input.scope, {
+          ...existing,
+          referenceIds: remaining,
+        });
+        return Promise.resolve(true);
+      }
     }
     this.#leases.delete(input.scope);
     return Promise.resolve(true);

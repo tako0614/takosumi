@@ -26,6 +26,7 @@ import type {
 } from "../../../../worker/src/bindings.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
   D1_MAX_BOUND_PARAMS,
   SqliteFakeD1,
@@ -280,7 +281,7 @@ test("abandonment cannot retire a Capsule after a concurrent Apply commit", asyn
   const service = new CapsulesService({
     store,
     now: () => new Date(LIFECYCLE_AT),
-    capsuleAbandonAdmission: async ({ capsule }, work) => {
+    capsuleLifecycleAdmission: async ({ capsule }, work) => {
       const current = await store.getCapsule(capsule.id);
       if (!current) throw new Error("Capsule disappeared during admission");
       return await work(current);
@@ -312,6 +313,63 @@ test("abandonment cannot retire a Capsule after a concurrent Apply commit", asyn
     currentOutputId: applied!.output.id,
     status: "active",
     updatedAt: APPLY_AT,
+  });
+});
+
+test("InstallConfig re-adoption uses the same host lifecycle admission as provider work", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "workspace_lifecycle_rebind_admission",
+    capsuleId: "capsule_lifecycle_rebind_admission",
+  });
+  const target = {
+    ...seeded.installConfig,
+    id: "cfg_lifecycle_rebind_admission_target",
+    name: "lifecycle-rebind-admission-target",
+    updatedAt: LIFECYCLE_AT,
+  };
+  await store.putInstallConfig(target);
+  let admitted = false;
+  const service = new CapsulesService({
+    store,
+    now: () => new Date(LIFECYCLE_AT),
+    capsuleLifecycleAdmission: async ({
+      capsule,
+      holderId,
+      joinExistingHolder,
+    }) => {
+      admitted = true;
+      expect(capsule.id).toBe(seeded.capsule.id);
+      expect(holderId.startsWith("capsule-rebind_")).toBe(true);
+      expect(holderId).toHaveLength("capsule-rebind_".length + 64);
+      expect(joinExistingHolder).toBe(true);
+      throw new Error("simulated materialization lease holder");
+    },
+  });
+
+  await expect(
+    service.rebindInstallConfig({
+      capsuleId: seeded.capsule.id,
+      targetInstallConfigId: target.id,
+      expected: {
+        installConfigId: seeded.installConfig.id,
+        installConfigDigest: await stableJsonDigest(seeded.installConfig),
+        currentStateGeneration: seeded.capsule.currentStateGeneration,
+        currentStateVersionId: seeded.capsule.currentStateVersionId,
+        status: seeded.capsule.status,
+        executionAuthorityEpoch:
+          (await store.getCapsuleExecutionAuthorityEpoch(
+            seeded.capsule.id,
+          )) ?? 1,
+      },
+      actorSubject: "principal_rebind_admission",
+      reason: "exercise shared lifecycle admission",
+      requestDigest: `sha256:${"c".repeat(64)}`,
+    }),
+  ).rejects.toThrow("simulated materialization lease holder");
+  expect(admitted).toBe(true);
+  expect(await store.getCapsule(seeded.capsule.id)).toMatchObject({
+    installConfigId: seeded.installConfig.id,
   });
 });
 

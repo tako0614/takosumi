@@ -1,5 +1,7 @@
 import type { CloudflareWorkerEnv as Env } from "../handler.ts";
 
+const MAX_JOINED_LEASE_REFERENCES = 64;
+
 export class CoordinationObject {
   constructor(
     readonly state: DurableObjectState,
@@ -71,28 +73,57 @@ export class CoordinationObject {
     input: CoordinationLeaseInput,
   ): Promise<CoordinationLease> {
     const now = Date.now();
-    const existing = await this.getLease(input.scope);
-    if (existing && Date.parse(existing.expiresAt) > now) {
-      return { ...existing, acquired: false };
+    const existing = await this.getStoredLease(input.scope);
+    if (existing) {
+      if (
+        input.joinExistingHolder === true &&
+        existing.joinable === true &&
+        existing.holderId === input.holderId &&
+        (existing.activeReferenceIds?.length ?? 0) <
+          MAX_JOINED_LEASE_REFERENCES
+      ) {
+        const referenceId = crypto.randomUUID();
+        const lease: StoredCoordinationLease = {
+          ...existing,
+          expiresAt: new Date(
+            Math.max(Date.parse(existing.expiresAt), now + input.ttlMs),
+          ).toISOString(),
+          activeReferenceIds: [
+            ...new Set([
+              ...(existing.activeReferenceIds ?? []),
+              referenceId,
+            ]),
+          ],
+        };
+        await this.state.storage.put(leaseKey(input.scope), lease);
+        return coordinationLeaseResponse(lease, true, referenceId);
+      }
+      return coordinationLeaseResponse(existing, false);
     }
-    const lease: CoordinationLease = {
+    const joinable = input.joinExistingHolder === true;
+    const referenceId = joinable ? crypto.randomUUID() : undefined;
+    const lease: StoredCoordinationLease = {
       scope: input.scope,
       holderId: input.holderId,
       token: crypto.randomUUID(),
-      acquired: true,
       expiresAt: new Date(now + input.ttlMs).toISOString(),
       metadata: input.metadata,
+      joinable,
+      ...(referenceId ? { activeReferenceIds: [referenceId] } : {}),
     };
     await this.state.storage.put(leaseKey(input.scope), lease);
-    return lease;
+    return coordinationLeaseResponse(lease, true, referenceId);
   }
 
   async renewLease(input: CoordinationRenewInput): Promise<CoordinationLease> {
-    const existing = await this.getLease(input.scope);
+    const existing = await this.getStoredLease(input.scope);
     if (
       !existing ||
       existing.holderId !== input.holderId ||
-      existing.token !== input.token
+      existing.token !== input.token ||
+      ((existing.activeReferenceIds?.length ?? 0) > 0 &&
+        (input.referenceId === undefined ||
+          !existing.activeReferenceIds!.includes(input.referenceId)))
     ) {
       return {
         scope: input.scope,
@@ -102,17 +133,21 @@ export class CoordinationObject {
         expiresAt: existing?.expiresAt ?? new Date(0).toISOString(),
       };
     }
-    const lease: CoordinationLease = {
+    const lease: StoredCoordinationLease = {
       ...existing,
-      acquired: true,
-      expiresAt: new Date(Date.now() + input.ttlMs).toISOString(),
+      expiresAt: new Date(
+        Math.max(
+          Date.parse(existing.expiresAt),
+          Date.now() + input.ttlMs,
+        ),
+      ).toISOString(),
     };
     await this.state.storage.put(leaseKey(input.scope), lease);
-    return lease;
+    return coordinationLeaseResponse(lease, true);
   }
 
   async releaseLease(input: CoordinationReleaseInput): Promise<boolean> {
-    const existing = await this.getLease(input.scope);
+    const existing = await this.getStoredLease(input.scope);
     if (
       !existing ||
       existing.holderId !== input.holderId ||
@@ -120,13 +155,39 @@ export class CoordinationObject {
     ) {
       return false;
     }
+    const activeReferenceIds = existing.activeReferenceIds ?? [];
+    if (activeReferenceIds.length > 0) {
+      if (
+        input.referenceId === undefined ||
+        !activeReferenceIds.includes(input.referenceId)
+      ) {
+        return false;
+      }
+      const remaining = activeReferenceIds.filter(
+        (referenceId) => referenceId !== input.referenceId,
+      );
+      if (remaining.length > 0) {
+        await this.state.storage.put(leaseKey(input.scope), {
+          ...existing,
+          activeReferenceIds: remaining,
+        } satisfies StoredCoordinationLease);
+        return true;
+      }
+    }
     await this.state.storage.delete(leaseKey(input.scope));
     return true;
   }
 
   async getLease(scope: string): Promise<CoordinationLease | undefined> {
+    const lease = await this.getStoredLease(scope);
+    return lease ? coordinationLeaseResponse(lease, true) : undefined;
+  }
+
+  private async getStoredLease(
+    scope: string,
+  ): Promise<StoredCoordinationLease | undefined> {
     if (!scope) return undefined;
-    const lease = await this.state.storage.get<CoordinationLease>(
+    const lease = await this.state.storage.get<StoredCoordinationLease>(
       leaseKey(scope),
     );
     if (!lease) return undefined;
@@ -134,7 +195,7 @@ export class CoordinationObject {
       await this.state.storage.delete(leaseKey(scope));
       return undefined;
     }
-    return lease;
+    return normalizeStoredLease(lease);
   }
 
   async scheduleAlarm(
@@ -204,7 +265,7 @@ export class CoordinationObject {
   }
 
   private async deleteExpiredLeases(nowMs: number): Promise<void> {
-    const leases = await this.state.storage.list<CoordinationLease>({
+    const leases = await this.state.storage.list<StoredCoordinationLease>({
       prefix: "lease:",
     });
     for (const [key, lease] of leases) {
@@ -257,6 +318,7 @@ interface CoordinationLease {
   readonly scope: string;
   readonly holderId: string;
   readonly token: string;
+  readonly referenceId?: string;
   readonly acquired: boolean;
   readonly expiresAt: string;
   readonly metadata?: Record<string, unknown>;
@@ -267,12 +329,14 @@ interface CoordinationLeaseInput {
   readonly holderId: string;
   readonly ttlMs: number;
   readonly metadata?: Record<string, unknown>;
+  readonly joinExistingHolder?: boolean;
 }
 
 interface CoordinationRenewInput {
   readonly scope: string;
   readonly holderId: string;
   readonly token: string;
+  readonly referenceId?: string;
   readonly ttlMs: number;
 }
 
@@ -280,6 +344,19 @@ interface CoordinationReleaseInput {
   readonly scope: string;
   readonly holderId: string;
   readonly token: string;
+  readonly referenceId?: string;
+}
+
+interface StoredCoordinationLease {
+  readonly scope: string;
+  readonly holderId: string;
+  readonly token: string;
+  readonly expiresAt: string;
+  readonly metadata?: Record<string, unknown>;
+  /** Missing means a legacy exclusive generation. */
+  readonly joinable?: boolean;
+  /** Missing means a legacy one-owner generation. */
+  readonly activeReferenceIds?: readonly string[];
 }
 
 interface CoordinationAlarm {
@@ -346,6 +423,28 @@ function optionalRecord(
   return value as Record<string, unknown>;
 }
 
+function optionalBoolean(
+  body: Record<string, unknown>,
+  field: string,
+): boolean | undefined {
+  const value = body[field];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "boolean") throw new InvalidCoordinationRequestError();
+  return value;
+}
+
+function optionalString(
+  body: Record<string, unknown>,
+  field: string,
+): string | undefined {
+  const value = body[field];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || !value) {
+    throw new InvalidCoordinationRequestError();
+  }
+  return value;
+}
+
 function parseLeaseInput(
   body: Record<string, unknown>,
 ): CoordinationLeaseInput {
@@ -354,6 +453,7 @@ function parseLeaseInput(
     holderId: requireString(body, "holderId"),
     ttlMs: requireNumber(body, "ttlMs"),
     metadata: optionalRecord(body, "metadata"),
+    joinExistingHolder: optionalBoolean(body, "joinExistingHolder"),
   };
 }
 
@@ -364,6 +464,7 @@ function parseRenewInput(
     scope: requireString(body, "scope"),
     holderId: requireString(body, "holderId"),
     token: requireString(body, "token"),
+    referenceId: optionalString(body, "referenceId"),
     ttlMs: requireNumber(body, "ttlMs"),
   };
 }
@@ -375,6 +476,50 @@ function parseReleaseInput(
     scope: requireString(body, "scope"),
     holderId: requireString(body, "holderId"),
     token: requireString(body, "token"),
+    referenceId: optionalString(body, "referenceId"),
+  };
+}
+
+function coordinationLeaseResponse(
+  lease: StoredCoordinationLease,
+  acquired: boolean,
+  referenceId?: string,
+): CoordinationLease {
+  return {
+    scope: lease.scope,
+    holderId: lease.holderId,
+    token: lease.token,
+    ...(referenceId ? { referenceId } : {}),
+    acquired,
+    expiresAt: lease.expiresAt,
+    ...(lease.metadata ? { metadata: lease.metadata } : {}),
+  };
+}
+
+/**
+ * Normalizes rows written before reference-tracked joining existed. Missing (or
+ * malformed) join metadata is an exclusive holder+token generation, so legacy
+ * callers can still renew and release it without inventing a member reference.
+ * A joined generation is valid only when its persisted member list is non-empty.
+ */
+function normalizeStoredLease(
+  lease: StoredCoordinationLease,
+): StoredCoordinationLease {
+  const activeReferenceIds =
+    lease.joinable === true && Array.isArray(lease.activeReferenceIds)
+      ? [
+          ...new Set(
+            lease.activeReferenceIds.filter(
+              (referenceId): referenceId is string =>
+                typeof referenceId === "string" && referenceId.length > 0,
+            ),
+          ),
+        ]
+      : [];
+  return {
+    ...lease,
+    joinable: activeReferenceIds.length > 0,
+    activeReferenceIds,
   };
 }
 

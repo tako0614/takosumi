@@ -617,10 +617,14 @@ export function durableObjectCapsuleCoordination(
         scope: input.scope,
         holderId: input.holderId,
         ttlMs: input.ttlMs,
+        ...(input.joinExistingHolder === true
+          ? { joinExistingHolder: true }
+          : {}),
       })) as {
         scope: string;
         holderId: string;
         token: string;
+        referenceId?: string;
         acquired: boolean;
         expiresAt: string;
       };
@@ -631,6 +635,7 @@ export function durableObjectCapsuleCoordination(
         scope: input.scope,
         holderId: input.holderId,
         token: input.token,
+        ...(input.referenceId ? { referenceId: input.referenceId } : {}),
         ttlMs: input.ttlMs,
       })) as {
         scope: string;
@@ -645,6 +650,7 @@ export function durableObjectCapsuleCoordination(
         scope: input.scope,
         holderId: input.holderId,
         token: input.token,
+        ...(input.referenceId ? { referenceId: input.referenceId } : {}),
       })) as boolean;
     },
   };

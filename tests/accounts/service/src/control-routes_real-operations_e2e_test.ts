@@ -2874,19 +2874,20 @@ test("authenticated repository Interface review persists exact proposals and app
   );
   expect(apply.run.status).toBe("succeeded");
 
-  // Apply commits only the Plan-pinned durable intent. The owning scheduled
-  // recovery path materializes canonical Interface/Binding rows after that
-  // transaction, so an isolate loss between the two cannot drop authority.
+  // Apply first commits the Plan-pinned durable intent, releases its outer
+  // Capsule lease, and then drains that exact obligation through the same
+  // fenced recovery machinery. The scheduled path remains the durable
+  // fallback, but the successful response already exposes the canonical rows.
   expect(
     await operations.interfaces.list({
       workspaceId: seeded.workspace.id,
       ownerKind: "Capsule",
       ownerId: capsule.id,
     }),
-  ).toHaveLength(0);
+  ).toHaveLength(2);
   expect(
     await operations.drainInterfaceMaterializationIntents({ limit: 1 }),
-  ).toMatchObject({ claimed: 1, completed: 1 });
+  ).toMatchObject({ claimed: 0, completed: 0 });
 
   const interfaces = await operations.interfaces.list({
     workspaceId: seeded.workspace.id,
