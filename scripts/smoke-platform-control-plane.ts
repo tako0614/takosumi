@@ -26,7 +26,10 @@ import type {
   InterfaceBinding,
 } from "../contract/interfaces.ts";
 import type { JsonObject, JsonValue } from "../contract/types.ts";
-import { canonicalProviderSource } from "../contract/provider-env-rules.ts";
+import {
+  canonicalProviderSource,
+  isOpenTofuIdentifier,
+} from "../contract/provider-env-rules.ts";
 import {
   assertNewOwnerPrivateEvidenceTarget,
   readOwnerPrivateTextFile,
@@ -56,7 +59,6 @@ const CLOUDFLARE_PROVIDER_SOURCE =
   "registry.opentofu.org/cloudflare/cloudflare";
 const EXACT_PROVIDER_SOURCE_PATTERN =
   /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\/[a-z0-9][a-z0-9_-]*\/[a-z0-9][a-z0-9_-]*$/u;
-const OPENTOFU_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const MAX_SMOKE_PROVIDER_BINDINGS = 64;
 const MAX_SMOKE_INTERFACE_BLUEPRINTS = 64;
 const MAX_SMOKE_INTERFACE_TOKEN_BYTES = 16 * 1024;
@@ -226,6 +228,12 @@ export interface SmokeProviderBindingInput {
   readonly rootAlias?: string;
   /** Existing Workspace ProviderConnection selected explicitly by the operator. */
   readonly connectionId: string;
+}
+
+export interface SmokeCompatibilityRootProviderRequirement {
+  readonly source: string;
+  readonly moduleLocalName: string;
+  readonly childAlias?: string;
 }
 
 export interface PlatformControlPlaneSmokeOptions {
@@ -2664,9 +2672,14 @@ async function deployGitSourceCapsule(
     capsuleId: capsule.id,
   });
   if (input.providerBindings.length > 0) {
+    const resolvedProviderBindings =
+      resolveSmokeProviderBindingsFromCompatibility(
+        input.providerBindings,
+        compatibility.report.rootProviderRequirements,
+      );
     await putCapsuleProviderBindings(options, {
       capsuleId: capsule.id,
-      bindings: input.providerBindings,
+      bindings: resolvedProviderBindings,
     });
   }
   const plan = await requestJson<{ readonly run: RunRecord }>({
@@ -2749,6 +2762,7 @@ async function createSmokeSourceCompatibilityCheck(
   readonly report: {
     readonly id: string;
     readonly level?: string;
+    readonly rootProviderRequirements: readonly SmokeCompatibilityRootProviderRequirement[];
   };
   readonly run?: RunRecord;
 }> {
@@ -2756,6 +2770,7 @@ async function createSmokeSourceCompatibilityCheck(
     readonly report?: {
       readonly id?: string;
       readonly level?: string;
+      readonly rootProviderRequirements?: unknown;
     };
     readonly run?: RunRecord;
   }>({
@@ -2777,10 +2792,15 @@ async function createSmokeSourceCompatibilityCheck(
       "source compatibility check response did not include report.id",
     );
   }
+  const rootProviderRequirements =
+    parseSmokeCompatibilityRootProviderRequirements(
+      response.report?.rootProviderRequirements,
+    );
   return {
     report: {
       id: reportId,
       ...(response.report?.level ? { level: response.report.level } : {}),
+      rootProviderRequirements,
     },
     ...(response.run ? { run: response.run } : {}),
   };
@@ -3012,6 +3032,103 @@ async function putCapsuleProviderBindings(
       input.capsuleId,
     )}/provider-bindings`,
     body: smokeCapsuleProviderBindingsBody(input),
+  });
+}
+
+function parseSmokeCompatibilityRootProviderRequirements(
+  value: unknown,
+): readonly SmokeCompatibilityRootProviderRequirement[] {
+  if (!Array.isArray(value)) {
+    throw new Error(
+      "source compatibility check response did not include report.rootProviderRequirements",
+    );
+  }
+  return value.map((candidate, index) => {
+    if (!isRecord(candidate)) {
+      throw new Error(
+        `compatibility rootProviderRequirements[${index}] must be an object`,
+      );
+    }
+    const source = requiredTrimmedString(
+      candidate.source,
+      `compatibility rootProviderRequirements[${index}].source`,
+    );
+    const canonicalSource = canonicalProviderSource(source);
+    if (!EXACT_PROVIDER_SOURCE_PATTERN.test(canonicalSource)) {
+      throw new Error(
+        `compatibility rootProviderRequirements[${index}].source must be a canonical provider source`,
+      );
+    }
+    const moduleLocalName = requiredTrimmedString(
+      candidate.moduleLocalName,
+      `compatibility rootProviderRequirements[${index}].moduleLocalName`,
+    );
+    if (!isOpenTofuIdentifier(moduleLocalName)) {
+      throw new Error(
+        `compatibility rootProviderRequirements[${index}].moduleLocalName must be a valid OpenTofu identifier`,
+      );
+    }
+    const childAlias = optionalOpenTofuIdentifier(
+      candidate.childAlias,
+      `compatibility rootProviderRequirements[${index}].childAlias`,
+    );
+    return {
+      source: canonicalSource,
+      moduleLocalName,
+      ...(childAlias ? { childAlias } : {}),
+    };
+  });
+}
+
+/**
+ * The public ProviderBinding API requires the module-local identity scanned
+ * from required_providers. A guided ProviderConnection starts with only its
+ * source, so fill only a uniquely discovered local name after compatibility.
+ * Never guess from the provider source suffix or silently reuse one Connection
+ * across multiple aliases.
+ */
+export function resolveSmokeProviderBindingsFromCompatibility(
+  bindings: readonly SmokeProviderBindingInput[],
+  rootProviderRequirements: readonly SmokeCompatibilityRootProviderRequirement[],
+): readonly SmokeProviderBindingInput[] {
+  const requirements = parseSmokeCompatibilityRootProviderRequirements(
+    rootProviderRequirements,
+  );
+  return bindings.map((binding) => {
+    const source = canonicalProviderSource(binding.provider);
+    const sourceMatches = requirements.filter(
+      (requirement) => requirement.source === source,
+    );
+    if (binding.moduleLocalName !== undefined) {
+      const declared = sourceMatches.some(
+        (requirement) =>
+          requirement.moduleLocalName === binding.moduleLocalName &&
+          requirement.childAlias === binding.childAlias,
+      );
+      if (!declared) {
+        throw new Error(
+          `explicit provider identity ${source} (${binding.moduleLocalName}${binding.childAlias ? `.${binding.childAlias}` : " default"}) is not declared by the compatibility report`,
+        );
+      }
+      return binding;
+    }
+    if (sourceMatches.length === 0) {
+      throw new Error(
+        `ProviderBinding ${source} omitted moduleLocalName and the compatibility report has no matching root provider requirement; pass --provider-bindings-json with explicit moduleLocalName and childAlias`,
+      );
+    }
+    if (sourceMatches.length > 1) {
+      throw new Error(
+        `ProviderBinding ${source} omitted moduleLocalName and the compatibility report has ${sourceMatches.length} matching root provider requirements; pass --provider-bindings-json with explicit moduleLocalName and childAlias`,
+      );
+    }
+    const requirement = sourceMatches[0]!;
+    if (requirement.childAlias !== binding.childAlias) {
+      throw new Error(
+        `ProviderBinding ${source} omitted an exact aliased provider identity; pass --provider-bindings-json with explicit moduleLocalName and childAlias`,
+      );
+    }
+    return { ...binding, moduleLocalName: requirement.moduleLocalName };
   });
 }
 
@@ -5448,7 +5565,7 @@ function optionalOpenTofuIdentifier(
 ): string | undefined {
   if (value === undefined) return undefined;
   const normalized = requiredTrimmedString(value, label);
-  if (!OPENTOFU_IDENTIFIER_PATTERN.test(normalized)) {
+  if (!isOpenTofuIdentifier(normalized)) {
     throw new Error(`${label} must be a valid OpenTofu identifier`);
   }
   return normalized;

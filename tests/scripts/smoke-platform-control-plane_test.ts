@@ -26,6 +26,7 @@ import {
   isSelectableCapsuleInstallConfig,
   interfaceMaterializationEvidence,
   main,
+  resolveSmokeProviderBindingsFromCompatibility,
   resolveOptions,
   selectSmokeInstallConfigId,
   shouldMarkPendingSmokeCapsuleError,
@@ -1309,6 +1310,147 @@ test("platform control-plane smoke binds an existing provider by its source", ()
       }),
     ),
   ).not.toContain('"alias"');
+});
+
+test("platform smoke resolves an omitted guided binding identity from compatibility", () => {
+  const resolved = resolveSmokeProviderBindingsFromCompatibility(
+    [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        connectionId: "pcn_guided_cloudflare",
+      },
+    ],
+    [
+      {
+        source: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
+      },
+    ],
+  );
+  expect(resolved).toEqual([
+    {
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "cloudflare",
+      connectionId: "pcn_guided_cloudflare",
+    },
+  ]);
+  expect(smokeCapsuleProviderBindingsBody({ bindings: resolved })).toEqual({
+    bindings: [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
+        connectionId: "pcn_guided_cloudflare",
+      },
+    ],
+  });
+});
+
+test("platform smoke selects the exact provider source from a multi-provider report", () => {
+  expect(
+    resolveSmokeProviderBindingsFromCompatibility(
+      [
+        {
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
+          connectionId: "pcn_guided_cloudflare",
+        },
+      ],
+      [
+        {
+          source: "registry.opentofu.org/hashicorp/aws",
+          moduleLocalName: "aws",
+        },
+        {
+          // Prove that the report owns the module-local name. The provider
+          // source suffix is not a safe fallback.
+          source: "cloudflare/cloudflare",
+          moduleLocalName: "edge",
+        },
+      ],
+    ),
+  ).toEqual([
+    {
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "edge",
+      connectionId: "pcn_guided_cloudflare",
+    },
+  ]);
+});
+
+test("platform smoke rejects an omitted identity when one source has multiple aliases", () => {
+  expect(() =>
+    resolveSmokeProviderBindingsFromCompatibility(
+      [
+        {
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
+          connectionId: "pcn_guided_cloudflare",
+        },
+      ],
+      [
+        {
+          source: "registry.opentofu.org/cloudflare/cloudflare",
+          moduleLocalName: "edge",
+          childAlias: "account",
+        },
+        {
+          source: "registry.opentofu.org/cloudflare/cloudflare",
+          moduleLocalName: "edge",
+          childAlias: "zone",
+        },
+      ],
+    ),
+  ).toThrow(/2 matching root provider requirements.*explicit moduleLocalName and childAlias/u);
+});
+
+test("platform smoke rejects an omitted identity with no matching requirement", () => {
+  expect(() =>
+    resolveSmokeProviderBindingsFromCompatibility(
+      [
+        {
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
+          connectionId: "pcn_guided_cloudflare",
+        },
+      ],
+      [
+        {
+          source: "registry.opentofu.org/hashicorp/aws",
+          moduleLocalName: "aws",
+        },
+      ],
+    ),
+  ).toThrow(/no matching root provider requirement.*explicit moduleLocalName and childAlias/u);
+});
+
+test("platform smoke preserves an explicit provider identity after compatibility validation", () => {
+  const binding = {
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    moduleLocalName: "edge-provider",
+    childAlias: "zone-edge",
+    rootAlias: "production-edge",
+    connectionId: "pcn_explicit_cloudflare",
+  } as const;
+  expect(
+    resolveSmokeProviderBindingsFromCompatibility(
+      [binding],
+      [
+        {
+          source: binding.provider,
+          moduleLocalName: binding.moduleLocalName,
+          childAlias: binding.childAlias,
+        },
+      ],
+    ),
+  ).toEqual([binding]);
+  expect(() =>
+    resolveSmokeProviderBindingsFromCompatibility(
+      [binding],
+      [
+        {
+          source: binding.provider,
+          moduleLocalName: "cloudflare",
+        },
+      ],
+    ),
+  ).toThrow(/explicit provider identity.*not declared/u);
 });
 
 test("multi-provider smoke evidence redacts explicit ProviderConnection ids on failure", async () => {
