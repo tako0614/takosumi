@@ -2431,3 +2431,684 @@ test("platform smoke keeps a successfully destroyed Capsule terminal when post-d
     globalThis.fetch = originalFetch;
   }
 });
+
+test("platform smoke does not retry or directly delete after a failed destroy apply", async () => {
+  const appName = "takosumi-destroy-failure-fixture";
+  const rawConnectionId = "conn_destroy_failure_fixture";
+  const providerConnectionId = "pcn_destroy_failure_fixture";
+  const capsuleId = "cap_destroy_failure_fixture";
+  const sourceId = "src_destroy_failure_fixture";
+  const sourceSnapshotId = "snap_destroy_failure_fixture";
+  const stateVersionId = "state_destroy_failure_fixture";
+  const outputId = "out_destroy_failure_fixture";
+  const runRecords = {
+    sync: {
+      id: "run_sync_destroy_failure_fixture",
+      status: "succeeded",
+      type: "source_sync",
+      sourceSnapshotId,
+    },
+    planWaitingApproval: {
+      id: "run_plan_destroy_failure_fixture",
+      status: "waiting_approval",
+      type: "plan",
+    },
+    planSucceeded: {
+      id: "run_plan_destroy_failure_fixture",
+      status: "succeeded",
+      type: "plan",
+    },
+    applySucceeded: {
+      id: "run_apply_destroy_failure_fixture",
+      status: "succeeded",
+      type: "apply",
+    },
+    destroyPlanWaitingApproval: {
+      id: "run_destroy_plan_failure_fixture",
+      status: "waiting_approval",
+      type: "destroy",
+    },
+    destroyFailed: {
+      id: "run_destroy_apply_failure_fixture",
+      status: "failed",
+      type: "destroy",
+    },
+  } as const;
+  const options = await resolveOptions(
+    {
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_destroyfailure",
+      appName,
+      sourceGitUrl: "https://git.example.test/destroy-failure-fixture.git",
+      cloudflareConnectionMode: "guided",
+      verificationMode: "opentofu",
+      noInterfaceProof: true,
+      outputAllowlistJson: JSON.stringify({}),
+      timeoutSeconds: "1",
+      deployTimeoutSeconds: "1",
+      pollIntervalMs: "1",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+      CLOUDFLARE_ACCOUNT_ID: "account-fixture",
+      CLOUDFLARE_WORKERS_SUBDOMAIN: "workers.example.test",
+    },
+  );
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{
+    readonly method: string;
+    readonly url: string;
+    readonly body?: string;
+  }> = [];
+  globalThis.fetch = (async (input, init) => {
+    const requestUrl = new URL(String(input));
+    const method = init?.method ?? "GET";
+    const body = typeof init?.body === "string" ? init.body : undefined;
+    requests.push({ method, url: requestUrl.toString(), ...(body ? { body } : {}) });
+    if (requestUrl.origin !== options.url) {
+      throw new Error(`unexpected external fixture request: ${requestUrl}`);
+    }
+    const path = requestUrl.pathname;
+    if (method === "POST" && path === "/api/v1/connections") {
+      return Response.json({ connection: { id: rawConnectionId } });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/connections/${rawConnectionId}/test`
+    ) {
+      return Response.json({ status: "verified" });
+    }
+    if (method === "GET" && path === "/api/v1/provider-connections") {
+      return Response.json({
+        providerConnections: [
+          {
+            id: providerConnectionId,
+            providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+            displayName: `Layer-2 smoke ${appName}`,
+          },
+        ],
+      });
+    }
+    if (method === "POST" && path === "/api/v1/sources") {
+      return Response.json({ source: { id: sourceId } });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/sources/${sourceId}/sync`
+    ) {
+      return Response.json({ run: runRecords.sync });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/runs/${runRecords.sync.id}`
+    ) {
+      return Response.json({ run: runRecords.sync });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/sources/${sourceId}/snapshots`
+    ) {
+      return Response.json({
+        snapshots: [
+          {
+            id: sourceSnapshotId,
+            resolvedCommit: "a".repeat(40),
+            archiveRef: "r2://fixture/source.tar.zst",
+            archiveDigest: `sha256:${"b".repeat(64)}`,
+            archiveSizeBytes: 1,
+            fetchedByRunId: runRecords.sync.id,
+          },
+        ],
+      });
+    }
+    if (method === "GET" && path === "/api/v1/capsule-configs") {
+      return Response.json({
+        installConfigs: [{ id: "cfg_destroy_failure_fixture", workspaceId: options.workspace }],
+      });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/workspaces/${options.workspace}/capsules`
+    ) {
+      return Response.json({ capsule: { id: capsuleId, name: appName } });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/sources/${sourceId}/compatibility-check`
+    ) {
+      return Response.json({
+        report: {
+          id: "compat_destroy_failure_fixture",
+          rootProviderRequirements: [
+            {
+              source: "registry.opentofu.org/cloudflare/cloudflare",
+              moduleLocalName: "cloudflare",
+            },
+          ],
+        },
+      });
+    }
+    if (
+      method === "PUT" &&
+      path === `/api/v1/capsules/${capsuleId}/provider-bindings`
+    ) {
+      return Response.json({});
+    }
+    if (method === "POST" && path === `/api/v1/capsules/${capsuleId}/plan`) {
+      return Response.json({ run: runRecords.planWaitingApproval });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/runs/${runRecords.planWaitingApproval.id}`
+    ) {
+      const planPolls = requests.filter(
+        (request) =>
+          request.method === "GET" &&
+          request.url.endsWith(`/api/v1/runs/${runRecords.planWaitingApproval.id}`),
+      ).length;
+      return Response.json({
+        run:
+          planPolls === 1
+            ? runRecords.planWaitingApproval
+            : runRecords.planSucceeded,
+      });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/runs/${runRecords.planWaitingApproval.id}/approve`
+    ) {
+      return Response.json({ run: runRecords.planSucceeded });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/runs/${runRecords.planWaitingApproval.id}/apply`
+    ) {
+      return Response.json({ run: runRecords.applySucceeded });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/runs/${runRecords.applySucceeded.id}`
+    ) {
+      return Response.json({ run: runRecords.applySucceeded });
+    }
+    if (method === "GET" && path === `/api/v1/capsules/${capsuleId}`) {
+      return Response.json({
+        capsule: {
+          id: capsuleId,
+          workspaceId: options.workspace,
+          status: "active",
+          currentStateVersionId: stateVersionId,
+          currentStateGeneration: 1,
+        },
+      });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/capsules/${capsuleId}/state-versions`
+    ) {
+      return Response.json({
+        stateVersions: [
+          {
+            id: stateVersionId,
+            workspaceId: options.workspace,
+            capsuleId,
+            environment: options.environment,
+            createdByRunId: runRecords.applySucceeded.id,
+            generation: 1,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      });
+    }
+    if (method === "GET" && path === `/api/v1/capsules/${capsuleId}/outputs`) {
+      return Response.json({
+        output: {
+          id: outputId,
+          workspaceId: options.workspace,
+          capsuleId,
+          stateGeneration: 1,
+          publicOutputs: {},
+          outputDigest: `sha256:${"c".repeat(64)}`,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/capsules/${capsuleId}/destroy-plan`
+    ) {
+      return Response.json({ run: runRecords.destroyPlanWaitingApproval });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/runs/${runRecords.destroyPlanWaitingApproval.id}`
+    ) {
+      return Response.json({ run: runRecords.destroyPlanWaitingApproval });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/runs/${runRecords.destroyPlanWaitingApproval.id}/approve`
+    ) {
+      return Response.json({});
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/runs/${runRecords.destroyPlanWaitingApproval.id}/apply`
+    ) {
+      return Response.json({ run: runRecords.destroyFailed });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/runs/${runRecords.destroyFailed.id}`
+    ) {
+      return Response.json({ run: runRecords.destroyFailed });
+    }
+    if (method === "PATCH" && path === `/api/v1/capsules/${capsuleId}`) {
+      throw new Error("failed destroy must retain Capsule evidence");
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/connections/${rawConnectionId}/revoke`
+    ) {
+      throw new Error("failed destroy must retain ProviderConnection");
+    }
+    throw new Error(`unexpected Takosumi fixture request: ${method} ${requestUrl}`);
+  }) as typeof fetch;
+  try {
+    const result = await runPlatformControlPlaneSmoke(options);
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain(
+      `destroy apply run ${runRecords.destroyFailed.id} ended as failed`,
+    );
+    expect(result.capsuleId).toBe(capsuleId);
+    expect(result.applyRunId).toBe(runRecords.applySucceeded.id);
+    expect(result.destroyPlanRunId).toBe(runRecords.destroyPlanWaitingApproval.id);
+    expect(result.destroyApplyRunId).toBe(runRecords.destroyFailed.id);
+    expect(result.connectionRevoked).toBe(false);
+    expect(result.connectionRevokeSkippedReason).toContain(
+      "keeping ProviderConnection",
+    );
+    expect(result.failureCleanup).toMatchObject({
+      attempted: true,
+      cloudflareWorkerGone: false,
+      capsuleMarkedError: false,
+      destroyAttempted: true,
+      destroyApplyAttempted: true,
+      destroyPlanRunId: runRecords.destroyPlanWaitingApproval.id,
+      destroyApplyRunId: runRecords.destroyFailed.id,
+      destroySucceeded: false,
+    });
+    expect(result.runTimings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "destroy_plan",
+          runId: runRecords.destroyPlanWaitingApproval.id,
+        }),
+        expect.objectContaining({
+          name: "destroy_apply",
+          runId: runRecords.destroyFailed.id,
+        }),
+      ]),
+    );
+    expect(
+      requests.filter(
+        (request) =>
+          request.method === "POST" &&
+          request.url.endsWith(`/api/v1/capsules/${capsuleId}/destroy-plan`),
+      ),
+    ).toHaveLength(1);
+    expect(
+      requests.filter(
+        (request) =>
+          request.method === "POST" &&
+          request.url.endsWith(
+            `/api/v1/runs/${runRecords.destroyPlanWaitingApproval.id}/apply`,
+          ),
+      ),
+    ).toHaveLength(1);
+    expect(
+      requests.filter(
+        (request) =>
+          request.method === "DELETE" &&
+          request.url.includes("api.cloudflare.com/client/v4/accounts"),
+      ),
+    ).toHaveLength(0);
+    expect(
+      requests.filter(
+        (request) =>
+          request.method === "POST" &&
+          request.url.endsWith(`/api/v1/connections/${rawConnectionId}/revoke`),
+      ),
+    ).toHaveLength(0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+type DestroyApplyReconciliationCase =
+  | "mismatched"
+  | "cancelled"
+  | "already_terminal";
+
+async function runDestroyApplyReconciliationFixture(
+  reconciliation: DestroyApplyReconciliationCase,
+) {
+  const appName = `takosumi-destroy-apply-${reconciliation}-fixture`;
+  const capsuleId = `cap_destroy_apply_${reconciliation}_fixture`;
+  const sourceId = `src_destroy_apply_${reconciliation}_fixture`;
+  const sourceSnapshotId = `snap_destroy_apply_${reconciliation}_fixture`;
+  const stateVersionId = `state_destroy_apply_${reconciliation}_fixture`;
+  const outputId = `out_destroy_apply_${reconciliation}_fixture`;
+  const destroyPlanRunId = `run_destroy_plan_${reconciliation}_fixture`;
+  const destroyApplyRunId = `run_destroy_apply_${reconciliation}_fixture`;
+  const staleRunId = `run_destroy_apply_stale_${reconciliation}_fixture`;
+  const runRecords = {
+    sync: {
+      id: `run_sync_${reconciliation}_fixture`,
+      status: "succeeded",
+      type: "source_sync",
+      sourceSnapshotId,
+    },
+    planWaitingApproval: {
+      id: `run_plan_${reconciliation}_fixture`,
+      status: "waiting_approval",
+      type: "plan",
+    },
+    planSucceeded: {
+      id: `run_plan_${reconciliation}_fixture`,
+      status: "succeeded",
+      type: "plan",
+    },
+    applySucceeded: {
+      id: `run_apply_${reconciliation}_fixture`,
+      status: "succeeded",
+      type: "apply",
+    },
+    destroyPlanWaitingApproval: {
+      id: destroyPlanRunId,
+      status: "waiting_approval",
+      type: "destroy",
+    },
+    destroyApplyRunning: {
+      id: destroyApplyRunId,
+      status: "running",
+      type: "destroy",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      startedAt: "2026-01-01T00:00:02.000Z",
+    },
+    destroyApplyTerminal: {
+      id: destroyApplyRunId,
+      status: reconciliation === "already_terminal" ? "failed" : "cancelled",
+      type: "destroy",
+      policyStatus: "deny",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      startedAt: "2026-01-01T00:00:02.000Z",
+      finishedAt: "2026-01-01T00:00:03.000Z",
+    },
+    destroyApplyStale: {
+      id: staleRunId,
+      status: "succeeded",
+      type: "destroy",
+      createdAt: "2025-01-01T00:00:00.000Z",
+      startedAt: "2025-01-01T00:00:02.000Z",
+      finishedAt: "2025-01-01T00:00:03.000Z",
+    },
+  } as const;
+  const options = await resolveOptions(
+    {
+      url: "https://app-staging.takosumi.com",
+      workspace: `ws_destroyapply${reconciliation.replaceAll("_", "")}`,
+      appName,
+      sourceGitUrl: `https://git.example.test/${reconciliation}.git`,
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      noInterfaceProof: true,
+      outputAllowlistJson: JSON.stringify({}),
+      timeoutSeconds: "1",
+      deployTimeoutSeconds: "1",
+      pollIntervalMs: "2000",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+      CLOUDFLARE_ACCOUNT_ID: "account-fixture",
+      CLOUDFLARE_WORKERS_SUBDOMAIN: "workers.example.test",
+    },
+  );
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{
+    readonly method: string;
+    readonly url: string;
+    readonly body?: string;
+  }> = [];
+  let destroyApplyPolls = 0;
+  globalThis.fetch = (async (input, init) => {
+    const requestUrl = new URL(String(input));
+    const method = init?.method ?? "GET";
+    const body = typeof init?.body === "string" ? init.body : undefined;
+    requests.push({ method, url: requestUrl.toString(), ...(body ? { body } : {}) });
+    if (requestUrl.origin !== options.url) {
+      throw new Error(`unexpected external fixture request: ${requestUrl}`);
+    }
+    const path = requestUrl.pathname;
+    if (method === "POST" && path === "/api/v1/sources") {
+      return Response.json({ source: { id: sourceId } });
+    }
+    if (method === "POST" && path === `/api/v1/sources/${sourceId}/sync`) {
+      return Response.json({ run: runRecords.sync });
+    }
+    if (method === "GET" && path === `/api/v1/runs/${runRecords.sync.id}`) {
+      return Response.json({ run: runRecords.sync });
+    }
+    if (method === "GET" && path === `/api/v1/sources/${sourceId}/snapshots`) {
+      return Response.json({
+        snapshots: [
+          {
+            id: sourceSnapshotId,
+            resolvedCommit: "a".repeat(40),
+            archiveRef: "r2://fixture/source.tar.zst",
+            archiveDigest: `sha256:${"b".repeat(64)}`,
+            archiveSizeBytes: 1,
+            fetchedByRunId: runRecords.sync.id,
+          },
+        ],
+      });
+    }
+    if (method === "GET" && path === "/api/v1/capsule-configs") {
+      return Response.json({
+        installConfigs: [
+          {
+            id: `cfg_destroy_apply_${reconciliation}_fixture`,
+            workspaceId: options.workspace,
+          },
+        ],
+      });
+    }
+    if (method === "POST" && path === `/api/v1/workspaces/${options.workspace}/capsules`) {
+      return Response.json({ capsule: { id: capsuleId, name: appName } });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/sources/${sourceId}/compatibility-check`
+    ) {
+      return Response.json({
+        report: {
+          id: `compat_destroy_apply_${reconciliation}_fixture`,
+          rootProviderRequirements: [],
+        },
+      });
+    }
+    if (method === "POST" && path === `/api/v1/capsules/${capsuleId}/plan`) {
+      return Response.json({ run: runRecords.planWaitingApproval });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/runs/${runRecords.planWaitingApproval.id}`
+    ) {
+      return Response.json({ run: runRecords.planWaitingApproval });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/runs/${runRecords.planWaitingApproval.id}/approve`
+    ) {
+      return Response.json({ run: runRecords.planSucceeded });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/runs/${runRecords.planWaitingApproval.id}/apply`
+    ) {
+      return Response.json({ run: runRecords.applySucceeded });
+    }
+    if (method === "GET" && path === `/api/v1/runs/${runRecords.applySucceeded.id}`) {
+      return Response.json({ run: runRecords.applySucceeded });
+    }
+    if (method === "GET" && path === `/api/v1/capsules/${capsuleId}`) {
+      return Response.json({
+        capsule: {
+          id: capsuleId,
+          workspaceId: options.workspace,
+          status: "active",
+          currentStateVersionId: stateVersionId,
+          currentStateGeneration: 1,
+        },
+      });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/capsules/${capsuleId}/state-versions`
+    ) {
+      return Response.json({
+        stateVersions: [
+          {
+            id: stateVersionId,
+            workspaceId: options.workspace,
+            capsuleId,
+            environment: options.environment,
+            createdByRunId: runRecords.applySucceeded.id,
+            generation: 1,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      });
+    }
+    if (method === "GET" && path === `/api/v1/capsules/${capsuleId}/outputs`) {
+      return Response.json({
+        output: {
+          id: outputId,
+          workspaceId: options.workspace,
+          capsuleId,
+          stateGeneration: 1,
+          publicOutputs: {},
+          outputDigest: `sha256:${"c".repeat(64)}`,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/capsules/${capsuleId}/destroy-plan`
+    ) {
+      return Response.json({ run: runRecords.destroyPlanWaitingApproval });
+    }
+    if (
+      method === "GET" &&
+      path === `/api/v1/runs/${destroyPlanRunId}`
+    ) {
+      return Response.json({ run: runRecords.destroyPlanWaitingApproval });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/runs/${destroyPlanRunId}/approve`
+    ) {
+      return Response.json({});
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/runs/${destroyPlanRunId}/apply`
+    ) {
+      return Response.json({ run: runRecords.destroyApplyRunning });
+    }
+    if (method === "GET" && path === `/api/v1/runs/${destroyApplyRunId}`) {
+      destroyApplyPolls += 1;
+      if (reconciliation === "mismatched") {
+        return Response.json({ run: runRecords.destroyApplyStale });
+      }
+      if (destroyApplyPolls === 1) {
+        return Response.json({ run: runRecords.destroyApplyRunning });
+      }
+      if (reconciliation === "already_terminal") {
+        return Response.json({ run: runRecords.destroyApplyTerminal });
+      }
+      return Response.json({ run: runRecords.destroyApplyRunning });
+    }
+    if (
+      reconciliation === "cancelled" &&
+      method === "POST" &&
+      path === `/api/v1/runs/${destroyApplyRunId}/cancel`
+    ) {
+      return Response.json({ run: runRecords.destroyApplyTerminal });
+    }
+    throw new Error(`unexpected Takosumi fixture request: ${method} ${requestUrl}`);
+  }) as typeof fetch;
+  try {
+    const result = await runPlatformControlPlaneSmoke(options);
+    return { result, requests, runRecords };
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+test("platform smoke rejects a destroy poll response for a different Run id", async () => {
+  const { result, runRecords } = await runDestroyApplyReconciliationFixture(
+    "mismatched",
+  );
+  expect(result.status).toBe("failed");
+  expect(result.error).toContain(
+    `run ${runRecords.destroyApplyRunning.id} poll returned mismatched run id ${runRecords.destroyApplyStale.id}`,
+  );
+  expect(result.destroyApplyRunId).toBe(runRecords.destroyApplyRunning.id);
+  expect(result.runTimings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        name: "destroy_apply",
+        runId: runRecords.destroyApplyRunning.id,
+      }),
+    ]),
+  );
+  expect(
+    result.runTimings.some((timing) => timing.runId === runRecords.destroyApplyStale.id),
+  ).toBe(false);
+});
+
+test.each([
+  "cancelled",
+  "already_terminal",
+] as const)(
+  "platform smoke records the exact terminal destroy Run after %s reconciliation",
+  async (reconciliation) => {
+    const { result, runRecords } = await runDestroyApplyReconciliationFixture(
+      reconciliation,
+    );
+    expect(result.status).toBe("failed");
+    expect(result.timedOutRunId).toBe(runRecords.destroyApplyRunning.id);
+    expect(result.runCancellationStatus).toBe(reconciliation);
+    expect(result.policyStatus).toBe("denied");
+    expect(result.destroyApplyRunId).toBe(runRecords.destroyApplyTerminal.id);
+    expect(result.runTimings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "destroy_apply",
+          runId: runRecords.destroyApplyTerminal.id,
+          finishedAt: runRecords.destroyApplyTerminal.finishedAt,
+          executionMs: 1_000,
+          totalMs: 3_000,
+        }),
+      ]),
+    );
+    expect(result.failureCleanup).toMatchObject({
+      destroyApplyRunId: runRecords.destroyApplyTerminal.id,
+      destroySucceeded: false,
+    });
+  },
+);

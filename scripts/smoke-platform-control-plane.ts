@@ -761,6 +761,7 @@ interface FailureCleanupResult {
   readonly cloudflareWorkerGone: boolean;
   readonly capsuleMarkedError: boolean;
   readonly destroyAttempted?: boolean;
+  readonly destroyApplyAttempted?: boolean;
   readonly destroyPlanRunId?: string;
   readonly destroyApplyRunId?: string;
   readonly destroySucceeded?: boolean;
@@ -779,6 +780,12 @@ interface DestroySmokeCapsuleResult {
   readonly destroyPlanRun: RunRecord;
   readonly destroyApplyRun: RunRecord;
   readonly destroyVerification?: SmokeDestroyVerification;
+}
+
+interface DestroySmokeCapsuleProgress {
+  destroyPlanRun?: RunRecord;
+  destroyApplyRun?: RunRecord;
+  destroyApplyAttempted: boolean;
 }
 
 interface ActivityEventRecord {
@@ -1633,6 +1640,8 @@ export async function runPlatformControlPlaneSmoke(
   let capsuleId: string | undefined;
   let planRunId: string | undefined;
   let applyRunId: string | undefined;
+  let destroyAttempted = false;
+  let destroyProgress: DestroySmokeCapsuleProgress | undefined;
   let destroyPlanRunId: string | undefined;
   let destroyApplyRunId: string | undefined;
   let stateVersionLedger: StateVersionLedgerVerificationResult | undefined;
@@ -1662,6 +1671,62 @@ export async function runPlatformControlPlaneSmoke(
   let failure: unknown;
   let cloudflareResourcePreflight:
     CloudflareResourcePreflightResult | undefined;
+  const recordDestroyProgress = (
+    progress: DestroySmokeCapsuleProgress | undefined,
+  ): void => {
+    if (!progress) return;
+    const destroyPlanRun = progress.destroyPlanRun;
+    if (destroyPlanRun) {
+      destroyPlanRunId ??= destroyPlanRun.id;
+      if (
+        !runTimings.some(
+          (timing) =>
+            timing.name === "destroy_plan" && timing.runId === destroyPlanRun.id,
+        )
+      ) {
+        runTimings.push(smokeRunTiming("destroy_plan", destroyPlanRun));
+      }
+    }
+    const destroyApplyRun = progress.destroyApplyRun;
+    if (destroyApplyRun) {
+      destroyApplyRunId ??= destroyApplyRun.id;
+      policyStatus = publicPolicyStatus(destroyApplyRun);
+      if (
+        !runTimings.some(
+          (timing) =>
+            timing.name === "destroy_apply" && timing.runId === destroyApplyRun.id,
+        )
+      ) {
+        runTimings.push(smokeRunTiming("destroy_apply", destroyApplyRun));
+      }
+    }
+  };
+  const recordReconciledRun = (
+    runId: string,
+    terminalRun: RunRecord,
+  ): void => {
+    let timingName: string | undefined;
+    if (destroyProgress?.destroyPlanRun?.id === runId) {
+      destroyProgress.destroyPlanRun = terminalRun;
+      timingName = "destroy_plan";
+    } else if (destroyProgress?.destroyApplyRun?.id === runId) {
+      destroyProgress.destroyApplyRun = terminalRun;
+      timingName = "destroy_apply";
+    } else if (planRunId === runId) {
+      timingName = "plan";
+    } else if (applyRunId === runId) {
+      timingName = "apply";
+    }
+    policyStatus = publicPolicyStatus(terminalRun);
+    if (
+      timingName &&
+      !runTimings.some(
+        (timing) => timing.name === timingName && timing.runId === runId,
+      )
+    ) {
+      runTimings.push(smokeRunTiming(timingName, terminalRun));
+    }
+  };
 
   try {
     if (options.expectedServiceIdentity) {
@@ -1860,21 +1925,15 @@ export async function runPlatformControlPlaneSmoke(
       }
     }
     beginStep("destroy");
+    destroyAttempted = true;
+    destroyProgress = { destroyApplyAttempted: false };
     const destroyResult = await destroySmokeCapsule(options, {
       capsuleId,
       reason: "Layer-2 platform-control-plane smoke cleanup",
       verifyCloudflareWorkerGone: shouldVerifyCloudflareWorker(options),
       publicOutputs: stateVersionLedger.publicOutputs,
-    });
-    destroyPlanRunId = destroyResult.destroyPlanRun.id;
-    destroyApplyRunId = destroyResult.destroyApplyRun.id;
-    policyStatus = publicPolicyStatus(destroyResult.destroyApplyRun);
-    runTimings.push(
-      smokeRunTiming("destroy_plan", destroyResult.destroyPlanRun),
-    );
-    runTimings.push(
-      smokeRunTiming("destroy_apply", destroyResult.destroyApplyRun),
-    );
+    }, destroyProgress);
+    recordDestroyProgress(destroyProgress);
     functionalProbe = finalizeFunctionalProbeCleanup(functionalProbe);
     completeStep("destroy");
     if (destroyResult.destroyVerification?.status === "inconclusive") {
@@ -2000,14 +2059,20 @@ export async function runPlatformControlPlaneSmoke(
       );
       runCancellationStatus = cancellation.status;
       runCancellationError = cancellation.error;
+      if (cancellation.run) {
+        recordReconciledRun(error.runId, cancellation.run);
+      }
       if (cancellation.status === "failed") {
         connectionRevokeSkippedReason =
           "run did not reach a terminal state and cancel did not confirm terminal ownership";
       }
     }
-    if (capsuleId && applyRunId && !destroyApplyRunId) {
+    recordDestroyProgress(destroyProgress);
+    if (capsuleId && applyRunId && !destroyAttempted) {
       beginStep("destroy");
+      destroyAttempted = true;
       const verifyCloudflareWorkerGone = shouldVerifyCloudflareWorker(options);
+      destroyProgress = { destroyApplyAttempted: false };
       try {
         const destroyResult = await destroySmokeCapsule(options, {
           capsuleId,
@@ -2015,40 +2080,37 @@ export async function runPlatformControlPlaneSmoke(
             "Layer-2 platform-control-plane smoke cleanup after verification failure",
           verifyCloudflareWorkerGone,
           publicOutputs: stateVersionLedger?.publicOutputs,
-        });
-        destroyPlanRunId = destroyResult.destroyPlanRun.id;
-        destroyApplyRunId = destroyResult.destroyApplyRun.id;
-        runTimings.push(
-          smokeRunTiming("destroy_plan", destroyResult.destroyPlanRun),
-        );
-        runTimings.push(
-          smokeRunTiming("destroy_apply", destroyResult.destroyApplyRun),
-        );
+        }, destroyProgress);
+        recordDestroyProgress(destroyProgress);
         functionalProbe = finalizeFunctionalProbeCleanup(functionalProbe);
         completeStep("destroy");
         failureCleanup = destroyFailureCleanupResult(destroyResult);
       } catch (destroyError) {
+        recordDestroyProgress(destroyProgress);
         connectionRevokeSkippedReason =
           "post-apply cleanup destroy failed; keeping ProviderConnection so the Capsule can be destroyed after the blocker is fixed";
-        const fallbackCleanup = await cleanupAppliedSmokeFailure(options, {
-          capsuleId,
-          publicOutputs: stateVersionLedger?.publicOutputs,
-        });
-        failureCleanup = {
-          ...fallbackCleanup,
-          destroyAttempted: true,
-          destroySucceeded: false,
-          destroyError:
-            destroyError instanceof Error
-              ? destroyError.message
-              : String(destroyError),
-        };
+        failureCleanup = failedDestroyCleanupResult(
+          destroyProgress,
+          destroyError,
+        );
       }
-    } else if (!destroyApplyRunId) {
+    } else if (!applyRunId && !destroyAttempted) {
       await markPendingSmokeCapsuleError(options, {
         workspaceId,
         capsuleId,
       }).catch(() => undefined);
+    } else if (
+      destroyAttempted &&
+      !failureCleanup &&
+      (destroyProgress?.destroyApplyRun?.status !== "succeeded" ||
+        destroyProgress?.destroyApplyRun?.policyStatus === "deny")
+    ) {
+      connectionRevokeSkippedReason =
+        "post-apply cleanup destroy failed; keeping ProviderConnection so the Capsule can be destroyed after the blocker is fixed";
+      failureCleanup = failedDestroyCleanupResult(
+        destroyProgress,
+        error,
+      );
     }
     failure = error;
   } finally {
@@ -3181,6 +3243,7 @@ async function destroySmokeCapsule(
     readonly verifyCloudflareWorkerGone: boolean;
     readonly publicOutputs?: Readonly<Record<string, unknown>>;
   },
+  progress: DestroySmokeCapsuleProgress,
 ): Promise<DestroySmokeCapsuleResult> {
   const destroyPlan = await requestJson<{ readonly run: RunRecord }>({
     baseUrl: options.url,
@@ -3195,7 +3258,9 @@ async function destroySmokeCapsule(
         : {}),
     },
   });
+  progress.destroyPlanRun = destroyPlan.run;
   const reviewedDestroyPlan = await pollRun(options, destroyPlan.run.id);
+  progress.destroyPlanRun = reviewedDestroyPlan;
   if (reviewedDestroyPlan.status !== "waiting_approval") {
     throw new Error(
       `destroy plan ${destroyPlan.run.id} ended as ${reviewedDestroyPlan.status}; expected waiting_approval`,
@@ -3208,6 +3273,7 @@ async function destroySmokeCapsule(
     path: `${API_PREFIX}/runs/${encodeURIComponent(destroyPlan.run.id)}/approve`,
     body: { reason: input.reason },
   });
+  progress.destroyApplyAttempted = true;
   const destroyApply = await requestJson<{ readonly run: RunRecord }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
@@ -3215,7 +3281,9 @@ async function destroySmokeCapsule(
     path: `${API_PREFIX}/runs/${encodeURIComponent(destroyPlan.run.id)}/apply`,
     body: { confirmDestructive: true },
   });
+  progress.destroyApplyRun = destroyApply.run;
   const completedDestroy = await pollRun(options, destroyApply.run.id);
+  progress.destroyApplyRun = completedDestroy;
   assertRunSucceeded(completedDestroy, "destroy apply");
   let destroyVerification: SmokeDestroyVerification | undefined;
   if (input.verifyCloudflareWorkerGone) {
@@ -3257,6 +3325,29 @@ function destroyFailureCleanupResult(
     destroySucceeded: true,
     ...(verification ? { destroyVerification: verification } : {}),
     ...(verification?.error ? { error: verification.error } : {}),
+  };
+}
+
+function failedDestroyCleanupResult(
+  progress: DestroySmokeCapsuleProgress | undefined,
+  error: unknown,
+): FailureCleanupResult {
+  return {
+    attempted: true,
+    cloudflareWorkerGone: false,
+    capsuleMarkedError: false,
+    destroyAttempted: true,
+    ...(progress?.destroyApplyAttempted === undefined
+      ? {}
+      : { destroyApplyAttempted: progress.destroyApplyAttempted }),
+    ...(progress?.destroyPlanRun
+      ? { destroyPlanRunId: progress.destroyPlanRun.id }
+      : {}),
+    ...(progress?.destroyApplyRun
+      ? { destroyApplyRunId: progress.destroyApplyRun.id }
+      : {}),
+    destroySucceeded: false,
+    destroyError: errorMessage(error),
   };
 }
 
@@ -3315,53 +3406,6 @@ async function markPendingSmokeCapsuleError(
   return true;
 }
 
-async function cleanupAppliedSmokeFailure(
-  options: PlatformControlPlaneSmokeOptions,
-  input: {
-    readonly capsuleId: string;
-    readonly publicOutputs?: Readonly<Record<string, unknown>>;
-  },
-): Promise<FailureCleanupResult> {
-  let cloudflareWorkerGone = false;
-  let capsuleMarkedError = false;
-  let cleanupError: string | undefined;
-  try {
-    const workerName = cloudflareWorkerName(options, input.publicOutputs);
-    const deleted = await cloudflareScriptRequest(
-      options,
-      "DELETE",
-      workerName,
-    );
-    cloudflareWorkerGone = deleted.status === 404 || deleted.ok;
-    if (!cloudflareWorkerGone) {
-      await assertCloudflareWorkerGone(options, input.publicOutputs);
-      cloudflareWorkerGone = true;
-    }
-  } catch (error) {
-    cleanupError = publicErrorMessage(error);
-  }
-  try {
-    await requestJson({
-      baseUrl: options.url,
-      token: options.accountSessionToken,
-      method: "PATCH",
-      path: `${API_PREFIX}/capsules/${encodeURIComponent(input.capsuleId)}`,
-      body: { status: "error" },
-    });
-    capsuleMarkedError = true;
-  } catch (error) {
-    cleanupError = cleanupError
-      ? `${cleanupError}; ${publicErrorMessage(error)}`
-      : publicErrorMessage(error);
-  }
-  return {
-    attempted: true,
-    cloudflareWorkerGone,
-    capsuleMarkedError,
-    ...(cleanupError ? { error: cleanupError } : {}),
-  };
-}
-
 async function pollRun(
   options: PlatformControlPlaneSmokeOptions,
   runId: string,
@@ -3374,6 +3418,11 @@ async function pollRun(
       token: options.accountSessionToken,
       path: `${API_PREFIX}/runs/${encodeURIComponent(runId)}`,
     });
+    if (response.run.id !== runId) {
+      throw new Error(
+        `run ${runId} poll returned mismatched run id ${response.run.id}`,
+      );
+    }
     if (response.run.status !== lastStatus && !options.json) {
       console.log(`run ${runId} ${response.run.status}`);
       lastStatus = response.run.status;
@@ -3391,6 +3440,7 @@ async function cancelRunAfterPollTimeout(
   runId: string,
 ): Promise<{
   readonly status: "cancelled" | "already_terminal" | "failed";
+  readonly run?: RunRecord;
   readonly error?: string;
 }> {
   try {
@@ -3399,8 +3449,13 @@ async function cancelRunAfterPollTimeout(
       token: options.accountSessionToken,
       path: `${API_PREFIX}/runs/${encodeURIComponent(runId)}`,
     });
+    if (current.run.id !== runId) {
+      throw new Error(
+        `run ${runId} cancel reconciliation returned mismatched run id ${current.run.id}`,
+      );
+    }
     if (TERMINAL_RUN_STATUSES.has(current.run.status)) {
-      return { status: "already_terminal" };
+      return { status: "already_terminal", run: current.run };
     }
     const cancelled = await requestJson<{ readonly run: RunRecord }>({
       baseUrl: options.url,
@@ -3409,8 +3464,13 @@ async function cancelRunAfterPollTimeout(
       path: `${API_PREFIX}/runs/${encodeURIComponent(runId)}/cancel`,
       body: {},
     });
+    if (cancelled.run.id !== runId) {
+      throw new Error(
+        `run ${runId} cancel response returned mismatched run id ${cancelled.run.id}`,
+      );
+    }
     if (TERMINAL_RUN_STATUSES.has(cancelled.run.status)) {
-      return { status: "cancelled" };
+      return { status: "cancelled", run: cancelled.run };
     }
     return {
       status: "failed",
@@ -4859,7 +4919,7 @@ async function assertPublicWorkerUrlGone(
 
 async function cloudflareScriptRequest(
   options: PlatformControlPlaneSmokeOptions,
-  method: "GET" | "DELETE",
+  method: "GET",
   workerName = options.appName,
 ): Promise<Response> {
   return await fetch(
