@@ -12,9 +12,13 @@ import {
   applyD1GuardedTableRenames,
   createCloudflareD1OpenTofuControlStore,
   ensureD1OpenTofuLedgerSchema,
+  initializeD1OpenTofuLedgerSchemaBinding,
   verifyD1OpenTofuLedgerSchemaPredeployed,
 } from "../../../worker/src/d1_opentofu_store.ts";
-import type { D1Database } from "../../../worker/src/bindings.ts";
+import type {
+  D1Database,
+  D1PreparedStatement,
+} from "../../../worker/src/bindings.ts";
 import {
   acquireControlD1MaintenanceFence,
   assertControlD1MaintenanceInactive,
@@ -23,6 +27,128 @@ import {
   releaseControlD1MaintenanceFence,
 } from "../../../worker/src/d1_schema_maintenance.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
+
+const V67_CAPSULE_INTERFACE_MATERIALIZATION_INTENTS_NAME =
+  "d1_capsule_interface_materialization_intents";
+const V67_CAPSULE_INTERFACE_MATERIALIZATION_INTENTS_CHECKSUM =
+  "sha256:bee14950c99e9f0a76d51197292a0a018f6f6a2aadde58bccd324781d9ed7a2a";
+const V67_CAPSULE_INTERFACE_MATERIALIZATION_INTENT_STATEMENTS = [
+  `create table if not exists capsule_interface_materialization_intents (
+    id text primary key,
+    apply_run_id text,
+    restore_run_id text,
+    source_intent_id text,
+    workspace_id text not null,
+    capsule_id text not null,
+    install_config_id text not null,
+    state_version_id text not null,
+    output_id text not null,
+    state_generation integer not null check (state_generation >= 1),
+    blueprints_digest text not null
+      check (substr(blueprints_digest, 1, 7) = 'sha256:'
+        and length(blueprints_digest) = 71
+        and substr(blueprints_digest, 8) not glob '*[^0-9a-f]*'),
+    blueprints_json text not null
+      check (length(cast(blueprints_json as blob)) <= 1048576),
+    total_items integer not null check (total_items >= 1),
+    next_item_index integer not null
+      check (next_item_index >= 0 and next_item_index <= total_items),
+    status text not null check (status in ('pending', 'completed', 'dead_letter')),
+    attempts integer not null check (attempts >= 0),
+    next_retry_at text not null,
+    lease_token text,
+    lease_expires_at text,
+    error_json text,
+    receipt_json text,
+    created_at text not null,
+    updated_at text not null,
+    completed_at text,
+    dead_lettered_at text,
+    check (
+      (apply_run_id is not null and restore_run_id is null and source_intent_id is null)
+      or
+      (apply_run_id is null and restore_run_id is not null and source_intent_id is not null)
+    )
+  )`,
+  `create unique index if not exists capsule_interface_materialization_intents_apply_run_unique
+    on capsule_interface_materialization_intents (apply_run_id)`,
+  `create unique index if not exists capsule_interface_materialization_intents_restore_run_unique
+    on capsule_interface_materialization_intents (restore_run_id)`,
+  `create unique index if not exists capsule_interface_materialization_intents_capsule_generation_unique
+    on capsule_interface_materialization_intents (capsule_id, state_generation)`,
+  `create index if not exists capsule_interface_materialization_intents_pending_idx
+    on capsule_interface_materialization_intents (status, next_retry_at)`,
+  `create index if not exists capsule_interface_materialization_intents_dead_letter_idx
+    on capsule_interface_materialization_intents (
+      workspace_id, status, dead_lettered_at desc, id desc
+    )`,
+] as const;
+const V67_CAPSULE_INTERFACE_MATERIALIZATION_INTENTS_CHECKSUM_SOURCE = `
+Successful non-destroy Apply commits retain exact Plan-pinned Interface blueprints as unresolved value-free intent
+apply Run identity and Capsule state generation are independently unique replay fences
+blueprint payloads are canonical JSON with a one MiB aggregate ceiling
+request handling performs one fixed intent statement independent of blueprint count
+${V67_CAPSULE_INTERFACE_MATERIALIZATION_INTENT_STATEMENTS.join("\n---\n")}
+`;
+
+async function sha256Digest(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return `sha256:${[...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+async function installV67CapsuleInterfaceMaterializationIntentSuffix(
+  db: SqliteFakeD1,
+  options: {
+    readonly checksum?: string;
+    readonly name?: string;
+    readonly statementCount?: number;
+    readonly statements?: readonly string[];
+  } = {},
+): Promise<void> {
+  const statements =
+    options.statements ??
+    V67_CAPSULE_INTERFACE_MATERIALIZATION_INTENT_STATEMENTS;
+  const statementCount =
+    options.statementCount ?? statements.length;
+  for (const statement of statements.slice(0, statementCount)) {
+    await db.prepare(statement).run();
+  }
+  await db
+    .prepare(
+      `insert into schema_migrations (version, name, checksum, applied_at)
+       values (67, ?, ?, '2026-08-30T00:00:00.000Z')`,
+    )
+    .bind(
+      options.name ?? V67_CAPSULE_INTERFACE_MATERIALIZATION_INTENTS_NAME,
+      options.checksum ??
+        V67_CAPSULE_INTERFACE_MATERIALIZATION_INTENTS_CHECKSUM,
+    )
+    .run();
+}
+
+async function seedReleasedMaintenanceFence(db: SqliteFakeD1): Promise<void> {
+  const fence = await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-08-29T23:58:00.000Z",
+  );
+  await releaseControlD1MaintenanceFence(
+    db,
+    fence,
+    "2026-08-29T23:59:00.000Z",
+  );
+}
 
 async function tableNames(db: SqliteFakeD1): Promise<Set<string>> {
   const result = await db
@@ -691,6 +817,7 @@ test("ensureD1OpenTofuLedgerSchema is idempotent across reboots", async () => {
 test("predeployed verification is strictly read-only", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(db);
   const queries: string[] = [];
   const readOnlyDb: D1Database = {
     prepare(query) {
@@ -712,7 +839,29 @@ test("predeployed verification is strictly read-only", async () => {
   );
 });
 
-test("predeployed verification accepts only the exact current v66 ledger", async () => {
+test("bridge bootstrap remains a v66 writer", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  expect(
+    await db
+      .prepare(`select max(version) as version from schema_migrations`)
+      .first(),
+  ).toEqual({ version: 66 });
+  expect(
+    (await tableNames(db)).has("capsule_interface_materialization_intents"),
+  ).toBe(false);
+});
+
+test("bridge pins the canonical v67 checksum to its exact additive statements", async () => {
+  expect(
+    await sha256Digest(
+      `67\n${V67_CAPSULE_INTERFACE_MATERIALIZATION_INTENTS_NAME}\n${V67_CAPSULE_INTERFACE_MATERIALIZATION_INTENTS_CHECKSUM_SOURCE.trim()}\n`,
+    ),
+  ).toBe(V67_CAPSULE_INTERFACE_MATERIALIZATION_INTENTS_CHECKSUM);
+});
+
+test("predeployed verification accepts exact v66 or its exact additive v67 suffix", async () => {
   const predecessor = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(predecessor, {
     throughMigrationVersion: 62,
@@ -733,6 +882,15 @@ test("predeployed verification accepts only the exact current v66 ledger", async
     false,
   );
 
+  const additiveV67 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(additiveV67);
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(additiveV67);
+  await verifyD1OpenTofuLedgerSchemaPredeployed(additiveV67);
+  expect(
+    (await indexNames(additiveV67, "capsule_interface_materialization_intents"))
+      .size,
+  ).toBe(5);
+
   const tooOld = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(tooOld, { throughMigrationVersion: 61 });
   await expect(verifyD1OpenTofuLedgerSchemaPredeployed(tooOld)).rejects.toThrow(
@@ -750,16 +908,119 @@ test("predeployed verification accepts only the exact current v66 ledger", async
 
   const extra = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(extra);
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(extra);
   await extra
     .prepare(
       `insert into schema_migrations (version, name, checksum, applied_at)
-       values (67, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
+       values (68, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
     )
     .bind(`sha256:${"f".repeat(64)}`)
     .run();
   await expect(verifyD1OpenTofuLedgerSchemaPredeployed(extra)).rejects.toThrow(
     "D1 OpenTofu predeployed schema verification failed",
   );
+});
+
+test("predeployed v67 verification rejects wrong checksum and partial schema", async () => {
+  const wrongChecksum = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(wrongChecksum);
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(wrongChecksum, {
+    checksum: `sha256:${"0".repeat(64)}`,
+  });
+  await expect(
+    verifyD1OpenTofuLedgerSchemaPredeployed(wrongChecksum),
+  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+
+  const wrongName = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(wrongName);
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(wrongName, {
+    name: "d1_capsule_interface_materialization_intents_wrong",
+  });
+  await expect(
+    verifyD1OpenTofuLedgerSchemaPredeployed(wrongName),
+  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+
+  const partial = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(partial);
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(partial, {
+    statementCount: 1,
+  });
+  await expect(
+    verifyD1OpenTofuLedgerSchemaPredeployed(partial),
+  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+
+  const wrongPhysicalShape = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(wrongPhysicalShape);
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(
+    wrongPhysicalShape,
+  );
+  await wrongPhysicalShape
+    .prepare(
+      `drop index capsule_interface_materialization_intents_pending_idx`,
+    )
+    .run();
+  await wrongPhysicalShape
+    .prepare(
+      `create index capsule_interface_materialization_intents_pending_idx
+       on capsule_interface_materialization_intents (status, attempts)`,
+    )
+    .run();
+  await expect(
+    verifyD1OpenTofuLedgerSchemaPredeployed(wrongPhysicalShape),
+  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+
+  const wrongConstraintLiteral = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(wrongConstraintLiteral);
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(
+    wrongConstraintLiteral,
+    {
+      statements:
+        V67_CAPSULE_INTERFACE_MATERIALIZATION_INTENT_STATEMENTS.map(
+          (statement, index) =>
+            index === 0
+              ? statement.replace("'pending'", "'PENDING'")
+              : statement,
+        ),
+    },
+  );
+  await expect(
+    verifyD1OpenTofuLedgerSchemaPredeployed(wrongConstraintLiteral),
+  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+});
+
+test("predeployed v67 verification rejects historical drift and a v68 suffix", async () => {
+  const drifted = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(drifted);
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(drifted);
+  await drifted
+    .prepare(`update schema_migrations set checksum = ? where version = 43`)
+    .bind(`sha256:${"0".repeat(64)}`)
+    .run();
+  await expect(
+    verifyD1OpenTofuLedgerSchemaPredeployed(drifted),
+  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+
+  const gap = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(gap);
+  await gap.prepare(`delete from schema_migrations where version = 66`).run();
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(gap);
+  await expect(
+    verifyD1OpenTofuLedgerSchemaPredeployed(gap),
+  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+
+  const future = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(future);
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(future);
+  await future
+    .prepare(
+      `insert into schema_migrations (version, name, checksum, applied_at)
+       values (68, 'd1_future', ?, '2026-08-30T00:01:00.000Z')`,
+    )
+    .bind(`sha256:${"f".repeat(64)}`)
+    .run();
+  await expect(
+    verifyD1OpenTofuLedgerSchemaPredeployed(future),
+  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
 });
 
 test("predeployed maintenance readiness uses one direct indexed read", async () => {
@@ -832,7 +1093,7 @@ test("maintenance release accepts missing transport meta only with the exact dur
   });
 });
 
-test("predeployed exact Workspace reads readiness and data in one statement", async () => {
+test("predeployed exact Workspace co-reads readiness without caching v66", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
   const initialFence = await acquireControlD1MaintenanceFence(
@@ -901,7 +1162,7 @@ test("predeployed exact Workspace reads readiness and data in one statement", as
   expect(batchCalls).toBe(0);
   expect(queries[0]).toContain("pragma_table_info('schema_migrations')");
   expect(queries[0]).toContain("FROM workspaces");
-  expect(queries[1]).not.toContain("pragma_table_info('schema_migrations')");
+  expect(queries[1]).toContain("pragma_table_info('schema_migrations')");
 
   await acquireControlD1MaintenanceFence(
     db,
@@ -924,7 +1185,397 @@ test("predeployed exact Workspace reads readiness and data in one statement", as
   expect(batchCalls).toBe(0);
 });
 
-test("predeployed account Workspace page reads readiness, total, and data in one statement", async () => {
+test("cold predeployed Workspace combined-read accepts exact v67 evidence", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(db);
+  await seedReleasedMaintenanceFence(db);
+  const queries: string[] = [];
+  const observed: D1Database = {
+    prepare(query) {
+      queries.push(query);
+      return db.prepare(query);
+    },
+    batch: db.batch.bind(db),
+  };
+  const store = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+
+  expect(await store.getWorkspace("workspace_absent_v67")).toBeUndefined();
+  expect(queries).toHaveLength(1);
+  expect(queries[0]).toContain("schema_migrations");
+  expect(queries[0]).toContain(
+    "capsule_interface_materialization_intents",
+  );
+});
+
+test("cold predeployed Workspace combined-read rejects a partial v67 shape", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(db, {
+    statementCount: 1,
+  });
+  await seedReleasedMaintenanceFence(db);
+  const store = createCloudflareD1OpenTofuControlStore(db, {
+    schemaMode: "predeployed",
+  });
+
+  await expect(store.getWorkspace("workspace_absent_partial_v67")).rejects
+    .toThrow("D1 OpenTofu predeployed schema verification failed");
+});
+
+test("warm v66 predeployed Workspace reader resumes after fenced v67 suffix apply", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await seedReleasedMaintenanceFence(db);
+  const queries: string[] = [];
+  const observed: D1Database = {
+    prepare(query) {
+      queries.push(query);
+      return db.prepare(query);
+    },
+    batch: db.batch.bind(db),
+  };
+  const store = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+  expect(await store.getWorkspace("workspace_absent_warm_bridge")).toBeUndefined();
+
+  const fence = await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-08-30T00:00:00.000Z",
+  );
+  await expect(
+    store.getWorkspace("workspace_absent_warm_bridge"),
+  ).rejects.toThrow("maintenance_fence_active");
+
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(db);
+  await releaseControlD1MaintenanceFence(
+    db,
+    fence,
+    "2026-08-30T00:01:00.000Z",
+  );
+
+  expect(await store.getWorkspace("workspace_absent_warm_bridge")).toBeUndefined();
+  expect(queries).toHaveLength(3);
+  expect(queries[2]).toContain("schema_migrations");
+  expect(queries[2]).toContain(
+    "capsule_interface_materialization_intents",
+  );
+  await verifyD1OpenTofuLedgerSchemaPredeployed(db);
+});
+
+test("v66 proof is request-local until one isolate validates exact v67", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await seedReleasedMaintenanceFence(db);
+  const queries: string[] = [];
+  const observed: D1Database = {
+    prepare(query) {
+      queries.push(query);
+      return db.prepare(query);
+    },
+    batch: db.batch.bind(db),
+  };
+
+  const firstV66Store = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+  expect(await firstV66Store.getWorkspace("workspace_absent_cache_bridge"))
+    .toBeUndefined();
+  const secondV66Store = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+  expect(await secondV66Store.getWorkspace("workspace_absent_cache_bridge"))
+    .toBeUndefined();
+  expect(queries).toHaveLength(2);
+  expect(queries[0]).toContain("pragma_table_info('schema_migrations')");
+  expect(queries[1]).toContain("pragma_table_info('schema_migrations')");
+
+  const fence = await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-08-30T00:06:00.000Z",
+  );
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(db);
+  await releaseControlD1MaintenanceFence(
+    db,
+    fence,
+    "2026-08-30T00:07:00.000Z",
+  );
+
+  // This long-lived store was deliberately dormant for the complete fence.
+  expect(await firstV66Store.getWorkspace("workspace_absent_cache_bridge"))
+    .toBeUndefined();
+  expect(queries[2]).toContain("pragma_table_info('schema_migrations')");
+  expect(queries[2]).toContain(
+    "capsule_interface_materialization_intents",
+  );
+
+  const cachedV67Store = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+  expect(await cachedV67Store.getWorkspace("workspace_absent_cache_bridge"))
+    .toBeUndefined();
+  expect(queries[3]).not.toContain("pragma_table_info('schema_migrations')");
+});
+
+test("concurrent operations on one store each prove v66 independently", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await seedReleasedMaintenanceFence(db);
+  const queries: string[] = [];
+  const observed: D1Database = {
+    prepare(query) {
+      queries.push(query);
+      return db.prepare(query);
+    },
+    batch: db.batch.bind(db),
+  };
+  const store = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+
+  await Promise.all([
+    store.listWorkspaces(),
+    store.listWorkspaces(),
+  ]);
+
+  expect(
+    queries.filter((query) =>
+      /pragma\s+table_(?:info|xinfo)\s*\(\s*['"]?schema_migrations['"]?\s*\)/iu.test(
+        query,
+      ),
+    ),
+  ).toHaveLength(2);
+  expect(
+    queries.filter((query) =>
+      query.trimStart().startsWith(
+        "select version, name, checksum, applied_at",
+      ),
+    ),
+  ).toHaveLength(2);
+});
+
+test("a same-store fence observer invalidates an in-flight v66 operation", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await seedReleasedMaintenanceFence(db);
+
+  let signalLedgerReadStarted: (() => void) | undefined;
+  const ledgerReadStarted = new Promise<void>((resolve) => {
+    signalLedgerReadStarted = resolve;
+  });
+  let releaseLedgerRead: (() => void) | undefined;
+  const ledgerReadRelease = new Promise<void>((resolve) => {
+    releaseLedgerRead = resolve;
+  });
+  const queries: string[] = [];
+  let delayDirectLedgerRead = true;
+  const observed: D1Database = {
+    prepare(query) {
+      queries.push(query);
+      const prepared = db.prepare(query);
+      if (
+        delayDirectLedgerRead &&
+        query.includes("select version, name, checksum, applied_at") &&
+        query.trimStart().startsWith("select version")
+      ) {
+        const delayed: D1PreparedStatement = {
+          bind(...values) {
+            return prepared.bind(...values);
+          },
+          first<T>() {
+            return prepared.first<T>();
+          },
+          async all<T>() {
+            signalLedgerReadStarted?.();
+            await ledgerReadRelease;
+            return await prepared.all<T>();
+          },
+          run<T>() {
+            return prepared.run<T>();
+          },
+        };
+        return delayed;
+      }
+      return prepared;
+    },
+    batch: db.batch.bind(db),
+  };
+  const store = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+
+  const staleOperation = store.listWorkspaces();
+  await ledgerReadStarted;
+
+  await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-08-30T00:10:00.000Z",
+  );
+  const fencedOperation = store.listWorkspaces();
+  await expect(fencedOperation).rejects.toThrow("maintenance_fence_active");
+
+  releaseLedgerRead?.();
+  delayDirectLedgerRead = false;
+  await expect(staleOperation).rejects.toThrow(
+    "D1 OpenTofu predeployed schema proof was invalidated",
+  );
+  expect(
+    queries.some((query) => /from\s+workspaces/iu.test(query)),
+  ).toBe(false);
+});
+
+test("a dormant warmed v66 store rejects partial v67 after an unseen fence", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await seedReleasedMaintenanceFence(db);
+  const store = createCloudflareD1OpenTofuControlStore(db, {
+    schemaMode: "predeployed",
+  });
+  expect(await store.getWorkspace("workspace_absent_dormant_bridge"))
+    .toBeUndefined();
+
+  const fence = await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-08-30T00:08:00.000Z",
+  );
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(db, {
+    statementCount: 1,
+  });
+  await releaseControlD1MaintenanceFence(
+    db,
+    fence,
+    "2026-08-30T00:09:00.000Z",
+  );
+
+  await expect(
+    store.getWorkspace("workspace_absent_dormant_bridge"),
+  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+});
+
+test("an in-flight v66 proof cannot restore readiness after the v67 fence invalidates it", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await seedReleasedMaintenanceFence(db);
+
+  let signalLedgerReadStarted: (() => void) | undefined;
+  const ledgerReadStarted = new Promise<void>((resolve) => {
+    signalLedgerReadStarted = resolve;
+  });
+  let releaseLedgerRead: (() => void) | undefined;
+  const ledgerReadRelease = new Promise<void>((resolve) => {
+    releaseLedgerRead = resolve;
+  });
+  const queries: string[] = [];
+  let delayDirectLedgerRead = true;
+  const observed: D1Database = {
+    prepare(query) {
+      queries.push(query);
+      const prepared = db.prepare(query);
+      if (
+        delayDirectLedgerRead &&
+        query.includes("select version, name, checksum, applied_at") &&
+        query.trimStart().startsWith("select version")
+      ) {
+        const delayed: D1PreparedStatement = {
+          bind(...values) {
+            return prepared.bind(...values);
+          },
+          first<T>() {
+            return prepared.first<T>();
+          },
+          async all<T>() {
+            signalLedgerReadStarted?.();
+            await ledgerReadRelease;
+            return await prepared.all<T>();
+          },
+          run<T>() {
+            return prepared.run<T>();
+          },
+        };
+        return delayed;
+      }
+      return prepared;
+    },
+    batch: db.batch.bind(db),
+  };
+
+  const staleReadiness = initializeD1OpenTofuLedgerSchemaBinding(
+    observed,
+    "predeployed",
+  );
+  await ledgerReadStarted;
+  const fence = await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-08-30T00:02:00.000Z",
+  );
+  const fencedStore = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+  await expect(
+    fencedStore.getWorkspace("workspace_absent_inflight_bridge"),
+  ).rejects.toThrow("maintenance_fence_active");
+
+  releaseLedgerRead?.();
+  await staleReadiness;
+  delayDirectLedgerRead = false;
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(db);
+  await releaseControlD1MaintenanceFence(
+    db,
+    fence,
+    "2026-08-30T00:03:00.000Z",
+  );
+
+  const postReleaseStore = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+  expect(
+    await postReleaseStore.getWorkspace("workspace_absent_inflight_bridge"),
+  ).toBeUndefined();
+  expect(queries.at(-1)).toContain("pragma_table_info('schema_migrations')");
+  expect(queries.at(-1)).toContain(
+    "capsule_interface_materialization_intents",
+  );
+});
+
+test("predeployed account Workspace page co-reads readiness without caching v66", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
   const fence = await acquireControlD1MaintenanceFence(
@@ -1079,7 +1730,7 @@ test("predeployed account Workspace page reads readiness, total, and data in one
   expect(prepareCalls).toBe(2);
   expect(batchCalls).toBe(0);
   expect(queries[0]).toContain("pragma_table_info('schema_migrations')");
-  expect(queries[1]).not.toContain("pragma_table_info('schema_migrations')");
+  expect(queries[1]).toContain("pragma_table_info('schema_migrations')");
   expect(second.items.map((item) => item.id)).toEqual([workspace.id]);
   expect(second.total).toBe(2);
   expect(second.nextCursor).toBeUndefined();
@@ -1161,6 +1812,59 @@ test("a warmed store observes a newly acquired maintenance fence", async () => {
   await expect(store.listWorkspaces()).rejects.toThrow(
     "maintenance_fence_active",
   );
+});
+
+test("a warmed direct reader revalidates the exact v67 suffix after its fence", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await seedReleasedMaintenanceFence(db);
+  const queries: string[] = [];
+  const observed: D1Database = {
+    prepare(query) {
+      queries.push(query);
+      return db.prepare(query);
+    },
+    batch: db.batch.bind(db),
+  };
+  const store = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+  expect(await store.listWorkspaces()).toEqual([]);
+
+  const fence = await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-08-30T00:04:00.000Z",
+  );
+  await expect(store.listWorkspaces()).rejects.toThrow(
+    "maintenance_fence_active",
+  );
+
+  await installV67CapsuleInterfaceMaterializationIntentSuffix(db);
+  await releaseControlD1MaintenanceFence(
+    db,
+    fence,
+    "2026-08-30T00:05:00.000Z",
+  );
+  const postReleaseQueryStart = queries.length;
+  expect(await store.listWorkspaces()).toEqual([]);
+  const postReleaseQueries = queries.slice(postReleaseQueryStart);
+  expect(
+    postReleaseQueries.some((query) =>
+      query.trimStart().startsWith("select version, name, checksum, applied_at"),
+    ),
+  ).toBe(true);
+  expect(
+    postReleaseQueries.some((query) =>
+      query.includes("capsule_interface_materialization_intents"),
+    ),
+  ).toBe(true);
 });
 
 test("predeployed verification rejects checksum drift", async () => {

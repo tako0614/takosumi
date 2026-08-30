@@ -116,14 +116,56 @@ operator-configurable API origin or pass a token on the command line.
 
 After this gate is part of the host's mandatory promotion sequence, set the
 platform composition's `TAKOSUMI_CONTROL_D1_SCHEMA_MODE` to `predeployed`.
-That mode performs one strict read-only check of the complete migration ledger
-per store instance and never executes schema DDL from a request. Every store
-operation additionally checks the durable maintenance fence, so a warmed
-isolate also fails closed while predeploy is active. It fails closed if a
-version, name, or checksum is missing or different. The OSS default remains
-`bootstrap` so a self-hosted reference composition can initialize a new
-database; hosted operators must opt into `predeployed` only together with this
-gate.
+That mode performs a strict read-only check of the complete migration ledger
+and never executes schema DDL from a request. Every store operation additionally
+checks the durable maintenance fence, so a warmed isolate also fails closed
+while predeploy is active. It fails closed if a version, name, or checksum is
+missing or different. The OSS default remains `bootstrap` so a self-hosted
+reference composition can initialize a new database; hosted operators must opt
+into `predeployed` only together with this gate.
+
+### Temporary production v66 to v67 bridge
+
+The production expand bridge built from serving source commit
+`24ea16d626f540260f496649cbdc5ffd7aa2a1f9` changes only predeployed schema
+readiness. Its bootstrap path, migration catalog, and all runtime writers remain
+at v66. It accepts exactly one of these read states:
+
+1. the complete canonical v66 ledger, with no v67 materialization-intent table
+   or index;
+2. that same v66 ledger plus migration 67 named
+   `d1_capsule_interface_materialization_intents`, checksum
+   `sha256:bee14950c99e9f0a76d51197292a0a018f6f6a2aadde58bccd324781d9ed7a2a`,
+   and the exact canonical `capsule_interface_materialization_intents` table
+   plus its five explicit indexes from migration 67.
+
+The bridge rejects a gap, historical checksum drift, a wrong v67 name or
+checksum, a missing or different v67 table/index, any additional explicit
+index on that table, and any v68 row. Verification is read-only in both direct
+predeploy readiness and the same-snapshot Workspace readiness/data co-read.
+
+A v66 proof is operation-local, including between concurrent operations on the
+same store. It is never joined through `#initialized`, shared with another
+request, or retained by a long-lived store, because an isolate can be dormant
+for the complete maintenance fence. Each operation therefore revalidates until
+that isolate itself observes exact v67. Only an exact v67 proof may be cached on
+the D1 binding for the remaining bridge lifetime. An active fence observed by
+any operation invalidates local and in-flight v66 proofs; a stale caller fails
+closed and cannot continue to an application-table read.
+
+Use a separate operator-private **full production Worker configuration** for
+the bridge. Preserve the production Worker name/environment, routes, vars,
+secrets, D1/R2/DO/container bindings, immutable runner image, `HOSTED` service,
+version metadata, and dashboard assets. Set
+`TAKOSUMI_CONTROL_D1_SCHEMA_MODE = "predeployed"` and point only `main` and the
+asset directory at the exact reviewed bridge checkout/build. A minimal
+schema-maintenance Worker configuration is not a valid application bridge.
+
+After the fenced migration 67 apply, exact structural/ledger verification, and
+fence release, deploy the canonical v67 application and retire this bridge.
+The bridge must be fully out of service before any v68 migration starts. Never
+apply or release v68 while a bridge Version can serve traffic; a later schema
+change requires its own reviewed compatibility release and gate.
 
 Deploy the fence-aware Worker version before entering the contract-migration
 window. The apply command atomically acquires a deterministic maintenance

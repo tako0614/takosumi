@@ -78,6 +78,7 @@ test("request-scoped store reuses one maintenance read for hot operations", asyn
   await store.listWorkspaces();
 
   expect(maintenanceReadCount(queries)).toBe(1);
+  expect(schemaReadinessQueryCount(queries)).toBe(2);
 });
 
 test("the default store keeps checking the durable fence per operation", async () => {
@@ -92,6 +93,7 @@ test("the default store keeps checking the durable fence per operation", async (
   await store.listWorkspaces();
 
   expect(maintenanceReadCount(queries)).toBe(2);
+  expect(schemaReadinessQueryCount(queries)).toBe(2);
 });
 
 test("request-scoped maintenance evidence does not cross store requests", async () => {
@@ -113,7 +115,7 @@ test("request-scoped maintenance evidence does not cross store requests", async 
   expect(maintenanceReadCount(queries)).toBe(2);
 });
 
-test("warm request stores share binding schema readiness but not maintenance evidence", async () => {
+test("warm request stores do not share v66 schema or maintenance evidence", async () => {
   const db = await createInactiveMaintenanceDatabase();
   const queries: string[] = [];
   const binding = observe(db, queries);
@@ -133,10 +135,10 @@ test("warm request stores share binding schema readiness but not maintenance evi
   await secondRequest.listWorkspaces();
 
   expect(maintenanceReadCount(queries)).toBe(1);
-  expect(schemaReadinessQueryCount(queries)).toBe(0);
+  expect(schemaReadinessQueryCount(queries)).toBe(1);
 });
 
-test("concurrent request stores keep separate admissions while sharing schema readiness", async () => {
+test("concurrent request stores keep separate admissions and v66 proofs", async () => {
   const db = await createInactiveMaintenanceDatabase();
   const queries: string[] = [];
   const binding = observe(db, queries);
@@ -155,9 +157,7 @@ test("concurrent request stores keep separate admissions while sharing schema re
   ]);
 
   expect(maintenanceReadCount(queries)).toBe(2);
-  // The fake binding records one matched ordered-ledger read per verifier. A
-  // second verifier would double this count.
-  expect(schemaReadinessQueryCount(queries)).toBe(1);
+  expect(schemaReadinessQueryCount(queries)).toBe(2);
 });
 
 test("request-scoped store fails closed on an active fence", async () => {

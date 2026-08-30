@@ -871,6 +871,7 @@ type D1PredeployedWorkspacePageRow = {
   readonly maintenance_json: string | null;
   readonly columns_json: string | null;
   readonly migrations_json: string | null;
+  readonly bridge_schema_objects_json: string | null;
   readonly total: number | string | null;
   readonly workspace_record: unknown;
   readonly sort_key: string | null;
@@ -879,36 +880,81 @@ type D1PredeployedWorkspacePageRow = {
 
 type D1PredeployedWorkspaceRow = Pick<
   D1PredeployedWorkspacePageRow,
-  "maintenance_json" | "columns_json" | "migrations_json" | "workspace_record"
+  | "maintenance_json"
+  | "columns_json"
+  | "migrations_json"
+  | "bridge_schema_objects_json"
+  | "workspace_record"
 >;
 
 // `createTakosumiWorkerService` constructs a fresh store for every request, but
-// Cloudflare reuses the bound D1 object for the lifetime of an isolate. Keep the
-// expensive immutable migration-catalog proof on that binding rather than on a
-// request-local store instance. The maintenance singleton is still co-read and
-// validated by every Workspace page statement, so an acquired maintenance fence
-// continues to fail closed immediately.
+// Cloudflare reuses the bound D1 object for the lifetime of an isolate. During
+// this temporary expand bridge, v66 is not immutable: an isolate may be dormant
+// for the complete v67 fence. Only an exact v67 proof can therefore be retained
+// on the binding. A v66 proof stays operation-local and is re-read until that
+// isolate itself observes the exact terminal bridge schema.
+type D1PredeployedSchemaProof = "v66" | "v67";
 const verifiedPredeployedD1Bindings = new WeakSet<object>();
-const predeployedD1SchemaReadiness = new WeakMap<object, Promise<void>>();
+const predeployedD1SchemaReadinessAttempt = new WeakMap<object, object>();
+const predeployedD1SchemaProofEpoch = new WeakMap<object, number>();
 const bootstrapD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 
-function ensurePredeployedD1SchemaReady(db: D1Database): Promise<void> {
-  if (verifiedPredeployedD1Bindings.has(db)) return Promise.resolve();
-  let readiness = predeployedD1SchemaReadiness.get(db);
-  if (readiness) return readiness;
-  const attempt = verifyD1OpenTofuLedgerSchemaPredeployed(db)
-    .then(() => {
-      verifiedPredeployedD1Bindings.add(db);
+function currentPredeployedD1SchemaProofEpoch(db: D1Database): number {
+  return predeployedD1SchemaProofEpoch.get(db) ?? 0;
+}
+
+function invalidatePredeployedD1SchemaProof(db: D1Database): void {
+  predeployedD1SchemaProofEpoch.set(
+    db,
+    currentPredeployedD1SchemaProofEpoch(db) + 1,
+  );
+  verifiedPredeployedD1Bindings.delete(db);
+  predeployedD1SchemaReadinessAttempt.delete(db);
+}
+
+function predeployedD1SchemaProofInvalidatedError(): Error {
+  return new Error(
+    "D1 OpenTofu predeployed schema proof was invalidated by a maintenance fence",
+  );
+}
+
+function ensurePredeployedD1SchemaReady(
+  db: D1Database,
+): Promise<D1PredeployedSchemaProof> {
+  if (verifiedPredeployedD1Bindings.has(db)) return Promise.resolve("v67");
+  // v66 proof may not cross a request/operation boundary, including while an
+  // earlier verifier is in flight. The opaque identity is only a stale-write
+  // guard for the one attempt that may install terminal v67 readiness.
+  const attemptIdentity = {};
+  const attemptEpoch = currentPredeployedD1SchemaProofEpoch(db);
+  predeployedD1SchemaReadinessAttempt.set(db, attemptIdentity);
+  const attempt = verifyD1OpenTofuLedgerSchemaPredeployedEvidence(db)
+    .then((proof) => {
+      // A concurrently observed maintenance fence can invalidate this proof
+      // while the read-only verifier is still in flight. Do not let the stale
+      // completion restore readiness after that invalidation.
+      if (
+        predeployedD1SchemaReadinessAttempt.get(db) === attemptIdentity
+      ) {
+        if (
+          proof === "v67" &&
+          currentPredeployedD1SchemaProofEpoch(db) === attemptEpoch
+        ) {
+          verifiedPredeployedD1Bindings.add(db);
+        }
+        predeployedD1SchemaReadinessAttempt.delete(db);
+      }
+      return proof;
     })
     .catch((error: unknown) => {
-      if (predeployedD1SchemaReadiness.get(db) === attempt) {
-        predeployedD1SchemaReadiness.delete(db);
+      if (
+        predeployedD1SchemaReadinessAttempt.get(db) === attemptIdentity
+      ) {
+        predeployedD1SchemaReadinessAttempt.delete(db);
       }
       throw error;
     });
-  readiness = attempt;
-  predeployedD1SchemaReadiness.set(db, readiness);
-  return readiness;
+  return attempt;
 }
 
 function ensureBootstrapD1SchemaReady(db: D1Database): Promise<void> {
@@ -926,16 +972,17 @@ function ensureBootstrapD1SchemaReady(db: D1Database): Promise<void> {
 }
 
 /**
- * Establish immutable schema readiness at the cached service-composition
- * boundary, before any request-scoped operation deadline starts. Maintenance
- * admission intentionally remains request-local in the store.
+ * Establish schema readiness at the service-composition boundary, before any
+ * request-scoped operation deadline starts. The bridge retains only exact v67;
+ * v66 is revalidated by the request operation. Maintenance admission remains
+ * request-local in the store.
  */
 export function initializeD1OpenTofuLedgerSchemaBinding(
   db: D1Database,
   schemaMode: D1OpenTofuControlSchemaMode,
 ): Promise<void> {
   return schemaMode === "predeployed"
-    ? ensurePredeployedD1SchemaReady(db)
+    ? ensurePredeployedD1SchemaReady(db).then(() => undefined)
     : ensureBootstrapD1SchemaReady(db);
 }
 
@@ -1642,7 +1689,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async #getPredeployedWorkspace(id: string): Promise<Workspace | undefined> {
-    const includeSchemaEvidence = !this.#predeployedSchemaVerified;
+    const proofEpoch = currentPredeployedD1SchemaProofEpoch(this.db);
+    const includeSchemaEvidence = !this.#hasExactPredeployedSchemaProof();
     const result = await this.db
       .prepare(
         `SELECT (
@@ -1698,6 +1746,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                        )`
                     : "NULL"
                 } AS migrations_json,
+                ${
+                  includeSchemaEvidence
+                    ? d1PredeployedV67SchemaObjectsJsonProjection()
+                    : "NULL"
+                } AS bridge_schema_objects_json,
                 (
                   SELECT record_json
                   FROM workspaces
@@ -1713,6 +1766,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     await this.#acceptPredeployedReadinessEvidence(
       result,
       includeSchemaEvidence,
+      proofEpoch,
     );
     return result.workspace_record === null
       ? undefined
@@ -1979,7 +2033,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const sortColumn =
       order === "updated_desc" ? "w.updated_at" : "w.created_at";
     const sortDirection = order === "updated_desc" ? "DESC" : "ASC";
-    const includeSchemaEvidence = !this.#predeployedSchemaVerified;
+    const proofEpoch = currentPredeployedD1SchemaProofEpoch(this.db);
+    const includeSchemaEvidence = !this.#hasExactPredeployedSchemaProof();
     const columnsProjection = includeSchemaEvidence
       ? `(
            SELECT json_group_array(json_object(
@@ -2007,6 +2062,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
              ORDER BY version
            ) AS ordered_migrations
          )`
+      : "NULL";
+    const bridgeSchemaObjectsProjection = includeSchemaEvidence
+      ? d1PredeployedV67SchemaObjectsJsonProjection()
       : "NULL";
     const result = await this.db
       .prepare(
@@ -2052,6 +2110,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                 ) AS maintenance_json,
                 ${columnsProjection} AS columns_json,
                 ${migrationsProjection} AS migrations_json,
+                ${bridgeSchemaObjectsProjection} AS bridge_schema_objects_json,
                 ${
                   includeTotal ? "(SELECT count(*) FROM base)" : "NULL"
                 } AS total,
@@ -2063,6 +2122,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                 NULL AS maintenance_json,
                 NULL AS columns_json,
                 NULL AS migrations_json,
+                NULL AS bridge_schema_objects_json,
                 NULL AS total,
                 workspace_record,
                 sort_key,
@@ -2088,6 +2148,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     await this.#acceptPredeployedReadinessEvidence(
       readiness,
       includeSchemaEvidence,
+      proofEpoch,
     );
 
     const workspaces = rows
@@ -2108,18 +2169,37 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async #acceptPredeployedReadinessEvidence(
     readiness: Pick<
       D1PredeployedWorkspacePageRow,
-      "maintenance_json" | "columns_json" | "migrations_json"
+      | "maintenance_json"
+      | "columns_json"
+      | "migrations_json"
+      | "bridge_schema_objects_json"
     >,
     includeSchemaEvidence: boolean,
+    proofEpoch: number,
   ): Promise<void> {
     const maintenance = parseD1JsonObject(
       readiness.maintenance_json,
       "maintenance",
     );
-    await assertControlD1MaintenanceResultInactive({
-      results: [maintenance],
-      success: true,
-    });
+    try {
+      await assertControlD1MaintenanceResultInactive({
+        results: [maintenance],
+        success: true,
+      });
+    } catch (error) {
+      // A later fence can append schema before it is released. Discard any
+      // retained terminal proof as soon as this store observes the fence so
+      // the first post-release combined read validates the exact resulting
+      // ledger and physical shape instead of trusting pre-fence evidence.
+      this.#invalidatePredeployedSchemaProof();
+      throw error;
+    }
+    if (currentPredeployedD1SchemaProofEpoch(this.db) !== proofEpoch) {
+      this.#predeployedSchemaVerified = verifiedPredeployedD1Bindings.has(
+        this.db,
+      );
+      throw predeployedD1SchemaProofInvalidatedError();
+    }
     if (!includeSchemaEvidence) return;
 
     const columns = parseD1JsonArray<D1TableInfoRow>(
@@ -2130,10 +2210,40 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       readiness.migrations_json,
       "migration ledger",
     );
-    await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations);
-    this.#predeployedSchemaVerified = true;
-    verifiedPredeployedD1Bindings.add(this.db);
-    this.#initialized = Promise.resolve();
+    const bridgeSchemaObjects =
+      parseD1JsonArray<D1PredeployedSchemaObjectRow>(
+        readiness.bridge_schema_objects_json,
+        "v67 bridge schema objects",
+      );
+    const proof = await validateD1OpenTofuLedgerSchemaPredeployed(
+      columns,
+      migrations,
+      bridgeSchemaObjects,
+    );
+    if (currentPredeployedD1SchemaProofEpoch(this.db) !== proofEpoch) {
+      this.#predeployedSchemaVerified = verifiedPredeployedD1Bindings.has(
+        this.db,
+      );
+      throw predeployedD1SchemaProofInvalidatedError();
+    }
+    this.#predeployedSchemaVerified = proof === "v67";
+    if (proof === "v67") {
+      verifiedPredeployedD1Bindings.add(this.db);
+    }
+  }
+
+  #hasExactPredeployedSchemaProof(): boolean {
+    return (
+      this.#predeployedSchemaVerified &&
+      verifiedPredeployedD1Bindings.has(this.db)
+    );
+  }
+
+  #invalidatePredeployedSchemaProof(): void {
+    if (this.#schemaMode !== "predeployed") return;
+    this.#predeployedSchemaVerified = false;
+    this.#initialized = undefined;
+    invalidatePredeployedD1SchemaProof(this.db);
   }
 
   async putProject(project: Project): Promise<Project> {
@@ -4509,35 +4619,78 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const assertMaintenanceInactive = () =>
       this.#requestMaintenanceScope?.ensure(this.db) ??
       assertControlD1MaintenanceInactive(this.db);
+    if (this.#schemaMode === "predeployed") {
+      // A v66 proof is operation-local, including when two calls use this same
+      // store concurrently. Only the exact v67 proof is retained on the D1
+      // binding; #initialized is reserved for bootstrap DDL serialization.
+      const proofEpoch = currentPredeployedD1SchemaProofEpoch(this.db);
+      try {
+        if (this.#hasExactPredeployedSchemaProof()) {
+          await assertMaintenanceInactive();
+          if (
+            currentPredeployedD1SchemaProofEpoch(this.db) !== proofEpoch
+          ) {
+            throw predeployedD1SchemaProofInvalidatedError();
+          }
+          return;
+        }
+
+        const [, proof] = await Promise.all([
+          assertMaintenanceInactive(),
+          ensurePredeployedD1SchemaReady(this.db),
+        ]);
+        if (currentPredeployedD1SchemaProofEpoch(this.db) !== proofEpoch) {
+          throw predeployedD1SchemaProofInvalidatedError();
+        }
+        this.#predeployedSchemaVerified = proof === "v67";
+        if (proof === "v67") {
+          verifiedPredeployedD1Bindings.add(this.db);
+        }
+        return;
+      } catch (error) {
+        // A fence observed by another operation invalidates any in-flight v66
+        // proof through the epoch check above. Clear local readiness and, when
+        // this is still the invalidation epoch, global readiness too so the
+        // next operation must obtain fresh evidence.
+        this.#requestMaintenanceScope?.reset();
+        // If another operation already advanced the epoch, preserve any exact
+        // v67 proof it may have established after that invalidation. A stale
+        // completion must not evict newer terminal readiness.
+        if (
+          currentPredeployedD1SchemaProofEpoch(this.db) === proofEpoch
+        ) {
+          this.#invalidatePredeployedSchemaProof();
+        } else {
+          this.#predeployedSchemaVerified = verifiedPredeployedD1Bindings.has(
+            this.db,
+          );
+        }
+        throw error;
+      }
+    }
+
     // Serialize concurrent callers onto the one in-flight bootstrap, but never
     // cache a REJECTED promise: a transient failure (e.g. a contended DDL) would
     // otherwise poison the isolate so every later method rejects forever. On
-    // failure, clear the memo so the next call retries; on success, the resolved
-    // promise stays cached and bootstrap runs exactly once.
-    if (this.#initialized === undefined) {
-      const attempt = (
-        this.#schemaMode === "predeployed"
-          ? Promise.all([
-              assertMaintenanceInactive(),
-              ensurePredeployedD1SchemaReady(this.db),
-            ]).then(() => {
-              this.#predeployedSchemaVerified = true;
-            })
-          : assertMaintenanceInactive().then(() =>
-              ensureBootstrapD1SchemaReady(this.db),
-            )
-      ).catch((error: unknown) => {
-        if (this.#initialized === attempt) {
-          this.#initialized = undefined;
-          this.#requestMaintenanceScope?.reset();
-        }
-        throw error;
-      });
+    // failure, clear the memo so the next call retries; bootstrap success stays
+    // cached and bootstrap runs exactly once.
+    let readiness = this.#initialized;
+    if (readiness === undefined) {
+      const attempt = assertMaintenanceInactive()
+        .then(() => ensureBootstrapD1SchemaReady(this.db))
+        .catch((error: unknown) => {
+          if (this.#initialized === attempt) {
+            this.#initialized = undefined;
+            this.#requestMaintenanceScope?.reset();
+          }
+          throw error;
+        });
       this.#initialized = attempt;
+      readiness = attempt;
     } else {
       await assertMaintenanceInactive();
     }
-    await this.#initialized;
+    await readiness;
   }
 }
 
@@ -9422,6 +9575,126 @@ type D1SchemaMigrationRow = {
   readonly applied_at: string;
 };
 
+type D1PredeployedSchemaObjectRow = {
+  readonly type: string;
+  readonly name: string;
+  readonly sql: string | null;
+};
+
+/**
+ * Temporary read-compatibility suffix for the production v66 -> v67 expand
+ * window. This is intentionally not part of D1_OPEN_TOFU_SCHEMA_MIGRATIONS:
+ * the bridge application must remain a v66 bootstrap/writer and may only read
+ * a database after the separate v67 schema owner has atomically applied the
+ * exact additive migration below.
+ */
+const D1_PREDEPLOYED_V67_SUFFIX = {
+  version: 67,
+  name: "d1_capsule_interface_materialization_intents",
+  checksum:
+    "sha256:bee14950c99e9f0a76d51197292a0a018f6f6a2aadde58bccd324781d9ed7a2a",
+} as const;
+
+const D1_PREDEPLOYED_V67_SCHEMA_OBJECTS = [
+  {
+    type: "table",
+    name: "capsule_interface_materialization_intents",
+    sql: `create table if not exists capsule_interface_materialization_intents (
+    id text primary key,
+    apply_run_id text,
+    restore_run_id text,
+    source_intent_id text,
+    workspace_id text not null,
+    capsule_id text not null,
+    install_config_id text not null,
+    state_version_id text not null,
+    output_id text not null,
+    state_generation integer not null check (state_generation >= 1),
+    blueprints_digest text not null
+      check (substr(blueprints_digest, 1, 7) = 'sha256:'
+        and length(blueprints_digest) = 71
+        and substr(blueprints_digest, 8) not glob '*[^0-9a-f]*'),
+    blueprints_json text not null
+      check (length(cast(blueprints_json as blob)) <= 1048576),
+    total_items integer not null check (total_items >= 1),
+    next_item_index integer not null
+      check (next_item_index >= 0 and next_item_index <= total_items),
+    status text not null check (status in ('pending', 'completed', 'dead_letter')),
+    attempts integer not null check (attempts >= 0),
+    next_retry_at text not null,
+    lease_token text,
+    lease_expires_at text,
+    error_json text,
+    receipt_json text,
+    created_at text not null,
+    updated_at text not null,
+    completed_at text,
+    dead_lettered_at text,
+    check (
+      (apply_run_id is not null and restore_run_id is null and source_intent_id is null)
+      or
+      (apply_run_id is null and restore_run_id is not null and source_intent_id is not null)
+    )
+  )`,
+  },
+  {
+    type: "index",
+    name: "capsule_interface_materialization_intents_apply_run_unique",
+    sql: `create unique index if not exists capsule_interface_materialization_intents_apply_run_unique
+    on capsule_interface_materialization_intents (apply_run_id)`,
+  },
+  {
+    type: "index",
+    name: "capsule_interface_materialization_intents_restore_run_unique",
+    sql: `create unique index if not exists capsule_interface_materialization_intents_restore_run_unique
+    on capsule_interface_materialization_intents (restore_run_id)`,
+  },
+  {
+    type: "index",
+    name:
+      "capsule_interface_materialization_intents_capsule_generation_unique",
+    sql: `create unique index if not exists capsule_interface_materialization_intents_capsule_generation_unique
+    on capsule_interface_materialization_intents (capsule_id, state_generation)`,
+  },
+  {
+    type: "index",
+    name: "capsule_interface_materialization_intents_pending_idx",
+    sql: `create index if not exists capsule_interface_materialization_intents_pending_idx
+    on capsule_interface_materialization_intents (status, next_retry_at)`,
+  },
+  {
+    type: "index",
+    name: "capsule_interface_materialization_intents_dead_letter_idx",
+    sql: `create index if not exists capsule_interface_materialization_intents_dead_letter_idx
+    on capsule_interface_materialization_intents (
+      workspace_id, status, dead_lettered_at desc, id desc
+    )`,
+  },
+] as const;
+
+const D1_PREDEPLOYED_V67_SCHEMA_OBJECTS_SQL = `
+  select type, name, sql
+  from sqlite_master
+  where (type = 'table' and name = 'capsule_interface_materialization_intents')
+     or (
+       type = 'index'
+       and tbl_name = 'capsule_interface_materialization_intents'
+       and sql is not null
+     )
+  order by type, name`;
+
+function d1PredeployedV67SchemaObjectsJsonProjection(): string {
+  return `(
+    select json_group_array(json_object(
+      'type', type,
+      'name', name,
+      'sql', sql
+    ))
+    from (${D1_PREDEPLOYED_V67_SCHEMA_OBJECTS_SQL})
+      as ordered_v67_schema_objects
+  )`;
+}
+
 /**
  * Strict read-only readiness check for hosts that predeploy the OSS control
  * schema. Unlike {@link ensureD1OpenTofuLedgerSchema}, this function never
@@ -9431,10 +9704,17 @@ type D1SchemaMigrationRow = {
 export async function verifyD1OpenTofuLedgerSchemaPredeployed(
   db: D1Database,
 ): Promise<void> {
+  await verifyD1OpenTofuLedgerSchemaPredeployedEvidence(db);
+}
+
+async function verifyD1OpenTofuLedgerSchemaPredeployedEvidence(
+  db: D1Database,
+): Promise<D1PredeployedSchemaProof> {
   let columns: readonly D1TableInfoRow[];
   let rows: readonly D1SchemaMigrationRow[];
+  let bridgeSchemaObjects: readonly D1PredeployedSchemaObjectRow[];
   try {
-    const [columnRows, result] = await Promise.all([
+    const [columnRows, result, schemaObjectsResult] = await Promise.all([
       d1ColumnInfo(db, "schema_migrations"),
       db
         .prepare(
@@ -9443,26 +9723,37 @@ export async function verifyD1OpenTofuLedgerSchemaPredeployed(
            order by version`,
         )
         .all<D1SchemaMigrationRow>(),
+      db
+        .prepare(D1_PREDEPLOYED_V67_SCHEMA_OBJECTS_SQL)
+        .all<D1PredeployedSchemaObjectRow>(),
     ]);
     columns = columnRows;
     rows = result.results ?? [];
+    bridgeSchemaObjects = schemaObjectsResult.results ?? [];
   } catch {
     throw new Error("D1 OpenTofu predeployed schema verification failed");
   }
 
-  await validateD1OpenTofuLedgerSchemaPredeployed(columns, rows);
+  return await validateD1OpenTofuLedgerSchemaPredeployed(
+    columns,
+    rows,
+    bridgeSchemaObjects,
+  );
 }
 
 async function validateD1OpenTofuLedgerSchemaPredeployed(
   columns: readonly D1TableInfoRow[],
   rows: readonly D1SchemaMigrationRow[],
-): Promise<void> {
+  bridgeSchemaObjects: readonly D1PredeployedSchemaObjectRow[],
+): Promise<D1PredeployedSchemaProof> {
   assertD1SchemaMigrationLedgerShape(columns);
-  if (rows.length !== D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length) {
+  const currentLength = D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length;
+  const hasV67Suffix = rows.length === currentLength + 1;
+  if (rows.length !== currentLength && !hasV67Suffix) {
     throw new Error("D1 OpenTofu predeployed schema verification failed");
   }
   const expectedChecksums = await expectedD1OpenTofuSchemaMigrationChecksums();
-  for (let index = 0; index < rows.length; index += 1) {
+  for (let index = 0; index < currentLength; index += 1) {
     const migration = D1_OPEN_TOFU_SCHEMA_MIGRATIONS[index];
     const row = rows[index];
     if (
@@ -9475,6 +9766,81 @@ async function validateD1OpenTofuLedgerSchemaPredeployed(
       throw new Error("D1 OpenTofu predeployed schema verification failed");
     }
   }
+  if (hasV67Suffix) {
+    const suffix = rows[currentLength];
+    if (
+      !suffix ||
+      suffix.version !== D1_PREDEPLOYED_V67_SUFFIX.version ||
+      suffix.name !== D1_PREDEPLOYED_V67_SUFFIX.name ||
+      suffix.checksum !== D1_PREDEPLOYED_V67_SUFFIX.checksum
+    ) {
+      throw new Error("D1 OpenTofu predeployed schema verification failed");
+    }
+  }
+  assertD1PredeployedV67SchemaObjects(
+    bridgeSchemaObjects,
+    hasV67Suffix,
+  );
+  return hasV67Suffix ? "v67" : "v66";
+}
+
+function assertD1PredeployedV67SchemaObjects(
+  rows: readonly D1PredeployedSchemaObjectRow[],
+  required: boolean,
+): void {
+  const expected = required ? D1_PREDEPLOYED_V67_SCHEMA_OBJECTS : [];
+  if (rows.length !== expected.length) {
+    throw new Error("D1 OpenTofu predeployed schema verification failed");
+  }
+  const actualByName = new Map<string, D1PredeployedSchemaObjectRow>();
+  for (const row of rows) {
+    if (actualByName.has(row.name)) {
+      throw new Error("D1 OpenTofu predeployed schema verification failed");
+    }
+    actualByName.set(row.name, row);
+  }
+  for (const schemaObject of expected) {
+    const actual = actualByName.get(schemaObject.name);
+    if (
+      !actual ||
+      actual.type !== schemaObject.type ||
+      typeof actual.sql !== "string" ||
+      normalizeD1SchemaObjectSql(actual.sql) !==
+        normalizeD1SchemaObjectSql(schemaObject.sql)
+    ) {
+      throw new Error("D1 OpenTofu predeployed schema verification failed");
+    }
+  }
+}
+
+function normalizeD1SchemaObjectSql(value: string): string {
+  const withoutOptionalCreationGuard = value
+    .trim()
+    .replace(
+      /^create\s+table\s+if\s+not\s+exists\s+/iu,
+      "create table ",
+    )
+    .replace(
+      /^create\s+unique\s+index\s+if\s+not\s+exists\s+/iu,
+      "create unique index ",
+    )
+    .replace(
+      /^create\s+index\s+if\s+not\s+exists\s+/iu,
+      "create index ",
+    );
+  // sqlite_master canonicalizes CREATE/IF NOT EXISTS and keyword casing, but
+  // string literals are part of the physical constraint definition. Normalize
+  // only the non-literal segments so status/digest constraint drift remains a
+  // hard failure instead of becoming case- or whitespace-insensitive.
+  return withoutOptionalCreationGuard
+    .split(/('(?:''|[^'])*')/gu)
+    .map((segment, index) =>
+      index % 2 === 1
+        ? segment
+        : segment.replace(/\s+/gu, " ").toLowerCase()
+    )
+    .join("")
+    .trim();
 }
 
 let d1OpenTofuSchemaMigrationChecksums: Promise<readonly string[]> | undefined;
