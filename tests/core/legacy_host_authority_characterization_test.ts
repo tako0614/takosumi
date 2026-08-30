@@ -1,8 +1,8 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
-  readdirSync,
   readFileSync,
 } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -124,46 +124,77 @@ const POSTGRES_RETIRED_TABLES = [
   "takosumi_target_pools",
 ] as const;
 
-function walkSourceFiles(root: string): string[] {
-  const files: string[] = [];
-  const entries = readdirSync(root, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name === ".git" || entry.name === "node_modules") continue;
-    const path = join(root, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...walkSourceFiles(path));
-    } else if (
-      entry.isFile() &&
-      (SOURCE_BASENAMES.has(entry.name) ||
-        SOURCE_EXTENSIONS.has(path.slice(path.lastIndexOf("."))))
-    ) {
-      files.push(path);
-    }
+function isImplementationSourcePath(path: string): boolean {
+  const inImplementationScope =
+    IMPLEMENTATION_FILES.some((file) => path === file) ||
+    IMPLEMENTATION_ROOTS.some((root) => path.startsWith(`${root}/`));
+  if (!inImplementationScope) return false;
+
+  const basename = path.slice(path.lastIndexOf("/") + 1);
+  return SOURCE_BASENAMES.has(basename) ||
+    SOURCE_EXTENSIONS.has(path.slice(path.lastIndexOf(".")));
+}
+
+function gitPathList(
+  args: readonly string[],
+  allowNoMatches = false,
+): string[] {
+  const result = spawnSync("git", [...args], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const status = result.status;
+  if (
+    result.error ||
+    status === null ||
+    (allowNoMatches ? status > 1 : status !== 0)
+  ) {
+    const detail = result.error?.message || result.stderr?.trim() ||
+      `exit ${status ?? "unknown"}`;
+    throw new Error(`git ${args.join(" ")} failed: ${detail}`);
   }
-  return files;
+
+  const stdout = typeof result.stdout === "string"
+    ? result.stdout
+    : result.stdout?.toString("utf8") ?? "";
+  return stdout.split("\0").filter(Boolean);
 }
 
 function legacyTableTokenInventory(): Map<string, readonly LegacyTokenHit[]> {
   const inventory = new Map<string, readonly LegacyTokenHit[]>();
   const tokenPattern = new RegExp(LEGACY_TABLE_TOKEN_PATTERN.source, "gu");
-  for (const implementationRoot of IMPLEMENTATION_ROOTS) {
-    for (const path of walkSourceFiles(join(REPO_ROOT, implementationRoot))) {
-      const source = readFileSync(path, "utf8");
-      const hits = [...source.matchAll(tokenPattern)].map((match) => ({
-        offset: match.index ?? -1,
-        token: match[0],
-      }));
-      if (hits.length > 0) inventory.set(relative(REPO_ROOT, path), hits);
-    }
-  }
-  for (const implementationFile of IMPLEMENTATION_FILES) {
-    const path = join(REPO_ROOT, implementationFile);
+  const pathspecs = [...IMPLEMENTATION_ROOTS, ...IMPLEMENTATION_FILES];
+  const trackedCandidates = gitPathList([
+    "grep",
+    "-IlP",
+    "-z",
+    LEGACY_TABLE_TOKEN_PATTERN.source,
+    "--",
+    ...pathspecs,
+  ], true);
+  const untrackedCandidates = gitPathList([
+    "ls-files",
+    "--others",
+    "--exclude-standard",
+    "-z",
+    "--",
+    ...pathspecs,
+  ]);
+
+  const candidates = new Set(
+    [...trackedCandidates, ...untrackedCandidates]
+      .filter(isImplementationSourcePath),
+  );
+  for (const relativePath of candidates) {
+    const path = join(REPO_ROOT, relativePath);
     const fileSource = readFileSync(path, "utf8");
     const hits = [...fileSource.matchAll(tokenPattern)].map((match) => ({
       offset: match.index ?? -1,
       token: match[0],
     }));
-    if (hits.length > 0) inventory.set(implementationFile, hits);
+    if (hits.length > 0) inventory.set(relativePath, hits);
   }
   return inventory;
 }
