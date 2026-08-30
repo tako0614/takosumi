@@ -5,7 +5,7 @@ import {
   existsSync,
   readFileSync,
 } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { isRetiredV1Path } from "../../contract/api-surface.ts";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
