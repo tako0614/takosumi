@@ -18,9 +18,10 @@ realized config held outside this repository.
 The shared deploy rules — clean worktree, owner gate first, build from that
 worktree, prove it on production's own inputs before the irreversible step,
 readback plus one real authenticated request, never blind-retry — are in
-`takos-control/engineering.policy.json` → `deploy`. This surface is
-`state-change` whenever it carries a control-ledger schema change, and
-`reversible` otherwise.
+`takos-control/engineering.policy.json` → `deploy`. This Worker surface never
+carries a control-ledger schema mutation. Official control D1 changes use the
+separate `takosumi-control-d1-schema-staging` and
+`takosumi-control-d1-schema` irreversible surfaces.
 
 ## Composition
 
@@ -63,6 +64,11 @@ instance health. A second sealed closure projects only that image literal back
 to the predecessor digest for reviewed restore.
 
 ```bash
+umask 077
+export TAKOSUMI_PLATFORM_MUTATION_AUTHORITY_DIR=\
+/absolute/durable/operator-private/takosumi-target-authority
+mkdir -m 0700 "$TAKOSUMI_PLATFORM_MUTATION_AUTHORITY_DIR"
+
 bun run deploy -- takosumi-platform-staging plan \
   --config /absolute/operator-private/wrangler.staging.toml \
   --plan-out /absolute/non-worktree-release-state/release-plan.json
@@ -133,6 +139,41 @@ Failure evidence is derived from those stages: no restore checkpoint is
 pre-mutation, an `unknown` or malformed checkpoint is post-mutation ambiguity,
 and an accepted stage is post-mutation readback.
 
+Every official forward execute/recovery, restore, and control-D1 schema
+mutation for one environment/Worker first acquires the same target-scoped
+inter-process authority. It lives under the explicitly configured durable
+operator-private `TAKOSUMI_PLATFORM_MUTATION_AUTHORITY_DIR`, never under
+`/tmp`, `/var/tmp`, `/run`, or `/dev/shm`. The directory must already exist,
+be physical, caller-owned, mode `0700`, and outside every Git worktree. Every
+plan seals its canonical path plus device/inode/birth-time/UID/mode identity
+digest. The target file name is derived only from the exact official
+environment and Worker name, so all plans in that authority root discover the
+same unresolved owner. Its fsynced owner record binds the operation kind,
+exact plan confirmation, canonical external checkpoint path, canonical file
+identity, machine, PID namespace, boot, PID, and process start. A
+post-checkpoint failure durably
+changes that owner from `active` to `unresolved` without removing the lock.
+The lock is held from each path's final live Version/predecessor check through
+provider mutation and authoritative readback.
+Thus a candidate forward deploy cannot replace the v66/v67 bridge between the
+schema owner's last compatibility check and its released-v67 readback. This is
+an enforced owner-surface boundary, not an operator instruction to serialize
+commands manually.
+
+A dead PID or an `unresolved` owner is not generic stale-lock authority. Every
+real platform or schema `plan`, every new execute, and every different plan,
+checkpoint, or operation kind fails with
+`platform_worker_target_mutation_reconciliation_required`. Only the exact
+forward `recover`, the exact reviewed restore invocation, or the exact schema
+`recover` may replace that owner record. It must then reconcile its own durable
+checkpoint against authoritative provider or D1 state; a failed reconciliation
+retains `unresolved`, while successful readback removes the lock. After a host
+reboot, a matching machine identity plus a changed boot ID proves only that the
+old PID is dead; exact owner/checkpoint recovery is still required. A foreign
+machine, malformed/torn owner, changed authority directory inode, or alternate
+root fails closed. Never delete, rename, edit, or redirect this target authority
+to admit another plan.
+
 The whole restore state machine runs under one inter-process lock derived from
 the checkpoint and confirmation, including every staged checkpoint transition,
 provider command, and authoritative readback. The owner record is fsynced under
@@ -145,6 +186,30 @@ After a crashed local owner is proven dead, the next invocation removes only
 that exact lock inode, re-reads the canonical staged checkpoint, and follows its
 existing lost-acknowledgement recovery path instead of starting another
 restore.
+
+A forward-only control D1 transition may permanently retire this plan's
+predecessor restore. The schema owner binds the exact accepted bridge plan and
+Version in its private compatibility proof. It accepts only the complete
+`takosumi.platform-worker-release-plan@v5`: the platform validator binds the
+environment, source commit, confirmation, external checkpoint, and predecessor
+before schema derives this same restore lock or the retirement path. Under the
+lock, schema refuses every malformed, partial, or `unknown` restore checkpoint.
+Such a checkpoint must be reconciled by this official restore owner surface;
+stale-lock reclamation does not prove a provider mutation was rejected. Only
+then may schema fsync a plan-scoped retirement marker before its mutation
+checkpoint. Official restore reads that marker under the lock before its first
+Container upload or Worker routing checkpoint and fails closed if it exists or
+is malformed. The marker is not an incident toggle: deleting it would revive a
+known v66-only restore against v67 and is prohibited.
+
+The platform and schema owners share one artifact-path graph before any
+schema-surface durable output write. It covers canonical future paths and
+existing device/inode identities for the platform plan/config, both sealed
+closure trees and their configs/entrypoints, forward checkpoint, `.restore`
+checkpoint, retirement marker, target mutation lock, restore lock and both
+pending-lock namespaces, plus the schema plan/evidence/checkpoint/proof/receipt
+and raw platform ready-evidence paths. An absent recovery filename is still
+reserved and cannot be claimed as a plan or evidence output.
 
 The authenticated Hosted subscription read is a separate E2E post-condition
 after publication; cloud-resource and AI E2E run against Takoserver's owning
@@ -168,11 +233,52 @@ official owner release path injects `https://store.takosumi.com` for production
 and the isolated `https://store-staging.takosumi.com` for staging. Users can
 still add store servers themselves.
 
-Before deploying code that requires a newer control-ledger D1 shape, run the
-[Control D1 schema predeploy](control-d1-schema-predeploy.md) gate against the
-same exact source commit. Back up, apply, and read-only verify staging before
-production. A platform Worker deployment must not depend on its first request
-to create or repair the required schema.
+Before deploying code that requires control-ledger v67, first deploy the
+reviewed zero-downtime bridge from the exact serving v66 source. The bridge's
+`predeployed` verifier accepts only the exact v66 or exact candidate v67
+ledger. After its platform ready evidence is retained, the official read-only
+proof owner emits the private serving-compatibility proof:
+
+```bash
+bun run deploy -- takosumi-control-d1-bridge-proof-staging create \
+  --bridge-plan /absolute/private/staging-bridge-plan.json \
+  --confirm sha256:<bridge-plan-confirmation> \
+  --bridge-evidence /absolute/private/staging-bridge-evidence.json \
+  --proof-out /absolute/private/staging-bridge-compatibility.json
+```
+
+Use `takosumi-control-d1-bridge-proof` for production. This producer validates
+the complete v5 plan, accepted forward checkpoint, complete raw ready evidence,
+and exact live immutable Worker Version, D1 binding, and
+`TAKOSUMI_CONTROL_D1_SCHEMA_MODE=predeployed` binding before one mode-`0600`
+no-overwrite write. The proof retains the raw evidence path and digest; the
+schema consumer validates those source bytes again. Hand-authored compatibility
+JSON is not an owner artifact.
+
+The resulting proof is consumed by the
+[Control D1 schema predeploy](control-d1-schema-predeploy.md) surface. The
+schema plan and execute both bind the exact immutable bridge Version and fail
+before mutation if the proof, accepted bridge plan, Version, or D1 binding
+drifts. A two-field checkpoint/confirmation object is not a platform plan and
+cannot establish this authority. Schema execute first holds the shared target
+lock and then that bridge plan's restore lock across final prestate and
+restore-checkpoint reconciliation, durable retirement of its v66-only
+predecessor restore, the sole apply, and exact readback. Platform forward and
+restore cannot enter their provider mutation/readback sections until schema
+has finished this boundary.
+
+Create the candidate platform plan **after** the bridge is serving. The plan
+therefore seals that compatible bridge as its predecessor and restore target.
+Then run staging schema rehearsal, production schema plan/execute, and exact
+v67 readback before executing the candidate Worker plan. Keep the bridge as
+the rollback floor through candidate readback. Once v67 commits, the old
+v66-only Version is not a valid restore target; preparing the candidate plan
+before the bridge would seal an invalid predecessor and is prohibited. The
+schema transition permanently fences the old bridge deployment plan's restore;
+the later candidate plan remains the valid rollback lane because its sealed
+predecessor is the v66/v67 bridge. The Worker plan does not apply or release a
+schema fence, and a first request must never create or repair the required
+shape.
 
 Accounts D1 v4 uses a separate one-time owner lane. First deploy the feature
 bridge, which accepts only exact legacy v3 or exact checksummed v4 and performs

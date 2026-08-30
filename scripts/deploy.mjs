@@ -7,6 +7,10 @@
 // 持つので、surface 名を引数で選びます。
 //
 //   bun run deploy -- takosumi-website
+//   bun run deploy -- takosumi-control-d1-schema-staging plan ...
+//   bun run deploy -- takosumi-control-d1-schema plan ...
+//   bun run deploy -- takosumi-control-d1-bridge-proof-staging create ...
+//   bun run deploy -- takosumi-control-d1-bridge-proof create ...
 //   bun run deploy -- takosumi-platform-staging plan ...
 //   bun run deploy -- takosumi-platform plan ...
 //   bun run deploy -- takosumi-platform-staging restore ...
@@ -53,6 +57,30 @@ const PLATFORM_PRODUCTION = {
   target: "cloudflare-worker:takosumi",
 };
 
+const CONTROL_D1_SCHEMA_STAGING = {
+  surface: "takosumi-control-d1-schema-staging",
+  environment: "staging",
+  target: "cloudflare-d1:takosumi-control-staging",
+};
+
+const CONTROL_D1_SCHEMA_PRODUCTION = {
+  surface: "takosumi-control-d1-schema",
+  environment: "production",
+  target: "cloudflare-d1:takosumi-control-production",
+};
+
+const CONTROL_D1_BRIDGE_PROOF_STAGING = {
+  surface: "takosumi-control-d1-bridge-proof-staging",
+  environment: "staging",
+  target: "private-evidence:takosumi-control-d1-bridge-staging",
+};
+
+const CONTROL_D1_BRIDGE_PROOF_PRODUCTION = {
+  surface: "takosumi-control-d1-bridge-proof",
+  environment: "production",
+  target: "private-evidence:takosumi-control-d1-bridge-production",
+};
+
 const CONTRACT_PACKAGE = {
   surface: "takosumi-contract-package",
   target: "npm:@takosjp/takosumi-contract",
@@ -65,16 +93,14 @@ const platformContract = ({ surface, target, environment }) => ({
   target,
   triggers: ["irreversible", "authority", "published-identity"],
   obligations: {
-    provenance:
-      `plan binds one clean pushed OSS commit, the exact external realized ${environment} config digest, a twice-reproduced complete physical dashboard asset tree, an immutable Git source snapshot, the exact Wrangler dry-run output tree, metadata-only secret names, the exact 100 percent predecessor Version, and the exact healthy predecessor Container application identity and immutable image; execute and restore recheck their external sealed closures and copy them with stable no-follow reads into fresh single-link upload custody`,
+    provenance: `plan binds one clean pushed OSS commit, the exact external realized ${environment} config digest, a twice-reproduced complete physical dashboard asset tree, an immutable Git source snapshot, the exact Wrangler dry-run output tree, metadata-only secret names, the exact 100 percent predecessor Version, and the exact healthy predecessor Container application identity and immutable image; execute and restore recheck their external sealed closures and copy them with stable no-follow reads into fresh single-link upload custody`,
     "post-conditions":
       "execute parses exactly one emitted Worker Version UUID, requires only that UUID at 100 percent, reads that immutable tagged Version back with the exact required bindings and fetch handler, proves the public root and Takosumi discovery document serve it, and requires exact Container list/detail identity, configured immutable image, no active rollout, and zero unhealthy instances; authenticated Hosted extension E2E is a separate required composition check",
     reversal:
-      "the same reviewed owner surface exposes restore against the exact plan confirmation; it first uses the sealed image-only predecessor config with strict immediate rollout, then restores the exact predecessor Worker Version at 100 percent, and records exact public Version plus Container identity/image/health readback under a durable staged checkpoint; deleted Durable Object storage is forward-only and cannot be restored by code rollback",
+      "the same reviewed owner surface exposes restore against the exact full v5 plan confirmation only while that plan has not been retired by a forward-only control D1 transition; the complete plan validator binds environment, source, confirmation, checkpoint, and predecessor before the shared lock is derived, then restore rejects a durable schema-retirement marker before any Container or Worker mutation; otherwise it first uses the sealed image-only predecessor config with strict immediate rollout, restores the exact predecessor Worker Version at 100 percent, and reconciles every staged unknown checkpoint to exact readback before the schema owner may retire this restore; deleted Durable Object storage is forward-only and cannot be restored by code rollback",
     "failure-handling":
       "plan-derived external fsynced unknown checkpoints are durable immediately before forward upload and each restore stage and are shared by alternate evidence paths; malformed or torn checkpoints are post-touch ambiguity; bounded redacted provider diagnostics record pre-mutation, post-mutation-unknown, or post-mutation-readback failure; execute never uploads after any forward checkpoint, and bounded lost-ack recovery requires one unique post-plan tagged Version or remains incomplete",
-    "pre-mutation-proof":
-      `plan reads Cloudflare's metadata-only secret-name list, exact serving Version, and exact healthy Container list/detail state; it reproduces the environment-aware dashboard build twice and runs Wrangler dry-run with immediate Container rollout plus strict conflict checks for both the reviewed forward config and an image-only predecessor projection; the private plan seals every physical asset and dry-run output path, size, and digest with config, immutable source, secret-name-set, and predecessor identities`,
+    "pre-mutation-proof": `plan first read-only inspects the deterministic same-target owner under the explicit durable operator-private TAKOSUMI_PLATFORM_MUTATION_AUTHORITY_DIR and refuses active, unresolved, foreign, malformed, or torn authority before source/config/provider work; the plan seals that directory's canonical path and device/inode/birth-time/UID/mode identity digest; it then reads Cloudflare's metadata-only secret-name list, exact serving Version, and exact healthy Container list/detail state, reproduces the environment-aware dashboard build twice, and runs Wrangler dry-run with immediate Container rollout plus strict conflict checks for both the reviewed forward config and an image-only predecessor projection; execute, recovery, and restore bind the durable owner to operation kind plus exact plan confirmation and checkpoint path and hold it from their final serving/predecessor check through provider mutation and authoritative readback; a same-machine reboot permits only exact checkpoint/provider recovery, while a dead or unresolved owner rejects every new execute or different plan/kind; restore then acquires the plan-scoped authority lock and rejects a control-D1 schema-retirement marker before its first provider checkpoint`,
     "independent-review":
       "execute requires the exact plan confirmation and a named operator reviewer distinct from the source bytes",
     "no-overwrite":
@@ -82,9 +108,63 @@ const platformContract = ({ surface, target, environment }) => ({
   },
 });
 
+const controlD1SchemaContract = ({ surface, target, environment }) => ({
+  surface,
+  target,
+  covers: [
+    "worker/src/d1_opentofu_store.ts",
+    "worker/src/d1_schema_maintenance.ts",
+    "deploy/platform/control_d1_schema.ts",
+    "deploy/platform/control_d1_schema_rest.ts",
+    "scripts/control-d1-schema-release.ts",
+  ],
+  triggers: ["irreversible", "authority"],
+  obligations: {
+    provenance: `plan is read-only and binds one clean pushed OSS commit to the exact ${environment} account, database, currently serving bridge Worker Version, D1 binding and predeployed schema-mode binding, API-token identity digest, canonical manifest/schema/ledger digests, exact v66 predecessor ledger, sole v67 successor, a fresh Time Travel bookmark, and an official private reviewed compatibility proof for that immutable Version against both exact v66 and v67 ledgers; the proof producer and consumer both validate the complete takosumi.platform-worker-release-plan@v5, accepted checkpoint, raw platform ready-evidence path/digest, exact environment, bridge source, confirmation, predecessor, and accepted forward Version before any restore lock or retirement marker is derived; production consumes only genuine appliedMigrationVersions [67] staging execution evidence, never observed-ready adoption, and rejects either the same physical account/database tuple or the same secret-free token-custody digest, while raw tokens never enter plans, receipts, evidence, diagnostics, or stdout`,
+    "post-conditions":
+      "execute requires the proof-bound compatible bridge Version to remain the sole serving Version, durably retires that bridge plan's v66-only predecessor restore before schema mutation, applies only migration [67], then independently reads the released maintenance state and exact ready v67 schema: 64 immutable ledger rows, 38 OSS tables, and the planned manifest, schema, and ledger digests; inactive is safe only because that bridge accepts both exact ledger heads",
+    reversal:
+      "schema migration is forward-only: before apply the surface permanently retires the exact bridge deployment plan's v66-only predecessor restore under that plan's restore lock, and the compatible bridge remains the Worker rollback floor through candidate readback; recover only reports ready or releases an exact matching active in-place fence after rechecking the retained proof, live bridge Version and D1 binding and ensuring the same stale restore remains retired; D1 Time Travel restore is a separate incident authority that this surface never invokes",
+    "failure-handling":
+      "a plan-derived fsynced mutation checkpoint prevents a second apply through another evidence path; the shared target-scoped lock excludes every official platform forward/restore mutation while schema can change or certify v67, durably binds the exact schema plan/checkpoint, and after process death or post-checkpoint failure permits only that plan's recover while rejecting every new execute or different plan/kind; under the validated bridge restore lock execute and v67 recovery reject every malformed, partial, or unknown platform restore checkpoint and require official restore reconciliation before retirement, apply, or ready evidence; execute invokes the existing apply once, never blind-retries, and every recovery reads authoritative ledger/fence/schema state before deciding untouched, ready, reviewed fence release, or fail-closed Time Travel escalation",
+    "pre-mutation-proof":
+      "the real schema plan first read-only inspects the deterministic owner under the same explicit durable operator-private target authority used by platform, seals its canonical path and directory inode-identity digest, and refuses unresolved/foreign/malformed state before source, provider, or D1 reads; plan and execute use the explicit account-scoped Cloudflare API-token REST boundary to recheck the exact proof-bound serving bridge Version, Worker D1 target and predeployed schema-mode binding, unchanged proof and raw platform ready evidence, complete validator-accepted v5 bridge plan, exact predecessor schema/ledger, absent fence, clean pushed source, credential digest, bookmark, and for production a genuine execution receipt with distinct target and credential custody; one canonical-path and existing-inode graph covers schema plan/evidence/checkpoint/proof/raw platform evidence/receipt plus the platform artifacts and both sealed closure trees, including absent future aliases; execute and every recovery branch that can reconcile the exact schema owner acquire the same target-scoped lock used by platform forward and restore, with target then plan-lock order; each v67 branch requires no unresolved restore checkpoint and spans final checks, retirement, sole apply or reviewed fence release, exact readback, and ready evidence",
+    "independent-review":
+      "execute requires the exact private-plan confirmation and a named operator reviewer distinct from the source author; recovery fence release requires its own state-derived confirmation and the same independent-review rule",
+  },
+});
+
+const controlD1BridgeProofContract = ({ surface, target, environment }) => ({
+  surface,
+  target,
+  covers: [
+    "scripts/platform-worker-release.ts",
+    "scripts/control-d1-schema-release.ts",
+    "deploy/platform/control_d1_schema.ts",
+  ],
+  triggers: ["authority"],
+  obligations: {
+    provenance: `the read-only producer accepts only a complete validated v5 ${environment} bridge plan, its exact accepted forward checkpoint, and the complete single-link 0600 platform ready evidence; it binds the raw evidence path and digest, bridge source/confirmation, canonical v66/v67 ledger digests, and the live immutable Worker Version, control-D1 binding, and predeployed schema-mode binding`,
+    "post-conditions":
+      "writes exactly one absent single-link mode-0600 private takosumi.control-d1-serving-compatibility-proof@v1 whose confirmation covers every retained authority; the schema consumer rereads the raw platform evidence rather than trusting a copied digest",
+    reversal:
+      "this producer performs no provider or D1 mutation; an unused private proof may be discarded, while any schema plan that consumed its exact path/digest remains immutable and requires a new plan",
+    "failure-handling":
+      "malformed, incomplete, aliased, wrong-environment, non-serving, wrong-binding, bootstrap-mode, or unresolved-target input fails before proof creation and never fabricates compatibility from a Version ID or hand-authored JSON",
+    "pre-mutation-proof":
+      "before its sole private artifact write it read-only checks the durable same-target authority, complete plan/checkpoint/evidence chain, exact live REST Version and bindings, and canonical source-owned v66/v67 ledgers; API tokens and raw target IDs stay out of stdout",
+    "independent-review":
+      "the proof retains the named reviewer from the validator-accepted platform ready evidence and cannot substitute a new unreviewed identity",
+  },
+});
+
 const CONTRACT = {
   kind: "takos.deploy-contract@v2",
   surfaces: [
+    controlD1BridgeProofContract(CONTROL_D1_BRIDGE_PROOF_STAGING),
+    controlD1BridgeProofContract(CONTROL_D1_BRIDGE_PROOF_PRODUCTION),
+    controlD1SchemaContract(CONTROL_D1_SCHEMA_STAGING),
+    controlD1SchemaContract(CONTROL_D1_SCHEMA_PRODUCTION),
     platformContract(PLATFORM_STAGING),
     platformContract(PLATFORM_PRODUCTION),
     runnerImageRelease.RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE,
@@ -151,6 +231,37 @@ function die(message, detail = []) {
 }
 
 if (
+  selected === CONTROL_D1_BRIDGE_PROOF_STAGING.surface ||
+  selected === CONTROL_D1_BRIDGE_PROOF_PRODUCTION.surface
+) {
+  const { runControlD1ServingCompatibilityProof } =
+    await import("./control-d1-schema-release.ts");
+  const environment =
+    selected === CONTROL_D1_BRIDGE_PROOF_STAGING.surface
+      ? CONTROL_D1_BRIDGE_PROOF_STAGING.environment
+      : CONTROL_D1_BRIDGE_PROOF_PRODUCTION.environment;
+  await runControlD1ServingCompatibilityProof(
+    process.argv.slice(3),
+    environment,
+  );
+  process.exit(0);
+}
+
+if (
+  selected === CONTROL_D1_SCHEMA_STAGING.surface ||
+  selected === CONTROL_D1_SCHEMA_PRODUCTION.surface
+) {
+  const { runControlD1SchemaRelease } =
+    await import("./control-d1-schema-release.ts");
+  const environment =
+    selected === CONTROL_D1_SCHEMA_STAGING.surface
+      ? CONTROL_D1_SCHEMA_STAGING.environment
+      : CONTROL_D1_SCHEMA_PRODUCTION.environment;
+  await runControlD1SchemaRelease(process.argv.slice(3), environment);
+  process.exit(0);
+}
+
+if (
   selected === PLATFORM_STAGING.surface ||
   selected === PLATFORM_PRODUCTION.surface
 ) {
@@ -164,7 +275,9 @@ if (
   process.exit(0);
 }
 
-if (selected === runnerImageRelease.RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE.surface) {
+if (
+  selected === runnerImageRelease.RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE.surface
+) {
   const options = runnerImageRelease.parseRunnerImageReleaseArgs(
     process.argv.slice(3),
   );
@@ -174,7 +287,8 @@ if (selected === runnerImageRelease.RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE.surfac
 }
 
 if (selected === CONTRACT_PACKAGE.surface) {
-  const { runContractPackageRelease } = await import("./contract-package-release.ts");
+  const { runContractPackageRelease } =
+    await import("./contract-package-release.ts");
   await runContractPackageRelease(process.argv.slice(3));
   process.exit(0);
 }

@@ -5,6 +5,7 @@ import {
   constants,
   fchmodSync,
   fstatSync,
+  ftruncateSync,
   fsyncSync,
   linkSync,
   lstatSync,
@@ -18,10 +19,19 @@ import {
   statSync,
   type BigIntStats,
   unlinkSync,
+  writeSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
 const WRANGLER = resolve(ROOT, "node_modules/.bin/wrangler");
@@ -34,6 +44,8 @@ const COMMAND_TIMEOUT_MS = 600_000;
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const COMMIT = /^[0-9a-f]{40}$/u;
 const VERSION = /^[0-9a-f]{8}-[0-9a-f-]{27,}$/u;
+const TARGET_MUTATION_AUTHORITY_DIRECTORY_ENV =
+  "TAKOSUMI_PLATFORM_MUTATION_AUTHORITY_DIR";
 const RUNNER_IMAGE =
   /^registry\.cloudflare\.com\/[0-9a-f]{32}\/takosumi-runner@sha256:[0-9a-f]{64}$/u;
 const REQUIRED_BINDINGS = [
@@ -166,10 +178,7 @@ function readStablePhysicalAsset(
   ) {
     throw new Error("platform_worker_release_asset_tree_invalid");
   }
-  const descriptor = openSync(
-    path,
-    constants.O_RDONLY | constants.O_NOFOLLOW,
-  );
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const openedBefore = fstatSync(descriptor, { bigint: true });
     if (
@@ -196,10 +205,7 @@ function readStablePhysicalAsset(
   }
 }
 
-function samePhysicalIdentity(
-  left: BigIntStats,
-  right: BigIntStats,
-): boolean {
+function samePhysicalIdentity(left: BigIntStats, right: BigIntStats): boolean {
   return (
     left.dev === right.dev &&
     left.ino === right.ino &&
@@ -258,9 +264,7 @@ export function platformWorkerDeployArguments(
   return [
     WRANGLER,
     "deploy",
-    ...(sealedEntrypointPath
-      ? [sealedEntrypointPath, "--no-bundle"]
-      : []),
+    ...(sealedEntrypointPath ? [sealedEntrypointPath, "--no-bundle"] : []),
     "--config",
     configPath,
     "--tag",
@@ -295,10 +299,7 @@ export function platformSealedConfigProjection(
     name: "main" | "directory",
     value: string,
   ): string => {
-    const expression = new RegExp(
-      `^(${name}\\s*=\\s*)"[^"]+"(\\s*)$`,
-      "gmu",
-    );
+    const expression = new RegExp(`^(${name}\\s*=\\s*)"[^"]+"(\\s*)$`, "gmu");
     const matches = [...input.matchAll(expression)];
     if (matches.length !== 1) {
       throw new Error("platform_worker_release_sealed_config_invalid");
@@ -369,14 +370,12 @@ function platformRunnerImageRange(source: string): Readonly<{
   const imageMatches = [
     ...runners[0]!.body.matchAll(/^image\s*=\s*"([^"]+)"\s*$/gmu),
   ];
-  if (
-    imageMatches.length !== 1 ||
-    !RUNNER_IMAGE.test(imageMatches[0]![1]!)
-  ) {
+  if (imageMatches.length !== 1 || !RUNNER_IMAGE.test(imageMatches[0]![1]!)) {
     throw new Error("platform_worker_release_restore_image_invalid");
   }
   const image = imageMatches[0]!;
-  const valueStart = runners[0]!.start + image.index! + image[0].indexOf('"') + 1;
+  const valueStart =
+    runners[0]!.start + image.index! + image[0].indexOf('"') + 1;
   const valueEnd = valueStart + image[1]!.length;
   return { valueStart, valueEnd, image: image[1]! };
 }
@@ -451,6 +450,7 @@ type PlatformRestoreLockIdentity = Readonly<{
   scope: string;
   directory: string;
   lockPath: string;
+  directoryIdentityDigest?: string;
 }>;
 
 type PlatformRestoreLockFileIdentity = Readonly<{
@@ -465,11 +465,58 @@ type PlatformRestoreHostIdentity = Readonly<{
   pidNamespaceIno: string;
 }>;
 
+type PlatformMutationLockBusyCode =
+  "platform_worker_restore_locked" | "platform_worker_target_mutation_locked";
+
+type PlatformRestoreLockOwner = Readonly<{
+  kind: "takosumi.platform-worker-restore-lock-owner@v1";
+  planConfirmation: string;
+}>;
+
+type PlatformTargetMutationLockOwner = Readonly<{
+  kind: "takosumi.platform-worker-target-mutation-lock-owner@v1";
+  operationKind:
+    | "platform-forward"
+    | "platform-restore"
+    | "control-d1-schema";
+  planConfirmation: string;
+  checkpointPath: string;
+}>;
+
+type PlatformMutationLockOwner =
+  | PlatformRestoreLockOwner
+  | PlatformTargetMutationLockOwner;
+
+type PlatformMutationLockRecord = Readonly<{
+  state: "active" | "unresolved";
+  scope: string;
+  owner: PlatformMutationLockOwner;
+  lockPath: string;
+  pendingName: string;
+  fileIdentity: PlatformRestoreLockFileIdentity;
+  hostIdentity: PlatformRestoreHostIdentity;
+  pid: number;
+  bootId: string;
+  processStartTicks: string;
+  acquiredAt: string;
+  status: BigIntStats;
+}>;
+
 function platformRestoreLockIdentity(
   planPath: string,
   confirmation: string,
 ): PlatformRestoreLockIdentity {
-  const checkpointPath = platformMutationCheckpointPath(planPath, confirmation);
+  const authority = readPlatformReleasePlanAuthority(planPath, confirmation);
+  return platformRestoreLockIdentityForCheckpoint(
+    authority.checkpointPath,
+    authority.confirmation,
+  );
+}
+
+function platformRestoreLockIdentityForCheckpoint(
+  checkpointPath: string,
+  confirmation: string,
+): PlatformRestoreLockIdentity {
   const scope = digest(
     new TextEncoder().encode(
       JSON.stringify({
@@ -493,19 +540,944 @@ export function platformRestoreLockPath(
   return platformRestoreLockIdentity(planPath, confirmation).lockPath;
 }
 
+export type PlatformTargetMutationIdentity = Readonly<{
+  environment: PlatformEnvironment;
+  workerName: string;
+  authorityDirectory: string;
+}>;
+
+export type PlatformTargetMutationLockRequest = Readonly<{
+  operationKind:
+    | "platform-forward"
+    | "platform-restore"
+    | "control-d1-schema";
+  planConfirmation: string;
+  checkpointPath: string;
+  mode: "execute" | "recover";
+}>;
+
+export type PlatformTargetMutationLockOptions = Readonly<{
+  shouldRetainAfterError?: (error: unknown) => boolean;
+}>;
+
+function platformTargetMutationLockIdentity(
+  target: PlatformTargetMutationIdentity,
+): PlatformRestoreLockIdentity {
+  const expected = TARGETS[target.environment];
+  if (
+    expected === undefined ||
+    target.workerName !== expected.workerName
+  ) {
+    throw new Error("platform_worker_target_mutation_identity_invalid");
+  }
+  const directory = platformTargetMutationAuthorityDirectory(
+    target.authorityDirectory,
+  );
+  const directoryStatus = lstatSync(directory, { bigint: true });
+  const directoryIdentityDigest = digest(
+    new TextEncoder().encode(
+      JSON.stringify({
+        kind: "takosumi.platform-worker-target-authority-directory@v1",
+        path: directory,
+        dev: directoryStatus.dev.toString(),
+        ino: directoryStatus.ino.toString(),
+        birthtimeNs: directoryStatus.birthtimeNs.toString(),
+        uid: directoryStatus.uid.toString(),
+        mode: (directoryStatus.mode & 0o777n).toString(8),
+      }),
+    ),
+  );
+  const scope = digest(
+    new TextEncoder().encode(
+      JSON.stringify({
+        kind: "takosumi.platform-worker-target-mutation-scope@v1",
+        environment: target.environment,
+        workerName: target.workerName,
+      }),
+    ),
+  );
+  return {
+    scope,
+    directory,
+    directoryIdentityDigest,
+    lockPath: join(
+      directory,
+      `${target.environment}-${scope.slice("sha256:".length)}.lock`,
+    ),
+  };
+}
+
+/**
+ * Resolve the one operator-configured, durable authority directory used by
+ * every plan for this Worker owner surface. The directory must already exist:
+ * a read-only plan never creates or repairs release authority.
+ */
+export function platformTargetMutationIdentityFromEnvironment(
+  environment: PlatformEnvironment,
+  values: Readonly<Record<string, string | undefined>> = process.env,
+): PlatformTargetMutationIdentity {
+  const authorityDirectory = values[TARGET_MUTATION_AUTHORITY_DIRECTORY_ENV];
+  if (authorityDirectory === undefined || authorityDirectory.length === 0) {
+    throw new Error(
+      "platform_worker_target_mutation_authority_directory_required",
+    );
+  }
+  const target = TARGETS[environment];
+  if (!target) {
+    throw new Error("platform_worker_target_mutation_identity_invalid");
+  }
+  return {
+    environment,
+    workerName: target.workerName,
+    authorityDirectory: platformTargetMutationAuthorityDirectory(
+      authorityDirectory,
+    ),
+  };
+}
+
+function platformTargetMutationAuthorityDirectory(value: string): string {
+  if (!isAbsolute(value) || resolve(value) !== value || insideRoot(value)) {
+    throw new Error(
+      "platform_worker_target_mutation_authority_directory_invalid",
+    );
+  }
+  const volatileRoots = ["/tmp", "/var/tmp", "/run", "/dev/shm"];
+  if (
+    volatileRoots.some(
+      (root) => value === root || value.startsWith(`${root}${sep}`),
+    )
+  ) {
+    throw new Error(
+      "platform_worker_target_mutation_authority_directory_volatile",
+    );
+  }
+  try {
+    assertOutsideGitWorktree(value);
+    const status = lstatSync(value);
+    if (
+      !status.isDirectory() ||
+      status.isSymbolicLink() ||
+      status.uid !== process.getuid?.() ||
+      (status.mode & 0o777) !== 0o700 ||
+      realpathSync(value) !== value ||
+      canonicalFuturePath(value) !== value
+    ) {
+      throw new Error(
+        "platform_worker_target_mutation_authority_directory_invalid",
+      );
+    }
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message ===
+        "platform_worker_target_mutation_authority_directory_invalid"
+    ) {
+      throw error;
+    }
+    throw new Error(
+      "platform_worker_target_mutation_authority_directory_invalid",
+      { cause: error },
+    );
+  }
+  return value;
+}
+
+export function platformTargetMutationLockPath(
+  target: PlatformTargetMutationIdentity,
+): string {
+  return platformTargetMutationLockIdentity(target).lockPath;
+}
+
+export function platformTargetMutationAuthorityDirectoryIdentityDigest(
+  target: PlatformTargetMutationIdentity,
+): string {
+  return platformTargetMutationLockIdentity(target).directoryIdentityDigest!;
+}
+
+/** Read-only refusal used by both real plan commands before other inspection. */
+export function assertPlatformTargetMutationAuthorityAvailable(
+  target: PlatformTargetMutationIdentity,
+): void {
+  const identity = platformTargetMutationLockIdentity(target);
+  let lock: PlatformMutationLockRecord;
+  try {
+    lock = readValidatedPlatformMutationLock(identity);
+  } catch (error) {
+    if (fileSystemError(error, "ENOENT")) return;
+    throw error;
+  }
+  const currentHost = platformRestoreHostIdentity();
+  const currentProcess = platformRestoreProcessIdentity(process.pid);
+  assertPlatformMutationLockHost(lock, currentHost, currentProcess.bootId);
+  if (
+    lock.state === "active" &&
+    lock.bootId === currentProcess.bootId &&
+    platformRestoreProcessStillOwnsLock(
+      lock.pid,
+      lock.processStartTicks,
+    )
+  ) {
+    throw new Error("platform_worker_target_mutation_locked");
+  }
+  throw new Error(
+    "platform_worker_target_mutation_reconciliation_required",
+  );
+}
+
+/**
+ * Exclude every official forward, restore, and schema mutation for one Worker
+ * target. This lock is deliberately independent of any individual release
+ * plan so a candidate plan and its serving bridge share the same authority.
+ */
+export async function withPlatformTargetMutationLock<T>(
+  target: PlatformTargetMutationIdentity,
+  request: PlatformTargetMutationLockRequest,
+  operation: () => Promise<T>,
+  options: PlatformTargetMutationLockOptions = {},
+): Promise<T> {
+  const identity = platformTargetMutationLockIdentity(target);
+  const owner = platformTargetMutationLockOwner(identity, request);
+  return withPlatformRestoreLockIdentity(
+    identity,
+    owner,
+    async () => {
+      const lockedIdentity = platformTargetMutationLockIdentity(target);
+      if (JSON.stringify(lockedIdentity) !== JSON.stringify(identity)) {
+        throw new Error("platform_worker_target_mutation_identity_drift");
+      }
+      const lockedOwner = platformTargetMutationLockOwner(
+        lockedIdentity,
+        request,
+      );
+      if (JSON.stringify(lockedOwner) !== JSON.stringify(owner)) {
+        throw new Error("platform_worker_target_mutation_authority_drift");
+      }
+      return operation();
+    },
+    "platform_worker_target_mutation_locked",
+    {
+      allowStaleReclaim: request.mode === "recover",
+      staleReclaimErrorCode:
+        "platform_worker_target_mutation_reconciliation_required",
+      shouldRetainAfterError: options.shouldRetainAfterError,
+    },
+  );
+}
+
+function platformTargetMutationLockOwner(
+  identity: PlatformRestoreLockIdentity,
+  request: PlatformTargetMutationLockRequest,
+): PlatformTargetMutationLockOwner {
+  if (
+    !record(request) ||
+    JSON.stringify(Object.keys(request).sort()) !==
+      JSON.stringify(
+        [
+          "checkpointPath",
+          "mode",
+          "operationKind",
+          "planConfirmation",
+        ].sort(),
+      ) ||
+    (request.operationKind !== "platform-forward" &&
+      request.operationKind !== "platform-restore" &&
+      request.operationKind !== "control-d1-schema") ||
+    !SHA256.test(request.planConfirmation) ||
+    !isAbsolute(request.checkpointPath) ||
+    resolve(request.checkpointPath) !== request.checkpointPath ||
+    (request.mode !== "execute" && request.mode !== "recover")
+  ) {
+    throw new Error("platform_worker_target_mutation_authority_invalid");
+  }
+  const checkpointPath = canonicalFuturePath(request.checkpointPath);
+  if (
+    checkpointPath !== request.checkpointPath ||
+    insideRoot(checkpointPath) ||
+    checkpointPath === identity.lockPath ||
+    dirname(checkpointPath) === identity.directory
+  ) {
+    throw new Error("platform_worker_target_mutation_authority_invalid");
+  }
+  try {
+    assertOutsideGitWorktree(checkpointPath);
+    const parent = lstatSync(dirname(checkpointPath));
+    if (
+      !parent.isDirectory() ||
+      parent.isSymbolicLink() ||
+      parent.uid !== process.getuid?.() ||
+      (parent.mode & 0o777) !== 0o700 ||
+      realpathSync(dirname(checkpointPath)) !== dirname(checkpointPath)
+    ) {
+      throw new Error("platform_worker_target_mutation_authority_invalid");
+    }
+    const checkpoint = optionalBigIntLstat(checkpointPath);
+    if (
+      checkpoint !== null &&
+      (!checkpoint.isFile() ||
+        checkpoint.isSymbolicLink() ||
+        checkpoint.nlink !== 1n ||
+        checkpoint.uid !== BigInt(process.getuid?.() ?? -1) ||
+        (checkpoint.mode & 0o777n) !== 0o600n ||
+        realpathSync(checkpointPath) !== checkpointPath)
+    ) {
+      throw new Error("platform_worker_target_mutation_authority_invalid");
+    }
+    const lock = optionalBigIntLstat(identity.lockPath);
+    if (
+      checkpoint !== null &&
+      lock !== null &&
+      checkpoint.dev === lock.dev &&
+      checkpoint.ino === lock.ino
+    ) {
+      throw new Error("platform_worker_target_mutation_authority_invalid");
+    }
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "platform_worker_target_mutation_authority_invalid"
+    ) {
+      throw error;
+    }
+    throw new Error("platform_worker_target_mutation_authority_invalid", {
+      cause: error,
+    });
+  }
+  return {
+    kind: "takosumi.platform-worker-target-mutation-lock-owner@v1",
+    operationKind: request.operationKind,
+    planConfirmation: request.planConfirmation,
+    checkpointPath,
+  };
+}
+
+function validPlatformMutationLockOwner(
+  value: unknown,
+): value is PlatformMutationLockOwner {
+  if (!record(value) || typeof value.kind !== "string") return false;
+  if (value.kind === "takosumi.platform-worker-restore-lock-owner@v1") {
+    return (
+      JSON.stringify(Object.keys(value).sort()) ===
+        JSON.stringify(["kind", "planConfirmation"].sort()) &&
+      typeof value.planConfirmation === "string" &&
+      SHA256.test(value.planConfirmation)
+    );
+  }
+  if (
+    value.kind !==
+      "takosumi.platform-worker-target-mutation-lock-owner@v1" ||
+    JSON.stringify(Object.keys(value).sort()) !==
+      JSON.stringify(
+        [
+          "checkpointPath",
+          "kind",
+          "operationKind",
+          "planConfirmation",
+        ].sort(),
+      ) ||
+    (value.operationKind !== "platform-forward" &&
+      value.operationKind !== "platform-restore" &&
+      value.operationKind !== "control-d1-schema") ||
+    typeof value.planConfirmation !== "string" ||
+    !SHA256.test(value.planConfirmation) ||
+    typeof value.checkpointPath !== "string" ||
+    !isAbsolute(value.checkpointPath) ||
+    resolve(value.checkpointPath) !== value.checkpointPath
+  ) {
+    return false;
+  }
+  try {
+    if (
+      canonicalFuturePath(value.checkpointPath) !== value.checkpointPath ||
+      insideRoot(value.checkpointPath)
+    ) {
+      return false;
+    }
+    assertOutsideGitWorktree(value.checkpointPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export type PlatformReleasePlanAuthority = Readonly<{
+  environment: PlatformEnvironment;
+  sourceCommit: string;
+  confirmation: string;
+  checkpointPath: string;
+  targetMutationAuthorityPath: string;
+  targetMutationAuthorityDirectoryIdentityDigest: string;
+  predecessorVersionId: string;
+}>;
+
+/**
+ * Read a platform plan only through the complete v5 validator. Cross-surface
+ * authorities must never derive a lock or retirement path from an ad-hoc JSON
+ * object that merely carries checkpointPath and confirmation-shaped strings.
+ */
+export function readPlatformReleasePlanAuthority(
+  planPath: string,
+  confirmation: string,
+): PlatformReleasePlanAuthority {
+  const plan = readValidatedPlatformReleasePlan(planPath, confirmation);
+  return platformReleasePlanAuthority(plan);
+}
+
+function readValidatedPlatformReleasePlan(
+  planPath: string,
+  confirmation: string,
+): PlatformReleasePlan {
+  if (!isAbsolute(planPath) || !SHA256.test(confirmation)) {
+    throw new Error("platform_worker_release_plan_invalid");
+  }
+  assertPrivateFile(planPath);
+  const bytes = readStablePhysicalBytes(
+    planPath,
+    "platform_worker_release_plan_invalid",
+  );
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    ) as unknown;
+  } catch {
+    throw new Error("platform_worker_release_plan_invalid");
+  }
+  if (
+    !record(envelope) ||
+    (envelope.environment !== "staging" &&
+      envelope.environment !== "production")
+  ) {
+    throw new Error("platform_worker_release_plan_invalid");
+  }
+  const plan = parsePlan(bytes, confirmation, envelope.environment);
+  const checkpointPath = resolve(plan.checkpointPath);
+  if (checkpointPath !== plan.checkpointPath || insideRoot(checkpointPath)) {
+    throw new Error("platform_worker_release_plan_invalid");
+  }
+  assertOutsideGitWorktree(checkpointPath);
+  return plan;
+}
+
+function platformReleasePlanAuthority(
+  plan: PlatformReleasePlan,
+): PlatformReleasePlanAuthority {
+  return {
+    environment: plan.environment,
+    sourceCommit: plan.sourceCommit,
+    confirmation: plan.confirmation,
+    checkpointPath: plan.checkpointPath,
+    targetMutationAuthorityPath: plan.targetMutationAuthorityPath,
+    targetMutationAuthorityDirectoryIdentityDigest:
+      plan.targetMutationAuthorityDirectoryIdentityDigest,
+    predecessorVersionId: plan.predecessorVersionId,
+  };
+}
+
+export type PlatformReleaseAdditionalArtifactPath = Readonly<{
+  label: string;
+  path: string;
+}>;
+
+/**
+ * Validate every durable platform artifact together with caller-owned paths.
+ * This is shared with the control-D1 schema owner so an absent schema output
+ * cannot be selected over a future restore checkpoint, retirement marker, or
+ * lock, nor anywhere inside either sealed closure.
+ */
+export function assertPlatformReleaseArtifactPathGraph(
+  planPath: string,
+  confirmation: string,
+  additionalPaths: readonly PlatformReleaseAdditionalArtifactPath[] = [],
+): PlatformReleasePlanAuthority {
+  const plan = readValidatedPlatformReleasePlan(planPath, confirmation);
+  assertPlatformReleaseArtifactPathGraphForPlan(
+    planPath,
+    plan,
+    additionalPaths,
+    "platform_worker_release_artifact_path_alias",
+  );
+  return platformReleasePlanAuthority(plan);
+}
+
+type PlatformArtifactPathEntry = Readonly<{
+  label: string;
+  path: string;
+  containmentGroup?: "forward-closure" | "restore-closure";
+  treeRoot?: boolean;
+}>;
+
+function assertPlatformReleaseArtifactPathGraphForPlan(
+  planPath: string,
+  plan: PlatformReleasePlan,
+  additionalPaths: readonly PlatformReleaseAdditionalArtifactPath[],
+  errorCode: string,
+): void {
+  const restoreLock = platformRestoreLockIdentityForCheckpoint(
+    plan.checkpointPath,
+    plan.confirmation,
+  );
+  const targetLock = platformTargetMutationLockIdentity({
+    environment: plan.environment,
+    workerName: TARGETS[plan.environment].workerName,
+    authorityDirectory: dirname(plan.targetMutationAuthorityPath),
+  });
+  if (targetLock.lockPath !== plan.targetMutationAuthorityPath) {
+    throw new Error(errorCode);
+  }
+  if (
+    targetLock.directoryIdentityDigest !==
+    plan.targetMutationAuthorityDirectoryIdentityDigest
+  ) {
+    throw new Error(errorCode);
+  }
+  assertPlatformArtifactPathEntries(
+    [
+      { label: "platform-plan", path: planPath },
+      { label: "platform-config", path: plan.configPath },
+      {
+        label: "platform-forward-closure",
+        path: plan.closurePath,
+        containmentGroup: "forward-closure",
+        treeRoot: true,
+      },
+      {
+        label: "platform-forward-sealed-config",
+        path: plan.sealedConfigPath,
+        containmentGroup: "forward-closure",
+      },
+      {
+        label: "platform-forward-upload-entrypoint",
+        path: plan.uploadEntrypointPath,
+        containmentGroup: "forward-closure",
+      },
+      { label: "platform-checkpoint", path: plan.checkpointPath },
+      {
+        label: "platform-restore-checkpoint",
+        path: `${plan.checkpointPath}.restore`,
+      },
+      {
+        label: "platform-restore-retirement",
+        path: `${plan.checkpointPath}.restore-retired-control-d1.json`,
+      },
+      { label: "platform-restore-lock", path: restoreLock.lockPath },
+      {
+        label: "platform-target-mutation-lock",
+        path: targetLock.lockPath,
+      },
+      {
+        label: "platform-restore-closure",
+        path: plan.restoreClosurePath,
+        containmentGroup: "restore-closure",
+        treeRoot: true,
+      },
+      {
+        label: "platform-restore-sealed-config",
+        path: plan.restoreSealedConfigPath,
+        containmentGroup: "restore-closure",
+      },
+      {
+        label: "platform-restore-upload-entrypoint",
+        path: plan.restoreUploadEntrypointPath,
+        containmentGroup: "restore-closure",
+      },
+      ...additionalPaths.map((entry) => ({
+        label: `caller-${entry.label}`,
+        path: entry.path,
+      })),
+    ],
+    [restoreLock, targetLock],
+    errorCode,
+  );
+}
+
+function assertPlatformArtifactPathEntries(
+  entries: readonly PlatformArtifactPathEntry[],
+  locks: readonly PlatformRestoreLockIdentity[],
+  errorCode: string,
+): void {
+  if (
+    new Set(entries.map((entry) => entry.label)).size !== entries.length ||
+    entries.some(
+      (entry) =>
+        !/^[a-z][a-z0-9-]{0,127}$/u.test(entry.label) ||
+        !isAbsolute(entry.path) ||
+        resolve(entry.path) !== entry.path,
+    )
+  ) {
+    throw new Error(errorCode);
+  }
+  const paths = entries.map((entry) => {
+    const canonical = canonicalFuturePath(entry.path);
+    let status: BigIntStats | null = null;
+    try {
+      status = lstatSync(entry.path, { bigint: true });
+    } catch (error) {
+      if (!fileSystemError(error, "ENOENT")) throw error;
+    }
+    if (
+      canonical !== entry.path ||
+      status?.isSymbolicLink() === true ||
+      (status?.isFile() === true && status.nlink !== 1n)
+    ) {
+      throw new Error(errorCode);
+    }
+    return { ...entry, canonical, status };
+  });
+  for (let leftIndex = 0; leftIndex < paths.length; leftIndex += 1) {
+    const left = paths[leftIndex]!;
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < paths.length;
+      rightIndex += 1
+    ) {
+      const right = paths[rightIndex]!;
+      if (
+        left.canonical === right.canonical ||
+        (left.status !== null &&
+          right.status !== null &&
+          left.status.dev === right.status.dev &&
+          left.status.ino === right.status.ino)
+      ) {
+        throw new Error(errorCode);
+      }
+      const nested =
+        artifactPathInside(left.canonical, right.canonical) ||
+        artifactPathInside(right.canonical, left.canonical);
+      const allowedClosureContainment =
+        nested &&
+        left.containmentGroup !== undefined &&
+        left.containmentGroup === right.containmentGroup &&
+        (left.treeRoot === true || right.treeRoot === true);
+      if (nested && !allowedClosureContainment) {
+        throw new Error(errorCode);
+      }
+    }
+  }
+  for (const lock of locks) {
+    const canonicalLockDirectory = canonicalFuturePath(lock.directory);
+    const pendingPrefix = `${basename(lock.lockPath)}.pending-`;
+    if (
+      paths.some(
+        (entry) =>
+          entry.path !== lock.lockPath &&
+          dirname(entry.canonical) === canonicalLockDirectory &&
+          basename(entry.canonical).startsWith(pendingPrefix),
+      )
+    ) {
+      throw new Error(errorCode);
+    }
+  }
+}
+
+function artifactPathInside(path: string, directory: string): boolean {
+  const nested = relative(directory, path);
+  return (
+    nested !== "" &&
+    nested !== ".." &&
+    !nested.startsWith(`..${sep}`) &&
+    !isAbsolute(nested)
+  );
+}
+
+export type PlatformControlD1RestoreRetirement = Readonly<{
+  environment: PlatformEnvironment;
+  bridgeSourceCommit: string;
+  servingBridgeVersionId: string;
+  targetDigest: string;
+  candidateMigrationVersion: 67;
+  candidateLedgerDigest: string;
+  recordedAt: string;
+}>;
+
+export function platformRestoreRetirementPath(
+  planPath: string,
+  confirmation: string,
+): string {
+  const authority = readPlatformReleasePlanAuthority(planPath, confirmation);
+  return `${authority.checkpointPath}.restore-retired-control-d1.json`;
+}
+
+export function retirePlatformRestoreForControlD1Schema(
+  planPath: string,
+  confirmation: string,
+  retirement: PlatformControlD1RestoreRetirement,
+): string {
+  const authority = readPlatformReleasePlanAuthority(planPath, confirmation);
+  assertPlatformRestoreReconciled(planPath, confirmation);
+  const path = `${authority.checkpointPath}.restore-retired-control-d1.json`;
+  const identity = platformRestoreRetirementIdentity(authority, retirement);
+  let existing: ReturnType<typeof readPlatformRestoreRetirement> | null = null;
+  try {
+    existing = readPlatformRestoreRetirement(path, authority);
+  } catch (error) {
+    if (!fileSystemError(error, "ENOENT")) throw error;
+  }
+  if (existing) {
+    const { recordedAt: _recordedAt, ...existingIdentity } = existing;
+    const { recordedAt: _requestedAt, ...requestedIdentity } = identity;
+    if (
+      JSON.stringify(existingIdentity) !== JSON.stringify(requestedIdentity)
+    ) {
+      throw new Error("platform_worker_restore_retirement_conflict");
+    }
+    return path;
+  }
+  ensurePrivateCheckpointDirectory(dirname(path));
+  writePrivate(
+    path,
+    new TextEncoder().encode(`${JSON.stringify(identity, null, 2)}\n`),
+  );
+  readPlatformRestoreRetirement(path, authority);
+  return path;
+}
+
+export function assertPlatformRestoreNotRetired(
+  planPath: string,
+  confirmation: string,
+): void {
+  const authority = readPlatformReleasePlanAuthority(planPath, confirmation);
+  const path = `${authority.checkpointPath}.restore-retired-control-d1.json`;
+  try {
+    readPlatformRestoreRetirement(path, authority);
+  } catch (error) {
+    if (fileSystemError(error, "ENOENT")) return;
+    throw error;
+  }
+  throw new Error("platform_worker_restore_retired_by_control_schema");
+}
+
+export function assertPlatformRestoreReconciled(
+  planPath: string,
+  confirmation: string,
+): void {
+  const authority = readPlatformReleasePlanAuthority(planPath, confirmation);
+  let fence: PlatformRestoreFence;
+  try {
+    fence = readPlatformRestoreFenceAtCheckpoint(
+      authority.checkpointPath,
+      authority.confirmation,
+    );
+  } catch (error) {
+    throw new Error("platform_worker_restore_reconciliation_required", {
+      cause: error,
+    });
+  }
+  if (fence.container === undefined && fence.worker === undefined) return;
+  if (
+    fence.container?.outcome !== "accepted" ||
+    fence.worker?.outcome !== "accepted" ||
+    fence.worker.versionId !== authority.predecessorVersionId
+  ) {
+    throw new Error("platform_worker_restore_reconciliation_required");
+  }
+}
+
+function platformRestoreRetirementIdentity(
+  authority: PlatformReleasePlanAuthority,
+  retirement: PlatformControlD1RestoreRetirement,
+) {
+  if (
+    retirement.environment !== authority.environment ||
+    retirement.bridgeSourceCommit !== authority.sourceCommit ||
+    !COMMIT.test(retirement.bridgeSourceCommit) ||
+    !VERSION.test(retirement.servingBridgeVersionId) ||
+    !SHA256.test(retirement.targetDigest) ||
+    retirement.candidateMigrationVersion !== 67 ||
+    !SHA256.test(retirement.candidateLedgerDigest) ||
+    !Number.isFinite(Date.parse(retirement.recordedAt)) ||
+    new Date(retirement.recordedAt).toISOString() !== retirement.recordedAt
+  ) {
+    throw new Error("platform_worker_restore_retirement_invalid");
+  }
+  return {
+    kind: "takosumi.platform-worker-restore-retirement@v1" as const,
+    bridgePlanConfirmation: authority.confirmation,
+    ...retirement,
+  };
+}
+
+function readPlatformRestoreRetirement(
+  path: string,
+  authority: PlatformReleasePlanAuthority,
+): ReturnType<typeof platformRestoreRetirementIdentity> {
+  let value: unknown;
+  try {
+    assertPrivateFile(path);
+    value = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(
+        readStablePhysicalBytes(
+          path,
+          "platform_worker_restore_retirement_invalid",
+        ),
+      ),
+    ) as unknown;
+  } catch (error) {
+    if (fileSystemError(error, "ENOENT")) throw error;
+    throw new Error("platform_worker_restore_retirement_invalid", {
+      cause: error,
+    });
+  }
+  const keys = [
+    "bridgePlanConfirmation",
+    "bridgeSourceCommit",
+    "candidateLedgerDigest",
+    "candidateMigrationVersion",
+    "environment",
+    "kind",
+    "recordedAt",
+    "servingBridgeVersionId",
+    "targetDigest",
+  ].sort();
+  if (
+    !record(value) ||
+    JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(keys) ||
+    value.kind !== "takosumi.platform-worker-restore-retirement@v1" ||
+    value.bridgePlanConfirmation !== authority.confirmation
+  ) {
+    throw new Error("platform_worker_restore_retirement_invalid");
+  }
+  const parsed = platformRestoreRetirementIdentity(authority, {
+    environment: value.environment as PlatformEnvironment,
+    bridgeSourceCommit: String(value.bridgeSourceCommit),
+    servingBridgeVersionId: String(value.servingBridgeVersionId),
+    targetDigest: String(value.targetDigest),
+    candidateMigrationVersion: value.candidateMigrationVersion as 67,
+    candidateLedgerDigest: String(value.candidateLedgerDigest),
+    recordedAt: String(value.recordedAt),
+  });
+  if (JSON.stringify(parsed) !== JSON.stringify(value)) {
+    throw new Error("platform_worker_restore_retirement_invalid");
+  }
+  return parsed;
+}
+
 /** Hold the plan-scoped restore authority across checkpoint and provider work. */
 export async function withPlatformRestoreLock<T>(
   planPath: string,
   confirmation: string,
   operation: () => Promise<T>,
 ): Promise<T> {
-  const identity = platformRestoreLockIdentity(planPath, confirmation);
-  ensurePrivateCheckpointDirectory(identity.directory);
-  const descriptor = acquirePlatformRestoreLock(identity, confirmation);
+  const authority = readPlatformReleasePlanAuthority(planPath, confirmation);
+  const identity = platformRestoreLockIdentityForCheckpoint(
+    authority.checkpointPath,
+    authority.confirmation,
+  );
+  return withPlatformRestoreLockIdentity(
+    identity,
+    {
+      kind: "takosumi.platform-worker-restore-lock-owner@v1",
+      planConfirmation: authority.confirmation,
+    },
+    async () => {
+      const lockedAuthority = readPlatformReleasePlanAuthority(
+        planPath,
+        confirmation,
+      );
+      if (JSON.stringify(lockedAuthority) !== JSON.stringify(authority)) {
+        throw new Error("platform_worker_release_plan_authority_drift");
+      }
+      return operation();
+    },
+  );
+}
+
+export async function withPlatformReleasePlanRestoreLock<T>(
+  planPath: string,
+  confirmation: string,
+  expected: Readonly<{
+    environment: PlatformEnvironment;
+    sourceCommit: string;
+  }>,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const authority = readPlatformReleasePlanAuthority(planPath, confirmation);
+  assertPlatformReleasePlanAuthority(authority, expected);
+  const identity = platformRestoreLockIdentityForCheckpoint(
+    authority.checkpointPath,
+    authority.confirmation,
+  );
+  return withPlatformRestoreLockIdentity(
+    identity,
+    {
+      kind: "takosumi.platform-worker-restore-lock-owner@v1",
+      planConfirmation: authority.confirmation,
+    },
+    async () => {
+      const lockedAuthority = readPlatformReleasePlanAuthority(
+        planPath,
+        confirmation,
+      );
+      assertPlatformReleasePlanAuthority(lockedAuthority, expected);
+      if (JSON.stringify(lockedAuthority) !== JSON.stringify(authority)) {
+        throw new Error("platform_worker_release_plan_authority_drift");
+      }
+      return operation();
+    },
+  );
+}
+
+function assertPlatformReleasePlanAuthority(
+  authority: PlatformReleasePlanAuthority,
+  expected: Readonly<{
+    environment: PlatformEnvironment;
+    sourceCommit: string;
+  }>,
+): void {
+  if (
+    authority.environment !== expected.environment ||
+    authority.sourceCommit !== expected.sourceCommit ||
+    !COMMIT.test(expected.sourceCommit)
+  ) {
+    throw new Error("platform_worker_release_plan_authority_mismatch");
+  }
+}
+
+async function withPlatformRestoreLockIdentity<T>(
+  identity: PlatformRestoreLockIdentity,
+  owner: PlatformMutationLockOwner,
+  operation: () => Promise<T>,
+  lockedErrorCode: PlatformMutationLockBusyCode = "platform_worker_restore_locked",
+  options: Readonly<{
+    allowStaleReclaim?: boolean;
+    staleReclaimErrorCode?: string;
+    shouldRetainAfterError?: (error: unknown) => boolean;
+  }> = {},
+): Promise<T> {
+  if (
+    owner.kind ===
+    "takosumi.platform-worker-target-mutation-lock-owner@v1"
+  ) {
+    platformTargetMutationAuthorityDirectory(identity.directory);
+  } else {
+    ensurePrivateCheckpointDirectory(identity.directory);
+  }
+  const descriptor = acquirePlatformRestoreLock(
+    identity,
+    owner,
+    lockedErrorCode,
+    options.allowStaleReclaim ?? owner.kind ===
+      "takosumi.platform-worker-restore-lock-owner@v1",
+    options.staleReclaimErrorCode,
+  );
   const seal = fstatSync(descriptor, { bigint: true });
+  let retainAfterError = false;
   try {
     return await operation();
+  } catch (error) {
+    if (options.shouldRetainAfterError) {
+      try {
+        retainAfterError = options.shouldRetainAfterError(error);
+      } catch {
+        // An unreadable checkpoint cannot prove that provider mutation did not
+        // begin. Preserve the durable owner authority for exact recovery.
+        retainAfterError = true;
+      }
+    }
+    throw error;
   } finally {
+    if (retainAfterError) {
+      markPlatformMutationLockUnresolved(identity, owner, descriptor);
+    }
     const opened = fstatSync(descriptor, { bigint: true });
     let linked: BigIntStats | null = null;
     try {
@@ -514,22 +1486,86 @@ export async function withPlatformRestoreLock<T>(
       if (!fileSystemError(error, "ENOENT")) throw error;
     }
     closeSync(descriptor);
-    if (
-      linked === null ||
-      !sameRestoreLockStatus(seal, opened) ||
-      !sameRestoreLockStatus(opened, linked) ||
-      opened.nlink !== 1n
-    ) {
+    const sameRetainedFile =
+      retainAfterError &&
+      linked !== null &&
+      platformRestoreLockStatusMatchesIdentity(
+        opened,
+        platformRestoreLockFileIdentity(seal),
+      ) &&
+      platformRestoreLockStatusMatchesIdentity(
+        linked,
+        platformRestoreLockFileIdentity(seal),
+      ) &&
+      sameRestoreLockStatus(opened, linked) &&
+      opened.nlink === 1n;
+    const sameUnchangedFile =
+      !retainAfterError &&
+      linked !== null &&
+      sameRestoreLockStatus(seal, opened) &&
+      sameRestoreLockStatus(opened, linked) &&
+      opened.nlink === 1n;
+    if (!sameRetainedFile && !sameUnchangedFile) {
       throw new Error("platform_worker_restore_lock_invalid");
     }
-    unlinkSync(identity.lockPath);
+    if (!retainAfterError) unlinkSync(identity.lockPath);
     syncDirectory(identity.directory);
   }
 }
 
+function markPlatformMutationLockUnresolved(
+  identity: PlatformRestoreLockIdentity,
+  owner: PlatformMutationLockOwner,
+  descriptor: number,
+): void {
+  const lock = readStablePlatformRestoreLock(identity.lockPath);
+  const openedBefore = fstatSync(descriptor, { bigint: true });
+  const fileIdentity = platformRestoreLockFileIdentity(openedBefore);
+  if (!sameRestoreLockStatus(lock.status, openedBefore)) {
+    throw new Error("platform_worker_restore_lock_invalid");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(lock.bytes),
+    ) as unknown;
+  } catch (error) {
+    throw new Error("platform_worker_restore_lock_invalid", { cause: error });
+  }
+  if (
+    !record(value) ||
+    value.kind !== "takosumi.platform-worker-mutation-lock@v2" ||
+    value.state !== "active" ||
+    value.scope !== identity.scope ||
+    JSON.stringify(value.owner) !== JSON.stringify(owner) ||
+    value.lockPath !== identity.lockPath ||
+    value.pid !== process.pid
+  ) {
+    throw new Error("platform_worker_restore_lock_invalid");
+  }
+  const bytes = new TextEncoder().encode(
+    `${JSON.stringify({ ...value, state: "unresolved" })}\n`,
+  );
+  ftruncateSync(descriptor, 0);
+  if (writeSync(descriptor, bytes, 0, bytes.length, 0) !== bytes.length) {
+    throw new Error("platform_worker_restore_lock_invalid");
+  }
+  fsyncSync(descriptor);
+  const openedAfter = fstatSync(descriptor, { bigint: true });
+  const linkedAfter = lstatSync(identity.lockPath, { bigint: true });
+  assertPlatformRestoreLockFileIdentity(openedAfter, fileIdentity, [1n]);
+  assertPlatformRestoreLockFileIdentity(linkedAfter, fileIdentity, [1n]);
+  if (!sameRestoreLockStatus(openedAfter, linkedAfter))
+    throw new Error("platform_worker_restore_lock_invalid");
+  syncDirectory(identity.directory);
+}
+
 function acquirePlatformRestoreLock(
   identity: PlatformRestoreLockIdentity,
-  confirmation: string,
+  owner: PlatformMutationLockOwner,
+  lockedErrorCode: PlatformMutationLockBusyCode,
+  allowStaleReclaim: boolean,
+  staleReclaimErrorCode?: string,
 ): number {
   for (;;) {
     const pendingName = `${basename(identity.lockPath)}.pending-${process.pid}-${randomBytes(16).toString("hex")}`;
@@ -555,9 +1591,10 @@ function acquirePlatformRestoreLock(
         descriptor,
         new TextEncoder().encode(
           `${JSON.stringify({
-            kind: "takosumi.platform-worker-restore-lock@v1",
+            kind: "takosumi.platform-worker-mutation-lock@v2",
+            state: "active",
             scope: identity.scope,
-            planConfirmation: confirmation,
+            owner,
             lockPath: identity.lockPath,
             pendingName,
             fileIdentity,
@@ -571,11 +1608,7 @@ function acquirePlatformRestoreLock(
       );
       fsyncSync(descriptor);
       const complete = fstatSync(descriptor, { bigint: true });
-      assertPlatformRestoreLockFileIdentity(
-        complete,
-        fileIdentity,
-        [1n],
-      );
+      assertPlatformRestoreLockFileIdentity(complete, fileIdentity, [1n]);
       try {
         linkSync(pendingPath, identity.lockPath);
         canonicalLinked = true;
@@ -585,8 +1618,16 @@ function acquirePlatformRestoreLock(
         descriptorOpen = false;
         unlinkSync(pendingPath);
         syncDirectory(identity.directory);
-        if (reclaimStalePlatformRestoreLock(identity, confirmation)) continue;
-        throw new Error("platform_worker_restore_locked");
+        if (
+          reclaimStalePlatformRestoreLock(
+            identity,
+            owner,
+            allowStaleReclaim,
+            staleReclaimErrorCode,
+          )
+        )
+          continue;
+        throw new Error(lockedErrorCode);
       }
       // Publish only a complete, fsynced owner record. The hard link is the
       // single atomic no-overwrite transition into canonical lock ownership.
@@ -603,10 +1644,7 @@ function acquirePlatformRestoreLock(
       syncDirectory(identity.directory);
       const opened = fstatSync(descriptor, { bigint: true });
       const linked = lstatSync(identity.lockPath, { bigint: true });
-      if (
-        !sameRestoreLockStatus(opened, linked) ||
-        opened.nlink !== 1n
-      ) {
+      if (!sameRestoreLockStatus(opened, linked) || opened.nlink !== 1n) {
         throw new Error("platform_worker_restore_lock_invalid");
       }
       return descriptor;
@@ -638,15 +1676,62 @@ function acquirePlatformRestoreLock(
 
 function reclaimStalePlatformRestoreLock(
   identity: PlatformRestoreLockIdentity,
-  confirmation: string,
+  requestedOwner: PlatformMutationLockOwner,
+  allowStaleReclaim: boolean,
+  staleReclaimErrorCode?: string,
 ): boolean {
-  let lock: Readonly<{ bytes: Uint8Array; status: BigIntStats }>;
+  let value: PlatformMutationLockRecord;
   try {
-    lock = readStablePlatformRestoreLock(identity.lockPath);
+    value = readValidatedPlatformMutationLock(identity);
   } catch (error) {
     if (fileSystemError(error, "ENOENT")) return true;
-    throw new Error("platform_worker_restore_lock_invalid", { cause: error });
+    throw error;
   }
+  const currentHost = platformRestoreHostIdentity();
+  const currentProcess = platformRestoreProcessIdentity(process.pid);
+  assertPlatformMutationLockHost(value, currentHost, currentProcess.bootId);
+  if (
+    value.state === "active" &&
+    value.bootId === currentProcess.bootId &&
+    platformRestoreProcessStillOwnsLock(
+      value.pid,
+      value.processStartTicks,
+    )
+  ) {
+    return false;
+  }
+  if (
+    JSON.stringify(value.owner) !== JSON.stringify(requestedOwner) ||
+    !allowStaleReclaim
+  ) {
+    if (staleReclaimErrorCode) throw new Error(staleReclaimErrorCode);
+    throw new Error("platform_worker_restore_lock_invalid");
+  }
+  const linked = optionalBigIntLstat(identity.lockPath);
+  if (linked === null) return true;
+  if (!sameRestoreLockStatus(value.status, linked)) {
+    throw new Error("platform_worker_restore_lock_invalid");
+  }
+  unlinkSync(identity.lockPath);
+  const pendingPath = join(identity.directory, value.pendingName);
+  const pending = optionalBigIntLstat(pendingPath);
+  if (pending) {
+    if (
+      !platformRestoreLockStatusMatchesIdentity(pending, value.fileIdentity)
+    ) {
+      throw new Error("platform_worker_restore_lock_invalid");
+    }
+    assertPlatformRestoreLockFile(pending, [1n]);
+    unlinkSync(pendingPath);
+  }
+  syncDirectory(identity.directory);
+  return true;
+}
+
+function readValidatedPlatformMutationLock(
+  identity: PlatformRestoreLockIdentity,
+): PlatformMutationLockRecord {
+  const lock = readStablePlatformRestoreLock(identity.lockPath);
   let value: unknown;
   try {
     value = JSON.parse(
@@ -666,16 +1751,18 @@ function reclaimStalePlatformRestoreLock(
           "hostIdentity",
           "kind",
           "lockPath",
+          "owner",
           "pendingName",
           "pid",
-          "planConfirmation",
           "processStartTicks",
           "scope",
+          "state",
         ].sort(),
       ) ||
-    value.kind !== "takosumi.platform-worker-restore-lock@v1" ||
+    value.kind !== "takosumi.platform-worker-mutation-lock@v2" ||
+    (value.state !== "active" && value.state !== "unresolved") ||
     value.scope !== identity.scope ||
-    value.planConfirmation !== confirmation ||
+    !validPlatformMutationLockOwner(value.owner) ||
     value.lockPath !== identity.lockPath ||
     typeof value.pendingName !== "string" ||
     !platformRestorePendingLockName(identity, value.pendingName) ||
@@ -692,45 +1779,45 @@ function reclaimStalePlatformRestoreLock(
   ) {
     throw new Error("platform_worker_restore_lock_invalid");
   }
-  assertPlatformRestoreLockFileIdentity(
-    lock.status,
-    value.fileIdentity,
-    [1n, 2n],
-  );
-  const currentHost = platformRestoreHostIdentity();
-  const currentProcess = platformRestoreProcessIdentity(process.pid);
-  if (!samePlatformRestoreHostIdentity(value.hostIdentity, currentHost)) {
+  assertPlatformRestoreLockFileIdentity(lock.status, value.fileIdentity, [
+    1n,
+    2n,
+  ]);
+  assertPlatformRestorePendingLink(identity, value.pendingName, lock.status);
+  return {
+    state: value.state,
+    scope: value.scope,
+    owner: value.owner,
+    lockPath: value.lockPath,
+    pendingName: value.pendingName,
+    fileIdentity: value.fileIdentity,
+    hostIdentity: value.hostIdentity,
+    pid: value.pid as number,
+    bootId: value.bootId,
+    processStartTicks: value.processStartTicks,
+    acquiredAt: value.acquiredAt,
+    status: lock.status,
+  };
+}
+
+function assertPlatformMutationLockHost(
+  lock: PlatformMutationLockRecord,
+  current: PlatformRestoreHostIdentity,
+  currentBootId: string,
+): void {
+  if (lock.hostIdentity.machineIdSha256 !== current.machineIdSha256) {
     throw new Error("platform_worker_restore_lock_foreign_host");
   }
-  if (value.bootId !== currentProcess.bootId) {
-    throw new Error("platform_worker_restore_lock_foreign_boot");
-  }
-  assertPlatformRestorePendingLink(identity, value.pendingName, lock.status);
+  // A different boot on the same physical machine proves the old process is
+  // dead. PID namespace inode identity is boot-local, so compare it only while
+  // both records describe this boot.
   if (
-    platformRestoreProcessStillOwnsLock(
-      value.pid as number,
-      value.processStartTicks,
-    )
+    lock.bootId === currentBootId &&
+    (lock.hostIdentity.pidNamespaceDev !== current.pidNamespaceDev ||
+      lock.hostIdentity.pidNamespaceIno !== current.pidNamespaceIno)
   ) {
-    return false;
+    throw new Error("platform_worker_restore_lock_foreign_host");
   }
-  const linked = optionalBigIntLstat(identity.lockPath);
-  if (linked === null) return true;
-  if (!sameRestoreLockStatus(lock.status, linked)) {
-    throw new Error("platform_worker_restore_lock_invalid");
-  }
-  unlinkSync(identity.lockPath);
-  const pendingPath = join(identity.directory, value.pendingName);
-  const pending = optionalBigIntLstat(pendingPath);
-  if (pending) {
-    if (!platformRestoreLockStatusMatchesIdentity(pending, value.fileIdentity)) {
-      throw new Error("platform_worker_restore_lock_invalid");
-    }
-    assertPlatformRestoreLockFile(pending, [1n]);
-    unlinkSync(pendingPath);
-  }
-  syncDirectory(identity.directory);
-  return true;
 }
 
 function readStablePlatformRestoreLock(
@@ -882,14 +1969,16 @@ function samePlatformRestoreHostIdentity(
 function platformRestoreProcessIdentity(
   pid: number,
 ): Readonly<{ bootId: string; processStartTicks: string }> {
-  const bootId = readFileSync(
-    "/proc/sys/kernel/random/boot_id",
-    "utf8",
-  ).trim();
+  const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
   const statSource = readFileSync(`/proc/${pid}/stat`, "utf8");
   const close = statSource.lastIndexOf(")");
   const fields =
-    close === -1 ? [] : statSource.slice(close + 1).trim().split(/\s+/u);
+    close === -1
+      ? []
+      : statSource
+          .slice(close + 1)
+          .trim()
+          .split(/\s+/u);
   const processStartTicks = fields[19];
   if (
     !/^[0-9a-f-]{36}$/u.test(bootId) ||
@@ -956,7 +2045,17 @@ export function readPlatformRestoreFence(
   planPath: string,
   confirmation: string,
 ): PlatformRestoreFence {
-  const path = platformRestoreCheckpointPath(planPath, confirmation);
+  return readPlatformRestoreFenceAtCheckpoint(
+    platformMutationCheckpointPath(planPath, confirmation),
+    confirmation,
+  );
+}
+
+function readPlatformRestoreFenceAtCheckpoint(
+  checkpointPath: string,
+  confirmation: string,
+): PlatformRestoreFence {
+  const path = `${checkpointPath}.restore`;
   try {
     lstatSync(path);
   } catch (error) {
@@ -992,7 +2091,8 @@ export function readPlatformRestoreFence(
         (value.outcome !== "unknown" && value.outcome !== "accepted") ||
         (value.outcome === "unknown"
           ? value.versionId !== null
-          : typeof value.versionId !== "string" || !VERSION.test(value.versionId))
+          : typeof value.versionId !== "string" ||
+            !VERSION.test(value.versionId))
       ) {
         throw new Error("platform_worker_restore_checkpoint_invalid");
       }
@@ -1024,14 +2124,20 @@ export function readPlatformRestoreFence(
     ...(records.some((entry) => entry.stage === "container")
       ? {
           container: acceptedContainer
-            ? { outcome: "accepted" as const, versionId: acceptedContainer.versionId }
+            ? {
+                outcome: "accepted" as const,
+                versionId: acceptedContainer.versionId,
+              }
             : { outcome: "unknown" as const, versionId: null },
         }
       : {}),
     ...(records.some((entry) => entry.stage === "worker")
       ? {
           worker: acceptedWorker
-            ? { outcome: "accepted" as const, versionId: acceptedWorker.versionId }
+            ? {
+                outcome: "accepted" as const,
+                versionId: acceptedWorker.versionId,
+              }
             : { outcome: "unknown" as const, versionId: null },
         }
       : {}),
@@ -1044,9 +2150,7 @@ export function platformRestoreFailureState(
 ): Readonly<{
   mutationOutcome: "not-started" | "unknown" | "accepted";
   failureBoundary:
-    | "pre-mutation"
-    | "post-mutation-unknown"
-    | "post-mutation-readback";
+    "pre-mutation" | "post-mutation-unknown" | "post-mutation-readback";
 }> {
   try {
     const fence = readPlatformRestoreFence(planPath, confirmation);
@@ -1082,9 +2186,11 @@ export function appendPlatformRestoreFence(
     stage === "container"
       ? fence.outcome === "unknown"
         ? current.container === undefined && current.worker === undefined
-        : current.container?.outcome === "unknown" && current.worker === undefined
+        : current.container?.outcome === "unknown" &&
+          current.worker === undefined
       : fence.outcome === "unknown"
-        ? current.container?.outcome === "accepted" && current.worker === undefined
+        ? current.container?.outcome === "accepted" &&
+          current.worker === undefined
         : current.container?.outcome === "accepted" &&
           current.worker?.outcome === "unknown";
   if (!validTransition) {
@@ -1121,7 +2227,10 @@ export function appendPlatformRestoreFence(
     fsyncSync(descriptor);
     const after = fstatSync(descriptor, { bigint: true });
     const linked = lstatSync(path, { bigint: true });
-    if (!sameInodeIdentity(before, after) || !samePhysicalIdentity(after, linked)) {
+    if (
+      !sameInodeIdentity(before, after) ||
+      !samePhysicalIdentity(after, linked)
+    ) {
       throw new Error("platform_worker_restore_checkpoint_invalid");
     }
   } finally {
@@ -1136,7 +2245,155 @@ export function readPlatformMutationFence(
   planPath: string,
   confirmation: string,
 ): PlatformMutationFence | null {
-  const path = platformMutationCheckpointPath(planPath, confirmation);
+  return readPlatformMutationFenceAtCheckpoint(
+    platformMutationCheckpointPath(planPath, confirmation),
+    confirmation,
+  );
+}
+
+export function readPlatformReleasePlanMutationState(
+  planPath: string,
+  confirmation: string,
+): Readonly<{
+  authority: PlatformReleasePlanAuthority;
+  fence: PlatformMutationFence | null;
+}> {
+  const authority = readPlatformReleasePlanAuthority(planPath, confirmation);
+  return {
+    authority,
+    fence: readPlatformMutationFenceAtCheckpoint(
+      authority.checkpointPath,
+      authority.confirmation,
+    ),
+  };
+}
+
+export type PlatformReleaseReadyEvidenceAuthority = Readonly<{
+  digest: string;
+  completedAt: string;
+  deployedVersionId: string;
+  reviewer: string;
+}>;
+
+/**
+ * Validate the platform owner's complete ready evidence against the complete
+ * v5 plan and its durable accepted checkpoint. Consumers must not trust a
+ * proof that merely copies a Version UUID or evidence-shaped digest.
+ */
+export function readPlatformReleaseReadyEvidenceAuthority(
+  planPath: string,
+  confirmation: string,
+  evidencePath: string,
+): PlatformReleaseReadyEvidenceAuthority {
+  const plan = readValidatedPlatformReleasePlan(planPath, confirmation);
+  assertPrivateFile(evidencePath);
+  const bytes = readStablePhysicalBytes(
+    evidencePath,
+    "platform_worker_release_evidence_invalid",
+  );
+  let value: unknown;
+  try {
+    value = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    ) as unknown;
+  } catch (error) {
+    throw new Error("platform_worker_release_evidence_invalid", {
+      cause: error,
+    });
+  }
+  const baseKeys = [
+    "closureSha256",
+    "completedAt",
+    "configPath",
+    "configSha256",
+    "dashboardAssetsSha256",
+    "deployedContainer",
+    "deployedVersionId",
+    "dryRunSha256",
+    "environment",
+    "kind",
+    "lostAcknowledgement",
+    "planConfirmation",
+    "predecessorContainer",
+    "predecessorVersionId",
+    "releaseTag",
+    "reversal",
+    "reviewer",
+    "sealedConfigSha256",
+    "secretNamesSha256",
+    "sourceCommit",
+    "status",
+  ];
+  if (!record(value)) {
+    throw new Error("platform_worker_release_evidence_invalid");
+  }
+  const keys = Object.keys(value).sort();
+  const expectedBase = [...baseKeys].sort();
+  const expectedRecovery = [...baseKeys, "recoverySourceCommit"].sort();
+  const forwardFence = readPlatformMutationFenceAtCheckpoint(
+    plan.checkpointPath,
+    plan.confirmation,
+  );
+  const expectedReversal = {
+    surface:
+      plan.environment === "staging"
+        ? "takosumi-platform-staging"
+        : "takosumi-platform",
+    action: "restore",
+    planConfirmation: plan.confirmation,
+    predecessorVersionId: plan.predecessorVersionId,
+    predecessorContainer: plan.predecessorContainer,
+  };
+  if (
+    (JSON.stringify(keys) !== JSON.stringify(expectedBase) &&
+      JSON.stringify(keys) !== JSON.stringify(expectedRecovery)) ||
+    value.kind !== "takosumi.platform-worker-release-evidence@v2" ||
+    value.status !== "ready" ||
+    typeof value.completedAt !== "string" ||
+    !Number.isFinite(Date.parse(value.completedAt)) ||
+    new Date(value.completedAt).toISOString() !== value.completedAt ||
+    value.environment !== plan.environment ||
+    value.sourceCommit !== plan.sourceCommit ||
+    ("recoverySourceCommit" in value &&
+      !COMMIT.test(String(value.recoverySourceCommit))) ||
+    value.configPath !== plan.configPath ||
+    value.configSha256 !== plan.configSha256 ||
+    value.sealedConfigSha256 !== plan.sealedConfigSha256 ||
+    value.closureSha256 !== plan.closure.digest ||
+    value.dashboardAssetsSha256 !== plan.dashboardAssets.digest ||
+    value.dryRunSha256 !== plan.dryRun.digest ||
+    value.secretNamesSha256 !== plan.secretNamesSha256 ||
+    value.predecessorVersionId !== plan.predecessorVersionId ||
+    JSON.stringify(value.predecessorContainer) !==
+      JSON.stringify(plan.predecessorContainer) ||
+    typeof value.deployedVersionId !== "string" ||
+    !VERSION.test(value.deployedVersionId) ||
+    forwardFence?.outcome !== "accepted" ||
+    forwardFence.versionId !== value.deployedVersionId ||
+    !validPlatformContainerState(value.deployedContainer) ||
+    value.releaseTag !== plan.releaseTag ||
+    value.planConfirmation !== plan.confirmation ||
+    typeof value.reviewer !== "string" ||
+    !/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(value.reviewer) ||
+    typeof value.lostAcknowledgement !== "boolean" ||
+    JSON.stringify(value.reversal) !== JSON.stringify(expectedReversal)
+  ) {
+    throw new Error("platform_worker_release_evidence_invalid");
+  }
+  assertPlatformContainerComplete(value.deployedContainer);
+  return {
+    digest: digest(bytes),
+    completedAt: value.completedAt,
+    deployedVersionId: value.deployedVersionId,
+    reviewer: value.reviewer,
+  };
+}
+
+function readPlatformMutationFenceAtCheckpoint(
+  checkpointPath: string,
+  confirmation: string,
+): PlatformMutationFence | null {
+  const path = checkpointPath;
   let status: ReturnType<typeof lstatSync>;
   try {
     status = lstatSync(path);
@@ -1154,19 +2411,13 @@ export function readPlatformMutationFence(
   ) {
     throw new Error("platform_worker_release_checkpoint_invalid");
   }
-  const lines = new TextDecoder("utf-8", { fatal: true })
-    .decode(
-      readStablePhysicalBytes(
-        path,
-        "platform_worker_release_checkpoint_invalid",
-      ),
-    );
+  const lines = new TextDecoder("utf-8", { fatal: true }).decode(
+    readStablePhysicalBytes(path, "platform_worker_release_checkpoint_invalid"),
+  );
   if (!lines.endsWith("\n")) {
     throw new Error("platform_worker_release_checkpoint_invalid");
   }
-  const recordsSource = lines
-    .split(/\r?\n/u)
-    .filter(Boolean);
+  const recordsSource = lines.split(/\r?\n/u).filter(Boolean);
   if (recordsSource.length === 0) {
     throw new Error("platform_worker_release_checkpoint_invalid");
   }
@@ -1223,12 +2474,11 @@ export function platformMutationFailureState(
 ): Readonly<{
   mutationOutcome: "not-started" | "unknown" | "accepted";
   failureBoundary:
-    | "pre-mutation"
-    | "post-mutation-unknown"
-    | "post-mutation-readback";
+    "pre-mutation" | "post-mutation-unknown" | "post-mutation-readback";
 }> {
   try {
-    const outcome = readPlatformMutationFence(planPath, confirmation)?.outcome ??
+    const outcome =
+      readPlatformMutationFence(planPath, confirmation)?.outcome ??
       "not-started";
     return {
       mutationOutcome: outcome,
@@ -1428,6 +2678,8 @@ interface PlatformReleasePlan {
   readonly sealedConfigSha256: string;
   readonly uploadEntrypointPath: string;
   readonly checkpointPath: string;
+  readonly targetMutationAuthorityPath: string;
+  readonly targetMutationAuthorityDirectoryIdentityDigest: string;
   readonly restoreClosurePath: string;
   readonly restoreClosure: DashboardAssetSeal;
   readonly restoreSealedConfigPath: string;
@@ -1477,6 +2729,10 @@ export interface CommandResult {
   readonly stderr: string;
 }
 
+export interface PlatformWorkerReleaseDependencies {
+  readonly env?: Readonly<Record<string, string | undefined>>;
+}
+
 export type PlatformReleaseCommand = (
   argv: readonly string[],
   stdin?: Uint8Array,
@@ -1487,12 +2743,17 @@ export type PlatformReleaseCommand = (
 export async function runPlatformWorkerRelease(
   argv: readonly string[],
   environment: PlatformEnvironment = "staging",
+  dependencies: PlatformWorkerReleaseDependencies = {},
 ): Promise<void> {
   const options = parsePlatformWorkerReleaseArgs(argv);
-  if (options.action === "plan") await plan(options, environment);
-  else if (options.action === "execute") await execute(options, environment);
-  else if (options.action === "recover") await recover(options, environment);
-  else await restore(options, environment);
+  const environmentVariables = dependencies.env ?? process.env;
+  if (options.action === "plan")
+    await plan(options, environment, environmentVariables);
+  else if (options.action === "execute")
+    await execute(options, environment, environmentVariables);
+  else if (options.action === "recover")
+    await recover(options, environment, environmentVariables);
+  else await restore(options, environment, environmentVariables);
 }
 
 export function parsePlatformWorkerReleaseArgs(
@@ -1582,7 +2843,15 @@ export function platformWorkerRestoreVersionArguments(
 async function plan(
   options: Extract<Options, { action: "plan" }>,
   environment: PlatformEnvironment,
+  environmentVariables: Readonly<Record<string, string | undefined>>,
 ): Promise<void> {
+  const targetMutationTarget = platformTargetMutationIdentityFromEnvironment(
+    environment,
+    environmentVariables,
+  );
+  // This must be the first target/source/config action. A plan is read-only,
+  // but it may not hide an indeterminate mutation behind a newer plan.
+  assertPlatformTargetMutationAuthorityAvailable(targetMutationTarget);
   assertCleanAndPushed();
   assertReadableConfig(options.config);
   assertExternalAbsent(options.planOut);
@@ -1593,16 +2862,57 @@ async function plan(
   assertExternalAbsent(restoreClosurePath);
   assertExternalAbsent(checkpointPath);
   assertExternalAbsent(`${checkpointPath}.restore`);
+  const targetMutationLock =
+    platformTargetMutationLockIdentity(targetMutationTarget);
+  assertPlatformArtifactPathEntries(
+    [
+      { label: "platform-plan", path: options.planOut },
+      { label: "platform-config", path: options.config },
+      {
+        label: "platform-forward-closure",
+        path: closurePath,
+        containmentGroup: "forward-closure",
+        treeRoot: true,
+      },
+      {
+        label: "platform-forward-sealed-config",
+        path: join(closurePath, "wrangler.toml"),
+        containmentGroup: "forward-closure",
+      },
+      { label: "platform-checkpoint", path: checkpointPath },
+      {
+        label: "platform-restore-checkpoint",
+        path: `${checkpointPath}.restore`,
+      },
+      {
+        label: "platform-restore-retirement",
+        path: `${checkpointPath}.restore-retired-control-d1.json`,
+      },
+      {
+        label: "platform-target-mutation-lock",
+        path: targetMutationLock.lockPath,
+      },
+      {
+        label: "platform-restore-closure",
+        path: restoreClosurePath,
+        containmentGroup: "restore-closure",
+        treeRoot: true,
+      },
+      {
+        label: "platform-restore-sealed-config",
+        path: join(restoreClosurePath, "wrangler.toml"),
+        containmentGroup: "restore-closure",
+      },
+    ],
+    [targetMutationLock],
+    "platform_worker_release_artifact_path_alias",
+  );
   const config = readStablePhysicalBytes(
     options.config,
     "platform_worker_release_config_invalid",
   );
   const configSource = new TextDecoder("utf-8", { fatal: true }).decode(config);
-  assertConfigTargetsSource(
-    configSource,
-    options.config,
-    environment,
-  );
+  assertConfigTargetsSource(configSource, options.config, environment);
   const dashboardAssets = await buildDeterministicDashboard(environment);
   const sourceCommit = git(["rev-parse", "HEAD"]).trim();
   const predecessorVersionId = await readServingVersion(options.config);
@@ -1618,8 +2928,7 @@ async function plan(
   let sealed: Awaited<ReturnType<typeof createPlatformDeployClosure>>;
   let restoreSealed: Awaited<ReturnType<typeof createPlatformDeployClosure>>;
   let restoreDryRunConfig:
-    | ReturnType<typeof createPlatformDryRunConfig>
-    | undefined;
+    ReturnType<typeof createPlatformDryRunConfig> | undefined;
   try {
     const transientRestoreConfig = createPlatformDryRunConfig(
       restoreConfigSource,
@@ -1665,6 +2974,9 @@ async function plan(
     sealedConfigSha256: sealed.configSha256,
     uploadEntrypointPath: sealed.uploadEntrypointPath,
     checkpointPath,
+    targetMutationAuthorityPath: targetMutationLock.lockPath,
+    targetMutationAuthorityDirectoryIdentityDigest:
+      targetMutationLock.directoryIdentityDigest!,
     restoreClosurePath,
     restoreClosure: restoreSealed.closure,
     restoreSealedConfigPath: restoreSealed.configPath,
@@ -1687,6 +2999,12 @@ async function plan(
     ...subject,
     confirmation: digest(new TextEncoder().encode(JSON.stringify(subject))),
   };
+  assertPlatformReleaseArtifactPathGraphForPlan(
+    options.planOut,
+    releasePlan,
+    [],
+    "platform_worker_release_artifact_path_alias",
+  );
   writePrivate(
     options.planOut,
     new TextEncoder().encode(`${JSON.stringify(releasePlan, null, 2)}\n`),
@@ -1699,6 +3017,7 @@ async function plan(
 async function execute(
   options: Extract<Options, { action: "execute" }>,
   environment: PlatformEnvironment,
+  environmentVariables: Readonly<Record<string, string | undefined>>,
 ): Promise<void> {
   assertExternalAbsent(options.evidence);
   let releasePlan: PlatformReleasePlan | undefined;
@@ -1716,11 +3035,49 @@ async function execute(
       options.confirmation,
       environment,
     );
+    const targetMutationTarget =
+      platformTargetMutationIdentityFromEnvironment(
+        environment,
+        environmentVariables,
+      );
+    if (
+      platformTargetMutationLockPath(targetMutationTarget) !==
+        releasePlan.targetMutationAuthorityPath ||
+      platformTargetMutationAuthorityDirectoryIdentityDigest(
+        targetMutationTarget,
+      ) !== releasePlan.targetMutationAuthorityDirectoryIdentityDigest
+    ) {
+      throw new Error(
+        "platform_worker_target_mutation_authority_directory_drift",
+      );
+    }
+    assertPlatformReleaseArtifactPathGraphForPlan(
+      options.plan,
+      releasePlan,
+      [{ label: "evidence", path: options.evidence }],
+      "platform_worker_release_artifact_path_alias",
+    );
     if (git(["rev-parse", "HEAD"]).trim() !== releasePlan.sourceCommit) {
       throw new Error("platform_worker_release_source_drift");
     }
     await assertPlanClosure(releasePlan);
-    await completeRelease(options, releasePlan, true);
+    await withPlatformTargetMutationLock(
+      targetMutationTarget,
+      {
+        operationKind: "platform-forward",
+        planConfirmation: releasePlan.confirmation,
+        checkpointPath: releasePlan.checkpointPath,
+        mode: "execute",
+      },
+      () => completeRelease(options, releasePlan!, true),
+      {
+        shouldRetainAfterError: () =>
+          platformMutationFailureState(
+            options.plan,
+            releasePlan!.confirmation,
+          ).mutationOutcome !== "not-started",
+      },
+    );
   } catch (error) {
     writePlatformFailureIfAbsent(options, environment, releasePlan, error);
     throw error;
@@ -1730,6 +3087,7 @@ async function execute(
 async function recover(
   options: Extract<Options, { action: "recover" }>,
   environment: PlatformEnvironment,
+  environmentVariables: Readonly<Record<string, string | undefined>>,
 ): Promise<void> {
   assertExternalAbsent(options.evidence);
   let releasePlan: PlatformReleasePlan | undefined;
@@ -1747,12 +3105,50 @@ async function recover(
       options.confirmation,
       environment,
     );
+    const targetMutationTarget =
+      platformTargetMutationIdentityFromEnvironment(
+        environment,
+        environmentVariables,
+      );
+    if (
+      platformTargetMutationLockPath(targetMutationTarget) !==
+        releasePlan.targetMutationAuthorityPath ||
+      platformTargetMutationAuthorityDirectoryIdentityDigest(
+        targetMutationTarget,
+      ) !== releasePlan.targetMutationAuthorityDirectoryIdentityDigest
+    ) {
+      throw new Error(
+        "platform_worker_target_mutation_authority_directory_drift",
+      );
+    }
+    assertPlatformReleaseArtifactPathGraphForPlan(
+      options.plan,
+      releasePlan,
+      [{ label: "evidence", path: options.evidence }],
+      "platform_worker_release_artifact_path_alias",
+    );
     const head = git(["rev-parse", "HEAD"]).trim();
     if (!isAncestor(releasePlan.sourceCommit, head)) {
       throw new Error("platform_worker_release_recovery_source_invalid");
     }
     await assertPlanClosure(releasePlan);
-    await completeRelease(options, releasePlan, false, head);
+    await withPlatformTargetMutationLock(
+      targetMutationTarget,
+      {
+        operationKind: "platform-forward",
+        planConfirmation: releasePlan.confirmation,
+        checkpointPath: releasePlan.checkpointPath,
+        mode: "recover",
+      },
+      () => completeRelease(options, releasePlan!, false, head),
+      {
+        shouldRetainAfterError: () =>
+          platformMutationFailureState(
+            options.plan,
+            releasePlan!.confirmation,
+          ).mutationOutcome !== "not-started",
+      },
+    );
   } catch (error) {
     writePlatformFailureIfAbsent(options, environment, releasePlan, error);
     throw error;
@@ -1762,6 +3158,7 @@ async function recover(
 async function restore(
   options: Extract<Options, { action: "restore" }>,
   environment: PlatformEnvironment,
+  environmentVariables: Readonly<Record<string, string | undefined>>,
 ): Promise<void> {
   assertExternalAbsent(options.evidence);
   let releasePlan: PlatformReleasePlan | undefined;
@@ -1779,16 +3176,53 @@ async function restore(
       options.confirmation,
       environment,
     );
+    const targetMutationTarget =
+      platformTargetMutationIdentityFromEnvironment(
+        environment,
+        environmentVariables,
+      );
+    if (
+      platformTargetMutationLockPath(targetMutationTarget) !==
+        releasePlan.targetMutationAuthorityPath ||
+      platformTargetMutationAuthorityDirectoryIdentityDigest(
+        targetMutationTarget,
+      ) !== releasePlan.targetMutationAuthorityDirectoryIdentityDigest
+    ) {
+      throw new Error(
+        "platform_worker_target_mutation_authority_directory_drift",
+      );
+    }
     const head = git(["rev-parse", "HEAD"]).trim();
     if (!isAncestor(releasePlan.sourceCommit, head)) {
       throw new Error("platform_worker_release_restore_source_invalid");
     }
     assertPlatformRestorePathGraph(options, releasePlan);
     await assertPlanClosure(releasePlan);
-    await withPlatformRestoreLock(
-      options.plan,
-      releasePlan.confirmation,
-      () => completeRestore(options, releasePlan!, head),
+    await withPlatformTargetMutationLock(
+      targetMutationTarget,
+      {
+        operationKind: "platform-restore",
+        planConfirmation: releasePlan.confirmation,
+        checkpointPath: `${releasePlan.checkpointPath}.restore`,
+        mode: "recover",
+      },
+      () =>
+        withPlatformReleasePlanRestoreLock(
+          options.plan,
+          releasePlan!.confirmation,
+          {
+            environment: releasePlan!.environment,
+            sourceCommit: releasePlan!.sourceCommit,
+          },
+          () => completeRestore(options, releasePlan!, head),
+        ),
+      {
+        shouldRetainAfterError: () =>
+          platformRestoreFailureState(
+            options.plan,
+            releasePlan!.confirmation,
+          ).mutationOutcome !== "not-started",
+      },
     );
   } catch (error) {
     const restoreState = releasePlan
@@ -1841,6 +3275,12 @@ function writePlatformFailureIfAbsent(
   plan: PlatformReleasePlan | undefined,
   error: unknown,
 ): void {
+  if (
+    error instanceof Error &&
+    error.message === "platform_worker_release_artifact_path_alias"
+  ) {
+    return;
+  }
   try {
     lstatSync(options.evidence);
     return;
@@ -1849,14 +3289,10 @@ function writePlatformFailureIfAbsent(
   }
   let mutationOutcome: "not-started" | "unknown" | "accepted" = "not-started";
   let failureBoundary:
-    | "pre-mutation"
-    | "post-mutation-unknown"
-    | "post-mutation-readback" = "pre-mutation";
+    "pre-mutation" | "post-mutation-unknown" | "post-mutation-readback" =
+    "pre-mutation";
   if (plan) {
-    const state = platformMutationFailureState(
-      options.plan,
-      plan.confirmation,
-    );
+    const state = platformMutationFailureState(options.plan, plan.confirmation);
     mutationOutcome = state.mutationOutcome;
     failureBoundary = state.failureBoundary;
   }
@@ -1960,10 +3396,7 @@ function platformDryRunConfigProjection(
   const base = dirname(originalConfigPath);
   let projected = source;
   for (const name of ["main", "directory"] as const) {
-    const expression = new RegExp(
-      `^(${name}\\s*=\\s*)"([^"]+)"(\\s*)$`,
-      "gmu",
-    );
+    const expression = new RegExp(`^(${name}\\s*=\\s*)"([^"]+)"(\\s*)$`, "gmu");
     const matches = [...projected.matchAll(expression)];
     if (matches.length !== 1) {
       throw new Error("platform_worker_release_dry_run_config_invalid");
@@ -1986,13 +3419,15 @@ async function createPlatformDeployClosure(
   dashboardAssets: DashboardAssetSeal,
   sourceCommit: string,
   dryRunConfigPath = originalConfigPath,
-): Promise<Readonly<{
-  configPath: string;
-  configSha256: string;
-  uploadEntrypointPath: string;
-  dryRun: DashboardAssetSeal;
-  closure: DashboardAssetSeal;
-}>> {
+): Promise<
+  Readonly<{
+    configPath: string;
+    configSha256: string;
+    uploadEntrypointPath: string;
+    dryRun: DashboardAssetSeal;
+    closure: DashboardAssetSeal;
+  }>
+> {
   mkdirSync(closurePath, { mode: 0o700 });
   const sourcePath = join(closurePath, "source");
   const dashboardPath = join(closurePath, "dashboard");
@@ -2033,21 +3468,14 @@ async function createPlatformDeployClosure(
   );
   writePrivate(configPath, new TextEncoder().encode(sealedSource));
   mkdirSync(dryRunPath, { mode: 0o700 });
-  const dryRun = await buildDryRunSeal(
-    dryRunConfigPath,
-    dryRunPath,
-    true,
-  );
+  const dryRun = await buildDryRunSeal(dryRunConfigPath, dryRunPath, true);
   const entryCandidates = dryRun.entries.filter(
     (entry) => !entry.path.includes("/") && entry.path.endsWith(".js"),
   );
   if (entryCandidates.length !== 1) {
     throw new Error("platform_worker_release_dry_run_entrypoint_invalid");
   }
-  const uploadEntrypointPath = join(
-    dryRunPath,
-    entryCandidates[0]!.path,
-  );
+  const uploadEntrypointPath = join(dryRunPath, entryCandidates[0]!.path);
   return {
     configPath,
     configSha256: digest(new TextEncoder().encode(sealedSource)),
@@ -2205,11 +3633,10 @@ function createGlobalTransientDirectory(prefix: string): string {
   const directory = mkdtempSync(join(resolve(tmpdir()), prefix));
   try {
     chmodSync(directory, 0o700);
-    if (
-      insideRoot(directory) ||
-      realpathSync(directory) !== directory
-    ) {
-      throw new Error("platform_worker_release_output_must_be_globally_external");
+    if (insideRoot(directory) || realpathSync(directory) !== directory) {
+      throw new Error(
+        "platform_worker_release_output_must_be_globally_external",
+      );
     }
     assertOutsideGitWorktree(directory);
     return directory;
@@ -2227,11 +3654,7 @@ async function assertPlanClosure(plan: PlatformReleasePlan): Promise<void> {
     "platform_worker_release_config_invalid",
   );
   const configSource = new TextDecoder("utf-8", { fatal: true }).decode(config);
-  assertConfigTargetsSource(
-    configSource,
-    plan.configPath,
-    plan.environment,
-  );
+  assertConfigTargetsSource(configSource, plan.configPath, plan.environment);
   if (digest(config) !== plan.configSha256) {
     throw new Error("platform_worker_release_config_drift");
   }
@@ -2319,11 +3742,10 @@ async function completeRelease(
         throw new Error("platform_worker_release_predecessor_drift");
       }
       assertPlatformUploadCustody(custody, plan.closure);
-      appendPlatformMutationFence(
-        options.plan,
-        plan.confirmation,
-        { outcome: "unknown", versionId: null },
-      );
+      appendPlatformMutationFence(options.plan, plan.confirmation, {
+        outcome: "unknown",
+        versionId: null,
+      });
       mutationOutcome = "unknown";
       assertPlatformUploadCustody(custody, plan.closure);
       const deployed = await requiredCommand(
@@ -2338,11 +3760,10 @@ async function completeRelease(
       const deployedVersionId = parseDeployedVersion(
         `${deployed.stdout}\n${deployed.stderr}`,
       );
-      appendPlatformMutationFence(
-        options.plan,
-        plan.confirmation,
-        { outcome: "accepted", versionId: deployedVersionId },
-      );
+      appendPlatformMutationFence(options.plan, plan.confirmation, {
+        outcome: "accepted",
+        versionId: deployedVersionId,
+      });
       fence = { outcome: "accepted", versionId: deployedVersionId };
       mutationOutcome = "accepted";
     }
@@ -2362,11 +3783,10 @@ async function completeRelease(
         plan.createdAt,
         plan.releaseTag,
       );
-      appendPlatformMutationFence(
-        options.plan,
-        plan.confirmation,
-        { outcome: "accepted", versionId: deployedVersionId },
-      );
+      appendPlatformMutationFence(options.plan, plan.confirmation, {
+        outcome: "accepted",
+        versionId: deployedVersionId,
+      });
       mutationOutcome = "accepted";
       lostAcknowledgement = true;
     } else {
@@ -2486,69 +3906,12 @@ function assertPlatformRestorePathGraph(
   options: Extract<Options, { action: "restore" }>,
   plan: PlatformReleasePlan,
 ): void {
-  const lock = platformRestoreLockIdentity(options.plan, plan.confirmation);
-  const requested = [
-    { label: "plan", path: options.plan },
-    { label: "evidence", path: options.evidence },
-    { label: "config", path: plan.configPath },
-    { label: "closure", path: plan.closurePath },
-    { label: "sealed-config", path: plan.sealedConfigPath },
-    { label: "upload-entrypoint", path: plan.uploadEntrypointPath },
-    { label: "checkpoint", path: plan.checkpointPath },
-    {
-      label: "restore-checkpoint",
-      path: `${plan.checkpointPath}.restore`,
-    },
-    { label: "restore-closure", path: plan.restoreClosurePath },
-    { label: "restore-sealed-config", path: plan.restoreSealedConfigPath },
-    {
-      label: "restore-upload-entrypoint",
-      path: plan.restoreUploadEntrypointPath,
-    },
-    { label: "restore-lock", path: lock.lockPath },
-  ].map((entry) => {
-    if (!isAbsolute(entry.path)) {
-      throw new Error("platform_worker_release_path_invalid");
-    }
-    const absolute = resolve(entry.path);
-    return {
-      ...entry,
-      absolute,
-      canonical: canonicalFuturePath(absolute),
-      status: optionalBigIntLstat(absolute),
-    };
-  });
-  for (let leftIndex = 0; leftIndex < requested.length; leftIndex += 1) {
-    const left = requested[leftIndex]!;
-    for (
-      let rightIndex = leftIndex + 1;
-      rightIndex < requested.length;
-      rightIndex += 1
-    ) {
-      const right = requested[rightIndex]!;
-      if (
-        left.canonical === right.canonical ||
-        (left.status !== null &&
-          right.status !== null &&
-          left.status.dev === right.status.dev &&
-          left.status.ino === right.status.ino)
-      ) {
-        throw new Error("platform_worker_restore_path_alias");
-      }
-    }
-  }
-  const canonicalLockDirectory = canonicalFuturePath(lock.directory);
-  const pendingPrefix = `${basename(lock.lockPath)}.pending-`;
-  if (
-    requested.some(
-      (entry) =>
-        entry.label !== "restore-lock" &&
-        dirname(entry.canonical) === canonicalLockDirectory &&
-        basename(entry.canonical).startsWith(pendingPrefix),
-    )
-  ) {
-    throw new Error("platform_worker_restore_path_alias");
-  }
+  assertPlatformReleaseArtifactPathGraphForPlan(
+    options.plan,
+    plan,
+    [{ label: "evidence", path: options.evidence }],
+    "platform_worker_restore_path_alias",
+  );
 }
 
 function canonicalFuturePath(path: string): string {
@@ -2572,6 +3935,10 @@ async function completeRestore(
   plan: PlatformReleasePlan,
   restoreSourceCommit: string,
 ): Promise<void> {
+  // The v67 schema transition permanently retires a bridge plan's old
+  // v66-only predecessor. This check runs under the plan-scoped restore lock
+  // and before either the Container upload or Worker routing checkpoint.
+  assertPlatformRestoreNotRetired(options.plan, plan.confirmation);
   const forward = readPlatformMutationFence(options.plan, plan.confirmation);
   if (forward?.outcome !== "accepted" || !forward.versionId) {
     throw new Error("platform_worker_restore_forward_release_incomplete");
@@ -2603,12 +3970,10 @@ async function completeRestore(
         configuredRunnerImage(plan.sealedConfigPath),
       );
       assertPlatformUploadCustody(custody, plan.restoreClosure);
-      appendPlatformRestoreFence(
-        options.plan,
-        plan.confirmation,
-        "container",
-        { outcome: "unknown", versionId: null },
-      );
+      appendPlatformRestoreFence(options.plan, plan.confirmation, "container", {
+        outcome: "unknown",
+        versionId: null,
+      });
       const restored = await requiredCommand(
         platformWorkerDeployArguments(
           custody.configPath,
@@ -2621,12 +3986,10 @@ async function completeRestore(
       restoreVersionId = parseDeployedVersion(
         `${restored.stdout}\n${restored.stderr}`,
       );
-      appendPlatformRestoreFence(
-        options.plan,
-        plan.confirmation,
-        "container",
-        { outcome: "accepted", versionId: restoreVersionId },
-      );
+      appendPlatformRestoreFence(options.plan, plan.confirmation, "container", {
+        outcome: "accepted",
+        versionId: restoreVersionId,
+      });
       fence = readPlatformRestoreFence(options.plan, plan.confirmation);
     } else if (fence.container.outcome === "unknown") {
       const versions = await requiredCommand([
@@ -2642,22 +4005,19 @@ async function completeRestore(
         plan.createdAt,
         restoreTag,
       );
-      appendPlatformRestoreFence(
-        options.plan,
-        plan.confirmation,
-        "container",
-        { outcome: "accepted", versionId: restoreVersionId },
-      );
+      appendPlatformRestoreFence(options.plan, plan.confirmation, "container", {
+        outcome: "accepted",
+        versionId: restoreVersionId,
+      });
       fence = readPlatformRestoreFence(options.plan, plan.confirmation);
     } else {
       restoreVersionId = fence.container.versionId!;
     }
 
-    await waitForServingTransition(
-      custody.configPath,
-      restoreVersionId,
-      [forward.versionId, plan.predecessorVersionId],
-    );
+    await waitForServingTransition(custody.configPath, restoreVersionId, [
+      forward.versionId,
+      plan.predecessorVersionId,
+    ]);
     await verifyPublishedVersion(
       custody.configPath,
       restoreVersionId,
@@ -2680,12 +4040,10 @@ async function completeRestore(
     );
 
     if (fence.worker === undefined) {
-      appendPlatformRestoreFence(
-        options.plan,
-        plan.confirmation,
-        "worker",
-        { outcome: "unknown", versionId: null },
-      );
+      appendPlatformRestoreFence(options.plan, plan.confirmation, "worker", {
+        outcome: "unknown",
+        versionId: null,
+      });
       await requiredCommand(
         platformWorkerRestoreVersionArguments(
           custody.configPath,
@@ -2693,12 +4051,10 @@ async function completeRestore(
           restoreMessage,
         ),
       );
-      appendPlatformRestoreFence(
-        options.plan,
-        plan.confirmation,
-        "worker",
-        { outcome: "accepted", versionId: plan.predecessorVersionId },
-      );
+      appendPlatformRestoreFence(options.plan, plan.confirmation, "worker", {
+        outcome: "accepted",
+        versionId: plan.predecessorVersionId,
+      });
     } else if (fence.worker.outcome === "unknown") {
       const serving = await readServingVersion(custody.configPath);
       if (serving !== plan.predecessorVersionId) {
@@ -2716,12 +4072,10 @@ async function completeRestore(
           ),
         );
       }
-      appendPlatformRestoreFence(
-        options.plan,
-        plan.confirmation,
-        "worker",
-        { outcome: "accepted", versionId: plan.predecessorVersionId },
-      );
+      appendPlatformRestoreFence(options.plan, plan.confirmation, "worker", {
+        outcome: "accepted",
+        versionId: plan.predecessorVersionId,
+      });
     } else if (fence.worker.versionId !== plan.predecessorVersionId) {
       throw new Error("platform_worker_restore_checkpoint_invalid");
     }
@@ -2805,7 +4159,9 @@ function platformRestoreTag(plan: PlatformReleasePlan): string {
   return `tks-rst-${plan.confirmation.slice("sha256:".length, "sha256:".length + 48)}`;
 }
 
-function platformReleaseTag(identity: Readonly<Record<string, unknown>>): string {
+function platformReleaseTag(
+  identity: Readonly<Record<string, unknown>>,
+): string {
   const environment = identity.environment;
   if (environment !== "staging" && environment !== "production") {
     throw new Error("platform_worker_release_plan_invalid");
@@ -2844,6 +4200,8 @@ function parsePlan(
           "sealedConfigSha256",
           "uploadEntrypointPath",
           "checkpointPath",
+          "targetMutationAuthorityDirectoryIdentityDigest",
+          "targetMutationAuthorityPath",
           "restoreClosurePath",
           "restoreClosure",
           "restoreSealedConfigPath",
@@ -2879,9 +4237,19 @@ function parsePlan(
     !SHA256.test(value.sealedConfigSha256) ||
     typeof value.uploadEntrypointPath !== "string" ||
     !isAbsolute(value.uploadEntrypointPath) ||
-    !insideDirectory(value.uploadEntrypointPath, join(value.closurePath, "dry-run")) ||
+    !insideDirectory(
+      value.uploadEntrypointPath,
+      join(value.closurePath, "dry-run"),
+    ) ||
     typeof value.checkpointPath !== "string" ||
     !isAbsolute(value.checkpointPath) ||
+    typeof value.targetMutationAuthorityPath !== "string" ||
+    !isAbsolute(value.targetMutationAuthorityPath) ||
+    resolve(value.targetMutationAuthorityPath) !==
+      value.targetMutationAuthorityPath ||
+    typeof value.targetMutationAuthorityDirectoryIdentityDigest !==
+      "string" ||
+    !SHA256.test(value.targetMutationAuthorityDirectoryIdentityDigest) ||
     typeof value.restoreClosurePath !== "string" ||
     !isAbsolute(value.restoreClosurePath) ||
     typeof value.restoreSealedConfigPath !== "string" ||
@@ -2930,6 +4298,30 @@ function parsePlan(
   ) {
     throw new Error("platform_worker_release_plan_invalid");
   }
+  try {
+    const targetLock = platformTargetMutationLockIdentity({
+      environment,
+      workerName: TARGETS[environment].workerName,
+      authorityDirectory: dirname(value.targetMutationAuthorityPath),
+    });
+    if (targetLock.lockPath !== value.targetMutationAuthorityPath) {
+      throw new Error("platform_worker_release_plan_invalid");
+    }
+    if (
+      targetLock.directoryIdentityDigest !==
+      value.targetMutationAuthorityDirectoryIdentityDigest
+    ) {
+      throw new Error("platform_worker_release_plan_invalid");
+    }
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "platform_worker_release_plan_invalid"
+    ) {
+      throw error;
+    }
+    throw new Error("platform_worker_release_plan_invalid", { cause: error });
+  }
   return value as unknown as PlatformReleasePlan;
 }
 
@@ -2955,7 +4347,9 @@ function validAssetSeal(value: unknown): value is DashboardAssetSeal {
       entry.path.length === 0 ||
       entry.path.includes("\\") ||
       isAbsolute(entry.path) ||
-      entry.path.split("/").some((part) => part === "" || part === "." || part === "..") ||
+      entry.path
+        .split("/")
+        .some((part) => part === "" || part === "." || part === "..") ||
       typeof entry.size !== "number" ||
       !Number.isSafeInteger(entry.size) ||
       entry.size < 0 ||
@@ -2968,8 +4362,7 @@ function validAssetSeal(value: unknown): value is DashboardAssetSeal {
   }
   if (
     new Set(paths).size !== paths.length ||
-    JSON.stringify(paths) !==
-      JSON.stringify([...paths].sort(codePointCompare))
+    JSON.stringify(paths) !== JSON.stringify([...paths].sort(codePointCompare))
   ) {
     return false;
   }
@@ -3051,8 +4444,8 @@ export function selectRecoveredVersion(
       throw new Error("platform_worker_release_versions_invalid");
     }
     return Date.parse(createdOn) >= Date.parse(planCreatedAt) &&
-        record(annotations) &&
-        annotations["workers/tag"] === expectedTag
+      record(annotations) &&
+      annotations["workers/tag"] === expectedTag
       ? [id]
       : [];
   });
@@ -3373,9 +4766,23 @@ function platformContainerHealth(
   return { failed, starting, scheduling, errorCount: errors.length };
 }
 
-function validPlatformContainerState(value: unknown): value is PlatformContainerState {
+function validPlatformContainerState(
+  value: unknown,
+): value is PlatformContainerState {
   return (
     record(value) &&
+    JSON.stringify(Object.keys(value).sort()) ===
+      JSON.stringify(
+        [
+          "hasActiveRollout",
+          "health",
+          "id",
+          "image",
+          "name",
+          "state",
+          "version",
+        ].sort(),
+      ) &&
     boundedString(value.id, 256) &&
     boundedString(value.name, 256) &&
     boundedString(value.state, 64) &&
@@ -3383,6 +4790,10 @@ function validPlatformContainerState(value: unknown): value is PlatformContainer
     platformContainerVersion(value.version) &&
     typeof value.hasActiveRollout === "boolean" &&
     record(value.health) &&
+    JSON.stringify(Object.keys(value.health).sort()) ===
+      JSON.stringify(
+        ["errorCount", "failed", "scheduling", "starting"].sort(),
+      ) &&
     nonNegativeInteger(value.health.failed) &&
     nonNegativeInteger(value.health.starting) &&
     nonNegativeInteger(value.health.scheduling) &&
@@ -3427,10 +4838,7 @@ export function assertPlatformRestoreCandidate(
   predecessor: PlatformContainerState,
   forwardImage: string,
 ): void {
-  if (
-    state.id !== predecessor.id ||
-    state.name !== predecessor.name
-  ) {
+  if (state.id !== predecessor.id || state.name !== predecessor.name) {
     throw new Error("platform_worker_restore_container_identity_changed");
   }
   if (
@@ -3446,9 +4854,8 @@ async function waitForPlatformContainer(
   environment: PlatformEnvironment,
   expectedImage: string,
 ): Promise<PlatformContainerState> {
-  return waitForPlatformContainerReadback(
-    expectedImage,
-    () => readPlatformContainer(configPath, environment),
+  return waitForPlatformContainerReadback(expectedImage, () =>
+    readPlatformContainer(configPath, environment),
   );
 }
 
@@ -3465,7 +4872,8 @@ export async function waitForPlatformContainerReadback(
     } catch (error) {
       const retryable =
         error instanceof Error &&
-        (error.message === "platform_worker_release_container_list_detail_mismatch" ||
+        (error.message ===
+          "platform_worker_release_container_list_detail_mismatch" ||
           error.message === "platform_worker_release_container_not_ready");
       if (!retryable || attempt === 36) throw error;
       await wait(5_000);
@@ -3808,7 +5216,9 @@ export function remoteBranchContainsCommit(
   const expectedRef = `refs/heads/${branch}`;
   return output.split("\n").some((line) => {
     const fields = line.trim().split(/\s+/u);
-    return fields.length === 2 && fields[0] === commit && fields[1] === expectedRef;
+    return (
+      fields.length === 2 && fields[0] === commit && fields[1] === expectedRef
+    );
   });
 }
 
@@ -3891,7 +5301,9 @@ function assertOutsideGitWorktree(path: string): void {
   for (;;) {
     try {
       lstatSync(join(cursor, ".git"));
-      throw new Error("platform_worker_release_output_must_be_globally_external");
+      throw new Error(
+        "platform_worker_release_output_must_be_globally_external",
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }

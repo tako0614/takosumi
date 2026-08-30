@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   linkSync,
@@ -11,7 +13,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -32,12 +34,16 @@ import {
   platformRestoreFailureState,
   platformRestoreCheckpointPath,
   platformRestoreLockPath,
+  platformTargetMutationLockPath,
+  platformTargetMutationAuthorityDirectoryIdentityDigest,
   platformWorkerRestoreVersionArguments,
   platformSealedConfigProjection,
   platformWorkerDeployArguments,
   readPlatformMutationFence,
   readPlatformRestoreFence,
+  runPlatformWorkerRelease,
   selectRecoveredVersion,
+  withPlatformTargetMutationLock,
 } from "../../scripts/platform-worker-release.ts";
 
 const roots: string[] = [];
@@ -45,8 +51,49 @@ const PREVIOUS = "11111111-1111-4111-8111-111111111111";
 const DEPLOYED = "22222222-2222-4222-8222-222222222222";
 const CONCURRENT = "33333333-3333-4333-8333-333333333333";
 
+function durableAuthorityDirectory(): string {
+  const root = mkdtempSync(
+    join(homedir(), ".takosumi-platform-authority-test-"),
+  );
+  chmodSync(root, 0o700);
+  roots.push(root);
+  return root;
+}
+
+async function subprocessExitWithin(
+  child: { readonly exited: Promise<number>; kill(signal?: number): void },
+  timeoutMs: number,
+): Promise<number> {
+  const timeout = Symbol("subprocess-timeout");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const result = await Promise.race([
+    child.exited,
+    new Promise<typeof timeout>((resolveTimeout) => {
+      timer = setTimeout(() => resolveTimeout(timeout), timeoutMs);
+    }),
+  ]);
+  if (timer !== undefined) clearTimeout(timer);
+  if (result !== timeout) return result;
+  child.kill(9);
+  await child.exited;
+  throw new Error("test_subprocess_exit_timeout");
+}
+
+function targetLockRequest(
+  checkpointPath: string,
+  mode: "execute" | "recover" = "execute",
+) {
+  return {
+    operationKind: "platform-forward" as const,
+    planConfirmation: `sha256:${createHash("sha256").update(checkpointPath).digest("hex")}`,
+    checkpointPath,
+    mode,
+  };
+}
+
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0))
+    rmSync(root, { recursive: true, force: true });
 });
 
 function assets() {
@@ -196,7 +243,10 @@ test("plan dry-run invokes Wrangler from the exact candidate worktree root", asy
 });
 
 test("transient restore dry-run config stays global and cleans up", () => {
-  const originalConfigPath = resolve(import.meta.dir, "../../deploy/platform/wrangler.toml");
+  const originalConfigPath = resolve(
+    import.meta.dir,
+    "../../deploy/platform/wrangler.toml",
+  );
   const transient = createPlatformDryRunConfig(
     ['main = "entry-worker.ts"', 'directory = "../../dashboard/dist"', ""].join(
       "\n",
@@ -365,7 +415,7 @@ test("plan-derived external fsynced checkpoint is invariant across copied plans 
   const plan = join(root, "plan.json");
   const copiedPlan = join(root, "copied-plan.json");
   const config = join(root, "wrangler.toml");
-  writeFileSync(config, "name = \"takosumi-staging\"\n", { mode: 0o600 });
+  writeFileSync(config, 'name = "takosumi-staging"\n', { mode: 0o600 });
   const checkpointPath = join(root, "mutation-checkpoint.jsonl");
   const planSource = JSON.stringify({ configPath: config, checkpointPath });
   writeFileSync(plan, planSource, { mode: 0o600 });
@@ -376,7 +426,9 @@ test("plan-derived external fsynced checkpoint is invariant across copied plans 
 
   const checkpoint = platformMutationCheckpointPath(plan, confirmation);
   expect(checkpoint).toBe(checkpointPath);
-  expect(checkpoint).toBe(platformMutationCheckpointPath(copiedPlan, confirmation));
+  expect(checkpoint).toBe(
+    platformMutationCheckpointPath(copiedPlan, confirmation),
+  );
   expect(firstEvidence).not.toBe(alternateEvidence);
   appendPlatformMutationFence(
     plan,
@@ -398,7 +450,9 @@ test("plan-derived external fsynced checkpoint is invariant across copied plans 
 });
 
 test("malformed or torn mutation checkpoints are post-touch ambiguous, never pre-mutation", () => {
-  const root = mkdtempSync(join(tmpdir(), "takosumi-platform-torn-checkpoint-"));
+  const root = mkdtempSync(
+    join(tmpdir(), "takosumi-platform-torn-checkpoint-"),
+  );
   roots.push(root);
   const plan = join(root, "plan.json");
   const config = join(root, "wrangler.toml");
@@ -434,7 +488,9 @@ test("malformed or torn mutation checkpoints are post-touch ambiguous, never pre
 });
 
 test("reviewed restore uses one plan-derived staged checkpoint across alternate evidence paths", () => {
-  const root = mkdtempSync(join(tmpdir(), "takosumi-platform-restore-checkpoint-"));
+  const root = mkdtempSync(
+    join(tmpdir(), "takosumi-platform-restore-checkpoint-"),
+  );
   roots.push(root);
   const plan = join(root, "plan.json");
   const copiedPlan = join(root, "copied-plan.json");
@@ -448,42 +504,32 @@ test("reviewed restore uses one plan-derived staged checkpoint across alternate 
   expect(platformRestoreCheckpointPath(plan, confirmation)).toBe(
     `${checkpointPath}.restore`,
   );
-  appendPlatformRestoreFence(
-    plan,
-    confirmation,
-    "container",
-    { outcome: "unknown", versionId: null },
-  );
+  appendPlatformRestoreFence(plan, confirmation, "container", {
+    outcome: "unknown",
+    versionId: null,
+  });
   expect(readPlatformRestoreFence(copiedPlan, confirmation)).toEqual({
     container: { outcome: "unknown", versionId: null },
   });
   expect(() =>
-    appendPlatformRestoreFence(
-      copiedPlan,
-      confirmation,
-      "container",
-      { outcome: "unknown", versionId: null },
-    ),
+    appendPlatformRestoreFence(copiedPlan, confirmation, "container", {
+      outcome: "unknown",
+      versionId: null,
+    }),
   ).toThrow("platform_worker_restore_checkpoint_invalid");
 
-  appendPlatformRestoreFence(
-    copiedPlan,
-    confirmation,
-    "container",
-    { outcome: "accepted", versionId: restoreVersion },
-  );
-  appendPlatformRestoreFence(
-    plan,
-    confirmation,
-    "worker",
-    { outcome: "unknown", versionId: null },
-  );
-  appendPlatformRestoreFence(
-    copiedPlan,
-    confirmation,
-    "worker",
-    { outcome: "accepted", versionId: PREVIOUS },
-  );
+  appendPlatformRestoreFence(copiedPlan, confirmation, "container", {
+    outcome: "accepted",
+    versionId: restoreVersion,
+  });
+  appendPlatformRestoreFence(plan, confirmation, "worker", {
+    outcome: "unknown",
+    versionId: null,
+  });
+  appendPlatformRestoreFence(copiedPlan, confirmation, "worker", {
+    outcome: "accepted",
+    versionId: PREVIOUS,
+  });
   expect(readPlatformRestoreFence(plan, confirmation)).toEqual({
     container: { outcome: "accepted", versionId: restoreVersion },
     worker: { outcome: "accepted", versionId: PREVIOUS },
@@ -491,7 +537,9 @@ test("reviewed restore uses one plan-derived staged checkpoint across alternate 
 });
 
 test("restore failure evidence follows the latest durable staged checkpoint", () => {
-  const root = mkdtempSync(join(tmpdir(), "takosumi-platform-restore-failure-"));
+  const root = mkdtempSync(
+    join(tmpdir(), "takosumi-platform-restore-failure-"),
+  );
   roots.push(root);
   const plan = join(root, "plan.json");
   const checkpointPath = join(root, "mutation-checkpoint.jsonl");
@@ -503,45 +551,37 @@ test("restore failure evidence follows the latest durable staged checkpoint", ()
     failureBoundary: "pre-mutation",
   });
 
-  appendPlatformRestoreFence(
-    plan,
-    confirmation,
-    "container",
-    { outcome: "unknown", versionId: null },
-  );
+  appendPlatformRestoreFence(plan, confirmation, "container", {
+    outcome: "unknown",
+    versionId: null,
+  });
   expect(platformRestoreFailureState(plan, confirmation)).toEqual({
     mutationOutcome: "unknown",
     failureBoundary: "post-mutation-unknown",
   });
 
-  appendPlatformRestoreFence(
-    plan,
-    confirmation,
-    "container",
-    { outcome: "accepted", versionId: DEPLOYED },
-  );
+  appendPlatformRestoreFence(plan, confirmation, "container", {
+    outcome: "accepted",
+    versionId: DEPLOYED,
+  });
   expect(platformRestoreFailureState(plan, confirmation)).toEqual({
     mutationOutcome: "accepted",
     failureBoundary: "post-mutation-readback",
   });
 
-  appendPlatformRestoreFence(
-    plan,
-    confirmation,
-    "worker",
-    { outcome: "unknown", versionId: null },
-  );
+  appendPlatformRestoreFence(plan, confirmation, "worker", {
+    outcome: "unknown",
+    versionId: null,
+  });
   expect(platformRestoreFailureState(plan, confirmation)).toEqual({
     mutationOutcome: "unknown",
     failureBoundary: "post-mutation-unknown",
   });
 
-  appendPlatformRestoreFence(
-    plan,
-    confirmation,
-    "worker",
-    { outcome: "accepted", versionId: PREVIOUS },
-  );
+  appendPlatformRestoreFence(plan, confirmation, "worker", {
+    outcome: "accepted",
+    versionId: PREVIOUS,
+  });
   expect(platformRestoreFailureState(plan, confirmation)).toEqual({
     mutationOutcome: "accepted",
     failureBoundary: "post-mutation-readback",
@@ -563,18 +603,14 @@ test("restore lock excludes an alternate process before provider mutation", asyn
   const providerMutations = join(input.root, "provider-mutations");
   const actor = writeRestoreProcessActor(input.root);
 
-  appendPlatformRestoreFence(
-    input.plan,
-    input.confirmation,
-    "container",
-    { outcome: "unknown", versionId: null },
-  );
-  appendPlatformRestoreFence(
-    input.plan,
-    input.confirmation,
-    "container",
-    { outcome: "accepted", versionId: DEPLOYED },
-  );
+  appendPlatformRestoreFence(input.plan, input.confirmation, "container", {
+    outcome: "unknown",
+    versionId: null,
+  });
+  appendPlatformRestoreFence(input.plan, input.confirmation, "container", {
+    outcome: "accepted",
+    versionId: DEPLOYED,
+  });
 
   const children = [input.plan, input.copiedPlan].map((plan) =>
     Bun.spawn(
@@ -594,18 +630,23 @@ test("restore lock excludes an alternate process before provider mutation", asyn
       { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
     ),
   );
-  writeFileSync(start, "go\n");
-  await waitForRestoreProcess(
-    () => restoreProcessLineCount(attempts) === 2,
-    "both restore actors to reach the acquisition barrier",
-  );
-  await waitForRestoreProcess(
-    () => restoreProcessLineCount(blocked) === 1,
-    "the alternate restore actor to observe the active owner",
-  );
-  writeFileSync(release, "continue\n");
-
-  const exitCodes = await Promise.all(children.map((child) => child.exited));
+  let exitCodes: number[] = [];
+  try {
+    writeFileSync(start, "go\n");
+    await waitForRestoreProcess(
+      () => restoreProcessLineCount(attempts) === 2,
+      "both restore actors to reach the acquisition barrier",
+    );
+    await waitForRestoreProcess(
+      () => restoreProcessLineCount(blocked) === 1,
+      "the alternate restore actor to observe the active owner",
+    );
+  } finally {
+    writeFileSync(release, "continue\n", { mode: 0o600 });
+    exitCodes = await Promise.all(
+      children.map((child) => subprocessExitWithin(child, 5_000)),
+    );
+  }
   expect(exitCodes.sort((left, right) => left - right)).toEqual([0, 73]);
   expect(restoreProcessLineCount(providerMutations)).toBe(1);
   expect(readPlatformRestoreFence(input.plan, input.confirmation)).toEqual({
@@ -613,11 +654,648 @@ test("restore lock excludes an alternate process before provider mutation", asyn
     worker: { outcome: "accepted", versionId: PREVIOUS },
   });
   expect(
-    readFileSync(platformRestoreCheckpointPath(input.plan, input.confirmation), "utf8")
+    readFileSync(
+      platformRestoreCheckpointPath(input.plan, input.confirmation),
+      "utf8",
+    )
       .trim()
       .split("\n"),
   ).toHaveLength(4);
-  expect(existsSync(platformRestoreLockPath(input.plan, input.confirmation))).toBeFalse();
+  expect(
+    existsSync(platformRestoreLockPath(input.plan, input.confirmation)),
+  ).toBeFalse();
+}, 30_000);
+
+test("target mutation lock excludes a forward mutation across processes and scopes exact Worker identity", async () => {
+  const root = mkdtempSync(join(tmpdir(), "takosumi-platform-target-lock-"));
+  roots.push(root);
+  const acquired = join(root, "acquired");
+  const release = join(root, "release");
+  const authorityDirectory = durableAuthorityDirectory();
+  const actor = join(root, "target-lock-actor.ts");
+  const moduleUrl = pathToFileURL(
+    resolve(import.meta.dir, "../../scripts/platform-worker-release.ts"),
+  ).href;
+  writeFileSync(
+    actor,
+    `import { existsSync, writeFileSync } from "node:fs";
+import { withPlatformTargetMutationLock } from ${JSON.stringify(moduleUrl)};
+
+const [acquired, release, checkpointPath, confirmation, authorityDirectory] = process.argv.slice(2);
+await withPlatformTargetMutationLock(
+  { environment: "staging", workerName: "takosumi-staging", authorityDirectory },
+  {
+    operationKind: "platform-forward",
+    planConfirmation: confirmation,
+    checkpointPath,
+    mode: "execute",
+  },
+  async () => {
+    writeFileSync(acquired, "held\\n", { mode: 0o600 });
+    while (!existsSync(release)) await Bun.sleep(5);
+  },
+);
+`,
+    { mode: 0o600 },
+  );
+  const stagingRequest = targetLockRequest(join(root, "staging-checkpoint"));
+  const competingStagingRequest = targetLockRequest(
+    join(root, "competing-staging-checkpoint"),
+  );
+  const productionRequest = targetLockRequest(
+    join(root, "production-checkpoint"),
+  );
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      actor,
+      acquired,
+      release,
+      stagingRequest.checkpointPath,
+      stagingRequest.planConfirmation,
+      authorityDirectory,
+    ],
+    { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+  );
+  let childExit: number | undefined;
+  try {
+    await waitForRestoreProcess(
+      () => existsSync(acquired),
+      "the alternate process to hold the staging target lock",
+    );
+    await expect(
+      withPlatformTargetMutationLock(
+        {
+          environment: "staging",
+          workerName: "takosumi-staging",
+          authorityDirectory,
+        },
+        competingStagingRequest,
+        async () => {
+          throw new Error("same_target_mutation_must_not_start");
+        },
+      ),
+    ).rejects.toThrow("platform_worker_target_mutation_locked");
+
+    let productionMutationStarted = false;
+    await withPlatformTargetMutationLock(
+      { environment: "production", workerName: "takosumi", authorityDirectory },
+      productionRequest,
+      async () => {
+        productionMutationStarted = true;
+      },
+    );
+    expect(productionMutationStarted).toBeTrue();
+  } finally {
+    writeFileSync(release, "continue\n", { mode: 0o600 });
+    childExit = await subprocessExitWithin(child, 5_000);
+  }
+  expect(childExit).toBe(0);
+  expect(
+    existsSync(
+      platformTargetMutationLockPath({
+        environment: "staging",
+        workerName: "takosumi-staging",
+        authorityDirectory,
+      }),
+    ),
+  ).toBeFalse();
+  expect(
+    platformTargetMutationLockPath({
+      environment: "staging",
+      workerName: "takosumi-staging",
+      authorityDirectory,
+    }),
+  ).not.toBe(
+    platformTargetMutationLockPath({
+      environment: "production",
+      workerName: "takosumi",
+      authorityDirectory,
+    }),
+  );
+  expect(() =>
+    platformTargetMutationLockPath({
+      environment: "staging",
+      workerName: "takosumi",
+      authorityDirectory,
+    }),
+  ).toThrow("platform_worker_target_mutation_identity_invalid");
+}, 20_000);
+
+test("a dead forward target owner permits only its exact recovery", async () => {
+  const owner = restoreProcessFixture();
+  const other = restoreProcessFixture(owner.authorityDirectory);
+  const actor = join(owner.root, "crashed-forward-target-owner.ts");
+  const moduleUrl = pathToFileURL(
+    resolve(import.meta.dir, "../../scripts/platform-worker-release.ts"),
+  ).href;
+  writeFileSync(
+    actor,
+    `import {
+  appendPlatformMutationFence,
+  platformMutationCheckpointPath,
+  withPlatformTargetMutationLock,
+} from ${JSON.stringify(moduleUrl)};
+
+const [plan, confirmation, authorityDirectory] = process.argv.slice(2);
+const checkpointPath = platformMutationCheckpointPath(plan, confirmation);
+await withPlatformTargetMutationLock(
+  { environment: "staging", workerName: "takosumi-staging", authorityDirectory },
+  {
+    operationKind: "platform-forward",
+    planConfirmation: confirmation,
+    checkpointPath,
+    mode: "execute",
+  },
+  async () => {
+    appendPlatformMutationFence(plan, confirmation, {
+      outcome: "unknown",
+      versionId: null,
+    });
+    process.exit(86);
+  },
+  {
+    shouldRetainAfterError: () => true,
+  },
+);
+`,
+    { mode: 0o600 },
+  );
+  const target = {
+    environment: "staging" as const,
+    workerName: "takosumi-staging",
+    authorityDirectory: owner.authorityDirectory,
+  };
+  const lockPath = platformTargetMutationLockPath(target);
+  try {
+    const crashed = Bun.spawn(
+      [
+        process.execPath,
+        actor,
+        owner.plan,
+        owner.confirmation,
+        owner.authorityDirectory,
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    );
+    expect(await subprocessExitWithin(crashed, 10_000)).toBe(86);
+    expect(readPlatformMutationFence(owner.plan, owner.confirmation)).toEqual({
+      outcome: "unknown",
+      versionId: null,
+    });
+    expect(existsSync(lockPath)).toBeTrue();
+
+    let otherPlanStarted = false;
+    await expect(
+      withPlatformTargetMutationLock(
+        target,
+        {
+          operationKind: "platform-forward",
+          planConfirmation: other.confirmation,
+          checkpointPath: platformMutationCheckpointPath(
+            other.plan,
+            other.confirmation,
+          ),
+          mode: "recover",
+        },
+        async () => {
+          otherPlanStarted = true;
+        },
+      ),
+    ).rejects.toThrow(
+      "platform_worker_target_mutation_reconciliation_required",
+    );
+    expect(otherPlanStarted).toBeFalse();
+
+    let blindRetryStarted = false;
+    await expect(
+      withPlatformTargetMutationLock(
+        target,
+        {
+          operationKind: "platform-forward",
+          planConfirmation: owner.confirmation,
+          checkpointPath: platformMutationCheckpointPath(
+            owner.plan,
+            owner.confirmation,
+          ),
+          mode: "execute",
+        },
+        async () => {
+          blindRetryStarted = true;
+        },
+      ),
+    ).rejects.toThrow(
+      "platform_worker_target_mutation_reconciliation_required",
+    );
+    expect(blindRetryStarted).toBeFalse();
+
+    let recovered = false;
+    await withPlatformTargetMutationLock(
+      target,
+      {
+        operationKind: "platform-forward",
+        planConfirmation: owner.confirmation,
+        checkpointPath: platformMutationCheckpointPath(
+          owner.plan,
+          owner.confirmation,
+        ),
+        mode: "recover",
+      },
+      async () => {
+        expect(
+          readPlatformMutationFence(owner.plan, owner.confirmation),
+        ).toEqual({ outcome: "unknown", versionId: null });
+        appendPlatformMutationFence(owner.plan, owner.confirmation, {
+          outcome: "accepted",
+          versionId: DEPLOYED,
+        });
+        recovered = true;
+      },
+    );
+    expect(recovered).toBeTrue();
+    expect(existsSync(lockPath)).toBeFalse();
+  } finally {
+    rmSync(lockPath, { force: true });
+  }
+}, 15_000);
+
+test("platform plan command refuses an unresolved target owner before source or config inspection", async () => {
+  const root = mkdtempSync(join(tmpdir(), "takosumi-platform-plan-owner-"));
+  roots.push(root);
+  const authorityDirectory = durableAuthorityDirectory();
+  const target = {
+    environment: "staging" as const,
+    workerName: "takosumi-staging",
+    authorityDirectory,
+  };
+  const request = targetLockRequest(join(root, "owner-checkpoint.jsonl"));
+  const lockPath = platformTargetMutationLockPath(target);
+  try {
+    await expect(
+      withPlatformTargetMutationLock(
+        target,
+        request,
+        async () => {
+          throw new Error("provider_outcome_unknown");
+        },
+        { shouldRetainAfterError: () => true },
+      ),
+    ).rejects.toThrow("provider_outcome_unknown");
+    expect(existsSync(lockPath)).toBeTrue();
+
+    await expect(
+      runPlatformWorkerRelease(
+        [
+          "plan",
+          "--config",
+          join(root, "missing-wrangler.toml"),
+          "--plan-out",
+          join(root, "new-plan.json"),
+        ],
+        "staging",
+        {
+          env: {
+            TAKOSUMI_PLATFORM_MUTATION_AUTHORITY_DIR: authorityDirectory,
+          },
+        },
+      ),
+    ).rejects.toThrow(
+      "platform_worker_target_mutation_reconciliation_required",
+    );
+    expect(existsSync(join(root, "new-plan.json"))).toBeFalse();
+  } finally {
+    rmSync(lockPath, { force: true });
+  }
+});
+
+test("durable target owner survives tmp loss and permits only exact recovery after reboot", async () => {
+  const root = mkdtempSync(join(tmpdir(), "takosumi-platform-reboot-owner-"));
+  roots.push(root);
+  const authorityDirectory = durableAuthorityDirectory();
+  const target = {
+    environment: "staging" as const,
+    workerName: "takosumi-staging",
+    authorityDirectory,
+  };
+  const request = targetLockRequest(join(root, "owner-checkpoint.jsonl"));
+  const otherRequest = targetLockRequest(join(root, "other-checkpoint.jsonl"));
+  const lockPath = platformTargetMutationLockPath(target);
+  writeFileSync(request.checkpointPath, "provider-outcome:unknown\n", {
+    mode: 0o600,
+  });
+  try {
+    await expect(
+      withPlatformTargetMutationLock(
+        target,
+        request,
+        async () => {
+          throw new Error("provider_ack_lost");
+        },
+        { shouldRetainAfterError: () => true },
+      ),
+    ).rejects.toThrow("provider_ack_lost");
+    const owner = JSON.parse(readFileSync(lockPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    owner.bootId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    owner.hostIdentity = {
+      ...(owner.hostIdentity as Record<string, unknown>),
+      pidNamespaceDev: "999999",
+      pidNamespaceIno: "999999",
+    };
+    writeFileSync(lockPath, `${JSON.stringify(owner)}\n`, { mode: 0o600 });
+
+    // Volatile scratch loss cannot erase the operator-private authority.
+    const erasedVolatileOwner = join(root, "legacy-owner.lock");
+    writeFileSync(erasedVolatileOwner, "obsolete\n", { mode: 0o600 });
+    rmSync(erasedVolatileOwner, { force: true });
+    expect(existsSync(lockPath)).toBeTrue();
+    await expect(
+      runPlatformWorkerRelease(
+        [
+          "plan",
+          "--config",
+          join(root, "missing-wrangler.toml"),
+          "--plan-out",
+          join(root, "new-plan.json"),
+        ],
+        "staging",
+        {
+          env: {
+            TAKOSUMI_PLATFORM_MUTATION_AUTHORITY_DIR: authorityDirectory,
+          },
+        },
+      ),
+    ).rejects.toThrow(
+      "platform_worker_target_mutation_reconciliation_required",
+    );
+    await expect(
+      withPlatformTargetMutationLock(
+        target,
+        { ...otherRequest, mode: "recover" },
+        async () => {
+          throw new Error("other_plan_must_not_recover");
+        },
+      ),
+    ).rejects.toThrow(
+      "platform_worker_target_mutation_reconciliation_required",
+    );
+
+    let exactRecoveryReadCheckpoint = false;
+    await withPlatformTargetMutationLock(
+      target,
+      { ...request, mode: "recover" },
+      async () => {
+        expect(readFileSync(request.checkpointPath, "utf8")).toBe(
+          "provider-outcome:unknown\n",
+        );
+        exactRecoveryReadCheckpoint = true;
+      },
+    );
+    expect(exactRecoveryReadCheckpoint).toBeTrue();
+    expect(existsSync(lockPath)).toBeFalse();
+  } finally {
+    rmSync(lockPath, { force: true });
+  }
+}, 15_000);
+
+test("plan and exact recovery fail closed for foreign or torn durable owners", async () => {
+  const root = mkdtempSync(join(tmpdir(), "takosumi-platform-owner-integrity-"));
+  roots.push(root);
+  const authorityDirectory = durableAuthorityDirectory();
+  const target = {
+    environment: "staging" as const,
+    workerName: "takosumi-staging",
+    authorityDirectory,
+  };
+  const request = targetLockRequest(join(root, "owner-checkpoint.jsonl"));
+  const lockPath = platformTargetMutationLockPath(target);
+  try {
+    await expect(
+      withPlatformTargetMutationLock(
+        target,
+        request,
+        async () => {
+          throw new Error("provider_ack_lost");
+        },
+        { shouldRetainAfterError: () => true },
+      ),
+    ).rejects.toThrow("provider_ack_lost");
+    const owner = JSON.parse(readFileSync(lockPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    owner.hostIdentity = {
+      ...(owner.hostIdentity as Record<string, unknown>),
+      machineIdSha256: `sha256:${"f".repeat(64)}`,
+    };
+    writeFileSync(lockPath, `${JSON.stringify(owner)}\n`, { mode: 0o600 });
+    await expect(
+      withPlatformTargetMutationLock(
+        target,
+        { ...request, mode: "recover" },
+        async () => {
+          throw new Error("foreign_owner_must_not_recover");
+        },
+      ),
+    ).rejects.toThrow("platform_worker_restore_lock_foreign_host");
+
+    writeFileSync(lockPath, '{"kind":"torn"', { mode: 0o600 });
+    await expect(
+      runPlatformWorkerRelease(
+        [
+          "plan",
+          "--config",
+          join(root, "missing-wrangler.toml"),
+          "--plan-out",
+          join(root, "new-plan.json"),
+        ],
+        "staging",
+        {
+          env: {
+            TAKOSUMI_PLATFORM_MUTATION_AUTHORITY_DIR: authorityDirectory,
+          },
+        },
+      ),
+    ).rejects.toThrow("platform_worker_restore_lock_invalid");
+  } finally {
+    rmSync(lockPath, { force: true });
+  }
+}, 15_000);
+
+test("target authority rejects volatile directories", () => {
+  expect(() =>
+    platformTargetMutationLockPath({
+      environment: "staging",
+      workerName: "takosumi-staging",
+      authorityDirectory: join(tmpdir(), "operator-state"),
+    }),
+  ).toThrow("platform_worker_target_mutation_authority_directory_volatile");
+});
+
+test("validated plans bind the durable authority directory inode", () => {
+  const input = restoreProcessFixture();
+  const moved = `${input.authorityDirectory}.original`;
+  renameSync(input.authorityDirectory, moved);
+  roots.push(moved);
+  mkdirSync(input.authorityDirectory, { mode: 0o700 });
+  roots.push(input.authorityDirectory);
+
+  expect(() =>
+    platformRestoreLockPath(input.plan, input.confirmation),
+  ).toThrow("platform_worker_release_plan_invalid");
+});
+
+test("a dead restore target owner denies another restore plan until exact staged recovery", async () => {
+  const owner = restoreProcessFixture();
+  const other = restoreProcessFixture(owner.authorityDirectory);
+  const actor = join(owner.root, "crashed-restore-target-owner.ts");
+  const moduleUrl = pathToFileURL(
+    resolve(import.meta.dir, "../../scripts/platform-worker-release.ts"),
+  ).href;
+  writeFileSync(
+    actor,
+    `import {
+  appendPlatformRestoreFence,
+  platformRestoreCheckpointPath,
+  withPlatformTargetMutationLock,
+} from ${JSON.stringify(moduleUrl)};
+
+const [plan, confirmation, authorityDirectory] = process.argv.slice(2);
+await withPlatformTargetMutationLock(
+  { environment: "staging", workerName: "takosumi-staging", authorityDirectory },
+  {
+    operationKind: "platform-restore",
+    planConfirmation: confirmation,
+    checkpointPath: platformRestoreCheckpointPath(plan, confirmation),
+    mode: "recover",
+  },
+  async () => {
+    appendPlatformRestoreFence(plan, confirmation, "container", {
+      outcome: "unknown",
+      versionId: null,
+    });
+    process.exit(86);
+  },
+  { shouldRetainAfterError: () => true },
+);
+`,
+    { mode: 0o600 },
+  );
+  const target = {
+    environment: "staging" as const,
+    workerName: "takosumi-staging",
+    authorityDirectory: owner.authorityDirectory,
+  };
+  const ownerRequest = {
+    operationKind: "platform-restore" as const,
+    planConfirmation: owner.confirmation,
+    checkpointPath: platformRestoreCheckpointPath(
+      owner.plan,
+      owner.confirmation,
+    ),
+    mode: "recover" as const,
+  };
+  const lockPath = platformTargetMutationLockPath(target);
+  try {
+    const crashed = Bun.spawn(
+      [
+        process.execPath,
+        actor,
+        owner.plan,
+        owner.confirmation,
+        owner.authorityDirectory,
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    );
+    expect(await subprocessExitWithin(crashed, 10_000)).toBe(86);
+    expect(readPlatformRestoreFence(owner.plan, owner.confirmation)).toEqual({
+      container: { outcome: "unknown", versionId: null },
+    });
+    expect(existsSync(lockPath)).toBeTrue();
+
+    await expect(
+      withPlatformTargetMutationLock(
+        target,
+        {
+          operationKind: "platform-restore",
+          planConfirmation: other.confirmation,
+          checkpointPath: platformRestoreCheckpointPath(
+            other.plan,
+            other.confirmation,
+          ),
+          mode: "recover",
+        },
+        async () => {
+          throw new Error("other_restore_must_not_start");
+        },
+      ),
+    ).rejects.toThrow(
+      "platform_worker_target_mutation_reconciliation_required",
+    );
+    await expect(
+      withPlatformTargetMutationLock(
+        target,
+        { ...ownerRequest, operationKind: "platform-forward" },
+        async () => {
+          throw new Error("other_operation_kind_must_not_start");
+        },
+      ),
+    ).rejects.toThrow(
+      "platform_worker_target_mutation_reconciliation_required",
+    );
+
+    await withPlatformTargetMutationLock(target, ownerRequest, async () => {
+      expect(readPlatformRestoreFence(owner.plan, owner.confirmation)).toEqual({
+        container: { outcome: "unknown", versionId: null },
+      });
+      appendPlatformRestoreFence(
+        owner.plan,
+        owner.confirmation,
+        "container",
+        { outcome: "accepted", versionId: DEPLOYED },
+      );
+    });
+    expect(readPlatformRestoreFence(owner.plan, owner.confirmation)).toEqual({
+      container: { outcome: "accepted", versionId: DEPLOYED },
+    });
+    expect(existsSync(lockPath)).toBeFalse();
+  } finally {
+    rmSync(lockPath, { force: true });
+  }
+}, 15_000);
+
+test("target mutation lock fails closed when its canonical owner path is replaced", async () => {
+  const root = mkdtempSync(join(tmpdir(), "takosumi-platform-target-alias-"));
+  roots.push(root);
+  const authorityDirectory = durableAuthorityDirectory();
+  const target = {
+    environment: "staging" as const,
+    workerName: "takosumi-staging",
+    authorityDirectory,
+  };
+  const request = targetLockRequest(join(root, "checkpoint"));
+  await withPlatformTargetMutationLock(target, request, async () => {});
+  const lockPath = platformTargetMutationLockPath(target);
+  const decoy = join(root, "decoy-lock");
+  writeFileSync(decoy, "not-an-owner-record\n", { mode: 0o600 });
+  symlinkSync(decoy, lockPath);
+  let mutationStarted = false;
+  try {
+    await expect(
+      withPlatformTargetMutationLock(
+        target,
+        request,
+        async () => {
+          mutationStarted = true;
+        },
+      ),
+    ).rejects.toThrow("platform_worker_restore_lock_invalid");
+  } finally {
+    rmSync(lockPath, { force: true });
+  }
+  expect(mutationStarted).toBeFalse();
 });
 
 test("a crashed restore owner is recovered from its canonical checkpoint without duplicate provider mutation", async () => {
@@ -630,18 +1308,14 @@ test("a crashed restore owner is recovered from its canonical checkpoint without
   const serving = join(input.root, "serving");
   const actor = writeRestoreProcessActor(input.root);
 
-  appendPlatformRestoreFence(
-    input.plan,
-    input.confirmation,
-    "container",
-    { outcome: "unknown", versionId: null },
-  );
-  appendPlatformRestoreFence(
-    input.plan,
-    input.confirmation,
-    "container",
-    { outcome: "accepted", versionId: DEPLOYED },
-  );
+  appendPlatformRestoreFence(input.plan, input.confirmation, "container", {
+    outcome: "unknown",
+    versionId: null,
+  });
+  appendPlatformRestoreFence(input.plan, input.confirmation, "container", {
+    outcome: "accepted",
+    versionId: DEPLOYED,
+  });
   writeFileSync(start, "go\n");
 
   const crashed = Bun.spawn(
@@ -660,8 +1334,10 @@ test("a crashed restore owner is recovered from its canonical checkpoint without
     ],
     { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
   );
-  expect(await crashed.exited).toBe(86);
-  expect(existsSync(platformRestoreLockPath(input.plan, input.confirmation))).toBeTrue();
+  expect(await subprocessExitWithin(crashed, 10_000)).toBe(86);
+  expect(
+    existsSync(platformRestoreLockPath(input.plan, input.confirmation)),
+  ).toBeTrue();
   expect(readPlatformRestoreFence(input.plan, input.confirmation)).toEqual({
     container: { outcome: "accepted", versionId: DEPLOYED },
     worker: { outcome: "unknown", versionId: null },
@@ -684,37 +1360,140 @@ test("a crashed restore owner is recovered from its canonical checkpoint without
     ],
     { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
   );
-  expect(await recovered.exited).toBe(0);
+  expect(await subprocessExitWithin(recovered, 10_000)).toBe(0);
   expect(restoreProcessLineCount(providerMutations)).toBe(1);
   expect(readPlatformRestoreFence(input.plan, input.confirmation)).toEqual({
     container: { outcome: "accepted", versionId: DEPLOYED },
     worker: { outcome: "accepted", versionId: PREVIOUS },
   });
   expect(
-    readFileSync(platformRestoreCheckpointPath(input.plan, input.confirmation), "utf8")
+    readFileSync(
+      platformRestoreCheckpointPath(input.plan, input.confirmation),
+      "utf8",
+    )
       .trim()
       .split("\n"),
   ).toHaveLength(4);
-  expect(existsSync(platformRestoreLockPath(input.plan, input.confirmation))).toBeFalse();
-});
+  expect(
+    existsSync(platformRestoreLockPath(input.plan, input.confirmation)),
+  ).toBeFalse();
+}, 25_000);
 
-function restoreProcessFixture() {
-  const root = mkdtempSync(join(tmpdir(), "takosumi-platform-restore-process-"));
+function restoreProcessFixture(
+  authorityDirectory = durableAuthorityDirectory(),
+) {
+  const root = mkdtempSync(
+    join(tmpdir(), "takosumi-platform-restore-process-"),
+  );
   roots.push(root);
   const plan = join(root, "plan.json");
   const copiedPlan = join(root, "copied-plan.json");
   const checkpointPath = join(root, "mutation-checkpoint.jsonl");
-  const confirmation = `sha256:${"a".repeat(64)}`;
-  const planSource = JSON.stringify({ checkpointPath });
-  writeFileSync(plan, planSource, { mode: 0o600 });
+  const confirmation = writeRestoreProcessPlan(
+    plan,
+    checkpointPath,
+    root,
+    authorityDirectory,
+  );
+  const planSource = readFileSync(plan, "utf8");
   writeFileSync(copiedPlan, planSource, { mode: 0o600 });
   expect(platformRestoreLockPath(copiedPlan, confirmation)).toBe(
     platformRestoreLockPath(plan, confirmation),
   );
-  expect(
+  expect(() =>
     platformRestoreLockPath(plan, `sha256:${"b".repeat(64)}`),
-  ).not.toBe(platformRestoreLockPath(plan, confirmation));
-  return { root, plan, copiedPlan, confirmation };
+  ).toThrow("platform_worker_release_plan_invalid");
+  return { root, plan, copiedPlan, confirmation, authorityDirectory };
+}
+
+function writeRestoreProcessPlan(
+  path: string,
+  checkpointPath: string,
+  root: string,
+  authorityDirectory: string,
+): string {
+  const digestJson = (value: unknown) =>
+    `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
+  const entry = {
+    path: "index.js",
+    size: 1,
+    sha256: digestJson({ bytes: "restore-lock" }),
+  };
+  const dryRun = {
+    digest: digestJson({
+      kind: "takosumi.dashboard-asset-tree@v1",
+      entries: [entry],
+    }),
+    entries: [entry],
+  };
+  const closureEntry = { ...entry, path: "dry-run/index.js" };
+  const closure = {
+    digest: digestJson({
+      kind: "takosumi.dashboard-asset-tree@v1",
+      entries: [closureEntry],
+    }),
+    entries: [closureEntry],
+  };
+  const closurePath = join(root, "bridge-closure");
+  const restoreClosurePath = join(root, "bridge-restore-closure");
+  const identity = {
+    kind: "takosumi.platform-worker-release-plan@v5" as const,
+    createdAt: "2026-08-30T11:40:00.000Z",
+    environment: "staging" as const,
+    sourceCommit: "d".repeat(40),
+    releaseNonce: "e".repeat(32),
+    configPath: join(root, "wrangler.toml"),
+    configSha256: digestJson({ config: "staging" }),
+    closurePath,
+    closure,
+    sealedConfigPath: join(closurePath, "wrangler.toml"),
+    sealedConfigSha256: digestJson({ sealedConfig: "staging" }),
+    uploadEntrypointPath: join(closurePath, "dry-run", "index.js"),
+    checkpointPath,
+    targetMutationAuthorityPath: platformTargetMutationLockPath({
+      environment: "staging",
+      workerName: "takosumi-staging",
+      authorityDirectory,
+    }),
+    targetMutationAuthorityDirectoryIdentityDigest:
+      platformTargetMutationAuthorityDirectoryIdentityDigest({
+        environment: "staging",
+        workerName: "takosumi-staging",
+        authorityDirectory,
+      }),
+    restoreClosurePath,
+    restoreClosure: closure,
+    restoreSealedConfigPath: join(restoreClosurePath, "wrangler.toml"),
+    restoreSealedConfigSha256: digestJson({ restoreConfig: "staging" }),
+    restoreUploadEntrypointPath: join(
+      restoreClosurePath,
+      "dry-run",
+      "index.js",
+    ),
+    restoreDryRun: dryRun,
+    dashboardAssets: closure,
+    dryRun,
+    secretNamesSha256: digestJson({ secrets: [] }),
+    predecessorVersionId: PREVIOUS,
+    predecessorContainer: {
+      id: "bridge-predecessor-container",
+      name: "staging-bridge-runner",
+      state: "ready",
+      image: `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`,
+      version: 1,
+      hasActiveRollout: false,
+      health: { failed: 0, starting: 0, scheduling: 0, errorCount: 0 },
+    },
+  };
+  const releaseTag = `tks-stg-${digestJson(identity).slice("sha256:".length, "sha256:".length + 48)}`;
+  const subject = { ...identity, releaseTag };
+  const confirmation = digestJson(subject);
+  writeFileSync(
+    path,
+    `${JSON.stringify({ ...subject, confirmation }, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  return confirmation;
 }
 
 function writeRestoreProcessActor(root: string): string {
@@ -792,10 +1571,8 @@ test("restore fences the exact reviewed application before one strict predecesso
   const checkpointPath = join(root, "mutation-checkpoint.jsonl");
   writeFileSync(plan, JSON.stringify({ checkpointPath }), { mode: 0o600 });
   const confirmation = `sha256:${"a".repeat(64)}`;
-  const predecessorImage =
-    `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`;
-  const forwardImage =
-    `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"c".repeat(64)}`;
+  const predecessorImage = `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`;
+  const forwardImage = `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"c".repeat(64)}`;
   const predecessor = {
     id: "application-id",
     name: "takosumi-staging-opentofurunnerobject",
@@ -828,12 +1605,10 @@ test("restore fences the exact reviewed application before one strict predecesso
       forwardImage,
     ),
   ).not.toThrow();
-  appendPlatformRestoreFence(
-    plan,
-    confirmation,
-    "container",
-    { outcome: "unknown", versionId: null },
-  );
+  appendPlatformRestoreFence(plan, confirmation, "container", {
+    outcome: "unknown",
+    versionId: null,
+  });
   expect(readPlatformRestoreFence(plan, confirmation)).toEqual({
     container: { outcome: "unknown", versionId: null },
   });
@@ -872,8 +1647,7 @@ test("restore fences the exact reviewed application before one strict predecesso
     assertPlatformRestoreCandidate(
       {
         ...interruptedForward,
-        image:
-          `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"f".repeat(64)}`,
+        image: `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"f".repeat(64)}`,
       },
       predecessor,
       forwardImage,
@@ -891,8 +1665,7 @@ test("reviewed restore projects only the predecessor image and routes the predec
     "max_instances = 1",
     "",
   ].join("\n");
-  const predecessorImage =
-    `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"c".repeat(64)}`;
+  const predecessorImage = `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"c".repeat(64)}`;
   expect(platformRestoreConfigProjection(current, predecessorImage)).toBe(
     current.replace(/sha256:b{64}/u, `sha256:${"c".repeat(64)}`),
   );
