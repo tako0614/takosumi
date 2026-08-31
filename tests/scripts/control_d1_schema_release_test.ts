@@ -22,6 +22,7 @@ import {
   verifyControlD1Schema,
 } from "../../deploy/platform/control_d1_schema.ts";
 import {
+  CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS,
   runControlD1ServingCompatibilityProof,
   runControlD1SchemaRelease as runReleaseSurface,
   type ControlD1SchemaReleaseDependencies,
@@ -53,6 +54,36 @@ const VERSION_ID = "11111111-1111-4111-8111-111111111111";
 const DRIFTED_VERSION_ID = "33333333-3333-4333-8333-333333333333";
 const BOOKMARK = "opaque-time-travel-bookmark";
 const BRIDGE_COMMIT = "b".repeat(40);
+
+interface BridgeProofArtifactFixture {
+  readonly bridgePlanPath: string;
+  readonly bridgePlanConfirmation: string;
+  readonly bridgeReleaseEvidencePath: string;
+  readonly bridgeSourceCompatibility: {
+    readonly predecessorPlatformPlanPath: string;
+    readonly predecessorPlatformPlanConfirmation: string;
+    readonly predecessorPlatformReleaseEvidencePath: string;
+    readonly canonicalPatchDigest: string;
+    readonly reviewer: string;
+  };
+}
+
+function predecessorProofArguments(
+  fixture: BridgeProofArtifactFixture,
+): readonly string[] {
+  return [
+    "--predecessor-plan",
+    fixture.bridgeSourceCompatibility.predecessorPlatformPlanPath,
+    "--predecessor-confirm",
+    fixture.bridgeSourceCompatibility.predecessorPlatformPlanConfirmation,
+    "--predecessor-evidence",
+    fixture.bridgeSourceCompatibility.predecessorPlatformReleaseEvidencePath,
+    "--confirm-patch",
+    fixture.bridgeSourceCompatibility.canonicalPatchDigest,
+    "--review",
+    fixture.bridgeSourceCompatibility.reviewer,
+  ];
+}
 const roots: string[] = [];
 const AUTHORITY_DIRECTORY = mkdtempSync(
   join(homedir(), ".takosumi-schema-authority-test-"),
@@ -127,18 +158,39 @@ function digestJson(value: unknown): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
 }
 
+function inspectBridgeSourceCompatibility(
+  predecessorSourceCommit: string,
+  bridgeSourceCommit: string,
+  reviewer: string,
+) {
+  return {
+    kind: "takosumi.control-d1-bridge-source-compatibility@v1" as const,
+    predecessorSourceCommit,
+    bridgeSourceCommit,
+    canonicalPatchDigest: digestJson({
+      predecessorSourceCommit,
+      bridgeSourceCommit,
+      changedPaths: CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS,
+    }),
+    changedPaths: CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS,
+    reviewer,
+  };
+}
+
 function writeStartedMutationCheckpoint(
   path: string,
   planConfirmation: string,
+  bridgeSourceCompatibilityDigest: string,
   recordedAt = "2026-08-30T12:00:00.000Z",
   predecessorChallengeEvidenceDigest = digestJson({
     test: "predecessor-challenge",
   }),
 ): string {
   const serialized = `${JSON.stringify({
-    kind: "takosumi.control-d1-schema-mutation-checkpoint@v2",
+    kind: "takosumi.control-d1-schema-mutation-checkpoint@v3",
     outcome: "unknown",
     planConfirmation,
+    bridgeSourceCompatibilityDigest,
     predecessorChallengeEvidenceDigest,
     recordedAt,
   })}\n`;
@@ -149,6 +201,7 @@ function writeStartedMutationCheckpoint(
   return digestJson({
     kind: "takosumi.control-d1-schema-release-readiness@v1",
     planConfirmation,
+    bridgeSourceCompatibilityDigest,
     mutationCheckpointStartedDigest: startedDigest,
   });
 }
@@ -191,6 +244,41 @@ async function servingCompatibilityProof(
   ]);
   const workerName =
     releaseEnvironment === "staging" ? "takosumi-staging" : "takosumi";
+  const predecessorPlanPath = join(
+    root,
+    `${releaseEnvironment}-predecessor-platform-plan.json`,
+  );
+  const predecessorCheckpointPath = join(
+    root,
+    `${releaseEnvironment}-predecessor-platform-checkpoint.jsonl`,
+  );
+  const predecessorPlanConfirmation = writeBridgePlatformPlan(
+    predecessorPlanPath,
+    predecessorCheckpointPath,
+    { environment: releaseEnvironment, sourceCommit: COMMIT },
+  );
+  appendPlatformMutationFence(
+    predecessorPlanPath,
+    predecessorPlanConfirmation,
+    { outcome: "unknown", versionId: null },
+    "2026-08-30T11:20:00.000Z",
+  );
+  appendPlatformMutationFence(
+    predecessorPlanPath,
+    predecessorPlanConfirmation,
+    { outcome: "accepted", versionId: DRIFTED_VERSION_ID },
+    "2026-08-30T11:21:00.000Z",
+  );
+  const predecessorReleaseEvidencePath = join(
+    root,
+    `${releaseEnvironment}-predecessor-platform-evidence.json`,
+  );
+  writeBridgePlatformReadyEvidence(
+    predecessorPlanPath,
+    predecessorReleaseEvidencePath,
+    DRIFTED_VERSION_ID,
+    "2026-08-30T11:22:00.000Z",
+  );
   const bridgePlanPath = join(root, `${releaseEnvironment}-bridge-plan.json`);
   const bridgeCheckpointPath = join(
     root,
@@ -269,8 +357,22 @@ async function servingCompatibilityProof(
     accepted: allowset[0],
     allowset,
   };
+  const sourceCompatibility = {
+    ...inspectBridgeSourceCompatibility(
+      COMMIT,
+      BRIDGE_COMMIT,
+      "operator:bridge-reviewer@example.com",
+    ),
+    predecessorServingVersionId: DRIFTED_VERSION_ID,
+    predecessorPlatformPlanPath: predecessorPlanPath,
+    predecessorPlatformPlanConfirmation: predecessorPlanConfirmation,
+    predecessorPlatformReleaseEvidencePath: predecessorReleaseEvidencePath,
+    predecessorPlatformReleaseEvidenceDigest: `sha256:${createHash("sha256")
+      .update(readFileSync(predecessorReleaseEvidencePath))
+      .digest("hex")}`,
+  };
   const identity = {
-    kind: "takosumi.control-d1-serving-compatibility-proof@v2" as const,
+    kind: "takosumi.control-d1-serving-compatibility-proof@v3" as const,
     status: "ready" as const,
     completedAt: "2026-08-30T11:55:00.000Z",
     environment: releaseEnvironment,
@@ -284,6 +386,8 @@ async function servingCompatibilityProof(
     bridgePlanDigest: `sha256:${createHash("sha256")
       .update(readFileSync(bridgePlanPath))
       .digest("hex")}`,
+    bridgeSourceCompatibility: sourceCompatibility,
+    bridgeSourceCompatibilityDigest: digestJson(sourceCompatibility),
     workerName,
     bindingName: "TAKOSUMI_CONTROL_DB" as const,
     servingVersionId: VERSION_ID,
@@ -337,12 +441,22 @@ async function servingCompatibilityProof(
     await runControlD1ServingCompatibilityProof(
       [
         "create",
+        "--predecessor-plan",
+        predecessorPlanPath,
+        "--predecessor-confirm",
+        predecessorPlanConfirmation,
+        "--predecessor-evidence",
+        predecessorReleaseEvidencePath,
         "--bridge-plan",
         bridgePlanPath,
         "--confirm",
         bridgePlanConfirmation,
         "--bridge-evidence",
         bridgeReleaseEvidencePath,
+        "--confirm-patch",
+        sourceCompatibility.canonicalPatchDigest,
+        "--review",
+        sourceCompatibility.reviewer,
         "--proof-out",
         path,
       ],
@@ -359,6 +473,7 @@ async function servingCompatibilityProof(
               : PRODUCTION_DATABASE_ID),
         ),
         now: () => "2026-08-30T11:55:00.000Z",
+        inspectBridgeSourceCompatibility,
         write: () => {},
       },
     );
@@ -375,6 +490,7 @@ function writeBridgePlatformReadyEvidence(
   planPath: string,
   evidencePath: string,
   deployedVersionId: string,
+  completedAt = "2026-08-30T11:52:00.000Z",
 ): void {
   const plan = JSON.parse(readFileSync(planPath, "utf8")) as Record<
     string,
@@ -385,7 +501,7 @@ function writeBridgePlatformReadyEvidence(
   const evidence = {
     kind: "takosumi.platform-worker-release-evidence@v2",
     status: "ready",
-    completedAt: "2026-08-30T11:52:00.000Z",
+    completedAt,
     environment,
     sourceCommit: plan.sourceCommit,
     configPath: plan.configPath,
@@ -656,6 +772,7 @@ function dependencies(
       pushed: true,
       authorEmail: "author@example.com",
     }),
+    inspectBridgeSourceCompatibility,
     createRemoteDatabase: (credentials) => ({
       database:
         credentials.databaseId === DATABASE_ID && stagingDatabase
@@ -700,7 +817,7 @@ test("staging plan is external, exact, REST-bound, and secret-free on stdout", a
     const planText = readFileSync(planPath, "utf8");
     const plan = JSON.parse(planText) as Record<string, unknown>;
     expect(statSync(planPath).mode & 0o777).toBe(0o600);
-    expect(plan.kind).toBe("takosumi.control-d1-schema-release-plan@v2");
+    expect(plan.kind).toBe("takosumi.control-d1-schema-release-plan@v3");
     expect(plan.environment).toBe("staging");
     expect(plan.sourceCommit).toBe(COMMIT);
     expect(plan.currentMigrationVersion).toBe(66);
@@ -751,11 +868,9 @@ test("staging plan is external, exact, REST-bound, and secret-free on stdout", a
 test("official bridge proof producer binds the full plan, raw ready evidence, and live immutable bindings", async () => {
   const root = privateRoot();
   const fixtureProofPath = await servingCompatibilityProof(root);
-  const fixture = JSON.parse(readFileSync(fixtureProofPath, "utf8")) as {
-    readonly bridgePlanPath: string;
-    readonly bridgePlanConfirmation: string;
-    readonly bridgeReleaseEvidencePath: string;
-  };
+  const fixture = JSON.parse(
+    readFileSync(fixtureProofPath, "utf8"),
+  ) as BridgeProofArtifactFixture;
   rmSync(fixtureProofPath);
   const proofPath = join(root, "official-bridge-proof.json");
   const calls: Array<{ url: string; authorization: string | null }> = [];
@@ -764,6 +879,7 @@ test("official bridge proof producer binds the full plan, raw ready evidence, an
   await runControlD1ServingCompatibilityProof(
     [
       "create",
+      ...predecessorProofArguments(fixture),
       "--bridge-plan",
       fixture.bridgePlanPath,
       "--confirm",
@@ -778,6 +894,7 @@ test("official bridge proof producer binds the full plan, raw ready evidence, an
       env: environment(),
       fetch: workerFetch(calls),
       now: () => "2026-08-30T11:55:00.000Z",
+      inspectBridgeSourceCompatibility,
       write: (value) => stdout.push(value),
     },
   );
@@ -787,7 +904,7 @@ test("official bridge proof producer binds the full plan, raw ready evidence, an
   expect(statSync(proofPath).mode & 0o777).toBe(0o600);
   expect(statSync(proofPath).nlink).toBe(1);
   expect(proof).toMatchObject({
-    kind: "takosumi.control-d1-serving-compatibility-proof@v2",
+    kind: "takosumi.control-d1-serving-compatibility-proof@v3",
     status: "ready",
     environment: "staging",
     bridgePlanPath: fixture.bridgePlanPath,
@@ -796,6 +913,14 @@ test("official bridge proof producer binds the full plan, raw ready evidence, an
     servingVersionId: VERSION_ID,
     schemaMode: "predeployed-bridge",
     reviewer: "operator:bridge-reviewer@example.com",
+    bridgeSourceCommit: BRIDGE_COMMIT,
+    bridgeSourceCompatibility: {
+      predecessorSourceCommit: COMMIT,
+      bridgeSourceCommit: BRIDGE_COMMIT,
+      predecessorServingVersionId: DRIFTED_VERSION_ID,
+      changedPaths: CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS,
+      reviewer: "operator:bridge-reviewer@example.com",
+    },
     predecessor: { migrationVersion: 66, status: "ready" },
     candidate: { migrationVersion: 67, status: "ready" },
   });
@@ -804,6 +929,13 @@ test("official bridge proof producer binds the full plan, raw ready evidence, an
   );
   expect(proof.confirmation).toMatch(/^sha256:[0-9a-f]{64}$/u);
   expect(proof.bridgePlanDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  expect(proof.bridgeSourceCompatibilityDigest).toMatch(
+    /^sha256:[0-9a-f]{64}$/u,
+  );
+  expect(
+    (proof.bridgeSourceCompatibility as Record<string, unknown>)
+      .canonicalPatchDigest,
+  ).toMatch(/^sha256:[0-9a-f]{64}$/u);
   expect(proof.compatibilityCatalogDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
   expect(proof.predecessorChallenge).toMatchObject({
     kind: "takosumi.control-d1-schema-compatibility-challenge-evidence@v1",
@@ -822,14 +954,216 @@ test("official bridge proof producer binds the full plan, raw ready evidence, an
   expect(calls.filter((call) => call.authorization === null)).toHaveLength(1);
 });
 
+test("a valid nonce and schema challenge cannot replace reviewed bridge source compatibility", async () => {
+  const root = privateRoot();
+  const fixtureProofPath = await servingCompatibilityProof(root);
+  const fixture = JSON.parse(
+    readFileSync(fixtureProofPath, "utf8"),
+  ) as BridgeProofArtifactFixture;
+  rmSync(fixtureProofPath);
+  const proofPath = join(root, "must-not-exist.json");
+  const calls: Array<{ url: string; authorization: string | null }> = [];
+
+  await expect(
+    runControlD1ServingCompatibilityProof(
+      [
+        "create",
+        ...predecessorProofArguments(fixture),
+        "--bridge-plan",
+        fixture.bridgePlanPath,
+        "--confirm",
+        fixture.bridgePlanConfirmation,
+        "--bridge-evidence",
+        fixture.bridgeReleaseEvidencePath,
+        "--proof-out",
+        proofPath,
+      ],
+      "staging",
+      {
+        env: environment(),
+        fetch: workerFetch(calls),
+        inspectBridgeSourceCompatibility: (
+          predecessorSourceCommit,
+          bridgeSourceCommit,
+          reviewer,
+        ) => ({
+          kind: "takosumi.control-d1-bridge-source-compatibility@v1",
+          predecessorSourceCommit,
+          bridgeSourceCommit,
+          canonicalPatchDigest: inspectBridgeSourceCompatibility(
+            predecessorSourceCommit,
+            bridgeSourceCommit,
+            reviewer,
+          ).canonicalPatchDigest,
+          changedPaths: ["worker/src/d1_opentofu_store.ts"],
+          reviewer,
+        }),
+      },
+    ),
+  ).rejects.toThrow(
+    "control_d1_serving_compatibility_proof_source_lineage_invalid",
+  );
+  expect(calls).toHaveLength(0);
+  expect(existsSync(proofPath)).toBeFalse();
+});
+
+test("bridge proof producer requires the reviewer-confirmed canonical patch digest", async () => {
+  const root = privateRoot();
+  const fixtureProofPath = await servingCompatibilityProof(root);
+  const fixture = JSON.parse(
+    readFileSync(fixtureProofPath, "utf8"),
+  ) as BridgeProofArtifactFixture;
+  rmSync(fixtureProofPath);
+  const proofPath = join(root, "must-not-exist.json");
+  const sourceArguments = [...predecessorProofArguments(fixture)];
+  sourceArguments[sourceArguments.indexOf("--confirm-patch") + 1] = digestJson({
+    forged: "unreviewed-patch",
+  });
+
+  await expect(
+    runControlD1ServingCompatibilityProof(
+      [
+        "create",
+        ...sourceArguments,
+        "--bridge-plan",
+        fixture.bridgePlanPath,
+        "--confirm",
+        fixture.bridgePlanConfirmation,
+        "--bridge-evidence",
+        fixture.bridgeReleaseEvidencePath,
+        "--proof-out",
+        proofPath,
+      ],
+      "staging",
+      {
+        env: environment(),
+        fetch: workerFetch([]),
+        inspectBridgeSourceCompatibility,
+      },
+    ),
+  ).rejects.toThrow(
+    "control_d1_serving_compatibility_proof_source_review_invalid",
+  );
+  expect(existsSync(proofPath)).toBeFalse();
+});
+
+test("bridge proof producer binds the exact previously serving Version to its validated source", async () => {
+  const root = privateRoot();
+  const fixtureProofPath = await servingCompatibilityProof(root);
+  const fixture = JSON.parse(
+    readFileSync(fixtureProofPath, "utf8"),
+  ) as BridgeProofArtifactFixture;
+  rmSync(fixtureProofPath);
+  const predecessorPlan = JSON.parse(
+    readFileSync(
+      fixture.bridgeSourceCompatibility.predecessorPlatformPlanPath,
+      "utf8",
+    ),
+  ) as { readonly checkpointPath: string };
+  const otherVersionId = "44444444-4444-4444-8444-444444444444";
+  rmSync(predecessorPlan.checkpointPath);
+  appendPlatformMutationFence(
+    fixture.bridgeSourceCompatibility.predecessorPlatformPlanPath,
+    fixture.bridgeSourceCompatibility.predecessorPlatformPlanConfirmation,
+    { outcome: "unknown", versionId: null },
+    "2026-08-30T11:20:00.000Z",
+  );
+  appendPlatformMutationFence(
+    fixture.bridgeSourceCompatibility.predecessorPlatformPlanPath,
+    fixture.bridgeSourceCompatibility.predecessorPlatformPlanConfirmation,
+    { outcome: "accepted", versionId: otherVersionId },
+    "2026-08-30T11:21:00.000Z",
+  );
+  const predecessorEvidence = JSON.parse(
+    readFileSync(
+      fixture.bridgeSourceCompatibility.predecessorPlatformReleaseEvidencePath,
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+  predecessorEvidence.deployedVersionId = otherVersionId;
+  writeFileSync(
+    fixture.bridgeSourceCompatibility.predecessorPlatformReleaseEvidencePath,
+    `${JSON.stringify(predecessorEvidence, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  const proofPath = join(root, "must-not-exist.json");
+
+  await expect(
+    runControlD1ServingCompatibilityProof(
+      [
+        "create",
+        ...predecessorProofArguments(fixture),
+        "--bridge-plan",
+        fixture.bridgePlanPath,
+        "--confirm",
+        fixture.bridgePlanConfirmation,
+        "--bridge-evidence",
+        fixture.bridgeReleaseEvidencePath,
+        "--proof-out",
+        proofPath,
+      ],
+      "staging",
+      {
+        env: environment(),
+        fetch: workerFetch([]),
+        inspectBridgeSourceCompatibility,
+      },
+    ),
+  ).rejects.toThrow(
+    "control_d1_serving_compatibility_proof_bridge_release_invalid",
+  );
+  expect(existsSync(proofPath)).toBeFalse();
+});
+
+test("schema plan recomputes the canonical bridge patch instead of trusting a copied digest", async () => {
+  const root = privateRoot();
+  const proofPath = await servingCompatibilityProof(root);
+  const proof = JSON.parse(readFileSync(proofPath, "utf8")) as Record<
+    string,
+    any
+  >;
+  proof.bridgeSourceCompatibility.canonicalPatchDigest = digestJson({
+    forged: "copied-review-label",
+  });
+  proof.bridgeSourceCompatibilityDigest = digestJson(
+    proof.bridgeSourceCompatibility,
+  );
+  const { confirmation: _discardedConfirmation, ...proofIdentity } = proof;
+  proof.confirmation = digestJson(proofIdentity);
+  writeFileSync(proofPath, `${JSON.stringify(proof, null, 2)}\n`, {
+    mode: 0o600,
+  });
+
+  const database = await predecessorDatabase();
+  const planPath = join(root, "must-not-exist-plan.json");
+  try {
+    await expect(
+      runReleaseSurface(
+        [
+          "plan",
+          "--plan-out",
+          planPath,
+          "--serving-compatibility-proof",
+          proofPath,
+        ],
+        "staging",
+        dependencies(database, []),
+      ),
+    ).rejects.toThrow(
+      "control_d1_schema_release_serving_compatibility_proof_invalid",
+    );
+    expect(existsSync(planPath)).toBeFalse();
+  } finally {
+    database.close();
+  }
+});
+
 test("bridge proof producer rejects hand-authored or incomplete platform evidence without creating output", async () => {
   const root = privateRoot();
   const fixtureProofPath = await servingCompatibilityProof(root);
-  const fixture = JSON.parse(readFileSync(fixtureProofPath, "utf8")) as {
-    readonly bridgePlanPath: string;
-    readonly bridgePlanConfirmation: string;
-    readonly bridgeReleaseEvidencePath: string;
-  };
+  const fixture = JSON.parse(
+    readFileSync(fixtureProofPath, "utf8"),
+  ) as BridgeProofArtifactFixture;
   const evidence = JSON.parse(
     readFileSync(fixture.bridgeReleaseEvidencePath, "utf8"),
   ) as Record<string, unknown>;
@@ -844,6 +1178,7 @@ test("bridge proof producer rejects hand-authored or incomplete platform evidenc
     runControlD1ServingCompatibilityProof(
       [
         "create",
+        ...predecessorProofArguments(fixture),
         "--bridge-plan",
         fixture.bridgePlanPath,
         "--confirm",
@@ -854,7 +1189,11 @@ test("bridge proof producer rejects hand-authored or incomplete platform evidenc
         proofPath,
       ],
       "staging",
-      { env: environment(), fetch: workerFetch([]) },
+      {
+        env: environment(),
+        fetch: workerFetch([]),
+        inspectBridgeSourceCompatibility,
+      },
     ),
   ).rejects.toThrow("platform_worker_release_evidence_invalid");
   expect(existsSync(proofPath)).toBeFalse();
@@ -863,16 +1202,15 @@ test("bridge proof producer rejects hand-authored or incomplete platform evidenc
 test("bridge proof producer refuses a live immutable Version without predeployed schema mode", async () => {
   const root = privateRoot();
   const fixtureProofPath = await servingCompatibilityProof(root);
-  const fixture = JSON.parse(readFileSync(fixtureProofPath, "utf8")) as {
-    readonly bridgePlanPath: string;
-    readonly bridgePlanConfirmation: string;
-    readonly bridgeReleaseEvidencePath: string;
-  };
+  const fixture = JSON.parse(
+    readFileSync(fixtureProofPath, "utf8"),
+  ) as BridgeProofArtifactFixture;
   const proofPath = join(root, "must-not-exist.json");
   await expect(
     runControlD1ServingCompatibilityProof(
       [
         "create",
+        ...predecessorProofArguments(fixture),
         "--bridge-plan",
         fixture.bridgePlanPath,
         "--confirm",
@@ -891,6 +1229,7 @@ test("bridge proof producer refuses a live immutable Version without predeployed
           () => DATABASE_ID,
           () => "bootstrap",
         ),
+        inspectBridgeSourceCompatibility,
       },
     ),
   ).rejects.toThrow("control_d1_schema_release_worker_schema_mode_invalid");
@@ -900,11 +1239,9 @@ test("bridge proof producer refuses a live immutable Version without predeployed
 test("bridge proof producer rejects a live Version whose challenge accepts only v66", async () => {
   const root = privateRoot();
   const fixtureProofPath = await servingCompatibilityProof(root);
-  const fixture = JSON.parse(readFileSync(fixtureProofPath, "utf8")) as {
-    readonly bridgePlanPath: string;
-    readonly bridgePlanConfirmation: string;
-    readonly bridgeReleaseEvidencePath: string;
-  };
+  const fixture = JSON.parse(
+    readFileSync(fixtureProofPath, "utf8"),
+  ) as BridgeProofArtifactFixture;
   const proofPath = join(root, "must-not-exist.json");
   const baseFetch = workerFetch(
     [],
@@ -961,6 +1298,7 @@ test("bridge proof producer rejects a live Version whose challenge accepts only 
     runControlD1ServingCompatibilityProof(
       [
         "create",
+        ...predecessorProofArguments(fixture),
         "--bridge-plan",
         fixture.bridgePlanPath,
         "--confirm",
@@ -971,7 +1309,11 @@ test("bridge proof producer rejects a live Version whose challenge accepts only 
         proofPath,
       ],
       "staging",
-      { env: environment(), fetch: forgedFetch },
+      {
+        env: environment(),
+        fetch: forgedFetch,
+        inspectBridgeSourceCompatibility,
+      },
     ),
   ).rejects.toThrow(
     "control_d1_serving_compatibility_proof_challenge_invalid",
@@ -1352,6 +1694,12 @@ test("execute applies only v67 once and writes exact ready evidence", async () =
     );
     const plan = JSON.parse(readFileSync(planPath, "utf8")) as {
       readonly confirmation: string;
+      readonly bridgeSourceCompatibilityDigest: string;
+      readonly bridgeSourceCompatibility: {
+        readonly predecessorSourceCommit: string;
+        readonly bridgeSourceCommit: string;
+        readonly canonicalPatchDigest: string;
+      };
       readonly mutationCheckpointPath: string;
     };
     stdout.length = 0;
@@ -1378,7 +1726,7 @@ test("execute applies only v67 once and writes exact ready evidence", async () =
     const evidenceText = readFileSync(evidencePath, "utf8");
     const evidence = JSON.parse(evidenceText) as Record<string, unknown>;
     expect(evidence.kind).toBe(
-      "takosumi.control-d1-schema-release-evidence@v2",
+      "takosumi.control-d1-schema-release-evidence@v3",
     );
     expect(evidence.status).toBe("ready");
     expect(evidence.appliedMigrationVersions).toEqual([67]);
@@ -1387,6 +1735,18 @@ test("execute applies only v67 once and writes exact ready evidence", async () =
     expect(evidence.finalTableCount).toBe(38);
     expect(evidence.servingCompatibilityProofDigest).toMatch(
       /^sha256:[0-9a-f]{64}$/u,
+    );
+    expect(evidence.bridgeSourceCompatibilityDigest).toBe(
+      plan.bridgeSourceCompatibilityDigest,
+    );
+    expect(evidence.bridgePredecessorSourceCommit).toBe(
+      plan.bridgeSourceCompatibility.predecessorSourceCommit,
+    );
+    expect(evidence.bridgeSourceCommit).toBe(
+      plan.bridgeSourceCompatibility.bridgeSourceCommit,
+    );
+    expect(evidence.bridgeCanonicalPatchDigest).toBe(
+      plan.bridgeSourceCompatibility.canonicalPatchDigest,
     );
     expect(evidence.mutationCheckpointDigest).toMatch(
       /^sha256:[0-9a-f]{64}$/u,
@@ -1410,6 +1770,22 @@ test("execute applies only v67 once and writes exact ready evidence", async () =
     });
     expect(evidence.credentialCustodyDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(evidence.reviewer).toBe("operator:reviewer@example.com");
+    const checkpointRecords = readFileSync(
+      plan.mutationCheckpointPath,
+      "utf8",
+    )
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(checkpointRecords).toHaveLength(2);
+    for (const checkpoint of checkpointRecords) {
+      expect(checkpoint).toMatchObject({
+        kind: "takosumi.control-d1-schema-mutation-checkpoint@v3",
+        planConfirmation: plan.confirmation,
+        bridgeSourceCompatibilityDigest:
+          plan.bridgeSourceCompatibilityDigest,
+      });
+    }
     for (const privateValue of [BOOKMARK, TOKEN]) {
       expect(evidenceText).not.toContain(privateValue);
     }
@@ -2274,7 +2650,7 @@ test("production rejects a hand-authored official receipt without the rehearsal 
       forgedReceiptPath,
       `${JSON.stringify(
         {
-          kind: "takosumi.control-d1-schema-release-evidence@v2",
+          kind: "takosumi.control-d1-schema-release-evidence@v3",
           status: "ready",
           completedAt: "2026-08-30T12:01:00.000Z",
           environment: "staging",
@@ -2290,6 +2666,14 @@ test("production rejects a hand-authored official receipt without the rehearsal 
           timeTravelBookmarkDigest: stagingPlan.timeTravelBookmarkDigest,
           servingCompatibilityProofDigest:
             stagingPlan.servingCompatibilityProofDigest,
+          bridgeSourceCompatibilityDigest:
+            stagingPlan.bridgeSourceCompatibilityDigest,
+          bridgePredecessorSourceCommit:
+            stagingPlan.bridgeSourceCompatibility.predecessorSourceCommit,
+          bridgeSourceCommit:
+            stagingPlan.bridgeSourceCompatibility.bridgeSourceCommit,
+          bridgeCanonicalPatchDigest:
+            stagingPlan.bridgeSourceCompatibility.canonicalPatchDigest,
           compatibilityCatalogDigest:
             stagingProof.compatibilityCatalogDigest,
           predecessorChallenge: stagingProof.predecessorChallenge,
@@ -2900,12 +3284,14 @@ test("recover releases only an exact active v67 fence after separate review", as
     );
     const plan = JSON.parse(readFileSync(planPath, "utf8")) as {
       readonly confirmation: string;
+      readonly bridgeSourceCompatibilityDigest: string;
       readonly manifestDigest: string;
       readonly mutationCheckpointPath: string;
     };
     writeStartedMutationCheckpoint(
       plan.mutationCheckpointPath,
       plan.confirmation,
+      plan.bridgeSourceCompatibilityDigest,
     );
     const candidate = await buildControlD1SchemaPlan();
     await applyControlD1Schema(database, candidate, {
@@ -3056,6 +3442,7 @@ test("lost apply acknowledgement never permits a second apply and recover reads 
     );
     const plan = JSON.parse(readFileSync(planPath, "utf8")) as {
       readonly confirmation: string;
+      readonly bridgeSourceCompatibilityDigest: string;
       readonly mutationCheckpointPath: string;
     };
     const executeArgs = (evidence: string) => [
@@ -3192,6 +3579,7 @@ test("v67 inactive recovery refuses an unresolved official restore checkpoint", 
     const releaseReadinessDigest = writeStartedMutationCheckpoint(
       plan.mutationCheckpointPath,
       plan.confirmation,
+      plan.bridgeSourceCompatibilityDigest,
     );
     await applyControlD1Schema(database, candidate, {
       sourceCommit: COMMIT,

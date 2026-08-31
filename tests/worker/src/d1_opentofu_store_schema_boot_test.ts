@@ -7,6 +7,8 @@
  * already-renamed databases without bricking the control DB.
  */
 import { expect, test } from "bun:test";
+import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
+import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 
 import {
   applyD1GuardedTableRenames,
@@ -16,6 +18,7 @@ import {
   verifyD1OpenTofuLedgerSchemaPredeployed,
 } from "../../../worker/src/d1_opentofu_store.ts";
 import type { D1Database } from "../../../worker/src/bindings.ts";
+import { createWorkerServiceApp } from "../../../worker/src/worker_service.ts";
 import {
   acquireControlD1MaintenanceFence,
   assertControlD1MaintenanceInactive,
@@ -23,6 +26,12 @@ import {
   readControlD1MaintenanceReleaseReceiptDetails,
   releaseControlD1MaintenanceFence,
 } from "../../../worker/src/d1_schema_maintenance.ts";
+import {
+  createCapsuleInterfaceMaterializationIntent,
+  pinCapsuleInterfaceBlueprints,
+} from "../../../core/domains/deploy-control/interface_materialization_intent.ts";
+import type { CommitRunStateInput } from "../../../core/domains/deploy-control/store.ts";
+import { seedCapsuleModel } from "../../helpers/deploy-control/model_fixture.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 async function tableNames(db: SqliteFakeD1): Promise<Set<string>> {
@@ -817,6 +826,254 @@ test("bridge compatibility accepts only the code-owned exact v66 and v67 ledgers
   await expect(readD1OpenTofuBridgeCompatibility(extra)).rejects.toThrow(
     "D1 OpenTofu bridge schema verification failed",
   );
+});
+
+test("bridge mode serves an authenticated ordinary control-plane route on exact v66 and v67", async () => {
+  for (const migrationVersion of [66, 67] as const) {
+    const db = new SqliteFakeD1();
+    await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: migrationVersion });
+    if (migrationVersion === 67) {
+      const fence = await acquireControlD1MaintenanceFence(
+        db,
+        {
+          sourceCommit: "a".repeat(40),
+          manifestDigest: `sha256:${"b".repeat(64)}`,
+          environment: "staging",
+          databaseRole: "in_place",
+          releasePolicy: "in_place",
+        },
+        "2026-08-31T00:00:00.000Z",
+      );
+      await releaseControlD1MaintenanceFence(
+        db,
+        fence,
+        "2026-08-31T00:01:00.000Z",
+      );
+    }
+    const token = `bridge-route-token-${migrationVersion}`;
+    const created = await createWorkerServiceApp(
+      {
+        TAKOSUMI_CONTROL_DB: db,
+        TAKOSUMI_CONTROL_D1_SCHEMA_MODE: "predeployed-bridge",
+        TAKOSUMI_ENVIRONMENT: "staging",
+        TAKOSUMI_DEV_MODE: "1",
+        TAKOSUMI_DEPLOY_CONTROL_TOKEN: token,
+        TAKOSUMI_SECRET_STORE_PASSPHRASE:
+          "bridge-route-secret-store-passphrase-0123456789",
+      } as unknown as CloudflareWorkerEnv,
+      "takosumi-api",
+      { operatorInstallConfigs: [], mountInternalLedgerRoutes: true },
+    );
+    const response = await created.app.request("/internal/v1/workspaces", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        handle: `bridge-${migrationVersion}`,
+        displayName: `Bridge ${migrationVersion}`,
+        type: "personal",
+        ownerUserId: `user_bridge_${migrationVersion}`,
+      }),
+    });
+    expect(response.status, `v${migrationVersion}: create Workspace`).toBe(201);
+    const body = (await response.json()) as { workspace: { id: string } };
+    const read = await created.app.request(
+      `/internal/v1/workspaces/${body.workspace.id}`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    expect(read.status, `v${migrationVersion}: read Workspace`).toBe(200);
+    expect(await read.json()).toMatchObject({
+      workspace: { id: body.workspace.id, handle: `bridge-${migrationVersion}` },
+    });
+  }
+});
+
+test("bridge mode disables v67 Interface intent writes on exact v66 before any ledger commit", async () => {
+  for (const migrationVersion of [66, 67] as const) {
+    const db = new SqliteFakeD1();
+    await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: migrationVersion });
+    const store = createCloudflareD1OpenTofuControlStore(db, {
+      schemaMode: "predeployed-bridge",
+    });
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_bridge_intent_${migrationVersion}`,
+      capsuleId: `capsule_bridge_intent_${migrationVersion}`,
+    });
+    const pinned = await pinCapsuleInterfaceBlueprints({
+      installConfigId: seeded.capsule.installConfigId,
+      blueprints: [
+        {
+          key: "mcp",
+          name: "mcp-server",
+          spec: {
+            type: "mcp.server",
+            version: "2025-11-25",
+            document: { transport: "streamable-http" },
+            inputs: {
+              endpoint: {
+                source: "capsule_output",
+                outputName: "endpoint",
+              },
+            },
+            access: { visibility: "workspace", resourceUriInput: "endpoint" },
+          },
+        },
+      ],
+    });
+    expect(pinned).toBeDefined();
+    const applyRunId = `apply_bridge_intent_${migrationVersion}`;
+    const stateVersion = {
+      id: `state_bridge_intent_${migrationVersion}`,
+      workspaceId: seeded.capsule.workspaceId,
+      capsuleId: seeded.capsule.id,
+      environment: seeded.capsule.environment,
+      generation: 1,
+      stateRef: `state/bridge/${migrationVersion}`,
+      digest: `sha256:${"a".repeat(64)}`,
+      createdByRunId: applyRunId,
+      createdAt: "2026-08-31T00:00:00.000Z",
+    };
+    const output = {
+      id: `output_bridge_intent_${migrationVersion}`,
+      workspaceId: seeded.capsule.workspaceId,
+      capsuleId: seeded.capsule.id,
+      stateGeneration: 1,
+      rawArtifactRef: `raw/bridge/${migrationVersion}`,
+      publicOutputs: { endpoint: "https://bridge.example.test/mcp" },
+      workspaceOutputs: { endpoint: "https://bridge.example.test/mcp" },
+      outputDigest: `sha256:${"b".repeat(64)}`,
+      createdAt: "2026-08-31T00:00:00.000Z",
+    };
+    const applyRunTerminal = {
+      id: applyRunId,
+      planRunId: `plan_${applyRunId}`,
+      workspaceId: seeded.capsule.workspaceId,
+      capsuleId: seeded.capsule.id,
+      operation: "update",
+      runnerProfileId: "opentofu-default",
+      status: "succeeded",
+      expected: {
+        planRunId: `plan_${applyRunId}`,
+        capsuleId: seeded.capsule.id,
+        runnerProfileId: "opentofu-default",
+        sourceDigest: `sha256:${"c".repeat(64)}`,
+        variablesDigest: `sha256:${"d".repeat(64)}`,
+        policyDecisionDigest: `sha256:${"e".repeat(64)}`,
+        planDigest: `sha256:${"f".repeat(64)}`,
+        planArtifactDigest: `sha256:${"f".repeat(64)}`,
+      },
+      stateBackend: { kind: "managed", ref: "state" },
+      stateLock: { status: "recorded", backendRef: "state" },
+      auditEvents: [],
+      createdAt: 1,
+      updatedAt: 2,
+      startedAt: 1,
+      finishedAt: 2,
+    } as ApplyRun;
+    const intent = createCapsuleInterfaceMaterializationIntent({
+      applyRunId,
+      workspaceId: seeded.capsule.workspaceId,
+      capsuleId: seeded.capsule.id,
+      stateVersionId: stateVersion.id,
+      outputId: output.id,
+      stateGeneration: 1,
+      pinned: pinned!,
+      createdAt: "2026-08-31T00:00:00.000Z",
+    });
+    const commit = {
+      stateVersion,
+      output,
+      capsulePatch: {
+        id: seeded.capsule.id,
+        patch: {
+          currentStateVersionId: stateVersion.id,
+          currentStateGeneration: 1,
+          currentOutputId: output.id,
+          status: "active",
+          updatedAt: "2026-08-31T00:00:00.000Z",
+        },
+        guard: { currentStateVersionId: undefined, status: "pending" },
+      },
+      applyRunTerminal,
+      interfaceMaterializationIntent: intent,
+    } satisfies CommitRunStateInput;
+
+    if (migrationVersion === 66) {
+      await expect(store.commitRunState(commit)).rejects.toThrow(
+        "control D1 v67",
+      );
+      expect(await store.getStateVersion(stateVersion.id)).toBeUndefined();
+      expect(await store.getOutput(output.id)).toBeUndefined();
+      expect((await store.getCapsule(seeded.capsule.id))?.currentStateGeneration).toBe(0);
+      expect(
+        await store.getCapsuleInterfaceMaterializationIntent(intent.id),
+      ).toBeUndefined();
+      await expect(
+        store.putPlanRunInputs({
+          planRunId: `plan_bridge_intent_${migrationVersion}`,
+          variables: {},
+          interfaceMaterialization: pinned!,
+        }),
+      ).rejects.toThrow("control D1 v67");
+      await expect(
+        store.putPlanRunInputs({
+          planRunId: `plan_bridge_sealed_${migrationVersion}`,
+          variables: {},
+          sealed: {
+            ciphertext: "opaque-ciphertext",
+            contentDigest: `sha256:${"9".repeat(64)}`,
+            names: ["interfaceMaterialization"],
+          },
+        }),
+      ).rejects.toThrow("control D1 v67");
+      expect(
+        await store.claimCapsuleInterfaceMaterializationIntent({
+          leaseToken: "bridge-v66-drain",
+          claimedAt: "2026-08-31T00:01:00.000Z",
+          leaseExpiresAt: "2026-08-31T00:02:00.000Z",
+        }),
+      ).toBeUndefined();
+      expect(
+        await store.listDeadLetteredCapsuleInterfaceMaterializationIntents(
+          seeded.capsule.workspaceId,
+          10,
+        ),
+      ).toEqual([]);
+      await ensureD1OpenTofuLedgerSchema(db);
+      await expect(
+        store.putPlanRunInputs({
+          planRunId: `plan_bridge_intent_${migrationVersion}`,
+          variables: {},
+          interfaceMaterialization: pinned!,
+        }),
+      ).resolves.toBeUndefined();
+      await expect(store.commitRunState(commit)).resolves.toMatchObject({
+        capsule: { id: seeded.capsule.id, currentStateGeneration: 1 },
+      });
+      expect(
+        await store.getCapsuleInterfaceMaterializationIntent(intent.id),
+      ).toEqual(intent);
+    } else {
+      await expect(store.commitRunState(commit)).resolves.toMatchObject({
+        capsule: { id: seeded.capsule.id, currentStateGeneration: 1 },
+      });
+      expect(
+        await store.getCapsuleInterfaceMaterializationIntent(intent.id),
+      ).toEqual(intent);
+      await expect(
+        store.putPlanRunInputs({
+          planRunId: `plan_bridge_intent_${migrationVersion}`,
+          variables: {},
+          interfaceMaterialization: pinned!,
+        }),
+      ).resolves.toBeUndefined();
+      expect(
+        await store.getPlanRunInputs(`plan_bridge_intent_${migrationVersion}`),
+      ).toMatchObject({ interfaceMaterialization: pinned });
+    }
+  }
 });
 
 test("predeployed maintenance readiness uses one direct indexed read", async () => {

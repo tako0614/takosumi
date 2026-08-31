@@ -242,21 +242,45 @@ proof owner emits the private serving-compatibility proof:
 
 ```bash
 bun run deploy -- takosumi-control-d1-bridge-proof-staging create \
+  --predecessor-plan /absolute/private/staging-predecessor-plan.json \
+  --predecessor-confirm sha256:<predecessor-plan-confirmation> \
+  --predecessor-evidence /absolute/private/staging-predecessor-evidence.json \
   --bridge-plan /absolute/private/staging-bridge-plan.json \
   --confirm sha256:<bridge-plan-confirmation> \
   --bridge-evidence /absolute/private/staging-bridge-evidence.json \
+  --confirm-patch sha256:<reviewed-canonical-patch-digest> \
+  --review operator:<same-reviewer-as-bridge-ready-evidence> \
   --proof-out /absolute/private/staging-bridge-compatibility.json
 ```
 
 Use `takosumi-control-d1-bridge-proof` for production. This producer validates
-the complete v5 plan, accepted forward checkpoint, complete raw ready evidence,
-and exact live immutable Worker Version, D1 binding, and
-`TAKOSUMI_CONTROL_D1_SCHEMA_MODE=predeployed-bridge` binding. It then sends a
+the complete v5 predecessor and bridge plans, both accepted forward
+checkpoints, and both complete raw ready-evidence artifacts. The validated
+predecessor deployment must be the bridge plan's exact predecessor Version.
+Its source commit must be a Git ancestor of the validated bridge source commit,
+their diff must be exactly the code-owned reviewed 20-path scope, and the proof
+binds the SHA-256 of Git's deterministic full-index binary patch.
+`--confirm-patch` must match that recomputation and `--review` must match the
+independent bridge ready-evidence reviewer; the bridge commit author cannot be
+that reviewer. The consumer repeats the repository calculation instead of
+trusting the retained digest.
+
+The producer also validates the exact live immutable Worker Version, D1
+binding, and `TAKOSUMI_CONTROL_D1_SCHEMA_MODE=predeployed-bridge` binding. It then sends a
 credential-free, cache-free random-nonce challenge and requires the physical v66
 ledger's complete rows plus the code-owned exact v66/v67 allowset before one mode-`0600`
 no-overwrite write. The proof retains the raw plan/evidence digests and raw
 canonical challenge response/digest; the schema consumer validates those source
-artifacts again. Hand-authored compatibility JSON is not an owner artifact.
+artifacts again. The challenge cannot establish source compatibility by itself.
+Hand-authored compatibility JSON is not an owner artifact.
+
+On exact v66 the bridge keeps ordinary authenticated control-plane routes
+available but rejects explicit or sealed Interface-bearing Plan sidecars before
+Apply dispatch, rejects Interface intent commit/restore writes, and makes intent
+draining return no work. This avoids querying the v67-only
+`capsule_interface_materialization_intents` table or mutating a provider without
+durable intent authority. Exact v67 lifts those gates after physical ledger
+validation and supports Interface commit/read normally.
 
 The resulting proof is consumed by the
 [Control D1 schema predeploy](control-d1-schema-predeploy.md) surface. The

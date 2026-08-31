@@ -2271,6 +2271,8 @@ export function readPlatformReleasePlanMutationState(
 export type PlatformReleaseReadyEvidenceAuthority = Readonly<{
   digest: string;
   completedAt: string;
+  sourceCommit: string;
+  predecessorVersionId: string;
   deployedVersionId: string;
   reviewer: string;
 }>;
@@ -2384,6 +2386,8 @@ export function readPlatformReleaseReadyEvidenceAuthority(
   return {
     digest: digest(bytes),
     completedAt: value.completedAt,
+    sourceCommit: plan.sourceCommit,
+    predecessorVersionId: plan.predecessorVersionId,
     deployedVersionId: value.deployedVersionId,
     reviewer: value.reviewer,
   };

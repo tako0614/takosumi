@@ -920,6 +920,7 @@ const verifiedPredeployedD1Bindings = new WeakSet<object>();
 const predeployedD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 const verifiedBridgeD1Bindings = new WeakSet<object>();
 const bridgeD1SchemaReadiness = new WeakMap<object, Promise<void>>();
+const bridgeD1MigrationVersions = new WeakMap<object, 66 | 67>();
 const bootstrapD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 
 function ensurePredeployedD1SchemaReady(db: D1Database): Promise<void> {
@@ -946,7 +947,11 @@ function ensureBridgeD1SchemaReady(db: D1Database): Promise<void> {
   let readiness = bridgeD1SchemaReadiness.get(db);
   if (readiness) return readiness;
   const attempt = readD1OpenTofuBridgeCompatibility(db)
-    .then(() => {
+    .then((compatibility) => {
+      bridgeD1MigrationVersions.set(
+        db,
+        compatibility.accepted.migrationVersion,
+      );
       verifiedBridgeD1Bindings.add(db);
     })
     .catch((error: unknown) => {
@@ -1580,6 +1585,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   // -- PlanRunInputs sidecar (internal; never projected) ----------------------
 
   async putPlanRunInputs(inputs: PlanRunInputs): Promise<void> {
+    if (inputs.interfaceMaterialization || inputs.sealed) {
+      await this.#assertBridgeInterfaceMaterializationAvailable();
+    }
     await this.#drizzleUpsert(
       schema.planRunInputs,
       {
@@ -1596,11 +1604,19 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async getPlanRunInputs(
     planRunId: string,
   ): Promise<PlanRunInputs | undefined> {
-    return await this.#drizzleFirstJson<PlanRunInputs>(
+    const inputs = await this.#drizzleFirstJson<PlanRunInputs>(
       schema.planRunInputs,
       schema.planRunInputs.inputsJson,
       eq(schema.planRunInputs.planRunId, planRunId),
     );
+    // A sealed sidecar cannot be inspected by the store. During exact v66 the
+    // bridge therefore rejects every sealed sidecar as well as an explicit
+    // Interface snapshot. This conservative gate runs before an Apply can be
+    // queued or dispatched and is lifted automatically on exact v67.
+    if (inputs?.interfaceMaterialization || inputs?.sealed) {
+      await this.#assertBridgeInterfaceMaterializationAvailable();
+    }
+    return inputs;
   }
 
   async deletePlanRunInputs(planRunId: string): Promise<void> {
@@ -1692,7 +1708,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async getWorkspace(id: string): Promise<Workspace | undefined> {
-    if (isPredeployedD1SchemaMode(this.#schemaMode)) {
+    if (
+      isPredeployedD1SchemaMode(this.#schemaMode) &&
+      !(await this.#usesBridgeV66CompatibilityPath())
+    ) {
       return await this.#getPredeployedWorkspace(id);
     }
     return await this.#drizzleFirstJson<Workspace>(
@@ -1933,7 +1952,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     accountId: string,
     params: AccountWorkspaceListParams,
   ): Promise<AccountWorkspacePage> {
-    if (isPredeployedD1SchemaMode(this.#schemaMode)) {
+    if (
+      isPredeployedD1SchemaMode(this.#schemaMode) &&
+      !(await this.#usesBridgeV66CompatibilityPath())
+    ) {
       return await this.#listPredeployedWorkspacesForAccountPage(
         accountId,
         params,
@@ -2192,7 +2214,14 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       "migration ledger",
     );
     if (this.#schemaMode === "predeployed-bridge") {
-      await validateD1OpenTofuBridgeLedgerSchema(columns, migrations);
+      const compatibility = await validateD1OpenTofuBridgeLedgerSchema(
+        columns,
+        migrations,
+      );
+      bridgeD1MigrationVersions.set(
+        this.db,
+        compatibility.accepted.migrationVersion,
+      );
       verifiedBridgeD1Bindings.add(this.db);
     } else {
       await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations);
@@ -3124,6 +3153,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   ): Promise<CommitRunStateResult> {
     assertD1AtomicCommitBatch(this.db, "commitRunState");
     await validateCommitRunStateInterfaceMaterializationIntent(input);
+    if (input.interfaceMaterializationIntent) {
+      await this.#assertBridgeInterfaceMaterializationAvailable();
+    }
     await this.#ensureSchema();
     const { capsulePatch } = input;
     if (input.applyRunTerminal && input.applyRunLeaseToken !== undefined) {
@@ -3250,6 +3282,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   ): Promise<CommitRestoredStateResult> {
     assertD1AtomicCommitBatch(this.db, "commitRestoredState");
     await validateCommitRestoredStateInterfaceMaterialization(input);
+    if (input.interfaceMaterializationReplacement) {
+      await this.#assertBridgeInterfaceMaterializationAvailable();
+    }
     await this.#ensureSchema();
     const { capsulePatch } = input;
     const row = await this.#orm
@@ -4220,6 +4255,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async getCapsuleInterfaceMaterializationIntent(
     id: string,
   ): Promise<CapsuleInterfaceMaterializationIntent | undefined> {
+    if (await this.#usesBridgeV66CompatibilityPath(true)) return undefined;
     await this.#ensureSchema();
     const row = await this.#orm
       .select()
@@ -4239,6 +4275,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (typeof workspaceId !== "string" || workspaceId.trim() === "") {
       throw new TypeError("workspaceId is required");
     }
+    if (await this.#usesBridgeV66CompatibilityPath(true)) return [];
     await this.#ensureSchema();
     const rows = await this.#orm
       .select()
@@ -4269,6 +4306,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     input: ClaimCapsuleInterfaceMaterializationIntentInput,
   ): Promise<CapsuleInterfaceMaterializationIntent | undefined> {
     assertCapsuleInterfaceMaterializationIntentClaimInput(input);
+    if (await this.#usesBridgeV66CompatibilityPath(true)) return undefined;
     await this.#ensureSchema();
     const table = schema.capsuleInterfaceMaterializationIntents;
     const candidateId = sql<string>`(
@@ -4307,6 +4345,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     input: RenewCapsuleInterfaceMaterializationIntentLeaseInput,
   ): Promise<RenewCapsuleInterfaceMaterializationIntentLeaseResult> {
     assertRenewCapsuleInterfaceMaterializationIntentLeaseInput(input);
+    await this.#assertBridgeInterfaceMaterializationAvailable();
     await this.#ensureSchema();
     const table = schema.capsuleInterfaceMaterializationIntents;
     const row = await this.#orm
@@ -4341,6 +4380,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     input: SettleCapsuleInterfaceMaterializationIntentInput,
   ): Promise<SettleCapsuleInterfaceMaterializationIntentResult> {
     assertCapsuleInterfaceMaterializationIntentSettlementInput(input);
+    await this.#assertBridgeInterfaceMaterializationAvailable();
     await this.#ensureSchema();
     const table = schema.capsuleInterfaceMaterializationIntents;
     const error =
@@ -4430,6 +4470,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     input: RetryCapsuleInterfaceMaterializationIntentInput,
   ): Promise<RetryCapsuleInterfaceMaterializationIntentResult> {
     assertRetryCapsuleInterfaceMaterializationIntentInput(input);
+    await this.#assertBridgeInterfaceMaterializationAvailable();
     await this.#ensureSchema();
     const table = schema.capsuleInterfaceMaterializationIntents;
     const capsule = schema.capsules;
@@ -5073,6 +5114,44 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .where(and(eq(schema.runs.id, id), inArray(schema.runs.type, [...types])))
       .get();
     return row?.runJson as T | undefined;
+  }
+
+  /**
+   * Resolve the exact physical ledger accepted for this bridge binding. The
+   * value comes only from the code-owned v66/v67 ledger validator and is cached
+   * on the bound D1 object, never from an env flag or caller assertion.
+   */
+  async #bridgeMigrationVersion(
+    refreshV66 = false,
+  ): Promise<66 | 67 | undefined> {
+    if (this.#schemaMode !== "predeployed-bridge") return undefined;
+    await this.#ensureSchema();
+    let migrationVersion = bridgeD1MigrationVersions.get(this.db);
+    if (migrationVersion !== 66 && migrationVersion !== 67) {
+      throw new Error("D1 OpenTofu bridge schema verification failed");
+    }
+    // An isolate may survive the externally owned v66 -> v67 transition. A
+    // cached v66 result is safe for ordinary generic reads, but an Interface
+    // operation must re-read the physical ledger so the gate can lift only
+    // after this exact binding has actually reached v67.
+    if (migrationVersion === 66 && refreshV66) {
+      const compatibility = await readD1OpenTofuBridgeCompatibility(this.db);
+      migrationVersion = compatibility.accepted.migrationVersion;
+      bridgeD1MigrationVersions.set(this.db, migrationVersion);
+    }
+    return migrationVersion;
+  }
+
+  async #usesBridgeV66CompatibilityPath(refreshV66 = false): Promise<boolean> {
+    return (await this.#bridgeMigrationVersion(refreshV66)) === 66;
+  }
+
+  async #assertBridgeInterfaceMaterializationAvailable(): Promise<void> {
+    if (await this.#usesBridgeV66CompatibilityPath(true)) {
+      throw new Error(
+        "Capsule Interface materialization requires control D1 v67; exact v66 bridge mode disables this operation before provider or ledger mutation",
+      );
+    }
   }
 
   async #ensureSchema(): Promise<void> {

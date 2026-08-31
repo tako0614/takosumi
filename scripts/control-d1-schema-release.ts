@@ -89,6 +89,12 @@ export interface ControlD1SchemaReleaseDependencies {
   readonly waitForRequestDrain?: (milliseconds: number) => Promise<void>;
   readonly applySchema?: typeof applyControlD1Schema;
   readonly releaseFence?: typeof releaseControlD1MaintenanceFence;
+  /** Test seam; the CLI always uses the repository-backed Git validator. */
+  readonly inspectBridgeSourceCompatibility?: (
+    predecessorSourceCommit: string,
+    bridgeSourceCommit: string,
+    reviewer: string,
+  ) => ControlD1BridgeSourcePatch;
   readonly write?: (value: string) => void;
 }
 
@@ -102,6 +108,28 @@ const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const COMMIT = /^[0-9a-f]{40}$/u;
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+export const CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS = [
+  "deploy/platform/control_d1_bridge_challenge.ts",
+  "deploy/platform/control_d1_schema.ts",
+  "deploy/platform/entry-worker.ts",
+  "deploy/platform/runtime_binding_materializer.ts",
+  "docs/operations/control-d1-schema-predeploy.md",
+  "docs/operations/platform-worker-deploy.md",
+  "docs/reference/configuration.md",
+  "package.json",
+  "scripts/control-d1-schema-release.ts",
+  "scripts/deploy.mjs",
+  "scripts/platform-worker-release.ts",
+  "tests/deploy/platform/control_d1_bridge_challenge_test.ts",
+  "tests/deploy/platform/control_d1_schema_test.ts",
+  "tests/scripts/control_d1_schema_release_test.ts",
+  "tests/scripts/deploy_entrypoint_boundary_test.ts",
+  "tests/scripts/platform_worker_release_authority_test.ts",
+  "tests/worker/src/d1_opentofu_store_schema_boot_test.ts",
+  "worker/src/bindings.ts",
+  "worker/src/d1_opentofu_store.ts",
+  "worker/src/worker_service.ts",
+] as const;
 const TARGETS = {
   staging: {
     workerName: "takosumi-staging",
@@ -141,7 +169,7 @@ type RecoverOptions = Readonly<{
 type Options = PlanOptions | ExecuteOptions | RecoverOptions;
 
 interface ControlD1SchemaReleasePlan {
-  readonly kind: "takosumi.control-d1-schema-release-plan@v2";
+  readonly kind: "takosumi.control-d1-schema-release-plan@v3";
   readonly createdAt: string;
   readonly environment: ControlD1SchemaReleaseEnvironment;
   readonly sourceCommit: string;
@@ -161,6 +189,8 @@ interface ControlD1SchemaReleasePlan {
   readonly bridgePlanConfirmation: string;
   readonly bridgeReleaseEvidencePath: string;
   readonly bridgeSourceCommit: string;
+  readonly bridgeSourceCompatibility: ControlD1BridgeSourceCompatibility;
+  readonly bridgeSourceCompatibilityDigest: string;
   readonly manifestDigest: string;
   readonly schemaDigest: string;
   readonly ledgerDigest: string;
@@ -226,8 +256,26 @@ interface ControlD1BridgeChallengeEvidence {
   readonly response: ControlD1BridgeChallengeResponse;
 }
 
+interface ControlD1BridgeSourcePatch {
+  readonly kind: "takosumi.control-d1-bridge-source-compatibility@v1";
+  readonly predecessorSourceCommit: string;
+  readonly bridgeSourceCommit: string;
+  readonly canonicalPatchDigest: string;
+  readonly changedPaths: readonly string[];
+  readonly reviewer: string;
+}
+
+interface ControlD1BridgeSourceCompatibility
+  extends ControlD1BridgeSourcePatch {
+  readonly predecessorServingVersionId: string;
+  readonly predecessorPlatformPlanPath: string;
+  readonly predecessorPlatformPlanConfirmation: string;
+  readonly predecessorPlatformReleaseEvidencePath: string;
+  readonly predecessorPlatformReleaseEvidenceDigest: string;
+}
+
 interface ControlD1ServingCompatibilityProof {
-  readonly kind: "takosumi.control-d1-serving-compatibility-proof@v2";
+  readonly kind: "takosumi.control-d1-serving-compatibility-proof@v3";
   readonly status: "ready";
   readonly completedAt: string;
   readonly environment: ControlD1SchemaReleaseEnvironment;
@@ -237,6 +285,8 @@ interface ControlD1ServingCompatibilityProof {
   readonly bridgeReleaseEvidencePath: string;
   readonly bridgeReleaseEvidenceDigest: string;
   readonly bridgePlanDigest: string;
+  readonly bridgeSourceCompatibility: ControlD1BridgeSourceCompatibility;
+  readonly bridgeSourceCompatibilityDigest: string;
   readonly workerName: string;
   readonly bindingName: "TAKOSUMI_CONTROL_DB";
   readonly servingVersionId: string;
@@ -274,9 +324,14 @@ export async function runControlD1SchemaRelease(
 }
 
 type ServingCompatibilityProofOptions = Readonly<{
+  predecessorPlan: string;
+  predecessorConfirmation: string;
+  predecessorEvidence: string;
   bridgePlan: string;
   confirmation: string;
   bridgeEvidence: string;
+  patchConfirmation: string;
+  reviewer: string;
   proofOut: string;
 }>;
 
@@ -298,9 +353,27 @@ export async function runControlD1ServingCompatibilityProof(
   assertExternalAbsent(options.proofOut);
   try {
     assertPlatformReleaseArtifactPathGraph(
+      options.predecessorPlan,
+      options.predecessorConfirmation,
+      [
+        {
+          label: "predecessor-release-evidence",
+          path: options.predecessorEvidence,
+        },
+        { label: "bridge-plan", path: options.bridgePlan },
+        { label: "bridge-release-evidence", path: options.bridgeEvidence },
+        { label: "serving-compatibility-proof", path: options.proofOut },
+      ],
+    );
+    assertPlatformReleaseArtifactPathGraph(
       options.bridgePlan,
       options.confirmation,
       [
+        { label: "predecessor-plan", path: options.predecessorPlan },
+        {
+          label: "predecessor-release-evidence",
+          path: options.predecessorEvidence,
+        },
         { label: "bridge-release-evidence", path: options.bridgeEvidence },
         { label: "serving-compatibility-proof", path: options.proofOut },
       ],
@@ -320,6 +393,15 @@ export async function runControlD1ServingCompatibilityProof(
     options.confirmation,
     options.bridgeEvidence,
   );
+  const predecessorRelease = readPlatformReleasePlanMutationState(
+    options.predecessorPlan,
+    options.predecessorConfirmation,
+  );
+  const predecessorEvidence = readPlatformReleaseReadyEvidenceAuthority(
+    options.predecessorPlan,
+    options.predecessorConfirmation,
+    options.predecessorEvidence,
+  );
   if (
     bridge.authority.environment !== environment ||
     bridge.authority.targetMutationAuthorityPath !==
@@ -329,12 +411,61 @@ export async function runControlD1ServingCompatibilityProof(
         targetMutationTarget,
       ) ||
     bridge.fence?.outcome !== "accepted" ||
-    bridge.fence.versionId !== evidence.deployedVersionId
+    bridge.fence.versionId !== evidence.deployedVersionId ||
+    predecessorRelease.authority.environment !== environment ||
+    predecessorRelease.authority.targetMutationAuthorityPath !==
+      bridge.authority.targetMutationAuthorityPath ||
+    predecessorRelease.authority
+      .targetMutationAuthorityDirectoryIdentityDigest !==
+      bridge.authority.targetMutationAuthorityDirectoryIdentityDigest ||
+    predecessorRelease.fence?.outcome !== "accepted" ||
+    predecessorRelease.fence.versionId !==
+      predecessorEvidence.deployedVersionId ||
+    predecessorEvidence.deployedVersionId !==
+      bridge.authority.predecessorVersionId ||
+    predecessorEvidence.sourceCommit !==
+      predecessorRelease.authority.sourceCommit ||
+    Date.parse(predecessorEvidence.completedAt) >
+      Date.parse(evidence.completedAt)
   ) {
     throw new Error(
       "control_d1_serving_compatibility_proof_bridge_release_invalid",
     );
   }
+  const bridgeSourcePatch = (
+    dependencies.inspectBridgeSourceCompatibility ??
+    inspectControlD1BridgeSourceCompatibility
+  )(
+    predecessorEvidence.sourceCommit,
+    bridge.authority.sourceCommit,
+    options.reviewer,
+  );
+  if (
+    evidence.reviewer !== options.reviewer ||
+    bridgeSourcePatch.canonicalPatchDigest !== options.patchConfirmation
+  ) {
+    throw new Error(
+      "control_d1_serving_compatibility_proof_source_review_invalid",
+    );
+  }
+  const boundBridgeSourceCompatibility: ControlD1BridgeSourceCompatibility = {
+    ...bridgeSourcePatch,
+    predecessorServingVersionId: predecessorEvidence.deployedVersionId,
+    predecessorPlatformPlanPath: options.predecessorPlan,
+    predecessorPlatformPlanConfirmation: options.predecessorConfirmation,
+    predecessorPlatformReleaseEvidencePath: options.predecessorEvidence,
+    predecessorPlatformReleaseEvidenceDigest: predecessorEvidence.digest,
+  };
+  assertControlD1BridgeSourceCompatibility(boundBridgeSourceCompatibility, {
+    predecessorSourceCommit: predecessorEvidence.sourceCommit,
+    bridgeSourceCommit: bridge.authority.sourceCommit,
+    predecessorServingVersionId: predecessorEvidence.deployedVersionId,
+    predecessorPlatformPlanPath: options.predecessorPlan,
+    predecessorPlatformPlanConfirmation: options.predecessorConfirmation,
+    predecessorPlatformReleaseEvidencePath: options.predecessorEvidence,
+    predecessorPlatformReleaseEvidenceDigest: predecessorEvidence.digest,
+    reviewer: options.reviewer,
+  });
   const credentials = releaseCredentials(
     environment,
     dependencies.env ?? process.env,
@@ -365,6 +496,12 @@ export async function runControlD1ServingCompatibilityProof(
     dependencies.now ?? now,
     "control_d1_serving_compatibility_proof_challenge_invalid",
   );
+  const completedAt = validTimestamp((dependencies.now ?? now)());
+  if (Date.parse(evidence.completedAt) > Date.parse(completedAt)) {
+    throw new Error(
+      "control_d1_serving_compatibility_proof_bridge_release_invalid",
+    );
+  }
   const targetDigest = digestJson({
     environment,
     accountId: credentials.accountId,
@@ -378,9 +515,9 @@ export async function runControlD1ServingCompatibilityProof(
     candidate.ledgerDigest,
   );
   const identity = {
-    kind: "takosumi.control-d1-serving-compatibility-proof@v2" as const,
+    kind: "takosumi.control-d1-serving-compatibility-proof@v3" as const,
     status: "ready" as const,
-    completedAt: validTimestamp((dependencies.now ?? now)()),
+    completedAt,
     environment,
     bridgeSourceCommit: bridge.authority.sourceCommit,
     bridgePlanPath: options.bridgePlan,
@@ -388,6 +525,10 @@ export async function runControlD1ServingCompatibilityProof(
     bridgeReleaseEvidencePath: options.bridgeEvidence,
     bridgeReleaseEvidenceDigest: evidence.digest,
     bridgePlanDigest: digestBytes(readStablePrivateBytes(options.bridgePlan)),
+    bridgeSourceCompatibility: boundBridgeSourceCompatibility,
+    bridgeSourceCompatibilityDigest: digestJson(
+      boundBridgeSourceCompatibility,
+    ),
     workerName: target.workerName,
     bindingName: target.bindingName,
     servingVersionId: serving.versionId,
@@ -423,6 +564,9 @@ export async function runControlD1ServingCompatibilityProof(
     status: proof.status,
     environment,
     bridgeReleaseEvidenceDigest: proof.bridgeReleaseEvidenceDigest,
+    bridgeSourceCompatibilityDigest: proof.bridgeSourceCompatibilityDigest,
+    canonicalPatchDigest:
+      proof.bridgeSourceCompatibility.canonicalPatchDigest,
     predecessorLedgerDigest: proof.predecessor.ledgerDigest,
     candidateLedgerDigest: proof.candidate.ledgerDigest,
     confirmation: proof.confirmation,
@@ -438,9 +582,14 @@ function parseServingCompatibilityProofArgs(
   }
   const values = argumentMap(rest);
   const allowed = [
+    "--predecessor-plan",
+    "--predecessor-confirm",
+    "--predecessor-evidence",
     "--bridge-plan",
     "--confirm",
     "--bridge-evidence",
+    "--confirm-patch",
+    "--review",
     "--proof-out",
   ];
   if (
@@ -453,9 +602,16 @@ function parseServingCompatibilityProofArgs(
     );
   }
   return {
+    predecessorPlan: absolute(values.get("--predecessor-plan")!),
+    predecessorConfirmation: digestValue(
+      values.get("--predecessor-confirm")!,
+    ),
+    predecessorEvidence: absolute(values.get("--predecessor-evidence")!),
     bridgePlan: absolute(values.get("--bridge-plan")!),
     confirmation: digestValue(values.get("--confirm")!),
     bridgeEvidence: absolute(values.get("--bridge-evidence")!),
+    patchConfirmation: digestValue(values.get("--confirm-patch")!),
+    reviewer: reviewerValue(values.get("--review")!),
     proofOut: absolute(values.get("--proof-out")!),
   };
 }
@@ -479,6 +635,12 @@ async function recover(
     schemaCheckpointPath: plan.mutationCheckpointPath,
     servingCompatibilityProofPath: plan.servingCompatibilityProofPath,
     bridgeReleaseEvidencePath: plan.bridgeReleaseEvidencePath,
+    predecessorPlatformPlanPath:
+      plan.bridgeSourceCompatibility.predecessorPlatformPlanPath,
+    predecessorPlatformPlanConfirmation:
+      plan.bridgeSourceCompatibility.predecessorPlatformPlanConfirmation,
+    predecessorPlatformReleaseEvidencePath:
+      plan.bridgeSourceCompatibility.predecessorPlatformReleaseEvidencePath,
     evidencePath: options.evidence,
     ...stagingArtifactPaths(plan),
   });
@@ -551,6 +713,8 @@ async function recover(
           ledgerDigest: plan.ledgerDigest,
           servingCompatibilityProofDigest:
             plan.servingCompatibilityProofDigest,
+          bridgeSourceCompatibilityDigest:
+            plan.bridgeSourceCompatibilityDigest,
           currentMigrationVersion: 66,
           currentMigrationCount: plan.currentMigrationCount,
           currentTableCount: plan.currentTableCount,
@@ -598,6 +762,7 @@ async function recover(
           startedMutationCheckpoint = readStartedMutationCheckpoint(
             plan.mutationCheckpointPath,
             plan.confirmation,
+            plan.bridgeSourceCompatibilityDigest,
           );
           const maintenanceRelease =
             await readControlD1MaintenanceReleaseReceiptDetails(
@@ -642,6 +807,8 @@ async function recover(
           schemaDigest: plan.schemaDigest,
           ledgerDigest: plan.ledgerDigest,
           servingCompatibilityProofDigest: plan.servingCompatibilityProofDigest,
+          bridgeSourceCompatibilityDigest:
+            plan.bridgeSourceCompatibilityDigest,
           currentMigrationVersion: 67,
           currentMigrationCount: 64,
           currentTableCount: 38,
@@ -733,6 +900,7 @@ async function recover(
           startedMutationCheckpoint = readStartedMutationCheckpoint(
             plan.mutationCheckpointPath,
             plan.confirmation,
+            plan.bridgeSourceCompatibilityDigest,
           );
           if (startedMutationCheckpoint.acceptedAt !== undefined) {
             throw new Error("active_checkpoint_already_accepted");
@@ -847,6 +1015,8 @@ async function recover(
           schemaDigest: plan.schemaDigest,
           ledgerDigest: plan.ledgerDigest,
           servingCompatibilityProofDigest: plan.servingCompatibilityProofDigest,
+          bridgeSourceCompatibilityDigest:
+            plan.bridgeSourceCompatibilityDigest,
           currentMigrationVersion: 67,
           currentMigrationCount: 64,
           currentTableCount: 38,
@@ -898,6 +1068,7 @@ async function assertRecoveryServingCompatibility(
       plan,
       candidate,
       predecessor,
+      dependencies,
     );
   } catch {
     await blockRecovery(
@@ -957,6 +1128,7 @@ async function assertRecoveryServingCompatibility(
             plan,
             candidate,
             predecessor,
+            dependencies,
           );
           if (
             lockedCompatibility.bridgePlanPath !==
@@ -1064,6 +1236,12 @@ async function execute(
     schemaCheckpointPath: plan.mutationCheckpointPath,
     servingCompatibilityProofPath: plan.servingCompatibilityProofPath,
     bridgeReleaseEvidencePath: plan.bridgeReleaseEvidencePath,
+    predecessorPlatformPlanPath:
+      plan.bridgeSourceCompatibility.predecessorPlatformPlanPath,
+    predecessorPlatformPlanConfirmation:
+      plan.bridgeSourceCompatibility.predecessorPlatformPlanConfirmation,
+    predecessorPlatformReleaseEvidencePath:
+      plan.bridgeSourceCompatibility.predecessorPlatformReleaseEvidencePath,
     evidencePath: options.evidence,
     ...stagingArtifactPaths(plan),
   });
@@ -1090,6 +1268,7 @@ async function execute(
     plan,
     candidate,
     predecessor,
+    dependencies,
   );
   await assertPlanStagingReceiptAuthority(
     plan,
@@ -1114,6 +1293,7 @@ async function execute(
             plan,
             candidate,
             predecessor,
+            dependencies,
           );
           if (
             lockedCompatibility.bridgePlanPath !==
@@ -1195,9 +1375,11 @@ async function execute(
             plan.mutationCheckpointPath,
             new TextEncoder().encode(
               `${JSON.stringify({
-                kind: "takosumi.control-d1-schema-mutation-checkpoint@v2",
+                kind: "takosumi.control-d1-schema-mutation-checkpoint@v3",
                 outcome: "unknown",
                 planConfirmation: plan.confirmation,
+                bridgeSourceCompatibilityDigest:
+                  plan.bridgeSourceCompatibilityDigest,
                 predecessorChallengeEvidenceDigest: digestJson(
                   executionPredecessorChallenge,
                 ),
@@ -1208,6 +1390,7 @@ async function execute(
           const startedMutationCheckpoint = readStartedMutationCheckpoint(
             plan.mutationCheckpointPath,
             plan.confirmation,
+            plan.bridgeSourceCompatibilityDigest,
           );
 
           let applied: Awaited<ReturnType<typeof applyControlD1Schema>>;
@@ -1320,9 +1503,11 @@ async function execute(
               plan.mutationCheckpointPath,
               new TextEncoder().encode(
                 `${JSON.stringify({
-                  kind: "takosumi.control-d1-schema-mutation-checkpoint@v2",
+                  kind: "takosumi.control-d1-schema-mutation-checkpoint@v3",
                   outcome: "accepted",
                   planConfirmation: plan.confirmation,
+                  bridgeSourceCompatibilityDigest:
+                    plan.bridgeSourceCompatibilityDigest,
                   appliedMigrationVersions: [67],
                   candidateChallengeEvidenceDigest:
                     digestJson(candidateChallenge),
@@ -1333,6 +1518,7 @@ async function execute(
             const acceptedMutationCheckpoint = readAcceptedMutationCheckpoint(
               plan.mutationCheckpointPath,
               plan.confirmation,
+              plan.bridgeSourceCompatibilityDigest,
             );
             const completedAt = validTimestamp((dependencies.now ?? now)());
             if (
@@ -1345,7 +1531,7 @@ async function execute(
               );
             }
             const evidence = {
-              kind: "takosumi.control-d1-schema-release-evidence@v2" as const,
+              kind: "takosumi.control-d1-schema-release-evidence@v3" as const,
               status: "ready" as const,
               completedAt,
               environment,
@@ -1361,6 +1547,14 @@ async function execute(
               timeTravelBookmarkDigest: plan.timeTravelBookmarkDigest,
               servingCompatibilityProofDigest:
                 plan.servingCompatibilityProofDigest,
+              bridgeSourceCompatibilityDigest:
+                plan.bridgeSourceCompatibilityDigest,
+              bridgePredecessorSourceCommit:
+                plan.bridgeSourceCompatibility.predecessorSourceCommit,
+              bridgeSourceCommit:
+                plan.bridgeSourceCompatibility.bridgeSourceCommit,
+              bridgeCanonicalPatchDigest:
+                plan.bridgeSourceCompatibility.canonicalPatchDigest,
               compatibilityCatalogDigest:
                 compatibility.compatibilityCatalogDigest,
               predecessorChallenge: executionPredecessorChallenge,
@@ -1566,6 +1760,8 @@ async function createPlan(
         platformTargetMutationAuthorityDirectoryIdentityDigest(
           targetMutationTarget,
         ),
+      inspectBridgeSourceCompatibility:
+        dependencies.inspectBridgeSourceCompatibility,
     },
   );
   const predecessorCompatibilityChallenge =
@@ -1610,6 +1806,15 @@ async function createPlan(
     schemaPlanPath: options.planOut,
     schemaCheckpointPath: checkpointPath,
     servingCompatibilityProofPath: options.servingCompatibilityProof,
+    predecessorPlatformPlanPath:
+      servingCompatibilityProof.proof.bridgeSourceCompatibility
+        .predecessorPlatformPlanPath,
+    predecessorPlatformPlanConfirmation:
+      servingCompatibilityProof.proof.bridgeSourceCompatibility
+        .predecessorPlatformPlanConfirmation,
+    predecessorPlatformReleaseEvidencePath:
+      servingCompatibilityProof.proof.bridgeSourceCompatibility
+        .predecessorPlatformReleaseEvidencePath,
     ...(options.stagingReceipt
       ? { stagingReceiptPath: options.stagingReceipt }
       : {}),
@@ -1628,7 +1833,7 @@ async function createPlan(
   });
   const pending = candidate.migrations.slice(predecessor.migrations.length);
   const identity = {
-    kind: "takosumi.control-d1-schema-release-plan@v2" as const,
+    kind: "takosumi.control-d1-schema-release-plan@v3" as const,
     createdAt: timestamp,
     environment,
     sourceCommit: source.head,
@@ -1650,6 +1855,10 @@ async function createPlan(
     bridgeReleaseEvidencePath:
       servingCompatibilityProof.proof.bridgeReleaseEvidencePath,
     bridgeSourceCommit: servingCompatibilityProof.proof.bridgeSourceCommit,
+    bridgeSourceCompatibility:
+      servingCompatibilityProof.proof.bridgeSourceCompatibility,
+    bridgeSourceCompatibilityDigest:
+      servingCompatibilityProof.proof.bridgeSourceCompatibilityDigest,
     manifestDigest: candidate.manifestDigest,
     schemaDigest: candidate.schemaDigest,
     ledgerDigest: candidate.ledgerDigest,
@@ -1845,6 +2054,8 @@ function readPlan(
     "bridgePlanPath",
     "bridgeReleaseEvidencePath",
     "bridgeSourceCommit",
+    "bridgeSourceCompatibility",
+    "bridgeSourceCompatibilityDigest",
     "confirmation",
     "createdAt",
     "credentialCustodyDigest",
@@ -1891,7 +2102,7 @@ function readPlan(
   if (
     JSON.stringify(Object.keys(value).sort()) !==
       JSON.stringify(expectedKeys) ||
-    value.kind !== "takosumi.control-d1-schema-release-plan@v2" ||
+    value.kind !== "takosumi.control-d1-schema-release-plan@v3" ||
     value.environment !== environment ||
     value.confirmation !== confirmation ||
     typeof value.createdAt !== "string" ||
@@ -1917,6 +2128,12 @@ function readPlan(
     resolve(value.bridgeReleaseEvidencePath) !==
       value.bridgeReleaseEvidencePath ||
     !COMMIT.test(String(value.bridgeSourceCommit)) ||
+    !record(value.bridgeSourceCompatibility) ||
+    value.bridgeSourceCompatibility.bridgeSourceCommit !==
+      value.bridgeSourceCommit ||
+    !SHA256.test(String(value.bridgeSourceCompatibilityDigest)) ||
+    value.bridgeSourceCompatibilityDigest !==
+      digestJson(value.bridgeSourceCompatibility) ||
     !SHA256.test(String(value.manifestDigest)) ||
     !SHA256.test(String(value.schemaDigest)) ||
     !SHA256.test(String(value.ledgerDigest)) ||
@@ -2118,6 +2335,7 @@ interface RecoveryEvidenceInput {
   readonly schemaDigest: string;
   readonly ledgerDigest: string;
   readonly servingCompatibilityProofDigest: string;
+  readonly bridgeSourceCompatibilityDigest: string;
   readonly currentMigrationVersion: 66 | 67;
   readonly currentMigrationCount: number;
   readonly currentTableCount: number;
@@ -2169,6 +2387,7 @@ async function blockRecovery(
     schemaDigest: plan.schemaDigest,
     ledgerDigest: plan.ledgerDigest,
     servingCompatibilityProofDigest: plan.servingCompatibilityProofDigest,
+    bridgeSourceCompatibilityDigest: plan.bridgeSourceCompatibilityDigest,
     currentMigrationVersion: latest,
     currentMigrationCount: ledger.length,
     maintenanceStatus,
@@ -2235,7 +2454,7 @@ function writeIncompleteEvidence(
       ? error.message
       : "control_d1_schema_release_failed";
   const evidence = {
-    kind: "takosumi.control-d1-schema-release-evidence@v2",
+    kind: "takosumi.control-d1-schema-release-evidence@v3",
     status: "incomplete",
     environment: plan.environment,
     sourceCommit: plan.sourceCommit,
@@ -2245,6 +2464,12 @@ function writeIncompleteEvidence(
     schemaDigest: plan.schemaDigest,
     ledgerDigest: plan.ledgerDigest,
     servingCompatibilityProofDigest: plan.servingCompatibilityProofDigest,
+    bridgeSourceCompatibilityDigest: plan.bridgeSourceCompatibilityDigest,
+    bridgePredecessorSourceCommit:
+      plan.bridgeSourceCompatibility.predecessorSourceCommit,
+    bridgeSourceCommit: plan.bridgeSourceCompatibility.bridgeSourceCommit,
+    bridgeCanonicalPatchDigest:
+      plan.bridgeSourceCompatibility.canonicalPatchDigest,
     reviewer: options.reviewer,
     mutationOutcome: "unknown",
     failureBoundary,
@@ -2307,6 +2532,13 @@ function validStagingRehearsalTarget(value: unknown): boolean {
 function digestValue(value: string): string {
   if (!SHA256.test(value)) {
     throw new Error("control_d1_schema_release_confirmation_invalid");
+  }
+  return value;
+}
+
+function reviewerValue(value: string): string {
+  if (!/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(value)) {
+    throw new Error("control_d1_schema_release_reviewer_invalid");
   }
   return value;
 }
@@ -2667,6 +2899,7 @@ type ServingCompatibilityContext = Readonly<{
   candidateLedgerDigest: string;
   targetMutationAuthorityPath: string;
   targetMutationAuthorityDirectoryIdentityDigest: string;
+  inspectBridgeSourceCompatibility?: ControlD1SchemaReleaseDependencies["inspectBridgeSourceCompatibility"];
 }>;
 
 function requiredServingCompatibilityProof(
@@ -2696,6 +2929,8 @@ function requiredServingCompatibilityProof(
     "bridgeReleaseEvidencePath",
     "bridgeReleaseEvidenceDigest",
     "bridgeSourceCommit",
+    "bridgeSourceCompatibility",
+    "bridgeSourceCompatibilityDigest",
     "candidate",
     "compatibilityCatalogDigest",
     "completedAt",
@@ -2716,10 +2951,16 @@ function requiredServingCompatibilityProof(
     !record(value) ||
     JSON.stringify(Object.keys(value).sort()) !==
       JSON.stringify(expectedKeys) ||
-    value.kind !== "takosumi.control-d1-serving-compatibility-proof@v2" ||
+    value.kind !== "takosumi.control-d1-serving-compatibility-proof@v3" ||
     value.status !== "ready" ||
     value.environment !== context.environment ||
     !COMMIT.test(String(value.bridgeSourceCommit)) ||
+    !SHA256.test(String(value.bridgeSourceCompatibilityDigest)) ||
+    !record(value.bridgeSourceCompatibility) ||
+    value.bridgeSourceCompatibility.bridgeSourceCommit !==
+      value.bridgeSourceCommit ||
+    value.bridgeSourceCompatibilityDigest !==
+      digestJson(value.bridgeSourceCompatibility) ||
     typeof value.bridgePlanPath !== "string" ||
     !isAbsolute(value.bridgePlanPath) ||
     resolve(value.bridgePlanPath) !== value.bridgePlanPath ||
@@ -2802,6 +3043,43 @@ function requiredServingCompatibilityProof(
       value.bridgePlanConfirmation as string,
       value.bridgeReleaseEvidencePath as string,
     );
+    const sourceCompatibility = value.bridgeSourceCompatibility as Record<
+      string,
+      unknown
+    >;
+    const predecessorRelease = readPlatformReleasePlanMutationState(
+      String(sourceCompatibility.predecessorPlatformPlanPath),
+      String(sourceCompatibility.predecessorPlatformPlanConfirmation),
+    );
+    const predecessorEvidence = readPlatformReleaseReadyEvidenceAuthority(
+      String(sourceCompatibility.predecessorPlatformPlanPath),
+      String(sourceCompatibility.predecessorPlatformPlanConfirmation),
+      String(sourceCompatibility.predecessorPlatformReleaseEvidencePath),
+    );
+    assertControlD1BridgeSourceCompatibility(sourceCompatibility, {
+      predecessorSourceCommit: predecessorEvidence.sourceCommit,
+      bridgeSourceCommit: bridgeRelease.authority.sourceCommit,
+      predecessorServingVersionId: predecessorEvidence.deployedVersionId,
+      predecessorPlatformPlanPath: String(
+        sourceCompatibility.predecessorPlatformPlanPath,
+      ),
+      predecessorPlatformPlanConfirmation: String(
+        sourceCompatibility.predecessorPlatformPlanConfirmation,
+      ),
+      predecessorPlatformReleaseEvidencePath: String(
+        sourceCompatibility.predecessorPlatformReleaseEvidencePath,
+      ),
+      predecessorPlatformReleaseEvidenceDigest: predecessorEvidence.digest,
+      reviewer: bridgeEvidence.reviewer,
+    });
+    const recomputedPatch = (
+      context.inspectBridgeSourceCompatibility ??
+      inspectControlD1BridgeSourceCompatibility
+    )(
+      predecessorEvidence.sourceCommit,
+      bridgeRelease.authority.sourceCommit,
+      bridgeEvidence.reviewer,
+    );
     if (
       bridgeRelease.authority.environment !== context.environment ||
       bridgeRelease.authority.sourceCommit !== value.bridgeSourceCommit ||
@@ -2815,6 +3093,32 @@ function requiredServingCompatibilityProof(
         value.bridgePlanDigest ||
       bridgeEvidence.deployedVersionId !== context.servingVersionId ||
       bridgeEvidence.reviewer !== value.reviewer ||
+      predecessorRelease.authority.environment !== context.environment ||
+      predecessorRelease.authority.targetMutationAuthorityPath !==
+        context.targetMutationAuthorityPath ||
+      predecessorRelease.authority
+        .targetMutationAuthorityDirectoryIdentityDigest !==
+        context.targetMutationAuthorityDirectoryIdentityDigest ||
+      predecessorRelease.fence?.outcome !== "accepted" ||
+      predecessorRelease.fence.versionId !==
+        predecessorEvidence.deployedVersionId ||
+      predecessorEvidence.deployedVersionId !==
+        bridgeRelease.authority.predecessorVersionId ||
+      Date.parse(predecessorEvidence.completedAt) >
+        Date.parse(bridgeEvidence.completedAt) ||
+      Date.parse(bridgeEvidence.completedAt) > Date.parse(value.completedAt) ||
+      predecessorEvidence.digest !==
+        sourceCompatibility.predecessorPlatformReleaseEvidenceDigest ||
+      JSON.stringify(recomputedPatch) !==
+        JSON.stringify({
+          kind: sourceCompatibility.kind,
+          predecessorSourceCommit:
+            sourceCompatibility.predecessorSourceCommit,
+          bridgeSourceCommit: sourceCompatibility.bridgeSourceCommit,
+          canonicalPatchDigest: sourceCompatibility.canonicalPatchDigest,
+          changedPaths: sourceCompatibility.changedPaths,
+          reviewer: sourceCompatibility.reviewer,
+        }) ||
       bridgeRelease.fence?.outcome !== "accepted" ||
       bridgeRelease.fence.versionId !== context.servingVersionId
     ) {
@@ -2835,6 +3139,7 @@ function assertPlanServingCompatibilityProof(
   plan: ControlD1SchemaReleasePlan,
   candidate: ControlD1SchemaPlan,
   predecessor: ControlD1SchemaPlan,
+  dependencies: ControlD1SchemaReleaseDependencies,
 ): ControlD1ServingCompatibilityProof {
   const retained = requiredServingCompatibilityProof(
     plan.servingCompatibilityProofPath,
@@ -2849,6 +3154,8 @@ function assertPlanServingCompatibilityProof(
       targetMutationAuthorityPath: plan.targetMutationAuthorityPath,
       targetMutationAuthorityDirectoryIdentityDigest:
         plan.targetMutationAuthorityDirectoryIdentityDigest,
+      inspectBridgeSourceCompatibility:
+        dependencies.inspectBridgeSourceCompatibility,
     },
   );
   if (
@@ -2859,7 +3166,11 @@ function assertPlanServingCompatibilityProof(
     retained.proof.bridgePlanConfirmation !== plan.bridgePlanConfirmation ||
     retained.proof.bridgeReleaseEvidencePath !==
       plan.bridgeReleaseEvidencePath ||
-    retained.proof.bridgeSourceCommit !== plan.bridgeSourceCommit
+    retained.proof.bridgeSourceCommit !== plan.bridgeSourceCommit ||
+    retained.proof.bridgeSourceCompatibilityDigest !==
+      plan.bridgeSourceCompatibilityDigest ||
+    JSON.stringify(retained.proof.bridgeSourceCompatibility) !==
+      JSON.stringify(plan.bridgeSourceCompatibility)
   ) {
     throw new Error(
       "control_d1_schema_release_serving_compatibility_proof_drift",
@@ -2949,6 +3260,10 @@ async function requiredStagingReceipt(
   }
   const receiptKeys = [
     "appliedMigrationVersions",
+    "bridgeCanonicalPatchDigest",
+    "bridgePredecessorSourceCommit",
+    "bridgeSourceCommit",
+    "bridgeSourceCompatibilityDigest",
     "completedAt",
     "compatibilityCatalogDigest",
     "credentialCustodyDigest",
@@ -2981,7 +3296,7 @@ async function requiredStagingReceipt(
     !record(receipt) ||
     JSON.stringify(Object.keys(receipt).sort()) !==
       JSON.stringify(receiptKeys) ||
-    receipt.kind !== "takosumi.control-d1-schema-release-evidence@v2" ||
+    receipt.kind !== "takosumi.control-d1-schema-release-evidence@v3" ||
     receipt.status !== "ready" ||
     receipt.environment !== "staging" ||
     receipt.sourceCommit !== source.head ||
@@ -3014,6 +3329,14 @@ async function requiredStagingReceipt(
     !SHA256.test(receipt.timeTravelBookmarkDigest) ||
     typeof receipt.servingCompatibilityProofDigest !== "string" ||
     !SHA256.test(receipt.servingCompatibilityProofDigest) ||
+    typeof receipt.bridgeSourceCompatibilityDigest !== "string" ||
+    !SHA256.test(receipt.bridgeSourceCompatibilityDigest) ||
+    typeof receipt.bridgePredecessorSourceCommit !== "string" ||
+    !COMMIT.test(receipt.bridgePredecessorSourceCommit) ||
+    typeof receipt.bridgeSourceCommit !== "string" ||
+    !COMMIT.test(receipt.bridgeSourceCommit) ||
+    typeof receipt.bridgeCanonicalPatchDigest !== "string" ||
+    !SHA256.test(receipt.bridgeCanonicalPatchDigest) ||
     typeof receipt.compatibilityCatalogDigest !== "string" ||
     !SHA256.test(receipt.compatibilityCatalogDigest) ||
     typeof receipt.mutationCheckpointDigest !== "string" ||
@@ -3056,6 +3379,14 @@ async function requiredStagingReceipt(
       servingCompatibilityProofPath:
         stagingPlan.servingCompatibilityProofPath,
       bridgeReleaseEvidencePath: stagingPlan.bridgeReleaseEvidencePath,
+      predecessorPlatformPlanPath:
+        stagingPlan.bridgeSourceCompatibility.predecessorPlatformPlanPath,
+      predecessorPlatformPlanConfirmation:
+        stagingPlan.bridgeSourceCompatibility
+          .predecessorPlatformPlanConfirmation,
+      predecessorPlatformReleaseEvidencePath:
+        stagingPlan.bridgeSourceCompatibility
+          .predecessorPlatformReleaseEvidencePath,
       evidencePath: path,
     });
     const planDigest = digestBytes(readStablePrivateBytes(planPath));
@@ -3075,10 +3406,12 @@ async function requiredStagingReceipt(
       stagingPlan,
       retainedCandidate,
       predecessor,
+      dependencies,
     );
     const checkpoint = readAcceptedMutationCheckpoint(
       stagingPlan.mutationCheckpointPath,
       stagingPlan.confirmation,
+      stagingPlan.bridgeSourceCompatibilityDigest,
     );
     const stagingCredentials = releaseCredentials(
       "staging",
@@ -3129,6 +3462,14 @@ async function requiredStagingReceipt(
         stagingPlan.timeTravelBookmarkDigest ||
       receipt.servingCompatibilityProofDigest !==
         stagingPlan.servingCompatibilityProofDigest ||
+      receipt.bridgeSourceCompatibilityDigest !==
+        stagingPlan.bridgeSourceCompatibilityDigest ||
+      receipt.bridgePredecessorSourceCommit !==
+        stagingPlan.bridgeSourceCompatibility.predecessorSourceCommit ||
+      receipt.bridgeSourceCommit !==
+        stagingPlan.bridgeSourceCompatibility.bridgeSourceCommit ||
+      receipt.bridgeCanonicalPatchDigest !==
+        stagingPlan.bridgeSourceCompatibility.canonicalPatchDigest ||
       receipt.compatibilityCatalogDigest !==
         compatibility.compatibilityCatalogDigest ||
       receipt.mutationCheckpointDigest !== checkpoint.digest ||
@@ -3213,6 +3554,7 @@ async function requiredStagingReceipt(
 function readAcceptedMutationCheckpoint(
   path: string,
   planConfirmation: string,
+  bridgeSourceCompatibilityDigest: string,
 ): Readonly<{
   digest: string;
   startedDigest: string;
@@ -3222,7 +3564,11 @@ function readAcceptedMutationCheckpoint(
   startedAt: string;
   acceptedAt: string;
 }> {
-  const checkpoint = readMutationCheckpoint(path, planConfirmation);
+  const checkpoint = readMutationCheckpoint(
+    path,
+    planConfirmation,
+    bridgeSourceCompatibilityDigest,
+  );
   if (
     checkpoint.acceptedAt === undefined ||
     checkpoint.candidateChallengeEvidenceDigest === undefined
@@ -3240,6 +3586,7 @@ function readAcceptedMutationCheckpoint(
 function readStartedMutationCheckpoint(
   path: string,
   planConfirmation: string,
+  bridgeSourceCompatibilityDigest: string,
 ): Readonly<{
   digest: string;
   startedDigest: string;
@@ -3249,12 +3596,17 @@ function readStartedMutationCheckpoint(
   startedAt: string;
   acceptedAt?: string;
 }> {
-  return readMutationCheckpoint(path, planConfirmation);
+  return readMutationCheckpoint(
+    path,
+    planConfirmation,
+    bridgeSourceCompatibilityDigest,
+  );
 }
 
 function readMutationCheckpoint(
   path: string,
   planConfirmation: string,
+  bridgeSourceCompatibilityDigest: string,
 ): Readonly<{
   digest: string;
   startedDigest: string;
@@ -3287,6 +3639,7 @@ function readMutationCheckpoint(
     JSON.stringify(Object.keys(started).sort()) !==
       JSON.stringify(
         [
+          "bridgeSourceCompatibilityDigest",
           "kind",
           "outcome",
           "planConfirmation",
@@ -3294,9 +3647,12 @@ function readMutationCheckpoint(
           "recordedAt",
         ].sort(),
       ) ||
-    started.kind !== "takosumi.control-d1-schema-mutation-checkpoint@v2" ||
+    started.kind !== "takosumi.control-d1-schema-mutation-checkpoint@v3" ||
     started.outcome !== "unknown" ||
     started.planConfirmation !== planConfirmation ||
+    started.bridgeSourceCompatibilityDigest !==
+      bridgeSourceCompatibilityDigest ||
+    !SHA256.test(String(started.bridgeSourceCompatibilityDigest)) ||
     !SHA256.test(String(started.predecessorChallengeEvidenceDigest)) ||
     typeof started.recordedAt !== "string" ||
     (records.length === 2 &&
@@ -3305,6 +3661,7 @@ function readMutationCheckpoint(
           JSON.stringify(
             [
               "appliedMigrationVersions",
+              "bridgeSourceCompatibilityDigest",
               "candidateChallengeEvidenceDigest",
               "kind",
               "outcome",
@@ -3313,9 +3670,11 @@ function readMutationCheckpoint(
             ].sort(),
           ) ||
         accepted.kind !==
-          "takosumi.control-d1-schema-mutation-checkpoint@v2" ||
+          "takosumi.control-d1-schema-mutation-checkpoint@v3" ||
         accepted.outcome !== "accepted" ||
         accepted.planConfirmation !== planConfirmation ||
+        accepted.bridgeSourceCompatibilityDigest !==
+          bridgeSourceCompatibilityDigest ||
         JSON.stringify(accepted.appliedMigrationVersions) !==
           JSON.stringify([67]) ||
         !SHA256.test(String(accepted.candidateChallengeEvidenceDigest)) ||
@@ -3341,6 +3700,7 @@ function readMutationCheckpoint(
       releaseReadinessDigest: digestJson({
         kind: "takosumi.control-d1-schema-release-readiness@v1",
         planConfirmation,
+        bridgeSourceCompatibilityDigest,
         mutationCheckpointStartedDigest: startedDigest,
       }),
       predecessorChallengeEvidenceDigest:
@@ -3358,6 +3718,148 @@ function readMutationCheckpoint(
     throw new Error("control_d1_schema_release_mutation_checkpoint_invalid", {
       cause: error,
     });
+  }
+}
+
+/**
+ * Canonical repository proof for the bounded bridge Worker. A valid proof is
+ * rooted at the exact source commit from the previously serving platform
+ * release and changes exactly the reviewed TASK-0042 path set. The digest is
+ * over Git's deterministic full-index binary patch, not a caller-provided
+ * summary or a live schema challenge.
+ */
+function inspectControlD1BridgeSourceCompatibility(
+  predecessorSourceCommit: string,
+  bridgeSourceCommit: string,
+  reviewer: string,
+): ControlD1BridgeSourcePatch {
+  if (
+    !COMMIT.test(predecessorSourceCommit) ||
+    !COMMIT.test(bridgeSourceCommit) ||
+    predecessorSourceCommit === bridgeSourceCommit ||
+    !/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(reviewer) ||
+    git(["cat-file", "-t", predecessorSourceCommit]).trim() !== "commit" ||
+    git(["cat-file", "-t", bridgeSourceCommit]).trim() !== "commit" ||
+    !gitCommitIsAncestor(predecessorSourceCommit, bridgeSourceCommit) ||
+    git(["show", "-s", "--format=%ae", bridgeSourceCommit])
+      .trim()
+      .toLowerCase() === reviewer.slice("operator:".length).toLowerCase()
+  ) {
+    throw new Error(
+      "control_d1_serving_compatibility_proof_source_lineage_invalid",
+    );
+  }
+  const names = new TextDecoder("utf-8", { fatal: true })
+    .decode(
+      gitBytes([
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        predecessorSourceCommit,
+        bridgeSourceCommit,
+        "--",
+      ]),
+    )
+    .split("\0")
+    .filter((path) => path.length > 0);
+  if (
+    JSON.stringify(names) !==
+    JSON.stringify(CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS)
+  ) {
+    throw new Error(
+      "control_d1_serving_compatibility_proof_patch_scope_invalid",
+    );
+  }
+  const patch = gitBytes([
+    "diff",
+    "--binary",
+    "--full-index",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--diff-algorithm=myers",
+    "--no-indent-heuristic",
+    "--unified=3",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    predecessorSourceCommit,
+    bridgeSourceCommit,
+    "--",
+  ]);
+  if (patch.byteLength === 0) {
+    throw new Error(
+      "control_d1_serving_compatibility_proof_patch_scope_invalid",
+    );
+  }
+  return {
+    kind: "takosumi.control-d1-bridge-source-compatibility@v1",
+    predecessorSourceCommit,
+    bridgeSourceCommit,
+    canonicalPatchDigest: digestBytes(patch),
+    changedPaths: names,
+    reviewer,
+  };
+}
+
+function assertControlD1BridgeSourceCompatibility(
+  value: unknown,
+  expected: Omit<
+    ControlD1BridgeSourceCompatibility,
+    "kind" | "canonicalPatchDigest" | "changedPaths"
+  >,
+): asserts value is ControlD1BridgeSourceCompatibility {
+  const keys = [
+    "bridgeSourceCommit",
+    "canonicalPatchDigest",
+    "changedPaths",
+    "kind",
+    "predecessorPlatformPlanConfirmation",
+    "predecessorPlatformPlanPath",
+    "predecessorPlatformReleaseEvidenceDigest",
+    "predecessorPlatformReleaseEvidencePath",
+    "predecessorServingVersionId",
+    "predecessorSourceCommit",
+    "reviewer",
+  ].sort();
+  if (
+    !record(value) ||
+    JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(keys) ||
+    value.kind !== "takosumi.control-d1-bridge-source-compatibility@v1" ||
+    value.predecessorSourceCommit !== expected.predecessorSourceCommit ||
+    value.bridgeSourceCommit !== expected.bridgeSourceCommit ||
+    value.predecessorServingVersionId !==
+      expected.predecessorServingVersionId ||
+    value.predecessorPlatformPlanPath !==
+      expected.predecessorPlatformPlanPath ||
+    value.predecessorPlatformPlanConfirmation !==
+      expected.predecessorPlatformPlanConfirmation ||
+    value.predecessorPlatformReleaseEvidencePath !==
+      expected.predecessorPlatformReleaseEvidencePath ||
+    value.predecessorPlatformReleaseEvidenceDigest !==
+      expected.predecessorPlatformReleaseEvidenceDigest ||
+    value.reviewer !== expected.reviewer ||
+    !COMMIT.test(String(value.predecessorSourceCommit)) ||
+    !COMMIT.test(String(value.bridgeSourceCommit)) ||
+    value.predecessorSourceCommit === value.bridgeSourceCommit ||
+    !UUID.test(String(value.predecessorServingVersionId)) ||
+    !isAbsolute(String(value.predecessorPlatformPlanPath)) ||
+    resolve(String(value.predecessorPlatformPlanPath)) !==
+      value.predecessorPlatformPlanPath ||
+    !SHA256.test(String(value.predecessorPlatformPlanConfirmation)) ||
+    !isAbsolute(String(value.predecessorPlatformReleaseEvidencePath)) ||
+    resolve(String(value.predecessorPlatformReleaseEvidencePath)) !==
+      value.predecessorPlatformReleaseEvidencePath ||
+    !SHA256.test(String(value.predecessorPlatformReleaseEvidenceDigest)) ||
+    !SHA256.test(String(value.canonicalPatchDigest)) ||
+    JSON.stringify(value.changedPaths) !==
+      JSON.stringify(CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS) ||
+    !/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(String(value.reviewer))
+  ) {
+    throw new Error(
+      "control_d1_serving_compatibility_proof_source_lineage_invalid",
+    );
   }
 }
 
@@ -3393,7 +3895,26 @@ function assertSourceReady(source: SourceInspection): void {
 }
 
 function git(args: readonly string[]): string {
-  const result = Bun.spawnSync(["git", ...args], {
+  return new TextDecoder("utf-8", { fatal: true }).decode(gitBytes(args));
+}
+
+function gitBytes(args: readonly string[]): Uint8Array {
+  const result = gitSpawn(args);
+  if (result.exitCode !== 0) {
+    throw new Error("control_d1_schema_release_git_failed");
+  }
+  return result.stdout;
+}
+
+function gitCommitIsAncestor(ancestor: string, descendant: string): boolean {
+  const result = gitSpawn(["merge-base", "--is-ancestor", ancestor, descendant]);
+  if (result.exitCode === 0) return true;
+  if (result.exitCode === 1) return false;
+  throw new Error("control_d1_schema_release_git_failed");
+}
+
+function gitSpawn(args: readonly string[]): ReturnType<typeof Bun.spawnSync> {
+  return Bun.spawnSync(["git", ...args], {
     cwd: ROOT,
     stdin: "ignore",
     stdout: "pipe",
@@ -3405,10 +3926,6 @@ function git(args: readonly string[]): string {
       LC_ALL: "C.UTF-8",
     },
   });
-  if (result.exitCode !== 0) {
-    throw new Error("control_d1_schema_release_git_failed");
-  }
-  return new TextDecoder("utf-8", { fatal: true }).decode(result.stdout);
 }
 
 function validTimestamp(value: string): string {
@@ -3489,6 +4006,9 @@ function assertControlD1SchemaArtifactPathGraph(
     schemaCheckpointPath: string;
     servingCompatibilityProofPath: string;
     bridgeReleaseEvidencePath: string;
+    predecessorPlatformPlanPath: string;
+    predecessorPlatformPlanConfirmation: string;
+    predecessorPlatformReleaseEvidencePath: string;
     evidencePath?: string;
     stagingReceiptPath?: string;
     stagingPlanPath?: string;
@@ -3499,6 +4019,16 @@ function assertControlD1SchemaArtifactPathGraph(
   }>,
 ): void {
   try {
+    assertPlatformReleaseArtifactPathGraph(
+      input.predecessorPlatformPlanPath,
+      input.predecessorPlatformPlanConfirmation,
+      [
+        {
+          label: "predecessor-release-evidence",
+          path: input.predecessorPlatformReleaseEvidencePath,
+        },
+      ],
+    );
     assertPlatformReleaseArtifactPathGraph(
       input.bridgePlanPath,
       input.bridgePlanConfirmation,
@@ -3512,6 +4042,14 @@ function assertControlD1SchemaArtifactPathGraph(
         {
           label: "bridge-release-evidence",
           path: input.bridgeReleaseEvidencePath,
+        },
+        {
+          label: "predecessor-platform-plan",
+          path: input.predecessorPlatformPlanPath,
+        },
+        {
+          label: "predecessor-platform-release-evidence",
+          path: input.predecessorPlatformReleaseEvidencePath,
         },
         ...(input.evidencePath
           ? [{ label: "schema-evidence", path: input.evidencePath }]
