@@ -71,6 +71,21 @@ manifest may request a generic Takosumi-provided capability and name its module
 variable delivery targets, but the application's OpenTofu module remains the
 authority for its provider and resource graph.
 
+Repositories remain plain OpenTofu modules. Source identity comes from the
+configured Git URL, ref, module path, and resolved commit. A repository may
+publish the optional `.well-known/takosumi.json` manifest using the closed
+`kind: Repository` envelope. The parser currently accepts exactly
+`takosumi.com/v1`, `takosumi.com/v2`, `takosumi.com/v2.1`,
+`takosumi.com/v2.2`, `takosumi.com/v2.3`, and `takosumi.com/v2.4`. The v1 and v2
+lanes are parser-only; checked-in structural schemas are published for v2.1
+through v2.4. Version 2.3 adds only the optional credential-free `sourceBuild`
+proposal per module, and v2.4 adds binding-delivered OIDC `ownerSubject`.
+Unknown fields remain closed, and no lane accepts provider, credential, target,
+billing, permission, or host-execution authority. Takosumi compiles a validated
+same-commit install proposal into a DB-owned `InstallConfig`. See the [current
+schema matrix](../docs/reference/schema-matrix.md) for the source of truth and
+compatibility rules.
+
 The runtime Interface entrypoint is a consumer view. Host-only input resolution,
 materialization markers, reconciliation provenance, projection sinks, Capsule
 blueprints, and create/status/token issuance requests stay inside the Takosumi
