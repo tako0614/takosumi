@@ -10,6 +10,7 @@ import { expect, test } from "bun:test";
 import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 
+import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import {
   applyD1GuardedTableRenames,
   createCloudflareD1OpenTofuControlStore,
@@ -887,6 +888,114 @@ test("bridge mode serves an authenticated ordinary control-plane route on exact 
     expect(await read.json()).toMatchObject({
       workspace: { id: body.workspace.id, handle: `bridge-${migrationVersion}` },
     });
+  }
+});
+
+test("bridge mode keeps Capsule InstallConfig rebind safe on exact v66 and atomically retires v67 intents", async () => {
+  for (const migrationVersion of [66, 67] as const) {
+    const db = new SqliteFakeD1();
+    await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: migrationVersion });
+    const store = createCloudflareD1OpenTofuControlStore(db, {
+      schemaMode: "predeployed-bridge",
+    });
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_bridge_rebind_${migrationVersion}`,
+      sourceId: `source_bridge_rebind_${migrationVersion}`,
+      snapshotId: `snapshot_bridge_rebind_${migrationVersion}`,
+      installConfigId: `config_bridge_rebind_previous_${migrationVersion}`,
+      capsuleId: `capsule_bridge_rebind_${migrationVersion}`,
+    });
+    const target = {
+      ...seeded.installConfig,
+      id: `config_bridge_rebind_target_${migrationVersion}`,
+      name: `bridge-rebind-target-${migrationVersion}`,
+      updatedAt: "2026-08-31T00:01:00.000Z",
+    };
+    await store.putInstallConfig(target);
+
+    if (migrationVersion === 66) {
+      expect(
+        (await tableNames(db)).has(
+          "capsule_interface_materialization_intents",
+        ),
+      ).toBe(false);
+    } else {
+      await db
+        .prepare(
+          `insert into capsule_interface_materialization_intents (
+             id, apply_run_id, restore_run_id, source_intent_id,
+             workspace_id, capsule_id, install_config_id,
+             state_version_id, output_id, state_generation,
+             blueprints_digest, blueprints_json, total_items,
+             next_item_index, status, attempts, next_retry_at,
+             lease_token, lease_expires_at, error_json, receipt_json,
+             created_at, updated_at, completed_at, dead_lettered_at
+           ) values (
+             ?, ?, null, null, ?, ?, ?, ?, ?, 1, ?, ?, 1, 0,
+             'pending', 0, ?, null, null, null, null, ?, ?, null, null
+           )`,
+        )
+        .bind(
+          "intent_bridge_rebind_67",
+          "apply_bridge_rebind_67",
+          seeded.capsule.workspaceId,
+          seeded.capsule.id,
+          seeded.installConfig.id,
+          "state_bridge_rebind_67",
+          "output_bridge_rebind_67",
+          `sha256:${"8".repeat(64)}`,
+          '[{"key":"mcp"}]',
+          "2026-08-31T00:00:00.000Z",
+          "2026-08-31T00:00:00.000Z",
+          "2026-08-31T00:00:00.000Z",
+        )
+        .run();
+    }
+
+    const result = await store.rebindCapsuleInstallConfig({
+      capsuleId: seeded.capsule.id,
+      targetInstallConfigId: target.id,
+      expected: {
+        installConfigId: seeded.installConfig.id,
+        installConfigDigest: await stableJsonDigest(seeded.installConfig),
+        targetInstallConfigDigest: await stableJsonDigest(target),
+        currentStateGeneration: seeded.capsule.currentStateGeneration,
+        currentStateVersionId: seeded.capsule.currentStateVersionId,
+        status: seeded.capsule.status,
+        executionAuthorityEpoch: 1,
+      },
+      updatedAt: "2026-08-31T00:02:00.000Z",
+    });
+    expect(result).toMatchObject({
+      status: "updated",
+      capsule: { id: seeded.capsule.id, installConfigId: target.id },
+    });
+    expect(
+      await store.getCapsuleExecutionAuthorityEpoch(seeded.capsule.id),
+    ).toBe(2);
+
+    if (migrationVersion === 67) {
+      const intent = await db
+        .prepare(
+          `select status, receipt_json, completed_at
+           from capsule_interface_materialization_intents
+           where id = 'intent_bridge_rebind_67'`,
+        )
+        .first<{
+          readonly status: string;
+          readonly receipt_json: string;
+          readonly completed_at: string;
+        }>();
+      expect(intent).toMatchObject({
+        status: "completed",
+        completed_at: "2026-08-31T00:02:00.000Z",
+      });
+      expect(JSON.parse(intent!.receipt_json)).toMatchObject({
+        disposition: "superseded_before_materialization",
+        blueprintsDigest: `sha256:${"8".repeat(64)}`,
+        completedAt: "2026-08-31T00:02:00.000Z",
+      });
+    }
   }
 });
 

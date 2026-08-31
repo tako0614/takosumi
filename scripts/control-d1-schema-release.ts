@@ -94,7 +94,7 @@ export interface ControlD1SchemaReleaseDependencies {
     predecessorSourceCommit: string,
     bridgeSourceCommit: string,
     reviewer: string,
-  ) => ControlD1BridgeSourcePatch;
+  ) => ControlD1BridgeSourceClosure;
   readonly write?: (value: string) => void;
 }
 
@@ -106,30 +106,9 @@ type Target = Readonly<{
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const COMMIT = /^[0-9a-f]{40}$/u;
+const GIT_TREE = /^[0-9a-f]{40}$/u;
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-export const CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS = [
-  "deploy/platform/control_d1_bridge_challenge.ts",
-  "deploy/platform/control_d1_schema.ts",
-  "deploy/platform/entry-worker.ts",
-  "deploy/platform/runtime_binding_materializer.ts",
-  "docs/operations/control-d1-schema-predeploy.md",
-  "docs/operations/platform-worker-deploy.md",
-  "docs/reference/configuration.md",
-  "package.json",
-  "scripts/control-d1-schema-release.ts",
-  "scripts/deploy.mjs",
-  "scripts/platform-worker-release.ts",
-  "tests/deploy/platform/control_d1_bridge_challenge_test.ts",
-  "tests/deploy/platform/control_d1_schema_test.ts",
-  "tests/scripts/control_d1_schema_release_test.ts",
-  "tests/scripts/deploy_entrypoint_boundary_test.ts",
-  "tests/scripts/platform_worker_release_authority_test.ts",
-  "tests/worker/src/d1_opentofu_store_schema_boot_test.ts",
-  "worker/src/bindings.ts",
-  "worker/src/d1_opentofu_store.ts",
-  "worker/src/worker_service.ts",
-] as const;
 const TARGETS = {
   staging: {
     workerName: "takosumi-staging",
@@ -256,17 +235,26 @@ interface ControlD1BridgeChallengeEvidence {
   readonly response: ControlD1BridgeChallengeResponse;
 }
 
-interface ControlD1BridgeSourcePatch {
-  readonly kind: "takosumi.control-d1-bridge-source-compatibility@v1";
-  readonly predecessorSourceCommit: string;
-  readonly bridgeSourceCommit: string;
+interface ControlD1BridgeSourceCommitClosureEntry {
+  readonly sourceCommit: string;
+  readonly parentSourceCommit: string;
+  readonly treeObjectId: string;
   readonly canonicalPatchDigest: string;
   readonly changedPaths: readonly string[];
+}
+
+interface ControlD1BridgeSourceClosure {
+  readonly kind: "takosumi.control-d1-bridge-source-compatibility@v2";
+  readonly predecessorSourceCommit: string;
+  readonly predecessorTreeObjectId: string;
+  readonly bridgeSourceCommit: string;
+  readonly commits: readonly ControlD1BridgeSourceCommitClosureEntry[];
+  readonly compatibilityClosureDigest: string;
   readonly reviewer: string;
 }
 
 interface ControlD1BridgeSourceCompatibility
-  extends ControlD1BridgeSourcePatch {
+  extends ControlD1BridgeSourceClosure {
   readonly predecessorServingVersionId: string;
   readonly predecessorPlatformPlanPath: string;
   readonly predecessorPlatformPlanConfirmation: string;
@@ -330,7 +318,7 @@ type ServingCompatibilityProofOptions = Readonly<{
   bridgePlan: string;
   confirmation: string;
   bridgeEvidence: string;
-  patchConfirmation: string;
+  closureConfirmation: string;
   reviewer: string;
   proofOut: string;
 }>;
@@ -432,7 +420,7 @@ export async function runControlD1ServingCompatibilityProof(
       "control_d1_serving_compatibility_proof_bridge_release_invalid",
     );
   }
-  const bridgeSourcePatch = (
+  const bridgeSourceClosure = (
     dependencies.inspectBridgeSourceCompatibility ??
     inspectControlD1BridgeSourceCompatibility
   )(
@@ -442,14 +430,15 @@ export async function runControlD1ServingCompatibilityProof(
   );
   if (
     evidence.reviewer !== options.reviewer ||
-    bridgeSourcePatch.canonicalPatchDigest !== options.patchConfirmation
+    bridgeSourceClosure.compatibilityClosureDigest !==
+      options.closureConfirmation
   ) {
     throw new Error(
       "control_d1_serving_compatibility_proof_source_review_invalid",
     );
   }
   const boundBridgeSourceCompatibility: ControlD1BridgeSourceCompatibility = {
-    ...bridgeSourcePatch,
+    ...bridgeSourceClosure,
     predecessorServingVersionId: predecessorEvidence.deployedVersionId,
     predecessorPlatformPlanPath: options.predecessorPlan,
     predecessorPlatformPlanConfirmation: options.predecessorConfirmation,
@@ -565,8 +554,8 @@ export async function runControlD1ServingCompatibilityProof(
     environment,
     bridgeReleaseEvidenceDigest: proof.bridgeReleaseEvidenceDigest,
     bridgeSourceCompatibilityDigest: proof.bridgeSourceCompatibilityDigest,
-    canonicalPatchDigest:
-      proof.bridgeSourceCompatibility.canonicalPatchDigest,
+    compatibilityClosureDigest:
+      proof.bridgeSourceCompatibility.compatibilityClosureDigest,
     predecessorLedgerDigest: proof.predecessor.ledgerDigest,
     candidateLedgerDigest: proof.candidate.ledgerDigest,
     confirmation: proof.confirmation,
@@ -588,7 +577,7 @@ function parseServingCompatibilityProofArgs(
     "--bridge-plan",
     "--confirm",
     "--bridge-evidence",
-    "--confirm-patch",
+    "--confirm-closure",
     "--review",
     "--proof-out",
   ];
@@ -610,7 +599,7 @@ function parseServingCompatibilityProofArgs(
     bridgePlan: absolute(values.get("--bridge-plan")!),
     confirmation: digestValue(values.get("--confirm")!),
     bridgeEvidence: absolute(values.get("--bridge-evidence")!),
-    patchConfirmation: digestValue(values.get("--confirm-patch")!),
+    closureConfirmation: digestValue(values.get("--confirm-closure")!),
     reviewer: reviewerValue(values.get("--review")!),
     proofOut: absolute(values.get("--proof-out")!),
   };
@@ -1553,8 +1542,8 @@ async function execute(
                 plan.bridgeSourceCompatibility.predecessorSourceCommit,
               bridgeSourceCommit:
                 plan.bridgeSourceCompatibility.bridgeSourceCommit,
-              bridgeCanonicalPatchDigest:
-                plan.bridgeSourceCompatibility.canonicalPatchDigest,
+              bridgeCompatibilityClosureDigest:
+                plan.bridgeSourceCompatibility.compatibilityClosureDigest,
               compatibilityCatalogDigest:
                 compatibility.compatibilityCatalogDigest,
               predecessorChallenge: executionPredecessorChallenge,
@@ -2468,8 +2457,8 @@ function writeIncompleteEvidence(
     bridgePredecessorSourceCommit:
       plan.bridgeSourceCompatibility.predecessorSourceCommit,
     bridgeSourceCommit: plan.bridgeSourceCompatibility.bridgeSourceCommit,
-    bridgeCanonicalPatchDigest:
-      plan.bridgeSourceCompatibility.canonicalPatchDigest,
+    bridgeCompatibilityClosureDigest:
+      plan.bridgeSourceCompatibility.compatibilityClosureDigest,
     reviewer: options.reviewer,
     mutationOutcome: "unknown",
     failureBoundary,
@@ -3072,7 +3061,7 @@ function requiredServingCompatibilityProof(
       predecessorPlatformReleaseEvidenceDigest: predecessorEvidence.digest,
       reviewer: bridgeEvidence.reviewer,
     });
-    const recomputedPatch = (
+    const recomputedClosure = (
       context.inspectBridgeSourceCompatibility ??
       inspectControlD1BridgeSourceCompatibility
     )(
@@ -3109,15 +3098,18 @@ function requiredServingCompatibilityProof(
       Date.parse(bridgeEvidence.completedAt) > Date.parse(value.completedAt) ||
       predecessorEvidence.digest !==
         sourceCompatibility.predecessorPlatformReleaseEvidenceDigest ||
-      JSON.stringify(recomputedPatch) !==
+      JSON.stringify(recomputedClosure) !==
         JSON.stringify({
           kind: sourceCompatibility.kind,
           predecessorSourceCommit:
             sourceCompatibility.predecessorSourceCommit,
+          predecessorTreeObjectId:
+            sourceCompatibility.predecessorTreeObjectId,
           bridgeSourceCommit: sourceCompatibility.bridgeSourceCommit,
-          canonicalPatchDigest: sourceCompatibility.canonicalPatchDigest,
-          changedPaths: sourceCompatibility.changedPaths,
+          commits: sourceCompatibility.commits,
           reviewer: sourceCompatibility.reviewer,
+          compatibilityClosureDigest:
+            sourceCompatibility.compatibilityClosureDigest,
         }) ||
       bridgeRelease.fence?.outcome !== "accepted" ||
       bridgeRelease.fence.versionId !== context.servingVersionId
@@ -3260,7 +3252,7 @@ async function requiredStagingReceipt(
   }
   const receiptKeys = [
     "appliedMigrationVersions",
-    "bridgeCanonicalPatchDigest",
+    "bridgeCompatibilityClosureDigest",
     "bridgePredecessorSourceCommit",
     "bridgeSourceCommit",
     "bridgeSourceCompatibilityDigest",
@@ -3335,8 +3327,8 @@ async function requiredStagingReceipt(
     !COMMIT.test(receipt.bridgePredecessorSourceCommit) ||
     typeof receipt.bridgeSourceCommit !== "string" ||
     !COMMIT.test(receipt.bridgeSourceCommit) ||
-    typeof receipt.bridgeCanonicalPatchDigest !== "string" ||
-    !SHA256.test(receipt.bridgeCanonicalPatchDigest) ||
+    typeof receipt.bridgeCompatibilityClosureDigest !== "string" ||
+    !SHA256.test(receipt.bridgeCompatibilityClosureDigest) ||
     typeof receipt.compatibilityCatalogDigest !== "string" ||
     !SHA256.test(receipt.compatibilityCatalogDigest) ||
     typeof receipt.mutationCheckpointDigest !== "string" ||
@@ -3468,8 +3460,8 @@ async function requiredStagingReceipt(
         stagingPlan.bridgeSourceCompatibility.predecessorSourceCommit ||
       receipt.bridgeSourceCommit !==
         stagingPlan.bridgeSourceCompatibility.bridgeSourceCommit ||
-      receipt.bridgeCanonicalPatchDigest !==
-        stagingPlan.bridgeSourceCompatibility.canonicalPatchDigest ||
+      receipt.bridgeCompatibilityClosureDigest !==
+        stagingPlan.bridgeSourceCompatibility.compatibilityClosureDigest ||
       receipt.compatibilityCatalogDigest !==
         compatibility.compatibilityCatalogDigest ||
       receipt.mutationCheckpointDigest !== checkpoint.digest ||
@@ -3722,17 +3714,19 @@ function readMutationCheckpoint(
 }
 
 /**
- * Canonical repository proof for the bounded bridge Worker. A valid proof is
- * rooted at the exact source commit from the previously serving platform
- * release and changes exactly the reviewed TASK-0042 path set. The digest is
- * over Git's deterministic full-index binary patch, not a caller-provided
- * summary or a live schema challenge.
+ * Canonical repository proof from the exact previously serving source to the
+ * bridge source. Every descendant must form one linear history edge, and each
+ * edge binds its parent, tree, path list, and deterministic full-index binary
+ * patch. The aggregate is therefore reviewable even when the safe bridge is a
+ * multi-commit closure; no fixed path allowlist or caller-authored summary can
+ * stand in for the actual Git objects.
  */
-function inspectControlD1BridgeSourceCompatibility(
+export function inspectControlD1BridgeSourceCompatibility(
   predecessorSourceCommit: string,
   bridgeSourceCommit: string,
   reviewer: string,
-): ControlD1BridgeSourcePatch {
+): ControlD1BridgeSourceClosure {
+  assertGitObjectReplacementUnavailable();
   if (
     !COMMIT.test(predecessorSourceCommit) ||
     !COMMIT.test(bridgeSourceCommit) ||
@@ -3740,38 +3734,136 @@ function inspectControlD1BridgeSourceCompatibility(
     !/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(reviewer) ||
     git(["cat-file", "-t", predecessorSourceCommit]).trim() !== "commit" ||
     git(["cat-file", "-t", bridgeSourceCommit]).trim() !== "commit" ||
-    !gitCommitIsAncestor(predecessorSourceCommit, bridgeSourceCommit) ||
-    git(["show", "-s", "--format=%ae", bridgeSourceCommit])
-      .trim()
-      .toLowerCase() === reviewer.slice("operator:".length).toLowerCase()
+    !gitCommitIsAncestor(predecessorSourceCommit, bridgeSourceCommit)
   ) {
     throw new Error(
       "control_d1_serving_compatibility_proof_source_lineage_invalid",
     );
   }
-  const names = new TextDecoder("utf-8", { fatal: true })
+  const predecessorTreeObjectId = git([
+    "show",
+    "-s",
+    "--format=%T",
+    predecessorSourceCommit,
+  ]).trim();
+  const sourceCommits = git([
+    "rev-list",
+    "--reverse",
+    `${predecessorSourceCommit}..${bridgeSourceCommit}`,
+  ])
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+  if (
+    !GIT_TREE.test(predecessorTreeObjectId) ||
+    sourceCommits.length === 0 ||
+    sourceCommits.at(-1) !== bridgeSourceCommit
+  ) {
+    throw new Error(
+      "control_d1_serving_compatibility_proof_source_lineage_invalid",
+    );
+  }
+
+  const reviewerEmail = reviewer.slice("operator:".length).toLowerCase();
+  const commits: ControlD1BridgeSourceCommitClosureEntry[] = [];
+  let expectedParent = predecessorSourceCommit;
+  for (const sourceCommit of sourceCommits) {
+    const parents = git(["show", "-s", "--format=%P", sourceCommit])
+      .trim()
+      .split(" ")
+      .filter(Boolean);
+    const treeObjectId = git([
+      "show",
+      "-s",
+      "--format=%T",
+      sourceCommit,
+    ]).trim();
+    const authorEmail = git(["show", "-s", "--format=%ae", sourceCommit])
+      .trim()
+      .toLowerCase();
+    if (
+      !COMMIT.test(sourceCommit) ||
+      parents.length !== 1 ||
+      parents[0] !== expectedParent ||
+      !GIT_TREE.test(treeObjectId) ||
+      authorEmail === reviewerEmail
+    ) {
+      throw new Error(
+        "control_d1_serving_compatibility_proof_source_lineage_invalid",
+      );
+    }
+    const changedPaths = canonicalGitChangedPaths(
+      expectedParent,
+      sourceCommit,
+    );
+    const patch = canonicalGitPatch(expectedParent, sourceCommit);
+    if (changedPaths.length === 0 || patch.byteLength === 0) {
+      throw new Error(
+        "control_d1_serving_compatibility_proof_patch_scope_invalid",
+      );
+    }
+    commits.push({
+      sourceCommit,
+      parentSourceCommit: expectedParent,
+      treeObjectId,
+      canonicalPatchDigest: digestBytes(patch),
+      changedPaths,
+    });
+    expectedParent = sourceCommit;
+  }
+
+  const identity = {
+    kind: "takosumi.control-d1-bridge-source-compatibility@v2" as const,
+    predecessorSourceCommit,
+    predecessorTreeObjectId,
+    bridgeSourceCommit,
+    commits,
+    reviewer,
+  };
+  return {
+    ...identity,
+    compatibilityClosureDigest: digestJson(identity),
+  };
+}
+
+function canonicalGitChangedPaths(
+  parentSourceCommit: string,
+  sourceCommit: string,
+): readonly string[] {
+  const paths = new TextDecoder("utf-8", { fatal: true })
     .decode(
       gitBytes([
         "diff",
         "--name-only",
         "-z",
         "--no-renames",
-        predecessorSourceCommit,
-        bridgeSourceCommit,
+        parentSourceCommit,
+        sourceCommit,
         "--",
       ]),
     )
     .split("\0")
     .filter((path) => path.length > 0);
   if (
-    JSON.stringify(names) !==
-    JSON.stringify(CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS)
+    paths.some(
+      (path) =>
+        path.startsWith("/") ||
+        path.split("/").some((segment) => segment === ".."),
+    ) ||
+    new Set(paths).size !== paths.length
   ) {
     throw new Error(
       "control_d1_serving_compatibility_proof_patch_scope_invalid",
     );
   }
-  const patch = gitBytes([
+  return paths;
+}
+
+function canonicalGitPatch(
+  parentSourceCommit: string,
+  sourceCommit: string,
+): Uint8Array {
+  return gitBytes([
     "diff",
     "--binary",
     "--full-index",
@@ -3784,36 +3876,26 @@ function inspectControlD1BridgeSourceCompatibility(
     "--unified=3",
     "--src-prefix=a/",
     "--dst-prefix=b/",
-    predecessorSourceCommit,
-    bridgeSourceCommit,
+    parentSourceCommit,
+    sourceCommit,
     "--",
   ]);
-  if (patch.byteLength === 0) {
-    throw new Error(
-      "control_d1_serving_compatibility_proof_patch_scope_invalid",
-    );
-  }
-  return {
-    kind: "takosumi.control-d1-bridge-source-compatibility@v1",
-    predecessorSourceCommit,
-    bridgeSourceCommit,
-    canonicalPatchDigest: digestBytes(patch),
-    changedPaths: names,
-    reviewer,
-  };
 }
 
 function assertControlD1BridgeSourceCompatibility(
   value: unknown,
   expected: Omit<
     ControlD1BridgeSourceCompatibility,
-    "kind" | "canonicalPatchDigest" | "changedPaths"
+    | "kind"
+    | "predecessorTreeObjectId"
+    | "commits"
+    | "compatibilityClosureDigest"
   >,
 ): asserts value is ControlD1BridgeSourceCompatibility {
   const keys = [
     "bridgeSourceCommit",
-    "canonicalPatchDigest",
-    "changedPaths",
+    "commits",
+    "compatibilityClosureDigest",
     "kind",
     "predecessorPlatformPlanConfirmation",
     "predecessorPlatformPlanPath",
@@ -3821,12 +3903,65 @@ function assertControlD1BridgeSourceCompatibility(
     "predecessorPlatformReleaseEvidencePath",
     "predecessorServingVersionId",
     "predecessorSourceCommit",
+    "predecessorTreeObjectId",
     "reviewer",
   ].sort();
+  const commits = record(value) && Array.isArray(value.commits)
+    ? value.commits
+    : [];
+  let expectedParent = record(value)
+    ? String(value.predecessorSourceCommit)
+    : "";
+  let commitsValid = commits.length > 0;
+  const seenCommits = new Set<string>();
+  for (const entry of commits) {
+    const entryKeys = [
+      "canonicalPatchDigest",
+      "changedPaths",
+      "parentSourceCommit",
+      "sourceCommit",
+      "treeObjectId",
+    ].sort();
+    if (
+      !record(entry) ||
+      JSON.stringify(Object.keys(entry).sort()) !== JSON.stringify(entryKeys) ||
+      !COMMIT.test(String(entry.sourceCommit)) ||
+      entry.parentSourceCommit !== expectedParent ||
+      !COMMIT.test(String(entry.parentSourceCommit)) ||
+      !GIT_TREE.test(String(entry.treeObjectId)) ||
+      !SHA256.test(String(entry.canonicalPatchDigest)) ||
+      !Array.isArray(entry.changedPaths) ||
+      entry.changedPaths.length === 0 ||
+      entry.changedPaths.some(
+        (path) =>
+          typeof path !== "string" ||
+          path.length === 0 ||
+          path.startsWith("/") ||
+          path.split("/").some((segment) => segment === ".."),
+      ) ||
+      new Set(entry.changedPaths).size !== entry.changedPaths.length ||
+      seenCommits.has(String(entry.sourceCommit))
+    ) {
+      commitsValid = false;
+      break;
+    }
+    seenCommits.add(String(entry.sourceCommit));
+    expectedParent = String(entry.sourceCommit);
+  }
+  const closureIdentity = record(value)
+    ? {
+        kind: value.kind,
+        predecessorSourceCommit: value.predecessorSourceCommit,
+        predecessorTreeObjectId: value.predecessorTreeObjectId,
+        bridgeSourceCommit: value.bridgeSourceCommit,
+        commits: value.commits,
+        reviewer: value.reviewer,
+      }
+    : undefined;
   if (
     !record(value) ||
     JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(keys) ||
-    value.kind !== "takosumi.control-d1-bridge-source-compatibility@v1" ||
+    value.kind !== "takosumi.control-d1-bridge-source-compatibility@v2" ||
     value.predecessorSourceCommit !== expected.predecessorSourceCommit ||
     value.bridgeSourceCommit !== expected.bridgeSourceCommit ||
     value.predecessorServingVersionId !==
@@ -3843,6 +3978,9 @@ function assertControlD1BridgeSourceCompatibility(
     !COMMIT.test(String(value.predecessorSourceCommit)) ||
     !COMMIT.test(String(value.bridgeSourceCommit)) ||
     value.predecessorSourceCommit === value.bridgeSourceCommit ||
+    !GIT_TREE.test(String(value.predecessorTreeObjectId)) ||
+    !commitsValid ||
+    expectedParent !== value.bridgeSourceCommit ||
     !UUID.test(String(value.predecessorServingVersionId)) ||
     !isAbsolute(String(value.predecessorPlatformPlanPath)) ||
     resolve(String(value.predecessorPlatformPlanPath)) !==
@@ -3852,9 +3990,8 @@ function assertControlD1BridgeSourceCompatibility(
     resolve(String(value.predecessorPlatformReleaseEvidencePath)) !==
       value.predecessorPlatformReleaseEvidencePath ||
     !SHA256.test(String(value.predecessorPlatformReleaseEvidenceDigest)) ||
-    !SHA256.test(String(value.canonicalPatchDigest)) ||
-    JSON.stringify(value.changedPaths) !==
-      JSON.stringify(CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS) ||
+    !SHA256.test(String(value.compatibilityClosureDigest)) ||
+    value.compatibilityClosureDigest !== digestJson(closureIdentity) ||
     !/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(String(value.reviewer))
   ) {
     throw new Error(
@@ -3914,7 +4051,7 @@ function gitCommitIsAncestor(ancestor: string, descendant: string): boolean {
 }
 
 function gitSpawn(args: readonly string[]): ReturnType<typeof Bun.spawnSync> {
-  return Bun.spawnSync(["git", ...args], {
+  return Bun.spawnSync(["git", "--no-replace-objects", ...args], {
     cwd: ROOT,
     stdin: "ignore",
     stdout: "pipe",
@@ -3926,6 +4063,52 @@ function gitSpawn(args: readonly string[]): ReturnType<typeof Bun.spawnSync> {
       LC_ALL: "C.UTF-8",
     },
   });
+}
+
+/**
+ * Replacement refs and legacy grafts can make two Git commands in the same
+ * checkout agree on a caller-substituted graph. Every command already ignores
+ * replacement objects, but the presence of either mechanism is itself
+ * provenance drift and therefore rejects the bridge closure before any object
+ * or ancestry inspection.
+ */
+function assertGitObjectReplacementUnavailable(): void {
+  const replacementRefs = git([
+    "for-each-ref",
+    "--format=%(refname)",
+    "refs/replace",
+  ]).trim();
+  const graftPath = git([
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-path",
+    "info/grafts",
+  ]).trim();
+  let graftExists = false;
+  try {
+    lstatSync(graftPath);
+    graftExists = true;
+  } catch (error) {
+    if (
+      !record(error) ||
+      typeof error.code !== "string" ||
+      error.code !== "ENOENT"
+    ) {
+      throw new Error(
+        "control_d1_serving_compatibility_proof_source_replacement_invalid",
+      );
+    }
+  }
+  if (
+    replacementRefs.length > 0 ||
+    !isAbsolute(graftPath) ||
+    resolve(graftPath) !== graftPath ||
+    graftExists
+  ) {
+    throw new Error(
+      "control_d1_serving_compatibility_proof_source_replacement_invalid",
+    );
+  }
 }
 
 function validTimestamp(value: string): string {

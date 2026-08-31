@@ -36,7 +36,10 @@ import {
   InMemoryCapsuleCoordination,
   type CapsuleCoordination,
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  type OpenTofuControlStore,
+} from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
@@ -60,6 +63,15 @@ import type {
   ApplyRun,
   PlanRun,
 } from "@takosumi/internal/deploy-control-api";
+import {
+  CloudflareD1OpenTofuControlStore,
+  ensureD1OpenTofuLedgerSchema,
+} from "../../../../worker/src/d1_opentofu_store.ts";
+import {
+  acquireControlD1MaintenanceFence,
+  releaseControlD1MaintenanceFence,
+} from "../../../../worker/src/d1_schema_maintenance.ts";
+import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 const ORIGIN = "https://app.takosumi.test";
 const PLAN_DIGEST =
@@ -3012,12 +3024,13 @@ async function reAdoptionRouteFixture(
     readonly genericDefault?: boolean;
     readonly currentVariableMapping?: Readonly<Record<string, unknown>>;
     readonly repositoryInputs?: readonly RepositoryInstallUxInput[];
+    readonly deployStore?: OpenTofuControlStore;
   } = {},
 ) {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const foreignCookie = seedSession(accountStore, `foreign_${suffix}`);
-  const deployStore = new InMemoryOpenTofuControlStore();
+  const deployStore = options.deployStore ?? new InMemoryOpenTofuControlStore();
   const repositoryInputs = options.repositoryInputs ?? [
     {
       name: "public_url",
@@ -3225,6 +3238,128 @@ function reAdoptionBody(
     expected: { authorityGuard },
   };
 }
+
+test("authenticated InstallConfig re-adoption stays available on exact v66 and atomically retires v67 intents", async () => {
+  for (const migrationVersion of [66, 67] as const) {
+    const db = new SqliteFakeD1();
+    await ensureD1OpenTofuLedgerSchema(db, {
+      throughMigrationVersion: migrationVersion,
+    });
+    const releasedFence = await acquireControlD1MaintenanceFence(
+      db,
+      {
+        sourceCommit: "a".repeat(40),
+        manifestDigest: `sha256:${"b".repeat(64)}`,
+        environment: "staging",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+      },
+      "2026-08-31T00:00:00.000Z",
+    );
+    await releaseControlD1MaintenanceFence(
+      db,
+      releasedFence,
+      "2026-08-31T00:00:01.000Z",
+    );
+    const deployStore = new CloudflareD1OpenTofuControlStore(db, {
+      schemaMode: "predeployed-bridge",
+    });
+    const fixture = await reAdoptionRouteFixture(
+      `bridge-v${migrationVersion}`,
+      { deployStore },
+    );
+    if (migrationVersion === 67) {
+      await db
+        .prepare(
+          `insert into capsule_interface_materialization_intents (
+             id, apply_run_id, restore_run_id, source_intent_id,
+             workspace_id, capsule_id, install_config_id,
+             state_version_id, output_id, state_generation,
+             blueprints_digest, blueprints_json, total_items,
+             next_item_index, status, attempts, next_retry_at,
+             lease_token, lease_expires_at, error_json, receipt_json,
+             created_at, updated_at, completed_at, dead_lettered_at
+           ) values (
+             ?, ?, null, null, ?, ?, ?, ?, ?, 1, ?, ?, 1, 0,
+             'pending', 0, ?, null, null, null, null, ?, ?, null, null
+           )`,
+        )
+        .bind(
+          "intent_authenticated_re_adoption_v67",
+          "apply_authenticated_re_adoption_v67",
+          fixture.seeded.capsule.workspaceId,
+          fixture.seeded.capsule.id,
+          fixture.seeded.installConfig.id,
+          "state_authenticated_re_adoption_v67",
+          "output_authenticated_re_adoption_v67",
+          `sha256:${"8".repeat(64)}`,
+          '[{"key":"mcp"}]',
+          "2026-08-31T00:00:00.000Z",
+          "2026-08-31T00:00:00.000Z",
+          "2026-08-31T00:00:00.000Z",
+        )
+        .run();
+    }
+
+    const authorityGuard = await readReAdoptionGuard(fixture);
+    const adopted = await controlJson<{
+      readonly capsule: { readonly installConfigId: string };
+      readonly installConfigReAdoption: {
+        readonly replayed: boolean;
+        readonly targetInstallConfigId: string;
+      };
+    }>(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path:
+          `/api/v1/capsules/${fixture.seeded.capsule.id}` +
+          "/install-config-re-adoptions",
+        headers: {
+          "idempotency-key": `re-adopt-bridge-v${migrationVersion}`,
+        },
+        body: reAdoptionBody(fixture, authorityGuard),
+      },
+      200,
+    );
+    expect(adopted.installConfigReAdoption.replayed).toBe(false);
+    expect(adopted.capsule.installConfigId).toBe(
+      adopted.installConfigReAdoption.targetInstallConfigId,
+    );
+    expect(
+      await deployStore.getCapsuleExecutionAuthorityEpoch(
+        fixture.seeded.capsule.id,
+      ),
+    ).toBe(2);
+
+    if (migrationVersion === 66) {
+      expect(
+        await db
+          .prepare(
+            `select name from sqlite_master
+             where type = 'table'
+               and name = 'capsule_interface_materialization_intents'`,
+          )
+          .first(),
+      ).toBeNull();
+    } else {
+      const intent = await db
+        .prepare(
+          `select status, receipt_json
+           from capsule_interface_materialization_intents
+           where id = 'intent_authenticated_re_adoption_v67'`,
+        )
+        .first<{ readonly status: string; readonly receipt_json: string }>();
+      expect(intent?.status).toBe("completed");
+      expect(JSON.parse(intent!.receipt_json)).toMatchObject({
+        disposition: "superseded_before_materialization",
+        blueprintsDigest: `sha256:${"8".repeat(64)}`,
+      });
+    }
+  }
+});
 
 async function seedRouteCommittedPostApplyRecovery(
   fixture: Awaited<ReturnType<typeof reAdoptionRouteFixture>>,

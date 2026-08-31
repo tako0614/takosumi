@@ -22,7 +22,7 @@ import {
   verifyControlD1Schema,
 } from "../../deploy/platform/control_d1_schema.ts";
 import {
-  CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS,
+  inspectControlD1BridgeSourceCompatibility,
   runControlD1ServingCompatibilityProof,
   runControlD1SchemaRelease as runReleaseSurface,
   type ControlD1SchemaReleaseDependencies,
@@ -53,7 +53,9 @@ const PRODUCTION_TOKEN = "production-api-token-must-never-be-recorded";
 const VERSION_ID = "11111111-1111-4111-8111-111111111111";
 const DRIFTED_VERSION_ID = "33333333-3333-4333-8333-333333333333";
 const BOOKMARK = "opaque-time-travel-bookmark";
-const BRIDGE_COMMIT = "b".repeat(40);
+const CLOSURE_COMMIT_ONE = "b".repeat(40);
+const CLOSURE_COMMIT_TWO = "c".repeat(40);
+const BRIDGE_COMMIT = "d".repeat(40);
 
 interface BridgeProofArtifactFixture {
   readonly bridgePlanPath: string;
@@ -63,7 +65,7 @@ interface BridgeProofArtifactFixture {
     readonly predecessorPlatformPlanPath: string;
     readonly predecessorPlatformPlanConfirmation: string;
     readonly predecessorPlatformReleaseEvidencePath: string;
-    readonly canonicalPatchDigest: string;
+    readonly compatibilityClosureDigest: string;
     readonly reviewer: string;
   };
 }
@@ -78,8 +80,8 @@ function predecessorProofArguments(
     fixture.bridgeSourceCompatibility.predecessorPlatformPlanConfirmation,
     "--predecessor-evidence",
     fixture.bridgeSourceCompatibility.predecessorPlatformReleaseEvidencePath,
-    "--confirm-patch",
-    fixture.bridgeSourceCompatibility.canonicalPatchDigest,
+    "--confirm-closure",
+    fixture.bridgeSourceCompatibility.compatibilityClosureDigest,
     "--review",
     fixture.bridgeSourceCompatibility.reviewer,
   ];
@@ -105,6 +107,59 @@ function privateRoot(): string {
   chmodSync(root, 0o700);
   roots.push(root);
   return root;
+}
+
+function withInterceptedGit<T>(
+  mode: "passthrough" | "replace" | "graft",
+  operation: () => T,
+): T {
+  const root = privateRoot();
+  const executable = join(root, "git");
+  const graftPath = join(root, "substituted-grafts");
+  const realGit = Bun.which("git");
+  if (realGit === null) throw new Error("test_git_missing");
+  if (mode === "graft") {
+    writeFileSync(graftPath, `${"e".repeat(40)} ${"f".repeat(40)}\n`, {
+      mode: 0o600,
+    });
+  }
+  writeFileSync(
+    executable,
+    `#!/usr/bin/env bun
+const args = process.argv.slice(2);
+if (args[0] !== "--no-replace-objects") process.exit(91);
+if (${JSON.stringify(mode)} === "replace" && args[1] === "for-each-ref") {
+  process.stdout.write("refs/replace/${"a".repeat(40)}\\n");
+  process.exit(0);
+}
+if (
+  ${JSON.stringify(mode)} === "graft" &&
+  args[1] === "rev-parse" &&
+  args.at(-1) === "info/grafts"
+) {
+  process.stdout.write(${JSON.stringify(`${graftPath}\n`)});
+  process.exit(0);
+}
+const result = Bun.spawnSync([${JSON.stringify(realGit)}, ...args], {
+  stdin: "ignore",
+  stdout: "pipe",
+  stderr: "pipe",
+});
+if (result.stdout.byteLength > 0) process.stdout.write(result.stdout);
+if (result.stderr.byteLength > 0) process.stderr.write(result.stderr);
+process.exit(result.exitCode ?? 1);
+`,
+    { mode: 0o700 },
+  );
+  chmodSync(executable, 0o700);
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${root}:${previousPath ?? ""}`;
+  try {
+    return operation();
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
 }
 
 async function subprocessExitWithin(
@@ -163,17 +218,55 @@ function inspectBridgeSourceCompatibility(
   bridgeSourceCommit: string,
   reviewer: string,
 ) {
-  return {
-    kind: "takosumi.control-d1-bridge-source-compatibility@v1" as const,
+  const commits = [
+    {
+      sourceCommit: CLOSURE_COMMIT_ONE,
+      parentSourceCommit: predecessorSourceCommit,
+      treeObjectId: "1".repeat(40),
+      canonicalPatchDigest: digestJson({
+        parentSourceCommit: predecessorSourceCommit,
+        sourceCommit: CLOSURE_COMMIT_ONE,
+        patch: "lifecycle",
+      }),
+      changedPaths: ["core/domains/deploy-control/store.ts"],
+    },
+    {
+      sourceCommit: CLOSURE_COMMIT_TWO,
+      parentSourceCommit: CLOSURE_COMMIT_ONE,
+      treeObjectId: "2".repeat(40),
+      canonicalPatchDigest: digestJson({
+        parentSourceCommit: CLOSURE_COMMIT_ONE,
+        sourceCommit: CLOSURE_COMMIT_TWO,
+        patch: "release",
+      }),
+      changedPaths: ["scripts/platform-worker-release.ts"],
+    },
+    {
+      sourceCommit: bridgeSourceCommit,
+      parentSourceCommit: CLOSURE_COMMIT_TWO,
+      treeObjectId: "3".repeat(40),
+      canonicalPatchDigest: digestJson({
+        parentSourceCommit: CLOSURE_COMMIT_TWO,
+        sourceCommit: bridgeSourceCommit,
+        patch: "bridge",
+      }),
+      changedPaths: [
+        "scripts/control-d1-schema-release.ts",
+        "worker/src/d1_opentofu_store.ts",
+      ],
+    },
+  ] as const;
+  const identity = {
+    kind: "takosumi.control-d1-bridge-source-compatibility@v2" as const,
     predecessorSourceCommit,
+    predecessorTreeObjectId: "0".repeat(40),
     bridgeSourceCommit,
-    canonicalPatchDigest: digestJson({
-      predecessorSourceCommit,
-      bridgeSourceCommit,
-      changedPaths: CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS,
-    }),
-    changedPaths: CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS,
+    commits,
     reviewer,
+  };
+  return {
+    ...identity,
+    compatibilityClosureDigest: digestJson(identity),
   };
 }
 
@@ -453,8 +546,8 @@ async function servingCompatibilityProof(
         bridgePlanConfirmation,
         "--bridge-evidence",
         bridgeReleaseEvidencePath,
-        "--confirm-patch",
-        sourceCompatibility.canonicalPatchDigest,
+        "--confirm-closure",
+        sourceCompatibility.compatibilityClosureDigest,
         "--review",
         sourceCompatibility.reviewer,
         "--proof-out",
@@ -918,7 +1011,17 @@ test("official bridge proof producer binds the full plan, raw ready evidence, an
       predecessorSourceCommit: COMMIT,
       bridgeSourceCommit: BRIDGE_COMMIT,
       predecessorServingVersionId: DRIFTED_VERSION_ID,
-      changedPaths: CONTROL_D1_BRIDGE_REVIEWED_PATCH_PATHS,
+      commits: [
+        { sourceCommit: CLOSURE_COMMIT_ONE, parentSourceCommit: COMMIT },
+        {
+          sourceCommit: CLOSURE_COMMIT_TWO,
+          parentSourceCommit: CLOSURE_COMMIT_ONE,
+        },
+        {
+          sourceCommit: BRIDGE_COMMIT,
+          parentSourceCommit: CLOSURE_COMMIT_TWO,
+        },
+      ],
       reviewer: "operator:bridge-reviewer@example.com",
     },
     predecessor: { migrationVersion: 66, status: "ready" },
@@ -934,7 +1037,7 @@ test("official bridge proof producer binds the full plan, raw ready evidence, an
   );
   expect(
     (proof.bridgeSourceCompatibility as Record<string, unknown>)
-      .canonicalPatchDigest,
+      .compatibilityClosureDigest,
   ).toMatch(/^sha256:[0-9a-f]{64}$/u);
   expect(proof.compatibilityCatalogDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
   expect(proof.predecessorChallenge).toMatchObject({
@@ -952,6 +1055,69 @@ test("official bridge proof producer binds the full plan, raw ready evidence, an
   }
   expect(calls.filter((call) => call.authorization === `Bearer ${TOKEN}`)).toHaveLength(2);
   expect(calls.filter((call) => call.authorization === null)).toHaveLength(1);
+});
+
+test("repository compatibility closure binds the genuine v66 serving predecessor through every linear descendant", () => {
+  const predecessorSourceCommit =
+    "24ea16d626f540260f496649cbdc5ffd7aa2a1f9";
+  const head = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+    cwd: join(import.meta.dir, "../.."),
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(head.exitCode).toBe(0);
+  const bridgeSourceCommit = new TextDecoder("utf-8", { fatal: true })
+    .decode(head.stdout)
+    .trim();
+  const closure = inspectControlD1BridgeSourceCompatibility(
+    predecessorSourceCommit,
+    bridgeSourceCommit,
+    "operator:independent-bridge-reviewer@example.com",
+  );
+
+  expect(closure).toMatchObject({
+    kind: "takosumi.control-d1-bridge-source-compatibility@v2",
+    predecessorSourceCommit,
+    bridgeSourceCommit,
+  });
+  expect(closure.commits.length).toBeGreaterThan(1);
+  expect(closure.commits[0]?.parentSourceCommit).toBe(
+    predecessorSourceCommit,
+  );
+  expect(closure.commits.at(-1)?.sourceCommit).toBe(bridgeSourceCommit);
+  for (let index = 1; index < closure.commits.length; index += 1) {
+    expect(closure.commits[index]?.parentSourceCommit).toBe(
+      closure.commits[index - 1]?.sourceCommit,
+    );
+  }
+  expect(
+    closure.commits.flatMap((entry) => entry.changedPaths),
+  ).toContain("core/domains/deploy-control/store.ts");
+  expect(closure.compatibilityClosureDigest).toMatch(
+    /^sha256:[0-9a-f]{64}$/u,
+  );
+});
+
+test("repository compatibility closure ignores and rejects Git graph replacement mechanisms", () => {
+  const predecessorSourceCommit =
+    "24ea16d626f540260f496649cbdc5ffd7aa2a1f9";
+  const bridgeSourceCommit = "5833fe43795e37b45f39b787c27ade6aebbcd04d";
+  const inspect = () =>
+    inspectControlD1BridgeSourceCompatibility(
+      predecessorSourceCommit,
+      bridgeSourceCommit,
+      "operator:independent-bridge-reviewer@example.com",
+    );
+
+  expect(
+    withInterceptedGit("passthrough", inspect).commits.length,
+  ).toBeGreaterThan(1);
+  for (const mode of ["replace", "graft"] as const) {
+    expect(() => withInterceptedGit(mode, inspect), mode).toThrow(
+      "control_d1_serving_compatibility_proof_source_replacement_invalid",
+    );
+  }
 });
 
 test("a valid nonce and schema challenge cannot replace reviewed bridge source compatibility", async () => {
@@ -987,15 +1153,20 @@ test("a valid nonce and schema challenge cannot replace reviewed bridge source c
           bridgeSourceCommit,
           reviewer,
         ) => ({
-          kind: "takosumi.control-d1-bridge-source-compatibility@v1",
+          kind: "takosumi.control-d1-bridge-source-compatibility@v2",
           predecessorSourceCommit,
+          predecessorTreeObjectId: "0".repeat(40),
           bridgeSourceCommit,
-          canonicalPatchDigest: inspectBridgeSourceCompatibility(
+          commits: inspectBridgeSourceCompatibility(
             predecessorSourceCommit,
             bridgeSourceCommit,
             reviewer,
-          ).canonicalPatchDigest,
-          changedPaths: ["worker/src/d1_opentofu_store.ts"],
+          ).commits.slice(0, 1),
+          compatibilityClosureDigest: inspectBridgeSourceCompatibility(
+            predecessorSourceCommit,
+            bridgeSourceCommit,
+            reviewer,
+          ).compatibilityClosureDigest,
           reviewer,
         }),
       },
@@ -1007,7 +1178,7 @@ test("a valid nonce and schema challenge cannot replace reviewed bridge source c
   expect(existsSync(proofPath)).toBeFalse();
 });
 
-test("bridge proof producer requires the reviewer-confirmed canonical patch digest", async () => {
+test("bridge proof producer requires the reviewer-confirmed compatibility closure digest", async () => {
   const root = privateRoot();
   const fixtureProofPath = await servingCompatibilityProof(root);
   const fixture = JSON.parse(
@@ -1016,7 +1187,7 @@ test("bridge proof producer requires the reviewer-confirmed canonical patch dige
   rmSync(fixtureProofPath);
   const proofPath = join(root, "must-not-exist.json");
   const sourceArguments = [...predecessorProofArguments(fixture)];
-  sourceArguments[sourceArguments.indexOf("--confirm-patch") + 1] = digestJson({
+  sourceArguments[sourceArguments.indexOf("--confirm-closure") + 1] = digestJson({
     forged: "unreviewed-patch",
   });
 
@@ -1115,14 +1286,14 @@ test("bridge proof producer binds the exact previously serving Version to its va
   expect(existsSync(proofPath)).toBeFalse();
 });
 
-test("schema plan recomputes the canonical bridge patch instead of trusting a copied digest", async () => {
+test("schema plan recomputes the bridge closure instead of trusting a copied digest", async () => {
   const root = privateRoot();
   const proofPath = await servingCompatibilityProof(root);
   const proof = JSON.parse(readFileSync(proofPath, "utf8")) as Record<
     string,
     any
   >;
-  proof.bridgeSourceCompatibility.canonicalPatchDigest = digestJson({
+  proof.bridgeSourceCompatibility.compatibilityClosureDigest = digestJson({
     forged: "copied-review-label",
   });
   proof.bridgeSourceCompatibilityDigest = digestJson(
@@ -1155,6 +1326,164 @@ test("schema plan recomputes the canonical bridge patch instead of trusting a co
     expect(existsSync(planPath)).toBeFalse();
   } finally {
     database.close();
+  }
+});
+
+test("schema plan rejects every compatibility-closure omission, reorder, addition, merge, and identity drift", async () => {
+  type MutableClosureEntry = {
+    sourceCommit: string;
+    parentSourceCommit: string;
+    treeObjectId: string;
+    canonicalPatchDigest: string;
+    changedPaths: string[];
+    mergeParentSourceCommit?: string;
+  };
+  type MutableClosure = {
+    kind: string;
+    predecessorSourceCommit: string;
+    predecessorTreeObjectId: string;
+    bridgeSourceCommit: string;
+    commits: MutableClosureEntry[];
+    compatibilityClosureDigest: string;
+    reviewer: string;
+    [key: string]: unknown;
+  };
+  const mutations: readonly {
+    readonly name: string;
+    readonly rehashClosure?: boolean;
+    readonly mutate: (closure: MutableClosure) => void;
+  }[] = [
+    {
+      name: "missing commit",
+      mutate(closure) {
+        closure.commits.splice(1, 1);
+        closure.commits[1]!.parentSourceCommit =
+          closure.commits[0]!.sourceCommit;
+      },
+    },
+    {
+      name: "reordered commits",
+      mutate(closure) {
+        closure.commits = [
+          closure.commits[1]!,
+          closure.commits[0]!,
+          closure.commits[2]!,
+        ];
+        let parent = closure.predecessorSourceCommit;
+        for (const entry of closure.commits) {
+          entry.parentSourceCommit = parent;
+          parent = entry.sourceCommit;
+        }
+      },
+    },
+    {
+      name: "extra commit",
+      mutate(closure) {
+        const bridge = closure.commits.pop()!;
+        const parent = closure.commits.at(-1)!.sourceCommit;
+        const extra = {
+          sourceCommit: "e".repeat(40),
+          parentSourceCommit: parent,
+          treeObjectId: "4".repeat(40),
+          canonicalPatchDigest: digestJson({ extra: "patch" }),
+          changedPaths: ["extra/unreviewed.ts"],
+        };
+        bridge.parentSourceCommit = extra.sourceCommit;
+        closure.commits.push(extra, bridge);
+      },
+    },
+    {
+      name: "merge parent",
+      mutate(closure) {
+        closure.commits[1]!.mergeParentSourceCommit = "e".repeat(40);
+      },
+    },
+    {
+      name: "path drift",
+      mutate(closure) {
+        closure.commits[0]!.changedPaths = ["unreviewed/path.ts"];
+      },
+    },
+    {
+      name: "tree drift",
+      mutate(closure) {
+        closure.commits[0]!.treeObjectId = "e".repeat(40);
+      },
+    },
+    {
+      name: "patch drift",
+      mutate(closure) {
+        closure.commits[0]!.canonicalPatchDigest = digestJson({
+          forged: "patch",
+        });
+      },
+    },
+    {
+      name: "alternate predecessor",
+      mutate(closure) {
+        closure.predecessorSourceCommit = "e".repeat(40);
+        closure.commits[0]!.parentSourceCommit =
+          closure.predecessorSourceCommit;
+      },
+    },
+    {
+      name: "reviewer digest mismatch",
+      rehashClosure: false,
+      mutate(closure) {
+        closure.reviewer = "operator:substituted-reviewer@example.com";
+      },
+    },
+  ];
+
+  for (const mutation of mutations) {
+    const root = privateRoot();
+    const proofPath = await servingCompatibilityProof(root);
+    const proof = JSON.parse(readFileSync(proofPath, "utf8")) as Record<
+      string,
+      any
+    >;
+    const closure = proof.bridgeSourceCompatibility as MutableClosure;
+    mutation.mutate(closure);
+    if (mutation.rehashClosure !== false) {
+      closure.compatibilityClosureDigest = digestJson({
+        kind: closure.kind,
+        predecessorSourceCommit: closure.predecessorSourceCommit,
+        predecessorTreeObjectId: closure.predecessorTreeObjectId,
+        bridgeSourceCommit: closure.bridgeSourceCommit,
+        commits: closure.commits,
+        reviewer: closure.reviewer,
+      });
+    }
+    proof.bridgeSourceCompatibilityDigest = digestJson(closure);
+    const { confirmation: _oldConfirmation, ...identity } = proof;
+    proof.confirmation = digestJson(identity);
+    writeFileSync(proofPath, `${JSON.stringify(proof, null, 2)}\n`, {
+      mode: 0o600,
+    });
+
+    const database = await predecessorDatabase();
+    try {
+      const planPath = join(root, `must-not-exist-${mutation.name}.json`);
+      await expect(
+        runReleaseSurface(
+          [
+            "plan",
+            "--plan-out",
+            planPath,
+            "--serving-compatibility-proof",
+            proofPath,
+          ],
+          "staging",
+          dependencies(database, []),
+        ),
+        mutation.name,
+      ).rejects.toThrow(
+        "control_d1_schema_release_serving_compatibility_proof_invalid",
+      );
+      expect(existsSync(planPath), mutation.name).toBeFalse();
+    } finally {
+      database.close();
+    }
   }
 });
 
@@ -1474,7 +1803,7 @@ test("plan rejects a compatibility proof misdirected to a different platform sou
   const database = await predecessorDatabase();
   const calls: Array<{ url: string; authorization: string | null }> = [];
   const proofPath = await servingCompatibilityProof(root, "staging", {
-    platformPlanSourceCommit: "d".repeat(40),
+    platformPlanSourceCommit: "e".repeat(40),
   });
   try {
     await expect(
@@ -1698,7 +2027,7 @@ test("execute applies only v67 once and writes exact ready evidence", async () =
       readonly bridgeSourceCompatibility: {
         readonly predecessorSourceCommit: string;
         readonly bridgeSourceCommit: string;
-        readonly canonicalPatchDigest: string;
+        readonly compatibilityClosureDigest: string;
       };
       readonly mutationCheckpointPath: string;
     };
@@ -1745,8 +2074,8 @@ test("execute applies only v67 once and writes exact ready evidence", async () =
     expect(evidence.bridgeSourceCommit).toBe(
       plan.bridgeSourceCompatibility.bridgeSourceCommit,
     );
-    expect(evidence.bridgeCanonicalPatchDigest).toBe(
-      plan.bridgeSourceCompatibility.canonicalPatchDigest,
+    expect(evidence.bridgeCompatibilityClosureDigest).toBe(
+      plan.bridgeSourceCompatibility.compatibilityClosureDigest,
     );
     expect(evidence.mutationCheckpointDigest).toMatch(
       /^sha256:[0-9a-f]{64}$/u,
@@ -2672,8 +3001,8 @@ test("production rejects a hand-authored official receipt without the rehearsal 
             stagingPlan.bridgeSourceCompatibility.predecessorSourceCommit,
           bridgeSourceCommit:
             stagingPlan.bridgeSourceCompatibility.bridgeSourceCommit,
-          bridgeCanonicalPatchDigest:
-            stagingPlan.bridgeSourceCompatibility.canonicalPatchDigest,
+          bridgeCompatibilityClosureDigest:
+            stagingPlan.bridgeSourceCompatibility.compatibilityClosureDigest,
           compatibilityCatalogDigest:
             stagingProof.compatibilityCatalogDigest,
           predecessorChallenge: stagingProof.predecessorChallenge,

@@ -2709,51 +2709,63 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           notExists(blocking),
         ),
       );
-    const reboundCapsuleFence = this.#orm
-      .select({ id: schema.capsules.id })
-      .from(schema.capsules)
-      .where(
-        and(
-          eq(schema.capsules.id, input.capsuleId),
-          eq(
-            schema.capsules.installConfigId,
-            input.targetInstallConfigId,
+    let result: unknown;
+    if (await this.#usesBridgeV66CompatibilityPath(true)) {
+      // Exact v66 predates the intent table, so there can be no unresolved
+      // Interface intent to retire. Keep ordinary InstallConfig re-adoption
+      // available by committing only the existing Capsule CAS. This is chosen
+      // from a fresh code-owned exact-ledger proof; it is never an SQL-error
+      // fallback. Exact v67 continues through the atomic two-statement batch.
+      const [capsuleResult] = await this.#orm.batch([capsuleRebind]);
+      result = capsuleResult;
+    } else {
+      const reboundCapsuleFence = this.#orm
+        .select({ id: schema.capsules.id })
+        .from(schema.capsules)
+        .where(
+          and(
+            eq(schema.capsules.id, input.capsuleId),
+            eq(
+              schema.capsules.installConfigId,
+              input.targetInstallConfigId,
+            ),
+            eq(schema.capsules.recordJson, updated),
+            eq(
+              schema.capsules.executionAuthorityEpoch,
+              input.expected.executionAuthorityEpoch + 1,
+            ),
           ),
-          eq(schema.capsules.recordJson, updated),
-          eq(
-            schema.capsules.executionAuthorityEpoch,
-            input.expected.executionAuthorityEpoch + 1,
+        );
+      const intentTable = schema.capsuleInterfaceMaterializationIntents;
+      const retireUnresolvedIntents = this.#orm
+        .update(intentTable)
+        .set({
+          status: "completed",
+          leaseToken: null,
+          leaseExpiresAt: null,
+          errorJson: null,
+          receiptJson: sql`json_object(
+            'disposition', 'superseded_before_materialization',
+            'blueprintsDigest', ${intentTable.blueprintsDigest},
+            'completedAt', ${input.updatedAt}
+          )`,
+          updatedAt: input.updatedAt,
+          completedAt: input.updatedAt,
+          deadLetteredAt: null,
+        })
+        .where(
+          and(
+            eq(intentTable.capsuleId, input.capsuleId),
+            inArray(intentTable.status, ["pending", "dead_letter"]),
+            exists(reboundCapsuleFence),
           ),
-        ),
-      );
-    const intentTable = schema.capsuleInterfaceMaterializationIntents;
-    const retireUnresolvedIntents = this.#orm
-      .update(intentTable)
-      .set({
-        status: "completed",
-        leaseToken: null,
-        leaseExpiresAt: null,
-        errorJson: null,
-        receiptJson: sql`json_object(
-          'disposition', 'superseded_before_materialization',
-          'blueprintsDigest', ${intentTable.blueprintsDigest},
-          'completedAt', ${input.updatedAt}
-        )`,
-        updatedAt: input.updatedAt,
-        completedAt: input.updatedAt,
-        deadLetteredAt: null,
-      })
-      .where(
-        and(
-          eq(intentTable.capsuleId, input.capsuleId),
-          inArray(intentTable.status, ["pending", "dead_letter"]),
-          exists(reboundCapsuleFence),
-        ),
-      );
-    const [result] = await this.#orm.batch([
-      capsuleRebind,
-      retireUnresolvedIntents,
-    ]);
+        );
+      const [capsuleResult] = await this.#orm.batch([
+        capsuleRebind,
+        retireUnresolvedIntents,
+      ]);
+      result = capsuleResult;
+    }
     if (changes(result as D1Result) > 0) {
       return { status: "updated", capsule: updated };
     }

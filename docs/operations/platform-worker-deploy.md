@@ -248,7 +248,7 @@ bun run deploy -- takosumi-control-d1-bridge-proof-staging create \
   --bridge-plan /absolute/private/staging-bridge-plan.json \
   --confirm sha256:<bridge-plan-confirmation> \
   --bridge-evidence /absolute/private/staging-bridge-evidence.json \
-  --confirm-patch sha256:<reviewed-canonical-patch-digest> \
+  --confirm-closure sha256:<reviewed-compatibility-closure-digest> \
   --review operator:<same-reviewer-as-bridge-ready-evidence> \
   --proof-out /absolute/private/staging-bridge-compatibility.json
 ```
@@ -257,13 +257,21 @@ Use `takosumi-control-d1-bridge-proof` for production. This producer validates
 the complete v5 predecessor and bridge plans, both accepted forward
 checkpoints, and both complete raw ready-evidence artifacts. The validated
 predecessor deployment must be the bridge plan's exact predecessor Version.
-Its source commit must be a Git ancestor of the validated bridge source commit,
-their diff must be exactly the code-owned reviewed 20-path scope, and the proof
-binds the SHA-256 of Git's deterministic full-index binary patch.
-`--confirm-patch` must match that recomputation and `--review` must match the
-independent bridge ready-evidence reviewer; the bridge commit author cannot be
-that reviewer. The consumer repeats the repository calculation instead of
-trusting the retained digest.
+Its source commit must begin one linear ordered descendant closure ending at
+the validated bridge source commit. The proof binds the predecessor tree and
+every commit's exact parent, tree, changed paths, and canonical full-index
+binary-patch digest, then binds all of them and the reviewer in one aggregate
+compatibility-closure digest. Missing, reordered, additional, or merge commits
+fail; there is no fixed path count or allowlist. `--confirm-closure` must match
+that recomputation and `--review` must match the independent bridge
+ready-evidence reviewer; no closure commit author can be that reviewer. The
+consumer repeats the repository calculation instead of trusting the retained
+digest. For the current v66 transition,
+`24ea16d626f540260f496649cbdc5ffd7aa2a1f9` is the serving predecessor; the
+v67-cataloging `5ccf82dc33e45d1b80cbbbf8f5636727a17182b0` cannot substitute
+for its Version-bound evidence. Every calculation uses
+`git --no-replace-objects` and rejects any local `refs/replace` or
+`info/grafts` graph substitution.
 
 The producer also validates the exact live immutable Worker Version, D1
 binding, and `TAKOSUMI_CONTROL_D1_SCHEMA_MODE=predeployed-bridge` binding. It then sends a
@@ -277,7 +285,10 @@ Hand-authored compatibility JSON is not an owner artifact.
 On exact v66 the bridge keeps ordinary authenticated control-plane routes
 available but rejects explicit or sealed Interface-bearing Plan sidecars before
 Apply dispatch, rejects Interface intent commit/restore writes, and makes intent
-draining return no work. This avoids querying the v67-only
+draining return no work. Capsule InstallConfig re-adoption remains available by
+using a fresh exact-v66 ledger proof and the Capsule CAS alone, without querying
+the absent intent table; on v67, re-adoption keeps unresolved-intent retirement
+in the same atomic batch as that CAS. This avoids querying the v67-only
 `capsule_interface_materialization_intents` table or mutating a provider without
 durable intent authority. Exact v67 lifts those gates after physical ledger
 validation and supports Interface commit/read normally.

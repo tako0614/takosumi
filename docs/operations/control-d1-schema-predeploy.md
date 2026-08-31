@@ -93,11 +93,11 @@ that Version serves would create a known outage, and restoring that Version
 after v67 would not recover service.
 
 Deploy and read back a zero-downtime bridge before creating either schema
-plan. The bridge is built from the exact previously serving source plus only
-the reviewed compatibility change; in the bounded `predeployed-bridge` mode it
-accepts the exact v66 ledger or the exact candidate v67 ledger and rejects every
-other ledger. Normal `predeployed` mode remains strict to the current v67
-catalog and is not the bridge mode.
+plan. The bridge is built from the exact previously serving source through an
+explicitly reviewed ordered compatibility closure; in the bounded
+`predeployed-bridge` mode it accepts the exact v66 ledger or the exact candidate
+v67 ledger and rejects every other ledger. Normal `predeployed` mode remains
+strict to the current v67 catalog and is not the bridge mode.
 
 The same bridge binary has explicit versioned behavior. On exact v66, ordinary
 authenticated control-plane reads and writes continue to use the v66 ledger,
@@ -108,8 +108,13 @@ intent commit/restore writes fail closed, and the background intent claim/read
 path returns no work. Migration v67 creates
 `capsule_interface_materialization_intents`; after the code-owned validator
 observes exact v67, those gates lift and Interface-bearing commit/read proceeds
-normally. The accepted version comes only from validation of the physical
-`schema_migrations` ledger, never from an environment assertion.
+normally. Ordinary authenticated Capsule InstallConfig re-adoption remains
+available on v66: after a fresh exact-ledger proof, it performs the existing
+Capsule CAS without referencing the absent intent table. On v67 the same
+operation keeps the Capsule CAS and unresolved-intent retirement in one atomic
+batch. This is never an SQL-error fallback. The accepted version comes only
+from validation of the physical `schema_migrations` ledger, never from an
+environment assertion.
 
 The bridge owner must retain a mode-`0600` private compatibility proof with:
 
@@ -122,9 +127,10 @@ The bridge owner must retain a mode-`0600` private compatibility proof with:
 - the bridge source commit, absolute platform plan path, platform plan
   confirmation and raw artifact digest, absolute raw platform ready-evidence
   path and digest, independent reviewer, and proof confirmation;
-- Git ancestry from that predecessor commit to the bridge commit, the exact
-  code-owned 20-path TASK-0042 review scope, and the SHA-256 of Git's canonical
-  full-index binary patch for those two commits;
+- the predecessor tree and every ordered descendant commit through the bridge,
+  with each commit's one exact parent, tree object, changed-path list, and
+  SHA-256 of Git's canonical full-index binary patch from that parent, plus an
+  aggregate compatibility-closure digest that also binds the reviewer;
 - the exact environment, Worker name, `TAKOSUMI_CONTROL_DB` binding, immutable
   serving Version, and target digest;
 - `schemaMode: predeployed-bridge`, the code-owned exact v66/v67 catalog digest,
@@ -147,7 +153,7 @@ bun run deploy -- takosumi-control-d1-bridge-proof-staging create \
   --confirm sha256:<bridge-plan-confirmation> \
   --bridge-evidence \
     "$PRIVATE_SCHEMA_RELEASE_DIR/staging-bridge-release-evidence.json" \
-  --confirm-patch sha256:<reviewed-canonical-patch-digest> \
+  --confirm-closure sha256:<reviewed-compatibility-closure-digest> \
   --review operator:<same-reviewer-as-bridge-ready-evidence> \
   --proof-out \
     "$PRIVATE_SCHEMA_RELEASE_DIR/staging-bridge-compatibility.json"
@@ -158,29 +164,47 @@ both complete v5 platform plans, both accepted forward checkpoints, and both
 full raw ready-evidence artifacts. It requires the predecessor evidence's
 deployed Version to be the bridge plan's predecessor Version, requires both
 plans to use the same target-mutation authority, and takes both source commits
-only from those validated artifacts. Git must then prove that the predecessor
-commit is an ancestor of the bridge commit and that their diff contains exactly
-the reviewed 20 paths. The producer hashes a deterministic `--binary
---full-index --no-renames --diff-algorithm=myers --no-indent-heuristic
---unified=3` patch; neither an operator-supplied digest nor a copied review label
-can substitute for that computation. `--confirm-patch` must equal this
-recomputed digest, and `--review` must equal the independent reviewer already
-bound by the bridge ready evidence. Review the canonical patch before supplying
-those values; the bridge source commit's author cannot be that reviewer.
+only from those validated artifacts. For this v66 transition the genuine
+previously serving source is
+`24ea16d626f540260f496649cbdc5ffd7aa2a1f9`; the descendant
+`5ccf82dc33e45d1b80cbbbf8f5636727a17182b0` already catalogs v67 and is not a
+valid substitute for predecessor evidence. The validated live Version and
+platform artifacts remain authoritative if this operational fact changes.
 
-Compute and review the same bytes from the validated artifact commits (replace
-the two placeholders; do not derive them from the current checkout):
+Git must prove that every commit in `git rev-list --reverse
+<predecessor>..<bridge>` is one linear descendant: merge commits, missing,
+reordered, or additional commits fail. For each edge the producer records the
+exact parent and tree object, derives the changed paths, and hashes a
+deterministic `--binary --full-index --no-renames --diff-algorithm=myers
+--no-indent-heuristic --unified=3` patch. It then hashes the complete ordered
+closure together with the predecessor tree and reviewer. There is deliberately
+no fixed path count or allowlist that can hide an intervening product change.
+Every Git read uses `git --no-replace-objects`, and the producer fails before
+lineage inspection if the checkout contains any `refs/replace` ref or an
+`info/grafts` file. Producer and consumer therefore cannot agree on a locally
+substituted object graph.
+
+Review the exact closure derived from the two validated artifact commits (do
+not derive either commit from the current checkout):
 
 ```bash
-git diff --binary --full-index --no-color --no-ext-diff --no-textconv \
-  --no-renames --diff-algorithm=myers --no-indent-heuristic --unified=3 \
-  --src-prefix=a/ --dst-prefix=b/ \
-  <predecessor-source-commit> <bridge-source-commit> -- | sha256sum
+bun -e '
+  import { inspectControlD1BridgeSourceCompatibility as inspect } from
+    "./scripts/control-d1-schema-release.ts";
+  console.log(JSON.stringify(inspect(process.argv[1], process.argv[2], process.argv[3]), null, 2));
+' \
+  <predecessor-source-commit> \
+  <bridge-source-commit> \
+  operator:<same-reviewer-as-bridge-ready-evidence>
 ```
 
-Prefix the emitted hex digest with `sha256:` for `--confirm-patch`. The producer
-also derives the changed-path list independently and requires the exact
-code-owned order, so confirming the digest does not widen the reviewed scope.
+Review every emitted commit, parent, tree, path, and per-commit patch digest;
+then pass the emitted `compatibilityClosureDigest` as `--confirm-closure`. The
+producer recomputes the same closure after validating both release chains.
+Neither a caller-authored list, a copied aggregate digest, nor a nonce/schema
+challenge can substitute for that computation. `--review` must match the
+independent reviewer in bridge ready evidence and cannot match any closure
+commit author.
 
 The producer also validates canonical v66/v67 ledger digests and the exact live
 immutable Version's D1 and `predeployed-bridge` schema-mode bindings. It
@@ -203,9 +227,10 @@ sealed predecessor, target authority path, and authority-directory inode digest
 before the schema surface reads the accepted forward checkpoint or derives a
 restore lock/retirement marker. It also revalidates the complete raw ready
 evidence rather than trusting the proof's copied digest. The consumer also
-reruns the same repository-backed ancestry, exact-path, and canonical-patch
-calculation and compares it to the proof, plan, checkpoint, and receipt
-bindings. The accepted immutable Version must be the proof-bound serving
+reruns the same repository-backed ordered-commit closure calculation and
+compares every parent/tree/path/patch plus the aggregate digest to the proof,
+plan, checkpoint, and receipt bindings. The accepted immutable Version must be
+the proof-bound serving
 bridge. A proof that names only a
 Version, a synthetic object with only `confirmation` and `checkpointPath`, a
 plan for another environment/source, or a bridge plan whose forward release is
@@ -236,7 +261,8 @@ confirmation, and the fsynced pre-apply checkpoint record, which itself retains
 the raw predecessor-challenge evidence digest. The accepted checkpoint record
 similarly retains the source-compatibility digest and raw candidate-challenge
 evidence digest. The `takosumi.control-d1-schema-release-evidence@v3` receipt
-retains the predecessor and bridge source commits plus canonical patch digest.
+retains the predecessor and bridge source commits plus the compatibility-closure
+digest.
 Production recomputes all bindings from the retained proof, source artifacts,
 receipt, and checkpoint and requires the live durable release receipt to match.
 An old v67 readback/release receipt therefore cannot be combined with newly
