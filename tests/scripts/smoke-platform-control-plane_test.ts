@@ -12,7 +12,10 @@ import { join } from "node:path";
 import { expect, test } from "bun:test";
 import {
   CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS,
+  EXTERNAL_DESTROY_VERIFICATION_KIND,
+  EXTERNAL_DESTROY_VERIFIER_RESULT_KIND,
   PLATFORM_CONTROL_PLANE_SMOKE_KIND,
+  createExternalDestroyEvidenceVerifier,
   assertInterfaceMaterialization,
   assertInterfacesRetired,
   assertSmokeSerializationSafe,
@@ -26,6 +29,7 @@ import {
   isSelectableCapsuleInstallConfig,
   interfaceMaterializationEvidence,
   main,
+  projectDestroyEvidencePublicOutputs,
   resolveSmokeProviderBindingsFromCompatibility,
   resolveOptions,
   runPlatformControlPlaneSmoke,
@@ -38,6 +42,50 @@ import {
   smokeWorkspaceCloudflareConnectionBody,
   assertServiceIdentityResponse,
 } from "../../scripts/smoke-platform-control-plane.ts";
+import type { DestroyEvidenceVerifier } from "../../scripts/smoke-platform-control-plane.ts";
+
+const EXTERNAL_DESTROY_CHECK_NAMES = [
+  "module_worker",
+  "worker_bundle",
+  "worker_version",
+  "worker_deployment",
+  "worker_endpoint",
+] as const;
+
+async function writeDestroyVerifierScript(
+  root: string,
+  source: string,
+): Promise<string> {
+  const script = join(root, "destroy-verifier.js");
+  await writeFile(script, source, { mode: 0o700 });
+  return script;
+}
+
+function destroyVerifierResultSource(
+  checks: readonly string[] = EXTERNAL_DESTROY_CHECK_NAMES,
+): string {
+  return `const fs = require("node:fs");\nconst inputFlag = process.argv[2];\nconst inputPath = process.argv[3];\nif (inputFlag !== "--input-file" || !inputPath) process.exit(9);\nconst input = JSON.parse(fs.readFileSync(inputPath, "utf8"));\nif (process.env.CAPTURE_FILE) fs.writeFileSync(process.env.CAPTURE_FILE, JSON.stringify({argv: process.argv.slice(2), env: process.env, input, inputMode: fs.statSync(inputPath).mode & 0o777}));\nconsole.log(JSON.stringify({kind:${JSON.stringify(EXTERNAL_DESTROY_VERIFIER_RESULT_KIND)},verifierId:input.verifierId,scriptDigest:input.scriptDigest,checks:${JSON.stringify(checks.map((name) => ({name,status: "passed"})))}}));\n`;
+}
+
+async function destroyVerifierFixtureRoot(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-destroy-verifier-test-"));
+  await chmod(root, 0o700);
+  return root;
+}
+
+function destroyVerifierInputFixture() {
+  return {
+    capsuleId: "cap_external_verifier",
+    destroyPlanRunId: "run_destroy_plan_external_verifier",
+    destroyApplyRunId: "run_destroy_apply_external_verifier",
+    publicOutputs: {
+      resource_identities: {
+        module_worker: { name: "worker", uid: "uid-worker" },
+      },
+      endpoint_url: "https://worker.example.test",
+    },
+  } as const;
+}
 
 test("platform smoke preserves the original pre-apply failure when a projected runtime URL is configured", async () => {
   const options = await resolveOptions(
@@ -2789,10 +2837,12 @@ test("platform smoke does not retry or directly delete after a failed destroy ap
 type DestroyApplyReconciliationCase =
   | "mismatched"
   | "cancelled"
-  | "already_terminal";
+  | "already_terminal"
+  | "external_verifier";
 
 async function runDestroyApplyReconciliationFixture(
   reconciliation: DestroyApplyReconciliationCase,
+  destroyEvidenceVerifier?: DestroyEvidenceVerifier,
 ) {
   const appName = `takosumi-destroy-apply-${reconciliation}-fixture`;
   const capsuleId = `cap_destroy_apply_${reconciliation}_fixture`;
@@ -2839,9 +2889,14 @@ async function runDestroyApplyReconciliationFixture(
     },
     destroyApplyTerminal: {
       id: destroyApplyRunId,
-      status: reconciliation === "already_terminal" ? "failed" : "cancelled",
+      status:
+        reconciliation === "already_terminal"
+          ? "failed"
+          : reconciliation === "external_verifier"
+            ? "succeeded"
+            : "cancelled",
       type: "destroy",
-      policyStatus: "deny",
+      ...(reconciliation === "external_verifier" ? {} : { policyStatus: "deny" }),
       createdAt: "2026-01-01T00:00:00.000Z",
       startedAt: "2026-01-01T00:00:02.000Z",
       finishedAt: "2026-01-01T00:00:03.000Z",
@@ -2876,6 +2931,9 @@ async function runDestroyApplyReconciliationFixture(
       CLOUDFLARE_WORKERS_SUBDOMAIN: "workers.example.test",
     },
   );
+  const smokeOptions = destroyEvidenceVerifier
+    ? { ...options, destroyEvidenceVerifier }
+    : options;
   const originalFetch = globalThis.fetch;
   const requests: Array<{
     readonly method: string;
@@ -2888,7 +2946,7 @@ async function runDestroyApplyReconciliationFixture(
     const method = init?.method ?? "GET";
     const body = typeof init?.body === "string" ? init.body : undefined;
     requests.push({ method, url: requestUrl.toString(), ...(body ? { body } : {}) });
-    if (requestUrl.origin !== options.url) {
+    if (requestUrl.origin !== smokeOptions.url) {
       throw new Error(`unexpected external fixture request: ${requestUrl}`);
     }
     const path = requestUrl.pathname;
@@ -2967,7 +3025,7 @@ async function runDestroyApplyReconciliationFixture(
       return Response.json({
         capsule: {
           id: capsuleId,
-          workspaceId: options.workspace,
+          workspaceId: smokeOptions.workspace,
           status: "active",
           currentStateVersionId: stateVersionId,
           currentStateGeneration: 1,
@@ -2984,7 +3042,7 @@ async function runDestroyApplyReconciliationFixture(
             id: stateVersionId,
             workspaceId: options.workspace,
             capsuleId,
-            environment: options.environment,
+            environment: smokeOptions.environment,
             createdByRunId: runRecords.applySucceeded.id,
             generation: 1,
             createdAt: "2026-01-01T00:00:00.000Z",
@@ -3034,6 +3092,9 @@ async function runDestroyApplyReconciliationFixture(
       if (reconciliation === "mismatched") {
         return Response.json({ run: runRecords.destroyApplyStale });
       }
+      if (reconciliation === "external_verifier") {
+        return Response.json({ run: runRecords.destroyApplyTerminal });
+      }
       if (destroyApplyPolls === 1) {
         return Response.json({ run: runRecords.destroyApplyRunning });
       }
@@ -3052,7 +3113,7 @@ async function runDestroyApplyReconciliationFixture(
     throw new Error(`unexpected Takosumi fixture request: ${method} ${requestUrl}`);
   }) as typeof fetch;
   try {
-    const result = await runPlatformControlPlaneSmoke(options);
+    const result = await runPlatformControlPlaneSmoke(smokeOptions);
     return { result, requests, runRecords };
   } finally {
     globalThis.fetch = originalFetch;
@@ -3112,3 +3173,302 @@ test.each([
     });
   },
 );
+
+test("external destroy verifier accepts the closed result and records host-owned evidence", async () => {
+  const root = await destroyVerifierFixtureRoot();
+  try {
+    const script = await writeDestroyVerifierScript(
+      root,
+      destroyVerifierResultSource(),
+    );
+    const verifier = createExternalDestroyEvidenceVerifier({
+      verifierId: "takos/takoserver-native-absence@v1",
+      script,
+      expectedCheckNames: EXTERNAL_DESTROY_CHECK_NAMES,
+      timeoutMs: 2_000,
+    });
+    const evidence = await verifier.verify(destroyVerifierInputFixture());
+    expect(evidence.kind).toBe(EXTERNAL_DESTROY_VERIFICATION_KIND);
+    expect(evidence.verifierId).toBe("takos/takoserver-native-absence@v1");
+    expect(evidence.scriptDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(evidence.resultDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(evidence.checks.map((check) => check.name)).toEqual(
+      [...EXTERNAL_DESTROY_CHECK_NAMES],
+    );
+    expect(evidence.checkCount).toBe(EXTERNAL_DESTROY_CHECK_NAMES.length);
+    expect(evidence.durationMs).toBeGreaterThanOrEqual(0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveOptions wires the optional Destroy verifier from the explicit CLI contract", async () => {
+  const root = await destroyVerifierFixtureRoot();
+  try {
+    const script = await writeDestroyVerifierScript(
+      root,
+      destroyVerifierResultSource(),
+    );
+    const options = await resolveOptions(
+      {
+        dryRun: true,
+        url: "https://app-staging.takosumi.com",
+        workspace: "ws_destroy_verifier_options",
+        sourceGitUrl: "https://git.example.test/destroy-verifier-options.git",
+        verificationMode: "opentofu",
+        noInterfaceProof: true,
+        destroyEvidenceVerifierScript: script,
+        destroyEvidenceVerifierId: "takos/takoserver-native-absence@v1",
+        destroyEvidenceVerifierChecks: JSON.stringify(EXTERNAL_DESTROY_CHECK_NAMES),
+        destroyEvidenceVerifierEnv: "TAKOSERVER_API_ORIGIN,TAKOSERVER_EVIDENCE_API_TOKEN",
+        destroyEvidenceVerifierTimeoutSeconds: "7",
+      },
+      {
+        TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+        TAKOSERVER_API_ORIGIN: "https://takoserver.example.test",
+        TAKOSERVER_EVIDENCE_API_TOKEN: "evidence-secret",
+      },
+    );
+    const verifier = options.destroyEvidenceVerifier;
+    expect(verifier?.verifierId).toBe("takos/takoserver-native-absence@v1");
+    expect(verifier?.expectedCheckNames).toEqual([...EXTERNAL_DESTROY_CHECK_NAMES]);
+    expect((verifier as { readonly envNames?: readonly string[] }).envNames).toEqual([
+      "TAKOSERVER_API_ORIGIN",
+      "TAKOSERVER_EVIDENCE_API_TOKEN",
+    ]);
+    expect((verifier as { readonly timeoutMs?: number }).timeoutMs).toBe(7_000);
+    expect(dryRunResult(options).inputs).toMatchObject({
+      destroyEvidenceVerifierId: "takos/takoserver-native-absence@v1",
+      destroyEvidenceVerifierCheckNames: EXTERNAL_DESTROY_CHECK_NAMES,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("external destroy verifier input projects only allowlisted public Outputs", () => {
+  expect(
+    projectDestroyEvidencePublicOutputs(
+      {
+        endpoint_url: "https://worker.example.test",
+        resource_identities: { worker: { uid: "uid-worker" } },
+        credential_value: "must-not-cross-boundary",
+      },
+      {
+        endpoint_url: { from: "endpoint_url", type: "url", required: true },
+        resource_identities: {
+          from: "resource_identities",
+          type: "json",
+          required: true,
+        },
+      },
+    ),
+  ).toEqual({
+    endpoint_url: "https://worker.example.test",
+    resource_identities: { worker: { uid: "uid-worker" } },
+  });
+});
+
+test("external destroy verifier rejects malformed and extra child output", async () => {
+  const root = await destroyVerifierFixtureRoot();
+  try {
+    const malformed = await writeDestroyVerifierScript(
+      root,
+      `console.log("not-json");\n`,
+    );
+    const verifier = createExternalDestroyEvidenceVerifier({
+      verifierId: "malformed",
+      script: malformed,
+      expectedCheckNames: EXTERNAL_DESTROY_CHECK_NAMES,
+      timeoutMs: 2_000,
+    });
+    await expect(verifier.verify(destroyVerifierInputFixture())).rejects.toThrow(
+      /stdout must be one JSON object|result/u,
+    );
+
+    const extra = await writeDestroyVerifierScript(
+      root,
+      `console.log(JSON.stringify({kind:${JSON.stringify(EXTERNAL_DESTROY_VERIFIER_RESULT_KIND)},verifierId:"malformed",scriptDigest:"sha256:${"0".repeat(64)}",checks:[],extra:true}));\n`,
+    );
+    const extraVerifier = createExternalDestroyEvidenceVerifier({
+      verifierId: "malformed",
+      script: extra,
+      expectedCheckNames: [EXTERNAL_DESTROY_CHECK_NAMES[0]],
+      timeoutMs: 2_000,
+    });
+    await expect(
+      extraVerifier.verify(destroyVerifierInputFixture()),
+    ).rejects.toThrow(/unexpected|missing|checks/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("external destroy verifier bounds timeout and nonzero exits", async () => {
+  const root = await destroyVerifierFixtureRoot();
+  try {
+    const timeoutScript = await writeDestroyVerifierScript(
+      root,
+      `setTimeout(() => {}, 10_000);\n`,
+    );
+    const timeoutVerifier = createExternalDestroyEvidenceVerifier({
+      verifierId: "timeout",
+      script: timeoutScript,
+      expectedCheckNames: EXTERNAL_DESTROY_CHECK_NAMES,
+      timeoutMs: 20,
+    });
+    await expect(
+      timeoutVerifier.verify(destroyVerifierInputFixture()),
+    ).rejects.toThrow(/timed out|timeout/u);
+
+    const oversizedScript = await writeDestroyVerifierScript(
+      root,
+      `process.stdout.write("x".repeat(70_000));\n`,
+    );
+    const oversizedVerifier = createExternalDestroyEvidenceVerifier({
+      verifierId: "oversized",
+      script: oversizedScript,
+      expectedCheckNames: EXTERNAL_DESTROY_CHECK_NAMES,
+      timeoutMs: 2_000,
+    });
+    await expect(
+      oversizedVerifier.verify(destroyVerifierInputFixture()),
+    ).rejects.toThrow(/output exceeded|oversized/u);
+
+    const nonzeroScript = await writeDestroyVerifierScript(
+      root,
+      `console.error("non-secret verifier failure"); process.exit(7);\n`,
+    );
+    const nonzeroVerifier = createExternalDestroyEvidenceVerifier({
+      verifierId: "nonzero",
+      script: nonzeroScript,
+      expectedCheckNames: EXTERNAL_DESTROY_CHECK_NAMES,
+      timeoutMs: 2_000,
+    });
+    await expect(
+      nonzeroVerifier.verify(destroyVerifierInputFixture()),
+    ).rejects.toThrow(/exited with 7/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("external destroy verifier passes no ambient credentials, output values, or ids in argv", async () => {
+  const root = await destroyVerifierFixtureRoot();
+  try {
+    const captureFile = join(root, "capture.json");
+    const script = await writeDestroyVerifierScript(
+      root,
+      destroyVerifierResultSource(),
+    );
+    const verifier = createExternalDestroyEvidenceVerifier({
+      verifierId: "leak-check",
+      script,
+      expectedCheckNames: EXTERNAL_DESTROY_CHECK_NAMES,
+      envNames: ["CAPTURE_FILE"],
+      environment: {
+        CAPTURE_FILE: captureFile,
+        TAKOSUMI_ACCOUNT_SESSION_TOKEN: "ambient-account-secret",
+        CLOUDFLARE_API_TOKEN: "ambient-cloudflare-secret",
+      },
+      timeoutMs: 2_000,
+    });
+    await verifier.verify(destroyVerifierInputFixture());
+    const captured = JSON.parse(await readFile(captureFile, "utf8")) as {
+      argv: string[];
+      env: Record<string, string>;
+      input: { publicOutputs: Record<string, unknown> };
+      inputMode: number;
+    };
+    expect(captured.argv).toHaveLength(2);
+    expect(captured.argv[0]).toBe("--input-file");
+    expect(captured.argv[1]).toMatch(/input\.json$/u);
+    expect(captured.inputMode).toBe(0o600);
+    expect(Object.keys(captured.env)).toEqual(["CAPTURE_FILE"]);
+    expect(captured.env).not.toHaveProperty("TAKOSUMI_ACCOUNT_SESSION_TOKEN");
+    expect(captured.env).not.toHaveProperty("CLOUDFLARE_API_TOKEN");
+    expect(captured.input.publicOutputs.endpoint_url).toBe(
+      "https://worker.example.test",
+    );
+    expect(JSON.stringify(captured)).not.toContain("ambient-account-secret");
+    expect(JSON.stringify(captured)).not.toContain("ambient-cloudflare-secret");
+    expect(JSON.stringify(verifier)).not.toContain("ambient-account-secret");
+    expect(JSON.stringify(verifier)).not.toContain("ambient-cloudflare-secret");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("external destroy verifier rejects duplicate and missing expected checks", async () => {
+  const root = await destroyVerifierFixtureRoot();
+  try {
+    const duplicateScript = await writeDestroyVerifierScript(
+      root,
+      destroyVerifierResultSource([
+        EXTERNAL_DESTROY_CHECK_NAMES[0],
+        EXTERNAL_DESTROY_CHECK_NAMES[0],
+        ...EXTERNAL_DESTROY_CHECK_NAMES.slice(2),
+      ]),
+    );
+    const verifier = createExternalDestroyEvidenceVerifier({
+      verifierId: "duplicate",
+      script: duplicateScript,
+      expectedCheckNames: EXTERNAL_DESTROY_CHECK_NAMES,
+      timeoutMs: 2_000,
+    });
+    await expect(verifier.verify(destroyVerifierInputFixture())).rejects.toThrow(
+      /duplicate|exact|expected/u,
+    );
+
+    const missingScript = await writeDestroyVerifierScript(
+      root,
+      destroyVerifierResultSource(EXTERNAL_DESTROY_CHECK_NAMES.slice(0, -1)),
+    );
+    const missingVerifier = createExternalDestroyEvidenceVerifier({
+      verifierId: "missing",
+      script: missingScript,
+      expectedCheckNames: EXTERNAL_DESTROY_CHECK_NAMES,
+      timeoutMs: 2_000,
+    });
+    await expect(
+      missingVerifier.verify(destroyVerifierInputFixture()),
+    ).rejects.toThrow(/expected|exact|missing/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("external destroy verifier failure retains Destroy progress without re-destroying", async () => {
+  const destroyEvidenceVerifier: DestroyEvidenceVerifier = {
+    verifierId: "takos/external-failure@v1",
+    expectedCheckNames: ["worker_endpoint"],
+    async verify() {
+      throw new Error("external verifier unavailable");
+    },
+  };
+  const { result, requests, runRecords } =
+    await runDestroyApplyReconciliationFixture(
+      "external_verifier",
+      destroyEvidenceVerifier,
+    );
+  expect(result.status).toBe("failed");
+  expect(result.error).toContain("external verifier unavailable");
+  expect(result.completedSteps).not.toContain("destroy");
+  expect(result.destroyPlanRunId).toBe(runRecords.destroyPlanWaitingApproval.id);
+  expect(result.destroyApplyRunId).toBe(runRecords.destroyApplyTerminal.id);
+  expect(result.destroyVerified).toBe(false);
+  expect(
+    requests.filter(
+      (request) =>
+        request.method === "POST" &&
+        request.url.includes("/destroy-plan"),
+    ),
+  ).toHaveLength(1);
+  expect(
+    requests.filter(
+      (request) =>
+        request.method === "POST" &&
+        request.url.endsWith(`/runs/${runRecords.destroyPlanWaitingApproval.id}/apply`),
+    ),
+  ).toHaveLength(1);
+});
