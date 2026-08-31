@@ -81,7 +81,10 @@ export interface TakosumiRuntimeBindingMaterializer {
 
 export interface RuntimeBindingMaterializerCloudflareEnv {
   readonly TAKOSUMI_CONTROL_DB: ControlD1Database;
-  readonly TAKOSUMI_CONTROL_D1_SCHEMA_MODE?: "bootstrap" | "predeployed";
+  readonly TAKOSUMI_CONTROL_D1_SCHEMA_MODE?:
+    | "bootstrap"
+    | "predeployed"
+    | "predeployed-bridge";
   readonly TAKOSUMI_ACCOUNTS_DB: AccountsD1Database;
   readonly TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE?: D1AccountsSchemaMode;
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;

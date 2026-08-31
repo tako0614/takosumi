@@ -235,8 +235,9 @@ still add store servers themselves.
 
 Before deploying code that requires control-ledger v67, first deploy the
 reviewed zero-downtime bridge from the exact serving v66 source. The bridge's
-`predeployed` verifier accepts only the exact v66 or exact candidate v67
-ledger. After its platform ready evidence is retained, the official read-only
+bounded `predeployed-bridge` verifier accepts only the exact v66 or exact
+candidate v67 ledger. Normal `predeployed` remains strict to the current v67
+catalog. After the bridge's platform ready evidence is retained, the official read-only
 proof owner emits the private serving-compatibility proof:
 
 ```bash
@@ -250,10 +251,12 @@ bun run deploy -- takosumi-control-d1-bridge-proof-staging create \
 Use `takosumi-control-d1-bridge-proof` for production. This producer validates
 the complete v5 plan, accepted forward checkpoint, complete raw ready evidence,
 and exact live immutable Worker Version, D1 binding, and
-`TAKOSUMI_CONTROL_D1_SCHEMA_MODE=predeployed` binding before one mode-`0600`
-no-overwrite write. The proof retains the raw evidence path and digest; the
-schema consumer validates those source bytes again. Hand-authored compatibility
-JSON is not an owner artifact.
+`TAKOSUMI_CONTROL_D1_SCHEMA_MODE=predeployed-bridge` binding. It then sends a
+credential-free, cache-free random-nonce challenge and requires the physical v66
+ledger's complete rows plus the code-owned exact v66/v67 allowset before one mode-`0600`
+no-overwrite write. The proof retains the raw plan/evidence digests and raw
+canonical challenge response/digest; the schema consumer validates those source
+artifacts again. Hand-authored compatibility JSON is not an owner artifact.
 
 The resulting proof is consumed by the
 [Control D1 schema predeploy](control-d1-schema-predeploy.md) surface. The

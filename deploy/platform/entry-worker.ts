@@ -17,6 +17,7 @@ import {
   type RuntimeBindingMaterializerInput,
   type RuntimeBindingMaterializerCloudflareEnv,
 } from "./runtime_binding_materializer.ts";
+import { controlD1BridgeChallengeResponse } from "./control_d1_bridge_challenge.ts";
 
 export {
   CoordinationObject,
@@ -130,6 +131,8 @@ export default {
     env: VersionedPlatformEnv,
     context?: PlatformExecutionContext,
   ): Promise<Response> {
+    const bridgeChallenge = await controlD1BridgeChallengeResponse(request, env);
+    if (bridgeChallenge) return bridgeChallenge;
     const composed = composeTakoserverHostedWorkerEnv(env);
     return withPlatformWorkerVersion(
       await platformWorker.fetch(request, composed, context),

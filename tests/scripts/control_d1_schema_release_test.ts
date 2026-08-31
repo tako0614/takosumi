@@ -127,6 +127,32 @@ function digestJson(value: unknown): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
 }
 
+function writeStartedMutationCheckpoint(
+  path: string,
+  planConfirmation: string,
+  recordedAt = "2026-08-30T12:00:00.000Z",
+  predecessorChallengeEvidenceDigest = digestJson({
+    test: "predecessor-challenge",
+  }),
+): string {
+  const serialized = `${JSON.stringify({
+    kind: "takosumi.control-d1-schema-mutation-checkpoint@v2",
+    outcome: "unknown",
+    planConfirmation,
+    predecessorChallengeEvidenceDigest,
+    recordedAt,
+  })}\n`;
+  writeFileSync(path, serialized, { flag: "wx", mode: 0o600 });
+  const startedDigest = `sha256:${createHash("sha256")
+    .update(serialized)
+    .digest("hex")}`;
+  return digestJson({
+    kind: "takosumi.control-d1-schema-release-readiness@v1",
+    planConfirmation,
+    mutationCheckpointStartedDigest: startedDigest,
+  });
+}
+
 function competingPlatformTargetRequest(root: string, label: string) {
   const checkpointPath = join(root, `${label}.checkpoint.jsonl`);
   return {
@@ -227,8 +253,24 @@ async function servingCompatibilityProof(
     bindingName: "TAKOSUMI_CONTROL_DB",
     servingVersionId: VERSION_ID,
   });
+  const allowset = [
+    { migrationVersion: 66, ledgerDigest: predecessor.ledgerDigest },
+    { migrationVersion: 67, ledgerDigest: candidate.ledgerDigest },
+  ] as const;
+  const challengeResponse = {
+    kind: "takosumi.control-d1-schema-compatibility-challenge@v1" as const,
+    status: "ready" as const,
+    nonce: "d".repeat(64),
+    environment: releaseEnvironment,
+    workerVersionId: VERSION_ID,
+    bindingName: "TAKOSUMI_CONTROL_DB" as const,
+    schemaMode: "predeployed-bridge" as const,
+    ledger: predecessor.migrations,
+    accepted: allowset[0],
+    allowset,
+  };
   const identity = {
-    kind: "takosumi.control-d1-serving-compatibility-proof@v1" as const,
+    kind: "takosumi.control-d1-serving-compatibility-proof@v2" as const,
     status: "ready" as const,
     completedAt: "2026-08-30T11:55:00.000Z",
     environment: releaseEnvironment,
@@ -239,11 +281,24 @@ async function servingCompatibilityProof(
     bridgeReleaseEvidenceDigest: `sha256:${createHash("sha256")
       .update(readFileSync(bridgeReleaseEvidencePath))
       .digest("hex")}`,
+    bridgePlanDigest: `sha256:${createHash("sha256")
+      .update(readFileSync(bridgePlanPath))
+      .digest("hex")}`,
     workerName,
     bindingName: "TAKOSUMI_CONTROL_DB" as const,
     servingVersionId: VERSION_ID,
     targetDigest,
-    schemaMode: "predeployed" as const,
+    schemaMode: "predeployed-bridge" as const,
+    compatibilityCatalogDigest: digestJson({
+      kind: "takosumi.control-d1-schema-compatibility-catalog@v1",
+      allowset,
+    }),
+    predecessorChallenge: {
+      kind: "takosumi.control-d1-schema-compatibility-challenge-evidence@v1",
+      observedAt: "2026-08-30T11:54:00.000Z",
+      responseDigest: digestJson(challengeResponse),
+      response: challengeResponse,
+    },
     predecessor: {
       migrationVersion: 66 as const,
       ledgerDigest: predecessor.ledgerDigest,
@@ -467,17 +522,61 @@ function writeBridgePlatformPlan(
 
 function workerFetch(
   calls: Array<{ url: string; authorization: string | null }>,
-  servingVersionId: () => string = () => VERSION_ID,
-  servingDatabaseId: () => string = () => DATABASE_ID,
-  servingSchemaMode: () => string = () => "predeployed",
+  servingVersionId: (url: URL) => string = () => VERSION_ID,
+  servingDatabaseId: (url: URL) => string = () => DATABASE_ID,
+  servingSchemaMode: (url: URL) => string = () => "predeployed-bridge",
+  acceptedMigrationVersion: (
+    url: URL,
+  ) => 66 | 67 | Promise<66 | 67> = () => 66,
 ) {
   return async (input: string | URL | Request, init?: RequestInit) => {
     const request = new Request(input, init);
-    const currentVersionId = servingVersionId();
+    const requestUrl = new URL(request.url);
+    const currentVersionId = servingVersionId(requestUrl);
     calls.push({
       url: request.url,
       authorization: request.headers.get("authorization"),
     });
+    if (
+      requestUrl.pathname ===
+      "/__takosumi/control-d1-schema-compatibility"
+    ) {
+      const [candidate, predecessor] = await Promise.all([
+        buildControlD1SchemaPlan(),
+        buildControlD1SchemaPlan({ throughMigrationVersion: 66 }),
+      ]);
+      const migrationVersion = await acceptedMigrationVersion(requestUrl);
+      const allowset = [
+        { migrationVersion: 66, ledgerDigest: predecessor.ledgerDigest },
+        { migrationVersion: 67, ledgerDigest: candidate.ledgerDigest },
+      ] as const;
+      return Response.json(
+        {
+          kind: "takosumi.control-d1-schema-compatibility-challenge@v1",
+          status: "ready",
+          nonce: requestUrl.searchParams.get("nonce"),
+          environment: requestUrl.hostname.includes("staging")
+            ? "staging"
+            : "production",
+          workerVersionId: currentVersionId,
+          bindingName: "TAKOSUMI_CONTROL_DB",
+          schemaMode: "predeployed-bridge",
+          ledger:
+            migrationVersion === 66
+              ? predecessor.migrations
+              : candidate.migrations,
+          accepted: migrationVersion === 66 ? allowset[0] : allowset[1],
+          allowset,
+        },
+        {
+          headers: {
+            "cache-control": "no-store",
+            pragma: "no-cache",
+            "x-takosumi-version-id": currentVersionId,
+          },
+        },
+      );
+    }
     if (request.url.endsWith("/deployments")) {
       return Response.json({
         success: true,
@@ -501,12 +600,12 @@ function workerFetch(
               {
                 name: "TAKOSUMI_CONTROL_DB",
                 type: "d1",
-                database_id: servingDatabaseId(),
+                database_id: servingDatabaseId(requestUrl),
               },
               {
                 name: "TAKOSUMI_CONTROL_D1_SCHEMA_MODE",
                 type: "plain_text",
-                text: servingSchemaMode(),
+                text: servingSchemaMode(requestUrl),
               },
             ],
           },
@@ -521,15 +620,34 @@ function dependencies(
   database: SqliteControlD1Database,
   calls: Array<{ url: string; authorization: string | null }>,
   releaseEnvironment: "staging" | "production" = "staging",
+  stagingDatabase?: SqliteControlD1Database,
 ): ControlD1SchemaReleaseDependencies {
   const databaseId =
     releaseEnvironment === "staging" ? DATABASE_ID : PRODUCTION_DATABASE_ID;
   return {
-    env: environment(releaseEnvironment),
+    env:
+      releaseEnvironment === "production"
+        ? { ...environment("staging"), ...environment("production") }
+        : environment("staging"),
     fetch: workerFetch(
       calls,
       () => VERSION_ID,
-      () => databaseId,
+      (url) =>
+        url.hostname.includes("app-staging") ||
+        url.pathname.includes("/takosumi-staging/")
+          ? DATABASE_ID
+          : databaseId,
+      () => "predeployed-bridge",
+      async (url) =>
+        (
+          await readControlD1MigrationLedger(
+            url.hostname.includes("app-staging") && stagingDatabase
+              ? stagingDatabase
+              : database,
+          )
+        ).at(-1)?.version === 67
+          ? 67
+          : 66,
     ),
     inspectSource: () => ({
       head: COMMIT,
@@ -538,8 +656,11 @@ function dependencies(
       pushed: true,
       authorEmail: "author@example.com",
     }),
-    createRemoteDatabase: () => ({
-      database,
+    createRemoteDatabase: (credentials) => ({
+      database:
+        credentials.databaseId === DATABASE_ID && stagingDatabase
+          ? stagingDatabase
+          : database,
       readTimeTravelBookmark: async () => BOOKMARK,
     }),
     now: () => "2026-08-30T12:00:00.000Z",
@@ -579,7 +700,7 @@ test("staging plan is external, exact, REST-bound, and secret-free on stdout", a
     const planText = readFileSync(planPath, "utf8");
     const plan = JSON.parse(planText) as Record<string, unknown>;
     expect(statSync(planPath).mode & 0o777).toBe(0o600);
-    expect(plan.kind).toBe("takosumi.control-d1-schema-release-plan@v1");
+    expect(plan.kind).toBe("takosumi.control-d1-schema-release-plan@v2");
     expect(plan.environment).toBe("staging");
     expect(plan.sourceCommit).toBe(COMMIT);
     expect(plan.currentMigrationVersion).toBe(66);
@@ -594,6 +715,12 @@ test("staging plan is external, exact, REST-bound, and secret-free on stdout", a
       /^sha256:[0-9a-f]{64}$/u,
     );
     expect(plan.servingCompatibilityProofPath).toBe(proofPath);
+    expect(plan.predecessorCompatibilityChallenge).toMatchObject({
+      response: {
+        workerVersionId: VERSION_ID,
+        accepted: { migrationVersion: 66 },
+      },
+    });
     expect(plan.confirmation).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(planText).toContain(BOOKMARK);
     expect(planText).not.toContain(TOKEN);
@@ -610,10 +737,12 @@ test("staging plan is external, exact, REST-bound, and secret-free on stdout", a
     expect(calls.map((call) => new URL(call.url).pathname)).toEqual([
       `/client/v4/accounts/${ACCOUNT_ID}/workers/scripts/takosumi-staging/deployments`,
       `/client/v4/accounts/${ACCOUNT_ID}/workers/scripts/takosumi-staging/versions/${VERSION_ID}`,
+      "/__takosumi/control-d1-schema-compatibility",
     ]);
     expect(
-      calls.every((call) => call.authorization === `Bearer ${TOKEN}`),
-    ).toBeTrue();
+      calls.filter((call) => call.authorization === `Bearer ${TOKEN}`),
+    ).toHaveLength(2);
+    expect(calls.filter((call) => call.authorization === null)).toHaveLength(1);
   } finally {
     database.close();
   }
@@ -658,14 +787,14 @@ test("official bridge proof producer binds the full plan, raw ready evidence, an
   expect(statSync(proofPath).mode & 0o777).toBe(0o600);
   expect(statSync(proofPath).nlink).toBe(1);
   expect(proof).toMatchObject({
-    kind: "takosumi.control-d1-serving-compatibility-proof@v1",
+    kind: "takosumi.control-d1-serving-compatibility-proof@v2",
     status: "ready",
     environment: "staging",
     bridgePlanPath: fixture.bridgePlanPath,
     bridgePlanConfirmation: fixture.bridgePlanConfirmation,
     bridgeReleaseEvidencePath: fixture.bridgeReleaseEvidencePath,
     servingVersionId: VERSION_ID,
-    schemaMode: "predeployed",
+    schemaMode: "predeployed-bridge",
     reviewer: "operator:bridge-reviewer@example.com",
     predecessor: { migrationVersion: 66, status: "ready" },
     candidate: { migrationVersion: 67, status: "ready" },
@@ -674,14 +803,23 @@ test("official bridge proof producer binds the full plan, raw ready evidence, an
     /^sha256:[0-9a-f]{64}$/u,
   );
   expect(proof.confirmation).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  expect(proof.bridgePlanDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  expect(proof.compatibilityCatalogDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  expect(proof.predecessorChallenge).toMatchObject({
+    kind: "takosumi.control-d1-schema-compatibility-challenge-evidence@v1",
+    response: {
+      workerVersionId: VERSION_ID,
+      accepted: { migrationVersion: 66 },
+      allowset: [{ migrationVersion: 66 }, { migrationVersion: 67 }],
+    },
+  });
   expect(proofText).not.toContain(TOKEN);
   const publicText = stdout.join("\n");
   for (const privateValue of [ACCOUNT_ID, DATABASE_ID, VERSION_ID, TOKEN]) {
     expect(publicText).not.toContain(privateValue);
   }
-  expect(
-    calls.every((call) => call.authorization === `Bearer ${TOKEN}`),
-  ).toBeTrue();
+  expect(calls.filter((call) => call.authorization === `Bearer ${TOKEN}`)).toHaveLength(2);
+  expect(calls.filter((call) => call.authorization === null)).toHaveLength(1);
 });
 
 test("bridge proof producer rejects hand-authored or incomplete platform evidence without creating output", async () => {
@@ -757,6 +895,159 @@ test("bridge proof producer refuses a live immutable Version without predeployed
     ),
   ).rejects.toThrow("control_d1_schema_release_worker_schema_mode_invalid");
   expect(existsSync(proofPath)).toBeFalse();
+});
+
+test("bridge proof producer rejects a live Version whose challenge accepts only v66", async () => {
+  const root = privateRoot();
+  const fixtureProofPath = await servingCompatibilityProof(root);
+  const fixture = JSON.parse(readFileSync(fixtureProofPath, "utf8")) as {
+    readonly bridgePlanPath: string;
+    readonly bridgePlanConfirmation: string;
+    readonly bridgeReleaseEvidencePath: string;
+  };
+  const proofPath = join(root, "must-not-exist.json");
+  const baseFetch = workerFetch(
+    [],
+    () => VERSION_ID,
+    () => DATABASE_ID,
+    () => "predeployed-bridge",
+  );
+  const predecessor = await buildControlD1SchemaPlan({
+    throughMigrationVersion: 66,
+  });
+  const forgedFetch = async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const request = new Request(input, init);
+    if (
+      request.url.startsWith(
+        "https://app-staging.takosumi.com/__takosumi/control-d1-schema-compatibility?",
+      )
+    ) {
+      const nonce = new URL(request.url).searchParams.get("nonce");
+      return Response.json(
+        {
+          kind: "takosumi.control-d1-schema-compatibility-challenge@v1",
+          status: "ready",
+          nonce,
+          environment: "staging",
+          workerVersionId: VERSION_ID,
+          schemaMode: "predeployed-bridge",
+          accepted: {
+            migrationVersion: 66,
+            ledgerDigest: predecessor.ledgerDigest,
+          },
+          allowset: [
+            {
+              migrationVersion: 66,
+              ledgerDigest: predecessor.ledgerDigest,
+            },
+          ],
+        },
+        {
+          headers: {
+            "cache-control": "no-store",
+            pragma: "no-cache",
+            "x-takosumi-version-id": VERSION_ID,
+          },
+        },
+      );
+    }
+    return await baseFetch(input, init);
+  };
+
+  await expect(
+    runControlD1ServingCompatibilityProof(
+      [
+        "create",
+        "--bridge-plan",
+        fixture.bridgePlanPath,
+        "--confirm",
+        fixture.bridgePlanConfirmation,
+        "--bridge-evidence",
+        fixture.bridgeReleaseEvidencePath,
+        "--proof-out",
+        proofPath,
+      ],
+      "staging",
+      { env: environment(), fetch: forgedFetch },
+    ),
+  ).rejects.toThrow(
+    "control_d1_serving_compatibility_proof_challenge_invalid",
+  );
+  expect(existsSync(proofPath)).toBeFalse();
+});
+
+test("schema plan independently rejects a proof-bound Version whose live challenge accepts only v66", async () => {
+  const root = privateRoot();
+  const planPath = join(root, "must-not-exist.json");
+  const database = await predecessorDatabase();
+  const calls: Array<{ url: string; authorization: string | null }> = [];
+  const proofPath = await servingCompatibilityProof(root);
+  const baseDependencies = dependencies(database, calls);
+  const predecessor = await buildControlD1SchemaPlan({
+    throughMigrationVersion: 66,
+  });
+  const forgedFetch = async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    if (
+      url.pathname === "/__takosumi/control-d1-schema-compatibility"
+    ) {
+      return Response.json(
+        {
+          kind: "takosumi.control-d1-schema-compatibility-challenge@v1",
+          status: "ready",
+          nonce: url.searchParams.get("nonce"),
+          environment: "staging",
+          workerVersionId: VERSION_ID,
+          schemaMode: "predeployed-bridge",
+          accepted: {
+            migrationVersion: 66,
+            ledgerDigest: predecessor.ledgerDigest,
+          },
+          allowset: [
+            {
+              migrationVersion: 66,
+              ledgerDigest: predecessor.ledgerDigest,
+            },
+          ],
+        },
+        {
+          headers: {
+            "cache-control": "no-store",
+            pragma: "no-cache",
+            "x-takosumi-version-id": VERSION_ID,
+          },
+        },
+      );
+    }
+    return await baseDependencies.fetch!(request);
+  };
+  try {
+    await expect(
+      runReleaseSurface(
+        [
+          "plan",
+          "--plan-out",
+          planPath,
+          "--serving-compatibility-proof",
+          proofPath,
+        ],
+        "staging",
+        { ...baseDependencies, fetch: forgedFetch },
+      ),
+    ).rejects.toThrow(
+      "control_d1_schema_release_serving_compatibility_challenge_invalid",
+    );
+    expect(existsSync(planPath)).toBeFalse();
+  } finally {
+    database.close();
+  }
 });
 
 test("schema plan command refuses an unresolved target owner before source, provider, or D1 reads", async () => {
@@ -1087,7 +1378,7 @@ test("execute applies only v67 once and writes exact ready evidence", async () =
     const evidenceText = readFileSync(evidencePath, "utf8");
     const evidence = JSON.parse(evidenceText) as Record<string, unknown>;
     expect(evidence.kind).toBe(
-      "takosumi.control-d1-schema-release-evidence@v1",
+      "takosumi.control-d1-schema-release-evidence@v2",
     );
     expect(evidence.status).toBe("ready");
     expect(evidence.appliedMigrationVersions).toEqual([67]);
@@ -1097,13 +1388,29 @@ test("execute applies only v67 once and writes exact ready evidence", async () =
     expect(evidence.servingCompatibilityProofDigest).toMatch(
       /^sha256:[0-9a-f]{64}$/u,
     );
+    expect(evidence.mutationCheckpointDigest).toMatch(
+      /^sha256:[0-9a-f]{64}$/u,
+    );
+    expect(evidence.maintenanceReleaseReceiptDigest).toMatch(
+      /^sha256:[0-9a-f]{64}$/u,
+    );
+    expect(evidence.predecessorChallenge).toMatchObject({
+      response: { accepted: { migrationVersion: 66 } },
+    });
+    expect(evidence.candidateChallenge).toMatchObject({
+      response: {
+        workerVersionId: VERSION_ID,
+        accepted: { migrationVersion: 67 },
+        allowset: [{ migrationVersion: 66 }, { migrationVersion: 67 }],
+      },
+    });
     expect(evidence.physicalTarget).toEqual({
       accountId: ACCOUNT_ID,
       databaseId: DATABASE_ID,
     });
     expect(evidence.credentialCustodyDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(evidence.reviewer).toBe("operator:reviewer@example.com");
-    for (const privateValue of [VERSION_ID, BOOKMARK, TOKEN]) {
+    for (const privateValue of [BOOKMARK, TOKEN]) {
       expect(evidenceText).not.toContain(privateValue);
     }
     for (const privateValue of [
@@ -1756,7 +2063,12 @@ test("production plan requires and seals the exact staging rehearsal receipt", a
     );
 
     const productionDependencies: ControlD1SchemaReleaseDependencies = {
-      ...dependencies(productionDatabase, productionCalls, "production"),
+      ...dependencies(
+        productionDatabase,
+        productionCalls,
+        "production",
+        stagingDatabase,
+      ),
     };
     await expect(
       runReleaseSurface(
@@ -1776,6 +2088,8 @@ test("production plan requires and seals the exact staging rehearsal receipt", a
         "plan",
         "--plan-out",
         productionPlanPath,
+        "--staging-plan",
+        stagingPlanPath,
         "--staging-receipt",
         stagingEvidencePath,
         "--serving-compatibility-proof",
@@ -1799,6 +2113,17 @@ test("production plan requires and seals the exact staging rehearsal receipt", a
       /^sha256:[0-9a-f]{64}$/u,
     );
     expect(productionPlan.stagingRehearsalReceiptDigest).not.toBeNull();
+    expect(productionPlan.stagingRehearsalPlanPath).toBe(stagingPlanPath);
+    expect(productionPlan.stagingRehearsalReceiptPath).toBe(
+      stagingEvidencePath,
+    );
+    for (const field of [
+      "stagingRehearsalPlanDigest",
+      "stagingRehearsalPlanConfirmation",
+      "stagingRehearsalCheckpointDigest",
+    ]) {
+      expect(productionPlan[field]).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    }
     expect(productionPlan.stagingRehearsalTarget).toMatchObject({
       accountId: ACCOUNT_ID,
       databaseId: DATABASE_ID,
@@ -1808,6 +2133,43 @@ test("production plan requires and seals the exact staging rehearsal receipt", a
     expect(productionPlan.credentialCustodyDigest).not.toBe(
       stagingEvidence.credentialCustodyDigest,
     );
+    const editedStagingEvidence = {
+      ...stagingEvidence,
+      reviewer: "operator:receipt-editor@example.com",
+    };
+    writeFileSync(
+      stagingEvidencePath,
+      `${JSON.stringify(editedStagingEvidence, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    let productionApplyCalls = 0;
+    await expect(
+      runReleaseSurface(
+        [
+          "execute",
+          "--plan",
+          productionPlanPath,
+          "--confirm",
+          productionPlan.confirmation as string,
+          "--review",
+          "operator:reviewer@example.com",
+          "--evidence",
+          join(root, "production-evidence-must-not-exist.json"),
+        ],
+        "production",
+        {
+          ...productionDependencies,
+          applySchema: async (...args) => {
+            productionApplyCalls += 1;
+            return await applyControlD1Schema(...args);
+          },
+        },
+      ),
+    ).rejects.toThrow(
+      "control_d1_schema_release_staging_receipt_authority_invalid",
+    );
+    expect(productionApplyCalls).toBe(0);
+    expect((await readControlD1MigrationLedger(productionDatabase)).at(-1)?.version).toBe(66);
   } finally {
     stagingDatabase.close();
     productionDatabase.close();
@@ -1842,6 +2204,8 @@ test("production never accepts observed-ready staging adoption as an execution r
           planPath,
           "--serving-compatibility-proof",
           proofPath,
+          "--staging-plan",
+          adoptionPath,
           "--staging-receipt",
           adoptionPath,
         ],
@@ -1851,6 +2215,251 @@ test("production never accepts observed-ready staging adoption as an execution r
     ).rejects.toThrow("control_d1_schema_release_staging_receipt_invalid");
     expect(existsSync(planPath)).toBeFalse();
   } finally {
+    productionDatabase.close();
+  }
+});
+
+test("production rejects a hand-authored official receipt without the rehearsal mutation authority", async () => {
+  const root = privateRoot();
+  const stagingPlanPath = join(root, "staging-plan.json");
+  const forgedReceiptPath = join(root, "forged-staging-receipt.json");
+  const productionPlanPath = join(root, "production-plan.json");
+  const stagingDatabase = await predecessorDatabase();
+  const productionDatabase = await predecessorDatabase();
+  const stagingCalls: Array<{ url: string; authorization: string | null }> = [];
+  const productionCalls: Array<{ url: string; authorization: string | null }> =
+    [];
+  const stagingProofPath = await servingCompatibilityProof(root);
+  const productionProofPath = await servingCompatibilityProof(
+    root,
+    "production",
+  );
+  try {
+    await runReleaseSurface(
+      [
+        "plan",
+        "--plan-out",
+        stagingPlanPath,
+        "--serving-compatibility-proof",
+        stagingProofPath,
+      ],
+      "staging",
+      dependencies(stagingDatabase, stagingCalls),
+    );
+    const stagingPlan = JSON.parse(
+      readFileSync(stagingPlanPath, "utf8"),
+    ) as Record<string, any>;
+    const stagingProof = JSON.parse(
+      readFileSync(stagingPlan.servingCompatibilityProofPath, "utf8"),
+    ) as Record<string, any>;
+    const forgedChallengeResponse = {
+      kind: "takosumi.control-d1-schema-compatibility-challenge@v1",
+      status: "ready",
+      nonce: "e".repeat(64),
+      environment: "staging",
+      workerVersionId: stagingPlan.target.servingVersionId,
+      schemaMode: "predeployed-bridge",
+      accepted: {
+        migrationVersion: stagingProof.candidate.migrationVersion,
+        ledgerDigest: stagingProof.candidate.ledgerDigest,
+      },
+      allowset: [stagingProof.predecessor, stagingProof.candidate].map(
+        ({ migrationVersion, ledgerDigest }) => ({
+          migrationVersion,
+          ledgerDigest,
+        }),
+      ),
+    };
+    writeFileSync(
+      forgedReceiptPath,
+      `${JSON.stringify(
+        {
+          kind: "takosumi.control-d1-schema-release-evidence@v2",
+          status: "ready",
+          completedAt: "2026-08-30T12:01:00.000Z",
+          environment: "staging",
+          sourceCommit: stagingPlan.sourceCommit,
+          planConfirmation: stagingPlan.confirmation,
+          targetDigest: stagingPlan.targetDigest,
+          physicalTarget: {
+            accountId: stagingPlan.target.accountId,
+            databaseId: stagingPlan.target.databaseId,
+          },
+          credentialDigest: stagingPlan.credentialDigest,
+          credentialCustodyDigest: stagingPlan.credentialCustodyDigest,
+          timeTravelBookmarkDigest: stagingPlan.timeTravelBookmarkDigest,
+          servingCompatibilityProofDigest:
+            stagingPlan.servingCompatibilityProofDigest,
+          compatibilityCatalogDigest:
+            stagingProof.compatibilityCatalogDigest,
+          predecessorChallenge: stagingProof.predecessorChallenge,
+          candidateChallenge: {
+            kind: "takosumi.control-d1-schema-compatibility-challenge-evidence@v1",
+            observedAt: "2026-08-30T12:01:00.000Z",
+            responseDigest: digestJson(forgedChallengeResponse),
+            response: forgedChallengeResponse,
+          },
+          mutationCheckpointDigest: digestJson({ forged: "checkpoint" }),
+          maintenanceReleaseReceiptDigest: digestJson({
+            forged: "maintenance-release",
+          }),
+          stagingRehearsalReceiptDigest: null,
+          manifestDigest: stagingPlan.manifestDigest,
+          schemaDigest: stagingPlan.schemaDigest,
+          ledgerDigest: stagingPlan.ledgerDigest,
+          appliedMigrationVersions: [67],
+          finalMigrationVersion: 67,
+          finalMigrationCount: 64,
+          finalTableCount: 38,
+          reviewer: "operator:receipt-forger@example.com",
+          maintenanceStatus: "inactive",
+          recovery: {
+            surface: "takosumi-control-d1-schema-staging",
+            action: "recover",
+            timeTravelRestoreAuthority: "separate-incident-boundary",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      { flag: "wx", mode: 0o600 },
+    );
+
+    await expect(
+      runReleaseSurface(
+        [
+          "plan",
+          "--plan-out",
+          productionPlanPath,
+          "--staging-plan",
+          stagingPlanPath,
+          "--staging-receipt",
+          forgedReceiptPath,
+          "--serving-compatibility-proof",
+          productionProofPath,
+        ],
+        "production",
+        dependencies(productionDatabase, productionCalls, "production"),
+      ),
+    ).rejects.toThrow(
+      "control_d1_schema_release_staging_receipt_authority_invalid",
+    );
+    expect(existsSync(productionPlanPath)).toBeFalse();
+  } finally {
+    stagingDatabase.close();
+    productionDatabase.close();
+  }
+});
+
+test("production rejects a rewritten checkpoint and receipt layered onto genuine staging readback", async () => {
+  const root = privateRoot();
+  const stagingPlanPath = join(root, "staging-plan.json");
+  const stagingEvidencePath = join(root, "staging-evidence.json");
+  const productionPlanPath = join(root, "production-plan.json");
+  const stagingDatabase = await predecessorDatabase();
+  const productionDatabase = await predecessorDatabase();
+  const stagingCalls: Array<{ url: string; authorization: string | null }> = [];
+  const productionCalls: Array<{ url: string; authorization: string | null }> =
+    [];
+  const stagingProofPath = await servingCompatibilityProof(root);
+  const productionProofPath = await servingCompatibilityProof(
+    root,
+    "production",
+  );
+  try {
+    const stagingDependencies = dependencies(stagingDatabase, stagingCalls);
+    await runReleaseSurface(
+      [
+        "plan",
+        "--plan-out",
+        stagingPlanPath,
+        "--serving-compatibility-proof",
+        stagingProofPath,
+      ],
+      "staging",
+      stagingDependencies,
+    );
+    const stagingPlan = JSON.parse(
+      readFileSync(stagingPlanPath, "utf8"),
+    ) as {
+      readonly confirmation: string;
+      readonly mutationCheckpointPath: string;
+    };
+    await runReleaseSurface(
+      [
+        "execute",
+        "--plan",
+        stagingPlanPath,
+        "--confirm",
+        stagingPlan.confirmation,
+        "--review",
+        "operator:reviewer@example.com",
+        "--evidence",
+        stagingEvidencePath,
+      ],
+      "staging",
+      stagingDependencies,
+    );
+
+    const [startedLine, acceptedLine] = readFileSync(
+      stagingPlan.mutationCheckpointPath,
+      "utf8",
+    )
+      .trimEnd()
+      .split("\n");
+    const started = JSON.parse(startedLine!) as Record<string, unknown>;
+    const rewrittenCheckpoint = `${JSON.stringify({
+      recordedAt: started.recordedAt,
+      predecessorChallengeEvidenceDigest:
+        started.predecessorChallengeEvidenceDigest,
+      planConfirmation: started.planConfirmation,
+      outcome: started.outcome,
+      kind: started.kind,
+    })}\n${acceptedLine}\n`;
+    writeFileSync(
+      stagingPlan.mutationCheckpointPath,
+      rewrittenCheckpoint,
+      { mode: 0o600 },
+    );
+    const stagingEvidence = JSON.parse(
+      readFileSync(stagingEvidencePath, "utf8"),
+    ) as Record<string, unknown>;
+    stagingEvidence.mutationCheckpointDigest = `sha256:${createHash("sha256")
+      .update(rewrittenCheckpoint)
+      .digest("hex")}`;
+    writeFileSync(
+      stagingEvidencePath,
+      `${JSON.stringify(stagingEvidence, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+
+    await expect(
+      runReleaseSurface(
+        [
+          "plan",
+          "--plan-out",
+          productionPlanPath,
+          "--staging-plan",
+          stagingPlanPath,
+          "--staging-receipt",
+          stagingEvidencePath,
+          "--serving-compatibility-proof",
+          productionProofPath,
+        ],
+        "production",
+        dependencies(
+          productionDatabase,
+          productionCalls,
+          "production",
+          stagingDatabase,
+        ),
+      ),
+    ).rejects.toThrow(
+      "control_d1_schema_release_staging_receipt_authority_invalid",
+    );
+    expect(existsSync(productionPlanPath)).toBeFalse();
+  } finally {
+    stagingDatabase.close();
     productionDatabase.close();
   }
 });
@@ -1909,6 +2518,8 @@ test("production rejects a staging rehearsal that reused the same physical targe
           "plan",
           "--plan-out",
           productionPlanPath,
+          "--staging-plan",
+          stagingPlanPath,
           "--staging-receipt",
           stagingEvidencePath,
           "--serving-compatibility-proof",
@@ -1918,7 +2529,7 @@ test("production rejects a staging rehearsal that reused the same physical targe
         {
           ...dependencies(productionDatabase, productionCalls, "production"),
           env: {
-            TAKOSUMI_PLATFORM_MUTATION_AUTHORITY_DIR: AUTHORITY_DIRECTORY,
+            ...environment("staging"),
             TAKOSUMI_CONTROL_D1_PRODUCTION_CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID,
             TAKOSUMI_CONTROL_D1_PRODUCTION_DATABASE_ID: DATABASE_ID,
             TAKOSUMI_CONTROL_D1_PRODUCTION_CLOUDFLARE_API_TOKEN:
@@ -1994,6 +2605,8 @@ test("production rejects reused staging credential custody for a distinct physic
           "plan",
           "--plan-out",
           productionPlanPath,
+          "--staging-plan",
+          stagingPlanPath,
           "--staging-receipt",
           stagingEvidencePath,
           "--serving-compatibility-proof",
@@ -2003,7 +2616,7 @@ test("production rejects reused staging credential custody for a distinct physic
         {
           ...dependencies(productionDatabase, productionCalls, "production"),
           env: {
-            TAKOSUMI_PLATFORM_MUTATION_AUTHORITY_DIR: AUTHORITY_DIRECTORY,
+            ...environment("staging"),
             TAKOSUMI_CONTROL_D1_PRODUCTION_CLOUDFLARE_ACCOUNT_ID:
               PRODUCTION_ACCOUNT_ID,
             TAKOSUMI_CONTROL_D1_PRODUCTION_DATABASE_ID: PRODUCTION_DATABASE_ID,
@@ -2047,6 +2660,7 @@ test("recover leaves exact v66 without a fence untouched", async () => {
     );
     const plan = JSON.parse(readFileSync(planPath, "utf8")) as {
       readonly confirmation: string;
+      readonly mutationCheckpointPath: string;
     };
     stdout.length = 0;
     await runReleaseSurface(
@@ -2287,7 +2901,12 @@ test("recover releases only an exact active v67 fence after separate review", as
     const plan = JSON.parse(readFileSync(planPath, "utf8")) as {
       readonly confirmation: string;
       readonly manifestDigest: string;
+      readonly mutationCheckpointPath: string;
     };
+    writeStartedMutationCheckpoint(
+      plan.mutationCheckpointPath,
+      plan.confirmation,
+    );
     const candidate = await buildControlD1SchemaPlan();
     await applyControlD1Schema(database, candidate, {
       sourceCommit: COMMIT,
@@ -2384,7 +3003,16 @@ test("lost apply acknowledgement never permits a second apply and recover reads 
   let probeRecoveryTargetLock = false;
   let competingForwardMutations = 0;
   const proofPath = await servingCompatibilityProof(root);
-  const fetchWorker = workerFetch(calls);
+  const fetchWorker = workerFetch(
+    calls,
+    () => VERSION_ID,
+    () => DATABASE_ID,
+    () => "predeployed-bridge",
+    async () =>
+      (await readControlD1MigrationLedger(database)).at(-1)?.version === 67
+        ? 67
+        : 66,
+  );
   const deps: ControlD1SchemaReleaseDependencies = {
     ...dependencies(database, calls),
     fetch: async (input, init) => {
@@ -2554,12 +3182,17 @@ test("v67 inactive recovery refuses an unresolved official restore checkpoint", 
     );
     const plan = JSON.parse(readFileSync(planPath, "utf8")) as {
       readonly confirmation: string;
+      readonly mutationCheckpointPath: string;
     };
     const proof = JSON.parse(readFileSync(proofPath, "utf8")) as {
       readonly bridgePlanPath: string;
       readonly bridgePlanConfirmation: string;
     };
     const candidate = await buildControlD1SchemaPlan();
+    const releaseReadinessDigest = writeStartedMutationCheckpoint(
+      plan.mutationCheckpointPath,
+      plan.confirmation,
+    );
     await applyControlD1Schema(database, candidate, {
       sourceCommit: COMMIT,
       environment: "staging",
@@ -2571,6 +3204,7 @@ test("v67 inactive recovery refuses an unresolved official restore checkpoint", 
       databaseRole: "in_place",
       releasePolicy: "in_place",
       databaseId: DATABASE_ID,
+      releaseReadinessDigest,
     });
     appendPlatformRestoreFence(
       proof.bridgePlanPath,
@@ -2745,7 +3379,16 @@ test("v67 inactive recovery rejects serving bridge Version drift before ready ev
   let servingVersionId = VERSION_ID;
   const deps = {
     ...dependencies(database, calls),
-    fetch: workerFetch(calls, () => servingVersionId),
+    fetch: workerFetch(
+      calls,
+      () => servingVersionId,
+      () => DATABASE_ID,
+      () => "predeployed-bridge",
+      async () =>
+        (await readControlD1MigrationLedger(database)).at(-1)?.version === 67
+          ? 67
+          : 66,
+    ),
     write: () => {},
   };
   try {
@@ -2822,6 +3465,11 @@ test("v67 inactive recovery rejects serving bridge D1 binding drift before ready
       calls,
       () => VERSION_ID,
       () => servingDatabaseId,
+      () => "predeployed-bridge",
+      async () =>
+        (await readControlD1MigrationLedger(database)).at(-1)?.version === 67
+          ? 67
+          : 66,
     ),
     write: () => {},
   };

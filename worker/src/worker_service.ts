@@ -111,10 +111,11 @@ export async function createWorkerServiceApp(
   if (
     controlD1SchemaMode !== undefined &&
     controlD1SchemaMode !== "bootstrap" &&
-    controlD1SchemaMode !== "predeployed"
+    controlD1SchemaMode !== "predeployed" &&
+    controlD1SchemaMode !== "predeployed-bridge"
   ) {
     throw new TypeError(
-      "TAKOSUMI_CONTROL_D1_SCHEMA_MODE must be bootstrap or predeployed",
+      "TAKOSUMI_CONTROL_D1_SCHEMA_MODE must be bootstrap, predeployed, or predeployed-bridge",
     );
   }
   await initializeD1OpenTofuLedgerSchemaBinding(

@@ -312,6 +312,8 @@ export interface ControlD1SchemaApplyOptions {
   readonly releasePolicy?: ControlD1MaintenanceReleasePolicy;
   readonly databaseId?: string;
   readonly sourceExportSha256?: string;
+  /** Opaque plan/checkpoint binding retained in the durable release receipt. */
+  readonly releaseReadinessDigest?: string;
   /**
    * Explicit recovery for one already-active immediate-predecessor fence.
    * Both values must be copied from the retained predecessor transcript.
@@ -407,6 +409,12 @@ export async function applyControlD1Schema(
   plan: ControlD1SchemaPlan,
   options: ControlD1SchemaApplyOptions,
 ): Promise<ControlD1SchemaApplyResult> {
+  if (
+    options.releaseReadinessDigest !== undefined &&
+    !/^sha256:[0-9a-f]{64}$/u.test(options.releaseReadinessDigest)
+  ) {
+    throw new ControlD1SchemaError("release_readiness_digest_invalid");
+  }
   const before = await readControlD1MigrationLedger(database);
   const successorIdentity = {
     sourceCommit: options.sourceCommit,
@@ -457,11 +465,13 @@ export async function applyControlD1Schema(
   }
   if (!options.retainMaintenanceFence) {
     const releasedAt = options.releasedAt();
+    const releaseReadinessDigest = options.releaseReadinessDigest ?? null;
     try {
       await releaseControlD1MaintenanceFence(
         database,
         fence,
         releasedAt,
+        { releaseReadinessDigest },
       );
     } catch (error) {
       // A transport can lose the response after D1 committed the release
@@ -471,6 +481,7 @@ export async function applyControlD1Schema(
         database,
         fence,
         releasedAt,
+        releaseReadinessDigest,
       ))) {
         throw error;
       }
@@ -500,6 +511,7 @@ async function matchesExactInPlaceReleaseReceipt(
   database: D1Database,
   fence: ControlD1MaintenanceFence,
   releasedAt: string,
+  releaseReadinessDigest: string | null,
 ): Promise<boolean> {
   try {
     const receipt = await readControlD1MaintenanceReleaseReceiptDetails(database);
@@ -516,7 +528,7 @@ async function matchesExactInPlaceReleaseReceipt(
       (await digestControlD1MaintenanceFence(receipt.fence)) ===
         (await digestControlD1MaintenanceFence(fence)) &&
       receipt.releasedAt === releasedAt &&
-      receipt.releaseReadinessDigest === null &&
+      receipt.releaseReadinessDigest === releaseReadinessDigest &&
       guards.guardedTableCount === guards.tables.length &&
       guards.guardTriggerCount === 0 &&
       guards.triggers.length === 0 &&

@@ -853,6 +853,35 @@ test("control D1 apply converges a fresh database and records every version", as
   }
 });
 
+test("control D1 apply rejects a malformed release binding before schema mutation", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  try {
+    await expect(
+      applyControlD1Schema(database, plan, {
+        sourceCommit: SOURCE_COMMIT,
+        environment: "test",
+        activatedAt: NOW,
+        releasedAt: () => NOW,
+        maintenanceDrainMilliseconds: 0,
+        waitForRequestDrain: async () => {},
+        releaseReadinessDigest: "self-asserted",
+      }),
+    ).rejects.toThrow("release_readiness_digest_invalid");
+    expect(
+      await database
+        .prepare(
+          `select count(*) as count
+           from sqlite_master
+           where type = 'table' and name = 'schema_migrations'`,
+        )
+        .first<{ count: number }>(),
+    ).toEqual({ count: 0 });
+  } finally {
+    database.close();
+  }
+});
+
 test("control D1 v49 atomically preserves populated appended-order Interfaces through predecessor fence recovery", async () => {
   const plan = await buildControlD1SchemaPlan({
     throughMigrationVersion: 49,

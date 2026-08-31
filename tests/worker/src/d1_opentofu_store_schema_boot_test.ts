@@ -12,6 +12,7 @@ import {
   applyD1GuardedTableRenames,
   createCloudflareD1OpenTofuControlStore,
   ensureD1OpenTofuLedgerSchema,
+  readD1OpenTofuBridgeCompatibility,
   verifyD1OpenTofuLedgerSchemaPredeployed,
 } from "../../../worker/src/d1_opentofu_store.ts";
 import type { D1Database } from "../../../worker/src/bindings.ts";
@@ -759,6 +760,62 @@ test("predeployed verification accepts only the exact current v67 ledger", async
     .run();
   await expect(verifyD1OpenTofuLedgerSchemaPredeployed(extra)).rejects.toThrow(
     "D1 OpenTofu predeployed schema verification failed",
+  );
+});
+
+test("bridge compatibility accepts only the code-owned exact v66 and v67 ledgers", async () => {
+  const predecessor = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(predecessor, {
+    throughMigrationVersion: 66,
+  });
+  const predecessorCompatibility = await readD1OpenTofuBridgeCompatibility(
+    predecessor,
+  );
+  expect(predecessorCompatibility).toMatchObject({
+    accepted: { migrationVersion: 66 },
+    allowset: [
+      { migrationVersion: 66 },
+      { migrationVersion: 67 },
+    ],
+  });
+  expect(predecessorCompatibility.accepted.ledgerDigest).toMatch(
+    /^sha256:[0-9a-f]{64}$/u,
+  );
+
+  const candidate = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(candidate, {
+    throughMigrationVersion: 67,
+  });
+  const candidateCompatibility = await readD1OpenTofuBridgeCompatibility(
+    candidate,
+  );
+  expect(candidateCompatibility).toMatchObject({
+    accepted: { migrationVersion: 67 },
+    allowset: predecessorCompatibility.allowset,
+  });
+  expect(candidateCompatibility.accepted.ledgerDigest).not.toBe(
+    predecessorCompatibility.accepted.ledgerDigest,
+  );
+
+  const tooOld = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(tooOld, {
+    throughMigrationVersion: 65,
+  });
+  await expect(readD1OpenTofuBridgeCompatibility(tooOld)).rejects.toThrow(
+    "D1 OpenTofu bridge schema verification failed",
+  );
+
+  const extra = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(extra);
+  await extra
+    .prepare(
+      `insert into schema_migrations (version, name, checksum, applied_at)
+       values (68, 'unexpected', ?, '2026-08-30T00:00:00.000Z')`,
+    )
+    .bind(`sha256:${"f".repeat(64)}`)
+    .run();
+  await expect(readD1OpenTofuBridgeCompatibility(extra)).rejects.toThrow(
+    "D1 OpenTofu bridge schema verification failed",
   );
 });
 

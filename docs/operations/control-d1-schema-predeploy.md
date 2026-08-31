@@ -94,20 +94,24 @@ after v67 would not recover service.
 
 Deploy and read back a zero-downtime bridge before creating either schema
 plan. The bridge is built from the exact previously serving source plus only
-the reviewed compatibility change; in `predeployed` mode it accepts the exact
-v66 ledger or the exact candidate v67 ledger and rejects every other ledger.
+the reviewed compatibility change; in the bounded `predeployed-bridge` mode it
+accepts the exact v66 ledger or the exact candidate v67 ledger and rejects every
+other ledger. Normal `predeployed` mode remains strict to the current v67
+catalog and is not the bridge mode.
 The bridge owner must retain a mode-`0600` private compatibility proof with:
 
-- kind `takosumi.control-d1-serving-compatibility-proof@v1` and status
+- kind `takosumi.control-d1-serving-compatibility-proof@v2` and status
   `ready`;
 - the bridge source commit, absolute platform plan path, platform plan
-  confirmation, absolute raw platform ready-evidence path and digest,
-  independent reviewer, and proof confirmation;
+  confirmation and raw artifact digest, absolute raw platform ready-evidence
+  path and digest, independent reviewer, and proof confirmation;
 - the exact environment, Worker name, `TAKOSUMI_CONTROL_DB` binding, immutable
   serving Version, and target digest;
-- `schemaMode: predeployed`; and
-- ready v66 and v67 entries bound to the exact predecessor and candidate ledger
-  digests.
+- `schemaMode: predeployed-bridge`, the code-owned exact v66/v67 catalog digest,
+  and ready v66 and v67 entries bound to those exact ledger digests; and
+- a cache-free, random-nonce live challenge whose raw canonical response and
+  digest bind that same Version, the fixed `TAKOSUMI_CONTROL_DB` binding name,
+  every physical v66 D1 ledger row, and the exact dual-ledger allowset.
 
 Only the official read-only bridge-proof surfaces mint that artifact. For
 staging:
@@ -125,8 +129,12 @@ bun run deploy -- takosumi-control-d1-bridge-proof-staging create \
 Use `takosumi-control-d1-bridge-proof` for production. The producer validates
 the complete v5 bridge plan, its accepted forward checkpoint, the full raw
 platform ready evidence, canonical v66/v67 ledger digests, and the exact live
-immutable Version's D1 and `predeployed` schema-mode bindings. It then creates
-one absent single-link mode-`0600` proof. It makes no provider or D1 mutation.
+immutable Version's D1 and `predeployed-bridge` schema-mode bindings. It also
+challenges that Version through the public cache-free compatibility endpoint;
+the request carries no Cloudflare credential and the response must echo the
+fresh nonce, immutable Version, physical v66 ledger and exact code-owned
+v66/v67 allowset. It then creates one absent single-link mode-`0600` proof. It
+makes no provider or D1 mutation.
 A hand-authored JSON file, copied digest, incomplete release evidence, or
 Version-only assertion is not a valid producer path.
 
@@ -145,8 +153,15 @@ plan for another environment/source, or a bridge plan whose forward release is
 not accepted is insufficient.
 `execute` rereads the same single-link private file and independently requires
 the proof-bound immutable Version to remain the only 100-percent serving
-Version with the same D1 binding. A missing, edited, generic, v66-only, or
-different-Version proof fails before the mutation checkpoint. Execute and both
+Version with the same D1 binding. Both schema `plan` and the locked pre-mutation
+check issue their own fresh v66 challenge instead of trusting the proof's stored
+response. A missing, edited, generic, v66-only, or
+different-Version proof fails before the mutation checkpoint. After exact v67
+readback and before accepting the mutation checkpoint, `execute` challenges the
+same immutable Version again and requires the physical v67 ledger plus the same
+exact dual-ledger allowset. The ready receipt retains both challenge evidence
+objects, their response digests, the accepted checkpoint digest, and the durable
+maintenance-release receipt digest. Execute and both
 v67 recovery branches perform that final check while holding the same
 environment/official-Worker target-scoped inter-process lock used by platform
 forward and restore. They keep it through schema mutation or fence release,
@@ -154,6 +169,15 @@ exact readback, and ready evidence, so a later candidate Worker cannot replace
 the bridge mid-transition. The bridge deployment and proof producer are
 separately authorized prerequisites; until they exist, this lane intentionally
 cannot plan.
+
+The in-place fence release also persists an opaque `releaseReadinessDigest`
+computed from the exact schema-plan confirmation and the fsynced pre-apply
+checkpoint record, which itself retains the raw predecessor-challenge evidence
+digest. The accepted checkpoint record similarly retains the raw
+candidate-challenge evidence digest. Production recomputes both bindings from
+the retained receipt/checkpoint and requires the live durable release receipt
+to match. An old v67 readback/release receipt therefore cannot be combined with
+newly hand-written plan, checkpoint, challenge, or receipt JSON.
 
 That target authority lives under
 `TAKOSUMI_PLATFORM_MUTATION_AUTHORITY_DIR`, an explicit durable physical
@@ -274,7 +298,16 @@ restore authorities remain held. A timeout or lost acknowledgement goes to
 `recover`; never rerun `execute`.
 
 Production planning consumes only the exact ready execution receipt from that
-fresh isolated staging rehearsal, same source, and canonical schema:
+fresh isolated staging rehearsal, same source, and canonical schema. It rereads
+the complete confirmed staging plan, its validated bridge plan/proof/raw
+platform evidence, the two-record mutation checkpoint ending in accepted
+`[67]`, the exact live v67 D1 schema, the durable released-fence identity, and a
+fresh candidate challenge against the same Version. The production plan seals
+the staging plan, checkpoint and receipt paths/digests/confirmation, and
+production `execute` independently repeats that authority check. A JSON object
+that merely self-reports the expected fields or digests is not a receipt. The
+durable released-fence receipt must also carry the release-readiness digest
+bound to that checkpoint's original pre-apply record:
 
 ```bash
 export TAKOSUMI_CONTROL_D1_PRODUCTION_CLOUDFLARE_ACCOUNT_ID=...
@@ -285,6 +318,7 @@ bun run deploy -- takosumi-control-d1-schema plan \
   --plan-out "$PRIVATE_SCHEMA_RELEASE_DIR/production-plan.json" \
   --serving-compatibility-proof \
     "$PRIVATE_SCHEMA_RELEASE_DIR/production-bridge-compatibility.json" \
+  --staging-plan "$PRIVATE_SCHEMA_RELEASE_DIR/staging-plan.json" \
   --staging-receipt "$PRIVATE_SCHEMA_RELEASE_DIR/staging-receipt.json"
 
 production_confirmation="$(
@@ -321,7 +355,8 @@ Recovery always reads the authoritative D1 ledger and maintenance state before
 deciding. Exact v66/absent recovery then acquires the exact schema target lock,
 rereads ledger and maintenance state under it, and only then may reconcile a
 crash-before-apply owner as `untouched`. Before exact v67/inactive can emit
-ready, and before an exact active
+ready it requires the retained pre-apply checkpoint and matching durable
+release-readiness digest. Before an exact active
 fence can be released, recovery acquires the same target lock and then the
 bridge plan's restore lock, rereads the retained proof and exact live Worker
 Version/D1 binding, and requires the official platform restore checkpoint to
@@ -398,7 +433,9 @@ current checkout is clean and its actual `HEAD` equals
 
 ## Operator configuration
 
-Remote commands read only the selected environment's variables:
+Staging commands read the staging variables. Production plan/execute also read
+the staging variables because they independently revalidate the sealed
+rehearsal authority before production mutation:
 
 ```text
 TAKOSUMI_CONTROL_D1_STAGING_CLOUDFLARE_ACCOUNT_ID
@@ -419,9 +456,12 @@ remote database.
 The REST adapter has a fixed `https://api.cloudflare.com` origin. Do not add an
 operator-configurable API origin or pass a token on the command line.
 
-After this gate is part of the host's mandatory promotion sequence, set the
-platform composition's `TAKOSUMI_CONTROL_D1_SCHEMA_MODE` to `predeployed`.
-That mode performs one strict read-only check of the complete migration ledger
+Use `predeployed-bridge` only for the reviewed v66-to-v67 bridge window. Its
+allowset is code-owned and exactly two entries long; no environment value or
+challenge response can widen it. After v67 is accepted and the candidate Worker
+has been read back, set the ordinary platform composition's
+`TAKOSUMI_CONTROL_D1_SCHEMA_MODE` to `predeployed`. That mode performs one strict
+read-only check of the complete current v67 migration ledger
 per store instance and never executes schema DDL from a request. Every store
 operation additionally checks the durable maintenance fence, so a warmed
 isolate also fails closed while predeploy is active. It fails closed if a

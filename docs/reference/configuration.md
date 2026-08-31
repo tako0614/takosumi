@@ -137,7 +137,7 @@ Takosumi OSS deployment path and do not create a FormActivation or Offering.
 
 | 変数                                   | 必須                           | 既定値      | 決めること                                                                                                                                   |
 | -------------------------------------- | ------------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TAKOSUMI_CONTROL_D1_SCHEMA_MODE`      | 任意                           | `bootstrap` | `bootstrap` はリクエスト時にスキーマを用意します。`predeployed` はそれを止め、マイグレーション台帳が揃っていることを読み取り専用で確かめます |
+| `TAKOSUMI_CONTROL_D1_SCHEMA_MODE`      | 任意                           | `bootstrap` | `bootstrap` はリクエスト時にスキーマを用意します。`predeployed` はそれを止め、現行マイグレーション台帳を厳密に読み取り検証します。`predeployed-bridge` は公式 v66/v67 移行中だけ使う exact two-ledger bridge です |
 | `TAKOSUMI_PRODUCTION_HARDENING_GATE`   | 任意                           | `observe`   | `observe` は不足を報告するだけです。`enforce` は証跡が欠けているあいだ内部の点検 endpoint が `503` を返します                                |
 | `TAKOSUMI_PLATFORM_HARDENING_EVIDENCE` | `enforce` のとき必須           | なし        | 上の点検に答える非 secret の JSON                                                                                                            |
 | `TAKOSUMI_RELEASE_ACTIVATOR_URL`       | 任意                           | なし        | apply の後にアプリ公開を引き受ける webhook の URL                                                                                            |

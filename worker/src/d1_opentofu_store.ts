@@ -885,7 +885,10 @@ function d1WorkspaceUpdatedDescKeysetWhere(
   return filter === undefined ? keyset : and(filter, keyset);
 }
 
-export type D1OpenTofuControlSchemaMode = "bootstrap" | "predeployed";
+export type D1OpenTofuControlSchemaMode =
+  | "bootstrap"
+  | "predeployed"
+  | "predeployed-bridge";
 
 export interface CloudflareD1OpenTofuControlStoreOptions {
   readonly schemaMode?: D1OpenTofuControlSchemaMode;
@@ -915,6 +918,8 @@ type D1PredeployedWorkspaceRow = Pick<
 // continues to fail closed immediately.
 const verifiedPredeployedD1Bindings = new WeakSet<object>();
 const predeployedD1SchemaReadiness = new WeakMap<object, Promise<void>>();
+const verifiedBridgeD1Bindings = new WeakSet<object>();
+const bridgeD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 const bootstrapD1SchemaReadiness = new WeakMap<object, Promise<void>>();
 
 function ensurePredeployedD1SchemaReady(db: D1Database): Promise<void> {
@@ -933,6 +938,25 @@ function ensurePredeployedD1SchemaReady(db: D1Database): Promise<void> {
     });
   readiness = attempt;
   predeployedD1SchemaReadiness.set(db, readiness);
+  return readiness;
+}
+
+function ensureBridgeD1SchemaReady(db: D1Database): Promise<void> {
+  if (verifiedBridgeD1Bindings.has(db)) return Promise.resolve();
+  let readiness = bridgeD1SchemaReadiness.get(db);
+  if (readiness) return readiness;
+  const attempt = readD1OpenTofuBridgeCompatibility(db)
+    .then(() => {
+      verifiedBridgeD1Bindings.add(db);
+    })
+    .catch((error: unknown) => {
+      if (bridgeD1SchemaReadiness.get(db) === attempt) {
+        bridgeD1SchemaReadiness.delete(db);
+      }
+      throw error;
+    });
+  readiness = attempt;
+  bridgeD1SchemaReadiness.set(db, readiness);
   return readiness;
 }
 
@@ -959,9 +983,19 @@ export function initializeD1OpenTofuLedgerSchemaBinding(
   db: D1Database,
   schemaMode: D1OpenTofuControlSchemaMode,
 ): Promise<void> {
-  return schemaMode === "predeployed"
-    ? ensurePredeployedD1SchemaReady(db)
-    : ensureBootstrapD1SchemaReady(db);
+  if (schemaMode === "predeployed") {
+    return ensurePredeployedD1SchemaReady(db);
+  }
+  if (schemaMode === "predeployed-bridge") {
+    return ensureBridgeD1SchemaReady(db);
+  }
+  return ensureBootstrapD1SchemaReady(db);
+}
+
+function isPredeployedD1SchemaMode(
+  schemaMode: D1OpenTofuControlSchemaMode,
+): boolean {
+  return schemaMode === "predeployed" || schemaMode === "predeployed-bridge";
 }
 
 /**
@@ -1021,8 +1055,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     this.#orm = drizzle(db, { schema });
     this.#schemaMode = options.schemaMode ?? "bootstrap";
     this.#predeployedSchemaVerified =
-      this.#schemaMode === "predeployed" &&
-      verifiedPredeployedD1Bindings.has(db);
+      (this.#schemaMode === "predeployed" &&
+        verifiedPredeployedD1Bindings.has(db)) ||
+      (this.#schemaMode === "predeployed-bridge" &&
+        verifiedBridgeD1Bindings.has(db));
   }
 
   /**
@@ -1656,7 +1692,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async getWorkspace(id: string): Promise<Workspace | undefined> {
-    if (this.#schemaMode === "predeployed") {
+    if (isPredeployedD1SchemaMode(this.#schemaMode)) {
       return await this.#getPredeployedWorkspace(id);
     }
     return await this.#drizzleFirstJson<Workspace>(
@@ -1897,7 +1933,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     accountId: string,
     params: AccountWorkspaceListParams,
   ): Promise<AccountWorkspacePage> {
-    if (this.#schemaMode === "predeployed") {
+    if (isPredeployedD1SchemaMode(this.#schemaMode)) {
       return await this.#listPredeployedWorkspacesForAccountPage(
         accountId,
         params,
@@ -2155,9 +2191,14 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       readiness.migrations_json,
       "migration ledger",
     );
-    await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations);
+    if (this.#schemaMode === "predeployed-bridge") {
+      await validateD1OpenTofuBridgeLedgerSchema(columns, migrations);
+      verifiedBridgeD1Bindings.add(this.db);
+    } else {
+      await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations);
+      verifiedPredeployedD1Bindings.add(this.db);
+    }
     this.#predeployedSchemaVerified = true;
-    verifiedPredeployedD1Bindings.add(this.db);
     this.#initialized = Promise.resolve();
   }
 
@@ -5050,10 +5091,12 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     // promise stays cached and bootstrap runs exactly once.
     if (this.#initialized === undefined) {
       const attempt = (
-        this.#schemaMode === "predeployed"
+        isPredeployedD1SchemaMode(this.#schemaMode)
           ? Promise.all([
               assertMaintenanceInactive(),
-              ensurePredeployedD1SchemaReady(this.db),
+              this.#schemaMode === "predeployed-bridge"
+                ? ensureBridgeD1SchemaReady(this.db)
+                : ensurePredeployedD1SchemaReady(this.db),
             ]).then(() => {
               this.#predeployedSchemaVerified = true;
             })
@@ -10238,26 +10281,69 @@ type D1SchemaMigrationRow = {
 export async function verifyD1OpenTofuLedgerSchemaPredeployed(
   db: D1Database,
 ): Promise<void> {
-  let columns: readonly D1TableInfoRow[];
-  let rows: readonly D1SchemaMigrationRow[];
+  let evidence: Awaited<ReturnType<typeof readD1SchemaMigrationEvidence>>;
   try {
-    const [columnRows, result] = await Promise.all([
-      d1ColumnInfo(db, "schema_migrations"),
-      db
-        .prepare(
-          `select version, name, checksum, applied_at
-           from schema_migrations
-           order by version`,
-        )
-        .all<D1SchemaMigrationRow>(),
-    ]);
-    columns = columnRows;
-    rows = result.results ?? [];
+    evidence = await readD1SchemaMigrationEvidence(db);
   } catch {
     throw new Error("D1 OpenTofu predeployed schema verification failed");
   }
 
-  await validateD1OpenTofuLedgerSchemaPredeployed(columns, rows);
+  await validateD1OpenTofuLedgerSchemaPredeployed(
+    evidence.columns,
+    evidence.rows,
+  );
+}
+
+export interface D1OpenTofuBridgeCompatibility {
+  readonly ledger: readonly {
+    readonly version: number;
+    readonly name: string;
+    readonly checksum: string;
+  }[];
+  readonly accepted: {
+    readonly migrationVersion: 66 | 67;
+    readonly ledgerDigest: string;
+  };
+  readonly allowset: readonly [
+    { readonly migrationVersion: 66; readonly ledgerDigest: string },
+    { readonly migrationVersion: 67; readonly ledgerDigest: string },
+  ];
+}
+
+/**
+ * Read the physical ledger and accept only the two code-owned bridge states.
+ * The allowset is derived from the immutable migration catalog and its exact
+ * checksums; no environment value or caller-provided digest can widen it.
+ */
+export async function readD1OpenTofuBridgeCompatibility(
+  db: D1Database,
+): Promise<D1OpenTofuBridgeCompatibility> {
+  try {
+    const evidence = await readD1SchemaMigrationEvidence(db);
+    return await validateD1OpenTofuBridgeLedgerSchema(
+      evidence.columns,
+      evidence.rows,
+    );
+  } catch {
+    throw new Error("D1 OpenTofu bridge schema verification failed");
+  }
+}
+
+async function readD1SchemaMigrationEvidence(db: D1Database): Promise<{
+  readonly columns: readonly D1TableInfoRow[];
+  readonly rows: readonly D1SchemaMigrationRow[];
+}> {
+  const [columns, result] = await Promise.all([
+    d1ColumnInfo(db, "schema_migrations"),
+    db
+      .prepare(
+        `select version, name, checksum, applied_at
+         from schema_migrations
+         order by version`,
+      )
+      .all<D1SchemaMigrationRow>(),
+  ]);
+  return { columns, rows: result.results ?? [] };
 }
 
 async function validateD1OpenTofuLedgerSchemaPredeployed(
@@ -10282,6 +10368,76 @@ async function validateD1OpenTofuLedgerSchemaPredeployed(
       throw new Error("D1 OpenTofu predeployed schema verification failed");
     }
   }
+}
+
+async function validateD1OpenTofuBridgeLedgerSchema(
+  columns: readonly D1TableInfoRow[],
+  rows: readonly D1SchemaMigrationRow[],
+): Promise<D1OpenTofuBridgeCompatibility> {
+  assertD1SchemaMigrationLedgerShape(columns);
+  async function compatibilityAt<Version extends 66 | 67>(
+    migrationVersion: Version,
+  ) {
+    const migrations = D1_OPEN_TOFU_SCHEMA_MIGRATIONS.filter(
+      (migration) => migration.version <= migrationVersion,
+    );
+    if (
+      migrations.length === 0 ||
+      migrations.at(-1)?.version !== migrationVersion
+    ) {
+      throw new Error("D1 OpenTofu bridge schema verification failed");
+    }
+    const ledger = await Promise.all(
+      migrations.map(async (migration) => ({
+        version: migration.version,
+        name: migration.name,
+        checksum: await d1OpenTofuSchemaMigrationChecksum(migration),
+      })),
+    );
+    return {
+      migrationVersion,
+      ledger,
+      ledgerDigest: await sha256Digest(JSON.stringify(ledger)),
+    };
+  }
+  const allowset = await Promise.all([
+    compatibilityAt(66),
+    compatibilityAt(67),
+  ]);
+  const accepted = allowset.find(
+    (candidate) =>
+      JSON.stringify(
+        rows.map(({ version, name, checksum }) => ({
+          version,
+          name,
+          checksum,
+        })),
+      ) === JSON.stringify(candidate.ledger),
+  );
+  if (!accepted) {
+    throw new Error("D1 OpenTofu bridge schema verification failed");
+  }
+  return {
+    ledger: rows.map(({ version, name, checksum }) => ({
+      version,
+      name,
+      checksum,
+    })),
+    accepted: {
+      migrationVersion: accepted.migrationVersion,
+      ledgerDigest: accepted.ledgerDigest,
+    },
+    allowset: [
+      {
+        migrationVersion: 66,
+        ledgerDigest: allowset[0].ledgerDigest,
+      },
+      {
+        migrationVersion: 67,
+        ledgerDigest: allowset[1].ledgerDigest,
+      },
+    ],
+  };
 }
 
 let d1OpenTofuSchemaMigrationChecksums: Promise<readonly string[]> | undefined;

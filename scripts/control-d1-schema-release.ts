@@ -35,9 +35,11 @@ import {
   readControlD1MigrationLedger,
   verifyControlD1Schema,
 } from "../deploy/platform/control_d1_schema.ts";
+import { CONTROL_D1_BRIDGE_CHALLENGE_PATH } from "../deploy/platform/control_d1_bridge_challenge.ts";
 import { CloudflareControlD1RestDatabase } from "../deploy/platform/control_d1_schema_rest.ts";
 import {
   releaseControlD1MaintenanceFence,
+  readControlD1MaintenanceReleaseReceiptDetails,
   type ControlD1MaintenanceFence,
 } from "../worker/src/d1_schema_maintenance.ts";
 import {
@@ -47,6 +49,7 @@ import {
   platformTargetMutationIdentityFromEnvironment,
   platformTargetMutationAuthorityDirectoryIdentityDigest,
   platformTargetMutationLockPath,
+  platformTargetForEnvironment,
   readPlatformReleaseReadyEvidenceAuthority,
   readPlatformReleasePlanMutationState,
   retirePlatformRestoreForControlD1Schema,
@@ -114,6 +117,7 @@ type PlanOptions = Readonly<{
   action: "plan";
   planOut: string;
   servingCompatibilityProof: string;
+  stagingPlan?: string;
   stagingReceipt?: string;
 }>;
 
@@ -137,7 +141,7 @@ type RecoverOptions = Readonly<{
 type Options = PlanOptions | ExecuteOptions | RecoverOptions;
 
 interface ControlD1SchemaReleasePlan {
-  readonly kind: "takosumi.control-d1-schema-release-plan@v1";
+  readonly kind: "takosumi.control-d1-schema-release-plan@v2";
   readonly createdAt: string;
   readonly environment: ControlD1SchemaReleaseEnvironment;
   readonly sourceCommit: string;
@@ -177,6 +181,12 @@ interface ControlD1SchemaReleasePlan {
   readonly servingCompatibilityProofPath: string;
   readonly servingCompatibilityProofDigest: string;
   readonly servingCompatibilityProofConfirmation: string;
+  readonly predecessorCompatibilityChallenge: ControlD1BridgeChallengeEvidence;
+  readonly stagingRehearsalPlanPath: string | null;
+  readonly stagingRehearsalPlanDigest: string | null;
+  readonly stagingRehearsalPlanConfirmation: string | null;
+  readonly stagingRehearsalCheckpointDigest: string | null;
+  readonly stagingRehearsalReceiptPath: string | null;
   readonly stagingRehearsalReceiptDigest: string | null;
   readonly stagingRehearsalTarget: {
     readonly accountId: string;
@@ -190,8 +200,34 @@ interface ControlD1SchemaReleasePlan {
   readonly confirmation: string;
 }
 
+interface ControlD1BridgeChallengeResponse {
+  readonly kind: "takosumi.control-d1-schema-compatibility-challenge@v1";
+  readonly status: "ready";
+  readonly nonce: string;
+  readonly environment: ControlD1SchemaReleaseEnvironment;
+  readonly workerVersionId: string;
+  readonly bindingName: "TAKOSUMI_CONTROL_DB";
+  readonly schemaMode: "predeployed-bridge";
+  readonly ledger: readonly ControlD1MigrationLedgerRow[];
+  readonly accepted: {
+    readonly migrationVersion: 66 | 67;
+    readonly ledgerDigest: string;
+  };
+  readonly allowset: readonly [
+    { readonly migrationVersion: 66; readonly ledgerDigest: string },
+    { readonly migrationVersion: 67; readonly ledgerDigest: string },
+  ];
+}
+
+interface ControlD1BridgeChallengeEvidence {
+  readonly kind: "takosumi.control-d1-schema-compatibility-challenge-evidence@v1";
+  readonly observedAt: string;
+  readonly responseDigest: string;
+  readonly response: ControlD1BridgeChallengeResponse;
+}
+
 interface ControlD1ServingCompatibilityProof {
-  readonly kind: "takosumi.control-d1-serving-compatibility-proof@v1";
+  readonly kind: "takosumi.control-d1-serving-compatibility-proof@v2";
   readonly status: "ready";
   readonly completedAt: string;
   readonly environment: ControlD1SchemaReleaseEnvironment;
@@ -200,11 +236,14 @@ interface ControlD1ServingCompatibilityProof {
   readonly bridgePlanConfirmation: string;
   readonly bridgeReleaseEvidencePath: string;
   readonly bridgeReleaseEvidenceDigest: string;
+  readonly bridgePlanDigest: string;
   readonly workerName: string;
   readonly bindingName: "TAKOSUMI_CONTROL_DB";
   readonly servingVersionId: string;
   readonly targetDigest: string;
-  readonly schemaMode: "predeployed";
+  readonly schemaMode: "predeployed-bridge";
+  readonly compatibilityCatalogDigest: string;
+  readonly predecessorChallenge: ControlD1BridgeChallengeEvidence;
   readonly predecessor: {
     readonly migrationVersion: 66;
     readonly ledgerDigest: string;
@@ -316,6 +355,16 @@ export async function runControlD1ServingCompatibilityProof(
     buildControlD1SchemaPlan({ throughMigrationVersion: 66 }),
   ]);
   assertTask0042Candidate(candidate, predecessor);
+  const predecessorChallenge = await readControlD1BridgeChallenge(
+    environment,
+    serving.versionId,
+    predecessor.ledgerDigest,
+    candidate.ledgerDigest,
+    66,
+    dependencies.fetch ?? fetch,
+    dependencies.now ?? now,
+    "control_d1_serving_compatibility_proof_challenge_invalid",
+  );
   const targetDigest = digestJson({
     environment,
     accountId: credentials.accountId,
@@ -324,8 +373,12 @@ export async function runControlD1ServingCompatibilityProof(
     bindingName: target.bindingName,
     servingVersionId: serving.versionId,
   });
+  const compatibilityCatalogDigest = controlD1CompatibilityCatalogDigest(
+    predecessor.ledgerDigest,
+    candidate.ledgerDigest,
+  );
   const identity = {
-    kind: "takosumi.control-d1-serving-compatibility-proof@v1" as const,
+    kind: "takosumi.control-d1-serving-compatibility-proof@v2" as const,
     status: "ready" as const,
     completedAt: validTimestamp((dependencies.now ?? now)()),
     environment,
@@ -334,11 +387,14 @@ export async function runControlD1ServingCompatibilityProof(
     bridgePlanConfirmation: bridge.authority.confirmation,
     bridgeReleaseEvidencePath: options.bridgeEvidence,
     bridgeReleaseEvidenceDigest: evidence.digest,
+    bridgePlanDigest: digestBytes(readStablePrivateBytes(options.bridgePlan)),
     workerName: target.workerName,
     bindingName: target.bindingName,
     servingVersionId: serving.versionId,
     targetDigest,
     schemaMode: serving.schemaMode,
+    compatibilityCatalogDigest,
+    predecessorChallenge,
     predecessor: {
       migrationVersion: 66 as const,
       ledgerDigest: predecessor.ledgerDigest,
@@ -424,6 +480,7 @@ async function recover(
     servingCompatibilityProofPath: plan.servingCompatibilityProofPath,
     bridgeReleaseEvidencePath: plan.bridgeReleaseEvidencePath,
     evidencePath: options.evidence,
+    ...stagingArtifactPaths(plan),
   });
   const credentials = releaseCredentials(
     environment,
@@ -534,6 +591,36 @@ async function recover(
       targetMutationTarget,
       schemaTargetMutationLockRequest(plan, "recover"),
       async () => {
+        let startedMutationCheckpoint: ReturnType<
+          typeof readStartedMutationCheckpoint
+        >;
+        try {
+          startedMutationCheckpoint = readStartedMutationCheckpoint(
+            plan.mutationCheckpointPath,
+            plan.confirmation,
+          );
+          const maintenanceRelease =
+            await readControlD1MaintenanceReleaseReceiptDetails(
+              remote.database,
+            );
+          if (
+            maintenanceRelease === null ||
+            !fenceMatchesPlan(maintenanceRelease.fence, plan) ||
+            maintenanceRelease.releaseReadinessDigest !==
+              startedMutationCheckpoint.releaseReadinessDigest
+          ) {
+            throw new Error("release_receipt_invalid");
+          }
+        } catch {
+          await blockRecovery(
+            options,
+            plan,
+            ledger,
+            maintenance.status,
+            dependencies,
+            "control_d1_schema_release_recovery_release_receipt_invalid",
+          );
+        }
         await assertRecoveryServingCompatibility(
           options,
           plan,
@@ -639,6 +726,27 @@ async function recover(
       targetMutationTarget,
       schemaTargetMutationLockRequest(plan, "recover"),
       async () => {
+        let startedMutationCheckpoint: ReturnType<
+          typeof readStartedMutationCheckpoint
+        >;
+        try {
+          startedMutationCheckpoint = readStartedMutationCheckpoint(
+            plan.mutationCheckpointPath,
+            plan.confirmation,
+          );
+          if (startedMutationCheckpoint.acceptedAt !== undefined) {
+            throw new Error("active_checkpoint_already_accepted");
+          }
+        } catch {
+          await blockRecovery(
+            options,
+            plan,
+            ledger,
+            maintenance.status,
+            dependencies,
+            "control_d1_schema_release_recovery_checkpoint_invalid",
+          );
+        }
         await assertRecoveryServingCompatibility(
           options,
           plan,
@@ -676,6 +784,10 @@ async function recover(
             remote.database,
             stateImmediatelyBeforeRelease.fence,
             validTimestamp((dependencies.now ?? now)()),
+            {
+              releaseReadinessDigest:
+                startedMutationCheckpoint.releaseReadinessDigest,
+            },
           );
         } catch {
           // The release batch may have committed before transport acknowledgement
@@ -708,6 +820,23 @@ async function recover(
           );
         }
         await assertExactCandidate(remote.database, candidate, false);
+        const maintenanceRelease =
+          await readControlD1MaintenanceReleaseReceiptDetails(remote.database);
+        if (
+          maintenanceRelease === null ||
+          !fenceMatchesPlan(maintenanceRelease.fence, plan) ||
+          maintenanceRelease.releaseReadinessDigest !==
+            startedMutationCheckpoint.releaseReadinessDigest
+        ) {
+          await blockRecovery(
+            options,
+            plan,
+            candidate.migrations,
+            releasedState.status,
+            dependencies,
+            "control_d1_schema_release_recovery_release_receipt_invalid",
+          );
+        }
         writeRecoveryEvidence(options.evidence, {
           status: "ready",
           environment,
@@ -848,6 +977,27 @@ async function assertRecoveryServingCompatibility(
           );
         }
         try {
+          await readControlD1BridgeChallenge(
+            plan.environment,
+            serving.versionId,
+            predecessor.ledgerDigest,
+            candidate.ledgerDigest,
+            67,
+            dependencies.fetch ?? fetch,
+            dependencies.now ?? now,
+            "control_d1_schema_release_recovery_serving_challenge_invalid",
+          );
+        } catch {
+          await blockRecovery(
+            options,
+            plan,
+            ledger,
+            maintenanceStatus,
+            dependencies,
+            "control_d1_schema_release_recovery_serving_challenge_invalid",
+          );
+        }
+        try {
           assertPlatformRestoreReconciled(
             compatibility.bridgePlanPath,
             compatibility.bridgePlanConfirmation,
@@ -915,6 +1065,7 @@ async function execute(
     servingCompatibilityProofPath: plan.servingCompatibilityProofPath,
     bridgeReleaseEvidencePath: plan.bridgeReleaseEvidencePath,
     evidencePath: options.evidence,
+    ...stagingArtifactPaths(plan),
   });
   assertReviewer(options.reviewer, plan.sourceAuthorEmail);
   const source = await (dependencies.inspectSource ?? inspectSourceCheckout)();
@@ -939,6 +1090,13 @@ async function execute(
     plan,
     candidate,
     predecessor,
+  );
+  await assertPlanStagingReceiptAuthority(
+    plan,
+    candidate,
+    source,
+    credentials,
+    dependencies,
   );
   await withPlatformTargetMutationLock(
     targetMutationTarget,
@@ -976,6 +1134,24 @@ async function execute(
           if (serving.versionId !== plan.target.servingVersionId) {
             throw new Error("control_d1_schema_release_serving_version_drift");
           }
+          const executionPredecessorChallenge =
+            await readControlD1BridgeChallenge(
+            environment,
+            serving.versionId,
+            predecessor.ledgerDigest,
+            candidate.ledgerDigest,
+            66,
+            dependencies.fetch ?? fetch,
+            dependencies.now ?? now,
+            "control_d1_schema_release_serving_compatibility_challenge_invalid",
+          );
+          await assertPlanStagingReceiptAuthority(
+            plan,
+            candidate,
+            source,
+            credentials,
+            dependencies,
+          );
           await assertExactPredecessor(remote.database, predecessor, plan);
           const bookmark = validBookmark(await remote.readTimeTravelBookmark());
           if (bookmark !== plan.timeTravelBookmark) {
@@ -1019,12 +1195,19 @@ async function execute(
             plan.mutationCheckpointPath,
             new TextEncoder().encode(
               `${JSON.stringify({
-                kind: "takosumi.control-d1-schema-mutation-checkpoint@v1",
+                kind: "takosumi.control-d1-schema-mutation-checkpoint@v2",
                 outcome: "unknown",
                 planConfirmation: plan.confirmation,
+                predecessorChallengeEvidenceDigest: digestJson(
+                  executionPredecessorChallenge,
+                ),
                 recordedAt: validTimestamp((dependencies.now ?? now)()),
               })}\n`,
             ),
+          );
+          const startedMutationCheckpoint = readStartedMutationCheckpoint(
+            plan.mutationCheckpointPath,
+            plan.confirmation,
           );
 
           let applied: Awaited<ReturnType<typeof applyControlD1Schema>>;
@@ -1044,6 +1227,8 @@ async function execute(
                 databaseRole: "in_place",
                 releasePolicy: "in_place",
                 databaseId: credentials.databaseId,
+                releaseReadinessDigest:
+                  startedMutationCheckpoint.releaseReadinessDigest,
               },
             );
           } catch (error) {
@@ -1107,22 +1292,62 @@ async function execute(
                 "control_d1_schema_release_final_verification_failed",
               );
             }
+            const candidateChallenge = await readControlD1BridgeChallenge(
+              environment,
+              serving.versionId,
+              predecessor.ledgerDigest,
+              candidate.ledgerDigest,
+              67,
+              dependencies.fetch ?? fetch,
+              dependencies.now ?? now,
+              "control_d1_schema_release_serving_compatibility_challenge_invalid",
+            );
+            const maintenanceRelease =
+              await readControlD1MaintenanceReleaseReceiptDetails(
+                remote.database,
+              );
+            if (
+              maintenanceRelease === null ||
+              !fenceMatchesPlan(maintenanceRelease.fence, plan) ||
+              maintenanceRelease.releaseReadinessDigest !==
+                startedMutationCheckpoint.releaseReadinessDigest
+            ) {
+              throw new Error(
+                "control_d1_schema_release_maintenance_release_receipt_invalid",
+              );
+            }
             appendPrivate(
               plan.mutationCheckpointPath,
               new TextEncoder().encode(
                 `${JSON.stringify({
-                  kind: "takosumi.control-d1-schema-mutation-checkpoint@v1",
+                  kind: "takosumi.control-d1-schema-mutation-checkpoint@v2",
                   outcome: "accepted",
                   planConfirmation: plan.confirmation,
                   appliedMigrationVersions: [67],
+                  candidateChallengeEvidenceDigest:
+                    digestJson(candidateChallenge),
                   recordedAt: validTimestamp((dependencies.now ?? now)()),
                 })}\n`,
               ),
             );
+            const acceptedMutationCheckpoint = readAcceptedMutationCheckpoint(
+              plan.mutationCheckpointPath,
+              plan.confirmation,
+            );
+            const completedAt = validTimestamp((dependencies.now ?? now)());
+            if (
+              Date.parse(maintenanceRelease.releasedAt) >
+                Date.parse(completedAt) ||
+              Date.parse(candidateChallenge.observedAt) > Date.parse(completedAt)
+            ) {
+              throw new Error(
+                "control_d1_schema_release_evidence_time_invalid",
+              );
+            }
             const evidence = {
-              kind: "takosumi.control-d1-schema-release-evidence@v1" as const,
+              kind: "takosumi.control-d1-schema-release-evidence@v2" as const,
               status: "ready" as const,
-              completedAt: validTimestamp((dependencies.now ?? now)()),
+              completedAt,
               environment,
               sourceCommit: plan.sourceCommit,
               planConfirmation: plan.confirmation,
@@ -1136,6 +1361,13 @@ async function execute(
               timeTravelBookmarkDigest: plan.timeTravelBookmarkDigest,
               servingCompatibilityProofDigest:
                 plan.servingCompatibilityProofDigest,
+              compatibilityCatalogDigest:
+                compatibility.compatibilityCatalogDigest,
+              predecessorChallenge: executionPredecessorChallenge,
+              candidateChallenge,
+              mutationCheckpointDigest: acceptedMutationCheckpoint.digest,
+              maintenanceReleaseReceiptDigest:
+                digestJson(maintenanceRelease),
               stagingRehearsalReceiptDigest: plan.stagingRehearsalReceiptDigest,
               manifestDigest: plan.manifestDigest,
               schemaDigest: plan.schemaDigest,
@@ -1336,6 +1568,17 @@ async function createPlan(
         ),
     },
   );
+  const predecessorCompatibilityChallenge =
+    await readControlD1BridgeChallenge(
+      environment,
+      serving.versionId,
+      predecessor.ledgerDigest,
+      candidate.ledgerDigest,
+      66,
+      dependencies.fetch ?? fetch,
+      dependencies.now ?? now,
+      "control_d1_schema_release_serving_compatibility_challenge_invalid",
+    );
   const credentialDigest = digestJson({
     environment,
     accountId: credentials.accountId,
@@ -1345,7 +1588,8 @@ async function createPlan(
   const custodyDigest = credentialCustodyDigest(credentials.apiToken);
   const stagingRehearsal =
     environment === "production"
-      ? requiredStagingReceipt(
+      ? await requiredStagingReceipt(
+          options.stagingPlan,
           options.stagingReceipt,
           candidate,
           source,
@@ -1354,6 +1598,7 @@ async function createPlan(
             databaseId: credentials.databaseId,
           },
           custodyDigest,
+          dependencies,
         )
       : null;
   assertControlD1SchemaArtifactPathGraph({
@@ -1368,10 +1613,22 @@ async function createPlan(
     ...(options.stagingReceipt
       ? { stagingReceiptPath: options.stagingReceipt }
       : {}),
+    ...(stagingRehearsal
+      ? {
+          stagingPlanPath: stagingRehearsal.planPath,
+          stagingCheckpointPath:
+            stagingRehearsal.plan.mutationCheckpointPath,
+          stagingServingCompatibilityProofPath:
+            stagingRehearsal.plan.servingCompatibilityProofPath,
+          stagingBridgePlanPath: stagingRehearsal.plan.bridgePlanPath,
+          stagingBridgeReleaseEvidencePath:
+            stagingRehearsal.plan.bridgeReleaseEvidencePath,
+        }
+      : {}),
   });
   const pending = candidate.migrations.slice(predecessor.migrations.length);
   const identity = {
-    kind: "takosumi.control-d1-schema-release-plan@v1" as const,
+    kind: "takosumi.control-d1-schema-release-plan@v2" as const,
     createdAt: timestamp,
     environment,
     sourceCommit: source.head,
@@ -1414,6 +1671,14 @@ async function createPlan(
     servingCompatibilityProofDigest: servingCompatibilityProof.digest,
     servingCompatibilityProofConfirmation:
       servingCompatibilityProof.proof.confirmation,
+    predecessorCompatibilityChallenge,
+    stagingRehearsalPlanPath: stagingRehearsal?.planPath ?? null,
+    stagingRehearsalPlanDigest: stagingRehearsal?.planDigest ?? null,
+    stagingRehearsalPlanConfirmation:
+      stagingRehearsal?.plan.confirmation ?? null,
+    stagingRehearsalCheckpointDigest:
+      stagingRehearsal?.checkpointDigest ?? null,
+    stagingRehearsalReceiptPath: options.stagingReceipt ?? null,
     stagingRehearsalReceiptDigest: stagingRehearsal?.digest ?? null,
     stagingRehearsalTarget: stagingRehearsal
       ? {
@@ -1510,7 +1775,12 @@ function parseArgs(
   }
   const allowed =
     environment === "production"
-      ? ["--plan-out", "--serving-compatibility-proof", "--staging-receipt"]
+      ? [
+          "--plan-out",
+          "--serving-compatibility-proof",
+          "--staging-plan",
+          "--staging-receipt",
+        ]
       : ["--plan-out", "--serving-compatibility-proof"];
   if (
     values.size !== allowed.length ||
@@ -1526,7 +1796,10 @@ function parseArgs(
       values.get("--serving-compatibility-proof")!,
     ),
     ...(environment === "production"
-      ? { stagingReceipt: absolute(values.get("--staging-receipt")!) }
+      ? {
+          stagingPlan: absolute(values.get("--staging-plan")!),
+          stagingReceipt: absolute(values.get("--staging-receipt")!),
+        }
       : {}),
   };
 }
@@ -1590,6 +1863,7 @@ function readPlan(
     "mutationCheckpointPath",
     "pendingLedger",
     "pendingMigrationVersions",
+    "predecessorCompatibilityChallenge",
     "predecessorLedgerDigest",
     "predecessorManifestDigest",
     "predecessorSchemaDigest",
@@ -1600,6 +1874,11 @@ function readPlan(
     "sourceAuthorEmail",
     "sourceBranch",
     "sourceCommit",
+    "stagingRehearsalCheckpointDigest",
+    "stagingRehearsalPlanConfirmation",
+    "stagingRehearsalPlanDigest",
+    "stagingRehearsalPlanPath",
+    "stagingRehearsalReceiptPath",
     "stagingRehearsalReceiptDigest",
     "stagingRehearsalTarget",
     "target",
@@ -1612,7 +1891,7 @@ function readPlan(
   if (
     JSON.stringify(Object.keys(value).sort()) !==
       JSON.stringify(expectedKeys) ||
-    value.kind !== "takosumi.control-d1-schema-release-plan@v1" ||
+    value.kind !== "takosumi.control-d1-schema-release-plan@v2" ||
     value.environment !== environment ||
     value.confirmation !== confirmation ||
     typeof value.createdAt !== "string" ||
@@ -1651,6 +1930,16 @@ function readPlan(
     value.servingCompatibilityProofPath === path ||
     !SHA256.test(String(value.servingCompatibilityProofDigest)) ||
     !SHA256.test(String(value.servingCompatibilityProofConfirmation)) ||
+    !assertControlD1BridgeChallengeEvidence(
+      value.predecessorCompatibilityChallenge,
+      {
+        environment,
+        servingVersionId: value.target.servingVersionId as string,
+        predecessorLedgerDigest: value.predecessorLedgerDigest as string,
+        candidateLedgerDigest: value.ledgerDigest as string,
+        acceptedMigrationVersion: 66,
+      },
+    ) ||
     value.currentMigrationVersion !== 66 ||
     !Number.isSafeInteger(value.currentMigrationCount) ||
     !Number.isSafeInteger(value.currentTableCount) ||
@@ -1666,6 +1955,22 @@ function readPlan(
     !SHA256.test(String(value.timeTravelBookmarkDigest)) ||
     (value.stagingRehearsalReceiptDigest !== null &&
       !SHA256.test(String(value.stagingRehearsalReceiptDigest))) ||
+    (value.stagingRehearsalPlanDigest !== null &&
+      !SHA256.test(String(value.stagingRehearsalPlanDigest))) ||
+    (value.stagingRehearsalPlanConfirmation !== null &&
+      !SHA256.test(String(value.stagingRehearsalPlanConfirmation))) ||
+    (value.stagingRehearsalCheckpointDigest !== null &&
+      !SHA256.test(String(value.stagingRehearsalCheckpointDigest))) ||
+    (value.stagingRehearsalPlanPath !== null &&
+      (typeof value.stagingRehearsalPlanPath !== "string" ||
+        !isAbsolute(value.stagingRehearsalPlanPath) ||
+        resolve(value.stagingRehearsalPlanPath) !==
+          value.stagingRehearsalPlanPath)) ||
+    (value.stagingRehearsalReceiptPath !== null &&
+      (typeof value.stagingRehearsalReceiptPath !== "string" ||
+        !isAbsolute(value.stagingRehearsalReceiptPath) ||
+        resolve(value.stagingRehearsalReceiptPath) !==
+          value.stagingRehearsalReceiptPath)) ||
     !validStagingRehearsalTarget(value.stagingRehearsalTarget) ||
     typeof value.mutationCheckpointPath !== "string" ||
     value.mutationCheckpointPath !== `${path}.mutation.jsonl` ||
@@ -1689,6 +1994,16 @@ function readPlan(
       value.timeTravelBookmarkDigest ||
     (environment === "production") !==
       (value.stagingRehearsalReceiptDigest !== null) ||
+    (environment === "production") !==
+      (value.stagingRehearsalPlanPath !== null) ||
+    (environment === "production") !==
+      (value.stagingRehearsalPlanDigest !== null) ||
+    (environment === "production") !==
+      (value.stagingRehearsalPlanConfirmation !== null) ||
+    (environment === "production") !==
+      (value.stagingRehearsalCheckpointDigest !== null) ||
+    (environment === "production") !==
+      (value.stagingRehearsalReceiptPath !== null) ||
     (environment === "production") !==
       (value.stagingRehearsalTarget !== null) ||
     (record(value.stagingRehearsalTarget) &&
@@ -1920,7 +2235,7 @@ function writeIncompleteEvidence(
       ? error.message
       : "control_d1_schema_release_failed";
   const evidence = {
-    kind: "takosumi.control-d1-schema-release-evidence@v1",
+    kind: "takosumi.control-d1-schema-release-evidence@v2",
     status: "incomplete",
     environment: plan.environment,
     sourceCommit: plan.sourceCommit,
@@ -2026,7 +2341,7 @@ async function readServingControlD1Binding(
   fetcher: typeof fetch,
 ): Promise<{
   readonly versionId: string;
-  readonly schemaMode: "predeployed";
+  readonly schemaMode: "predeployed-bridge";
 }> {
   const base = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(credentials.accountId)}/workers/scripts/${encodeURIComponent(target.workerName)}`;
   const deployments = await cloudflareJson(
@@ -2086,11 +2401,205 @@ async function readServingControlD1Binding(
   if (
     schemaModes.length !== 1 ||
     !record(schemaModes[0]) ||
-    schemaModes[0].text !== "predeployed"
+    schemaModes[0].text !== "predeployed-bridge"
   ) {
     throw new Error("control_d1_schema_release_worker_schema_mode_invalid");
   }
-  return { versionId, schemaMode: "predeployed" };
+  return { versionId, schemaMode: "predeployed-bridge" };
+}
+
+function controlD1CompatibilityCatalogDigest(
+  predecessorLedgerDigest: string,
+  candidateLedgerDigest: string,
+): string {
+  return digestJson({
+    kind: "takosumi.control-d1-schema-compatibility-catalog@v1",
+    allowset: [
+      { migrationVersion: 66, ledgerDigest: predecessorLedgerDigest },
+      { migrationVersion: 67, ledgerDigest: candidateLedgerDigest },
+    ],
+  });
+}
+
+async function readControlD1BridgeChallenge(
+  environment: ControlD1SchemaReleaseEnvironment,
+  servingVersionId: string,
+  predecessorLedgerDigest: string,
+  candidateLedgerDigest: string,
+  acceptedMigrationVersion: 66 | 67,
+  fetcher: typeof fetch,
+  clock: () => string,
+  failureCode: string,
+): Promise<ControlD1BridgeChallengeEvidence> {
+  const nonce = randomBytes(32).toString("hex");
+  const origin = platformTargetForEnvironment(environment).origin;
+  const url = new URL(CONTROL_D1_BRIDGE_CHALLENGE_PATH, origin);
+  url.searchParams.set("nonce", nonce);
+  let response: Response;
+  try {
+    response = await fetcher(url, {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        "cache-control": "no-cache",
+      },
+      redirect: "manual",
+    });
+  } catch (error) {
+    throw new Error(failureCode, { cause: error });
+  }
+  let bytes: Uint8Array;
+  try {
+    const body = await response.arrayBuffer();
+    if (body.byteLength === 0 || body.byteLength > 32_768) {
+      throw new Error("challenge_size_invalid");
+    }
+    bytes = new Uint8Array(body);
+  } catch (error) {
+    throw new Error(failureCode, { cause: error });
+  }
+  let value: unknown;
+  let raw: string;
+  try {
+    raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    value = JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw new Error(failureCode, { cause: error });
+  }
+  try {
+    if (
+      !response.ok ||
+      response.status !== 200 ||
+      response.redirected ||
+      response.headers.get("cache-control") !== "no-store" ||
+      response.headers.get("pragma") !== "no-cache" ||
+      response.headers.get("x-takosumi-version-id") !== servingVersionId ||
+      !/^application\/json(?:;|$)/iu.test(
+        response.headers.get("content-type") ?? "",
+      ) ||
+      !record(value) ||
+      raw !== JSON.stringify(value) ||
+      JSON.stringify(Object.keys(value).sort()) !==
+        JSON.stringify(
+          [
+            "accepted",
+            "allowset",
+            "bindingName",
+            "environment",
+            "kind",
+            "ledger",
+            "nonce",
+            "schemaMode",
+            "status",
+            "workerVersionId",
+          ].sort(),
+        )
+    ) {
+      throw new Error("challenge_envelope_invalid");
+    }
+    const expectedAllowset = [
+      { migrationVersion: 66, ledgerDigest: predecessorLedgerDigest },
+      { migrationVersion: 67, ledgerDigest: candidateLedgerDigest },
+    ];
+    const expectedAccepted = expectedAllowset.find(
+      (entry) => entry.migrationVersion === acceptedMigrationVersion,
+    );
+    if (
+      value.kind !==
+        "takosumi.control-d1-schema-compatibility-challenge@v1" ||
+      value.status !== "ready" ||
+      value.nonce !== nonce ||
+      value.environment !== environment ||
+      value.workerVersionId !== servingVersionId ||
+      value.bindingName !== "TAKOSUMI_CONTROL_DB" ||
+      value.schemaMode !== "predeployed-bridge" ||
+      !validLedger(value.ledger) ||
+      digestJson(value.ledger) !== expectedAccepted?.ledgerDigest ||
+      JSON.stringify(value.allowset) !== JSON.stringify(expectedAllowset) ||
+      JSON.stringify(value.accepted) !== JSON.stringify(expectedAccepted)
+    ) {
+      throw new Error("challenge_binding_invalid");
+    }
+    return {
+      kind: "takosumi.control-d1-schema-compatibility-challenge-evidence@v1",
+      observedAt: validTimestamp(clock()),
+      responseDigest: digestBytes(bytes),
+      response: value as unknown as ControlD1BridgeChallengeResponse,
+    };
+  } catch (error) {
+    throw new Error(failureCode, { cause: error });
+  }
+}
+
+function assertControlD1BridgeChallengeEvidence(
+  value: unknown,
+  context: Readonly<{
+    environment: ControlD1SchemaReleaseEnvironment;
+    servingVersionId: string;
+    predecessorLedgerDigest: string;
+    candidateLedgerDigest: string;
+    acceptedMigrationVersion: 66 | 67;
+  }>,
+): value is ControlD1BridgeChallengeEvidence {
+  if (
+    !record(value) ||
+    JSON.stringify(Object.keys(value).sort()) !==
+      JSON.stringify(["kind", "observedAt", "response", "responseDigest"]) ||
+    value.kind !==
+      "takosumi.control-d1-schema-compatibility-challenge-evidence@v1" ||
+    typeof value.observedAt !== "string" ||
+    !SHA256.test(String(value.responseDigest)) ||
+    !record(value.response)
+  ) {
+    return false;
+  }
+  try {
+    validTimestamp(value.observedAt);
+  } catch {
+    return false;
+  }
+  const response = value.response;
+  const expectedAllowset = [
+    {
+      migrationVersion: 66,
+      ledgerDigest: context.predecessorLedgerDigest,
+    },
+    { migrationVersion: 67, ledgerDigest: context.candidateLedgerDigest },
+  ];
+  const expectedAccepted = expectedAllowset.find(
+    (entry) => entry.migrationVersion === context.acceptedMigrationVersion,
+  );
+  return (
+    JSON.stringify(Object.keys(response).sort()) ===
+      JSON.stringify(
+        [
+          "accepted",
+          "allowset",
+          "bindingName",
+          "environment",
+          "kind",
+          "ledger",
+          "nonce",
+          "schemaMode",
+          "status",
+          "workerVersionId",
+        ].sort(),
+      ) &&
+    response.kind ===
+      "takosumi.control-d1-schema-compatibility-challenge@v1" &&
+    response.status === "ready" &&
+    typeof response.nonce === "string" &&
+    /^[0-9a-f]{64}$/u.test(response.nonce) &&
+    response.environment === context.environment &&
+    response.workerVersionId === context.servingVersionId &&
+    response.bindingName === "TAKOSUMI_CONTROL_DB" &&
+    response.schemaMode === "predeployed-bridge" &&
+    validLedger(response.ledger) &&
+    digestJson(response.ledger) === expectedAccepted?.ledgerDigest &&
+    JSON.stringify(response.allowset) === JSON.stringify(expectedAllowset) &&
+    JSON.stringify(response.accepted) === JSON.stringify(expectedAccepted) &&
+    value.responseDigest === digestJson(response)
+  );
 }
 
 async function cloudflareJson(
@@ -2181,17 +2690,20 @@ function requiredServingCompatibilityProof(
   }
   const expectedKeys = [
     "bindingName",
+    "bridgePlanDigest",
     "bridgePlanConfirmation",
     "bridgePlanPath",
     "bridgeReleaseEvidencePath",
     "bridgeReleaseEvidenceDigest",
     "bridgeSourceCommit",
     "candidate",
+    "compatibilityCatalogDigest",
     "completedAt",
     "confirmation",
     "environment",
     "kind",
     "predecessor",
+    "predecessorChallenge",
     "reviewer",
     "schemaMode",
     "servingVersionId",
@@ -2204,7 +2716,7 @@ function requiredServingCompatibilityProof(
     !record(value) ||
     JSON.stringify(Object.keys(value).sort()) !==
       JSON.stringify(expectedKeys) ||
-    value.kind !== "takosumi.control-d1-serving-compatibility-proof@v1" ||
+    value.kind !== "takosumi.control-d1-serving-compatibility-proof@v2" ||
     value.status !== "ready" ||
     value.environment !== context.environment ||
     !COMMIT.test(String(value.bridgeSourceCommit)) ||
@@ -2217,12 +2729,25 @@ function requiredServingCompatibilityProof(
     resolve(value.bridgeReleaseEvidencePath) !==
       value.bridgeReleaseEvidencePath ||
     !SHA256.test(String(value.bridgeReleaseEvidenceDigest)) ||
+    !SHA256.test(String(value.bridgePlanDigest)) ||
     value.workerName !== context.target.workerName ||
     value.bindingName !== context.target.bindingName ||
     value.servingVersionId !== context.servingVersionId ||
     !UUID.test(String(value.servingVersionId)) ||
     value.targetDigest !== context.targetDigest ||
-    value.schemaMode !== "predeployed" ||
+    value.schemaMode !== "predeployed-bridge" ||
+    value.compatibilityCatalogDigest !==
+      controlD1CompatibilityCatalogDigest(
+        context.predecessorLedgerDigest,
+        context.candidateLedgerDigest,
+      ) ||
+    !assertControlD1BridgeChallengeEvidence(value.predecessorChallenge, {
+      environment: context.environment,
+      servingVersionId: context.servingVersionId,
+      predecessorLedgerDigest: context.predecessorLedgerDigest,
+      candidateLedgerDigest: context.candidateLedgerDigest,
+      acceptedMigrationVersion: 66,
+    }) ||
     !record(value.predecessor) ||
     JSON.stringify(Object.keys(value.predecessor).sort()) !==
       JSON.stringify(readinessKeys) ||
@@ -2248,6 +2773,14 @@ function requiredServingCompatibilityProof(
   }
   try {
     validTimestamp(value.completedAt);
+    if (
+      !record(value.predecessorChallenge) ||
+      typeof value.predecessorChallenge.observedAt !== "string" ||
+      Date.parse(value.predecessorChallenge.observedAt) >
+        Date.parse(value.completedAt)
+    ) {
+      throw new Error("challenge_time_invalid");
+    }
   } catch {
     throw new Error(
       "control_d1_schema_release_serving_compatibility_proof_invalid",
@@ -2278,6 +2811,8 @@ function requiredServingCompatibilityProof(
       bridgeRelease.authority.targetMutationAuthorityDirectoryIdentityDigest !==
         context.targetMutationAuthorityDirectoryIdentityDigest ||
       bridgeEvidence.digest !== value.bridgeReleaseEvidenceDigest ||
+      digestBytes(readStablePrivateBytes(value.bridgePlanPath as string)) !==
+        value.bridgePlanDigest ||
       bridgeEvidence.deployedVersionId !== context.servingVersionId ||
       bridgeEvidence.reviewer !== value.reviewer ||
       bridgeRelease.fence?.outcome !== "accepted" ||
@@ -2333,20 +2868,74 @@ function assertPlanServingCompatibilityProof(
   return retained.proof;
 }
 
-function requiredStagingReceipt(
+async function assertPlanStagingReceiptAuthority(
+  plan: ControlD1SchemaReleasePlan,
+  candidate: ControlD1SchemaPlan,
+  source: SourceInspection,
+  productionCredentials: ReleaseCredentials,
+  dependencies: ControlD1SchemaReleaseDependencies,
+): Promise<void> {
+  if (plan.environment !== "production") return;
+  if (
+    plan.stagingRehearsalPlanPath === null ||
+    plan.stagingRehearsalPlanDigest === null ||
+    plan.stagingRehearsalPlanConfirmation === null ||
+    plan.stagingRehearsalCheckpointDigest === null ||
+    plan.stagingRehearsalReceiptPath === null ||
+    plan.stagingRehearsalReceiptDigest === null
+  ) {
+    throw new Error(
+      "control_d1_schema_release_staging_receipt_authority_invalid",
+    );
+  }
+  await requiredStagingReceipt(
+    plan.stagingRehearsalPlanPath,
+    plan.stagingRehearsalReceiptPath,
+    candidate,
+    source,
+    {
+      accountId: productionCredentials.accountId,
+      databaseId: productionCredentials.databaseId,
+    },
+    plan.credentialCustodyDigest,
+    dependencies,
+    {
+      planDigest: plan.stagingRehearsalPlanDigest,
+      planConfirmation: plan.stagingRehearsalPlanConfirmation,
+      checkpointDigest: plan.stagingRehearsalCheckpointDigest,
+      receiptDigest: plan.stagingRehearsalReceiptDigest,
+    },
+  );
+}
+
+async function requiredStagingReceipt(
+  planPath: string | undefined,
   path: string | undefined,
   candidate: ControlD1SchemaPlan,
   source: SourceInspection,
   productionTarget: Readonly<{ accountId: string; databaseId: string }>,
   productionCredentialCustodyDigest: string,
-): Readonly<{
-  digest: string;
-  accountId: string;
-  databaseId: string;
-  targetDigest: string;
-  credentialCustodyDigest: string;
-}> {
-  if (!path) {
+  dependencies: ControlD1SchemaReleaseDependencies,
+  expected?: Readonly<{
+    planDigest: string;
+    planConfirmation: string;
+    checkpointDigest: string;
+    receiptDigest: string;
+  }>,
+): Promise<
+  Readonly<{
+    planPath: string;
+    planDigest: string;
+    checkpointDigest: string;
+    plan: ControlD1SchemaReleasePlan;
+    digest: string;
+    accountId: string;
+    databaseId: string;
+    targetDigest: string;
+    credentialCustodyDigest: string;
+  }>
+> {
+  if (!path || !planPath) {
     throw new Error("control_d1_schema_release_staging_receipt_required");
   }
   const bytes = readStablePrivateBytes(path);
@@ -2361,6 +2950,7 @@ function requiredStagingReceipt(
   const receiptKeys = [
     "appliedMigrationVersions",
     "completedAt",
+    "compatibilityCatalogDigest",
     "credentialCustodyDigest",
     "credentialDigest",
     "environment",
@@ -2369,10 +2959,14 @@ function requiredStagingReceipt(
     "finalTableCount",
     "kind",
     "ledgerDigest",
+    "maintenanceReleaseReceiptDigest",
     "maintenanceStatus",
     "manifestDigest",
     "planConfirmation",
     "physicalTarget",
+    "candidateChallenge",
+    "mutationCheckpointDigest",
+    "predecessorChallenge",
     "recovery",
     "reviewer",
     "schemaDigest",
@@ -2387,7 +2981,7 @@ function requiredStagingReceipt(
     !record(receipt) ||
     JSON.stringify(Object.keys(receipt).sort()) !==
       JSON.stringify(receiptKeys) ||
-    receipt.kind !== "takosumi.control-d1-schema-release-evidence@v1" ||
+    receipt.kind !== "takosumi.control-d1-schema-release-evidence@v2" ||
     receipt.status !== "ready" ||
     receipt.environment !== "staging" ||
     receipt.sourceCommit !== source.head ||
@@ -2420,8 +3014,21 @@ function requiredStagingReceipt(
     !SHA256.test(receipt.timeTravelBookmarkDigest) ||
     typeof receipt.servingCompatibilityProofDigest !== "string" ||
     !SHA256.test(receipt.servingCompatibilityProofDigest) ||
+    typeof receipt.compatibilityCatalogDigest !== "string" ||
+    !SHA256.test(receipt.compatibilityCatalogDigest) ||
+    typeof receipt.mutationCheckpointDigest !== "string" ||
+    !SHA256.test(receipt.mutationCheckpointDigest) ||
+    typeof receipt.maintenanceReleaseReceiptDigest !== "string" ||
+    !SHA256.test(receipt.maintenanceReleaseReceiptDigest) ||
     typeof receipt.reviewer !== "string" ||
-    !/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(receipt.reviewer)
+    !/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(receipt.reviewer) ||
+    !record(receipt.recovery) ||
+    JSON.stringify(receipt.recovery) !==
+      JSON.stringify({
+        surface: "takosumi-control-d1-schema-staging",
+        action: "recover",
+        timeTravelRestoreAuthority: "separate-incident-boundary",
+      })
   ) {
     throw new Error("control_d1_schema_release_staging_receipt_invalid");
   }
@@ -2435,13 +3042,323 @@ function requiredStagingReceipt(
       "control_d1_schema_release_staging_rehearsal_isolation_invalid",
     );
   }
+  try {
+    const stagingPlan = readPlan(
+      planPath,
+      receipt.planConfirmation as string,
+      "staging",
+    );
+    assertControlD1SchemaArtifactPathGraph({
+      bridgePlanPath: stagingPlan.bridgePlanPath,
+      bridgePlanConfirmation: stagingPlan.bridgePlanConfirmation,
+      schemaPlanPath: planPath,
+      schemaCheckpointPath: stagingPlan.mutationCheckpointPath,
+      servingCompatibilityProofPath:
+        stagingPlan.servingCompatibilityProofPath,
+      bridgeReleaseEvidencePath: stagingPlan.bridgeReleaseEvidencePath,
+      evidencePath: path,
+    });
+    const planDigest = digestBytes(readStablePrivateBytes(planPath));
+    const { candidate: retainedCandidate, predecessor } =
+      await assertPlanCandidate(stagingPlan);
+    if (
+      stagingPlan.sourceCommit !== source.head ||
+      stagingPlan.sourceBranch !== source.branch ||
+      stagingPlan.sourceAuthorEmail !== source.authorEmail ||
+      retainedCandidate.manifestDigest !== candidate.manifestDigest ||
+      retainedCandidate.schemaDigest !== candidate.schemaDigest ||
+      retainedCandidate.ledgerDigest !== candidate.ledgerDigest
+    ) {
+      throw new Error("staging_plan_source_invalid");
+    }
+    const compatibility = assertPlanServingCompatibilityProof(
+      stagingPlan,
+      retainedCandidate,
+      predecessor,
+    );
+    const checkpoint = readAcceptedMutationCheckpoint(
+      stagingPlan.mutationCheckpointPath,
+      stagingPlan.confirmation,
+    );
+    const stagingCredentials = releaseCredentials(
+      "staging",
+      dependencies.env ?? process.env,
+    );
+    assertCredentialsMatchPlan(stagingCredentials, stagingPlan);
+    const remote = await (
+      dependencies.createRemoteDatabase ?? createRemoteDatabase
+    )(stagingCredentials);
+    const serving = await readServingControlD1Binding(
+      stagingCredentials,
+      TARGETS.staging,
+      dependencies.fetch ?? fetch,
+    );
+    if (serving.versionId !== stagingPlan.target.servingVersionId) {
+      throw new Error("staging_serving_version_invalid");
+    }
+    await assertExactCandidate(remote.database, retainedCandidate, false);
+    const maintenanceRelease =
+      await readControlD1MaintenanceReleaseReceiptDetails(remote.database);
+    if (
+      maintenanceRelease === null ||
+      !fenceMatchesPlan(maintenanceRelease.fence, stagingPlan) ||
+      maintenanceRelease.releaseReadinessDigest !==
+        checkpoint.releaseReadinessDigest
+    ) {
+      throw new Error("staging_maintenance_receipt_invalid");
+    }
+    const freshCandidateChallenge = await readControlD1BridgeChallenge(
+      "staging",
+      serving.versionId,
+      predecessor.ledgerDigest,
+      retainedCandidate.ledgerDigest,
+      67,
+      dependencies.fetch ?? fetch,
+      dependencies.now ?? now,
+      "staging_candidate_challenge_invalid",
+    );
+    if (
+      receipt.planConfirmation !== stagingPlan.confirmation ||
+      receipt.targetDigest !== stagingPlan.targetDigest ||
+      receipt.physicalTarget.accountId !== stagingPlan.target.accountId ||
+      receipt.physicalTarget.databaseId !== stagingPlan.target.databaseId ||
+      receipt.credentialDigest !== stagingPlan.credentialDigest ||
+      receipt.credentialCustodyDigest !==
+        stagingPlan.credentialCustodyDigest ||
+      receipt.timeTravelBookmarkDigest !==
+        stagingPlan.timeTravelBookmarkDigest ||
+      receipt.servingCompatibilityProofDigest !==
+        stagingPlan.servingCompatibilityProofDigest ||
+      receipt.compatibilityCatalogDigest !==
+        compatibility.compatibilityCatalogDigest ||
+      receipt.mutationCheckpointDigest !== checkpoint.digest ||
+      receipt.maintenanceReleaseReceiptDigest !==
+        digestJson(maintenanceRelease) ||
+      !assertControlD1BridgeChallengeEvidence(receipt.predecessorChallenge, {
+        environment: "staging",
+        servingVersionId: stagingPlan.target.servingVersionId,
+        predecessorLedgerDigest: predecessor.ledgerDigest,
+        candidateLedgerDigest: retainedCandidate.ledgerDigest,
+        acceptedMigrationVersion: 66,
+      }) ||
+      !assertControlD1BridgeChallengeEvidence(receipt.candidateChallenge, {
+        environment: "staging",
+        servingVersionId: stagingPlan.target.servingVersionId,
+        predecessorLedgerDigest: predecessor.ledgerDigest,
+        candidateLedgerDigest: retainedCandidate.ledgerDigest,
+        acceptedMigrationVersion: 67,
+      }) ||
+      checkpoint.predecessorChallengeEvidenceDigest !==
+        digestJson(receipt.predecessorChallenge) ||
+      checkpoint.candidateChallengeEvidenceDigest !==
+        digestJson(receipt.candidateChallenge) ||
+      JSON.stringify(
+        (receipt.candidateChallenge as ControlD1BridgeChallengeEvidence)
+          .response.allowset,
+      ) !== JSON.stringify(freshCandidateChallenge.response.allowset) ||
+      (receipt.candidateChallenge as ControlD1BridgeChallengeEvidence).response
+        .accepted.ledgerDigest !==
+        freshCandidateChallenge.response.accepted.ledgerDigest ||
+      Date.parse(stagingPlan.createdAt) > Date.parse(checkpoint.startedAt) ||
+      Date.parse(stagingPlan.createdAt) >
+        Date.parse(
+          (receipt.predecessorChallenge as ControlD1BridgeChallengeEvidence)
+            .observedAt,
+        ) ||
+      Date.parse(
+        (receipt.predecessorChallenge as ControlD1BridgeChallengeEvidence)
+          .observedAt,
+      ) > Date.parse(checkpoint.startedAt) ||
+      Date.parse(checkpoint.startedAt) > Date.parse(checkpoint.acceptedAt) ||
+      Date.parse(checkpoint.acceptedAt) > Date.parse(receipt.completedAt) ||
+      Date.parse(maintenanceRelease.releasedAt) >
+        Date.parse(receipt.completedAt) ||
+      Date.parse(
+        (receipt.candidateChallenge as ControlD1BridgeChallengeEvidence)
+          .observedAt,
+      ) > Date.parse(receipt.completedAt)
+    ) {
+      throw new Error("staging_receipt_binding_invalid");
+    }
+    assertReviewer(receipt.reviewer as string, source.authorEmail);
+    const receiptDigest = digestBytes(bytes);
+    if (
+      expected &&
+      (expected.planDigest !== planDigest ||
+        expected.planConfirmation !== stagingPlan.confirmation ||
+        expected.checkpointDigest !== checkpoint.digest ||
+        expected.receiptDigest !== receiptDigest)
+    ) {
+      throw new Error("staging_receipt_plan_drift");
+    }
+    return {
+      planPath,
+      planDigest,
+      checkpointDigest: checkpoint.digest,
+      plan: stagingPlan,
+      digest: receiptDigest,
+      accountId: receipt.physicalTarget.accountId,
+      databaseId: receipt.physicalTarget.databaseId,
+      targetDigest: receipt.targetDigest,
+      credentialCustodyDigest: receipt.credentialCustodyDigest,
+    };
+  } catch (error) {
+    throw new Error(
+      "control_d1_schema_release_staging_receipt_authority_invalid",
+      { cause: error },
+    );
+  }
+}
+
+function readAcceptedMutationCheckpoint(
+  path: string,
+  planConfirmation: string,
+): Readonly<{
+  digest: string;
+  startedDigest: string;
+  releaseReadinessDigest: string;
+  predecessorChallengeEvidenceDigest: string;
+  candidateChallengeEvidenceDigest: string;
+  startedAt: string;
+  acceptedAt: string;
+}> {
+  const checkpoint = readMutationCheckpoint(path, planConfirmation);
+  if (
+    checkpoint.acceptedAt === undefined ||
+    checkpoint.candidateChallengeEvidenceDigest === undefined
+  ) {
+    throw new Error("control_d1_schema_release_mutation_checkpoint_invalid");
+  }
   return {
-    digest: digestBytes(bytes),
-    accountId: receipt.physicalTarget.accountId,
-    databaseId: receipt.physicalTarget.databaseId,
-    targetDigest: receipt.targetDigest,
-    credentialCustodyDigest: receipt.credentialCustodyDigest,
+    ...checkpoint,
+    candidateChallengeEvidenceDigest:
+      checkpoint.candidateChallengeEvidenceDigest,
+    acceptedAt: checkpoint.acceptedAt,
   };
+}
+
+function readStartedMutationCheckpoint(
+  path: string,
+  planConfirmation: string,
+): Readonly<{
+  digest: string;
+  startedDigest: string;
+  releaseReadinessDigest: string;
+  predecessorChallengeEvidenceDigest: string;
+  candidateChallengeEvidenceDigest?: string;
+  startedAt: string;
+  acceptedAt?: string;
+}> {
+  return readMutationCheckpoint(path, planConfirmation);
+}
+
+function readMutationCheckpoint(
+  path: string,
+  planConfirmation: string,
+): Readonly<{
+  digest: string;
+  startedDigest: string;
+  releaseReadinessDigest: string;
+  predecessorChallengeEvidenceDigest: string;
+  candidateChallengeEvidenceDigest?: string;
+  startedAt: string;
+  acceptedAt?: string;
+}> {
+  const bytes = readStablePrivateBytes(path);
+  let records: unknown[];
+  let lines: string[];
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    if (!text.endsWith("\n")) throw new Error("checkpoint_newline_invalid");
+    lines = text.slice(0, -1).split("\n");
+    records = lines.map((line) => JSON.parse(line) as unknown);
+    if (lines.some((line, index) => line !== JSON.stringify(records[index]))) {
+      throw new Error("checkpoint_not_canonical");
+    }
+  } catch (error) {
+    throw new Error("control_d1_schema_release_mutation_checkpoint_invalid", {
+      cause: error,
+    });
+  }
+  const [started, accepted] = records;
+  if (
+    (records.length !== 1 && records.length !== 2) ||
+    !record(started) ||
+    JSON.stringify(Object.keys(started).sort()) !==
+      JSON.stringify(
+        [
+          "kind",
+          "outcome",
+          "planConfirmation",
+          "predecessorChallengeEvidenceDigest",
+          "recordedAt",
+        ].sort(),
+      ) ||
+    started.kind !== "takosumi.control-d1-schema-mutation-checkpoint@v2" ||
+    started.outcome !== "unknown" ||
+    started.planConfirmation !== planConfirmation ||
+    !SHA256.test(String(started.predecessorChallengeEvidenceDigest)) ||
+    typeof started.recordedAt !== "string" ||
+    (records.length === 2 &&
+      (!record(accepted) ||
+        JSON.stringify(Object.keys(accepted).sort()) !==
+          JSON.stringify(
+            [
+              "appliedMigrationVersions",
+              "candidateChallengeEvidenceDigest",
+              "kind",
+              "outcome",
+              "planConfirmation",
+              "recordedAt",
+            ].sort(),
+          ) ||
+        accepted.kind !==
+          "takosumi.control-d1-schema-mutation-checkpoint@v2" ||
+        accepted.outcome !== "accepted" ||
+        accepted.planConfirmation !== planConfirmation ||
+        JSON.stringify(accepted.appliedMigrationVersions) !==
+          JSON.stringify([67]) ||
+        !SHA256.test(String(accepted.candidateChallengeEvidenceDigest)) ||
+        typeof accepted.recordedAt !== "string"))
+  ) {
+    throw new Error("control_d1_schema_release_mutation_checkpoint_invalid");
+  }
+  try {
+    const startedAt = validTimestamp(started.recordedAt);
+    const acceptedAt =
+      record(accepted) && typeof accepted.recordedAt === "string"
+        ? validTimestamp(accepted.recordedAt)
+        : undefined;
+    if (acceptedAt !== undefined && Date.parse(startedAt) > Date.parse(acceptedAt)) {
+      throw new Error("checkpoint_time_invalid");
+    }
+    const startedDigest = digestBytes(
+      new TextEncoder().encode(`${lines[0]}\n`),
+    );
+    return {
+      digest: digestBytes(bytes),
+      startedDigest,
+      releaseReadinessDigest: digestJson({
+        kind: "takosumi.control-d1-schema-release-readiness@v1",
+        planConfirmation,
+        mutationCheckpointStartedDigest: startedDigest,
+      }),
+      predecessorChallengeEvidenceDigest:
+        started.predecessorChallengeEvidenceDigest as string,
+      ...(record(accepted)
+        ? {
+            candidateChallengeEvidenceDigest:
+              accepted.candidateChallengeEvidenceDigest as string,
+          }
+        : {}),
+      startedAt,
+      ...(acceptedAt === undefined ? {} : { acceptedAt }),
+    };
+  } catch (error) {
+    throw new Error("control_d1_schema_release_mutation_checkpoint_invalid", {
+      cause: error,
+    });
+  }
 }
 
 function inspectSourceCheckout(): SourceInspection {
@@ -2574,6 +3491,11 @@ function assertControlD1SchemaArtifactPathGraph(
     bridgeReleaseEvidencePath: string;
     evidencePath?: string;
     stagingReceiptPath?: string;
+    stagingPlanPath?: string;
+    stagingCheckpointPath?: string;
+    stagingServingCompatibilityProofPath?: string;
+    stagingBridgePlanPath?: string;
+    stagingBridgeReleaseEvidencePath?: string;
   }>,
 ): void {
   try {
@@ -2602,6 +3524,41 @@ function assertControlD1SchemaArtifactPathGraph(
               },
             ]
           : []),
+        ...(input.stagingPlanPath
+          ? [{ label: "schema-staging-plan", path: input.stagingPlanPath }]
+          : []),
+        ...(input.stagingCheckpointPath
+          ? [
+              {
+                label: "schema-staging-checkpoint",
+                path: input.stagingCheckpointPath,
+              },
+            ]
+          : []),
+        ...(input.stagingServingCompatibilityProofPath
+          ? [
+              {
+                label: "schema-staging-serving-compatibility-proof",
+                path: input.stagingServingCompatibilityProofPath,
+              },
+            ]
+          : []),
+        ...(input.stagingBridgePlanPath
+          ? [
+              {
+                label: "schema-staging-bridge-plan",
+                path: input.stagingBridgePlanPath,
+              },
+            ]
+          : []),
+        ...(input.stagingBridgeReleaseEvidencePath
+          ? [
+              {
+                label: "schema-staging-bridge-release-evidence",
+                path: input.stagingBridgeReleaseEvidencePath,
+              },
+            ]
+          : []),
       ],
     );
   } catch (error) {
@@ -2609,6 +3566,39 @@ function assertControlD1SchemaArtifactPathGraph(
       cause: error,
     });
   }
+}
+
+function stagingArtifactPaths(
+  plan: ControlD1SchemaReleasePlan,
+): Readonly<{
+  stagingReceiptPath?: string;
+  stagingPlanPath?: string;
+  stagingCheckpointPath?: string;
+  stagingServingCompatibilityProofPath?: string;
+  stagingBridgePlanPath?: string;
+  stagingBridgeReleaseEvidencePath?: string;
+}> {
+  if (
+    plan.environment !== "production" ||
+    plan.stagingRehearsalReceiptPath === null ||
+    plan.stagingRehearsalPlanPath === null
+  ) {
+    return {};
+  }
+  const stagingPlan = readPlan(
+    plan.stagingRehearsalPlanPath,
+    plan.stagingRehearsalPlanConfirmation!,
+    "staging",
+  );
+  return {
+    stagingReceiptPath: plan.stagingRehearsalReceiptPath,
+    stagingPlanPath: plan.stagingRehearsalPlanPath,
+    stagingCheckpointPath: stagingPlan.mutationCheckpointPath,
+    stagingServingCompatibilityProofPath:
+      stagingPlan.servingCompatibilityProofPath,
+    stagingBridgePlanPath: stagingPlan.bridgePlanPath,
+    stagingBridgeReleaseEvidencePath: stagingPlan.bridgeReleaseEvidencePath,
+  };
 }
 
 function assertExternalAbsent(path: string): void {

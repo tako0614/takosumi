@@ -6,11 +6,16 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_CONTROL_DB: D1Database;
   /**
    * `predeployed` disables request-time schema DDL and requires the complete
-   * current migration ledger through a strict read-only check. OSS/self-host
-   * defaults to `bootstrap`; hosted compositions must set this only after
-   * running their reviewed predeploy gate.
+   * current migration ledger through a strict read-only check.
+   * `predeployed-bridge` is the bounded v66/v67 transition mode and accepts
+   * only those two code-owned exact ledgers. OSS/self-host defaults to
+   * `bootstrap`; hosted compositions must set either predeployed mode only
+   * through its reviewed owner gate.
    */
-  readonly TAKOSUMI_CONTROL_D1_SCHEMA_MODE?: "bootstrap" | "predeployed";
+  readonly TAKOSUMI_CONTROL_D1_SCHEMA_MODE?:
+    | "bootstrap"
+    | "predeployed"
+    | "predeployed-bridge";
   /**
    * Accounts-plane token store used only by the unified platform composition.
    * API-only/service-lane workers omit it, leaving Interface oauth2 delivery
