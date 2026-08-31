@@ -215,6 +215,55 @@ The authenticated Hosted subscription read is a separate E2E post-condition
 after publication; cloud-resource and AI E2E run against Takoserver's owning
 endpoints.
 
+## Optional post-Destroy external evidence
+
+The platform smoke can compose an optional external `DestroyEvidenceVerifier`
+after a terminal, successful Destroy Apply and before the `destroy` step is
+marked complete. Configure all of the following together (CLI options or the
+matching `TAKOSUMI_SMOKE_DESTROY_EVIDENCE_*` variables):
+
+```text
+--destroy-evidence-verifier-script <path>
+--destroy-evidence-verifier-id <id>
+--destroy-evidence-verifier-checks <name,...>
+--destroy-evidence-verifier-env <NAME,...>       # optional, explicit only
+--destroy-evidence-verifier-timeout-seconds <n>  # default 30
+```
+
+Takosumi hashes the executable immediately before each spawn and invokes it
+exactly as `process.execPath <script> --input-file <path>`. The mode-0600 input
+file is removed in a `finally` block and contains only the verifier id, script
+digest, Destroy plan/apply ids, and the allowlisted public Outputs:
+
+```json
+{
+  "kind": "takosumi.external-destroy-verifier-input@v1",
+  "verifierId": "<id>",
+  "scriptDigest": "sha256:<64 lowercase hex>",
+  "context": {
+    "capsuleId": "<id>",
+    "destroyPlanRunId": "<id>",
+    "destroyApplyRunId": "<id>"
+  },
+  "publicOutputs": {}
+}
+```
+
+The child receives a fresh environment containing only the names listed by
+`--destroy-evidence-verifier-env`; ambient credentials are not inherited and
+no input value or id is placed in argv. Stdout must be exactly one closed
+`takosumi.external-destroy-verifier-result@v1` object with the configured,
+ordered checks, each `{ "name": "...", "status": "passed" }`, and the echoed
+script digest. Takosumi independently records the accepted result digest,
+check count, and host-measured duration in
+`takosumi.external-destroy-verification@v1`.
+
+Malformed/extra output, duplicate or missing checks, timeout, oversized output,
+non-zero exit, or a digest mismatch fails the smoke with a bounded local
+diagnostic. Destroy progress remains recorded and cleanup never issues Destroy
+again after the verifier fails. The existing Cloudflare Worker absence
+verifier remains a separate built-in check.
+
 ## Self-host build and deployment
 
 Build and verify the OSS target from the product root:

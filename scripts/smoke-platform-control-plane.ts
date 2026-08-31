@@ -38,6 +38,12 @@ import {
 
 export const PLATFORM_CONTROL_PLANE_SMOKE_KIND =
   "takosumi.platform-control-plane-smoke@v3" as const;
+export const EXTERNAL_DESTROY_VERIFIER_INPUT_KIND =
+  "takosumi.external-destroy-verifier-input@v1" as const;
+export const EXTERNAL_DESTROY_VERIFIER_RESULT_KIND =
+  "takosumi.external-destroy-verifier-result@v1" as const;
+export const EXTERNAL_DESTROY_VERIFICATION_KIND =
+  "takosumi.external-destroy-verification@v1" as const;
 export const CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS = 180_000;
 
 const TAKOSUMI_ROOT = resolve(import.meta.dir, "..");
@@ -62,6 +68,11 @@ const EXACT_PROVIDER_SOURCE_PATTERN =
 const MAX_SMOKE_PROVIDER_BINDINGS = 64;
 const MAX_SMOKE_INTERFACE_BLUEPRINTS = 64;
 const MAX_SMOKE_INTERFACE_TOKEN_BYTES = 16 * 1024;
+const MAX_EXTERNAL_DESTROY_VERIFIER_CHECKS = 64;
+const MAX_EXTERNAL_DESTROY_VERIFIER_CHECK_NAME_BYTES = 128;
+const MAX_EXTERNAL_DESTROY_VERIFIER_ENV_NAME_BYTES = 128;
+const MAX_EXTERNAL_DESTROY_VERIFIER_OUTPUT_BYTES = 64 * 1024;
+const DEFAULT_EXTERNAL_DESTROY_VERIFIER_TIMEOUT_MS = 30_000;
 const HELLO_WORKER_INTERFACE_TYPE = "mcp.server";
 const HELLO_WORKER_INTERFACE_VERSION = "2025-11-25";
 const HELLO_WORKER_INTERFACE_PERMISSION = "mcp.invoke";
@@ -151,6 +162,90 @@ type JsonSmokeValue =
   | boolean
   | readonly JsonSmokeValue[]
   | { readonly [key: string]: JsonSmokeValue };
+type Sha256Digest = `sha256:${string}`;
+
+export interface DestroyEvidenceCheck {
+  readonly name: string;
+  readonly status: "passed";
+}
+
+/** Closed result emitted by an external Destroy evidence process. */
+export interface ExternalDestroyVerifierResult {
+  readonly kind: typeof EXTERNAL_DESTROY_VERIFIER_RESULT_KIND;
+  readonly verifierId: string;
+  readonly scriptDigest: Sha256Digest;
+  readonly checks: readonly DestroyEvidenceCheck[];
+}
+
+/** Host-owned evidence derived from one accepted external verifier result. */
+export interface DestroyEvidenceVerification {
+  readonly kind: typeof EXTERNAL_DESTROY_VERIFICATION_KIND;
+  readonly verifierId: string;
+  readonly scriptDigest: Sha256Digest;
+  readonly resultDigest: Sha256Digest;
+  readonly checks: readonly DestroyEvidenceCheck[];
+  readonly checkCount: number;
+  readonly durationMs: number;
+}
+
+/** Public, credential-free context offered to a post-Destroy verifier. */
+export interface DestroyEvidenceVerifierInput {
+  readonly capsuleId: string;
+  readonly destroyPlanRunId: string;
+  readonly destroyApplyRunId: string;
+  readonly publicOutputs: Readonly<Record<string, JsonSmokeValue>>;
+}
+
+/** Closed mode-0600 input file written for an external verifier process. */
+export interface ExternalDestroyVerifierInput {
+  readonly kind: typeof EXTERNAL_DESTROY_VERIFIER_INPUT_KIND;
+  readonly verifierId: string;
+  readonly scriptDigest: Sha256Digest;
+  readonly context: {
+    readonly capsuleId: string;
+    readonly destroyPlanRunId: string;
+    readonly destroyApplyRunId: string;
+  };
+  readonly publicOutputs: Readonly<Record<string, JsonSmokeValue>>;
+}
+
+/** Host-composed seam for optional post-Destroy evidence. */
+export interface DestroyEvidenceVerifier {
+  readonly verifierId: string;
+  readonly expectedCheckNames: readonly string[];
+  verify(input: DestroyEvidenceVerifierInput): Promise<DestroyEvidenceVerification>;
+}
+
+export interface ExternalDestroyEvidenceVerifierOptions {
+  readonly verifierId: string;
+  /** Bun/Node-loadable verifier script. It receives `--input-file <path>`. */
+  readonly script: string;
+  /** Exact ordered checks the child must return. */
+  readonly expectedCheckNames: readonly string[];
+  /** Explicitly forwarded environment names; no ambient environment is inherited. */
+  readonly envNames?: readonly string[];
+  /** Source environment from which only envNames are copied. */
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+  readonly timeoutMs?: number;
+}
+
+export type DestroyEvidenceVerifierErrorCode =
+  | "invalid_input"
+  | "spawn"
+  | "timeout"
+  | "output_too_large"
+  | "nonzero"
+  | "malformed_result";
+
+export class DestroyEvidenceVerifierError extends Error {
+  constructor(
+    readonly code: DestroyEvidenceVerifierErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "DestroyEvidenceVerifierError";
+  }
+}
 type SmokeOutputAllowlistType =
   "string" | "url" | "hostname" | "number" | "boolean" | "json";
 type SmokeOutputAllowlist = Readonly<
@@ -274,6 +369,8 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly functionalProbeScript?: string;
   readonly functionalProbeScriptDigest?: string;
   readonly functionalProbeEnvNames: readonly string[];
+  /** Optional host-composed verifier invoked after terminal Destroy Apply. */
+  readonly destroyEvidenceVerifier?: DestroyEvidenceVerifier;
   readonly sourceGitUrl?: string;
   readonly sourceRef?: string;
   readonly sourcePath?: string;
@@ -360,6 +457,7 @@ export interface PlatformControlPlaneSmokeResult {
   readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
   readonly publicUrlChecks?: readonly PublicUrlCheckResult[];
   readonly functionalProbe?: CapsuleFunctionalProbeEvidence;
+  readonly destroyEvidenceVerification?: DestroyEvidenceVerification;
   readonly capsuleGateStatus: SmokeCheckStatus;
   readonly policyStatus: SmokeCheckStatus;
   readonly workerUrl: string;
@@ -399,6 +497,8 @@ export interface PlatformControlPlaneSmokeResult {
     readonly runtimePublicUrlOutput?: string;
     readonly functionalProbeScriptDigest?: string;
     readonly functionalProbeEnvNames: readonly string[];
+    readonly destroyEvidenceVerifierId?: string;
+    readonly destroyEvidenceVerifierCheckNames?: readonly string[];
     readonly capsuleDir?: string;
     readonly sourceGitUrlDigest?: string;
     readonly sourceRef?: string;
@@ -477,6 +577,11 @@ interface CliArgs {
   readonly runtimePublicUrlOutput?: string;
   readonly functionalProbeScript?: string;
   readonly functionalProbeEnv?: string;
+  readonly destroyEvidenceVerifierScript?: string;
+  readonly destroyEvidenceVerifierId?: string;
+  readonly destroyEvidenceVerifierChecks?: string;
+  readonly destroyEvidenceVerifierEnv?: string;
+  readonly destroyEvidenceVerifierTimeoutSeconds?: string;
   readonly timeoutSeconds?: string;
   readonly deployTimeoutSeconds?: string;
   readonly pollIntervalMs?: string;
@@ -1198,6 +1303,54 @@ export async function resolveOptions(
       }
     }
   }
+  const destroyEvidenceVerifierScriptInput =
+    args.destroyEvidenceVerifierScript ??
+    env.TAKOSUMI_SMOKE_DESTROY_EVIDENCE_VERIFIER_SCRIPT;
+  const destroyEvidenceVerifierIdInput =
+    args.destroyEvidenceVerifierId ??
+    env.TAKOSUMI_SMOKE_DESTROY_EVIDENCE_VERIFIER_ID;
+  const destroyEvidenceVerifierChecksInput =
+    args.destroyEvidenceVerifierChecks ??
+    env.TAKOSUMI_SMOKE_DESTROY_EVIDENCE_VERIFIER_CHECKS;
+  const destroyEvidenceVerifierEnvInput =
+    args.destroyEvidenceVerifierEnv ??
+    env.TAKOSUMI_SMOKE_DESTROY_EVIDENCE_VERIFIER_ENV;
+  const destroyEvidenceVerifierTimeoutSecondsInput =
+    args.destroyEvidenceVerifierTimeoutSeconds ??
+    env.TAKOSUMI_SMOKE_DESTROY_EVIDENCE_VERIFIER_TIMEOUT_SECONDS;
+  const destroyEvidenceVerifierConfigured =
+    destroyEvidenceVerifierScriptInput !== undefined ||
+    destroyEvidenceVerifierIdInput !== undefined ||
+    destroyEvidenceVerifierChecksInput !== undefined ||
+    destroyEvidenceVerifierEnvInput !== undefined ||
+    destroyEvidenceVerifierTimeoutSecondsInput !== undefined;
+  const destroyEvidenceVerifier = destroyEvidenceVerifierConfigured
+    ? createExternalDestroyEvidenceVerifier({
+        verifierId: requiredDestroyEvidenceVerifierInput(
+          destroyEvidenceVerifierIdInput,
+          "--destroy-evidence-verifier-id",
+        ),
+        script: requiredDestroyEvidenceVerifierInput(
+          destroyEvidenceVerifierScriptInput,
+          "--destroy-evidence-verifier-script",
+        ),
+        expectedCheckNames: parseDestroyEvidenceVerifierCheckNames(
+          requiredDestroyEvidenceVerifierInput(
+            destroyEvidenceVerifierChecksInput,
+            "--destroy-evidence-verifier-checks",
+          ),
+        ),
+        envNames: parseDestroyEvidenceVerifierEnvNames(
+          destroyEvidenceVerifierEnvInput,
+        ),
+        timeoutMs:
+          parsePositiveInteger(
+            destroyEvidenceVerifierTimeoutSecondsInput,
+            "--destroy-evidence-verifier-timeout-seconds",
+            Math.ceil(DEFAULT_EXTERNAL_DESTROY_VERIFIER_TIMEOUT_MS / 1000),
+          ) * 1000,
+      })
+    : undefined;
   const appName = resolvedAppName;
   const explicitRunnerProfileId =
     args.runnerProfileId ?? env.TAKOSUMI_SMOKE_RUNNER_PROFILE_ID;
@@ -1241,6 +1394,9 @@ export async function resolveOptions(
     ...(functionalProbeScript ? { functionalProbeScript } : {}),
     ...(functionalProbeScriptDigest ? { functionalProbeScriptDigest } : {}),
     functionalProbeEnvNames,
+    ...(destroyEvidenceVerifier
+      ? { destroyEvidenceVerifier }
+      : {}),
     ...(sourceGitUrl ? { sourceGitUrl } : {}),
     ...(sourceRef ? { sourceRef } : {}),
     ...(sourceGitUrl ? { sourcePath } : {}),
@@ -1660,6 +1816,7 @@ export async function runPlatformControlPlaneSmoke(
   let releaseActivation: ReleaseActivationVerificationResult | undefined;
   let publicUrlChecks: readonly PublicUrlCheckResult[] | undefined;
   let functionalProbe: CapsuleFunctionalProbeEvidence | undefined;
+  let destroyEvidenceVerification: DestroyEvidenceVerification | undefined;
   let capsuleGateStatus: SmokeCheckStatus = "not_reached";
   let policyStatus: SmokeCheckStatus = "not_reached";
   let timedOutRunId: string | undefined;
@@ -1935,13 +2092,26 @@ export async function runPlatformControlPlaneSmoke(
     }, destroyProgress);
     recordDestroyProgress(destroyProgress);
     functionalProbe = finalizeFunctionalProbeCleanup(functionalProbe);
-    completeStep("destroy");
     if (destroyResult.destroyVerification?.status === "inconclusive") {
+      completeStep("destroy");
       failureCleanup = destroyFailureCleanupResult(destroyResult);
       throw new Error(
         `destroy completed but external Worker verification was inconclusive: ${destroyResult.destroyVerification.error ?? "unknown verification error"}`,
       );
     }
+    if (options.destroyEvidenceVerifier) {
+      destroyEvidenceVerification =
+        await options.destroyEvidenceVerifier.verify({
+          capsuleId,
+          destroyPlanRunId: destroyResult.destroyPlanRun.id,
+          destroyApplyRunId: destroyResult.destroyApplyRun.id,
+          publicOutputs: projectDestroyEvidencePublicOutputs(
+            stateVersionLedger.publicOutputs,
+            options.outputAllowlist,
+          ),
+        });
+    }
+    completeStep("destroy");
 
     if (interfaceMaterializationContext) {
       beginStep("interfaceRetiredVerified");
@@ -2034,6 +2204,7 @@ export async function runPlatformControlPlaneSmoke(
       cloudflareResourcePreflight,
       publicUrlChecks,
       functionalProbe,
+      destroyEvidenceVerification,
       capsuleGateStatus: "passed",
       policyStatus: policyStatus === "denied" ? failPolicy() : "passed",
       workerUrl: shouldVerifyCloudflareWorker(options)
@@ -2153,6 +2324,7 @@ export async function runPlatformControlPlaneSmoke(
     cloudflareResourcePreflight,
     publicUrlChecks,
     functionalProbe,
+    destroyEvidenceVerification,
     capsuleGateStatus,
     policyStatus,
     connectionRevoked,
@@ -2200,6 +2372,7 @@ export function failedResult(
     readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
     readonly publicUrlChecks?: readonly PublicUrlCheckResult[];
     readonly functionalProbe?: CapsuleFunctionalProbeEvidence;
+    readonly destroyEvidenceVerification?: DestroyEvidenceVerification;
     readonly capsuleGateStatus: SmokeCheckStatus;
     readonly policyStatus: SmokeCheckStatus;
     readonly connectionRevoked?: boolean;
@@ -2270,6 +2443,7 @@ export function failedResult(
     cloudflareResourcePreflight: input.cloudflareResourcePreflight,
     publicUrlChecks: input.publicUrlChecks,
     functionalProbe: input.functionalProbe,
+    destroyEvidenceVerification: input.destroyEvidenceVerification,
     capsuleGateStatus: input.capsuleGateStatus,
     policyStatus: input.policyStatus,
     workerUrl: failedResultWorkerUrl(
@@ -5513,6 +5687,85 @@ function parseFunctionalProbeEnvNames(
   return names.sort();
 }
 
+function parseExplicitEnvironmentNames(
+  values: readonly string[],
+  label: string,
+): readonly string[] {
+  const names = [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+  for (const name of names) {
+    if (
+      Buffer.byteLength(name) > MAX_EXTERNAL_DESTROY_VERIFIER_ENV_NAME_BYTES ||
+      !/^[A-Z][A-Z0-9_]*$/u.test(name)
+    ) {
+      throw new DestroyEvidenceVerifierError(
+        "invalid_input",
+        `${label} must contain uppercase environment variable names`,
+      );
+    }
+  }
+  return names.sort();
+}
+
+function requiredDestroyEvidenceVerifierInput(
+  value: string | undefined,
+  label: string,
+): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${label} is required when an external Destroy verifier is configured`);
+  }
+  return value.trim();
+}
+
+function parseDestroyEvidenceVerifierCheckNames(raw: string): readonly string[] {
+  const value = raw.trim();
+  if (!value) {
+    throw new Error("--destroy-evidence-verifier-checks must contain check names");
+  }
+  if (value.startsWith("[")) {
+    const parsed = parseJsonValue(value, "--destroy-evidence-verifier-checks");
+    if (!Array.isArray(parsed)) {
+      throw new Error("--destroy-evidence-verifier-checks JSON must be an array");
+    }
+    if (!parsed.every((entry) => typeof entry === "string")) {
+      throw new Error(
+        "--destroy-evidence-verifier-checks JSON must contain only strings",
+      );
+    }
+    try {
+      return normalizeDestroyEvidenceCheckNames(
+        parsed as readonly string[],
+        "--destroy-evidence-verifier-checks",
+      );
+    } catch (error) {
+      if (error instanceof DestroyEvidenceVerifierError) {
+        throw new Error(error.message);
+      }
+      throw error;
+    }
+  }
+  try {
+    return normalizeDestroyEvidenceCheckNames(
+      value.split(",").map((entry) => entry.trim()),
+      "--destroy-evidence-verifier-checks",
+    );
+  } catch (error) {
+    if (error instanceof DestroyEvidenceVerifierError) {
+      throw new Error(error.message);
+    }
+    throw error;
+  }
+}
+
+function parseDestroyEvidenceVerifierEnvNames(
+  raw: string | undefined,
+): readonly string[] {
+  if (!raw?.trim()) return [];
+  return parseExplicitEnvironmentNames(
+    raw.split(","),
+    "--destroy-evidence-verifier-env",
+  );
+}
+
 function normalizeBaseUrl(value: string): string {
   const url = new URL(value);
   url.pathname = url.pathname.replace(/\/+$/g, "");
@@ -6399,6 +6652,8 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly runtimePublicUrlOutput?: string;
   readonly functionalProbeScriptDigest?: string;
   readonly functionalProbeEnvNames: readonly string[];
+  readonly destroyEvidenceVerifierId?: string;
+  readonly destroyEvidenceVerifierCheckNames?: readonly string[];
   readonly capsuleDir?: string;
   readonly sourceGitUrlDigest?: string;
   readonly sourceRef?: string;
@@ -6457,6 +6712,13 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
       ? { functionalProbeScriptDigest: options.functionalProbeScriptDigest }
       : {}),
     functionalProbeEnvNames: options.functionalProbeEnvNames,
+    ...(options.destroyEvidenceVerifier
+      ? {
+          destroyEvidenceVerifierId: options.destroyEvidenceVerifier.verifierId,
+          destroyEvidenceVerifierCheckNames:
+            options.destroyEvidenceVerifier.expectedCheckNames,
+        }
+      : {}),
     ...(options.sourceGitUrl
       ? {
           sourceGitUrlDigest: sha256(options.sourceGitUrl),
@@ -6486,6 +6748,10 @@ function sha256(value: string): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
+function sha256Bytes(value: Uint8Array): Sha256Digest {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
 function digestJson(value: unknown): string {
   return sha256(stableJson(value));
 }
@@ -6501,6 +6767,414 @@ function stableJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+function assertCanonicalDestroyEvidenceVerifierId(
+  value: unknown,
+  label: string,
+): string {
+  if (typeof value !== "string" || value.trim() !== value || !value) {
+    throw new DestroyEvidenceVerifierError(
+      "invalid_input",
+      `${label} must be a non-empty canonical identifier`,
+    );
+  }
+  // Verifier identities are namespaced published ids (for example
+  // `takos/takoserver-native-absence@v1`), so retain the slash and version
+  // marker as part of the canonical identity rather than normalising it away.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/@:-]{0,127}$/u.test(value)) {
+    throw new DestroyEvidenceVerifierError(
+      "invalid_input",
+      `${label} must be a canonical identifier`,
+    );
+  }
+  return value;
+}
+
+function normalizeDestroyEvidenceCheckNames(
+  names: readonly string[],
+  label: string,
+): readonly string[] {
+  if (!Array.isArray(names) || names.length === 0) {
+    throw new DestroyEvidenceVerifierError(
+      "invalid_input",
+      `${label} must contain at least one check name`,
+    );
+  }
+  if (names.length > MAX_EXTERNAL_DESTROY_VERIFIER_CHECKS) {
+    throw new DestroyEvidenceVerifierError(
+      "invalid_input",
+      `${label} must contain at most ${MAX_EXTERNAL_DESTROY_VERIFIER_CHECKS} checks`,
+    );
+  }
+  const normalized = names.map((name, index) => {
+    if (
+      typeof name !== "string" ||
+      name.length === 0 ||
+      name.trim() !== name ||
+      Buffer.byteLength(name) > MAX_EXTERNAL_DESTROY_VERIFIER_CHECK_NAME_BYTES ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(name)
+    ) {
+      throw new DestroyEvidenceVerifierError(
+        "invalid_input",
+        `${label}[${index}] must be a bounded canonical check name`,
+      );
+    }
+    return name;
+  });
+  if (new Set(normalized).size !== normalized.length) {
+    throw new DestroyEvidenceVerifierError(
+      "invalid_input",
+      `${label} must contain unique check names`,
+    );
+  }
+  return normalized;
+}
+
+function assertClosedObjectKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+  label: string,
+): void {
+  const actual = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  if (
+    actual.length !== sortedExpected.length ||
+    actual.some((key, index) => key !== sortedExpected[index])
+  ) {
+    throw new Error(
+      `${label} contains unexpected or missing fields`,
+    );
+  }
+}
+
+/** Parse and validate one exact external verifier stdout result. */
+export function assertExternalDestroyVerifierResult(
+  value: unknown,
+  input: {
+    readonly verifierId: string;
+    readonly scriptDigest: string;
+    readonly expectedCheckNames: readonly string[];
+  },
+): ExternalDestroyVerifierResult {
+  if (!isRecord(value)) {
+    throw new Error("external destroy verifier result must be an object");
+  }
+  assertClosedObjectKeys(
+    value,
+    ["checks", "kind", "scriptDigest", "verifierId"],
+    "external destroy verifier result",
+  );
+  if (value.kind !== EXTERNAL_DESTROY_VERIFIER_RESULT_KIND) {
+    throw new Error("external destroy verifier result kind is invalid");
+  }
+  if (value.verifierId !== input.verifierId) {
+    throw new Error("external destroy verifier result verifierId mismatched");
+  }
+  if (value.scriptDigest !== input.scriptDigest) {
+    throw new Error("external destroy verifier result scriptDigest mismatched");
+  }
+  if (!/^sha256:[0-9a-f]{64}$/u.test(input.scriptDigest)) {
+    throw new Error("external destroy verifier scriptDigest is invalid");
+  }
+  const expectedCheckNames = normalizeDestroyEvidenceCheckNames(
+    input.expectedCheckNames,
+    "external destroy verifier expectedCheckNames",
+  );
+  if (!Array.isArray(value.checks)) {
+    throw new Error("external destroy verifier result checks must be an array");
+  }
+  if (value.checks.length !== expectedCheckNames.length) {
+    throw new Error(
+      `external destroy verifier result checks must contain exactly ${expectedCheckNames.length} entries`,
+    );
+  }
+  const checks = value.checks.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`external destroy verifier result checks[${index}] must be an object`);
+    }
+    assertClosedObjectKeys(entry, ["name", "status"], `external destroy verifier result checks[${index}]`);
+    if (
+      typeof entry.name !== "string" ||
+      entry.name.length === 0 ||
+      entry.name.trim() !== entry.name ||
+      Buffer.byteLength(entry.name) > MAX_EXTERNAL_DESTROY_VERIFIER_CHECK_NAME_BYTES ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(entry.name)
+    ) {
+      throw new Error(
+        `external destroy verifier result checks[${index}].name is invalid`,
+      );
+    }
+    if (entry.status !== "passed") {
+      throw new Error(
+        `external destroy verifier result checks[${index}].status is not passed`,
+      );
+    }
+    if (entry.name !== expectedCheckNames[index]) {
+      throw new Error(
+        `external destroy verifier result checks[${index}] did not match the expected ordered check name`,
+      );
+    }
+    return { name: entry.name, status: "passed" as const };
+  });
+  if (new Set(checks.map((check) => check.name)).size !== checks.length) {
+    throw new Error("external destroy verifier result check names must be unique");
+  }
+  return {
+    kind: EXTERNAL_DESTROY_VERIFIER_RESULT_KIND,
+    verifierId: input.verifierId,
+    scriptDigest: input.scriptDigest as Sha256Digest,
+    checks,
+  };
+}
+
+/** Keep only names in the smoke output projection for the child input file. */
+export function projectDestroyEvidencePublicOutputs(
+  publicOutputs: Readonly<Record<string, unknown>> | undefined,
+  outputAllowlist: SmokeOutputAllowlist,
+): Readonly<Record<string, JsonSmokeValue>> {
+  const projected: Record<string, JsonSmokeValue> = {};
+  if (!publicOutputs) return projected;
+  for (const name of Object.keys(outputAllowlist).sort()) {
+    if (!Object.prototype.hasOwnProperty.call(publicOutputs, name)) continue;
+    const value = publicOutputs[name];
+    if (!isJsonSmokeValue(value)) {
+      throw new DestroyEvidenceVerifierError(
+        "invalid_input",
+        `projected public Output ${name} is not JSON-compatible`,
+      );
+    }
+    projected[name] = value;
+  }
+  return projected;
+}
+
+export class ExternalProcessDestroyEvidenceVerifier
+  implements DestroyEvidenceVerifier {
+  readonly verifierId: string;
+  readonly expectedCheckNames: readonly string[];
+  readonly envNames: readonly string[];
+  readonly script: string;
+  readonly timeoutMs: number;
+  #sourceEnvironment?: Readonly<
+    Record<string, string | undefined>
+  >;
+
+  constructor(options: ExternalDestroyEvidenceVerifierOptions) {
+    this.verifierId = assertCanonicalDestroyEvidenceVerifierId(
+      options.verifierId,
+      "destroy evidence verifierId",
+    );
+    if (typeof options.script !== "string" || !options.script.trim()) {
+      throw new DestroyEvidenceVerifierError(
+        "invalid_input",
+        "destroy evidence verifier script is required",
+      );
+    }
+    this.script = resolve(options.script);
+    this.expectedCheckNames = normalizeDestroyEvidenceCheckNames(
+      options.expectedCheckNames,
+      "destroy evidence verifier expectedCheckNames",
+    );
+    this.envNames = parseExplicitEnvironmentNames(
+      options.envNames ?? [],
+      "destroy evidence verifier envNames",
+    );
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_EXTERNAL_DESTROY_VERIFIER_TIMEOUT_MS;
+    if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 1) {
+      throw new DestroyEvidenceVerifierError(
+        "invalid_input",
+        "destroy evidence verifier timeoutMs must be a positive integer",
+      );
+    }
+    if (options.environment !== undefined) {
+      const selectedEnvironment: Record<string, string | undefined> = {};
+      for (const name of this.envNames) {
+        const value = options.environment[name];
+        if (value !== undefined) selectedEnvironment[name] = value;
+      }
+      this.#sourceEnvironment = selectedEnvironment;
+    }
+  }
+
+  private freshForwardedEnvironment(): NodeJS.ProcessEnv {
+    const sourceEnvironment = this.#sourceEnvironment ?? process.env;
+    const forwardedEnvironment: NodeJS.ProcessEnv = {};
+    for (const name of this.envNames) {
+      const value = sourceEnvironment[name];
+      if (value !== undefined) forwardedEnvironment[name] = value;
+    }
+    return forwardedEnvironment;
+  }
+
+  async verify(
+    input: DestroyEvidenceVerifierInput,
+  ): Promise<DestroyEvidenceVerification> {
+    const capsuleId = assertCanonicalDestroyEvidenceVerifierId(
+      input.capsuleId,
+      "destroy evidence capsuleId",
+    );
+    const destroyPlanRunId = assertCanonicalDestroyEvidenceVerifierId(
+      input.destroyPlanRunId,
+      "destroy evidence destroyPlanRunId",
+    );
+    const destroyApplyRunId = assertCanonicalDestroyEvidenceVerifierId(
+      input.destroyApplyRunId,
+      "destroy evidence destroyApplyRunId",
+    );
+    if (!isRecord(input.publicOutputs) || !isJsonRecord(input.publicOutputs)) {
+      throw new DestroyEvidenceVerifierError(
+        "invalid_input",
+        "destroy evidence publicOutputs must be a JSON object",
+      );
+    }
+    const forwardedEnvironment = this.freshForwardedEnvironment();
+    for (const name of this.envNames) {
+      if (forwardedEnvironment[name] === undefined) {
+        throw new DestroyEvidenceVerifierError(
+          "invalid_input",
+          `destroy evidence verifier environment variable ${name} is not set`,
+        );
+      }
+    }
+
+    const startedAtMs = Date.now();
+    const tempDir = await mkdtemp(
+      resolve(tmpdir(), "takosumi-external-destroy-verifier-"),
+    );
+    const inputFile = resolve(tempDir, "input.json");
+    try {
+      let scriptBytes: Buffer;
+      try {
+        scriptBytes = await readFile(this.script);
+      } catch {
+        throw new DestroyEvidenceVerifierError(
+          "spawn",
+          "destroy evidence verifier script could not be read",
+        );
+      }
+      const scriptDigest = sha256Bytes(scriptBytes);
+      const verifierInput: ExternalDestroyVerifierInput = {
+        kind: EXTERNAL_DESTROY_VERIFIER_INPUT_KIND,
+        verifierId: this.verifierId,
+        scriptDigest,
+        context: {
+          capsuleId,
+          destroyPlanRunId,
+          destroyApplyRunId,
+        },
+        publicOutputs: input.publicOutputs,
+      };
+      await writeFile(inputFile, `${stableJson(verifierInput)}\n`, {
+        mode: 0o600,
+      });
+
+      const child = spawn(process.execPath, [this.script, "--input-file", inputFile], {
+        cwd: dirname(this.script),
+        env: forwardedEnvironment,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      let outputBytes = 0;
+      let outputTooLarge = false;
+      let spawnError: Error | undefined;
+      let timedOut = false;
+      const collect = (target: Buffer[], chunk: Buffer): void => {
+        if (outputTooLarge) return;
+        if (outputBytes + chunk.length > MAX_EXTERNAL_DESTROY_VERIFIER_OUTPUT_BYTES) {
+          outputTooLarge = true;
+          child.kill("SIGKILL");
+          return;
+        }
+        outputBytes += chunk.length;
+        target.push(Buffer.from(chunk));
+      };
+      child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
+      child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+      child.on("error", (error) => {
+        spawnError = error;
+      });
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, this.timeoutMs);
+      const exitCode = await new Promise<number>((resolveExit) => {
+        child.on("close", (code) => resolveExit(code ?? 1));
+      });
+      clearTimeout(timeout);
+      if (spawnError) {
+        throw new DestroyEvidenceVerifierError(
+          "spawn",
+          "destroy evidence verifier process could not start",
+        );
+      }
+      if (timedOut) {
+        throw new DestroyEvidenceVerifierError(
+          "timeout",
+          `destroy evidence verifier timed out after ${this.timeoutMs}ms`,
+        );
+      }
+      if (outputTooLarge) {
+        throw new DestroyEvidenceVerifierError(
+          "output_too_large",
+          `destroy evidence verifier output exceeded ${MAX_EXTERNAL_DESTROY_VERIFIER_OUTPUT_BYTES} bytes`,
+        );
+      }
+      if (exitCode !== 0) {
+        throw new DestroyEvidenceVerifierError(
+          "nonzero",
+          `destroy evidence verifier exited with ${exitCode}`,
+        );
+      }
+      const raw = Buffer.concat(stdout).toString("utf8").trim();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw new DestroyEvidenceVerifierError(
+          "malformed_result",
+          "destroy evidence verifier stdout must be one JSON object",
+        );
+      }
+      let result: ExternalDestroyVerifierResult;
+      try {
+        result = assertExternalDestroyVerifierResult(parsed, {
+          verifierId: this.verifierId,
+          scriptDigest,
+          expectedCheckNames: this.expectedCheckNames,
+        });
+      } catch (error) {
+        throw new DestroyEvidenceVerifierError(
+          "malformed_result",
+          `destroy evidence verifier result was invalid: ${publicErrorMessage(error).slice(0, 240)}`,
+        );
+      }
+      return {
+        kind: EXTERNAL_DESTROY_VERIFICATION_KIND,
+        verifierId: this.verifierId,
+        scriptDigest,
+        resultDigest: digestJson(result) as Sha256Digest,
+        checks: result.checks,
+        checkCount: result.checks.length,
+        durationMs: Math.max(0, Date.now() - startedAtMs),
+      };
+    } catch (error) {
+      if (error instanceof DestroyEvidenceVerifierError) throw error;
+      throw new DestroyEvidenceVerifierError(
+        "spawn",
+        `destroy evidence verifier process failed: ${publicErrorMessage(error).slice(0, 240)}`,
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  }
+}
+
+export function createExternalDestroyEvidenceVerifier(
+  options: ExternalDestroyEvidenceVerifierOptions,
+): DestroyEvidenceVerifier {
+  return new ExternalProcessDestroyEvidenceVerifier(options);
 }
 
 async function runCapsuleFunctionalProbe(
@@ -7692,6 +8366,11 @@ Options:
   --runtime-public-url-output <name>              optional explicit projected URL Output name; otherwise the Cloudflare reference URL is derived from --app-name
   --functional-probe-script <path>                run a local Bun probe after apply/public checks and before destroy; ordinary projected Outputs are available through TAKOSUMI_CAPSULE_OUTPUTS_FILE and stdout must be takosumi.capsule-functional-probe@v1 JSON
   --functional-probe-env <NAME,...>               explicitly forward only these environment variables to the functional probe
+  --destroy-evidence-verifier-script <path>        optional post-Destroy verifier; or TAKOSUMI_SMOKE_DESTROY_EVIDENCE_VERIFIER_SCRIPT
+  --destroy-evidence-verifier-id <id>              verifier identity; or TAKOSUMI_SMOKE_DESTROY_EVIDENCE_VERIFIER_ID
+  --destroy-evidence-verifier-checks <names>       ordered comma-separated names (or JSON string array); or TAKOSUMI_SMOKE_DESTROY_EVIDENCE_VERIFIER_CHECKS
+  --destroy-evidence-verifier-env <NAME,...>       explicitly forward only these environment variables; or TAKOSUMI_SMOKE_DESTROY_EVIDENCE_VERIFIER_ENV
+  --destroy-evidence-verifier-timeout-seconds <n>  child timeout, default 30; or TAKOSUMI_SMOKE_DESTROY_EVIDENCE_VERIFIER_TIMEOUT_SECONDS
   --require-release-activation <any|pending|succeeded|failed|none>
                                                    require a release_activation Activity event for the apply Run; default none
   --expected-service-identity-header <name>        optional provider-neutral immutable service identity header; requires --expected-service-identity
