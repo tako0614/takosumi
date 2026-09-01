@@ -1896,3 +1896,284 @@ output "value" {
   ]);
   expect(result.level).toBe("ready");
 });
+
+test("recognizes every OpenTofu configuration spelling instead of silently ignoring it", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "versions.tofu",
+        text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+`,
+      },
+      {
+        path: "providers.tf.json",
+        text: JSON.stringify({
+          terraform: {
+            required_providers: {
+              random: { source: "hashicorp/random", version: "~> 3.6" },
+            },
+          },
+        }),
+      },
+      {
+        path: "takoform.tofu.json",
+        text: JSON.stringify({
+          terraform: [
+            {
+              required_providers: [{ takoform: { source: "tako0614/takoform" } }],
+            },
+          ],
+        }),
+      },
+      {
+        path: "main.tf",
+        text: `
+resource "cloudflare_workers_kv_namespace" "app" {
+  title = "app"
+}
+
+output "namespace_id" {
+  value = cloudflare_workers_kv_namespace.app.id
+}
+`,
+      },
+    ],
+  });
+
+  // Every spelling contributes its provider requirements, canonicalized.
+  expect(
+    result.rootProviderRequirements
+      .map((requirement) => requirement.source)
+      .sort(),
+  ).toEqual([
+    "registry.opentofu.org/cloudflare/cloudflare",
+    "registry.opentofu.org/hashicorp/random",
+    "registry.opentofu.org/tako0614/takoform",
+  ]);
+  // JSON spellings are refused explicitly (fail closed) rather than dropped.
+  const jsonFindings = result.findings.filter(
+    (finding) => finding.code === "opentofu_json_semantics_unsupported",
+  );
+  expect(jsonFindings.map((finding) => finding.path).sort()).toEqual([
+    "providers.tf.json",
+    "takoform.tofu.json",
+  ]);
+  expect(result.level).toBe("unsupported");
+});
+
+test("discovers one provider declared only in a .tofu file", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tofu",
+        text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+resource "cloudflare_workers_kv_namespace" "app" {
+  title = "app"
+}
+
+output "namespace_id" {
+  value = cloudflare_workers_kv_namespace.app.id
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.rootProviderRequirements).toMatchObject([
+    {
+      source: "registry.opentofu.org/cloudflare/cloudflare",
+      moduleLocalName: "cloudflare",
+    },
+  ]);
+  expect(result.rootModuleOutputs).toEqual([
+    { name: "namespace_id", sensitive: false, ephemeral: false },
+  ]);
+});
+
+test("refuses a JSON-only module explicitly rather than treating it as empty", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tofu.json",
+        text: JSON.stringify({
+          variable: { base_domain: { type: "string" } },
+          output: { public_origin: { value: "https://${var.base_domain}" } },
+        }),
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(
+    result.findings.filter(
+      (finding) => finding.code === "opentofu_json_semantics_unsupported",
+    ),
+  ).toMatchObject([{ severity: "error", path: "main.tofu.json" }]);
+  expect(
+    result.findings.some(
+      (finding) => finding.code === "opentofu_configuration_missing",
+    ),
+  ).toBe(false);
+});
+
+test("follows module blocks into a .tofu child module and ignores sibling directories", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+module "storage" {
+  source      = "./modules/storage"
+  bucket_name = "attachments"
+}
+
+output "bucket" {
+  value = module.storage.bucket
+}
+`,
+      },
+      {
+        path: "modules/storage/main.tofu",
+        text: `
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
+
+resource "aws_s3_bucket" "b" {
+  bucket = var.bucket_name
+}
+
+variable "bucket_name" {
+  type = string
+}
+
+output "bucket" {
+  value = aws_s3_bucket.b.bucket
+}
+`,
+      },
+      {
+        path: "other/main.tofu",
+        text: `
+terraform {
+  required_providers {
+    google = {
+      source = "hashicorp/google"
+    }
+  }
+}
+
+resource "google_storage_bucket" "ignored" {
+  name = "x"
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.providerPackages.map((pkg) => pkg.source)).toEqual([
+    "registry.opentofu.org/hashicorp/aws",
+  ]);
+  expect(result.resources).toEqual([
+    { type: "aws_s3_bucket", count: 1, allowed: true },
+  ]);
+  expect(result.rootModuleVariables).toEqual([]);
+  expect(result.rootModuleOutputs).toEqual([
+    { name: "bucket", sensitive: false, ephemeral: false },
+  ]);
+});
+
+test("reports JSON config that cannot be parsed instead of silently ignoring its providers", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      { path: "main.tf.json", text: "{ not json" },
+      { path: "outputs.tf", text: 'output "x" {\n  value = 1\n}\n' },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(
+    result.findings.filter((finding) => finding.code === "opentofu_json_invalid"),
+  ).toMatchObject([{ severity: "error", path: "main.tf.json" }]);
+});
+
+test("detects credential-like provider attributes and provisioners declared in a .tofu file", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tofu",
+        text: `
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
+
+provider "aws" {
+  region     = "us-east-1"
+  access_key = "AKIA-fixture"
+}
+
+resource "aws_instance" "web" {
+  ami = "ami-1"
+
+  provisioner "local-exec" {
+    command = "echo hello"
+  }
+}
+
+output "ip" {
+  value = aws_instance.web.public_ip
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(result.findings.map((finding) => finding.code)).toEqual(
+    expect.arrayContaining([
+      "provider_credentials_in_source",
+      "provisioner_unsupported",
+    ]),
+  );
+  expect(result.provisioners).toEqual([{ type: "local-exec", allowed: false }]);
+  expect(result.resources).toEqual([
+    { type: "aws_instance", count: 1, allowed: true },
+  ]);
+});
