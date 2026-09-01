@@ -25,7 +25,15 @@ const KNOWN_RUN_ERROR_HINTS: Readonly<Record<string, MessageKey>> = {
 };
 
 /** Friendly failure hint for a run summary — never the raw error code. */
-export function runFailureHint(errorCode: string | undefined): string {
+export function runFailureHint(
+  errorCode: string | undefined,
+  /**
+   * Hint to use when the error code is unclassified. The default points at
+   * the run screen's diagnostics and logs, which do not exist on every screen
+   * that reports a failed run — a caller without them must say where to look.
+   */
+  fallbackKey: MessageKey = "run.summary.failedHint",
+): string {
   const key = errorCode ? KNOWN_RUN_ERROR_HINTS[errorCode] : undefined;
-  return t(key ?? "run.summary.failedHint");
+  return t(key ?? fallbackKey);
 }

@@ -5,7 +5,7 @@
  * identity, validation, uniqueness, and persistence remain in core.
  */
 import type { ControlDispatchContext } from "./shared.ts";
-import { requireWorkspaceAccess } from "./shared.ts";
+import { requireResourceWorkspaceAccess } from "./shared.ts";
 import {
   errorJson,
   json,
@@ -58,7 +58,7 @@ export async function handleProjects(
   if (method !== "GET") return methodNotAllowed("GET");
   const projectId = decodeURIComponent(segments[1] ?? "");
   const project = await ctx.operations.projects.getProject(projectId);
-  const auth = await requireWorkspaceAccess({
+  const auth = await requireResourceWorkspaceAccess({
     operations: ctx.operations,
     store: ctx.store,
     workspaceId: project.workspaceId,

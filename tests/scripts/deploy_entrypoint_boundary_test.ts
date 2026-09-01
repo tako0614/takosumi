@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "../..");
 
-test("OSS deploy entrypoint cannot publish the official hosted platform Worker", async () => {
+test("OSS deploy contract exposes only its platform Worker and website surfaces", async () => {
   const child = Bun.spawn(["bun", "scripts/deploy.mjs", "--contract"], {
     cwd: root,
     stdout: "pipe",
@@ -23,6 +23,10 @@ test("OSS deploy entrypoint cannot publish the official hosted platform Worker",
   };
   expect(contract.surfaces).toEqual([
     expect.objectContaining({
+      surface: "takosumi-platform",
+      target: "cloudflare-worker:takosumi",
+    }),
+    expect.objectContaining({
       surface: "takosumi-website",
       target: "cloudflare-pages:takosumi-website",
     }),
@@ -31,5 +35,11 @@ test("OSS deploy entrypoint cannot publish the official hosted platform Worker",
   const source = await Bun.file(resolve(root, "scripts/deploy.mjs")).text();
   expect(source).not.toContain("TAKOSUMI_WRANGLER_CONFIG");
   expect(source).not.toContain("takosumi-platform-worker");
-  expect(source).not.toMatch(/wrangler",\s*\["deploy"/u);
+  expect(source).toMatch(/surface:\s*["']takosumi-platform["']/u);
+  expect(source).toMatch(/wrangler["'],\s*\["deploy"/u);
+  expect(source).not.toMatch(/Workers?\s+for\s+Platforms/iu);
+  expect(source).not.toMatch(/\bWfP\b/iu);
+  expect(source).not.toMatch(/\bModuleWorker\b/iu);
+  expect(source).not.toMatch(/Takoserver/iu);
+  expect(source).not.toMatch(/managed customer(?: runtime| worker)?/iu);
 });

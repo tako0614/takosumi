@@ -12,6 +12,7 @@ import {
   capsuleLeaseScope,
   capsuleResourceAdmissionScope,
   withCapsuleResourceAdmission,
+  workspaceRunSlotScope,
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
@@ -145,6 +146,10 @@ function controllerWith(
   return new OpenTofuController({
     store,
     capsuleCoordination: coordination,
+    // The fairness fence parks a run by throwing for an external run owner to
+    // re-arm, so it only engages when one is composed in. Without this the
+    // controller runs inline and the fence stays off by design.
+    enqueueRun: () => Promise.resolve(),
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: () => 1,
     newId: ((): ((p: string) => string) => {
@@ -297,4 +302,87 @@ test("Capsule Resource admission is mutually exclusive in either race ordering",
   expect(capsuleResourceAdmissionScope("cap_admission")).toBe(
     "capsule-resource-admission:cap_admission",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Workspace run-slot fairness fence
+// ---------------------------------------------------------------------------
+
+test("an apply parks queued when every workspace run slot is held", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedApply(store, {
+    capsuleId: "cap_slots001",
+    planRunId: "plan_slots_a",
+    applyRunId: "apply_slots_a",
+  });
+  const coordination = new InMemoryCapsuleCoordination();
+  // Default concurrency is 2: hold both slots as if sibling runs were live.
+  for (const slot of [0, 1]) {
+    const held = await coordination.acquireLease({
+      scope: workspaceRunSlotScope("ws_cap_slots001", slot),
+      holderId: `sibling-${slot}`,
+      ttlMs: 60_000,
+    });
+    expect(held.acquired).toBe(true);
+  }
+  const controller = controllerWith(store, coordination, {
+    apply: () => Promise.reject(new Error("must not dispatch")),
+  });
+
+  await expect(
+    controller.runQueuedApply("apply_slots_a"),
+  ).rejects.toBeInstanceOf(CapsuleLeaseBusyError);
+  // Parked, not failed: the run is still queued and the plan is not burned.
+  expect((await store.getApplyRun("apply_slots_a"))?.status).toBe("queued");
+});
+
+test("another workspace's held run slots do not park this workspace's apply", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedApply(store, {
+    capsuleId: "cap_slots002",
+    planRunId: "plan_slots_b",
+    applyRunId: "apply_slots_b",
+  });
+  const coordination = new InMemoryCapsuleCoordination();
+  for (const slot of [0, 1]) {
+    await coordination.acquireLease({
+      scope: workspaceRunSlotScope("ws_other_workspace", slot),
+      holderId: `sibling-${slot}`,
+      ttlMs: 60_000,
+    });
+  }
+  let applied = false;
+  const controller = controllerWith(store, coordination, {
+    apply: () => {
+      applied = true;
+      return Promise.resolve(fixtureStateCommit());
+    },
+  });
+
+  await controller.runQueuedApply("apply_slots_b");
+  expect(applied).toBe(true);
+});
+
+test("the run slot is released after the apply completes", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedApply(store, {
+    capsuleId: "cap_slots003",
+    planRunId: "plan_slots_c",
+    applyRunId: "apply_slots_c",
+  });
+  const coordination = new InMemoryCapsuleCoordination();
+  const controller = controllerWith(store, coordination, {
+    apply: () => Promise.resolve(fixtureStateCommit()),
+  });
+  await controller.runQueuedApply("apply_slots_c");
+
+  // Both slots must be free again.
+  for (const slot of [0, 1]) {
+    const lease = await coordination.acquireLease({
+      scope: workspaceRunSlotScope("ws_cap_slots003", slot),
+      holderId: "probe",
+      ttlMs: 1_000,
+    });
+    expect(lease.acquired).toBe(true);
+  }
 });

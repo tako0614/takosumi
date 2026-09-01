@@ -609,30 +609,6 @@ export class SourcesService {
     };
   }
 
-  /**
-   * Resolves the Capsule Gate policy for a pre-install compatibility check that
-   * carries a service-side `installConfigId` but no Capsule yet. The
-   * InstallConfig's bounded policy is merged with
-   * the Workspace policy as a ceiling, exactly as {@link
-   * #compatibilityContextForCapsule} does for an existing Capsule. The
-   * instance-wide default allowlist is never touched: the analyzer UNIONs this
-   * bounded policy with the default, so the extra allowance is scoped to this
-   * single vetted config and the SAME policy is enforced again at plan/apply.
-   * A Workspace-neutral config is usable from any Workspace; a
-   * Workspace-scoped config must belong to the requesting Workspace.
-   */
-  async #compatibilityPolicyForInstallConfig(
-    workspaceId: string,
-    installConfigId: string | undefined,
-  ): Promise<PolicyConfig | undefined> {
-    return (
-      await this.#compatibilityContextForInstallConfig(
-        workspaceId,
-        installConfigId,
-      )
-    ).policy;
-  }
-
   async #compatibilityContextForInstallConfig(
     workspaceId: string,
     installConfigId: string | undefined,

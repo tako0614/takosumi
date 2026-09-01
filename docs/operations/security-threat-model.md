@@ -11,8 +11,11 @@ record a separate private acceptance reference.
 The model covers one operator-selected Takosumi origin containing Accounts,
 OIDC, dashboard, control plane, and runner dispatch. It also covers the
 operator-selected database/object/queue substrates and runner executors.
-Takosumi Cloud adds a closed commercial/Cloud-capacity layer through public
-OSS seams; OSS does not trust or depend on that layer.
+Takosumi Hosted may add retail/commerce/client composition through public OSS
+seams. Takoserver is a separate external Host for managed supply. OSS does not
+trust or depend on either product, and never receives Takoserver parent provider
+credentials, backend/capacity selection, WfP namespace/dispatcher, or native
+managed-resource identity. Takosumi Cloud is a retired historical identity.
 
 Trust crosses these boundaries:
 
@@ -59,7 +62,7 @@ public repository.
 | Secret leakage through Output/Interface/log/audit             | Sensitive Outputs are excluded; Interface accepts non-secret declared inputs only; logs/diagnostics/audit use redaction and secret-boundary tests.                                  |
 | Audit deletion/suppression                                    | Chained immutable events, external append-only replication where configured, backup/restore chain verification, and operator rotation/run logs are required.                        |
 | Tenant DoS, quota bypass, or billing abuse                    | Bounded inputs, queue/lease controls, quotas/rate limits, kill switch, noisy-tenant tests, and audited operator override are required.                                              |
-| Closed-host boundary leak                                     | Dependency direction stays Cloud to OSS; closed billing/capacity internals do not enter public contracts or become required by self-hosted Takosumi.                                |
+| External product/Host boundary leak                           | Hosted depends one-way on OSS public seams; Takoserver managed-supply credentials, capacity, WfP routing, billing, and native identities do not enter OSS contracts or become required by self-hosted Takosumi. |
 
 ## Review and change triggers
 

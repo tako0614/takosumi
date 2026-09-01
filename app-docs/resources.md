@@ -1,5 +1,12 @@
 # Resources and providers
 
+> **歴史資料（アーカイブ）— 現行の正本ではありません。** このページは退役した
+> Takosumi Cloud の計画・実装を記録したものです。現行の availability、pricing、SLA、
+> support、production authority を示しません。Takosumi Hosted が新しい
+> retail/commerce/client composition docs を所有し、managed supply、capacity、provider
+> credential、Offering は Takoserver が所有します。本文は歴史的証拠として保持しており、
+> 現行サービスの根拠に使わないでください。
+
 Takosumi Cloud で使う cloud resource は、Git repository の OpenTofu module が宣言し、
 選択した provider が作成します。Takosumi は provider を置き換えず、Run と state の境界を
 提供します。
@@ -29,7 +36,7 @@ repository commit
 
 更新と削除も同じ graph で行います。Dashboard の別操作や data endpoint から同じ object を
 作り直しません。provider が失敗した場合は Run に診断を残し、別 backend へ勝手に迂回せず
-fail closed します。
+安全側に停止します。
 
 ## Cloud catalog
 

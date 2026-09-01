@@ -16,8 +16,19 @@ Takosumi は、Git に置いた OpenTofu / Terraform module をチームで安�
 Takosumi 専用の `.tf` 記法や first-party provider はありません。Cloudflare、AWS、
 Kubernetes などは、それぞれの既存 provider が操作します。
 
-[ソフトウェアのドキュメント](https://takosumi.com/docs/) ·
-[Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)
+通常の BYOC では Workspace/customer が vendor account と credential、作成される
+resource を所有します。Takosumi が仲介する経路は
+`ProviderConnection → CredentialRecipe → ProviderBinding → run-scoped runner materialization
+→ standard OpenTofu provider → customer-owned resource` です。Takoform を使う managed supply
+は external Takoserver Takoform Host の責任であり、Takosumi は Host-scoped credential を
+通常の ProviderConnection として扱います。Takoserver の親 provider credential、provider
+installation、backend、capacity、WfP namespace/dispatcher/native identity、managed Offering
+を Takosumi が受け取ったり選択したりすることはありません。
+
+[ソフトウェアのドキュメント](https://takosumi.com/docs/)
+
+Takosumi Hosted は別の hosted product です。現行の retail / commerce docs は
+Takosumi Hosted が公開します。
 
 ## 5 分で動作を確認する
 
@@ -80,15 +91,20 @@ Form をホストして実体化するサービスはこのリポジトリの所
 ではありません。互換用の API、schema、保存データを残している箇所は migration
 internal として扱い、通常の利用者向け手順やナビゲーションには掲載しません。
 
-## Takosumi と Takosumi Cloud
+## Takosumi、Takosumi Hosted、Takoserver
 
-- **Takosumi** はこのリポジトリのソフトウェアです。自分の環境で運用できます。
-- **Takosumi Cloud** は `app.takosumi.com` で提供する公式ホスティングです。Cloud が提供する
-  hosted Form/service、料金、容量、サポートは Cloud 側が決めます。
+- **Takosumi** はこのリポジトリの OSS control plane です。自分の環境で運用できます。
+- **Takosumi Hosted** は、必要に応じて retail、commerce、client composition を所有する
+  別の hosted product です。managed supply や provider execution の authority ではありません。
+- **Takoserver** は optional な managed supply の外部 Takoform Host です。managed service の
+  Offering、capacity、provider installation/credential、backend、WfP namespace/dispatcher/
+  native identity、実行の authority を持ちます。
+- **Takosumi Cloud** は退役した historical identity です。`app.takosumi.com` の availability、
+  pricing、SLA、support を現在の authority として扱いません。
 
-OSS は Cloud がなくても動きます。Cloud 固有の価格、Stripe、内部の配置先はこの
-リポジトリの公開仕様ではありません。境界の詳細は
-[製品の境界](docs/concepts/boundaries.md)にあります。
+OSS は hosted product がなくても動きます。retail、Stripe、managed capacity、内部の配置先
+はこのリポジトリの公開仕様ではありません。境界の詳細は[製品の境界](docs/concepts/boundaries.md)
+にあります。
 
 Takos は別の製品です。Accounts / deploy-control / dashboard / runner を Takos worker に
 組み込みません。Takos は外部 client として Takosumi endpoint に接続します。
@@ -115,7 +131,8 @@ bun run docs:build
 
 主なディレクトリは、公開 contract の `contract/`、control plane の `core/`、画面の
 `dashboard/`、runner の `runner/`、配布構成の `deploy/`、ドキュメントの `docs/` です。
-standalone OSS clone は hosted Cloud の GA や本番課金の操作を代理実行しません。
+standalone OSS clone は Takosumi Hosted の retail、Takoserver の managed supply、または
+本番課金の操作を代理実行しません。
 
 ライセンスは [AGPL-3.0-only](LICENSE) です。脆弱性の報告方法は
 [SECURITY.md](SECURITY.md)を参照してください。

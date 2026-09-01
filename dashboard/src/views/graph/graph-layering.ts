@@ -40,54 +40,93 @@ export function filterGraphForDependencyView(
 }
 
 export function layerGraph(graph: WorkspaceGraph): LayeredGraph {
-  const nodeById = new Map(graph.nodes.map((n) => [n.capsuleId, n]));
+  const nodeById = new Map<string, GraphNode>();
   const producers = new Map<string, Set<string>>();
-  const producersByConsumer = new Map<string, string[]>();
-  for (const node of graph.nodes) producers.set(node.capsuleId, new Set());
+  const consumers = new Map<string, Set<string>>();
+  const producerNamesByConsumer = new Map<string, Set<string>>();
+  for (const node of graph.nodes) {
+    const id = node.capsuleId;
+    nodeById.set(id, node);
+    if (!producers.has(id)) {
+      producers.set(id, new Set());
+    }
+  }
   for (const edge of graph.edges) {
-    producers.get(edge.consumerCapsuleId)?.add(edge.producerCapsuleId);
+    const dependencies = producers.get(edge.consumerCapsuleId);
+    if (dependencies && !dependencies.has(edge.producerCapsuleId)) {
+      dependencies.add(edge.producerCapsuleId);
+      const downstream = consumers.get(edge.producerCapsuleId) ?? new Set();
+      downstream.add(edge.consumerCapsuleId);
+      consumers.set(edge.producerCapsuleId, downstream);
+    }
     const producerName =
       nodeById.get(edge.producerCapsuleId)?.name ?? edge.producerCapsuleId;
-    const list = producersByConsumer.get(edge.consumerCapsuleId) ?? [];
     // Multiple output→input wirings between the same pair are one dependency in
     // the caption — don't list the same producer name more than once.
-    if (!list.includes(producerName)) list.push(producerName);
-    producersByConsumer.set(edge.consumerCapsuleId, list);
+    const names =
+      producerNamesByConsumer.get(edge.consumerCapsuleId) ?? new Set<string>();
+    names.add(producerName);
+    producerNamesByConsumer.set(edge.consumerCapsuleId, names);
   }
 
+  const remainingProducers = new Map<string, number>();
+  for (const [id, dependencies] of producers) {
+    remainingProducers.set(id, dependencies.size);
+  }
+  const deepestProducer = new Map<string, number>();
   const depth = new Map<string, number>();
   const resolved = new Set<string>();
-  let progress = true;
-  while (progress && resolved.size < graph.nodes.length) {
-    progress = false;
-    for (const node of graph.nodes) {
-      const id = node.capsuleId;
-      if (resolved.has(id)) continue;
-      const deps = producers.get(id) ?? new Set<string>();
-      let maxDepth = -1;
-      let ready = true;
-      for (const dep of deps) {
-        if (!resolved.has(dep)) {
-          ready = false;
-          break;
-        }
-        maxDepth = Math.max(maxDepth, depth.get(dep) ?? 0);
-      }
-      if (ready) {
-        depth.set(id, maxDepth + 1);
-        resolved.add(id);
-        progress = true;
+  const queued = new Set<string>();
+  const queue: string[] = [];
+  for (const node of graph.nodes) {
+    const id = node.capsuleId;
+    if (remainingProducers.get(id) === 0 && !queued.has(id)) {
+      queued.add(id);
+      depth.set(id, 0);
+      queue.push(id);
+    }
+  }
+
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const id = queue[cursor]!;
+    resolved.add(id);
+    const currentDepth = depth.get(id) ?? 0;
+    const downstream = consumers.get(id);
+    if (!downstream) continue;
+    for (const consumerId of downstream) {
+      const remaining = remainingProducers.get(consumerId);
+      if (remaining === undefined || remaining === 0) continue;
+      const nextRemaining = remaining - 1;
+      remainingProducers.set(consumerId, nextRemaining);
+      deepestProducer.set(
+        consumerId,
+        Math.max(deepestProducer.get(consumerId) ?? -1, currentDepth),
+      );
+      if (nextRemaining === 0 && !queued.has(consumerId)) {
+        queued.add(consumerId);
+        depth.set(consumerId, (deepestProducer.get(consumerId) ?? -1) + 1);
+        queue.push(consumerId);
       }
     }
   }
 
-  const maxLayer = Math.max(0, ...[...depth.values()]);
+  let maxLayer = 0;
+  for (const value of depth.values()) maxLayer = Math.max(maxLayer, value);
   const layers: GraphNode[][] = Array.from({ length: maxLayer + 1 }, () => []);
+  const cyclic: GraphNode[] = [];
   for (const node of graph.nodes) {
-    const d = depth.get(node.capsuleId);
+    const id = node.capsuleId;
+    if (!resolved.has(id)) {
+      cyclic.push(node);
+      continue;
+    }
+    const d = depth.get(id);
     if (d !== undefined) layers[d]!.push(node);
   }
-  const cyclic = graph.nodes.filter((n) => !resolved.has(n.capsuleId));
+  const producersByConsumer = new Map<string, readonly string[]>();
+  for (const [consumerId, names] of producerNamesByConsumer) {
+    producersByConsumer.set(consumerId, [...names]);
+  }
   return {
     layers: layers.filter((l) => l.length > 0),
     cyclic,

@@ -8,6 +8,10 @@
  *
  * Run with `bun deploy/node-postgres/src/server.ts`.
  */
+import {
+  InMemoryPortableHostIdempotencyLedger,
+  PortableHostIdempotencyCoordinator,
+} from "../../../core/api/portable_host_idempotency.ts";
 import type {
   AccountsHandler,
   AccountsJsonWebKey,
@@ -28,6 +32,14 @@ import {
   parseEnv,
 } from "./handler.ts";
 import { buildComposedApp } from "./composed-app.ts";
+import {
+  createFileOpenTofuStateArtifactStore,
+  createFileSourceArchiveStore,
+  createHttpOpenTofuRunner,
+  createSelfHostOpenTofuRunnerProfile,
+  SELF_HOST_OPENTOFU_RUNNER_PROFILE_ID,
+} from "./local-opentofu-runner.ts";
+import { selectSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { resolveStaticAssetsDir } from "./static-assets.ts";
 import { isSecretKey, redactString } from "takosumi-contract/redaction";
 
@@ -161,6 +173,21 @@ export async function buildComposedServer(
   const pool = createPostgresPool(config);
   const queryClient = wrapPool(pool);
   const store = new PostgresAccountsStore(queryClient);
+  // Promoted self-host profile: `TAKOSUMI_OPENTOFU_RUNNER_URL` attaches the
+  // standalone runner container so this composition can actually plan/apply.
+  // Explicit overrides (local-substrate, tests) always win; with neither, the
+  // server still boots but every run refuses — say so loudly.
+  const envRunner =
+    overrides.opentofuRunner === undefined
+      ? envOpenTofuRunner(env)
+      : undefined;
+  if (!overrides.opentofuRunner && !envRunner) {
+    structuredLog(
+      "error",
+      "no OpenTofu runner configured; plan/apply cannot execute (set TAKOSUMI_OPENTOFU_RUNNER_URL to the runner container)",
+      { event: "runner.resolution.missing" },
+    );
+  }
   const staticAssets = await resolveStaticAssetsDir(readEnv());
   if (!staticAssets) {
     // The server-HTML dashboard was removed, so a missing SPA build means the
@@ -178,6 +205,11 @@ export async function buildComposedServer(
     store,
     productDiscovery: {
       mobileOidcClientId: config.mobileOidcClientId,
+      // Runtime store endpoint: advertised through discovery so the SPA
+      // never needs a rebuild to point at (or away from) a store.
+      ...(runtimeTcsStoreUrl(env)
+        ? { endpoints: { "takosumi.tcs-store.v1": runtimeTcsStoreUrl(env)! } }
+        : {}),
     },
     createAccountsHandler: (controlPlaneOperations) =>
       buildAccountsHandler(config, store, controlPlaneOperations),
@@ -185,16 +217,22 @@ export async function buildComposedServer(
     ...(staticAssets ? { staticAssets } : {}),
     ...(overrides.opentofuRunner
       ? { opentofuRunner: overrides.opentofuRunner }
-      : {}),
+      : envRunner
+        ? { opentofuRunner: envRunner.runner }
+        : {}),
     ...(overrides.opentofuRunnerExecutors
       ? { opentofuRunnerExecutors: overrides.opentofuRunnerExecutors }
       : {}),
     ...(overrides.runnerProfiles
       ? { runnerProfiles: overrides.runnerProfiles }
-      : {}),
+      : envRunner
+        ? { runnerProfiles: envRunner.profiles }
+        : {}),
     ...(overrides.defaultRunnerProfileId
       ? { defaultRunnerProfileId: overrides.defaultRunnerProfileId }
-      : {}),
+      : envRunner
+        ? { defaultRunnerProfileId: envRunner.defaultRunnerProfileId }
+        : {}),
     ...(managedVanityHostnameSlotsPerOwner !== undefined
       ? {
           managedVanityHostnameSlotsPerOwner,
@@ -215,6 +253,63 @@ export async function buildComposedServer(
 
 async function main(): Promise<void> {
   await buildComposedServer();
+}
+
+/** Validated absolute http(s) store endpoint from `TAKOSUMI_TCS_STORE_URL`. */
+function runtimeTcsStoreUrl(
+  env: Record<string, string | undefined>,
+): string | undefined {
+  const raw = env.TAKOSUMI_TCS_STORE_URL?.trim();
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return undefined;
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Env-driven runner wiring for the promoted self-host profile. Durable file
+ * stores live under `TAKOSUMI_RUNTIME_DIR` (default /var/lib/takosumi — the
+ * compose file mounts a named volume there because sealed state artifacts
+ * MUST survive restarts); state artifacts are sealed with the same
+ * secret-boundary crypto as every other at-rest secret.
+ */
+function envOpenTofuRunner(env: Record<string, string | undefined>):
+  | {
+      readonly runner: ReturnType<typeof createHttpOpenTofuRunner>;
+      readonly profiles: readonly ReturnType<
+        typeof createSelfHostOpenTofuRunnerProfile
+      >[];
+      readonly defaultRunnerProfileId: string;
+    }
+  | undefined {
+  const baseUrl = env.TAKOSUMI_OPENTOFU_RUNNER_URL?.trim();
+  if (!baseUrl) return undefined;
+  const runtimeDir = env.TAKOSUMI_RUNTIME_DIR?.trim() || "/var/lib/takosumi";
+  const sharedToken = env.TAKOSUMI_RUNNER_SHARED_TOKEN?.trim();
+  const runner = createHttpOpenTofuRunner({
+    archiveStore: createFileSourceArchiveStore(
+      env.TAKOSUMI_SOURCE_ARCHIVE_DIR?.trim() ||
+        `${runtimeDir}/source-archives`,
+    ),
+    stateStore: createFileOpenTofuStateArtifactStore(
+      env.TAKOSUMI_STATE_ARTIFACT_DIR?.trim() ||
+        `${runtimeDir}/state-artifacts`,
+      selectSecretBoundaryCrypto({ env }),
+    ),
+    baseUrl,
+    ...(sharedToken ? { sharedToken } : {}),
+  });
+  return {
+    runner,
+    profiles: [createSelfHostOpenTofuRunnerProfile()],
+    defaultRunnerProfileId: SELF_HOST_OPENTOFU_RUNNER_PROFILE_ID,
+  };
 }
 
 /**
@@ -251,6 +346,18 @@ async function buildAccountsHandler(
     ...(config.passkeys ? { passkeys: config.passkeys } : {}),
     ...(config.upstreamOAuth ? { upstreamOAuth: config.upstreamOAuth } : {}),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
+    // Idempotency-Key support for the capsule write lane. This distribution
+    // runs as ONE process, so an in-memory ledger is authoritative for its
+    // lifetime — which covers the retry window that actually matters (a
+    // network flake or a double-clicked install). It does NOT survive a
+    // restart: a retry across one re-executes, exactly as it does today
+    // without a key.
+    controlIdempotency: new PortableHostIdempotencyCoordinator(
+      new InMemoryPortableHostIdempotencyLedger(),
+    ),
+    ...(controlWriteRateLimitOption(
+      Bun.env.TAKOSUMI_CONTROL_WRITE_RATE_LIMIT,
+    )),
     ...(config.privacyOperationsToken
       ? { privacyOperationsToken: config.privacyOperationsToken }
       : {}),
@@ -561,6 +668,39 @@ function wrapPool(pool: PgPool): PostgresQueryClient {
       const result = await pool.query(sql, args);
       return { rows: result.rows as T[] };
     },
+    async transaction<T>(
+      run: (client: PostgresQueryClient) => Promise<T>,
+    ): Promise<T> {
+      const connection = await pool.connect();
+      const transactionClient: PostgresQueryClient = {
+        async queryObject<Row>(
+          sql: string,
+          args: readonly unknown[] = [],
+        ): Promise<{ rows: Row[] }> {
+          const result = await connection.query(sql, args);
+          return { rows: result.rows as Row[] };
+        },
+        // Lifecycle code does not nest transactions, but retaining the pinned
+        // client on accidental re-entry is safer than escaping to the pool.
+        transaction: async (nested) => await nested(transactionClient),
+      };
+      try {
+        await connection.query("BEGIN");
+        const result = await run(transactionClient);
+        await connection.query("COMMIT");
+        return result;
+      } catch (error) {
+        try {
+          await connection.query("ROLLBACK");
+        } catch {
+          // Preserve the lifecycle failure; releasing the broken connection
+          // lets pg discard it instead of masking the original error.
+        }
+        throw error;
+      } finally {
+        connection.release();
+      }
+    },
   };
 }
 
@@ -682,4 +822,18 @@ function isNodeMain(): boolean {
     globalThis as { process?: { env: Record<string, string | undefined> } }
   ).process;
   return proc?.env?.TAKOSUMI_ACCOUNTS_MAIN === "1";
+}
+
+/**
+ * Parses TAKOSUMI_CONTROL_WRITE_RATE_LIMIT (writes per minute per
+ * workspace/subject on the session control lane). Absent/malformed keeps the
+ * service default (30); 0 disables.
+ */
+function controlWriteRateLimitOption(
+  raw: string | undefined,
+): { readonly controlWriteRateLimitPerMinute?: number } {
+  if (raw === undefined || raw.trim() === "") return {};
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) return {};
+  return { controlWriteRateLimitPerMinute: parsed };
 }

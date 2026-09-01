@@ -11,6 +11,7 @@
  * Presentation stays with the callers; this owns the fetch and the two
  * provenance guarantees.
  */
+import { t } from "../i18n/index.ts";
 import {
   createSource,
   extractRunId,
@@ -65,7 +66,7 @@ export async function readSnapshotDocument<T>(
   // A tag can move between resolution and sync; the bytes shown must be the
   // commit that was pinned, or nothing is shown at all.
   if (resolved && snapshot.resolvedCommit !== resolved.commit) {
-    throw new Error("stable tag の commit と SourceSnapshot が一致しません");
+    throw t("new.error.sourceRevisionMismatch");
   }
   const file = await request.read(created.source.id, snapshot.id, request.path);
   return {

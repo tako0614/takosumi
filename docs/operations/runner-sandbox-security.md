@@ -18,6 +18,29 @@ The OSS reference image executes module/provider code as the unprivileged
 bounded `/tmp` run/cache directories are writable. Non-root execution reduces
 container breakout impact but is not a substitute for substrate isolation.
 
+## Narrow runner contract
+
+The RunnerObject is the execution half of the RunOwner/RunnerObject boundary.
+It receives one immutable, already-approved Run envelope, materializes only the
+scoped ProviderConnection credential described by its CredentialRecipe and
+ProviderBinding, executes the requested OpenTofu phase, and returns immutable
+artifacts plus either a terminal result or the typed
+`runner_mutation_indeterminate` outcome.
+
+The result returns to RunOwner, not directly to ArtifactLedger. RunnerObject
+may keep an executor-local delivery receipt to prevent a duplicate process or
+provider call inside its substrate, but that receipt cannot authorize adoption,
+artifact commit, or a current-state-pointer change. RunOwner alone validates the
+exact result and authorizes the ledger commit.
+
+The runner does not own scheduling, approval or review, retry policy, the
+current-state pointer, Stack/Offering catalogs, billing, Host or Resource
+lifecycle, or indeterminate-result adoption. RunOwner retains the durable
+at-most-once Apply/Destroy mutation fence and the authority to reconcile or
+adopt an exact post-dispatch result. Making the envelope narrow must not merge
+RunOwner, the mutation fence, and the isolated executor; those boundaries have
+different failure and security responsibilities.
+
 ## Worker relay memory and artifact limits
 
 The Cloudflare runner relay must stay below the Worker isolate memory ceiling

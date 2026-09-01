@@ -23,6 +23,10 @@ import type {
   TraceSpanEvent,
   TraceSpanQuery,
 } from "./types.ts";
+import {
+  type MetricAggregate,
+  MetricAggregateAccumulator,
+} from "./metric_layout.ts";
 import type {
   AuditReplicationDriver,
   AuditReplicationSink,
@@ -100,6 +104,9 @@ export class SqlObservabilitySink implements ObservabilitySink {
     AuditReplicationDriver | AuditReplicationSink | undefined;
   readonly #metrics: MetricEvent[] = [];
   readonly #traces: TraceSpanEvent[] = [];
+  // Single-process host: in-memory accumulation is monotonic for the process
+  // lifetime; Prometheus treats a restart as an ordinary counter reset.
+  readonly #aggregates = new MetricAggregateAccumulator();
 
   constructor(options: SqlObservabilitySinkOptions) {
     this.#client = options.client;
@@ -176,7 +183,12 @@ export class SqlObservabilitySink implements ObservabilitySink {
 
   recordMetric(event: MetricEvent): Promise<MetricEvent> {
     this.#metrics.push(structuredClone(event));
+    this.#aggregates.record(event);
     return Promise.resolve(event);
+  }
+
+  listMetricAggregates(): Promise<readonly MetricAggregate[]> {
+    return Promise.resolve(this.#aggregates.list());
   }
 
   listMetrics(query: MetricEventQuery = {}): Promise<readonly MetricEvent[]> {

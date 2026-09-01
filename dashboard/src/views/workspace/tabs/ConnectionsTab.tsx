@@ -735,6 +735,16 @@ export default function ConnectionsTab(props: {
                   )}
                 </Show>
               </span>
+              {/* Every sibling surface offers a retry; a full page reload must
+                  never be the only recovery for a transient list failure. */}
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                onClick={() => void refetchProviderConnections()}
+              >
+                {t("common.retry")}
+              </Button>
             </Toast>
           );
         }}

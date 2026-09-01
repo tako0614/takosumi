@@ -12,6 +12,12 @@ export interface StoredOfferingCatalog {
   readonly createdBy: string;
 }
 
+export function offeringCatalogKey(
+  catalog: Pick<OfferingCatalog, "id" | "version">,
+): string {
+  return `${catalog.id}@${catalog.version}`;
+}
+
 export type CreateOfferingCatalogResult =
   | {
       readonly status: "created" | "already_exists";

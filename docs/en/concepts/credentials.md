@@ -4,6 +4,27 @@ Takosumi **stores credentials write-only, hands them over only while a Run is ex
 and keeps only their names in the record**. Everything on this page rests on those three
 properties.
 
+## BYOC and an external managed Host
+
+In the ordinary BYOC path, the Workspace/customer owns the vendor account,
+credential, and resulting resource. Takosumi uses only this execution path:
+
+```text
+ProviderConnection
+  → CredentialRecipe
+  → ProviderBinding
+  → run-scoped runner materialization
+  → standard OpenTofu provider
+  → customer-owned resource
+```
+
+Takoform follows the same ordinary-provider path. If the customer chooses
+managed supply, a Host-scoped credential for an external Takoserver Takoform Host
+may be registered as an ordinary ProviderConnection. Takosumi never receives or
+selects Takoserver's parent provider credential, provider installation, backend,
+capacity, Workers for Platforms (WfP) namespace, dispatcher, native identity, or
+managed Offering. Those are Takoserver authorities.
+
 ## Connection
 
 Credentials live in a Connection, not in a `.env` file or a manifest. A stored value is
@@ -104,8 +125,9 @@ Connection, and the environment variable names that will be injected
 
 ## A Credential Recipe is a convenience
 
-An operator can supply Credential Recipes. A Recipe is a **convenience** that saves you
-from naming the environment variables yourself.
+An operator can supply Credential Recipes. A Recipe is a **convenience** for a
+Workspace/customer registering its own provider credential; it records variable
+and file names, not credential values or vendor-account authority.
 
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/credential-recipes" \

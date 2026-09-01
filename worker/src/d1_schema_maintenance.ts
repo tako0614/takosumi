@@ -944,13 +944,6 @@ async function listGuardedTables(db: D1Database): Promise<readonly string[]> {
   return (result.results ?? []).map((row) => guardedIdentifier(row.name));
 }
 
-async function listMaintenanceTriggerNames(
-  db: D1Database,
-): Promise<ReadonlySet<string>> {
-  const rows = await listMaintenanceTriggers(db);
-  return new Set(rows.map((row) => row.name));
-}
-
 interface MaintenanceTriggerRow {
   readonly name: string;
   readonly table: string;

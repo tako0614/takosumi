@@ -1309,3 +1309,54 @@ test("safeRunId neutralizes dot-segment runIds so the workspace stays jailed", (
     expect(root === jail || root.startsWith(`${jail}/`)).toBe(true);
   }
 });
+
+test("compatibility_check returns every OpenTofu config spelling the runner executes", async () => {
+  const runId = `compat_spellings_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, runId);
+  const sourceRoot = join(root, "source");
+  try {
+    await mkdir(join(sourceRoot, "nested"), { recursive: true });
+    await writeFile(join(sourceRoot, "main.tf"), "terraform {}\n");
+    await writeFile(join(sourceRoot, "versions.tofu"), "terraform {}\n");
+    // Provider-free on purpose: credential-free init must succeed without a
+    // provider mirror, while tofu still has to parse every JSON spelling.
+    await writeFile(
+      join(sourceRoot, "providers.tf.json"),
+      '{"terraform":{"required_version":">= 1.6"}}\n',
+    );
+    await writeFile(
+      join(sourceRoot, "nested", "extra.tofu.json"),
+      '{"output":{"x":{"value":1}}}\n',
+    );
+    await writeFile(join(sourceRoot, "notes.json"), '{"not":"config"}\n');
+    await writeFile(join(sourceRoot, "old.tf.bak"), "terraform {}\n");
+    await writeFile(join(sourceRoot, "README.md"), "ignored\n");
+
+    const response = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "compatibility_check",
+          runId,
+          request: {},
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.files).toEqual([
+      { path: "main.tf", text: "terraform {}\n" },
+      { path: "nested/extra.tofu.json", text: '{"output":{"x":{"value":1}}}\n' },
+      {
+        path: "providers.tf.json",
+        text: '{"terraform":{"required_version":">= 1.6"}}\n',
+      },
+      { path: "versions.tofu", text: "terraform {}\n" },
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

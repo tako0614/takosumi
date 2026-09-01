@@ -1,5 +1,7 @@
 import { test } from "bun:test";
 import {
+  canonicalStorageMigrationChecksum,
+  legacyStorageMigrationChecksum,
   StorageMigrationCatalogError,
   StorageMigrationChecksumMismatchError,
   StorageMigrationPendingError,
@@ -145,58 +147,181 @@ test("StorageMigrationRunner fails closed on applied version drift", async () =>
   );
 });
 
-test("StorageMigrationRunner checksums include down/forward-only state", async () => {
+test("StorageMigrationRunner checksums ignore editorial migration fields", async () => {
   const sql = new FakeSqlClient();
-  const runner = new StorageMigrationRunner(sql, { migrations });
-  await runner.applyPending();
+  await new StorageMigrationRunner(sql, { migrations }).applyPending();
 
-  const withDown: readonly StorageMigrationStatement[] = [
-    { ...migrations[0], down: "drop table if exists one" },
+  // None of these reach a protected database, so none may invalidate a
+  // ledger row that already recorded a successful apply.
+  const edited: readonly StorageMigrationStatement[] = [
+    {
+      ...migrations[0],
+      description: "first, restated for the runbook",
+      domain: "core",
+      down: "drop table if exists one",
+      sql: `-- explain why this table exists\n${migrations[0].sql}\n`,
+    },
     migrations[1],
   ];
-  const changedRunner = new StorageMigrationRunner(sql, {
-    migrations: withDown,
-  });
+
+  const plan = await new StorageMigrationRunner(sql, { migrations: edited })
+    .verifyCurrent();
+  assertEquals(plan.pending.length, 0);
+  assertEquals(plan.legacyChecksumIds, []);
+});
+
+test("StorageMigrationRunner checksums still reject executable SQL drift", async () => {
+  const sql = new FakeSqlClient();
+  await new StorageMigrationRunner(sql, { migrations }).applyPending();
+
+  const rewritten: readonly StorageMigrationStatement[] = [
+    {
+      ...migrations[0],
+      sql: "create table if not exists one (id text primary key, extra text)",
+    },
+    migrations[1],
+  ];
 
   await assertRejects(
-    () => changedRunner.plan(),
+    () =>
+      new StorageMigrationRunner(sql, { migrations: rewritten }).plan(),
     StorageMigrationChecksumMismatchError,
     "system.001",
   );
 });
 
-test("Postgres migrations preserve checksums accepted by existing databases", async () => {
+test("StorageMigrationRunner accepts and reconciles a pre-canonical ledger", async () => {
+  const sql = new FakeSqlClient();
+  for (const migration of migrations) {
+    sql.recordApplied({
+      id: migration.id,
+      version: migration.version,
+      checksum: await legacyStorageMigrationChecksum(migration),
+    });
+  }
+
+  const stale = await new StorageMigrationRunner(sql, { migrations })
+    .verifyCurrent();
+  assertEquals(stale.legacyChecksumIds, ["system.001", "space.002"]);
+
+  const applied = await new StorageMigrationRunner(sql, { migrations })
+    .applyPending();
+  assertEquals(applied.reconciledChecksumIds, ["system.001", "space.002"]);
+  assertEquals(applied.appliedNow.length, 0);
+
+  const reconciled = await new StorageMigrationRunner(sql, { migrations })
+    .verifyCurrent();
+  assertEquals(reconciled.legacyChecksumIds, []);
+  assertEquals(
+    reconciled.applied.map((row) => row.checksum),
+    await Promise.all(
+      migrations.map((migration) =>
+        canonicalStorageMigrationChecksum(migration)
+      ),
+    ),
+  );
+});
+
+test("StorageMigrationRunner keeps a declared retirement bootable", async () => {
+  const sql = new FakeSqlClient();
+  await new StorageMigrationRunner(sql, { migrations }).applyPending();
+
+  const retired = [
+    { id: "space.002", version: 2, reason: "superseded by a later shape" },
+  ];
+  const plan = await new StorageMigrationRunner(sql, {
+    migrations: [migrations[0]],
+    retired,
+  }).verifyCurrent();
+  assertEquals(plan.pending.length, 0);
+  assertEquals(plan.applied.length, 2);
+});
+
+test("StorageMigrationRunner burns a retired id and version forever", async () => {
+  const sql = new FakeSqlClient();
+  const retired = [
+    { id: "space.002", version: 2, reason: "superseded by a later shape" },
+  ];
+
+  assertThrows(
+    () =>
+      new StorageMigrationRunner(sql, { migrations, retired }),
+    StorageMigrationCatalogError,
+    "must never be reused",
+  );
+
+  assertThrows(
+    () =>
+      new StorageMigrationRunner(sql, {
+        migrations: [
+          migrations[0],
+          { ...migrations[1], id: "space.002.rewritten" },
+        ],
+        retired,
+      }),
+    StorageMigrationCatalogError,
+    "retired migration space.002",
+  );
+});
+
+test("released Postgres migrations keep their canonical checksum", async () => {
   const fixture = (await Bun.file(
     new URL("./fixtures/valid-applied-catalog-v61.json", import.meta.url),
   ).json()) as AppliedCatalogFixture;
   const sql = new FakeSqlClient();
-  const runner = new StorageMigrationRunner(sql, {
+  const plan = await new StorageMigrationRunner(sql, {
     migrations: postgresStorageMigrationStatements,
-  });
-  const plan = await runner.plan();
+  }).plan();
   const current = new Map(
     plan.pending.map((entry) => [
       entry.migration.id,
-      {
-        version: entry.migration.version,
-        checksum: entry.checksum,
-      },
+      { version: entry.migration.version, checksum: entry.checksum },
     ]),
   );
 
-  assertEquals(fixture.schemaVersion, 1);
+  assertEquals(fixture.schemaVersion, 2);
   assertEquals(
     postgresStorageMigrationStatements
       .filter((migration) => migration.version <= 61)
       .map((migration) => migration.id),
     fixture.migrations.map((migration) => migration.id),
   );
+  // The canonical digest covers the executable SQL, so this pin fails on an
+  // edit to released SQL and stays quiet for description / `down` / comment
+  // changes.
   for (const applied of fixture.migrations) {
     assertEquals(current.get(applied.id), {
       version: applied.version,
       checksum: applied.checksum,
     });
   }
+});
+
+test("ledgers written by the pre-canonical runner still verify", async () => {
+  const fixture = (await Bun.file(
+    new URL("./fixtures/valid-applied-catalog-v61.json", import.meta.url),
+  ).json()) as AppliedCatalogFixture;
+  const sql = new FakeSqlClient();
+  for (const applied of fixture.migrations) {
+    sql.recordApplied({
+      id: applied.id,
+      version: applied.version,
+      checksum: applied.legacyChecksum,
+    });
+  }
+
+  const plan = await new StorageMigrationRunner(sql, {
+    migrations: postgresStorageMigrationStatements,
+  }).plan();
+
+  assertEquals(
+    plan.legacyChecksumIds,
+    fixture.migrations.map((migration) => migration.id),
+  );
+  assertEquals(
+    plan.pending.length,
+    postgresStorageMigrationStatements.length - fixture.migrations.length,
+  );
 });
 
 test("StorageMigrationRunner uses one runner-wide lock while applying", async () => {
@@ -222,6 +347,7 @@ interface AppliedCatalogFixture {
     readonly id: string;
     readonly version: number;
     readonly checksum: string;
+    readonly legacyChecksum: string;
   }[];
 }
 
@@ -288,6 +414,18 @@ class FakeSqlClient implements SqlClient {
         version: params.version,
         checksum: params.checksum,
         applied_at: "2026-04-27T00:00:00.000Z",
+      });
+      return { rows: [], rowCount: 1 };
+    }
+    if (normalized.startsWith("update storage_migrations set checksum")) {
+      const params = asRecord(parameters);
+      const row = this.#applied.get(String(params.id));
+      if (!row || row.checksum !== params.legacy) {
+        return { rows: [], rowCount: 0 };
+      }
+      this.#applied.set(String(params.id), {
+        ...row,
+        checksum: params.checksum,
       });
       return { rows: [], rowCount: 1 };
     }
@@ -358,6 +496,25 @@ function assertEquals(actual: unknown, expected: unknown): void {
       )}`,
     );
   }
+}
+
+function assertThrows(
+  fn: () => unknown,
+  errorClass: new (...args: never[]) => Error,
+  includes: string,
+): void {
+  try {
+    fn();
+  } catch (error) {
+    if (!(error instanceof errorClass)) {
+      throw new Error(`expected ${errorClass.name}, got ${String(error)}`);
+    }
+    if (!error.message.includes(includes)) {
+      throw new Error(`expected error message to include ${includes}`);
+    }
+    return;
+  }
+  throw new Error("expected function to throw");
 }
 
 async function assertRejects(

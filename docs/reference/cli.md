@@ -4,6 +4,18 @@ Takosumi CLI は、画面でできる操作を自動化したい場合の補助�
 dashboard の `/install?git=...` / `/new` からサービスを選び、接続する provider を選んで
 plan / apply します。CLI は任意の Takosumi endpoint に向けて使えます。
 
+## 入手する
+
+CLI は npm にはまだ公開していません。リポジトリの checkout から実行します。
+
+```bash
+bun install
+bun run cli -- status <run-id>
+```
+
+`takosumi <args>` を直接打ちたい場合は `cd cli && bun link` で PATH に載せられます。
+このページ以降の例は、リンク済みの `takosumi` 表記で書いています。
+
 ```bash
 export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com
 export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
@@ -14,7 +26,10 @@ takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
-Takosumi Cloud を使う場合の hosted endpoint は `https://app.takosumi.com` です。
+Takosumi Cloud は退役した historical identity です。`app.takosumi.com` を current hosted
+endpoint として使用・案内しないでください。CLI は operator が明示した Takosumi origin に
+向けます。Takosumi Hosted の retail/client composition と Takoserver の managed supply は
+それぞれの product が公開する client/endpoint contract を使います。
 
 CLI は OpenTofu を直接実行しません。通常の作成フローは dashboard の Git URL install で、
 ここで Source / Capsule / Run を作ります。Run の source identity として Git commit / ref /
@@ -118,7 +133,7 @@ takosumi accounts serve \
 ## Platform readiness の contribution を追加する
 
 `takosumi launch-readiness template` は OSS/Operator に共通する baseline を生成します。
-hosted service や別の edition が追加の運用証跡を要求する場合は、owner 側が versioned な
+Takosumi Hosted や Takoserver が追加の運用証跡を要求する場合は、owner 側が versioned な
 `takosumi.platform-readiness-contribution@v2` の
 `PlatformReadinessContribution` JSON を管理します。template を生成するときに
 `--contribution-file <path>` で選びます。

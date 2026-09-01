@@ -52,6 +52,7 @@ import { publicInstallConfigRecord } from "../domains/capsules/public_install_co
 import {
   TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE,
   TAKOSUMI_API_CAPSULE_OUTPUTS_ROUTE,
+  TAKOSUMI_API_CAPSULE_RESTORE_ROUTE,
   TAKOSUMI_API_CAPSULE_ROUTE,
   TAKOSUMI_STATE_VERSION_ROLLBACK_PLAN_ROUTE,
   TAKOSUMI_STATE_VERSION_ROUTE,
@@ -283,13 +284,26 @@ export const DEPLOY_CONTROL_CAPSULE_ENDPOINTS: readonly DeployControlEndpoint[] 
       method: "DELETE",
       path: TAKOSUMI_API_CAPSULE_ROUTE,
       summary:
-        "Starts the canonical destroy flow by creating a destroy-plan Run; approval + destroy_apply perform teardown.",
+        "Safe-by-default delete: schedules the two-phase uninstall (grace period, restorable, deferred destroy with pre-destroy export). `?mode=immediate` keeps the direct destroy-plan flow; a never-applied Capsule is abandoned immediately in both modes.",
       auth: "deploy-control-token",
       operationId: "deleteCapsule",
       openapi: {
         pathParams: ["capsuleId"],
         okStatus: "202",
-        okSchema: "RunResponse",
+        okSchema: "DeleteCapsuleResponse",
+      },
+      notImplementedMessage: "capsules not wired",
+    },
+    {
+      method: "POST",
+      path: TAKOSUMI_API_CAPSULE_RESTORE_ROUTE,
+      summary:
+        "Restores an uninstalled Capsule during its grace period (a pure ledger transition — nothing was destroyed yet).",
+      auth: "deploy-control-token",
+      operationId: "restoreCapsule",
+      openapi: {
+        pathParams: ["capsuleId"],
+        okSchema: "CapsuleResponse",
       },
       notImplementedMessage: "capsules not wired",
     },
@@ -701,14 +715,58 @@ export function mountDeployControlCapsuleRoutes(
           return c.json({ ...capsuleResponse(capsule), abandoned: true }, 202);
         }
         ensureOperationPermission(principal, "destroy");
-        ensureRunnerProfileSelectionPermission(principal, undefined);
-        const response = await controller.createCapsuleDestroyPlan(id, {
-          actor: principal.actor,
+        const mode = c.req.query("mode");
+        if (mode !== undefined && mode !== "immediate" && mode !== "scheduled") {
+          return c.json(
+            errorEnvelope(
+              c,
+              "invalid_argument",
+              "mode may only be 'scheduled' (default) or 'immediate'",
+            ),
+            400,
+          );
+        }
+        if (mode === "immediate") {
+          ensureRunnerProfileSelectionPermission(principal, undefined);
+          const response = await controller.createCapsuleDestroyPlan(id, {
+            actor: principal.actor,
+          });
+          return c.json(
+            { run: await controller.getRun(response.planRun.id) },
+            202,
+          );
+        }
+        // Safe default: the two-phase uninstall. Resources (and their data)
+        // stay until the grace period ends; restore undoes it entirely.
+        const capsule = await capsules!.scheduleCapsuleUninstall(id, {
+          ...(principal.actor ? { requestedBy: principal.actor } : {}),
         });
         return c.json(
-          { run: await controller.getRun(response.planRun.id) },
+          {
+            ...capsuleResponse(capsule),
+            uninstall: {
+              ...(capsule.scheduledDestroyAt
+                ? { scheduledDestroyAt: capsule.scheduledDestroyAt }
+                : {}),
+            },
+          },
           202,
         );
+      },
+    }),
+  );
+
+  app.post(
+    TAKOSUMI_API_CAPSULE_RESTORE_ROUTE,
+    defineRoute({
+      ctx,
+      requireService: requireCapsules,
+      param: CAPSULE_ID_PARAM,
+      handler: async ({ c, principal, id }) => {
+        const existing = await controller.getCapsule(id);
+        ensureWorkspacePermission(principal, existing.capsule.workspaceId);
+        const capsule = await capsules!.restoreUninstalledCapsule(id);
+        return c.json(capsuleResponse(capsule), 200);
       },
     }),
   );

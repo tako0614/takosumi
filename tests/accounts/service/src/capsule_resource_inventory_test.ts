@@ -106,7 +106,7 @@ test("current-resource-inventory authorizes Workspace before reading the project
     ["capsules", capsule.id, "current-resource-inventory"],
     "GET",
   );
-  expect(response?.status).toBe(403);
+  expect(response?.status).toBe(404);
   expect(reads).toBe(0);
 });
 

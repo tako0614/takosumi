@@ -12,6 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/compose-helpers.sh"
+INGRESS_IP="$(local_substrate_ingress_ip)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 APP_HOST="${TAKOSUMI_LOCAL_APP_HOST:-app.takosumi.test}"
 OAUTH_HOST="${TAKOSUMI_LOCAL_OAUTH_MOCK_HOST:-oauth-mock.test}"
@@ -19,7 +20,7 @@ BASE="https://${APP_HOST}"
 LOCAL_DEV_SESSION_ID="$(local_substrate_dev_session_id)"
 LOCAL_DEV_SUBJECT="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SUBJECT:-tsub_takosumi_accounts_local}"
 COOKIE_JARS=()
-CURL_TLS=(--cacert "$CA" --resolve "${APP_HOST}:443:127.0.0.1" --resolve "${OAUTH_HOST}:443:127.0.0.1")
+CURL_TLS=(--cacert "$CA" --resolve "${APP_HOST}:443:${INGRESS_IP}" --resolve "${OAUTH_HOST}:443:${INGRESS_IP}")
 
 cleanup_jars() {
 	for jar in "${COOKIE_JARS[@]}"; do
@@ -115,6 +116,7 @@ CAPSULE_NAME="tenant-capsule-${RUN_SUFFIX}"
 
 WORKSPACE_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
 	-b "$JAR_A" \
+	-H "Origin: $BASE" \
 	-H "Content-Type: application/json" \
 	-d "$(cat <<JSON
 {
@@ -144,6 +146,7 @@ fi
 
 SOURCE_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
 	-b "$JAR_A" \
+	-H "Origin: $BASE" \
 	-H "Content-Type: application/json" \
 	-d "$(cat <<JSON
 {
@@ -176,6 +179,7 @@ fi
 
 CAPSULE_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
 	-b "$JAR_A" \
+	-H "Origin: $BASE" \
 	-H "Content-Type: application/json" \
 	-d "$(cat <<JSON
 {
@@ -209,6 +213,7 @@ fi
 cleanup() {
 	curl -sk "${CURL_TLS[@]}" -X DELETE \
 		-b "$JAR_A" \
+		-H "Origin: $BASE" \
 		"$BASE/api/v1/capsules/$CAPSULE_ID" >/dev/null 2>&1 || true
 	cleanup_jars
 }

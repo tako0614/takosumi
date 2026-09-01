@@ -115,17 +115,26 @@ describe("Capsule detail StateVersion surface", () => {
     expect(source).toContain('title: t("app.danger.destroyConfirmTitle")');
     expect(ja["app.danger.destroyConfirmMessage"]).toContain("{name}");
     expect(en["app.danger.destroyConfirmMessage"]).toContain("{name}");
-    // There are now three explicit confirmations: the shared Source revision
-    // gate, immediate-delete gate, and settings-tab unsaved-edits guard. No
-    // blanket delete modal.
+    // There are now four explicit confirmations: the shared Source revision
+    // gate, the scheduled-uninstall gate (it acts immediately and names the
+    // data + permanent-deletion date), the never-applied immediate-delete
+    // gate, and the settings-tab unsaved-edits guard. The IMMEDIATE destroy
+    // still confirms once — at destroy-apply on the run screen.
     expect(source).toContain('title: t("app.settings.leaveConfirm.title")');
-    expect(source.match(/await confirm\(/g)?.length).toBe(3);
-    // The danger tab still names the service in its warning header.
-    expect(source).toContain(
-      't("app.danger.destroyBody", {\n                          name: serviceLabel(),\n                        })',
-    );
+    expect(source.match(/await confirm\(/g)?.length).toBe(4);
+    // The danger tab still names the service in its warning header — the
+    // never-applied immediate-delete copy and the two-phase uninstall copy.
+    expect(source).toContain('t("app.danger.destroyBody", {');
+    expect(source).toContain('t("app.danger.uninstallBody", {');
     expect(ja["app.danger.destroyBody"]).toContain("{name}");
     expect(en["app.danger.destroyBody"]).toContain("{name}");
+    expect(ja["app.danger.uninstallBody"]).toContain("{name}");
+    expect(en["app.danger.uninstallBody"]).toContain("{name}");
+    // The uninstall copy names the DATA and the billing honesty explicitly.
+    expect(ja["app.danger.uninstallBody"]).toContain("データ");
+    expect(ja["app.danger.uninstallBody"]).toContain("課金");
+    expect(en["app.danger.uninstallBody"]).toContain("data");
+    expect(en["app.danger.uninstallBody"]).toContain("bill");
   });
 
   test("keeps provider binding editing behind advanced service settings", () => {
@@ -241,8 +250,11 @@ describe("Capsule detail StateVersion surface", () => {
       /createResource\(\s*deploysCapsuleId,\s*listStateVersions\s*\)/,
     );
     expect(source).toMatch(
-      /createResource\(\s*currentStateVersionId,\s*getStateVersion,\s*\)/,
+      /createResource\(\s*\(\) => supplementalReadPlan\(\)\.stateVersionId,\s*getStateVersion,\s*\)/,
     );
+    expect(source).toContain("planWorkloadDetailSupplementalReads");
+    expect(source).toContain("supplementalReadPlan().activityWorkspaceId");
+    expect(source).toContain("supplementalReadPlan().usageCapsuleId");
     expect(source).toContain("const settingsWorkspaceId");
     expect(source).toMatch(
       /createResource\(\s*settingsWorkspaceId,\s*listSources\s*\)/,
@@ -393,4 +405,14 @@ describe("Capsule detail StateVersion surface", () => {
     // is omitted instead of rendering a dead 未設定 row.
     expect(source).not.toContain('t("app.config.oidcOff")');
   });
+});
+
+test("removal confirmations name the services that depend on this one", () => {
+  // The consumer graph was already loaded for the dependencies view; the
+  // destructive path used to talk only about data and billing, so a user
+  // could schedule the removal of something another app depends on.
+  expect(source).toContain("const dependentsWarning = (): string =>");
+  expect(source).toContain("app.danger.dependentsWarning");
+  // Both removal paths carry it: the grace-period default and immediate.
+  expect(source.match(/\$\{dependentsWarning\(\)\}/gu)).toHaveLength(2);
 });

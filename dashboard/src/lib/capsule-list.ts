@@ -1,4 +1,5 @@
 import { listCapsules, type Capsule } from "./control-api.ts";
+import { clearWorkspaceCache, isFreshCacheEntry } from "./cache.ts";
 
 const CACHE_TTL_MS = 5_000;
 
@@ -17,25 +18,8 @@ function cacheKey(
   return `${workspaceId}:${options.includeDestroyed === false ? "active" : "all"}`;
 }
 
-function fresh(
-  entry: CacheEntry | undefined,
-  now = Date.now(),
-): entry is CacheEntry {
-  return entry !== undefined && now - entry.cachedAt < CACHE_TTL_MS;
-}
-
 export function clearCapsuleListCache(workspaceId?: string): void {
-  if (!workspaceId) {
-    cache.clear();
-    inflight.clear();
-    return;
-  }
-  for (const key of [...cache.keys()]) {
-    if (key.startsWith(`${workspaceId}:`)) cache.delete(key);
-  }
-  for (const key of [...inflight.keys()]) {
-    if (key.startsWith(`${workspaceId}:`)) inflight.delete(key);
-  }
+  clearWorkspaceCache(cache, inflight, workspaceId);
 }
 
 export function primeCapsuleListCache(
@@ -48,14 +32,6 @@ export function primeCapsuleListCache(
     cachedAt: Date.now(),
   });
   emitCapsuleListCacheChanged(workspaceId);
-}
-
-export function peekCapsulesCached(
-  workspaceId: string,
-  options: { readonly includeDestroyed?: boolean } = {},
-): readonly Capsule[] | undefined {
-  const current = cache.get(cacheKey(workspaceId, options));
-  return fresh(current) ? current.capsules : undefined;
 }
 
 function emitCapsuleListCacheChanged(workspaceId: string): void {
@@ -76,7 +52,9 @@ export async function listCapsulesCached(
 ): Promise<readonly Capsule[]> {
   const key = cacheKey(workspaceId, options);
   const current = cache.get(key);
-  if (!options.force && fresh(current)) return current.capsules;
+  if (!options.force && isFreshCacheEntry(current, CACHE_TTL_MS)) {
+    return current.capsules;
+  }
   const currentInflight = inflight.get(key);
   if (!options.force && currentInflight) return currentInflight;
 

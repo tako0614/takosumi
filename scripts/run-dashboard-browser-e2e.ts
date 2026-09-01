@@ -4,6 +4,7 @@ import {
   resolveExternalStorageState,
   validateExpectedWorkerVersionId,
 } from "./dashboard-browser-e2e/live-inputs.ts";
+import { resolvePortableE2EPort } from "./dashboard-browser-e2e/port.ts";
 
 const mode = process.argv[2] ?? "";
 if (mode !== "portable" && mode !== "live" && mode !== "public-live") {
@@ -62,6 +63,10 @@ if (mode === "portable") {
       "portable dashboard browser E2E requires dashboard/dist/index.html; run `bun run check:dashboard` first",
     );
   }
+  // Publish one port for the config, the spec, and the fixture server so two
+  // checkouts on the same host do not fight over a fixed one.
+  const port = await resolvePortableE2EPort(process.env);
+  console.error(`[dashboard-e2e] portable fixture server port: ${port}`);
 } else if (mode === "live") {
   const required = [
     "TAKOSUMI_E2E_BASE_URL",

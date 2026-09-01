@@ -8,7 +8,7 @@ export const TAKOSUMI_APP_HANDOFF_DASHBOARD_PATH = "/new" as const;
  * "/install?handoff=%s")`), which decodes it and pre-fills `/new`. Opaque form
  * (`web+takosumi:install?...`, action read from `pathname`) — never the
  * authority form `web+takosumi://install`, whose keyword lands in `host` and is
- * lowercased/punycode-normalized. Canonical spec: docs/integration/remote-install.md.
+ * lowercased/punycode-normalized. Canonical spec: docs/reference/app-handoff.md.
  */
 export const TAKOSUMI_APP_INSTALL_SCHEME = "web+takosumi" as const;
 export const TAKOSUMI_APP_INSTALL_SCHEME_ACTION = "install" as const;

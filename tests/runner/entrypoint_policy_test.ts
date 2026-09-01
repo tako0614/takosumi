@@ -245,7 +245,7 @@ test("resolved-host policy accepts public addresses through an injected runner r
       "source host",
       async (host) => {
         seen.push(host);
-        return ["203.0.113.10", "2001:db8::10"];
+        return ["8.8.8.8", "2001:4860:4860::8888"];
       },
     ),
   ).resolves.toBeUndefined();
@@ -257,7 +257,7 @@ test("resolved-host policy rejects any private answer and unresolved names", asy
     assertResolvedHostNotBlocked(
       "mixed.example.test",
       "source host",
-      async () => ["203.0.113.10", "10.0.0.5"],
+      async () => ["8.8.8.8", "10.0.0.5"],
     ),
   ).rejects.toThrow("resolves to a blocked address (10.0.0.5)");
 
@@ -268,6 +268,44 @@ test("resolved-host policy rejects any private answer and unresolved names", asy
       async () => [],
     ),
   ).rejects.toThrow("could not be resolved for SSRF validation");
+});
+
+test("resolved-host policy rejects every canonical special-use DNS answer", async () => {
+  for (
+    const address of [
+      "192.0.0.1",
+      "192.0.2.1",
+      "198.18.0.1",
+      "198.51.100.7",
+      "203.0.113.9",
+      "64:ff9b::169.254.169.254",
+      "2002:a9fe:a9fe::1",
+      "FE80::1",
+    ]
+  ) {
+    await expect(
+      assertResolvedHostNotBlocked(
+        "attacker-controlled.example",
+        "source host",
+        async () => [address],
+      ),
+    ).rejects.toThrow(`resolves to a blocked address (${address})`);
+  }
+});
+
+test("resolved-host policy rejects blocked IP literals without DNS", async () => {
+  let called = false;
+  await expect(
+    assertResolvedHostNotBlocked(
+      "[64:ff9b::169.254.169.254]",
+      "source host",
+      async () => {
+        called = true;
+        return ["8.8.8.8"];
+      },
+    ),
+  ).rejects.toThrow("source host is not allowed");
+  expect(called).toBe(false);
 });
 
 test("resolved-host policy rejects internal names before invoking a resolver", async () => {

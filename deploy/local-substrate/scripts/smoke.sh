@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SUBSTRATE_DIR"
 source "$SCRIPT_DIR/compose-helpers.sh"
+INGRESS_IP="$(local_substrate_ingress_ip)"
 
 PROFILE="$(local_substrate_profile)"
 export TAKOSUMI_LOCAL_SUBSTRATE_PROFILE="$PROFILE"
@@ -14,7 +15,7 @@ case "$PROFILE" in
 		TAKOSUMI_SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://service.takosumi.test}"
 		;;
 	postgres)
-		TAKOSUMI_SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://app.takosumi.test}"
+		TAKOSUMI_SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://service-worker.takosumi.test}"
 		;;
 esac
 export TAKOSUMI_SERVICE_URL
@@ -116,7 +117,7 @@ check() {
 	local path=$3
 	local expect_status=$4
 	local code
-	code=$(curl -sk --cacert "$CA" --resolve "${host}:443:127.0.0.1" \
+	code=$(curl -sk --cacert "$CA" --resolve "${host}:443:${INGRESS_IP}" \
 		-o /dev/null -w "%{http_code}" "https://${host}${path}")
 	if [[ "$code" == "$expect_status" ]]; then
 		echo "    PASS [$label] https://${host}${path} -> $code"
@@ -136,7 +137,7 @@ check_json() {
 	local path=$3
 	local jq_path=$4   # python-style: a.b.c or a.b[0].c
 	local body status
-	body=$(curl -sk --cacert "$CA" --resolve "${host}:443:127.0.0.1" \
+	body=$(curl -sk --cacert "$CA" --resolve "${host}:443:${INGRESS_IP}" \
 		-w "\n%{http_code}" "https://${host}${path}")
 	status=$(echo "$body" | tail -n1)
 	if [[ "$status" != "200" ]]; then
@@ -177,8 +178,9 @@ check_post() {
 	local body=$4
 	local expect_status=$5
 	local code
-	code=$(curl -sk --cacert "$CA" --resolve "${host}:443:127.0.0.1" \
+	code=$(curl -sk --cacert "$CA" --resolve "${host}:443:${INGRESS_IP}" \
 		-X POST -H "Authorization: Bearer $LOCAL_CLOUD_SESSION_ID" \
+		-H "Origin: https://${host}" \
 		-H "Content-Type: application/json" --data "$body" \
 		-o /dev/null -w "%{http_code}" "https://${host}${path}")
 	if [[ "$code" == "$expect_status" ]]; then
@@ -349,7 +351,7 @@ fi
 echo
 case "$PROFILE" in
 	workers) DEFAULT_K6_RATE=1 ;;
-	postgres) DEFAULT_K6_RATE=10 ;;
+	postgres) DEFAULT_K6_RATE=1 ;;
 esac
 K6_RATE="${TAKOSUMI_K6_REQUEST_RATE:-$DEFAULT_K6_RATE}"
 echo "==> k6 load baseline via Caddy + TLS ($((K6_RATE * 2)) total RPS x 20s — regression watch only, NOT SLO)"

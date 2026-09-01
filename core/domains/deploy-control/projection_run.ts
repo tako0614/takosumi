@@ -317,6 +317,12 @@ export function projectApplyRun(
       : {}),
     ...runEnvironmentEvidence(applyRun),
     ...(errorCode ? { errorCode } : {}),
+    // Live progress is a RUNNING-only signal. A terminal row keeps the counts
+    // out of the projection so a finished install never renders a stale
+    // "3 of 7" beside its own success.
+    ...(applyRun.applyProgress && applyRun.status === "running"
+      ? { applyProgress: applyRun.applyProgress }
+      : {}),
     createdBy: DEFAULT_CREATED_BY,
     createdAt: new Date(applyRun.createdAt).toISOString(),
     ...(iso(applyRun.startedAt) ? { startedAt: iso(applyRun.startedAt)! } : {}),

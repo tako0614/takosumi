@@ -1,85 +1,89 @@
-# Takosumi と Takosumi Cloud
+# Takosumi、BYOC、外部 managed Host の境界
 
-同じ名前がソフトウェアと公式サービスを指さないよう、このドキュメントでは次のように
-区別します。
+Takosumi OSS は、利用者が自分の vendor account と credential を持つ BYOC
+(bring your own cloud) control plane です。Takosumi Cloud という名前は退役した
+過去の identity であり、`app.takosumi.com` の availability、pricing、SLA、support
+を現在の正本として扱いません。
 
-| 名前               | 意味                                                 |
-| ------------------ | ---------------------------------------------------- |
-| **Takosumi**       | このリポジトリで公開している AGPL-3.0 のソフトウェア |
-| **Takosumi Cloud** | `app.takosumi.com` で提供する公式ホスティング        |
+| 名前 | authority / 役割 |
+| --- | --- |
+| **Takosumi** | このリポジトリの AGPL-3.0 OSS control plane。Git/OpenTofu の Stack、Run、state、Output、audit、credential delivery を所有します。 |
+| **Takosumi Hosted** | 必要な場合に retail、commerce、client composition を所有する別の hosted product です。managed supply や provider execution の authority ではありません。 |
+| **Takoserver** | optional な managed supply の外部 Takoform Host です。managed service の Offering、capacity、provider installation/credential、backend、実行、WfP namespace/dispatcher/native identity を所有します。 |
+| **Takosumi Cloud** | 退役した historical identity。現在の availability、pricing、SLA、support、managed supply の authority ではありません。 |
 
-## ソフトウェアが提供するもの
+## Takosumi OSS が提供するもの
 
-Takosumi OSS には次が含まれます。
+Takosumi OSS の supported user path は、Git に置いた OpenTofu / Terraform module を
+実行する 1 つの Stack flow です。次を提供します。
 
-- Git module の plan、apply、state、output、監査記録
-- provider の接続情報を保存し、runner に安全に渡す仕組み
-- dashboard、API、CLI、サインイン
-- デプロイしたものの接続先と利用許可を記録する Interface / InterfaceBinding
-- 任意の OpenTofu / Terraform provider を接続する ProviderConnection / ProviderBinding
+- Git module の plan、確認、apply、state、Output、audit
+- Workspace / Project / Capsule / Run の lifecycle
+- ProviderConnection、CredentialRecipe、ProviderBinding と run-scoped runner
+- dashboard、API、CLI、OIDC discovery、Interface / InterfaceBinding
 
-どのクラウドを使うかは module、provider、または運用者の構成が決めます。Takosumi OSS
-は特定のクラウドアカウントや provider を必須にしません。Takoform は普通の provider
-として OpenTofu runner から使われます。provider 側の object を別の resource ledger に
-複製して、第二の lifecycle を作ることもしません。
+Takosumi は専用の `.tf` 記法や first-party provider を配布しません。Cloudflare、AWS、
+Kubernetes、Takoform はすべて通常の OpenTofu provider です。provider 側の resource を
+別の Takosumi Resource ledger に複製して、第二の lifecycle を作りません。
 
-Resource Shape / Form Host を Takosumi OSS が提供する、という旧来の説明は廃止しました。
-Form の定義、provider、package、hosted instance は Takoform または Takosumi Cloud
-などの外部 Host が所有します。OSS に残る Resource API、schema、migration は過去の
-保存データを安全に扱うための temporary migration internals であり、supported product
-としての authoring surface ではありません。
+## Customer BYOC の実行経路
 
-## 運用者が決めるもの
+通常の BYOC では Workspace/customer が vendor account と credential、そして作成される
+resource の authority を持ちます。Takosumi は次の順にだけ接続を仲介します。
 
-同じ Takosumi を動かしていても、設置先によって次は異なります。
-
-- 利用する provider とその実行環境
-- 外部 Host または Takosumi Cloud が提供する hosted Form instance
-- 保存容量、利用上限、バックアップ期間
-- 利用量を記録するだけか、請求まで行うか
-- 更新、障害対応、support、SLA
-
-その endpoint が提供する機能は、名前や edition から推測せずに確認します。
-
-```bash
-curl https://takosumi.example.com/.well-known/takosumi
+```text
+ProviderConnection
+  → CredentialRecipe
+  → ProviderBinding
+  → run-scoped runner materialization
+  → standard OpenTofu provider
+  → customer-owned resource
 ```
 
-または、認証済みの API から `/v1/capabilities` を取得します。
+Credential の値は Run 中の runner にだけ materialize され、Takosumi の Output、state、
+log、audit には入りません。provider、account、region、backend、capacity は module と
+customer/operator が選びます。Takosumi は vendor account を作成・所有・推測しません。
 
-## Takosumi Cloud が追加するもの
+## Optional managed supply: Takoserver Takoform Host
 
-Takosumi Cloud は、Takosumi OSS を運用した公式サービスです。Cloud が追加するのは、
-Cloud が提供する hosted Form/service の実装、公式の容量、料金と支払い、support、SLA、abuse 対策です。
+利用者が module から Takoform provider を選び、managed supply を使う場合でも、Takoform
+は通常の provider のままです。Takosumi は external Takoserver Takoform Host に対する
+Host-scoped credential を通常の ProviderConnection として登録し、ProviderBinding を
+通じて Run の runner に渡せます。
 
-これらは OSS の一般仕様ではありません。料金や利用上限を確認するときは
-[Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)を参照してください。
+この経路で Takosumi が受け取ったり選択したりしないものは、Takoserver の親 provider
+credential、provider installation、backend、capacity、Workers for Platforms (WfP)
+namespace、dispatcher、native identity です。これらと managed service の Offering は
+Takoserver の authority です。Takosumi は Host の endpoint と Run の結果だけを、通常の
+provider/Interface の境界で扱います。
 
-Cloud 側の実装は OSS の contract を利用しますが、OSS から Cloud の private code や
-Stripe へ依存することはありません。
+## Retired Resource / Form surface
 
-## Takoform と外部 Host の位置づけ
+Resource Shape、Form Registry、FormActivation、TargetPool、SpacePolicy、Resolver、
+Adapter と旧 `/v1/resources` lifecycle は supported authoring ではありません。残る route、
+schema、store、migration は既存データの移行・削除 custody のための compatibility surface
+です。新しい integration は Git module と通常の provider を使い、Takosumi Core の
+authoring authority としてこれらを選びません。
 
-Takoform は Form の仕様、provider、package、conformance を所有する独立したプロジェクト
-です。Takosumi からはほかの OpenTofu provider と同じように利用します。Form を保存して
-実行する Host や hosted instance を Takosumi OSS が自動で提供するわけではありません。
+Generic Offering API/route/store も Takosumi Core の supported authority ではありません。
+現在存在する endpoint は legacy/operator-only の実装 conformance gap であり、新しい
+integration では使わないでください。削除を進める migration surface で、managed Offering
+の正本は Takoserver です。
 
-同様に、Cloudflare、AWS などの Terraform / OpenTofu provider は runner から見て通常の
-provider です。ただし、実行後の authority は同じではありません。
+## Operator と hosted product
 
-- Cloudflare / AWS などの provider を module から直接使う場合は、共通の
-  Run、state、output、監査記録を使います。provider 側の resource は必ずしも
-  Takosumi の Resource 台帳には入りません。
-- Takoform の host または Takosumi Cloud が hosted Form instance を提供する場合、その
-  lifecycle と実装の authority は外部 Host 側にあります。
-- Takosumi OSS の runner が Cloud 専用の provider や TargetPool を暗黙に選ぶ仕組みは
-  ありません。
+自分で Takosumi を運用する operator は、database、runner、backup、provider 接続、
+support、SLA、利用量の扱いを自分で決めます。Takosumi Hosted が retail/commerce/client
+composition を提供する場合も、Takoserver の managed supply authority や customer の
+BYOC credential ownership を吸収しません。
 
-## self-host する場合
+Takosumi Hosted の現行 retail 文書が公開されるまでは、この OSS repository や旧
+`app.takosumi.com` Cloud 文書から availability、pricing、SLA、support を推測しないで
+ください。
 
-自分で Takosumi を運用する場合は、あなたが上記の運用者になります。software update、
-secret、データベース、runner、バックアップ、provider の構成を自分で管理します。Form
-instance を使う場合は、その外部 Host の契約と運用境界も確認します。
+## 関連
 
-構成の選び方と公開手順は[自分で動かす](./self-host.md)にあります。repository 内の
-operator runbook は利用者向け仕様ではありません。
+- [全体像](./index.md)
+- [認証情報](./credentials.md)
+- [Resource migration internals](./resources.md)
+- [API](../reference/api.md)

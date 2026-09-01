@@ -16,6 +16,7 @@ import {
 import { sha256HexAsync } from "../../shared/runtime/hash.ts";
 import { InterpretedDraft202012Validator } from "../../shared/json-schema/draft_2020.ts";
 import { canonicalInterfaceOAuth2ResourceUri } from "./oauth_resource.ts";
+import { interfaceSpecsEqual } from "./interface_spec_equivalence.ts";
 import { InterfaceService, InterfaceServiceError } from "./service.ts";
 
 export type FormDescriptorSkipReason =
@@ -363,24 +364,6 @@ async function retireStaleDescriptor(
     "conflict",
     "stale Form descriptor Interface changed during retirement",
   );
-}
-
-function interfaceSpecsEqual(
-  left: InterfaceSpec,
-  right: InterfaceSpec,
-): boolean {
-  return canonicalJson(left) === canonicalJson(right);
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 async function descriptorRecordName(

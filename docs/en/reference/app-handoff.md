@@ -1,8 +1,8 @@
 # App Handoff Protocol
 
-Takosumi App Handoff is the small URL protocol for creating a Takosumi-managed
-hosted service from any client: web app, desktop app, mobile app, browser link,
-or CLI output.
+Takosumi App Handoff is the small URL protocol for creating a
+Takosumi-managed Stack/Capsule from any client: web app, desktop app, mobile app,
+browser link, or CLI output.
 
 the Takosumi dashboard is a web/dashboard flow. This protocol does not require or imply a
 standalone Takosumi mobile app; clients return to their own product app or web
@@ -29,8 +29,10 @@ The public entrypoint is on the Takosumi origin selected by the operator:
 https://<takosumi-origin>/install
 ```
 
-The official Takosumi Cloud origin is `app.takosumi.com`, but the same protocol
-works at any explicit self-hosted or Operator origin.
+There is no current official Cloud origin to advertise. Takosumi Cloud is a
+retired historical identity, so do not use `app.takosumi.com` as a current
+endpoint. Use the explicit self-hosted or Operator Takosumi origin. Takosumi
+Hosted owns the endpoint and client contract for any retail/client composition.
 
 The dashboard may canonicalize the flow to `/new`, but external clients should
 link `/install`.
@@ -53,8 +55,8 @@ creation target or release-ref authority. `product` does not select the install
 target. Use `product` and `return_uri` together only when Takosumi should return
 to a client.
 
-If `return_uri` is absent, the flow is just a normal hosted-service creation
-link. In that case, do not include `product`. If `return_uri` is present,
+If `return_uri` is absent, the flow is a normal Stack creation link provided by
+the operator. In that case, do not include `product`. If `return_uri` is present,
 Takosumi preserves `product` and `return_uri` through sign-in, provider
 connection setup, plan, and apply screens.
 

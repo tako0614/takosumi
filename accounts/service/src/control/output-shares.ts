@@ -111,6 +111,7 @@ import {
   publicOutputShare,
   publicPlanActionResponse,
   publicRun,
+  requireResourceWorkspaceAccess,
   requireWorkspaceAccess,
   resolveProviderBindings,
 } from "./shared.ts";
@@ -246,7 +247,7 @@ async function createOutputShare(
   if (!auth.ok) return auth.response;
   const producer = await operations.capsules.getCapsule(producerCapsuleId);
   if (producer.workspaceId !== fromWorkspaceId) {
-    const producerAuth = await requireWorkspaceAccess({
+    const producerAuth = await requireResourceWorkspaceAccess({
       operations,
       store,
       workspaceId: producer.workspaceId,
@@ -277,7 +278,7 @@ async function approveOutputShare(
 ): Promise<Response> {
   const existing = await operations.outputShares.getShare(shareId);
   if (!existing) return errorJson("not_found", "not found", 404);
-  const auth = await requireWorkspaceAccess({
+  const auth = await requireResourceWorkspaceAccess({
     operations,
     store,
     workspaceId: existing.toWorkspaceId,
@@ -299,7 +300,7 @@ async function revokeOutputShare(
 ): Promise<Response> {
   const existing = await operations.outputShares.getShare(shareId);
   if (!existing) return errorJson("not_found", "not found", 404);
-  const auth = await requireWorkspaceAccess({
+  const auth = await requireResourceWorkspaceAccess({
     operations,
     store,
     workspaceId: existing.fromWorkspaceId,

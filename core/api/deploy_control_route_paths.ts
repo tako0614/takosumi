@@ -86,6 +86,9 @@ export const TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE =
 /** Current public Output projection for a Capsule. */
 export const TAKOSUMI_API_CAPSULE_OUTPUTS_ROUTE =
   `${INTERNAL_V1_PREFIX}/capsules/:capsuleId/outputs` as const;
+/** Restores an uninstalled Capsule during its grace period. */
+export const TAKOSUMI_API_CAPSULE_RESTORE_ROUTE =
+  `${INTERNAL_V1_PREFIX}/capsules/:capsuleId/restore` as const;
 export const TAKOSUMI_STATE_VERSION_ROUTE =
   `${INTERNAL_V1_PREFIX}/state-versions/:stateVersionId` as const;
 export const TAKOSUMI_STATE_VERSION_ROLLBACK_PLAN_ROUTE =

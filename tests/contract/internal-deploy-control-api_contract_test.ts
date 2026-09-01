@@ -43,6 +43,12 @@ test("Deploy Control API v1 error code and HTTP status table is frozen", () => {
     "not_found",
     "failed_precondition",
     "resource_exhausted",
+    // Admission throttling and transient unavailability are their own codes:
+    // both used to collapse into failed_precondition/resource_exhausted, so a
+    // client could not tell "retry shortly" from "this will never work".
+    // resource_exhausted keeps its historical 413 (request too large).
+    "rate_limited",
+    "unavailable",
     "not_implemented",
     "internal_error",
   ]);
@@ -53,6 +59,8 @@ test("Deploy Control API v1 error code and HTTP status table is frozen", () => {
     not_found: 404,
     failed_precondition: 409,
     resource_exhausted: 413,
+    rate_limited: 429,
+    unavailable: 503,
     not_implemented: 501,
     internal_error: 500,
   });

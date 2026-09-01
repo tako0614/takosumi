@@ -17,10 +17,7 @@ import type {
   RunnerStateBackend,
   RunnerStateLockEvidence,
 } from "@takosumi/internal/deploy-control-api";
-import type {
-  OutputAllowlistEntry,
-  OutputValueType,
-} from "takosumi-contract/install-configs";
+import type { OutputAllowlistEntry } from "takosumi-contract/install-configs";
 import {
   OpenTofuControllerError,
   OpenTofuRunnerExecutionError,

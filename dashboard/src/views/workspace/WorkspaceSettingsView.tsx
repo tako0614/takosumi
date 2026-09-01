@@ -91,10 +91,11 @@ function Inner(props: {
       />
       {/* Backups/Shares are reached from the /settings/manage catalog, not the
           everyday settings tab strip (a deliberate de-noising). Hide the strip
-          on those routes so it doesn't render with no active tab highlighted. */}
-      <Show
-        when={!props.standaloneTab && tab() !== "backups" && tab() !== "shares"}
-      >
+          on those routes so it doesn't render with no active tab highlighted.
+          Every strip tab (incl. the standalone /settings/billing route) KEEPS
+          the strip — clicking a tab must never strand the user without a way
+          back to General/Members. */}
+      <Show when={tab() !== "backups" && tab() !== "shares"}>
         <Tabs
           items={tabItems()}
           aria-label={t("workspaceSettings.tabsLabel")}

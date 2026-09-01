@@ -132,5 +132,7 @@ Postgres のデータと証明書も消す場合は `bash scripts/down.sh -v` �
 - [自分で動かす](../concepts/self-host.md)
 - [CLI](../reference/cli.md)
 
-公式ホスティングを使う場合は
-[Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)を参照してください。
+Takosumi Cloud は退役した historical identity です。`app.takosumi.com` の
+availability、pricing、SLA、support を現行サービスの正本として扱わないでください。
+現行の retail/commerce/client composition docs は Takosumi Hosted、managed supply と
+Offering は Takoserver が所有します。

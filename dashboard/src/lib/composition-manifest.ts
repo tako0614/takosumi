@@ -70,10 +70,6 @@ export function parseCompositionInstallLink(
   return { git, ref, path };
 }
 
-export function hasCompositionInstallLink(search: string): boolean {
-  return new URLSearchParams(search).get("kind") === "composition";
-}
-
 export async function parseCompositionManifestText(text: string): Promise<{
   readonly manifest: CapsuleCompositionManifest;
   readonly digest: string;

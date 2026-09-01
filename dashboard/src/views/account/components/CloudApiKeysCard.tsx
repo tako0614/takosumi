@@ -245,6 +245,23 @@ export default function CloudApiKeysCard(props: {
         )}
       </Show>
 
+      {/* A failed key list must degrade to an inline retry — reading the
+          errored resource below would THROW out of this card and white-screen
+          the whole Account page through the root ErrorBoundary. */}
+      <Show when={keys.error}>
+        <Toast tone="error">
+          {friendlyError(keys.error, t).message}
+          <Button
+            variant="secondary"
+            size="sm"
+            type="button"
+            onClick={() => void refetch()}
+          >
+            {t("common.retry")}
+          </Button>
+        </Toast>
+      </Show>
+
       <Show when={created()}>
         {(result) => (
           <div class="wc-api-key-created" role="status">
@@ -345,7 +362,7 @@ export default function CloudApiKeysCard(props: {
 
       <DataTable
         columns={columns()}
-        rows={keys()}
+        rows={keys.error ? [] : keys()}
         loading={keys.loading}
         rowKey={(key) => key.id}
         empty={t("account.apiKeys.empty")}

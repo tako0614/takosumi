@@ -97,9 +97,8 @@ When a runner artifact changed, add a staging smoke through the selected
 `RunnerProfile.executorId` and real executor adapter, not only a local image
 start. For the Cloudflare reference adapter this means the deployed Container
 runner path; other adapters provide their own equivalent versioned hardening
-contribution. Official hosted Cloud checks are composed by
-`takosumi-cloud/modules/hardening/cloudflare-platform-hardening.json`, not by a
-fixed OSS checklist.
+contribution. Takosumi Hosted and Takoserver compose their own exact deployment
+hardening and readback checks; neither is proved by a fixed OSS checklist.
 
 ## Severity SLA
 

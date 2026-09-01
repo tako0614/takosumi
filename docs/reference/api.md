@@ -21,6 +21,13 @@ provider として使います。外部 provider は plain Stack flow でその�
 Interface / InterfaceBinding は provider-neutral な接続認可を表します。
 Cloudflare 固有の import/deploy compatibility profile は廃止済みです。
 
+通常の BYOC では Workspace/customer が vendor account と credential、作成される resource
+を所有します。経路は `ProviderConnection → CredentialRecipe → ProviderBinding →
+run-scoped runner materialization → standard OpenTofu provider → customer-owned resource`
+です。managed Takoform supply は external Takoserver Host に接続しますが、Takosumi は
+Takoserver の親 provider credential、provider installation、backend、capacity、WfP
+namespace/dispatcher/native identity、managed Offering を受け取りません。
+
 ## エンドポイントの探索
 
 すべての Takosumi endpoint は、次の discovery endpoint を公開します。
@@ -80,8 +87,8 @@ Authorization: Bearer <token>
 ```
 
 どの Takosumi endpoint も、operator が有効化した session / bearer token 方式を
-capability として公開します。Takosumi Cloud の API key は、Takosumi Accounts の
-personal access token です。S3-compatible endpoint のように標準 protocol 自体が
+capability として公開します。旧 Takosumi Cloud の API key という呼び方は historical
+です。現在の Accounts API は personal access token を使います。S3-compatible endpoint のように標準 protocol 自体が
 署名方式を持つ場合は、その protocol の署名を使います。
 
 ### Accounts personal access token
@@ -139,13 +146,13 @@ OpenTofu registry 経路を利用します。mirror を必須にする場合は 
 として明示します。
 
 Stack flow のエンドポイントはすべて `/api/v1` の下にあります。`/v1` は別物で、
-後述の Resource / Interface 制御面です。この 2 つを取り違えると認証は通っても
+後述の legacy Resource/Form compatibility と current Interface/capability 制御面です。この 2 つを取り違えると認証は通っても
 404 になります。
 
 正本は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
 次の 80 件です。
 
-**Account views**
+### Account views
 
 | メソッド | パス                             | 説明                                                        |
 | -------- | -------------------------------- | ----------------------------------------------------------- |
@@ -158,7 +165,7 @@ active membership を `created_asc` で返し、archived Workspace も含めま�
 `cursor` だけを受け付けます。レスポンスの `total` は cursor 適用前の全 active
 membership 行数です。Workspace-scoped credential では利用できません。
 
-**Workspace**
+### Workspace
 
 | メソッド | パス                                                 | 説明                                    |
 | -------- | ---------------------------------------------------- | --------------------------------------- |
@@ -181,7 +188,7 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 
 操作履歴は `/api/v1/workspaces/{workspaceId}/activity` から読みます。
 
-**Project と Capsule**
+### Project と Capsule
 
 | メソッド | パス                                                      | 説明                               |
 | -------- | --------------------------------------------------------- | ---------------------------------- |
@@ -216,7 +223,7 @@ Run は必ず計画の作成から始まります。
 | POST     | `/api/v1/capsules/{capsuleId}/drift-check`  | 差分確認 Run を作る          |
 | POST     | `/api/v1/capsules/{capsuleId}/backups`      | Capsule のバックアップを作る |
 
-**Source**
+### Source
 
 | メソッド | パス                                             | 説明                        |
 | -------- | ------------------------------------------------ | --------------------------- |
@@ -229,7 +236,7 @@ Run は必ず計画の作成から始まります。
 | POST     | `/api/v1/sources/{sourceId}/compatibility-check` | 互換性レポートを作る        |
 | GET      | `/api/v1/compatibility-reports/{reportId}`       | 互換性レポートを読む        |
 
-**Run と StateVersion**
+### Run と StateVersion
 
 | メソッド | パス                                                    | 説明                            |
 | -------- | ------------------------------------------------------- | ------------------------------- |
@@ -246,7 +253,7 @@ Run は必ず計画の作成から始まります。
 | GET      | `/api/v1/state-versions/{stateVersionId}`               | StateVersion を読む             |
 | POST     | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | 以前の状態に戻す計画を作る      |
 
-**認証情報と Output の共有**
+### 認証情報と Output の共有
 
 | メソッド | パス                                            | 説明                                               |
 | -------- | ----------------------------------------------- | -------------------------------------------------- |
@@ -266,7 +273,7 @@ Run は必ず計画の作成から始まります。
 Connection の作成は `POST /api/v1/connections` です。`/api/v1/provider-connections`
 は読み取り専用で、失効は `POST /api/v1/connections/{connectionId}/revoke` です。
 
-**dashboard 用の投影**
+### dashboard 用の投影
 
 | メソッド | パス                          | 説明                                     |
 | -------- | ----------------------------- | ---------------------------------------- |
@@ -321,10 +328,10 @@ first-come-first-served に予約します。
 
 Hostname reservation と vanity slot は Capsule lifetime に属します。成功した
 Capsule destroy で解放し、個別 route の削除では解放しません。ユーザー所有 custom
-domain は、この mode ではなく別の verified-domain lifecycle を使います。Takosumi Cloud
-では verification / certificate lifecycle が未実装のため Planned です。Cloud の
-route への要求は安全側に停止します。通常の OpenTofu の URL / route 変数を
-BYOC provider へ渡す経路は、これとは別にそのまま使えます。
+domain は、この mode ではなく別の verified-domain lifecycle を使います。verified-domain
+の実装と certificate lifecycle は各 operator/host の責任で、旧 Takosumi Cloud の
+availability や route を current authority として扱いません。通常の OpenTofu の URL /
+route 変数を BYOC provider へ渡す経路は、これとは別にそのまま使えます。
 
 Run には次を保存します。
 
@@ -365,6 +372,26 @@ Content-Type: application/json
 クライアントは、返された SourceSyncRun が `succeeded` になるまで待ちます。その Run の
 `sourceSnapshotId` が一覧に現れてから、compatibility check と plan を続けます。
 
+## Generic Offering catalog (legacy/operator-only)
+
+次の route は現在の実装に残っていますが、Takosumi Core の supported authority では
+ありません。legacy/operator-only の implementation conformance gap であり、新しい
+integration では使用せず、migration/delete の removal-target として扱います。managed
+service の Offering と availability の正本は Takoserver です。
+
+```http
+POST /v1/offering-catalogs
+GET  /v1/offering-catalogs?limit={n}&cursor={opaque}
+GET  /v1/offering-catalogs/{catalogId}/versions/{catalogVersion}
+POST /v1/offering-availability/query
+POST /v1/offering-selections/resolve
+```
+
+既存の response は exact catalog/offering version、subject、requirements、audience、
+resolver evidence を返す compatibility wire ですが、これを new authoring、managed
+capacity、価格、SKU、payment、credential、SLA、support の authority と解釈してはいけません。
+新しい利用者は Git module と通常の ProviderConnection/ProviderBinding を使います。
+
 ## OIDC と workload identity
 
 Takosumi Accounts は登録済み OIDC client のための標準 issuer surface を公開します。
@@ -381,7 +408,9 @@ AWS / GCP / Kubernetes ごとの固定 route や credential kind も Core には
 将来の workload identity は、汎用 OIDC principal、Resource Credential / Policy、または
 Credential Recipe の明示的な pre-run action として設計します。公開するのは、実装と
 discovery が揃ってからです。
-Operator / Cloud はその汎用 seam に Enterprise SSO、SCIM、商用 audit export を追加できます。
+Takosumi Hosted はその汎用 seam に retail/client composition を追加でき、Takoserver は
+managed supply の contract を追加できます。Enterprise SSO、SCIM、商用 audit export の
+authority は各外部 product が明示します。
 
 Capsule が公開する OIDC client は `installExperience.oidc_client.scopes`
 で必要な scope を宣言できます。`openid` は必須です。Accounts が発行する
@@ -420,8 +449,9 @@ compatibility profile は Cloud hostname を作りません。runtime route は
 reservation authority、または operator / Cloud の VerifiedDomain lifecycle が管理します。
 routing cache や backend state を hostname 所有権の正本にはしません。
 
-Takosumi Cloud 固有の endpoint 例は
-[Cloud endpoints](https://app.takosumi.com/docs/endpoints) を見てください。
+Takosumi Hosted の retail/client composition endpoint は、この OSS API の authority では
+ありません。現行 URL、価格、availability、SLA、support は、その product と Takoserver の
+公開された contract を確認してください。
 
 ## エラーの形式
 

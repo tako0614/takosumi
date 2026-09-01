@@ -1258,3 +1258,276 @@ output "value" {
   ]);
   expect(result.level).toBe("ready");
 });
+
+test("discovers required providers from every OpenTofu config spelling the runner executes", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "versions.tofu",
+        text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+`,
+      },
+      {
+        path: "providers.tf.json",
+        text: JSON.stringify({
+          terraform: {
+            required_providers: {
+              random: { source: "hashicorp/random", version: "~> 3.6" },
+            },
+          },
+        }),
+      },
+      {
+        path: "takoform.tofu.json",
+        text: JSON.stringify({
+          terraform: [
+            {
+              required_providers: [{ takoform: { source: "tako0614/takoform" } }],
+            },
+          ],
+        }),
+      },
+      {
+        path: "main.tf",
+        text: `
+resource "random_id" "suffix" {
+  byte_length = 4
+}
+
+output "suffix" {
+  value = random_id.suffix.hex
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.providers.map((provider) => provider.source)).toEqual([
+    "cloudflare/cloudflare",
+    "hashicorp/random",
+    "tako0614/takoform",
+  ]);
+  expect(result.providers.every((provider) => provider.allowed)).toBe(true);
+});
+
+test("discovers one provider declared only in a .tofu file", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tofu",
+        text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+resource "cloudflare_workers_kv_namespace" "app" {
+  title = "app"
+}
+
+output "namespace_id" {
+  value = cloudflare_workers_kv_namespace.app.id
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.providers).toEqual([
+    {
+      source: "cloudflare/cloudflare",
+      localName: "cloudflare",
+      aliases: [],
+      allowed: true,
+    },
+  ]);
+  expect(result.rootModuleOutputs).toEqual([
+    { name: "namespace_id", sensitive: false, ephemeral: false },
+  ]);
+});
+
+test("treats a JSON-only module without providers as runnable", () => {
+  const files = [
+    {
+      path: "main.tofu.json",
+      text: JSON.stringify({
+        variable: {
+          base_domain: { type: "string" },
+          replicas: { type: "number", default: 1 },
+        },
+        locals: { public_origin: "https://${var.base_domain}" },
+        output: {
+          public_origin: { value: "${local.public_origin}" },
+          admin_token: { value: "${var.base_domain}", sensitive: true },
+        },
+      }),
+    },
+  ];
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files,
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.providers).toEqual([]);
+  expect(result.resources).toEqual([]);
+  expect(result.findings).toEqual([]);
+  expect(result.rootModuleVariables).toEqual(["base_domain", "replicas"]);
+  expect(result.rootModuleVariableDeclarations).toEqual([
+    { name: "base_domain", type: "string", hasDefault: false },
+    { name: "replicas", type: "number", hasDefault: true },
+  ]);
+  expect(result.rootModuleOutputs).toEqual([
+    { name: "admin_token", sensitive: true, ephemeral: false },
+    { name: "public_origin", sensitive: false, ephemeral: false },
+  ]);
+  expect(collectRootModuleOutputDeclarations(files)).toEqual(
+    result.rootModuleOutputs,
+  );
+  expect(collectRootModuleVariableDeclarations(files)).toEqual(
+    result.rootModuleVariableDeclarations,
+  );
+});
+
+test("follows JSON module blocks into the selected module tree and ignores sibling modules", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf.json",
+        text: JSON.stringify({
+          module: {
+            storage: { source: "./modules/storage", bucket_name: "attachments" },
+          },
+          output: { bucket: { value: "${module.storage.bucket}" } },
+        }),
+      },
+      {
+        path: "modules/storage/main.tofu",
+        text: `
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
+
+resource "aws_s3_bucket" "b" {
+  bucket = var.bucket_name
+}
+
+variable "bucket_name" {
+  type = string
+}
+
+output "bucket" {
+  value = aws_s3_bucket.b.bucket
+}
+`,
+      },
+      {
+        path: "other/main.tofu.json",
+        text: JSON.stringify({
+          terraform: {
+            required_providers: { google: { source: "hashicorp/google" } },
+          },
+          resource: { google_storage_bucket: { ignored: { name: "x" } } },
+        }),
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.providers.map((provider) => provider.source)).toEqual([
+    "hashicorp/aws",
+  ]);
+  expect(result.resources).toEqual([
+    { type: "aws_s3_bucket", count: 1, allowed: true },
+  ]);
+  expect(result.rootModuleVariables).toEqual([]);
+  expect(result.rootModuleOutputs).toEqual([
+    { name: "bucket", sensitive: false, ephemeral: false },
+  ]);
+});
+
+test("reports JSON config that cannot be parsed instead of silently ignoring its providers", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      { path: "main.tf.json", text: "{ not json" },
+      { path: "outputs.tf", text: 'output "x" {\n  value = 1\n}\n' },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(
+    result.findings.filter(
+      (finding) => finding.code === "opentofu_json_configuration_invalid",
+    ),
+  ).toMatchObject([
+    {
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      path: "main.tf.json",
+    },
+  ]);
+});
+
+test("detects credential-like provider attributes and provisioners declared in JSON", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf.json",
+        text: JSON.stringify({
+          terraform: {
+            required_providers: { aws: { source: "hashicorp/aws" } },
+          },
+          provider: { aws: { region: "us-east-1", access_key: "AKIA-fixture" } },
+          resource: {
+            aws_instance: {
+              web: {
+                ami: "ami-1",
+                provisioner: { "local-exec": { command: "echo hello" } },
+              },
+            },
+          },
+          output: { ip: { value: "${aws_instance.web.public_ip}" } },
+        }),
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(result.findings.map((finding) => finding.code)).toEqual(
+    expect.arrayContaining([
+      "provider_credentials_in_source",
+      "provisioner_unsupported",
+    ]),
+  );
+  expect(result.provisioners).toEqual([{ type: "local-exec", allowed: false }]);
+  expect(result.resources).toEqual([
+    { type: "aws_instance", count: 1, allowed: true },
+  ]);
+});

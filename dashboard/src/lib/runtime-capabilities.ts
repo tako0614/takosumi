@@ -7,8 +7,31 @@ import { isTakosumiCompatibilityProfileToken } from "takosumi-contract";
 
 const [runtimeCapabilities, setRuntimeCapabilities] =
   createSignal<TakosumiProductCapabilities>();
+const [runtimeStoreUrlSignal, setRuntimeStoreUrl] = createSignal<string>();
 let capabilityLoad:
   Promise<TakosumiProductCapabilities | undefined> | undefined;
+
+/**
+ * Operator-configured store (TCS) endpoint from the discovery document's
+ * `endpoints.extensions["takosumi.tcs-store.v1"]`. Runtime config: pointing a
+ * deployment at a store never requires rebuilding the SPA (the build-time
+ * VITE value stays only as the Cloud build's fallback).
+ */
+export function runtimeStoreUrl(): string | undefined {
+  return runtimeStoreUrlSignal();
+}
+
+function adoptRuntimeStoreUrl(wellKnown: TakosumiWellKnownDocument): void {
+  const raw = wellKnown.endpoints?.extensions?.["takosumi.tcs-store.v1"];
+  if (typeof raw !== "string" || raw.trim().length === 0) return;
+  try {
+    const url = new URL(raw.trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") return;
+    setRuntimeStoreUrl(url.toString());
+  } catch {
+    // An invalid operator value degrades to the build-time default.
+  }
+}
 
 export function isTakosEmbeddedRuntime(): boolean {
   return import.meta.env.VITE_TAKOS_EMBEDDED === "1";
@@ -51,6 +74,7 @@ export async function loadTakosumiRuntimeCapabilities(
   }
   const wellKnown =
     (await wellKnownResponse.json()) as TakosumiWellKnownDocument;
+  adoptRuntimeStoreUrl(wellKnown);
   const capabilitiesUrl = new URL(
     wellKnown.endpoints?.capabilities || "/v1/capabilities",
     wellKnownUrl,

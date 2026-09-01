@@ -3,7 +3,7 @@
 `.well-known/takosumi.json` は、Git repository が同じ commit に固定された
 install metadata を Takosumi に提案するための任意文書です。repository が所有しますが、
 実行権限ではありません。Source sync は repository root の文書を最大 128 KiB の
-UTF-8 JSON として検証し、結果と digest を immutable
+UTF-8 JSON として検証し、結果と digest を変更不可の
 `SourceSnapshot.repositoryManifest` に保存します。raw document は public API に
 返しません。
 
@@ -42,7 +42,7 @@ persist 済み InstallConfig であり、manifest を実行時に再読込しま
 です。これは structural schema であり、JSON Schema と parser の完全な同値性を
 意味しません。cross-field uniqueness、`defaultModule` と動的 key の一致、JSON
 recursive depth（最大32）、下記の secret/authority vocabulary 検査は canonical
-parser が追加で fail closed に検査します。
+parser が追加で行い、満たさない場合は安全側に停止します。
 
 ## Module path と default 選択
 
@@ -135,7 +135,7 @@ operator が許可しない OIDC scope や requirement kind は compiler が拒�
 Workspace にある `Resolved` Interface がちょうど1件の場合だけ、Capsule OIDC client の
 pairwise principal に最小 permissions の通常の `InterfaceBinding` を作ります。0件または
 複数件、revoked/conflicting binding、operator policy 外の permission/delivery は
-fail closed です。runtime credential は短期発行され、manifest や OpenTofu variable へ
+安全側に停止します。runtime credential は短期発行され、manifest や OpenTofu variable へ
 書き込みません。
 
 ## `features`
@@ -225,7 +225,7 @@ base InstallConfig と operator policy は常に ceiling です。repository pro
 allowlist や authority を広げず、service/operator 宣言と衝突する proposal は
 上書きせず拒否されます。
 manifest digest、snapshot、selected module、compatibility report が一致しない場合は
-fail closed です。
+安全側に停止します。
 
 ## 無効な例
 
@@ -276,12 +276,12 @@ version identifier は closed schema の識別子です。既存 version の fie
 後から広げません。v2.1 は optional `install.defaultModule`、v2.2 は provider-neutral な
 `interface.consume`、v2.3 は bounded credential-free `sourceBuild` だけを追加する
 additive schema revision です。既存の module、
-provided Interface、authority semantics は変えません。未知 version/field は fail closed
-です。incompatible vocabulary や authority model の変更には別の schema identifier が
+provided Interface、authority semantics は変えません。未知 version/field は安全側に停止
+します。incompatible vocabulary や authority model の変更には別の schema identifier が
 必要です。
 
 将来 metadata section を追加するときは新しい `apiVersion` を定義し、未知 field は
-fail closed のままにします。
+安全側に停止したままにします。
 
 - v1/v2 の single-module repository はそのまま利用でき、唯一の key が選ばれます。
 - multi-module repository は v2.1 に上げ、exact `defaultModule` を追加します。

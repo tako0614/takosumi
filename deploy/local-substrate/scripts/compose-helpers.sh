@@ -13,6 +13,13 @@ local_substrate_profile() {
 	esac
 }
 
+# Host address used by curl --resolve for the TLS ingress. Keep this aligned
+# with the address rendered into the local DNS zones and the explicit Caddy
+# host bind so the substrate can coexist with another loopback-only dev proxy.
+local_substrate_ingress_ip() {
+	printf '%s\n' "${TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_IP:-127.0.0.1}"
+}
+
 # Dev fixture account session bearer for the running stack. scripts/up.sh
 # generates it per bring-up and writes it to caddy/runtime/dev-session-id; there
 # is deliberately no built-in literal, because a fixed bearer checked into the

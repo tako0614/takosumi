@@ -18,11 +18,11 @@ production surfaceのdeployはこのrepositoryのentrypointを使います。共
 bun run deploy
 ```
 
-`prepare`はproductionを変更せず、以下のartifactとgateを一つのimmutable
+`prepare`はproductionを変更せず、以下のartifactとgateを一つの変更不可な
 candidateへ束ねます。`promote`だけが登録済み固定adapterを呼び、remote readback
 まで完了させます。この文書にあるproduct check、evidence generator、
 materializer helperはcandidate/adapter内部の部品であり、単独ではrelease
-authorityになりません。adapterがないsurfaceはfail closedにし、raw deployへ
+authorityになりません。adapterがないsurfaceは安全側に停止し、raw deployへ
 fallbackしません。
 
 ## Artifact Matrix
@@ -35,7 +35,7 @@ fallbackしません。
 | Control-store migrations / schema       | `takosumi/core/adapters/storage`                                         | applied by the selected storage migration adapter                | migration transcript and logical-schema tests                                            |
 | Credential Recipe contribution          | operator/provider contribution + `docs/internal/core-spec.md`            | registered explicitly by the composition; no implicit seed       | contribution diff, driver availability, ProviderConnection policy evidence               |
 | Operator-defined runner / egress policy | runner and policy ports                                                  | deployed with the selected executor and network adapters         | explicit executor, credential phase, and egress evidence                                 |
-| Release activator materializer          | optional operator/Cloud service outside OSS                              | executor for declared service-side Capsule lifecycle actions     | terminal success/failure proof, app URL/health proof, retained provider state on failure |
+| Release activator materializer          | optional operator service outside OSS                                    | executor for declared service-side Capsule lifecycle actions     | terminal success/failure proof, app URL/health proof, retained provider state on failure |
 | Maintained OpenTofu module sources      | `takosumi/opentofu-modules`                                              | ordinary Git Sources consumed through the same Capsule flow      | commit SHA and fixture plan evidence where available                                     |
 
 Takosumi does not require one universal npm, OCI, Worker, or container artifact
@@ -43,10 +43,10 @@ format for the control plane. The operator exposes one logical Takosumi origin
 and selects a composition that binds storage, queue/dispatch, assets, and
 runner ports. `deploy/platform` is the Cloudflare reference adapter;
 `deploy/node-postgres` is another composition. Realized config and secrets live
-in operator-owned state outside source repositories. The official
-`app.takosumi.com` deployment, Cloud wrapper, hosted docs overlay, and realized
-Cloudflare revisions are Takosumi Cloud artifacts documented under
-`takosumi-cloud/docs/operations`.
+in operator-owned state outside source repositories. Takosumi Hosted owns any
+retail/client composition evidence, while Takoserver owns managed-supply
+deployment evidence. Takosumi Cloud is a retired historical identity, and this
+runbook does not assert the current `app.takosumi.com` composition or version.
 
 Capsule application artifacts are not Takosumi platform release artifacts. If a
 Git-hosted OpenTofu module needs a prebuilt Worker bundle, container image,
@@ -185,12 +185,12 @@ service-unit `Environment=`, log, or release evidence. The strict file shape is:
   "tokens": [
     {
       "label": "production",
-      "principal": "takosumi-cloud/production",
+      "principal": "takosumi-platform/production",
       "token": "<strong independently generated bearer token>"
     },
     {
       "label": "staging",
-      "principal": "takosumi-cloud/staging",
+      "principal": "takosumi-platform/staging",
       "token": "<different strong independently generated bearer token>"
     }
   ]

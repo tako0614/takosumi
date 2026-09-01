@@ -6,11 +6,9 @@ import {
   PORTABLE_WORKSPACES,
   workspacesResponse,
 } from "./fixture-data.ts";
+import { portableE2EPort } from "../../../scripts/dashboard-browser-e2e/port.ts";
 
-const port = Number(process.env.TAKOSUMI_E2E_PORT ?? "4179");
-if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-  throw new Error("TAKOSUMI_E2E_PORT must be a valid TCP port");
-}
+const port = portableE2EPort(process.env);
 
 const distRoot = resolve(import.meta.dir, "../../../dashboard/dist");
 const indexFile = Bun.file(join(distRoot, "index.html"));

@@ -80,7 +80,8 @@ export const DEPLOY_CONTROL_RUN_ENDPOINTS: readonly DeployControlEndpoint[] = [
   {
     method: "POST",
     path: TAKOSUMI_RUN_CANCEL_ROUTE,
-    summary: "Cancels a queued or waiting-approval run.",
+    summary:
+      "Cancels a queued, waiting-approval, or running run (running = best-effort kill).",
     auth: "deploy-control-token",
     operationId: "cancelRun",
     openapi: { pathParams: ["runId"], okSchema: "RunResponse" },

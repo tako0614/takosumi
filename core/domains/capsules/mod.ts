@@ -13,7 +13,11 @@
  * flows through it; bindings reference ProviderConnection ids only.
  */
 
-import type { Capsule, CapsuleStatus } from "takosumi-contract/capsules";
+import type {
+  Capsule,
+  CapsulePreDestroyExport,
+  CapsuleStatus,
+} from "takosumi-contract/capsules";
 import type {
   ProviderBindingSet,
   InstallConfig,
@@ -35,6 +39,7 @@ import {
 import { validateResourceMigrationDeclaration } from "../deploy-control/resource_migrations.ts";
 import type {
   CapsuleListPageParams,
+  CapsuleRuntimeSafety,
   OpenTofuControlStore,
 } from "../deploy-control/store.ts";
 import {
@@ -158,6 +163,31 @@ export interface CapsulesServiceDependencies {
   readonly capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
   /** Optional host-owned abandon admission; absent keeps legacy behavior. */
   readonly capsuleAbandonAdmission?: CapsuleAbandonAdmission;
+  /**
+   * Two-phase uninstall grace period before the deferred destroy becomes due
+   * (`TAKOSUMI_UNINSTALL_GRACE_DAYS`). Operator-configured; the OSS fallback
+   * is 7 days. Hosted offerings choose their own value by policy.
+   */
+  readonly uninstallGraceMs?: number;
+}
+
+export const DEFAULT_UNINSTALL_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Work-item kind the deferred-destroy handler registers for. */
+export const CAPSULE_DEFERRED_DESTROY_WORK_ITEM_KIND =
+  "capsule.deferred_destroy";
+
+/**
+ * Parses `TAKOSUMI_UNINSTALL_GRACE_DAYS` (whole days, 0–365) into
+ * milliseconds; anything else means "use the default".
+ */
+export function uninstallGraceMsFromDays(value: unknown): number | undefined {
+  if (typeof value !== "string" || !/^\d+$/u.test(value.trim())) {
+    return undefined;
+  }
+  const days = Number(value.trim());
+  if (!Number.isSafeInteger(days) || days < 0 || days > 365) return undefined;
+  return days * 24 * 60 * 60 * 1000;
 }
 
 export class CapsulesService {
@@ -166,6 +196,7 @@ export class CapsulesService {
   readonly #now: () => Date;
   readonly #activity: ActivityRecorder;
   readonly #projects: ProjectsService;
+  readonly #uninstallGraceMs: number = DEFAULT_UNINSTALL_GRACE_MS;
   #capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
   #capsuleAbandonAdmission?: CapsuleAbandonAdmission;
 
@@ -178,6 +209,12 @@ export class CapsulesService {
       deps.projects ?? new ProjectsService({ store: deps.store });
     this.#capsuleOwnedResourceFence = deps.capsuleOwnedResourceFence;
     this.#capsuleAbandonAdmission = deps.capsuleAbandonAdmission;
+    this.#uninstallGraceMs =
+      deps.uninstallGraceMs !== undefined &&
+      Number.isFinite(deps.uninstallGraceMs) &&
+      deps.uninstallGraceMs >= 0
+        ? deps.uninstallGraceMs
+        : DEFAULT_UNINSTALL_GRACE_MS;
   }
 
   /**
@@ -390,7 +427,17 @@ export class CapsulesService {
     id: string,
     status: CapsuleStatus,
   ): Promise<Capsule> {
-    await this.#requireCapsule(id);
+    const existing = await this.#requireCapsule(id);
+    // The uninstall grace state is entered and left ONLY through the dedicated
+    // uninstall/restore routes, which own the scheduling and evidence fields a
+    // bare status patch would leave dangling.
+    if (existing.status === "uninstalled" || status === "uninstalled") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${id} uninstall state changes only through the uninstall and restore routes`,
+        { reason: "capsule_uninstalled" },
+      );
+    }
     const updated = await this.#store.patchCapsule(id, {
       status,
       updatedAt: this.#now().toISOString(),
@@ -398,6 +445,174 @@ export class CapsulesService {
     if (!updated) {
       throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
     }
+    return updated;
+  }
+
+  /**
+   * Two-phase uninstall entry: parks the Capsule in the `uninstalled` grace
+   * state, schedules the deferred destroy, and enqueues the durable
+   * scheduled-intent item the cron drain finalizes it from. Idempotent — an
+   * already-uninstalled Capsule returns its existing schedule. The provider
+   * resources (and their data) still exist and still meter until the grace
+   * period ends; restore before then is a pure ledger transition.
+   */
+  async scheduleCapsuleUninstall(
+    id: string,
+    options: { readonly requestedBy?: string } = {},
+  ): Promise<Capsule> {
+    const existing = await this.#requireCapsule(id);
+    if (existing.status === "uninstalled") return existing;
+    if (existing.status === "destroyed") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${id} is already destroyed`,
+      );
+    }
+    if (!existing.currentStateVersionId && existing.currentStateGeneration === 0) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${id} has never applied; use the abandon path instead of a scheduled uninstall`,
+      );
+    }
+    const now = this.#now();
+    const nowIso = now.toISOString();
+    const scheduledDestroyAt = new Date(
+      now.getTime() + this.#uninstallGraceMs,
+    ).toISOString();
+    const updated = await this.#store.patchCapsule(id, {
+      status: "uninstalled",
+      uninstalledAt: nowIso,
+      scheduledDestroyAt,
+      ...(options.requestedBy
+        ? { uninstallRequestedBy: options.requestedBy }
+        : {}),
+      updatedAt: nowIso,
+    });
+    if (!updated) {
+      throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
+    }
+    // The work item carries the exact scheduledDestroyAt it was minted for;
+    // the handler re-reads the Capsule and treats any mismatch (restore,
+    // re-uninstall) as a no-op, so stale items can never destroy anything.
+    await this.#store.enqueueWorkItem({
+      id: this.#newId("wi"),
+      kind: CAPSULE_DEFERRED_DESTROY_WORK_ITEM_KIND,
+      dedupeKey: `${id}:${scheduledDestroyAt}`,
+      workspaceId: updated.workspaceId,
+      capsuleId: id,
+      dueAt: scheduledDestroyAt,
+      maxAttempts: 3,
+      payload: { scheduledDestroyAt },
+      now: nowIso,
+    });
+    await this.#activity.record({
+      workspaceId: updated.workspaceId,
+      action: "capsule.uninstall_scheduled",
+      targetType: "capsule",
+      targetId: updated.id,
+      metadata: {
+        name: updated.name,
+        environment: updated.environment,
+        scheduledDestroyAt,
+      },
+    });
+    return updated;
+  }
+
+  /**
+   * Stamps the pre-destroy export evidence onto an uninstalled Capsule (once —
+   * a second attempt keeps the first evidence). The uninstall finalizer calls
+   * this before creating the scheduled destroy plan so the record of "was the
+   * data exported, and why not" survives the destroy.
+   */
+  async recordCapsulePreDestroyExport(
+    id: string,
+    evidence: CapsulePreDestroyExport,
+  ): Promise<Capsule> {
+    const existing = await this.#requireCapsule(id);
+    if (existing.status !== "uninstalled") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${id} is not uninstalled`,
+      );
+    }
+    if (existing.preDestroyExport) return existing;
+    const updated = await this.#store.patchCapsule(id, {
+      preDestroyExport: evidence,
+      updatedAt: this.#now().toISOString(),
+    });
+    if (!updated) {
+      throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
+    }
+    await this.#activity.record({
+      workspaceId: updated.workspaceId,
+      action: `capsule.pre_destroy_export.${
+        evidence.status === "exported"
+          ? "completed"
+          : evidence.status
+      }`,
+      targetType: "capsule",
+      targetId: updated.id,
+      metadata: {
+        name: updated.name,
+        environment: updated.environment,
+        ...(evidence.backupId ? { backupId: evidence.backupId } : {}),
+        ...(evidence.reason ? { reason: evidence.reason } : {}),
+      },
+    });
+    return updated;
+  }
+
+  /** Durable runtime-safety projection passthrough (see the store contract). */
+  async getCapsuleRuntimeSafety(
+    id: string,
+  ): Promise<CapsuleRuntimeSafety | undefined> {
+    return await this.#store.getCapsuleRuntimeSafety(id);
+  }
+
+  /**
+   * Restores an uninstalled Capsule during its grace period: a pure ledger
+   * transition back to `active` — nothing was destroyed yet. Refused once a
+   * destroy apply is in flight (`terminating` runtime safety); a still-parked
+   * system destroy PLAN is inert without approval and stays orphaned.
+   */
+  async restoreUninstalledCapsule(id: string): Promise<Capsule> {
+    const existing = await this.#requireCapsule(id);
+    if (existing.status !== "uninstalled") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${id} is not uninstalled`,
+      );
+    }
+    const runtimeSafety = await this.#store.getCapsuleRuntimeSafety(id);
+    if (
+      runtimeSafety?.phase === "terminating" ||
+      runtimeSafety?.phase === "retired"
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${id} destroy is already in flight and cannot be restored`,
+        { reason: "capsule_destroy_in_flight" },
+      );
+    }
+    const nowIso = this.#now().toISOString();
+    const updated = await this.#store.patchCapsule(id, {
+      status: "active",
+      uninstalledAt: undefined,
+      scheduledDestroyAt: undefined,
+      uninstallRequestedBy: undefined,
+      updatedAt: nowIso,
+    });
+    if (!updated) {
+      throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
+    }
+    await this.#activity.record({
+      workspaceId: updated.workspaceId,
+      action: "capsule.uninstall_restored",
+      targetType: "capsule",
+      targetId: updated.id,
+      metadata: { name: updated.name, environment: updated.environment },
+    });
     return updated;
   }
 

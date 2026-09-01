@@ -41,7 +41,7 @@ import {
 } from "../../lib/control-api.ts";
 import {
   type AppSurface,
-  isVisibleServiceCapsule,
+  isLaunchableCapsule,
   needsAttention,
 } from "../../lib/capsules-ui.ts";
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
@@ -153,8 +153,10 @@ function Inner() {
     if (uiSurfaces.error) void refetchUiSurfaces();
   };
   const visibleCapsules = createMemo(() =>
+    // The launcher hides uninstalled Capsules; they stay on the service
+    // list (restorable) until the scheduled destroy runs.
     (capsules.error ? [] : (capsules.latest ?? [])).filter(
-      isVisibleServiceCapsule,
+      isLaunchableCapsule,
     ),
   );
   // Capsule is the installed-app ledger. Interface is the only launcher/runtime

@@ -22,6 +22,10 @@ import {
   type AccountsStore,
 } from "../../../../accounts/service/src/store.ts";
 import { encodeCursor } from "../../../../contract/pagination.ts";
+import {
+  InMemoryTokenBucketRateLimiter,
+  type WriteRateLimiter,
+} from "../../../../core/shared/rate_limit.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 
@@ -73,6 +77,10 @@ async function authenticatedControlRequest(input: {
   readonly token: string;
   readonly path: string;
   readonly method?: string;
+  readonly writeRateLimit?: {
+    readonly limiter: WriteRateLimiter;
+    readonly limitPerMinute: number;
+  };
 }): Promise<Response> {
   const url = new URL(`https://app.example.test${input.path}`);
   const response = await handleControlRoute({
@@ -83,6 +91,7 @@ async function authenticatedControlRequest(input: {
     url,
     store: input.store,
     operations: input.operations,
+    ...(input.writeRateLimit ? { writeRateLimit: input.writeRateLimit } : {}),
   });
   expect(response).toBeDefined();
   return response!;
@@ -336,7 +345,9 @@ test("a Workspace member can read but cannot mutate Workspace settings or contro
     path: "/api/v1/runs/run_role_guard/cancel",
     method: "POST",
   });
-  expect(cancel.status).toBe(403);
+  // A member without write access gets the same 404 as for an unknown run:
+  // an id-addressed Run never reveals that it exists.
+  expect(cancel.status).toBe(404);
   expect(fixture.mutations).toEqual({ workspaceUpdates: 0, runCancels: 0 });
 });
 
@@ -2437,7 +2448,9 @@ test("a Workspace-restricted credential cannot reach another Workspace it is a m
     ["capsules", "cap_1"],
     "GET",
   );
-  expect(capsule?.status).toBe(403);
+  // 404: an id-addressed Capsule outside the credential's Workspace must be
+  // indistinguishable from one that does not exist.
+  expect(capsule?.status).toBe(404);
 
   const workspaceRequest = new Request(
     `https://app.example.test/api/v1/workspaces/${workspace.id}/projects`,
@@ -2481,4 +2494,68 @@ test("retired projection and upload operations have no Accounts handler", async 
       "POST",
     ),
   ).toBeUndefined();
+});
+
+// ---------------------------------------------------------------------------
+// Edge write-lane throttle (B-W4)
+// ---------------------------------------------------------------------------
+
+function writeScopedPatStore(token: string): InMemoryAccountsStore {
+  const store = new InMemoryAccountsStore();
+  store.savePersonalAccessToken(token, {
+    tokenId: "pat_write_throttle",
+    tokenPrefix: "display",
+    subject: "tsub_owner",
+    name: "Write automation",
+    scopes: ["read", "write"],
+    workspaceId: workspace.id,
+    createdAt: Date.now(),
+  });
+  return store;
+}
+
+test("writes past the per-workspace budget get 429 + Retry-After; reads stay open", async () => {
+  const token = "opaque-write-throttle";
+  const store = writeScopedPatStore(token);
+  const operations = workspaceAuthorizationOperations();
+  const writeRateLimit = {
+    limiter: new InMemoryTokenBucketRateLimiter(),
+    limitPerMinute: 1,
+  };
+
+  const first = await authenticatedControlRequest({
+    store,
+    operations,
+    token,
+    path: `/api/v1/workspaces/${workspace.id}`,
+    method: "POST",
+    writeRateLimit,
+  });
+  expect(first.status).not.toBe(429);
+
+  const second = await authenticatedControlRequest({
+    store,
+    operations,
+    token,
+    path: `/api/v1/workspaces/${workspace.id}`,
+    method: "POST",
+    writeRateLimit,
+  });
+  expect(second.status).toBe(429);
+  expect(second.headers.get("retry-after")).toBeTruthy();
+  const body = (await second.json()) as {
+    error: { code: string; details?: { retryAfterSeconds?: number } };
+  };
+  expect(body.error.code).toBe("rate_limited");
+  expect(body.error.details?.retryAfterSeconds).toBeGreaterThan(0);
+
+  // Reads share no budget with writes: still admitted after the refusal.
+  const read = await authenticatedControlRequest({
+    store,
+    operations,
+    token,
+    path: `/api/v1/workspaces/${workspace.id}`,
+    writeRateLimit,
+  });
+  expect(read.status).not.toBe(429);
 });

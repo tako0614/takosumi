@@ -45,10 +45,16 @@ test("platform exports its already-composed Capsule execution authority", async 
 test("platform scheduled Accounts retention runs a bounded predeployed slice", async () => {
   const db = new SqliteFakeD1();
   await db.exec(D1_ACCOUNTS_STORE_INIT_SQL);
-  const retentionMigration = listD1AccountsMigrations().find(
-    (migration) => migration.name === "refresh_chain_retention_indexes",
-  );
-  await db.exec(retentionMigration!.sql);
+  for (const migrationName of [
+    "refresh_chain_retention_indexes",
+    "authorization_code_redemptions",
+  ]) {
+    const migration = listD1AccountsMigrations().find(
+      (candidate) => candidate.name === migrationName,
+    );
+    expect(migration).toBeDefined();
+    await db.exec(migration!.sql);
+  }
   await insertDocument(db, "refresh_chain_links", "old-parent", {
     parentHash: "old-parent",
     childHash: "old-child",

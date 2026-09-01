@@ -14,7 +14,7 @@ InterfaceBinding が決めるので、**宣言しただけでは誰も呼べま�
 ## 宣言する
 
 Interface の正本は Takosumi の Interface API です。Capsule の blueprint から
-materialize する場合も、外部 Host が Form descriptor を投影する場合も、最終的には
+実体化する場合も、外部 Host が Form descriptor を投影する場合も、最終的には
 同じ台帳へ収束します。Form descriptor の定義・実体化の authority は外部 Host 側です。
 
 ```http
@@ -108,7 +108,7 @@ provider credential、account id、native resource id、bearer token は
 
 Binding の revoke、Interface generation の変更、permission の変更後に、
 古い materialization へ fallback してはいけません。host は新しい exact runtime
-version を作るか、呼び出しを fail closed にします。
+version を作るか、呼び出しを安全側に停止します。
 
 これは Interface の認可機能です。OpenTofu module が Cloudflare / AWS / Takoform などの
 provider を直接使う経路を置き換えません。

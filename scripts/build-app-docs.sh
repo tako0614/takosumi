@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Build the hosted Takosumi Cloud docs and embed them under the platform app
+# Build the retired Takosumi Cloud documentation archive and embed it under the
+# platform app. The generated pages are historical evidence, not current
+# availability, pricing, SLA, support, or production authority.
 # static asset root so app.takosumi.com/docs serves them.
 
 set -euo pipefail
@@ -36,7 +38,7 @@ if [ ! -x "${VITEPRESS_BIN}" ]; then
   install_docs_node_modules
 fi
 
-echo "[takosumi/app-docs] build hosted Cloud docs"
+echo "[takosumi/app-docs] build retired Cloud docs archive"
 cd "${APP_DOCS_DIR}"
 VITEPRESS_BASE="${VITEPRESS_BASE:-/docs/}" "${VITEPRESS_BIN}" build
 

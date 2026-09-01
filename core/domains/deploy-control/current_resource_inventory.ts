@@ -23,6 +23,15 @@ import type { StateVersion } from "takosumi-contract/state-versions";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import type { OpenTofuControlStore } from "./store.ts";
 
+type CurrentResourceInventoryStore = Pick<
+  OpenTofuControlStore,
+  | "getCapsule"
+  | "getWorkspace"
+  | "getStateVersion"
+  | "getApplyRun"
+  | "getPlanRun"
+>;
+
 /** Deterministic response bound for one current Capsule inventory. */
 export const MAX_CURRENT_RESOURCE_INVENTORY_ITEMS = 1_000;
 
@@ -50,7 +59,7 @@ const DATA_SOURCE_ADDRESS_PATTERN =
 
 /** Read the complete current inventory for one Capsule. */
 export async function getCurrentResourceInventory(
-  store: OpenTofuControlStore,
+  store: CurrentResourceInventoryStore,
   capsuleId: string,
 ): Promise<CapsuleCurrentResourceInventoryResponse> {
   requireNonEmptyString(capsuleId, "capsuleId");

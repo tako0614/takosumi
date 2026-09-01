@@ -70,6 +70,7 @@ docs use a different name, read it back through this table.
 | Secret                | A secret value stored encrypted.                                                                         |
 | secret partition      | The token naming the encryption partition a secret is stored in. You give it when creating a Connection. |
 | personal access token | An API token issued by Accounts. It carries `read` / `write` / `admin` scopes.                           |
+| BYOC                  | A usage model where the Workspace/customer owns the vendor account, credential, and resulting resource. |
 
 ## Runtime connections
 
@@ -109,6 +110,7 @@ OpenTofu providers.
 | observe           | The old Resource read-only drift check; migration only.                                                                                         |
 | import            | The old operation taking an existing object into the Resource ledger; migration only.                                                          |
 | portability       | The old Resource-resolution mobility classification; migration only.                                                                            |
+| Offering          | A record in the old Generic Offering catalog/availability/selection API; legacy/operator-only and a migration/delete target. Managed Offering authority belongs to Takoserver. |
 | Compatibility API | An entry point that accepts a standard protocol such as S3 or OCI within a decided scope and version.                                          |
 
 ## Reading status
@@ -145,5 +147,7 @@ curl -s https://takosumi.example.com/.well-known/takosumi
 | Term           | Meaning                                                           |
 | -------------- | ----------------------------------------------------------------- |
 | Operator       | The party running Takosumi for themselves or for their own users. |
-| Takosumi Cloud | The hosted service run officially.                                |
+| Takosumi Hosted | A separate hosted product that may own retail, commerce, and client composition; it is not managed-supply authority. |
+| Takoserver      | The external Takoform Host for optional managed supply; it owns Offerings, capacity, provider installation/credentials, backend, and execution. |
+| Takosumi Cloud  | A retired historical identity; `app.takosumi.com` availability, pricing, SLA, and support are not current authority. |
 | showback       | The billing mode that goes as far as recording and showing usage. |

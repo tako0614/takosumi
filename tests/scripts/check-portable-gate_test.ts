@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 
 import {
+  FAST_GATE_SKIPPED_PHASES,
+  fastGatePhases,
   PORTABLE_GATE_PHASES,
   PortableGateFailure,
   runPortableGate,
@@ -20,6 +22,7 @@ test("preserves the complete check phase order and commands", () => {
     "authoritative-docs",
     "import-boundaries",
     "test-source-boundary",
+    "unreferenced-exports",
     "generalization-boundaries",
     "tests",
     "typescript",
@@ -39,6 +42,7 @@ test("preserves the complete check phase order and commands", () => {
     "bun run check:authoritative-docs",
     "bun run check:import-boundaries",
     "bun run check:test-source-boundary",
+    "bun run check:unreferenced-exports",
     "bun run check:generalization-boundaries",
     "bun run test",
     "tsc --noEmit",
@@ -159,4 +163,42 @@ test("prints a total timing after every phase succeeds", async () => {
   expect(events).toContain("[portable-check] ✓ typescript (0.50s)");
   expect(events).toContain("[portable-check] ✓ tests (0.50s)");
   expect(events).toContain("[portable-check] complete (1.00s)");
+});
+
+test("--fast keeps every non-browser phase and stays a valid gate", () => {
+  const fast = fastGatePhases();
+
+  // The inner loop must still be a real gate: same validation, both global
+  // sweeps present, nothing reordered.
+  validatePortableGatePhases(fast);
+  expect(fast.map((phase) => phase.name)).toEqual([
+    "format",
+    "package-script-boundaries",
+    "production-migrations",
+    "no-first-party-provider",
+    "generated-assets",
+    "service-form-runtime-artifacts",
+    "authoritative-docs",
+    "import-boundaries",
+    "test-source-boundary",
+    "unreferenced-exports",
+    "generalization-boundaries",
+    "tests",
+    "typescript",
+    "worker-types",
+    "cloudflare-worker-build",
+  ]);
+});
+
+test("--fast never silently drops a phase the complete gate adds", () => {
+  const skipped = PORTABLE_GATE_PHASES.filter(
+    (phase) => !fastGatePhases().some((fast) => fast.name === phase.name),
+  ).map((phase) => phase.name);
+
+  expect(skipped).toEqual([...FAST_GATE_SKIPPED_PHASES]);
+  for (const name of FAST_GATE_SKIPPED_PHASES) {
+    expect(PORTABLE_GATE_PHASES.some((phase) => phase.name === name)).toBe(
+      true,
+    );
+  }
 });

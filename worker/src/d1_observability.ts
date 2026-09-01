@@ -4,6 +4,7 @@ import {
   type ChainedAuditEvent,
   type ObservabilitySink,
   verifyAuditHashChain,
+  verifyChainedRecordHash,
 } from "../../core/domains/observability/mod.ts";
 import type {
   MetricEvent,
@@ -11,11 +12,19 @@ import type {
   TraceSpanEvent,
   TraceSpanQuery,
 } from "../../core/domains/observability/types.ts";
+import {
+  aggregateLabelsKey,
+  boundedAggregateLabels,
+  type MetricAggregate,
+  metricAggregateDeltas,
+} from "../../core/domains/observability/metric_layout.ts";
 import type { JsonObject } from "takosumi-contract/reference/compat";
-import type { D1Database } from "./bindings.ts";
+import type { D1Database, D1PreparedStatement } from "./bindings.ts";
 
 const OBSERVABILITY_QUERY_LIMIT = 5000;
 const RETENTION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+/** Bounded audit-chain verification window per call (checkpointed forward). */
+const AUDIT_VERIFY_WINDOW = 2000;
 
 /**
  * Durable Cloudflare Worker observability sink.
@@ -84,36 +93,147 @@ export class CloudflareD1ObservabilitySink implements ObservabilitySink {
     return (rows.results ?? []).map(auditRecordFromRow);
   }
 
+  /**
+   * Checkpointed forward verification: the chain is append-only, so once a
+   * prefix has verified it never needs re-reading. Each call verifies a
+   * bounded window from the stored anchor (whose own hash is re-asserted so a
+   * tampered anchor cannot smuggle a broken prefix past the check) and
+   * advances the checkpoint; a chain longer than one window converges over
+   * successive calls instead of becoming unrunnable at scale.
+   */
   async verifyAuditChain(): Promise<boolean> {
-    return (await verifyAuditHashChain(await this.listAudit())).valid;
+    const checkpoint = await this.#db
+      .prepare(
+        `select sequence, hash from takosumi_observability_audit_verify_checkpoint
+          where singleton = 1`,
+      )
+      .first<{ readonly sequence: number; readonly hash: string }>();
+    let anchor: ChainedAuditEvent | undefined;
+    if (checkpoint) {
+      const anchorRow = await this.#db
+        .prepare(
+          `select sequence, event_json, previous_hash, hash
+             from takosumi_observability_audit
+            where sequence = ?`,
+        )
+        .bind(checkpoint.sequence)
+        .first<AuditRow>();
+      // A missing or altered anchor invalidates the checkpoint: fall back to
+      // a from-genesis verification window.
+      if (anchorRow && anchorRow.hash === checkpoint.hash) {
+        anchor = auditRecordFromRow(anchorRow);
+      }
+    }
+    const rows = await this.#db
+      .prepare(
+        `select sequence, event_json, previous_hash, hash
+           from takosumi_observability_audit
+          where sequence > ?
+          order by sequence asc
+          limit ${AUDIT_VERIFY_WINDOW}`,
+      )
+      .bind(anchor?.sequence ?? 0)
+      .all<AuditRow>();
+    const window = (rows.results ?? []).map(auditRecordFromRow);
+    // `verifyAuditHashChain` assumes a from-genesis list; an anchored window
+    // instead seeds the link verification with the checkpointed hash (whose
+    // own integrity was recomputed above via the stored row).
+    const verdict = anchor
+      ? await verifyAuditHashChainWindow(anchor, window)
+      : await verifyAuditHashChain(window);
+    if (!verdict.valid) return false;
+    const tail = window.at(-1) ?? anchor;
+    if (tail) {
+      await this.#db
+        .prepare(
+          `insert into takosumi_observability_audit_verify_checkpoint
+            (singleton, sequence, hash, verified_at)
+           values (1, ?, ?, ?)
+           on conflict (singleton)
+           do update set sequence = excluded.sequence, hash = excluded.hash,
+             verified_at = excluded.verified_at`,
+        )
+        .bind(tail.sequence, tail.hash, new Date(this.#now()).toISOString())
+        .run();
+    }
+    return true;
   }
 
   async recordMetric(event: MetricEvent): Promise<MetricEvent> {
-    await this.#db
-      .prepare(
-        `insert or replace into takosumi_observability_metrics
-          (id, name, kind, value, unit, tags_json, space_id, group_id,
-           actor_json, payload_json, observed_at, request_id, correlation_id)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        event.id,
-        event.name,
-        event.kind,
-        event.value,
-        event.unit ?? null,
-        event.tags ? JSON.stringify(event.tags) : null,
-        event.workspaceId ?? null,
-        event.runGroupId ?? null,
-        event.actor ? JSON.stringify(event.actor) : null,
-        event.payload ? JSON.stringify(event.payload) : null,
-        event.observedAt,
-        event.requestId ?? null,
-        event.correlationId ?? null,
-      )
-      .run();
+    const statements = [
+      this.#db
+        .prepare(
+          `insert or replace into takosumi_observability_metrics
+            (id, name, kind, value, unit, tags_json, space_id, group_id,
+             actor_json, payload_json, observed_at, request_id, correlation_id)
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          event.id,
+          event.name,
+          event.kind,
+          event.value,
+          event.unit ?? null,
+          event.tags ? JSON.stringify(event.tags) : null,
+          event.workspaceId ?? null,
+          event.runGroupId ?? null,
+          event.actor ? JSON.stringify(event.actor) : null,
+          event.payload ? JSON.stringify(event.payload) : null,
+          event.observedAt,
+          event.requestId ?? null,
+          event.correlationId ?? null,
+        ),
+      ...this.#aggregateStatements(event),
+    ];
+    // One batch: the raw event and its monotonic aggregate rows land (or fail)
+    // together, so the durable counters can never drift from recorded events.
+    await this.#db.batch(statements);
     await this.#sweepRetentionIfDue();
     return structuredClone(event);
+  }
+
+  #aggregateStatements(event: MetricEvent): readonly D1PreparedStatement[] {
+    if (event.kind !== "counter" && event.kind !== "histogram") return [];
+    const labels = boundedAggregateLabels(event);
+    const labelsKey = aggregateLabelsKey(labels);
+    return metricAggregateDeltas(event).map(({ le, delta }) =>
+      this.#db
+        .prepare(
+          `insert into takosumi_observability_metric_aggregates
+            (name, labels_key, le, kind, labels_json, value, updated_at)
+           values (?, ?, ?, ?, ?, ?, ?)
+           on conflict (name, labels_key, le)
+           do update set value = takosumi_observability_metric_aggregates.value + excluded.value,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(
+          event.name,
+          labelsKey,
+          le,
+          event.kind,
+          JSON.stringify(labels),
+          delta,
+          event.observedAt,
+        )
+    );
+  }
+
+  async listMetricAggregates(): Promise<readonly MetricAggregate[]> {
+    const rows = await this.#db
+      .prepare(
+        `select name, labels_key, le, kind, labels_json, value
+           from takosumi_observability_metric_aggregates
+          order by name asc, labels_key asc, le asc`,
+      )
+      .all<AggregateRow>();
+    return (rows.results ?? []).map((row) => ({
+      name: row.name,
+      kind: row.kind === "histogram" ? "histogram" : "counter",
+      labelsKey: row.labels_key,
+      labels: parseJsonRecord(row.labels_json),
+      le: row.le,
+      value: Number(row.value),
+    }));
   }
 
   async listMetrics(
@@ -265,6 +385,15 @@ interface TraceRow extends Record<string, unknown> {
   readonly event_json: string;
 }
 
+interface AggregateRow extends Record<string, unknown> {
+  readonly name: string;
+  readonly labels_key: string;
+  readonly le: string;
+  readonly kind: string;
+  readonly labels_json: string;
+  readonly value: number;
+}
+
 interface MetricRow extends Record<string, unknown> {
   readonly id: string;
   readonly name: string;
@@ -343,6 +472,26 @@ function addWhere(
   if (!value) return;
   where.push(`${column} = ?`);
   params.push(value);
+}
+
+/**
+ * Link-verifies a window of chained records seeded from a trusted anchor: the
+ * first window record must chain off the anchor's hash, and every record's
+ * own hash must recompute. The anchor itself is re-hashed too so a tampered
+ * checkpoint row cannot vouch for a broken prefix.
+ */
+async function verifyAuditHashChainWindow(
+  anchor: ChainedAuditEvent,
+  window: readonly ChainedAuditEvent[],
+): Promise<{ readonly valid: boolean }> {
+  if (!(await verifyChainedRecordHash(anchor))) return { valid: false };
+  let previousHash = anchor.hash;
+  for (const record of window) {
+    if (record.previousHash !== previousHash) return { valid: false };
+    if (!(await verifyChainedRecordHash(record))) return { valid: false };
+    previousHash = record.hash;
+  }
+  return { valid: true };
 }
 
 function isAuditSequenceConflict(error: unknown): boolean {

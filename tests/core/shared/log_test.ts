@@ -60,6 +60,9 @@ test("createTakosumiLogger preserves default console warning severity", () => {
     const log = createTakosumiLogger({
       format: "json",
       now: () => new Date("2026-07-19T06:00:00.000Z"),
+      // Ambient env is excluded on purpose: this asserts default console
+      // severity routing, not the host's silencing preference.
+      env: {},
     });
 
     log.warn("service.runner_profiles.unknown_enabled_ids", {
@@ -179,4 +182,48 @@ test("createTakosumiLogger honours TAKOSUMI_LOG_FORMAT override", () => {
 
   log.info("takosumi.service.boot.starting");
   assert.ok(!stdout[0].startsWith("{"));
+});
+
+test("TAKOSUMI_LOG_SILENCE drops info and warn from the default sinks", () => {
+  const captured: string[] = [];
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  try {
+    console.log = (line?: unknown) => captured.push(`log:${String(line)}`);
+    console.warn = (line?: unknown) => captured.push(`warn:${String(line)}`);
+    console.error = (line?: unknown) => captured.push(`error:${String(line)}`);
+    const log = createTakosumiLogger({
+      format: "json",
+      env: { TAKOSUMI_LOG_SILENCE: "1" },
+    });
+
+    log.info("takosumi.service.boot.starting");
+    log.warn("takosumi.service.boot.dev_mode_enabled");
+    log.error("takosumi.service.boot.fatal");
+  } finally {
+    console.log = originalLog;
+    console.warn = originalWarn;
+    console.error = originalError;
+  }
+
+  assert.equal(captured.length, 1);
+  assert.ok(captured[0].startsWith("error:"));
+});
+
+test("TAKOSUMI_LOG_SILENCE never silences an injected sink", () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const log = createTakosumiLogger({
+    format: "json",
+    env: { TAKOSUMI_LOG_SILENCE: "true" },
+    stdout: (line) => stdout.push(line),
+    stderr: (line) => stderr.push(line),
+  });
+
+  log.info("takosumi.service.boot.starting");
+  log.warn("takosumi.service.boot.dev_mode_enabled");
+
+  assert.equal(stdout.length, 1);
+  assert.equal(stderr.length, 1);
 });

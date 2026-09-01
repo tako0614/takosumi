@@ -24,15 +24,18 @@ drift apart.
 | repository manifest | parser: `takosumi.com/v1`, `takosumi.com/v2`, `takosumi.com/v2.1`, `takosumi.com/v2.2`, `takosumi.com/v2.3`; checked-in schemas: `v2.1`–`v2.3` | `contract/repository-manifest.ts`; `docs/public/schemas/repository-manifest-v2.*.schema.json` | repository / same-commit manifest compiler | Every lane is closed. `v1`/`v2` are parser-compatibility lanes only; `v2.2` adds Interface consumption and `v2.3` adds credential-free `sourceBuild` |
 | Capsule source options | `install.takosumi.com/v1alpha1` | `contract/capsules.ts` | repository/install source / Accounts and dashboard | Closed envelope; an incompatible field or meaning needs a new identity and migration note |
 | optional Form host boundary | `forms.takoform.com/v1alpha1`; `takoform.host-api@v1alpha1`; install envelope `takosumi.takoform-install-envelope-set@v3` | `contract/form-host-interoperability.ts`; `contract/service-forms.ts` | external Form/package flow / optional host adapter | This does not own portable Takoform. A Form `definitionVersion` does not advance with Takosumi software |
+| legacy Generic Offering surface | current `/v1/offering-*` routes and Offering store | `core/domains/offerings/`; route inventory | operator-only compatibility / migration-delete owner | Not a supported Takosumi Core authority. Do not use for new integrations; managed Offerings belong to Takoserver |
 | background/runtime ABI | background authority/result `v2`; host runtime materialization `v1`; managed runtime/relational batch `v1` | `contract/background-events.ts`; `contract/host-runtime-materialization.ts`; `contract/managed-runtime-connections.ts`; `contract/managed-relational-runtime.ts` | host/runner / exact ABI consumer | Provide a window in which every producer and consumer can read the shape. Same-token semantic changes require old-reader regression evidence and a compatibility note |
 | readiness/config evidence | platform readiness `v2`; platform hardening `v1`; provider configurations `@v1` | `contract/platform-readiness.ts`; `contract/platform-hardening.ts`; `contract/provider-configurations.ts` | operator tooling / validator | Evidence-format versions, not service API or database versions |
 | runner durable receipts | mutation dispatch/semantics `v2`; credential authority `v1`; run owner `v1` | `worker/src/durable/OpenTofuRunnerObject.ts`; `worker/src/durable/OpenTofuRunOwnerObject.ts` | Durable Object / recovery and audit reader | Recovery identities after acknowledgement loss; never overwrite an old receipt, add a reader or an explicit migration |
 | SourceSnapshot / StateVersion / Run | no independent wire-schema version | `contract/sources.ts`; `contract/state-versions.ts`; `contract/runs.ts`; owning database migrations | Takosumi control plane / dashboard and runner | TypeScript shape and durable migrations are authoritative. Do not add a convenience global schema version |
 
-Takosumi Cloud is a separate closed delta with its own D1 component manifest.
-Private component numbers are not copied into the OSS public contract. Cloud
-must exact-pin the OSS commit and schema evidence it consumes and maintain its
-own matrix and history.
+Takosumi Cloud is a retired historical identity and is not current authority for
+availability, pricing, SLA, or support. If Takosumi Hosted owns retail,
+commerce, or client composition, Takoserver still owns managed supply, capacity,
+provider credentials, and Offerings. Each external product exact-pins the OSS
+commit and schema evidence it consumes and maintains its own private matrix and
+history.
 
 ## Changing a version
 

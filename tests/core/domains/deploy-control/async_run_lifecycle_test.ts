@@ -14,6 +14,11 @@ import {
   type BeginApplyRunResult,
   InMemoryOpenTofuControlStore,
 } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  CapsuleLeaseBusyError,
+  InMemoryCapsuleCoordination,
+  workspaceRunSlotScope,
+} from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   fixtureStateCommit,
@@ -1156,8 +1161,8 @@ test("runner infrastructure errors fail a plan after the retry budget is exhaust
         planCalls++;
         return Promise.reject(
           new OpenTofuRunnerInfrastructureError(
-            RUNNER_CONTAINER_CAPACITY_EXCEEDED,
-            { reason: "capacity_exhausted" },
+            "runner substrate reset during plan",
+            { reason: "substrate_reset" },
           ),
         );
       },
@@ -1331,8 +1336,8 @@ test("runner infrastructure errors fail apply after the retry budget is exhauste
         applyCalls++;
         return Promise.reject(
           new OpenTofuRunnerInfrastructureError(
-            RUNNER_CONTAINER_CAPACITY_EXCEEDED,
-            { reason: "capacity_exhausted" },
+            "runner artifact relay lost the apply acknowledgement",
+            { reason: "runner_artifact_relay_ambiguous" },
           ),
         );
       },
@@ -1383,6 +1388,393 @@ test("runner infrastructure errors fail apply after the retry budget is exhauste
       workspaceId: applyRun.workspaceId,
       cause: "controller_retry",
     },
+  ]);
+});
+
+test("capacity refusals keep requeueing past the retry limit while within the queue-age budget", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let applyCalls = 0;
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(5900),
+    newId: deterministicIds(),
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      apply: (job) => {
+        applyCalls++;
+        if (applyCalls <= 3) {
+          return Promise.reject(
+            new OpenTofuRunnerInfrastructureError(
+              RUNNER_CONTAINER_CAPACITY_EXCEEDED,
+              { reason: "capacity_exhausted" },
+            ),
+          );
+        }
+        return Promise.resolve(
+          fixtureStateCommit({ rawOutputRef: job.rawOutputRef }),
+        );
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_capacity_patience",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  // Three consecutive capacity refusals — the 1-retry infrastructure budget
+  // would have failed this terminally on the second dispatch.
+  for (let i = 0; i < 3; i++) {
+    await expect(
+      controller.dispatchQueuedRun({
+        action: "apply",
+        runId: applyRun.id,
+        workspaceId: applyRun.workspaceId,
+      }),
+    ).rejects.toThrow(/retryable_runner_infrastructure_error/);
+    expect((await store.getApplyRun(applyRun.id))!.status).toEqual("queued");
+  }
+  await controller.dispatchQueuedRun({
+    action: "apply",
+    runId: applyRun.id,
+    workspaceId: applyRun.workspaceId,
+  });
+
+  const succeeded = (await store.getApplyRun(applyRun.id))!;
+  expect(succeeded.status).toEqual("succeeded");
+  expect(applyCalls).toEqual(4);
+  expect(
+    succeeded.auditEvents.filter(
+      (event) => event.type === "apply.retry_scheduled",
+    ),
+  ).toHaveLength(3);
+});
+
+test("capacity refusals fail as runner_capacity_timeout once the queue-age budget is spent", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(5950),
+    newId: deterministicIds(),
+    // The budget starts at the FIRST capacity refusal, so the first one always
+    // requeues; the 1ms budget is spent by the time the second arrives.
+    runnerCapacityQueueBudgetMs: 1,
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      apply: () =>
+        Promise.reject(
+          new OpenTofuRunnerInfrastructureError(
+            RUNNER_CONTAINER_CAPACITY_EXCEEDED,
+            { reason: "capacity_exhausted" },
+          ),
+        ),
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_capacity_timeout",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  // First refusal: requeued, and it stamps the start of the wait.
+  await expect(
+    controller.dispatchQueuedRun({
+      action: "apply",
+      runId: applyRun.id,
+      workspaceId: applyRun.workspaceId,
+    }),
+  ).rejects.toThrow(/retryable_runner_infrastructure_error/);
+  expect((await store.getApplyRun(applyRun.id))!.status).toEqual("queued");
+
+  // Second refusal: the budget measured from the first has elapsed.
+  await controller.dispatchQueuedRun({
+    action: "apply",
+    runId: applyRun.id,
+    workspaceId: applyRun.workspaceId,
+  });
+
+  const failed = (await store.getApplyRun(applyRun.id))!;
+  expect(failed.status).toEqual("failed");
+  expect(failed.diagnostics?.[0]?.code).toEqual("runner_capacity_timeout");
+  expect(failed.diagnostics?.[0]?.message).toContain("runner_capacity_timeout");
+});
+
+test("cancelling a RUNNING plan kills the runner dispatch and lands terminal cancelled", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let observedSignal: AbortSignal | undefined;
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6100),
+    newId: deterministicIds(),
+    runner: {
+      // Blocks until the threaded dispatch signal aborts — a run that would
+      // otherwise execute forever.
+      plan: (_job, options?: { readonly signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          observedSignal = options?.signal;
+          options?.signal?.addEventListener("abort", () =>
+            reject(options.signal?.reason ?? new Error("aborted")),
+          );
+        }),
+      apply: () => Promise.reject(new Error("not used")),
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_cancel_plan",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  const dispatching = controller
+    .dispatchQueuedRun({
+      action: "plan",
+      runId: queuedPlan.id,
+      workspaceId: queuedPlan.workspaceId,
+    })
+    .catch(() => undefined);
+  // Wait until the executor has claimed the run and is blocked on the runner.
+  while ((await store.getPlanRun(queuedPlan.id))!.status !== "running") {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+
+  const cancelled = await controller.cancelRun(queuedPlan.id);
+  expect(cancelled.status).toEqual("cancelled");
+  await dispatching;
+
+  expect(observedSignal?.aborted).toBe(true);
+  const finalRun = (await store.getPlanRun(queuedPlan.id))!;
+  expect(finalRun.status).toEqual("cancelled");
+  expect(
+    finalRun.auditEvents.some(
+      (event) => event.type === "plan.cancel.requested",
+    ),
+  ).toBe(true);
+});
+
+test("cancelling a RUNNING apply lands terminal cancelled with honest uncertainty diagnostics", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let observedSignal: AbortSignal | undefined;
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6200),
+    newId: deterministicIds(),
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      apply: (_job, options?: { readonly signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          observedSignal = options?.signal;
+          options?.signal?.addEventListener("abort", () =>
+            reject(options.signal?.reason ?? new Error("aborted")),
+          );
+        }),
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_cancel_apply",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  const dispatching = controller
+    .dispatchQueuedRun({
+      action: "apply",
+      runId: applyRun.id,
+      workspaceId: applyRun.workspaceId,
+    })
+    .catch(() => undefined);
+  while ((await store.getApplyRun(applyRun.id))!.status !== "running") {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+
+  const cancelled = await controller.cancelRun(applyRun.id);
+  expect(cancelled.status).toEqual("cancelled");
+  await dispatching;
+
+  expect(observedSignal?.aborted).toBe(true);
+  const finalRun = (await store.getApplyRun(applyRun.id))!;
+  expect(finalRun.status).toEqual("cancelled");
+  expect(finalRun.diagnostics?.[0]?.code).toEqual("cancel_requested");
+  expect(finalRun.diagnostics?.[0]?.message).toContain("next plan");
+  // The capsule still points at its pre-apply state generation: the executor
+  // lost the row and committed nothing.
+  const capsule = (await store.getCapsule("cap_cancel_apply"))!;
+  expect(capsule.currentStateGeneration).toEqual(0);
+});
+
+test("a plan run parks queued when every workspace run slot is held", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const coordination = new InMemoryCapsuleCoordination();
+  const controller = new OpenTofuController({
+    store,
+    capsuleCoordination: coordination,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6000),
+    newId: deterministicIds(),
+    runner: {
+      plan: () => Promise.reject(new Error("must not dispatch")),
+      apply: () => Promise.reject(new Error("must not dispatch")),
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, { capsuleId: "cap_slot_plan" });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  // Default workspace concurrency is 2: hold both slots.
+  for (const slot of [0, 1]) {
+    await coordination.acquireLease({
+      scope: workspaceRunSlotScope(queuedPlan.workspaceId, slot),
+      holderId: `sibling-${slot}`,
+      ttlMs: 60_000,
+    });
+  }
+
+  await expect(
+    controller.dispatchQueuedRun({
+      action: "plan",
+      runId: queuedPlan.id,
+      workspaceId: queuedPlan.workspaceId,
+    }),
+  ).rejects.toBeInstanceOf(CapsuleLeaseBusyError);
+  expect((await store.getPlanRun(queuedPlan.id))!.status).toEqual("queued");
+});
+
+test("runner-minute usage bills each apply attempt under a distinct idempotency key", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let applyCalls = 0;
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(5700),
+    newId: deterministicIds(),
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      apply: (job) => {
+        applyCalls++;
+        if (applyCalls === 1) {
+          // A relay-ambiguous failure DID consume runner time, unlike a
+          // capacity refusal (which never reaches the runner and is not
+          // billed at all).
+          return Promise.reject(
+            new OpenTofuRunnerInfrastructureError(
+              "runner artifact relay lost the apply acknowledgement",
+              { reason: "runner_artifact_relay_ambiguous" },
+            ),
+          );
+        }
+        return Promise.resolve(
+          fixtureStateCommit({ rawOutputRef: job.rawOutputRef }),
+        );
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+    defaultBillingSettings: { mode: "showback" },
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_attempt_metering",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  await expect(
+    controller.dispatchQueuedRun({
+      action: "apply",
+      runId: applyRun.id,
+      workspaceId: applyRun.workspaceId,
+    }),
+  ).rejects.toThrow(/retryable_runner_infrastructure_error/);
+  await controller.dispatchQueuedRun({
+    action: "apply",
+    runId: applyRun.id,
+    workspaceId: applyRun.workspaceId,
+  });
+
+  expect((await store.getApplyRun(applyRun.id))!.status).toEqual("succeeded");
+  expect(applyCalls).toEqual(2);
+  const attemptKeys = (await store.listUsageEvents(applyRun.workspaceId))
+    .filter(
+      (event) => event.kind === "runner_minute" && event.runId === applyRun.id,
+    )
+    .map((event) => event.idempotencyKey)
+    .sort();
+  // A per-run key was first-write-wins: the requeued first attempt's partial
+  // minutes shadowed the executed retry. Each attempt now bills separately.
+  expect(attemptKeys).toEqual([
+    `${applyRun.id}:runner_minute:0`,
+    `${applyRun.id}:runner_minute:1`,
   ]);
 });
 
@@ -1514,8 +1906,8 @@ test("runner infrastructure errors fail destroy apply after the retry budget is 
         destroyCalls++;
         return Promise.reject(
           new OpenTofuRunnerInfrastructureError(
-            RUNNER_CONTAINER_CAPACITY_EXCEEDED,
-            { reason: "capacity_exhausted" },
+            "runner artifact relay lost the destroy acknowledgement",
+            { reason: "runner_artifact_relay_ambiguous" },
           ),
         );
       },
@@ -1896,3 +2288,164 @@ function controllableClock(start: number): {
     value: () => value,
   };
 }
+
+test("live apply progress is stamped on the run while the apply executes", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let releaseApply!: () => void;
+  const applyHolds = new Promise<void>((resolve) => {
+    releaseApply = resolve;
+  });
+  let progressReads = 0;
+  const progressTargets: string[] = [];
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6300),
+    newId: deterministicIds(),
+    // Tick fast so the renewal harness samples progress during the test.
+    runRenewalIntervalMs: 5,
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      apply: async (job) => {
+        await applyHolds;
+        return fixtureStateCommit({ rawOutputRef: job.rawOutputRef });
+      },
+      applyProgress: (input) => {
+        // The runner executes an apply under the PLAN's dispatch coordinate.
+        // A stub that ignores this argument let a completely dead feature pass:
+        // production read progress under the ApplyRun id, which addresses a
+        // runner that never ran anything.
+        progressTargets.push(input.planRunId);
+        progressReads += 1;
+        return Promise.resolve({
+          completed: 3,
+          inFlight: 1,
+          currentResource: "cloudflare_d1_database.db",
+        });
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, { capsuleId: "cap_progress" });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  const dispatching = controller.dispatchQueuedRun({
+    action: "apply",
+    runId: applyRun.id,
+    workspaceId: applyRun.workspaceId,
+  });
+  // Wait for a heartbeat tick to sample and stamp progress.
+  let stamped: ApplyRun | undefined;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const current = await store.getApplyRun(applyRun.id);
+    if (current?.applyProgress) {
+      stamped = current;
+      break;
+    }
+  }
+  releaseApply();
+  await dispatching;
+
+  expect(progressReads).toBeGreaterThan(0);
+  expect([...new Set(progressTargets)]).toEqual([planRun.id]);
+  expect(stamped?.applyProgress).toMatchObject({
+    completed: 3,
+    inFlight: 1,
+    currentResource: "cloudflare_d1_database.db",
+  });
+  // The terminal projection drops it: a finished install must not render a
+  // stale "3 of 7" beside its own success.
+  const projected = await controller.getRun(applyRun.id);
+  expect(projected.status).toEqual("succeeded");
+  expect(projected.applyProgress).toBeUndefined();
+});
+
+test("a capacity refusal bills no runner time", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let applyCalls = 0;
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(6400),
+    newId: deterministicIds(),
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      apply: (job) => {
+        applyCalls++;
+        if (applyCalls === 1) {
+          return Promise.reject(
+            new OpenTofuRunnerInfrastructureError(
+              RUNNER_CONTAINER_CAPACITY_EXCEEDED,
+              { reason: "capacity_exhausted" },
+            ),
+          );
+        }
+        return Promise.resolve(
+          fixtureStateCommit({ rawOutputRef: job.rawOutputRef }),
+        );
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+    defaultBillingSettings: { mode: "showback" },
+  });
+  const request = await seedUpdatable(store, { capsuleId: "cap_no_charge" });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  await expect(
+    controller.dispatchQueuedRun({
+      action: "apply",
+      runId: applyRun.id,
+      workspaceId: applyRun.workspaceId,
+    }),
+  ).rejects.toThrow(/retryable_runner_infrastructure_error/);
+  await controller.dispatchQueuedRun({
+    action: "apply",
+    runId: applyRun.id,
+    workspaceId: applyRun.workspaceId,
+  });
+
+  expect((await store.getApplyRun(applyRun.id))!.status).toEqual("succeeded");
+  const applyMinutes = (await store.listUsageEvents(applyRun.workspaceId))
+    .filter(
+      (event) => event.kind === "runner_minute" && event.runId === applyRun.id,
+    );
+  // The refused attempt never reached the runner, so only the executed
+  // attempt is billed. Charging both billed the control plane's own backoff.
+  expect(applyMinutes).toHaveLength(1);
+});

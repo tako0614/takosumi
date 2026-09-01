@@ -23,6 +23,43 @@ export interface AuthorizationCodeRecord {
   expiresAt: number;
 }
 
+/**
+ * Immutable validation snapshot returned before an authorization code is
+ * claimed. `redemptionId` is an opaque, store-derived identifier (a credential
+ * hash on durable adapters); callers must pass the whole candidate back
+ * unchanged so the store can reject a stale snapshot without touching a newer
+ * record that happens to reuse the same presented code.
+ */
+export interface AuthorizationCodeRedemptionCandidate {
+  readonly redemptionId: string;
+  readonly recordVersion: string;
+  readonly record: AuthorizationCodeRecord;
+}
+
+export type OpenAuthorizationCodeRedemptionResult =
+  | {
+      readonly status: "active";
+      readonly candidate: AuthorizationCodeRedemptionCandidate;
+    }
+  | { readonly status: "replayed" | "unknown" };
+
+export type ClaimValidatedAuthorizationCodeResult =
+  | { readonly status: "claimed"; readonly claimId: string }
+  | { readonly status: "replayed" | "stale" | "lost" };
+
+export interface FinalizeAuthorizationCodeRedemptionInput {
+  readonly code: string;
+  readonly claimId: string;
+  readonly accessToken: string;
+  readonly accessRecord: TokenRecord;
+  readonly refreshToken?: string;
+  readonly refreshRecord?: TokenRecord;
+}
+
+export type FinalizeAuthorizationCodeRedemptionResult = {
+  readonly status: "issued" | "replayed" | "lost";
+};
+
 export interface TokenRecord {
   clientId: string;
   /** Invocation-time OAuth audience. Absent on ordinary client tokens. */
@@ -192,10 +229,18 @@ export interface RefreshChainPruneResult {
   chainAccessTokens: number;
   /** revoked_refresh_roots rows removed (refresh-token lifetime). */
   revokedRoots: number;
-  /** consumed_authorization_codes rows removed (auth-code lifetime). */
+  /**
+   * consumed_authorization_codes rows removed after the auth-code cutoff and
+   * only after the expand-window lifecycle authority is gone.
+   */
   consumedCodes: number;
-  /** auth_code_token_links rows removed (auth-code lifetime). */
+  /** auth_code_token_links rows removed (refresh-chain lifetime). */
   authCodeTokenLinks: number;
+  /**
+   * Terminal authorization_code_redemptions rows removed (refresh-chain
+   * lifetime). Active and issuing rows are never retention candidates.
+   */
+  authorizationCodeRedemptions: number;
 }
 
 export type OidcClientAuthMethod =
@@ -313,12 +358,35 @@ export interface AccountsStore {
     code: string,
     record: AuthorizationCodeRecord,
   ): void | Promise<void>;
-  consumeAuthorizationCode(
+  /**
+   * Opens a non-mutating validation snapshot while the code is active. Any
+   * presentation after a claim has started is a replay: the store atomically
+   * records `replayed` and revokes every descendant before returning.
+   */
+  openAuthorizationCodeRedemption(
     code: string,
   ):
-    | AuthorizationCodeRecord
-    | undefined
-    | Promise<AuthorizationCodeRecord | undefined>;
+    | OpenAuthorizationCodeRedemptionResult
+    | Promise<OpenAuthorizationCodeRedemptionResult>;
+  /**
+   * Claims one already-validated immutable snapshot. The record-version CAS is
+   * the sole issuance winner; a stale candidate never consumes a replacement.
+   */
+  claimValidatedAuthorizationCode(
+    candidate: AuthorizationCodeRedemptionCandidate,
+  ):
+    | ClaimValidatedAuthorizationCodeResult
+    | Promise<ClaimValidatedAuthorizationCodeResult>;
+  /**
+   * Atomically persists the claimant's access/refresh records, hashed lineage,
+   * and terminal `issued` state. Credentials are usable only after this method
+   * returns `issued`; a replay winner causes a no-write `replayed` result.
+   */
+  finalizeAuthorizationCodeRedemption(
+    input: FinalizeAuthorizationCodeRedemptionInput,
+  ):
+    | FinalizeAuthorizationCodeRedemptionResult
+    | Promise<FinalizeAuthorizationCodeRedemptionResult>;
   saveAccessToken(token: string, record: TokenRecord): void | Promise<void>;
   findAccessToken(
     token: string,
@@ -430,28 +498,6 @@ export interface AccountsStore {
     rootToken: string,
   ): readonly string[] | Promise<readonly string[]>;
   /**
-   * Marks the authorization code (one-shot) as consumed. Used by the
-   * token endpoint to detect authorization-code reuse and cascade-revoke
-   * the tokens issued from the first exchange (OAuth 2.1 §4.1.4).
-   */
-  markAuthorizationCodeConsumed(code: string): void | Promise<void>;
-  /**
-   * Returns true if the authorization code has already been marked as
-   * consumed by `markAuthorizationCodeConsumed`.
-   */
-  isAuthorizationCodeConsumed(code: string): boolean | Promise<boolean>;
-  /**
-   * Records the access token (and optionally the refresh-chain root)
-   * that was issued by exchanging the given authorization code. The
-   * tokens recorded here are revoked by
-   * `revokeTokensIssuedFromCode` when the code is replayed.
-   */
-  linkAccessTokenToAuthCode(
-    code: string,
-    accessToken: string,
-    refreshTokenRoot?: string,
-  ): void | Promise<void>;
-  /**
    * Records that the access token was minted by a rotation in the
    * refresh chain rooted at `refreshTokenRoot`. `revokeRefreshChain`
    * deletes every access token linked here so a refresh-token replay
@@ -462,17 +508,6 @@ export interface AccountsStore {
     refreshTokenRoot: string,
     accessToken: string,
   ): void | Promise<void>;
-  /**
-   * Returns the access and refresh root tokens that were issued by
-   * exchanging the given authorization code. The caller is responsible
-   * for cascading the refresh chain revocations.
-   */
-  revokeTokensIssuedFromCode(code: string):
-    | {
-        access: readonly string[];
-        refresh: readonly string[];
-      }
-    | Promise<{ access: readonly string[]; refresh: readonly string[] }>;
   /**
    * Bounded retention page for refresh-chain / authorization-code tracking
    * state. The timestamp+primary-key cursor and limit are mandatory so no
@@ -518,6 +553,21 @@ export interface AccountsStore {
   ): string | undefined | Promise<string | undefined>;
 }
 
+interface InMemoryAuthorizationCodeRedemption {
+  readonly redemptionId: string;
+  readonly recordVersion: string;
+  readonly record: AuthorizationCodeRecord;
+  state: "active" | "issuing" | "issued" | "replayed";
+  claimId?: string;
+  readonly createdAt: number;
+  updatedAt: number;
+  claimedAt?: number;
+  issuedAt?: number;
+  replayedAt?: number;
+  accessToken?: string;
+  refreshToken?: string;
+}
+
 export class InMemoryAccountsStore implements AccountsStore {
   readonly #accounts = new Map<TakosumiSubject, TakosumiAccountRecord>();
   readonly #upstreamIdentities = new Map<string, UpstreamIdentityRecord>();
@@ -525,7 +575,11 @@ export class InMemoryAccountsStore implements AccountsStore {
   readonly #accountSessions = new Map<string, AccountSessionRecord>();
   readonly #privacyRequests = new Map<string, PrivacyRequestRecord>();
   readonly #privacyRequestsBySubject = new Map<TakosumiSubject, Set<string>>();
-  readonly #authorizationCodes = new Map<string, AuthorizationCodeRecord>();
+  readonly #authorizationCodeRedemptions = new Map<
+    string,
+    InMemoryAuthorizationCodeRedemption
+  >();
+  readonly #authorizationCodeByRedemptionId = new Map<string, string>();
   readonly #accessTokens = new Map<string, TokenRecord>();
   readonly #refreshTokens = new Map<string, TokenRecord>();
   readonly #personalAccessTokens = new Map<string, PersonalAccessTokenRecord>();
@@ -563,6 +617,7 @@ export class InMemoryAccountsStore implements AccountsStore {
     ["revoked_roots", []],
     ["consumed_codes", []],
     ["auth_code_token_links", []],
+    ["authorization_code_redemptions", []],
   ]);
   // WebAuthn challenge store: key -> { challenge, expiresAt }. Single-shot
   // delete-on-read via consumePasskeyChallenge.
@@ -694,13 +749,115 @@ export class InMemoryAccountsStore implements AccountsStore {
   }
 
   saveAuthorizationCode(code: string, record: AuthorizationCodeRecord): void {
-    this.#authorizationCodes.set(code, record);
+    const existing = this.#authorizationCodeRedemptions.get(code);
+    if (existing && existing.state !== "active") {
+      this.#replayAuthorizationCode(code, existing);
+    }
+    const now = Date.now();
+    const redemption: InMemoryAuthorizationCodeRedemption = {
+      redemptionId: crypto.randomUUID(),
+      recordVersion: crypto.randomUUID(),
+      record: structuredClone(record),
+      state: "active",
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.#authorizationCodeRedemptions.set(code, redemption);
+    this.#authorizationCodeByRedemptionId.set(redemption.redemptionId, code);
   }
 
-  consumeAuthorizationCode(code: string): AuthorizationCodeRecord | undefined {
-    const record = this.#authorizationCodes.get(code);
-    this.#authorizationCodes.delete(code);
-    return record;
+  openAuthorizationCodeRedemption(
+    code: string,
+  ): OpenAuthorizationCodeRedemptionResult {
+    const redemption = this.#authorizationCodeRedemptions.get(code);
+    if (!redemption) return { status: "unknown" };
+    if (redemption.state !== "active") {
+      this.#replayAuthorizationCode(code, redemption);
+      return { status: "replayed" };
+    }
+    return {
+      status: "active",
+      candidate: {
+        redemptionId: redemption.redemptionId,
+        recordVersion: redemption.recordVersion,
+        record: structuredClone(redemption.record),
+      },
+    };
+  }
+
+  claimValidatedAuthorizationCode(
+    candidate: AuthorizationCodeRedemptionCandidate,
+  ): ClaimValidatedAuthorizationCodeResult {
+    const code = this.#authorizationCodeByRedemptionId.get(
+      candidate.redemptionId,
+    );
+    if (!code) return { status: "lost" };
+    const redemption = this.#authorizationCodeRedemptions.get(code);
+    if (!redemption) return { status: "lost" };
+    if (redemption.recordVersion !== candidate.recordVersion) {
+      return { status: "stale" };
+    }
+    if (redemption.state !== "active") {
+      this.#replayAuthorizationCode(code, redemption);
+      return { status: "replayed" };
+    }
+    const now = Date.now();
+    const claimId = crypto.randomUUID();
+    redemption.state = "issuing";
+    redemption.claimId = claimId;
+    redemption.claimedAt = now;
+    redemption.updatedAt = now;
+    return { status: "claimed", claimId };
+  }
+
+  finalizeAuthorizationCodeRedemption(
+    input: FinalizeAuthorizationCodeRedemptionInput,
+  ): FinalizeAuthorizationCodeRedemptionResult {
+    if (
+      (input.refreshToken === undefined) !==
+      (input.refreshRecord === undefined)
+    ) {
+      throw new TypeError(
+        "authorization-code refresh token and record must be provided together",
+      );
+    }
+    const redemption = this.#authorizationCodeRedemptions.get(input.code);
+    if (!redemption) return { status: "lost" };
+    if (redemption.state === "replayed") return { status: "replayed" };
+    if (
+      redemption.state !== "issuing" ||
+      redemption.claimId !== input.claimId
+    ) {
+      return { status: "lost" };
+    }
+    const now = Date.now();
+    this.#accessTokens.set(
+      input.accessToken,
+      structuredClone(input.accessRecord),
+    );
+    if (input.refreshToken && input.refreshRecord) {
+      this.#refreshTokens.set(
+        input.refreshToken,
+        structuredClone(input.refreshRecord),
+      );
+    }
+    this.#recordAuthorizationCodeIssued(
+      input.code,
+      input.accessToken,
+      input.refreshToken,
+      now,
+    );
+    redemption.state = "issued";
+    redemption.accessToken = input.accessToken;
+    redemption.refreshToken = input.refreshToken;
+    redemption.issuedAt = now;
+    redemption.updatedAt = now;
+    this.#upsertRefreshChainRetentionCandidate(
+      "authorization_code_redemptions",
+      redemption.redemptionId,
+      now,
+    );
+    return { status: "issued" };
   }
 
   saveAccessToken(token: string, record: TokenRecord): void {
@@ -774,9 +931,7 @@ export class InMemoryAccountsStore implements AccountsStore {
         )
       : records;
     return {
-      items: after
-        .slice(0, input.limit + 1)
-        .map((record) => ({ ...record })),
+      items: after.slice(0, input.limit + 1).map((record) => ({ ...record })),
       total: records.length,
       cursorValid,
     };
@@ -892,8 +1047,7 @@ export class InMemoryAccountsStore implements AccountsStore {
     return [...tokens];
   }
 
-  markAuthorizationCodeConsumed(code: string): void {
-    const consumedAt = Date.now();
+  #recordAuthorizationCodeConsumed(code: string, consumedAt: number): void {
     this.#consumedAuthorizationCodes.set(code, consumedAt);
     this.#upsertRefreshChainRetentionCandidate(
       "consumed_codes",
@@ -914,18 +1068,16 @@ export class InMemoryAccountsStore implements AccountsStore {
     }
   }
 
-  isAuthorizationCodeConsumed(code: string): boolean {
-    return this.#consumedAuthorizationCodes.has(code);
-  }
-
-  linkAccessTokenToAuthCode(
+  #recordAuthorizationCodeIssued(
     code: string,
     accessToken: string,
     refreshTokenRoot?: string,
+    createdAt = Date.now(),
   ): void {
+    this.#recordAuthorizationCodeConsumed(code, createdAt);
     let entry = this.#authorizationCodeTokens.get(code);
     if (!entry) {
-      entry = { access: new Set(), refresh: new Set(), createdAt: Date.now() };
+      entry = { access: new Set(), refresh: new Set(), createdAt };
       this.#authorizationCodeTokens.set(code, entry);
       this.#upsertRefreshChainRetentionCandidate(
         "auth_code_token_links",
@@ -961,26 +1113,54 @@ export class InMemoryAccountsStore implements AccountsStore {
     }
   }
 
-  revokeTokensIssuedFromCode(code: string): {
-    access: readonly string[];
-    refresh: readonly string[];
-  } {
+  #revokeTokensIssuedFromCode(code: string): void {
     const entry = this.#authorizationCodeTokens.get(code);
-    if (!entry) return { access: [], refresh: [] };
+    if (!entry) return;
     // Cascade-delete the access tokens issued from this code, then
     // cascade-revoke every refresh chain that was rooted by this code.
     for (const accessToken of entry.access) {
       this.#accessTokens.delete(accessToken);
     }
-    const accessOut = [...entry.access];
-    const refreshOut = [...entry.refresh];
     for (const refreshRoot of entry.refresh) {
       this.revokeRefreshChain(refreshRoot);
     }
-    return { access: accessOut, refresh: refreshOut };
   }
 
-  isRefreshRootRevoked(token: string): boolean {
+  #replayAuthorizationCode(
+    code: string,
+    redemption: InMemoryAuthorizationCodeRedemption,
+  ): void {
+    const now = Date.now();
+    this.#revokeTokensIssuedFromCode(code);
+    // The lifecycle row itself is the new replay authority. The legacy
+    // consumed/link maps remain populated as expand-window evidence and are
+    // still handled by the bounded retention pass.
+    this.#recordAuthorizationCodeConsumed(code, now);
+    redemption.state = "replayed";
+    redemption.replayedAt ??= now;
+    redemption.updatedAt = now;
+    this.#upsertRefreshChainRetentionCandidate(
+      "authorization_code_redemptions",
+      redemption.redemptionId,
+      redemption.replayedAt,
+    );
+  }
+
+  #authorizationCodeHasRefreshActivityAfter(
+    code: string,
+    cutoff: number,
+  ): boolean {
+    const lineage = this.#authorizationCodeTokens.get(code);
+    if (!lineage || lineage.refresh.size === 0) return false;
+    for (const [parent, createdAt] of this.#refreshChainLinkCreatedAt) {
+      if (createdAt <= cutoff) continue;
+      const root = this.#refreshChainRoots.get(parent) ?? parent;
+      if (lineage.refresh.has(root)) return true;
+    }
+    return false;
+  }
+
+  isRefreshRootRevoked(token: string): boolean | Promise<boolean> {
     const root = this.#refreshChainRoots.get(token) ?? token;
     return this.#revokedRefreshChainRoots.has(root);
   }
@@ -992,9 +1172,7 @@ export class InMemoryAccountsStore implements AccountsStore {
     const phase = input.cursor?.phase ?? "chain_links";
     const cursor = decodeInMemoryRetentionCursor(input.cursor?.after);
     const cutoff =
-      phase === "consumed_codes" || phase === "auth_code_token_links"
-        ? input.consumedCodeBefore
-        : input.chainBefore;
+      phase === "consumed_codes" ? input.consumedCodeBefore : input.chainBefore;
     const candidates = this.#refreshChainRetentionCandidatesAfter(
       phase,
       cursor,
@@ -1007,6 +1185,7 @@ export class InMemoryAccountsStore implements AccountsStore {
       revokedRoots: 0,
       consumedCodes: 0,
       authCodeTokenLinks: 0,
+      authorizationCodeRedemptions: 0,
     };
     for (const candidate of candidates) {
       if (phase === "chain_links") {
@@ -1039,19 +1218,58 @@ export class InMemoryAccountsStore implements AccountsStore {
         );
         counts.revokedRoots += 1;
       } else if (phase === "consumed_codes") {
-        this.#consumedAuthorizationCodes.delete(candidate.key);
-        this.#removeRefreshChainRetentionCandidate(
-          "consumed_codes",
-          candidate.key,
-        );
-        counts.consumedCodes += 1;
+        // Keep the pre-lifecycle replay marker for the entire expand window.
+        // A rollback runtime needs it to recognize reuse and cascade the
+        // descendants represented by the accompanying legacy token links.
+        if (!this.#authorizationCodeRedemptions.has(candidate.key)) {
+          this.#consumedAuthorizationCodes.delete(candidate.key);
+          this.#removeRefreshChainRetentionCandidate(
+            "consumed_codes",
+            candidate.key,
+          );
+          counts.consumedCodes += 1;
+        }
+      } else if (phase === "auth_code_token_links") {
+        // The legacy multi-link row is the expand-window lineage authority for
+        // refresh roots not representable by the lifecycle's single summary
+        // pair. Keep it until the lifecycle row is safely gone; a later pass
+        // will collect the evidence without racing replay or replacement.
+        if (!this.#authorizationCodeRedemptions.has(candidate.key)) {
+          this.#authorizationCodeTokens.delete(candidate.key);
+          this.#removeRefreshChainRetentionCandidate(
+            "auth_code_token_links",
+            candidate.key,
+          );
+          counts.authCodeTokenLinks += 1;
+        }
       } else {
-        this.#authorizationCodeTokens.delete(candidate.key);
-        this.#removeRefreshChainRetentionCandidate(
-          "auth_code_token_links",
-          candidate.key,
-        );
-        counts.authCodeTokenLinks += 1;
+        const code = this.#authorizationCodeByRedemptionId.get(candidate.key);
+        const redemption = code
+          ? this.#authorizationCodeRedemptions.get(code)
+          : undefined;
+        // The index only contains terminal rows, but keep deletion guarded so
+        // an active replacement can never be removed by a stale cursor.
+        if (
+          redemption?.redemptionId === candidate.key &&
+          (redemption.state === "issued" || redemption.state === "replayed") &&
+          !this.#authorizationCodeHasRefreshActivityAfter(code!, cutoff)
+        ) {
+          this.#authorizationCodeRedemptions.delete(code!);
+          this.#authorizationCodeByRedemptionId.delete(candidate.key);
+          this.#removeRefreshChainRetentionCandidate(
+            "authorization_code_redemptions",
+            candidate.key,
+          );
+          counts.authorizationCodeRedemptions += 1;
+        } else if (redemption?.redemptionId !== candidate.key) {
+          // A replacement owns this code now. Drop only the stale retention
+          // candidate/id mapping; the replacement row remains untouched.
+          this.#authorizationCodeByRedemptionId.delete(candidate.key);
+          this.#removeRefreshChainRetentionCandidate(
+            "authorization_code_redemptions",
+            candidate.key,
+          );
+        }
       }
     }
     const last = candidates.at(-1);
@@ -1105,6 +1323,13 @@ export class InMemoryAccountsStore implements AccountsStore {
     ) {
       const candidate = index[position]!;
       if (candidate.at > cutoff) break;
+      if (
+        (phase === "consumed_codes" ||
+          phase === "auth_code_token_links") &&
+        this.#authorizationCodeRedemptions.has(candidate.key)
+      ) {
+        continue;
+      }
       candidates.push(candidate);
     }
     return candidates;
@@ -1166,6 +1391,7 @@ const IN_MEMORY_RETENTION_PHASES: readonly RefreshChainRetentionPhase[] = [
   "revoked_roots",
   "consumed_codes",
   "auth_code_token_links",
+  "authorization_code_redemptions",
 ];
 
 function nextInMemoryRetentionPhase(
@@ -1175,9 +1401,10 @@ function nextInMemoryRetentionPhase(
   return IN_MEMORY_RETENTION_PHASES[index + 1];
 }
 
-function decodeInMemoryRetentionCursor(
-  value: string | undefined,
-): { readonly at: number; readonly key: string } {
+function decodeInMemoryRetentionCursor(value: string | undefined): {
+  readonly at: number;
+  readonly key: string;
+} {
   if (value === undefined) return { at: -1, key: "" };
   let parsed: unknown;
   try {
@@ -1214,7 +1441,9 @@ function assertInMemoryRetentionInput(
   ) {
     throw new TypeError("refresh-chain retention cutoffs must be finite");
   }
-  if (!IN_MEMORY_RETENTION_PHASES.includes(input.cursor?.phase ?? "chain_links")) {
+  if (
+    !IN_MEMORY_RETENTION_PHASES.includes(input.cursor?.phase ?? "chain_links")
+  ) {
     throw new TypeError("invalid in-memory refresh-chain retention phase");
   }
 }

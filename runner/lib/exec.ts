@@ -1,6 +1,6 @@
 // runner/lib/exec.ts
 //
-// Subprocess execution + OpenTofu plan/output readers + capped HTTP body reader.
+// Subprocess execution + OpenTofu plan/output readers.
 //
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
@@ -21,42 +21,6 @@ import {
 import {
   baseCommandEnv,
 } from "./credentials.ts";
-
-export async function readResponseBytesWithCap(
-  response: Response,
-  maxBytes: number,
-  label: string,
-): Promise<Uint8Array> {
-  const declared = response.headers.get("content-length");
-  if (declared !== null) {
-    const parsed = Number.parseInt(declared, 10);
-    if (Number.isFinite(parsed) && parsed > maxBytes) {
-      throw new Error(`${label} declares ${parsed} bytes, cap is ${maxBytes}`);
-    }
-  }
-  if (!response.body) return new Uint8Array();
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (!value) continue;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => {});
-      throw new Error(`${label} exceeds ${maxBytes} bytes`);
-    }
-    chunks.push(value);
-  }
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
-}
 
 export async function runRequiredCommand(
   command: readonly string[],
@@ -141,6 +105,12 @@ export async function runCommand(
      * those credential files exist.
      */
     readonly isolateProcessGroup?: boolean;
+    /**
+     * Receives stdout as it arrives, in addition to the buffered return. Used
+     * by the apply lane to track live resource progress without changing the
+     * command, its output, or the buffered result any other caller sees.
+     */
+    readonly onStdoutChunk?: (chunk: string) => void;
   },
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   let timedOut = false;
@@ -178,7 +148,9 @@ export async function runCommand(
       })
     : exited;
   const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(subprocess.stdout).text(),
+    options.onStdoutChunk
+      ? readStreamText(subprocess.stdout, options.onStdoutChunk)
+      : new Response(subprocess.stdout).text(),
     new Response(subprocess.stderr).text(),
     exit,
   ]);
@@ -192,6 +164,46 @@ export async function runCommand(
           .join("\n")
       : stderr,
   };
+}
+
+/**
+ * Buffers a stream to text exactly like `Response.text()` while handing each
+ * decoded chunk to `onChunk` as it arrives. An observer that throws must not
+ * break the command, so its failures are swallowed.
+ */
+async function readStreamText(
+  stream: ReadableStream<Uint8Array>,
+  onChunk: (chunk: string) => void,
+): Promise<string> {
+  const decoder = new TextDecoder();
+  const reader = stream.getReader();
+  let text = "";
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      const chunk = decoder.decode(next.value, { stream: true });
+      if (chunk.length === 0) continue;
+      text += chunk;
+      try {
+        onChunk(chunk);
+      } catch {
+        // Progress observation is best-effort; never fail the command for it.
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const tail = decoder.decode();
+  if (tail.length > 0) {
+    text += tail;
+    try {
+      onChunk(tail);
+    } catch {
+      // Same: observation failures never reach the caller.
+    }
+  }
+  return text;
 }
 
 /** SIGKILLs a whole process group; an already-empty group is not an error. */

@@ -98,6 +98,28 @@ wait_for_completed_service() {
 	return 1
 }
 
+wait_for_substrate_ready() {
+	local deadline=$((SECONDS + LOCAL_WAIT_TIMEOUT_SECONDS))
+	while (( SECONDS < deadline )); do
+		if curl --silent --show-error --fail \
+			--cacert caddy/runtime/pebble-issuance-root.pem \
+			--resolve "app.takosumi.test:443:$INGRESS_IP" \
+			https://app.takosumi.test/.well-known/openid-configuration \
+			>/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 2
+	done
+
+	echo "substrate did not become ready within ${LOCAL_WAIT_TIMEOUT_SECONDS}s" >&2
+	compose_substrate --profile "$PROFILE" ps --all >&2 || true
+	case "$PROFILE" in
+		postgres) compose_substrate --profile "$PROFILE" logs --tail 120 cloud >&2 || true ;;
+		workers) compose_substrate --profile "$PROFILE" logs --tail 120 takosumi-service-worker >&2 || true ;;
+	esac
+	return 1
+}
+
 prepare_app_armor_substrate_prereqs() {
 	if ! local_substrate_disable_apparmor || [[ -z "$PROFILE" ]]; then
 		return 0
@@ -105,8 +127,11 @@ prepare_app_armor_substrate_prereqs() {
 
 	echo "==> Preparing substrate storage outside compose healthchecks (AppArmor override)"
 	# Containers created before the override (or surviving a daemon restart) can
-	# fail before Docker reapplies the unconfined profile. Recreate these two
-	# prerequisites just like the full substrate stack below.
+	# fail before Docker reapplies the unconfined profile. Remove only this
+	# substrate project's containers (volumes remain), then bring storage up once
+	# before migrations. Recreating Postgres again after the migrations can race
+	# cloud startup against crash recovery and make up.sh report a false-ready 502.
+	compose_substrate --profile "$PROFILE" rm -f -s
 	compose_substrate --profile "$PROFILE" up -d --force-recreate \
 		substrate-postgres substrate-minio
 
@@ -245,12 +270,6 @@ if [[ -n "$PROFILE" ]]; then
 	echo "==> Starting substrate stack (profile: $PROFILE)"
 	prepare_app_armor_substrate_prereqs
 	substrate_up_args=(up -d --build)
-	if local_substrate_disable_apparmor; then
-		# Recreate stale containers that were originally created with Docker's
-		# default AppArmor profile; starting them can fail before compose can
-		# apply the unconfined override.
-		substrate_up_args+=(--force-recreate)
-	fi
 	compose_substrate --profile "$PROFILE" "${substrate_up_args[@]}"
 
 	echo "==> Waiting for static build outputs"
@@ -283,16 +302,7 @@ if [[ -n "$PROFILE" ]]; then
 	compose_ingress up -d --force-recreate caddy
 
 	echo "==> Waiting for substrate services to become healthy"
-	for _ in $(seq 1 120); do
-		# Check OIDC discovery via Caddy as a proxy for full readiness.
-		if curl -sk --cacert caddy/runtime/pebble-issuance-root.pem \
-			--resolve app.takosumi.test:443:127.0.0.1 \
-			https://app.takosumi.test/.well-known/openid-configuration \
-			>/dev/null 2>&1; then
-			break
-		fi
-		sleep 2
-	done
+	wait_for_substrate_ready
 fi
 
 cat <<EOF

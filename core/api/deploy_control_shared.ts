@@ -13,7 +13,10 @@
 import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { ApiEndpoint, ApiEndpointMethod } from "./route_families.ts";
-import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
+import {
+  DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE,
+  retryAfterSecondsFromDetails,
+} from "@takosumi/internal/deploy-control-api";
 import type {
   ConnectionScopeHints,
   ConnectionScopeKind,
@@ -887,6 +890,12 @@ export async function runHandler(
     const controllerCode = controllerErrorCode(err);
     if (controllerCode) {
       const publicError = publicControllerError(err);
+      // rate_limited / unavailable carry a client backoff hint; mirror it into
+      // the standard Retry-After header alongside the envelope details.
+      const retryAfterSeconds =
+        controllerCode === "rate_limited" || controllerCode === "unavailable"
+          ? retryAfterSecondsFromDetails(publicError.details)
+          : undefined;
       return c.json(
         errorEnvelope(
           c,
@@ -895,6 +904,9 @@ export async function runHandler(
           publicError.details,
         ),
         controllerHttpStatus(controllerCode),
+        retryAfterSeconds !== undefined
+          ? { "retry-after": String(retryAfterSeconds) }
+          : undefined,
       );
     }
     const requestId = resolveRequestId(c);

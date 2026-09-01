@@ -298,6 +298,9 @@ export class BackupsService {
         backupId,
         workspaceId,
         capturedAt: createdAt,
+        // A Capsule-scoped backup (e.g. the pre-destroy export) collects only
+        // that Capsule's service data instead of the whole Workspace sweep.
+        ...(request.capsuleId ? { capsuleId: request.capsuleId } : {}),
       });
       const artifactsManifest = await this.#writeArtifactsManifest({
         backupId,
@@ -725,11 +728,13 @@ export class BackupsService {
     readonly backupId: string;
     readonly workspaceId: string;
     readonly capturedAt: string;
+    readonly capsuleId?: string;
   }): Promise<BackupRecord["serviceData"] | undefined> {
     if (!this.#artifactStore) return undefined;
     const manifest = await this.#collectServiceDataManifest(
       input.workspaceId,
       input.capturedAt,
+      input.capsuleId,
     );
     if (manifest.entries.length === 0) return undefined;
 
@@ -768,6 +773,7 @@ export class BackupsService {
   async #collectServiceDataManifest(
     workspaceId: string,
     capturedAt: string,
+    capsuleId?: string,
   ): Promise<ServiceDataBackupManifest> {
     const installConfigs = new Map(
       (await this.#store.listInstallConfigs(workspaceId)).map((config) => [
@@ -783,6 +789,7 @@ export class BackupsService {
 
     const entries: ServiceDataBackupEntry[] = [];
     for (const capsule of await this.#store.listCapsules(workspaceId)) {
+      if (capsuleId !== undefined && capsule.id !== capsuleId) continue;
       const config = installConfigs.get(capsule.installConfigId);
       if (!config) continue;
       const backup = config.backup;

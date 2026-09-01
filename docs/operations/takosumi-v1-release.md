@@ -2,10 +2,13 @@
 
 This runbook covers the Takosumi OSS source/module release. The current
 supported product is one Git/OpenTofu/Terraform Stack flow with arbitrary
-providers, generic Interfaces, and generic Offerings. It does not publish a
-Takosumi Form Host, Form Registry, FormActivation, TargetPool, or SpacePolicy
-surface. Takosumi Cloud release and commercial readiness are separate external
-Host decisions.
+providers and generic Interfaces. It does not publish a generic Offering
+authority, Takosumi Form Host, Form Registry, FormActivation, TargetPool, or
+SpacePolicy surface. Existing Offering routes/stores are legacy/operator-only
+implementation conformance gaps and removal-target migration custody. Managed
+service Offering, capacity, provider credentials, and Host execution belong to
+Takoserver; Takosumi Hosted retail/commercial readiness is a separate external
+product decision. Takosumi Cloud is a retired historical identity.
 
 This procedure is evidence and failure handling, not release authorization.
 The release owner stops at the first missing, stale, mutable, or unreviewed
@@ -95,7 +98,8 @@ Fetch the tag from the remote, verify its signature and resolved commit, and
 read the GitHub Release as non-draft. Record those immutable URLs in the
 receipt. If a composed host was deployed, its owner performs separate
 authenticated smoke/readback against that host and records its deployment
-revision; OSS publication does not imply Cloud capacity, billing, SLA, or
+revision; OSS publication does not imply Takoserver managed capacity, provider
+credentials, Offering availability, or Takosumi Hosted retail, billing, SLA, or
 support readiness.
 
 Before publication, abort on any failed gate, missing approval, evidence drift,

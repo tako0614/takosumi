@@ -115,6 +115,7 @@ import {
   publicCapsule,
   publicPlanActionResponse,
   publicRun,
+  requireResourceWorkspaceAccess,
   requireWorkspaceAccess,
   resolveProviderBindings,
 } from "./shared.ts";
@@ -209,7 +210,7 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
-      const auth = await requireWorkspaceAccess({
+      const auth = await requireResourceWorkspaceAccess({
         operations,
         store,
         workspaceId,
@@ -234,7 +235,7 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
-      const auth = await requireWorkspaceAccess({
+      const auth = await requireResourceWorkspaceAccess({
         operations,
         store,
         workspaceId,
@@ -263,7 +264,7 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
-      const auth = await requireWorkspaceAccess({
+      const auth = await requireResourceWorkspaceAccess({
         operations,
         store,
         workspaceId,
@@ -311,7 +312,7 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
-      const auth = await requireWorkspaceAccess({
+      const auth = await requireResourceWorkspaceAccess({
         operations,
         store,
         workspaceId,
@@ -514,7 +515,7 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
-      const auth = await requireWorkspaceAccess({
+      const auth = await requireResourceWorkspaceAccess({
         operations,
         store,
         workspaceId,

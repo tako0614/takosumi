@@ -1,5 +1,12 @@
 # Takosumi Cloud SLA
 
+> **Historical archive — not current authority.** This page records the retired
+> Takosumi Cloud plan/implementation. It is not current availability, pricing,
+> SLA, support, or production authority. Takosumi Hosted owns new
+> retail/commerce/client-composition documentation; Takoserver owns managed
+> supply, capacity, provider credentials, and Offerings. Preserve the body as
+> historical evidence and do not use it as current service authority.
+
 This page defines Takosumi Cloud availability targets and public incident
 communications. Until the public-access gate opens, these are the operating
 targets for GA. `sla://takosumi-cloud/official-sla-v1` takes effect when that

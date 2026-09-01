@@ -15,6 +15,7 @@ import type {
   SqlTransaction,
   SqlValue,
 } from "../../adapters/storage/sql.ts";
+import { isPostgresUniqueViolation } from "../../adapters/storage/pg_result.ts";
 import { packageInstallEquivalent } from "./record_equivalence.ts";
 import type {
   FormActivationRecord,
@@ -74,7 +75,7 @@ export class SqlFormRegistryStore implements FormRegistryStore {
         };
       });
     } catch (error) {
-      if (!isUniqueConstraintError(error)) throw error;
+      if (!isPostgresUniqueViolation(error)) throw error;
       const racedPackage = await this.getPackage(packageRecord.packageDigest);
       if (
         racedPackage !== undefined &&
@@ -424,13 +425,6 @@ function activationParameters(
 
 function decode<T>(value: unknown): T {
   return (typeof value === "string" ? JSON.parse(value) : value) as T;
-}
-
-function isUniqueConstraintError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const code = "code" in error ? String(error.code) : "";
-  const message = "message" in error ? String(error.message) : "";
-  return code === "23505" || /duplicate key|unique constraint/iu.test(message);
 }
 
 export function createSqlFormRegistryStore(

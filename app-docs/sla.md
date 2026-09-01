@@ -1,5 +1,12 @@
 # Takosumi Cloud SLA
 
+> **歴史資料（アーカイブ）— 現行の正本ではありません。** このページは退役した
+> Takosumi Cloud の計画・実装を記録したものです。現行の availability、pricing、SLA、
+> support、production authority を示しません。Takosumi Hosted が新しい
+> retail/commerce/client composition docs を所有し、managed supply、capacity、provider
+> credential、Offering は Takoserver が所有します。本文は歴史的証拠として保持しており、
+> 現行サービスの根拠に使わないでください。
+
 このページは Takosumi Cloud の可用性目標とインシデント時の公開方針です。
 一般公開ゲートを開くまでは GA 後の運用目標として扱い、ゲートを開いた時点から
 `sla://takosumi-cloud/official-sla-v1` を適用します。

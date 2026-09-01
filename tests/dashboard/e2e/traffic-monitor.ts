@@ -10,6 +10,7 @@ import {
 } from "./traffic-policy.ts";
 import { validateExpectedWorkerVersionId } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
 import { assertExpectedWorkerVersionId } from "../../../scripts/dashboard-browser-e2e/version-contract.ts";
+import { portableE2EPort } from "../../../scripts/dashboard-browser-e2e/port.ts";
 
 export interface DashboardTrafficFailure {
   readonly kind: "response" | "requestfailed" | "version" | "redirect";
@@ -37,7 +38,7 @@ export interface DashboardTrafficMonitor {
 
 function expectedOrigin(mode: DashboardE2EMode): string {
   return mode === "portable"
-    ? "http://127.0.0.1:4179"
+    ? `http://127.0.0.1:${portableE2EPort(process.env)}`
     : (process.env.TAKOSUMI_E2E_BASE_URL?.trim() ?? "");
 }
 

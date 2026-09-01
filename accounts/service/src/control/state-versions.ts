@@ -111,6 +111,7 @@ import {
   publicCapsule,
   publicPlanActionResponse,
   publicRun,
+  requireResourceWorkspaceAccess,
   requireWorkspaceAccess,
   resolveProviderBindings,
 } from "./shared.ts";
@@ -155,7 +156,7 @@ export async function handleStateVersions(
   if (segments[0] === "state-versions" && segments.length >= 2) {
     const stateVersionId = decodeURIComponent(segments[1] ?? "");
     const { stateVersion } = await operations.getStateVersion(stateVersionId);
-    const auth = await requireWorkspaceAccess({
+    const auth = await requireResourceWorkspaceAccess({
       operations,
       store,
       workspaceId: stateVersion.workspaceId,

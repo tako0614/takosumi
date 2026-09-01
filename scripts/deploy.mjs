@@ -14,7 +14,9 @@
 // あること、前回の snapshot から答えが変わっていないことを確認します。
 //
 // OSS platform worker の self-host deploy は利用者/operator自身のauthorityです。
-// 公式hosted platformはtakosumi-cloudが所有し、このentrypointからはdeployしません。
+// 公式hosted platform (app.takosumi.com) は ADR 0014 の cutover でこの repo が
+// 所有するようになりました: 走るコードは deploy/platform/worker.ts そのもので、
+// realized config だけが operator-private (takosumi-private) にあります。
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -34,9 +36,72 @@ const WEBSITE = {
   build: ["bash", "website/build.sh"],
 };
 
+const PLATFORM = {
+  surface: "takosumi-platform",
+  configRoot:
+    process.env.TAKOSUMI_PLATFORM_CONFIG_ROOT ??
+    resolve(repo, "..", "takosumi-private", "platform"),
+  environments: {
+    staging: {
+      workerName: "takosumi-staging",
+      config: "wrangler.staging.toml",
+      site: "https://app-staging.takosumi.com",
+    },
+    production: {
+      workerName: "takosumi",
+      config: "wrangler.toml",
+      site: "https://app.takosumi.com",
+    },
+  },
+};
+
 const CONTRACT = {
   kind: "takos.deploy-contract@v2",
   surfaces: [
+    {
+      surface: PLATFORM.surface,
+      target: "cloudflare-worker:takosumi",
+      covers: ["deploy/platform", "core", "dashboard", "scripts/deploy.mjs"],
+      triggers: ["published-identity", "authority", "irreversible"],
+      obligations: {
+        provenance:
+          "refuses a dirty worktree unless --allow-dirty is passed explicitly, and then records " +
+          "the exact dirty file list in the result; records the commit, branch, environment, the " +
+          "sha256 of the realized operator config it was pointed at, and the freshly built " +
+          "dashboard index.html digest. The realized config lives in the operator-private " +
+          "sibling and is named by path, never embedded.",
+        "post-conditions":
+          "reads back the served Worker version id from the publication output, then exercises " +
+          "the public origin: the dashboard must answer 200 on /, and an API namespace must " +
+          "answer with a non-5xx status, which proves the worker script — not only the asset " +
+          "layer — is the one serving.",
+        reversal:
+          "the currently served Worker version id is read before any mutation and printed with " +
+          "the exact `wrangler versions deploy` command that restores it. Durable Object " +
+          "deleted_classes migrations are forward-only: rolling back the Worker does not " +
+          "resurrect deleted storage, and the config history in the operator-private sibling is " +
+          "the record of what was destroyed.",
+        "failure-handling":
+          "an unreadable revert point refuses before touching the target; a failed publication " +
+          "prints the provider's own output and names the revert point; failed post-conditions " +
+          "exit non-zero with the previous version id instead of retrying.",
+        "no-overwrite":
+          "every publication mints a new immutable Worker Version: a changed byte becomes a new " +
+          "version id, nothing is written over the previous one, and the result records both the " +
+          "previous and the published id so history stays a chain rather than a slot.",
+        "pre-mutation-proof":
+          "before the real upload the writer runs `wrangler deploy --dry-run` against the exact " +
+          "realized production config, which compiles the bundle and validates every binding and " +
+          "Durable Object migration against production's own configuration without mutating it; " +
+          "the staging environment publishes and probes the same source first.",
+        "independent-review":
+          "a production publication follows a staging publication of the same source whose " +
+          "recorded probes are the non-author check, and the operator invoking " +
+          "--environment=production after reading that staging result is the deliberate re-read; " +
+          "the result JSON records the commit, config digest, and the exact dirty file list so " +
+          "that re-read has something concrete to hold.",
+      },
+    },
     {
       surface: WEBSITE.surface,
       target: `cloudflare-pages:${WEBSITE.project}`,
@@ -77,6 +142,146 @@ function die(message, detail = []) {
   process.stderr.write(`deploy blocked: ${message}\n`);
   for (const line of detail) process.stderr.write(`- ${line}\n`);
   process.exit(1);
+}
+
+if (selected === PLATFORM.surface) {
+  await deployPlatform();
+  process.exit(0);
+}
+
+async function deployPlatform() {
+  const flags = process.argv.slice(2).filter((arg) => arg.startsWith("--"));
+  const environmentFlag = flags.find((arg) => arg.startsWith("--environment="));
+  const environment = environmentFlag?.slice("--environment=".length);
+  const target = PLATFORM.environments[environment];
+  if (!target) {
+    die("name the environment: --environment=staging or --environment=production");
+  }
+  const allowDirty = flags.includes("--allow-dirty");
+  const configPath = resolve(PLATFORM.configRoot, target.config);
+  if (!existsSync(configPath)) {
+    die(`realized config not found: ${configPath}`);
+  }
+
+  // provenance
+  const dirtyFiles = git("status", "--porcelain");
+  if (dirtyFiles !== "" && !allowDirty) {
+    die(
+      "the worktree is not clean; pass --allow-dirty only when publishing " +
+        "uncommitted work is a deliberate, recorded decision",
+      dirtyFiles.split("\n").slice(0, 20),
+    );
+  }
+  const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const commit = git("rev-parse", "HEAD");
+  const branch = git("rev-parse", "--abbrev-ref", "HEAD");
+  const configDigest = sha256(readFileSync(configPath));
+  process.stdout.write(`source ${commit} (${branch})\n`);
+  process.stdout.write(`realized config ${configPath} sha256 ${configDigest.slice(0, 16)}\n`);
+
+  // The dashboard is part of the published bytes; build it from this worktree.
+  process.stdout.write("\n==> bun run build (dashboard)\n");
+  execFileSync("bun", ["run", "build"], { cwd: join(repo, "dashboard"), stdio: "inherit" });
+  const dashboardIndex = join(repo, "dashboard", "dist", "index.html");
+  if (!existsSync(dashboardIndex)) die("dashboard/dist/index.html is missing after the build");
+  const indexDigest = sha256(readFileSync(dashboardIndex));
+
+  // reversal: 戻し先を先に読む。読めなければ publish しない。
+  let previousVersion = null;
+  try {
+    const listed = run("wrangler", ["versions", "list", "-c", configPath, "--json"]);
+    previousVersion = JSON.parse(listed)[0]?.id ?? null;
+  } catch (error) {
+    die(`cannot read the current version list: ${error.message}`);
+  }
+  if (!previousVersion) {
+    die("no previous Worker version was readable, so there is no revert point");
+  }
+  process.stdout.write(`previous version ${previousVersion}\n`);
+  process.stdout.write(
+    `revert with: wrangler versions deploy ${previousVersion}@100% -c ${configPath}\n`,
+  );
+
+  // pre-mutation-proof: compile and validate against the realized config
+  // without touching the target.
+  process.stdout.write(`\n==> wrangler deploy --dry-run (${environment})\n`);
+  try {
+    run("wrangler", ["deploy", "--dry-run", "-c", configPath]);
+  } catch (error) {
+    process.stderr.write(`${error.stdout ?? ""}${error.stderr ?? ""}\n`);
+    die("the dry-run compile failed; nothing was touched");
+  }
+
+  process.stdout.write(`\n==> wrangler deploy (${environment}: ${target.workerName})\n`);
+  let output;
+  try {
+    output = run("wrangler", ["deploy", "-c", configPath]);
+  } catch (error) {
+    process.stderr.write(`${error.stdout ?? ""}${error.stderr ?? ""}\n`);
+    die(
+      "publication failed; the target may be unchanged or partially updated. " +
+        `Reconcile against version ${previousVersion} before retrying.`,
+    );
+  }
+  process.stdout.write(output);
+  const publishedVersion =
+    output.match(/Current Version ID: ([0-9a-f-]+)/u)?.[1] ??
+    output.match(/Version ID:\s+([0-9a-f-]+)/u)?.[1] ??
+    null;
+
+  // post-conditions: the worker, not only the asset layer, must be serving.
+  const probe = async (path, accept) => {
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      try {
+        const response = await fetch(`${target.site}${path}`, {
+          headers: { "cache-control": "no-cache" },
+          redirect: "manual",
+        });
+        if (accept(response)) return true;
+      } catch {
+        // retry
+      }
+      if (attempt < 6) await new Promise((wake) => setTimeout(wake, 3000 * attempt));
+    }
+    return false;
+  };
+  const dashboardOk = await probe("/", (response) => response.status === 200);
+  const apiOk = await probe("/api/v1/capsules", (response) => response.status < 500);
+
+  const result = {
+    kind: "takos.deploy-result@v1",
+    surface: PLATFORM.surface,
+    target: `cloudflare-worker:${target.workerName}`,
+    environment,
+    commit,
+    branch,
+    dirty: dirtyFiles === "" ? [] : dirtyFiles.split("\n"),
+    configPath,
+    configDigest,
+    dashboardIndexDigest: indexDigest,
+    previousVersion,
+    publishedVersion,
+    dashboardReadback: dashboardOk ? "OK" : "MISMATCH",
+    apiReadback: apiOk ? "OK" : "MISMATCH",
+    status: dashboardOk && apiOk && publishedVersion ? "PUBLISHED" : "INDETERMINATE",
+    at: new Date().toISOString(),
+  };
+  process.stdout.write(`\n${JSON.stringify(result, null, 2)}\n`);
+
+  // Operator-private evidence, when the sibling is present.
+  const evidenceDir = resolve(PLATFORM.configRoot, "..", "evidence");
+  if (existsSync(evidenceDir)) {
+    const { appendFileSync } = await import("node:fs");
+    appendFileSync(join(evidenceDir, "platform-deploys.jsonl"), `${JSON.stringify(result)}\n`);
+  }
+
+  if (result.status !== "PUBLISHED") {
+    process.stderr.write(
+      `\nthe publication happened but the post-conditions did not hold. Do not retry blindly: ` +
+        `compare against previous version ${previousVersion} first.\n`,
+    );
+    process.exit(1);
+  }
 }
 
 function git(...args) {

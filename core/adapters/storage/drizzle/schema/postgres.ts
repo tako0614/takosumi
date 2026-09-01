@@ -386,6 +386,11 @@ export const runs = pgTable(
     heartbeatAt: bigint("heartbeat_at", { mode: "number" }),
     createdAt: text("created_at").notNull(),
     runJson: json("run_json").notNull(),
+    // Write-time projection of the run JSON's billing finalization marker
+    // (`runRowBillingCapturePending`); the partial backlog index over it keeps
+    // the repair sweep off jsonb scans. Physically LAST: migration 109 appends
+    // it with ALTER TABLE on databases whose runs table predates it.
+    billingCapturePending: integer("billing_capture_pending"),
   },
   (table) => [
     index("takosumi_runs_kind_idx").on(table.kind),
@@ -398,12 +403,58 @@ export const runs = pgTable(
       table.createdAt,
     ),
     index("takosumi_runs_created_at_idx").on(table.createdAt),
+    index("takosumi_runs_status_kind_created_idx").on(
+      table.status,
+      table.kind,
+      table.createdAt,
+    ),
+    index("takosumi_runs_billing_capture_pending_idx")
+      .on(table.billingCapturePending)
+      .where(sql`billing_capture_pending = 1`),
   ],
 );
 
 export const planRunInputs = pgTable(names.planRunInputs, {
   planRunId: text("plan_run_id").primaryKey(),
   inputsJson: json("inputs_json").notNull(),
+});
+
+/** Durable scheduled-intent queue drained by the cron/scheduler lane. */
+export const controlWorkItems = pgTable(
+  names.controlWorkItems,
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(),
+    dedupeKey: text("dedupe_key"),
+    workspaceId: text("workspace_id"),
+    capsuleId: text("capsule_id"),
+    runId: text("run_id"),
+    dueAt: text("due_at").notNull(),
+    priority: integer("priority").notNull().default(0),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    status: text("status").notNull().default("pending"),
+    lockedUntil: text("locked_until"),
+    lockedBy: text("locked_by"),
+    payloadJson: json("payload_json"),
+    lastError: text("last_error"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("takosumi_control_work_items_due_idx").on(table.status, table.dueAt),
+    index("takosumi_control_work_items_kind_idx").on(table.kind),
+    uniqueIndex("takosumi_control_work_items_dedupe_unique")
+      .on(table.kind, table.dedupeKey)
+      .where(sql`dedupe_key is not null and status in ('pending', 'leased')`),
+  ],
+);
+
+/** Durable rotation cursors for the scheduled sweeps. */
+export const controlSweepCursors = pgTable(names.controlSweepCursors, {
+  sweepName: text("sweep_name").primaryKey(),
+  cursor: text("cursor"),
+  updatedAt: text("updated_at").notNull(),
 });
 
 export const stateVersions = pgTable(

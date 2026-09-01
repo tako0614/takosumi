@@ -95,7 +95,7 @@ export function analyzeOpenTofuCapsuleFiles(
     };
   }
 
-  const allHclFiles = input.files.filter((file) => file.path.endsWith(".tf"));
+  const allHclFiles = normalizeOpenTofuConfigFiles(input.files, findings);
   const hclFiles = selectReachableModuleTreeFiles(allHclFiles, findings);
   const rootModuleOutputs = collectRootModuleOutputDeclarations(hclFiles);
   if (hclFiles.length === 0) {
@@ -103,7 +103,8 @@ export function analyzeOpenTofuCapsuleFiles(
       severity: "error",
       compatibilityImpact: "unsupported",
       code: "opentofu_configuration_missing",
-      message: "No .tf files were found in the Capsule path.",
+      message:
+        "No OpenTofu configuration files (.tf, .tofu, .tf.json, .tofu.json) were found in the Capsule path.",
       path: input.sourceSnapshot.path,
       suggestion:
         "Point the install path at an OpenTofu module-compatible configuration.",
@@ -653,7 +654,7 @@ export function collectRootModuleVariableDeclarations(
   files: readonly CapsuleSourceFile[],
 ): readonly CapsuleRootModuleVariableDeclaration[] {
   const byName = new Map<string, CapsuleRootModuleVariableDeclaration>();
-  for (const file of files) {
+  for (const file of normalizeOpenTofuConfigFiles(files)) {
     if (!isRootModuleTfFile(file.path)) continue;
     for (const block of matchNamedBlocks(file.text, "variable")) {
       byName.set(block.name, {
@@ -707,7 +708,7 @@ export function collectRootModuleOutputDeclarations(
   files: readonly CapsuleSourceFile[],
 ): readonly CapsuleRootModuleOutputDeclaration[] {
   const byName = new Map<string, CapsuleRootModuleOutputDeclaration>();
-  for (const file of files) {
+  for (const file of normalizeOpenTofuConfigFiles(files)) {
     if (!isRootModuleTfFile(file.path)) continue;
     for (const block of matchNamedBlocks(file.text, "output")) {
       byName.set(block.name, {
@@ -741,7 +742,7 @@ function collectRootModuleNamedBlocks(
   blockType: "variable" | "output",
 ): readonly string[] {
   const names = new Set<string>();
-  for (const file of files) {
+  for (const file of normalizeOpenTofuConfigFiles(files)) {
     if (!isRootModuleTfFile(file.path)) continue;
     for (const block of matchNamedBlocks(file.text, blockType)) {
       names.add(block.name);
@@ -751,7 +752,7 @@ function collectRootModuleNamedBlocks(
 }
 
 function isRootModuleTfFile(path: string): boolean {
-  return path.endsWith(".tf") && !path.includes("/");
+  return openTofuConfigFileKind(path) !== undefined && !path.includes("/");
 }
 
 function providerAllowed(
@@ -1019,4 +1020,249 @@ function readBlock(
     }
   }
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// OpenTofu configuration spellings.
+//
+// OpenTofu loads `.tf` / `.tofu` (native HCL) and `.tf.json` / `.tofu.json`
+// (JSON syntax). The runner scans exactly those four spellings before init, so
+// the static gate must see the same set: a provider, module, provisioner, or
+// credential declared only in a `.tofu` or JSON file must not stay invisible
+// until after ProviderBinding and credential resolution. JSON documents are
+// normalized into the equivalent HCL block shape so every collector above
+// keeps one implementation; the rendered text is analysis input only and is
+// never handed to `tofu`.
+// ---------------------------------------------------------------------------
+
+type OpenTofuConfigFileKind = "hcl" | "json";
+
+function openTofuConfigFileKind(
+  path: string,
+): OpenTofuConfigFileKind | undefined {
+  if (path.endsWith(".tf.json") || path.endsWith(".tofu.json")) return "json";
+  if (path.endsWith(".tf") || path.endsWith(".tofu")) return "hcl";
+  return undefined;
+}
+
+/** Rendered JSON documents keep their `.tf.json` path; never re-parse them. */
+const renderedJsonConfigFiles = new WeakSet<CapsuleSourceFile>();
+
+function normalizeOpenTofuConfigFiles(
+  files: readonly CapsuleSourceFile[],
+  findings?: CapsuleGateFinding[],
+): readonly CapsuleSourceFile[] {
+  const normalized: CapsuleSourceFile[] = [];
+  for (const file of files) {
+    const kind = openTofuConfigFileKind(file.path);
+    if (kind === undefined) continue;
+    if (kind === "hcl" || renderedJsonConfigFiles.has(file)) {
+      normalized.push(file);
+      continue;
+    }
+    let rendered: string;
+    try {
+      rendered = renderOpenTofuJsonAsHcl(JSON.parse(file.text));
+    } catch (error) {
+      findings?.push({
+        severity: "error",
+        compatibilityImpact: "unsupported",
+        code: "opentofu_json_configuration_invalid",
+        message: `OpenTofu JSON configuration ${file.path} cannot be parsed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        path: file.path,
+        suggestion:
+          "Fix the JSON syntax document so tofu init and the compatibility gate see the same declarations.",
+      });
+      continue;
+    }
+    const renderedFile: CapsuleSourceFile = { path: file.path, text: rendered };
+    renderedJsonConfigFiles.add(renderedFile);
+    normalized.push(renderedFile);
+  }
+  return normalized;
+}
+
+const OPENTOFU_JSON_TWO_LABEL_BLOCKS = new Set(["resource", "data"]);
+const OPENTOFU_JSON_ONE_LABEL_BLOCKS = new Set([
+  "module",
+  "provider",
+  "variable",
+  "output",
+]);
+const OPENTOFU_JSON_ATTRIBUTE_ONLY_BODIES = new Set(["variable", "output"]);
+
+function renderOpenTofuJsonAsHcl(document: unknown): string {
+  if (!isJsonRecord(document)) {
+    throw new Error("the top-level value must be a JSON object");
+  }
+  const blocks: string[] = [];
+  for (const [key, value] of Object.entries(document)) {
+    if (key.startsWith("//")) continue;
+    if (OPENTOFU_JSON_TWO_LABEL_BLOCKS.has(key)) {
+      for (const [type, byName] of jsonEntries(value, key)) {
+        for (const [name, bodies] of jsonEntries(byName, `${key}.${type}`)) {
+          for (const body of jsonBodies(bodies, `${key}.${type}.${name}`)) {
+            blocks.push(
+              renderHclBlock(
+                `${key} ${hclQuoted(type)} ${hclQuoted(name)}`,
+                renderJsonBody(body, key),
+              ),
+            );
+          }
+        }
+      }
+      continue;
+    }
+    if (OPENTOFU_JSON_ONE_LABEL_BLOCKS.has(key)) {
+      for (const [name, bodies] of jsonEntries(value, key)) {
+        for (const body of jsonBodies(bodies, `${key}.${name}`)) {
+          blocks.push(
+            renderHclBlock(
+              `${key} ${hclQuoted(name)}`,
+              renderJsonBody(body, key),
+            ),
+          );
+        }
+      }
+      continue;
+    }
+    if (key === "terraform") {
+      for (const body of jsonBodies(value, key)) {
+        blocks.push(renderHclBlock("terraform", renderTerraformJsonBody(body)));
+      }
+      continue;
+    }
+    if (key === "locals") {
+      for (const body of jsonBodies(value, key)) {
+        blocks.push(renderHclBlock("locals", renderJsonAttributes(body)));
+      }
+      continue;
+    }
+    blocks.push(...renderJsonBodyEntry(key, value));
+  }
+  return `${blocks.join("\n\n")}\n`;
+}
+
+function renderTerraformJsonBody(body: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(body)) {
+    if (key === "required_providers") {
+      for (const requirements of jsonBodies(value, "terraform.required_providers")) {
+        const inner: string[] = [];
+        for (const [name, requirement] of Object.entries(requirements)) {
+          if (typeof requirement === "string") {
+            // `name = "version"` shorthand keeps OpenTofu's default namespace.
+            inner.push(`${name} = { version = ${hclQuoted(requirement)} }`);
+            continue;
+          }
+          inner.push(
+            ...renderHclBlock(`${name} =`, renderJsonAttributes(jsonRecord(requirement, `terraform.required_providers.${name}`))).split("\n"),
+          );
+        }
+        lines.push(renderHclBlock("required_providers", inner));
+      }
+      continue;
+    }
+    lines.push(...renderJsonBodyEntry(key, value));
+  }
+  return lines;
+}
+
+function renderJsonBody(
+  body: Record<string, unknown>,
+  blockType: string,
+): string[] {
+  if (OPENTOFU_JSON_ATTRIBUTE_ONLY_BODIES.has(blockType)) {
+    return renderJsonAttributes(body, blockType === "variable");
+  }
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(body)) {
+    lines.push(...renderJsonBodyEntry(key, value));
+  }
+  return lines;
+}
+
+/**
+ * OpenTofu JSON syntax is ambiguous between nested blocks and object
+ * attributes; the schema decides. For static analysis an object whose members
+ * are all objects is rendered as labelled nested blocks (`provisioner
+ * "local-exec" {}`, `backend "s3" {}`, `dynamic "x" {}`), an object with some
+ * nested object becomes an unlabelled block, and every other value stays an
+ * attribute. Arrays of objects are repeated blocks.
+ */
+function renderJsonBodyEntry(key: string, value: unknown): string[] {
+  if (key.startsWith("//")) return [];
+  if (Array.isArray(value) && value.length > 0 && value.every(isJsonRecord)) {
+    return value.flatMap((item) => renderJsonBodyEntry(key, item));
+  }
+  if (isJsonRecord(value)) {
+    const members = Object.values(value);
+    if (members.length > 0 && members.every(isJsonRecord)) {
+      return Object.entries(value).map(([label, labelled]) =>
+        renderHclBlock(
+          `${key} ${hclQuoted(label)}`,
+          renderJsonBody(labelled as Record<string, unknown>, key),
+        ),
+      );
+    }
+    if (members.some(isJsonRecord)) {
+      return [renderHclBlock(key, renderJsonBody(value, key))];
+    }
+  }
+  return [`${key} = ${JSON.stringify(value)}`];
+}
+
+function renderJsonAttributes(
+  body: Record<string, unknown>,
+  rawTypeExpression = false,
+): string[] {
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(body)) {
+    if (key.startsWith("//")) continue;
+    if (rawTypeExpression && key === "type" && typeof value === "string") {
+      lines.push(`type = ${value}`);
+      continue;
+    }
+    lines.push(`${key} = ${JSON.stringify(value)}`);
+  }
+  return lines;
+}
+
+function renderHclBlock(header: string, body: readonly string[]): string {
+  const inner = body.flatMap((line) => line.split("\n")).map((line) => `  ${line}`);
+  return `${header} {\n${inner.join("\n")}\n}`;
+}
+
+function hclQuoted(value: string): string {
+  return JSON.stringify(value);
+}
+
+function jsonEntries(
+  value: unknown,
+  location: string,
+): [string, unknown][] {
+  return Object.entries(jsonRecord(value, location));
+}
+
+function jsonBodies(
+  value: unknown,
+  location: string,
+): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => jsonRecord(item, `${location}[${index}]`));
+  }
+  return [jsonRecord(value, location)];
+}
+
+function jsonRecord(value: unknown, location: string): Record<string, unknown> {
+  if (!isJsonRecord(value)) {
+    throw new Error(`${location} must be a JSON object`);
+  }
+  return value;
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

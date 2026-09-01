@@ -9,6 +9,15 @@ configuration language.
 
 Takosumi does not ship a first-party Terraform/OpenTofu provider.
 
+In ordinary BYOC, the Workspace/customer owns the vendor account, credential,
+and resulting resource. The execution path is `ProviderConnection →
+CredentialRecipe → ProviderBinding → run-scoped runner materialization →
+standard OpenTofu provider → customer-owned resource`. Managed supply uses an
+external Takoserver Takoform Host as an ordinary provider connection; Takosumi
+never receives or selects Takoserver's parent provider credential, provider
+installation, backend, capacity, WfP namespace/dispatcher, native identity, or
+managed Offering.
+
 ## Why use it
 
 ### Apply only what you reviewed
@@ -81,9 +90,12 @@ durable database, and OpenTofu runner.
   [Store API](./reference/store-api.md), [API](./reference/api.md), and
   [CLI](./reference/cli.md) references
 
-The old Resource Shape / Form Host API is documented only in the
-[Resource migration note](./concepts/resources.md); it is not a new authoring
-surface.
+The old Resource Shape / Form Host API and Generic Offering API are documented
+only in the [Resource migration note](./concepts/resources.md). Existing routes
+and stores are legacy/operator-only implementation conformance gaps and removal
+targets, not new authoring surfaces. Managed Offerings belong to Takoserver.
 
-Pricing, Cloud resources, and support for the official hosted service are in
-the [Takosumi Cloud documentation](https://app.takosumi.com/docs/en/).
+Takosumi Cloud is a retired historical identity. `app.takosumi.com` availability,
+pricing, SLA, and support pages are not current authority. Takosumi Hosted owns
+current retail, commerce, and client-composition docs when published; Takoserver
+owns managed supply and Offerings.

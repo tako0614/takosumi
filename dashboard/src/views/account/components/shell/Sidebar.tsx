@@ -49,6 +49,12 @@ export default function Sidebar() {
               href={item.href}
               class="sidebar-link"
               classList={{ active: isNavActive(loc.pathname, item) }}
+              // The router's own aria-current is exact-match only; announce the
+              // same prefix-derived active state the visual highlight uses so
+              // /settings/account marks 設定 for assistive tech too.
+              aria-current={
+                isNavActive(loc.pathname, item) ? "page" : undefined
+              }
             >
               <item.icon size={18} />
               <span class="sidebar-link-label">{t(item.labelKey)}</span>

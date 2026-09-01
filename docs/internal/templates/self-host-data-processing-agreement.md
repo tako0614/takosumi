@@ -1,10 +1,10 @@
 # Self-host template: Data Processing Addendum
 
 This Data Processing Addendum is an operator template describing the baseline
-data-processing boundary of an operator-hosted Takosumi origin. It is not the
-agreement for the official Takosumi Cloud deployment. Cloud-specific legal
-terms, subprocessors, regions, retention, and contact details belong to the
-hosted Cloud documentation and signed customer agreement. Every operator must
+data-processing boundary of an operator-hosted Takosumi origin. It is not an
+agreement for Takosumi Hosted retail/payment processing or Takoserver managed
+supply. Each owning product publishes its own legal terms, subprocessors,
+regions, retention, and contact details. Every operator must
 replace this template with its own organization-specific DPA before offering a
 service.
 

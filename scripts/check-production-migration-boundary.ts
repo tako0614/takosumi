@@ -66,6 +66,38 @@ for (const forbidden of [
   }
 }
 
+// The one shipped entrypoint allowed to reach the fixture reset. Local and
+// test databases get a supported unwind path; protected schemas still get
+// none. Its fail-closed guards are part of this boundary.
+const FIXTURE_RESET_CLI = "core/scripts/db-fixture-reset.ts";
+if (!existsSync(resolve(root, FIXTURE_RESET_CLI))) {
+  fail(
+    `${FIXTURE_RESET_CLI} must exist so disposable databases have a supported reset path`,
+  );
+} else {
+  const cli = read(FIXTURE_RESET_CLI);
+  const protectedEnvRead =
+    /(?:process\.env|env)\s*(?:\.\s*|\[\s*["'])(?:DATABASE_URL|TAKOSUMI_PRODUCTION_DATABASE_URL|TAKOSUMI_STAGING_DATABASE_URL)\b/u;
+  if (protectedEnvRead.test(cli)) {
+    fail(`${FIXTURE_RESET_CLI} must not read a protected database URL`);
+  }
+  for (const guard of [
+    "assertDisposableScope",
+    "assertDisposableDatabaseUrl",
+    "assertDisposableEnvironment",
+    "TAKOSUMI_FIXTURE_DATABASE_URL",
+  ]) {
+    if (!cli.includes(guard)) {
+      fail(`${FIXTURE_RESET_CLI} is missing the ${guard} guard`);
+    }
+  }
+  if (scripts["db:fixture-reset"] !== `bun ${FIXTURE_RESET_CLI}`) {
+    fail(
+      `package.json script db:fixture-reset must run ${FIXTURE_RESET_CLI}`,
+    );
+  }
+}
+
 const tracked = spawnSync(
   "git",
   ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
@@ -81,6 +113,7 @@ if (tracked.status !== 0) {
     if (
       path ===
         "core/adapters/storage/migration-runner/fixture-reset.ts" ||
+      path === FIXTURE_RESET_CLI ||
       path.startsWith("tests/")
     ) {
       continue;

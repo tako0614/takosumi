@@ -1,8 +1,9 @@
 # Secret rotation runbook
 
-This runbook covers Takosumi OSS and Takosumi for Operator secret classes.
-Closed Takosumi Cloud payment, Cloud-capacity, and AI-upstream secrets are
-owned by `takosumi-cloud/docs/operations/secret-rotation.md`.
+This runbook covers Takosumi OSS and operator-owned platform secret classes.
+Takosumi Hosted owns its retail/payment secrets. Takoserver owns managed-supply,
+provider-parent, capacity, WfP, and service-upstream secrets. Neither class is
+an OSS secret or documented here. Takosumi Cloud is retired history.
 
 Cadence, audit requirements, and responsibility follow
 [Secret Rotation Policy](secret-rotation-policy.md).
@@ -150,15 +151,12 @@ operator must use its reviewed deployment adapter, validate the exact selected
 secret names, pass values without logging them, perform a fixed readback, and
 keep only public IDs/digests in evidence.
 
-Takosumi Cloud is stricter: runtime-secret mutation is part of the fixed
-controller release and raw Wrangler secret/deploy commands are not an operator
-path. The closed adapter accepts an exact value-free
-`takosumi.cloud-runtime-secret-files@v1` manifest whose paths point to
-owner-matched `0600` files under `0700` directories outside every source
-checkout. The sealed release policy allowlists names, the OIDC key triple is
-atomic, and the adapter proves health plus exact public JWKS key IDs before it
-records success. See the closed Cloud rotation and immutable Worker-release
-runbooks for staging, replica, authorization, and production execution.
+An external product rotates only its own classes through its owning deployment
+contract. Takosumi Hosted retail/payment material never becomes a
+ProviderConnection or OSS Worker variable. Takoserver provider-parent, WfP, and
+managed-service material stays behind Takoserver's non-public authority and is
+never copied into the Takosumi platform Worker or runner. Each owner must prove
+health and exact public identity readback without recording secret values.
 
 ## Verification
 

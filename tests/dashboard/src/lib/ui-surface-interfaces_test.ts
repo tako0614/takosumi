@@ -414,10 +414,95 @@ describe("dashboard UI-surface Interface consumer", () => {
     expect(surfaces.some((surface) => surface.interfaceId === "if_ui_100")).toBe(
       true,
     );
+    const surfaceIds = surfaces.map((surface) => surface.interfaceId);
+    expect(surfaceIds).toEqual([...surfaceIds].sort());
     expect(calls).toEqual([
       "/api/v1/workspaces/ws_1/ui-surfaces",
       "/api/v1/workspaces/ws_1/ui-surfaces?cursor=page_2",
     ]);
+  });
+
+  test("parses each page before requesting the next page", async () => {
+    const first = uiInterface();
+    const firstMetadata = first.metadata;
+    let firstPageParsed = false;
+    Object.defineProperty(first, "metadata", {
+      enumerable: true,
+      get() {
+        firstPageParsed = true;
+        return firstMetadata;
+      },
+    });
+
+    const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
+      const path = String(input);
+      if (path === "/api/v1/workspaces/ws_1/ui-surfaces") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ interfaces: [first], nextCursor: "page_2" }),
+        } as Response;
+      }
+      if (path === "/api/v1/workspaces/ws_1/ui-surfaces?cursor=page_2") {
+        expect(firstPageParsed).toBeTrue();
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ interfaces: [] }),
+        } as Response;
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    };
+
+    await expect(
+      listAuthorizedUiSurfaces("ws_1", { fetch: fetcher }),
+    ).resolves.toHaveLength(1);
+  });
+
+  test("keeps pagination errors ahead of deferred parser failures", async () => {
+    const fetcher =
+      (invalidSecondCursor: boolean) =>
+      async (input: RequestInfo | URL): Promise<Response> => {
+        const path = String(input);
+        if (path === "/api/v1/workspaces/ws_1/ui-surfaces") {
+          const broken = uiInterface();
+          Object.defineProperty(broken, "metadata", {
+            enumerable: true,
+            get() {
+              throw new Error("first-page parser failure");
+            },
+          });
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              interfaces: [broken],
+              nextCursor: "page_2",
+            }),
+          } as Response;
+        }
+        if (path === "/api/v1/workspaces/ws_1/ui-surfaces?cursor=page_2") {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              interfaces: [],
+              ...(invalidSecondCursor ? { nextCursor: "" } : {}),
+            }),
+          } as Response;
+        }
+        return Response.json(
+          { error: "unexpected request" },
+          { status: 500 },
+        );
+      };
+
+    await expect(
+      listAuthorizedUiSurfaces("ws_1", { fetch: fetcher(true) }),
+    ).rejects.toThrow("UI surface list pagination cursor is invalid");
+    await expect(
+      listAuthorizedUiSurfaces("ws_1", { fetch: fetcher(false) }),
+    ).rejects.toThrow("first-page parser failure");
   });
 
   test("fails closed for an invalid pagination cursor", async () => {

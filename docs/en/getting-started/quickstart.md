@@ -135,5 +135,7 @@ Use `bash scripts/down.sh -v` to also remove Postgres data and certificates.
 - [Self-hosting](../concepts/self-host.md)
 - [CLI](../reference/cli.md)
 
-For the official hosted service, use the
-[Takosumi Cloud documentation](https://app.takosumi.com/docs/en/).
+Takosumi Cloud is a retired historical identity. Do not treat
+`app.takosumi.com` availability, pricing, SLA, or support pages as current
+authority. Current retail/commerce/client-composition documentation belongs to
+Takosumi Hosted; managed supply and Offerings belong to Takoserver.

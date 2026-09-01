@@ -1,6 +1,10 @@
 import type { Hono as HonoApp } from "hono";
 import type { ObservabilitySink } from "../domains/observability/mod.ts";
 import type { MetricEvent } from "../domains/observability/types.ts";
+import {
+  type MetricAggregate,
+  metricHistogramBuckets,
+} from "../domains/observability/metric_layout.ts";
 import { apiError, registerApiErrorHandler } from "./errors.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
 import type { ApiEndpoint } from "./route_families.ts";
@@ -67,7 +71,10 @@ export const METRICS_ENDPOINTS: readonly ApiEndpoint[] = [
 ] as const;
 
 export interface RegisterMetricsRoutesOptions {
-  readonly observability: Pick<ObservabilitySink, "listMetrics">;
+  readonly observability: Pick<
+    ObservabilitySink,
+    "listMetrics" | "listMetricAggregates"
+  >;
   readonly getScrapeToken?: () => string | undefined;
   readonly metricTags?: Record<string, string>;
   readonly now?: () => Date;
@@ -88,10 +95,12 @@ export function registerMetricsRoutes(
       return c.json(apiError("unauthenticated", "invalid scrape token"), 401);
     }
     const metrics = await options.observability.listMetrics();
+    const aggregates = await options.observability.listMetricAggregates?.();
     const now = options.now?.() ?? new Date();
     return new Response(
       renderPrometheusMetrics(metrics, now, {
         defaultTags: options.metricTags,
+        ...(aggregates ? { aggregates } : {}),
       }),
       {
         status: 200,
@@ -103,6 +112,13 @@ export function registerMetricsRoutes(
 
 export interface RenderPrometheusMetricsOptions {
   readonly defaultTags?: Record<string, string>;
+  /**
+   * Durable monotonic aggregate rows. When present, counter and histogram
+   * series render FROM THESE (raw events for those kinds are ignored, so
+   * event retention can never make a counter decrease); gauges always render
+   * from the latest events, which ground-truth emitters refresh every tick.
+   */
+  readonly aggregates?: readonly MetricAggregate[];
 }
 
 export function renderPrometheusMetrics(
@@ -110,8 +126,15 @@ export function renderPrometheusMetrics(
   _now: Date = new Date(),
   options: RenderPrometheusMetricsOptions = {},
 ): string {
+  const aggregated = options.aggregates;
   const byName = new Map<string, MetricEvent[]>();
   for (const event of events) {
+    if (
+      aggregated !== undefined &&
+      (event.kind === "counter" || event.kind === "histogram")
+    ) {
+      continue;
+    }
     const name = sanitizeMetricName(event.name);
     byName.set(name, [...(byName.get(name) ?? []), event]);
   }
@@ -121,7 +144,11 @@ export function renderPrometheusMetrics(
     "takosumi_metrics_scrape_info 1",
   ];
   const renderedNames = new Set<string>();
+  if (aggregated !== undefined) {
+    renderAggregates(lines, renderedNames, aggregated);
+  }
   for (const [name, namedEvents] of [...byName.entries()].sort()) {
+    if (renderedNames.has(name)) continue;
     renderedNames.add(name);
     const kind = namedEvents[0]?.kind ?? "gauge";
     if (kind === "histogram") {
@@ -146,9 +173,60 @@ export function renderPrometheusMetrics(
   return `${lines.join("\n")}\n`;
 }
 
-const HISTOGRAM_BUCKETS = [
-  0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
-] as const;
+function renderAggregates(
+  lines: string[],
+  renderedNames: Set<string>,
+  aggregates: readonly MetricAggregate[],
+): void {
+  const byName = new Map<string, MetricAggregate[]>();
+  for (const row of aggregates) {
+    const name = sanitizeMetricName(row.name);
+    byName.set(name, [...(byName.get(name) ?? []), row]);
+  }
+  for (const [name, rows] of [...byName.entries()].sort()) {
+    renderedNames.add(name);
+    const kind = rows[0]?.kind ?? "counter";
+    if (kind === "counter") {
+      lines.push(`# TYPE ${name} counter`);
+      for (const row of rows) {
+        if (row.le !== "") continue;
+        lines.push(
+          `${name}${renderLabels(row.labels)} ${formatNumber(row.value)}`,
+        );
+      }
+      continue;
+    }
+    lines.push(`# TYPE ${name} histogram`);
+    const bySeries = new Map<string, MetricAggregate[]>();
+    for (const row of rows) {
+      bySeries.set(row.labelsKey, [...(bySeries.get(row.labelsKey) ?? []), row]);
+    }
+    for (const seriesRows of bySeries.values()) {
+      const labels = seriesRows[0]!.labels;
+      const byLe = new Map(seriesRows.map((row) => [row.le, row.value]));
+      for (const bucket of metricHistogramBuckets(seriesRows[0]!.name)) {
+        lines.push(
+          `${name}_bucket${renderLabels({ ...labels, le: String(bucket) })} ${formatNumber(
+            byLe.get(String(bucket)) ?? 0,
+          )}`,
+        );
+      }
+      lines.push(
+        `${name}_bucket${renderLabels({ ...labels, le: "+Inf" })} ${formatNumber(
+          byLe.get("+Inf") ?? 0,
+        )}`,
+      );
+      lines.push(
+        `${name}_sum${renderLabels(labels)} ${formatNumber(byLe.get("sum") ?? 0)}`,
+      );
+      lines.push(
+        `${name}_count${renderLabels(labels)} ${formatNumber(
+          byLe.get("count") ?? 0,
+        )}`,
+      );
+    }
+  }
+}
 
 function renderHistogram(
   lines: string[],
@@ -156,11 +234,12 @@ function renderHistogram(
   events: readonly MetricEvent[],
 ): void {
   lines.push(`# TYPE ${name} histogram`);
+  const buckets = metricHistogramBuckets(events[0]?.name ?? name);
   const byLabels = groupByLabels(events);
   for (const [labelKey, samples] of byLabels) {
     const labels = parseLabelKey(labelKey);
     const sum = samples.reduce((total, event) => total + event.value, 0);
-    for (const bucket of HISTOGRAM_BUCKETS) {
+    for (const bucket of buckets) {
       const count = samples.filter((event) => event.value <= bucket).length;
       lines.push(
         `${name}_bucket${renderLabels({ ...labels, le: String(bucket) })} ${formatNumber(
@@ -194,10 +273,10 @@ function defaultDashboardMetricSeries(
     runner_profile_id:
       normalizedDefaultTag(inputTags.runner_profile_id) ?? "opentofu-default",
   };
+  // Bounded labels only — matches the write-side vocabulary in
+  // metric_layout.ts (unbounded tenant ids never appear on Prometheus series).
   const deployTags = {
     ...baseTags,
-    workspace_id: "none",
-    capsule_id: "none",
     operation_kind: "none",
     status: "idle",
   };
@@ -256,7 +335,7 @@ function renderDefaultSeries(
 ): void {
   if (series.kind === "histogram") {
     lines.push(`# TYPE ${series.name} histogram`);
-    for (const bucket of HISTOGRAM_BUCKETS) {
+    for (const bucket of metricHistogramBuckets(series.name)) {
       lines.push(
         `${series.name}_bucket${renderLabels({
           ...series.tags,

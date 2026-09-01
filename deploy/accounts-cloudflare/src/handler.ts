@@ -1,3 +1,4 @@
+import type { PortableHostIdempotencyCoordinator } from "../../../core/api/portable_host_idempotency.ts";
 import {
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   type TakosumiSubject,
@@ -107,6 +108,13 @@ export interface CreateCloudflareWorkerOptions<
    * ControlPlaneOperations}. When omitted the control routes 503 after the
    * session gate.
    */
+  /**
+   * Optional Idempotency-Key coordinator for the capsule write lane, built
+   * from the same env as the control plane.
+   */
+  readonly controlIdempotency?: (
+    env: TEnv,
+  ) => PortableHostIdempotencyCoordinator | undefined;
   readonly controlPlaneOperations?: (
     env: TEnv,
   ) => Promise<ControlPlaneOperations | undefined>;
@@ -457,7 +465,7 @@ function usesIdentityOnlyAccountsHandler(pathname: string): boolean {
 // is behind the schema) or an older version (database is behind the Worker)
 // so operators don't silently run a schema that does not match the service.
 // See `README.md` → "D1 schema migration" for the runner workflow.
-const EXPECTED_D1_SCHEMA_VERSION = 3;
+const EXPECTED_D1_SCHEMA_VERSION = 4;
 
 async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   env: TEnv,
@@ -525,6 +533,18 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
       ? { interfaceOAuthActivityValidator }
       : {}),
     ...(managedPublicBaseDomain ? { managedPublicBaseDomain } : {}),
+    ...(!identityOnly && options.controlIdempotency
+      ? (() => {
+          const idempotency = options.controlIdempotency!(env);
+          return idempotency ? { controlIdempotency: idempotency } : {};
+        })()
+      : {}),
+    ...(controlWriteRateLimitOption(
+      optionalString(
+        (env as { TAKOSUMI_CONTROL_WRITE_RATE_LIMIT?: string })
+          .TAKOSUMI_CONTROL_WRITE_RATE_LIMIT,
+      ),
+    )),
     privacyOperationsToken: optionalString(
       env.TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN,
     ),
@@ -1093,4 +1113,18 @@ function splitList(value: unknown): readonly string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Parses TAKOSUMI_CONTROL_WRITE_RATE_LIMIT (writes per minute per
+ * workspace/subject on the session control lane). Absent/malformed keeps the
+ * service default (30); 0 disables.
+ */
+function controlWriteRateLimitOption(
+  raw: string | undefined,
+): { readonly controlWriteRateLimitPerMinute?: number } {
+  if (raw === undefined || raw.trim() === "") return {};
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) return {};
+  return { controlWriteRateLimitPerMinute: parsed };
 }

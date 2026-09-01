@@ -17,12 +17,12 @@ records are backing material; they do not grant broad operator access to user
 provider accounts. Account-plane projection material must not be embedded in
 OpenTofu outputs.
 
-Takosumi OSS may include Compatibility API framework, compatibility profiles,
-Resource Shape APIs, adapter contracts, and usage-event emission. Official
-operator-provided deployment targets, Takosumi-owned native resource internals, enforced
-billing/payment, official usage metering sold as a service, and official
-support/abuse workflows are Takosumi for Operator / Takosumi Cloud operation
-features and are governed by the relevant hosted operator terms when used.
+Takosumi OSS may include compatibility profiles, Interfaces, provider-neutral
+Stack execution, and showback events. Generic Offering and active Resource/Form
+Host lifecycle are not current OSS authority. An operator governs its own BYOC
+deployment and support terms; Takosumi Hosted governs any retail/payment/client
+composition it offers, and Takoserver governs its managed supply, provider
+credentials, meter, price, quota, SLA, and support terms.
 
 Self-hosted operators may replace this page with their own terms. If a hosted
 operator publishes separate signed terms, those operator terms take precedence

@@ -16,11 +16,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/compose-helpers.sh"
+INGRESS_IP="$(local_substrate_ingress_ip)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 APP_HOST="${TAKOSUMI_LOCAL_APP_HOST:-app.takosumi.test}"
 OAUTH_HOST="${TAKOSUMI_LOCAL_OAUTH_MOCK_HOST:-oauth-mock.test}"
 BASE="https://${APP_HOST}"
-CURL_TLS=(--cacert "$CA" --resolve "${APP_HOST}:443:127.0.0.1" --resolve "${OAUTH_HOST}:443:127.0.0.1")
+CURL_TLS=(--cacert "$CA" --resolve "${APP_HOST}:443:${INGRESS_IP}" --resolve "${OAUTH_HOST}:443:${INGRESS_IP}")
 
 STATE="oauth_tls_neg_$(date +%s%N)_$$"
 JAR=$(mktemp)

@@ -78,15 +78,15 @@ State transition は timeline に残します。Takosumi incident tracking が�
 
 ## Initial Response Window
 
-1. page を ack し、war room を開く。
-2. 初期 SEV と影響範囲を宣言する。
-3. 影響 service set への非必須 deploy を freeze する。
-4. 以下を任命する:
+1. page を ack し、war room を開きます。
+2. 初期 SEV と影響範囲を宣言します。
+3. 影響 service set への非必須 deploy を freeze します。
+4. 以下を任命します:
    - incident commander
    - mitigation owner
    - investigation owner
    - communications owner
-5. 現在の signal を収集する:
+5. 現在の signal を収集します:
    - HTTP 5xx / latency
    - deploy success / rollback metric
    - selected Runner adapter health / stale queued Runs / RunOwner state
@@ -94,7 +94,7 @@ State transition は timeline に残します。Takosumi incident tracking が�
    - CredentialRecipe seed changes、provider allowlist changes、Provider Connection changes、
      egress policy changes、Connection driver deploy
    - 直近の deploy、config / secret rotation
-6. 最もリスクの低い mitigation を選び、実行前に judgement を channel に書く。
+6. 最もリスクの低い mitigation を選び、実行前に judgement を channel に書きます。
 
 ## Mitigation Priority
 

@@ -78,13 +78,13 @@ dashboard や exporter は `unratedEventCount` を金額 0 や無料利用とし
 
 ## Operational checks
 
-1. Workspace の mode が意図した `disabled` / `showback` か確認する。
-2. plan review で対象 Run の `RunCost` を取得し、mode、estimate、rating evidence を記録する。
+1. Workspace の mode が意図した `disabled` / `showback` か確認します。
+2. plan review で対象 Run の `RunCost` を取得し、mode、estimate、rating evidence を記録します。
 3. `showback` の apply 成功後、Workspace usage ledger に同じ Run / Capsule の event が一度だけ
-   追加されたことを確認する。
+   追加されたことを確認します。
 4. pagination cursor を最後まで読み、期間集計は `createdAt`、`usdMicros`、
-   `ratingStatus` を用いる。`unrated` を無料利用額として集計しない。
-5. source別集計では未知の token を拒否せず、opaque dimension として保持する。
+   `ratingStatus` を用います。`unrated` を無料利用額として集計しません。
+5. source別集計では未知の token を拒否せず、opaque dimension として保持します。
 
 例 (operator bearer の取得方法は platform deploy runbook に従う):
 

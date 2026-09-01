@@ -176,7 +176,9 @@ test("session Capsule Output read authorizes the exact Workspace before reading 
     "subject_other",
   );
 
-  expect(response.status).toBe(403);
+  // 404, not 403: an id-addressed Capsule the caller may not see must not
+  // answer differently from one that does not exist (existence oracle).
+  expect(response.status).toBe(404);
   expect(reads).toBe(0);
 });
 

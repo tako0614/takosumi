@@ -1,5 +1,12 @@
 # Takosumi Cloud pricing
 
+> **Historical archive — not current authority.** This page records the retired
+> Takosumi Cloud plan/implementation. It is not current availability, pricing,
+> SLA, support, or production authority. Takosumi Hosted owns new
+> retail/commerce/client-composition documentation; Takoserver owns managed
+> supply, capacity, provider credentials, and Offerings. Preserve the body as
+> historical evidence and do not use it as current service authority.
+
 Takosumi Cloud uses tax-exclusive USD prepaid credits. There is no monthly
 subscription. Every account uses the same Cloud Offering catalog; Resource
 counts are common safety ceilings, not tier features.

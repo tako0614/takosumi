@@ -21,7 +21,7 @@ export const ja = {
   "installStore.back": "選び直す",
   "installStore.entryLoadTitle": "追加候補を確認",
   "installStore.entryLoadHint":
-    "明示したGitリポジトリから候補文書を読み込みます。この操作で読み取り用のSourceとRunが作成されます。",
+    "指定したGitリポジトリから候補を読み込みます（読み取りのみ。まだ何もインストールされません）。",
   "installStore.entryLoad": "候補を読み込む",
   "installStore.entryHint": "追加するサービスを1つ選んでください。",
   "installStore.select": "これを選ぶ",
@@ -38,6 +38,8 @@ export const ja = {
   "installStore.preparing": "追加の準備をしています",
   "installStore.preparingHint":
     "リポジトリを確認し、必要な接続と変更内容をまとめています。",
+  "installStore.preparingFetching":
+    "リポジトリを取得しています。初回は1分ほどかかることがあります。",
   "installStore.compatibilityFailed":
     "このサービスは現在の環境に追加できません。",
   "installStore.providerTitle": "接続が必要です",
@@ -54,10 +56,10 @@ export const ja = {
   "installStore.setupHint": "このサービスが必要とする項目だけを入力します。",
   "installStore.sourceBuildTitle": "リポジトリのビルド手順",
   "installStore.sourceBuildHint":
-    "Planを開始する前に、認証情報を使わないコマンドと生成されるパスを確認してください。",
+    "変更の準備を始める前に、認証情報を使わないコマンドと生成されるパスを確認してください。",
   "installStore.sourceBuildCommand": "コマンド {index}",
   "installStore.sourceBuildWorkingDirectory": "作業ディレクトリ",
-  "installStore.sourceBuildSourceRoot": "Source root",
+  "installStore.sourceBuildSourceRoot": "ソースの起点",
   "installStore.sourceBuildOutputs": "生成されるパス",
   "installStore.setupInvalid": "サービスの設定定義が無効です。",
   "installStore.setupRequired": "{label}を入力してください。",
@@ -66,14 +68,14 @@ export const ja = {
   "installStore.secretHint":
     "シークレットはこのフォームから変数として送信しません。",
   "installStore.reviewing": "変更内容を確認しています",
-  "installStore.reviewingHint": "安全に適用できるかPlanを確認しています。",
+  "installStore.reviewingHint": "安全に適用できるか変更内容を確認しています。",
   "installStore.reviewTitle": "インストール前の確認",
   "installStore.reviewHint": "Takosumiが行う変更です。",
   "installStore.changes": "変更数",
   "installStore.createCount": "作成",
   "installStore.updateCount": "変更",
   "installStore.deleteCount": "削除",
-  "installStore.approve": "Planを承認",
+  "installStore.approve": "変更を承認",
   "installStore.confirmTitle": "確認が必要な変更があります",
   "installStore.confirmHint":
     "削除または明示承認が必要な変更を含みます。内容を確認してください。",
@@ -82,9 +84,32 @@ export const ja = {
   "installStore.runDetails": "技術的な詳細",
   "installStore.installing": "インストールしています",
   "installStore.installingHint": "この画面を開いたままお待ちください。",
-  "installStore.planBlocked": "このPlanは適用できません",
+  "installStore.progressCount": "リソースを作成中 ({completed}/{total})",
+  "installStore.progressCountUnknownTotal": "リソースを作成中 ({completed} 件完了)",
+  "installStore.planBlocked": "この変更は適用できません",
   "installStore.planBlockedHint":
-    "ポリシーまたはPlanの詳細を確認してください。",
+    "ポリシーまたは技術的な詳細を確認してください。",
+  "installStore.runFailedHint":
+    "「技術的な詳細」で原因を確認できます。設定を直して、もう一度追加できます。",
+  "installStore.startOver": "最初からやり直す",
+  "installStore.settlingSlow":
+    "公開処理に時間がかかっています。このまま待っても、実行の詳細を開いても構いません。",
+  "installStore.entryKindComposition": "構成",
+  "installStore.entryKindSourceOptions": "インストール候補",
+  "installStore.refLatestStable": "最新の安定版",
+  "installStore.evidenceTitle": "変更されないソースの証跡",
+  "installStore.evidenceOnlySelected":
+    "下で選んだソースだけが追加されます。",
+  "installStore.evidenceRetained": "選択時のソース証跡",
+  "installStore.evidenceReview":
+    "この証跡を確認してから追加してください。",
+  "installStore.setupUnavailable": "設定項目を表示できません",
+  "installStore.accountSignIn": "Takosumi アカウントでサインイン",
+  "installStore.accountSignInHint":
+    "このサービスは Takosumi アカウントでサインインします。パスワードを設定値として送ることはありません。",
+  "installStore.secretSetupUnavailable": "シークレット設定を表示できません",
+  "installStore.managedHostname": "管理ホスト名",
+  "installStore.optionalFeatures": "任意の機能",
   "installStore.readinessFailed":
     "サービスの公開状態を確認できませんでした。技術的な詳細を確認してください。",
   "installStore.activationFailed":
@@ -95,8 +120,6 @@ export const ja = {
   "installStore.launchNotReady":
     "サービスは適用されましたが、起動リンクをまだ確認できません。再確認するか、サービスの詳細を開いてください。",
   "installStore.runFailed": "インストールを完了できませんでした",
-  "installStore.runFailedHint":
-    "技術的な詳細を確認して、もう一度お試しください。",
   "installStore.doneTitle": "追加できました",
   "installStore.doneHint": "サービスを開いて使い始められます。",
   "installStore.open": "サービスを開く",
@@ -104,7 +127,7 @@ export const ja = {
   "installStore.invalidSource": "有効なhttpsのGit URLを入力してください。",
   "installStore.invalidName":
     "サービス名は半角小文字・数字・ハイフンで入力してください。",
-  "installStore.planMissing": "Planの開始結果を確認できませんでした。",
+  "installStore.planMissing": "変更内容の確認結果を取得できませんでした。",
   "installStore.listingUnavailable":
     "このサービスをStoreから取得できませんでした。",
   // --- common -------------------------------------------------------------
@@ -277,6 +300,7 @@ export const ja = {
   "status.capsule.stale": "更新があります",
   "status.capsule.error": "エラー",
   "status.capsule.disabled": "無効",
+  "status.capsule.uninstalled": "削除予定",
   "status.capsule.destroyed": "削除済み",
   "status.run.queued": "待機中",
   "status.run.running": "実行中",
@@ -293,7 +317,6 @@ export const ja = {
   "status.connection.pending": "未確認",
   "status.connection.verified": "確認済み",
   "status.connection.revoked": "無効化済み",
-  "status.connection.expired": "期限切れ",
   "status.connection.error": "エラー",
   "status.providerConnection.ready": "利用できます",
   "status.providerConnection.needs_setup": "未確認",
@@ -430,11 +453,12 @@ export const ja = {
     "記録済みリソース一覧を読み込めませんでした。",
   "app.deploys.inventoryLegacyUnavailable":
     "この古い適用状態にはリソース一覧の記録がありません。",
-  "app.deploys.inventoryGeneration": "状態世代",
+  "app.deploys.inventoryGeneration": "バージョン番号",
   "app.deploys.inventoryRecordedAt": "記録日時",
   "app.deploys.inventoryStateVersion": "状態バージョン",
-  "app.deploys.inventoryApplyRun": "Apply 実行",
-  "app.deploys.inventoryPlanRun": "Plan 実行",
+  "app.deploys.inventoryApplyRun": "適用の実行記録",
+  "app.deploys.generationBadge": "第{n}版",
+  "app.deploys.inventoryPlanRun": "変更確認の実行記録",
   "app.deploys.inventoryEmpty": "デプロイ済みリソースは記録されていません。",
   "app.recentActivity.title": "最近の更新",
   "app.recentActivity.open": "詳細",
@@ -518,6 +542,7 @@ export const ja = {
     "保存しました。変更を反映するにはデプロイしてください。",
   "app.config.deployChanges": "変更をデプロイ",
   "app.updateNow": "更新する",
+  "app.updateNowTagged": "{tag} に更新",
   "app.autoUpdate.title": "自動更新",
   "app.autoUpdate.body":
     "新しいバージョンが見つかったら自動で更新します。作り直しや削除を含む変更は自動では行わず、確認をお願いします。",
@@ -530,6 +555,22 @@ export const ja = {
   "app.danger.destroyConfirmMessage":
     "{name} を削除します。まだデプロイされていない場合はこの場で完全に削除され、元に戻せません。",
   "app.danger.destroyCta": "削除の確認を開く",
+  "app.danger.uninstallBody":
+    "{name} を削除するとすぐに一覧から隠れ、猶予期間ののち完全に削除されます。それまでリソースとデータは残り（課金も続きます）、ワンクリックで復元できます。期限が来るとデータのエクスポートを試みたうえで、データを含めて完全に削除されます。",
+  "app.danger.dependentsWarning":
+    "このサービスの出力を {names} が使っています。削除するとそれらが動かなくなる可能性があります。",
+  "app.danger.uninstallConfirmTitle": "このサービスを削除しますか？",
+  "app.danger.uninstallConfirmMessage":
+    "{name} を削除します。猶予期間中は復元でき、その間リソースとデータは残り課金も続きます。期限が来るとデータのエクスポートを試みたうえで、データを含めて完全に削除されます。",
+  "app.danger.uninstallCta": "サービスを削除",
+  "app.danger.destroyNowCta": "今すぐ完全に削除（猶予なし）",
+  "app.danger.uninstalledTitle": "削除が予約されています",
+  "app.danger.uninstalledBody":
+    "{name} は {date} に完全に削除されます。それまでリソースとデータは残り、課金も続きます。使い続けるには復元してください。今すぐ削除することもできます。",
+  "app.uninstalled.banner":
+    "このサービスは {date} に完全に削除されます。それまでリソースとデータは残り（課金も続きます）、復元できます。",
+  "app.uninstalled.restore": "復元",
+  "app.uninstalled.deleteNow": "今すぐ削除",
   "app.setupIncomplete.body":
     "追加が完了していません。変更の確認からやり直すか、削除してやり直せます。",
   "app.setupIncomplete.review": "更新タブへ",
@@ -684,7 +725,7 @@ export const ja = {
   "run.resources.kicker": "確認",
   "run.resources.title": "変更予定",
   "run.resources.count": "{n} 件",
-  "run.resources.more": "ほか {n} 件の変更があります。",
+  "run.resources.showAll": "残りの変更をすべて表示（{n} 件）",
   "run.resources.actionCreate": "作成",
   "run.resources.actionUpdate": "変更",
   "run.resources.actionDelete": "削除",
@@ -801,6 +842,8 @@ export const ja = {
     "利用する接続先の固定情報が含まれています。非公開値を外したあと、追加時に固定内容を確認します。",
   "new.compat.issue.reviewRequired.message":
     "追加前に確認が必要な項目があります。",
+  "new.error.sourceRevisionMismatch":
+    "選んだバージョンと取得したソースが一致しませんでした。もう一度お試しください。",
   "new.error.sourceRefNotFound":
     "指定されたバージョン「{ref}」が見つかりません。リンク先にこのバージョンがあるか確認してください。",
   "new.error.sourceFetchFailed":
@@ -818,8 +861,35 @@ export const ja = {
     "この公開URL名は既に使われています。別の名前にして、もう一度お試しください。",
   "new.error.managedHostnameSlotLimit":
     "短いURLの空き枠がありません。通常URLを使うか、既存の短いURLを解放してください。",
+  "new.error.alreadyExistsUseName":
+    "この名前のサービスは既にあります。「{name}」で追加できます。",
+  "new.error.useSuggestedName": "「{name}」にする",
+  "new.compat.retryTransient":
+    "確認そのものが完了しませんでした。サービス側の問題ではない可能性があります。",
   "new.error.alreadyExistsGeneric":
     "このサービスは既に追加されています。一覧から既存サービスを開いてください。",
+  "notif.event.capsuleAbandoned": "追加を取りやめました",
+  "notif.event.capsuleAutoReplanStarted": "更新に失敗したので、自動でやり直しています",
+  "notif.event.capsuleAutoReplanFailed": "更新の自動やり直しができませんでした",
+  "notif.event.capsuleAutoUpdateApplyFailed": "自動更新の適用に失敗しました",
+  "notif.event.capsuleInstallCleanupStarted": "失敗した初回追加の後片付けを始めました",
+  "notif.event.capsuleInstallCleanupFailed": "失敗した初回追加の後片付けができませんでした",
+  "notif.event.capsuleStale": "ソースが更新されたので、更新できます",
+  "notif.event.capsuleSystemDestroyBlocked": "予約された削除を保留しました",
+  "notif.event.capsuleSystemDestroyContinueFailed": "予約された削除を続行できませんでした",
+  "notif.event.capsuleUninstallScheduled": "削除を予約しました",
+  "notif.event.capsuleUninstallRestored": "削除の予約を取り消しました",
+  "notif.event.capsulePreDestroyExportCompleted": "削除前にデータをエクスポートしました",
+  "notif.event.capsulePreDestroyExportFailed": "削除前のエクスポートができませんでした",
+  "notif.event.capsulePreDestroyExportSkipped": "この構成では削除前のエクスポートに対応していません",
+  "notif.event.restoreCreated": "復元を受け付けました",
+  "notif.event.restoreSucceeded": "復元が完了しました",
+  "notif.event.runCancelled": "実行を取り消しました",
+  "notif.event.runRetryScheduled": "一時的な問題のため、やり直します",
+  "notif.event.runArtifactLedgerRetryScheduled": "記録の確認が取れなかったので、やり直します",
+  "notif.event.runIdempotentReplay": "同じ要求だったので、前回の結果を返しました",
+  "notif.event.resourceRunDestroyed": "リソースを削除しました",
+  "notif.event.releaseActivationNotApplicable": "公開処理は不要でした",
   "workspaceSettings.title": "設定",
   "workspaceSettings.tabsLabel": "設定セクション",
   "workspaceSettings.subtitle":
@@ -896,7 +966,7 @@ export const ja = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "自分の認証情報で外部プロバイダーを接続します。利用可否は operator の provider policy、runner capability、Run approval に従います。",
+    "自分の認証情報で外部プロバイダーを接続します。利用できる範囲は運営者のポリシーと実行環境の設定、承認ルールに従います。",
   "conn.providerConnections.title": "接続済みアカウント",
   "conn.expiresAt": "期限: {date}",
   "conn.oauth.connected": "プロバイダー接続を保存しました。",
@@ -929,10 +999,10 @@ export const ja = {
   "conn.guided.instructions": "手順を表示",
   "conn.byok.title": "自分のカギで外部プロバイダーを接続",
   "conn.byok.body":
-    "プロバイダーの取得元 (source) と必要な環境変数を入力します。この接続にも provider policy、runner capability、Run approval が適用されます。",
+    "プロバイダーの取得元と必要な環境変数を入力します。この接続にも運営者のポリシーと実行環境の設定、承認ルールが適用されます。",
   "conn.byok.noBillingNote":
     "Takosumi の料金がある場合は preview に表示されます。外部プロバイダーの料金は、そのプロバイダーから別途請求されます。",
-  "conn.byok.usePreset": "インストール済み Recipe を使う",
+  "conn.byok.usePreset": "用意された接続手順を使う",
   "conn.register": "接続を保存",
   "conn.registering": "保存中…",
   "conn.genericEnv.providerName": "プロバイダーの取得元",
@@ -1052,6 +1122,8 @@ export const ja = {
   "notif.event.stale": "依存先が更新されたため、このサービスに更新があります",
   "notif.event.staleNamed":
     "依存先が更新されたため、「{name}」に更新があります",
+  "notif.event.staleSource": "このサービスの新しいバージョンがあります",
+  "notif.event.staleSourceNamed": "「{name}」の新しいバージョンがあります",
   "notif.event.staleDetail": "更新元: {producer}",
   "notif.event.connCreated": "接続済みアカウント「{provider}」を追加しました",
   "notif.event.connCreatedGeneric": "接続済みアカウントを追加しました",
@@ -1152,7 +1224,7 @@ export const ja = {
     "このブラウザはこの機能に未対応です。ストア側でインスタンス URL を入力してください。",
   "account.apiKeys.title": "Cloud API キー",
   "account.apiKeys.subtitle":
-    "CLIや外部ツールからTakosumi Cloudを操作するためのキーを発行・失効できます。",
+    "CLIや外部ツールからアカウントのAPIを操作するためのキーを発行・失効できます。",
   "account.apiKeys.secretOnce": "秘密値は作成時のみ表示",
   "account.apiKeys.name": "キーの名前",
   "account.apiKeys.namePlaceholder": "例: 開発用 CLI",

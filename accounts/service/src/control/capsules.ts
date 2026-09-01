@@ -120,9 +120,11 @@ import {
   publicCapsule,
   publicPlanActionResponse,
   publicRun,
+  requireResourceWorkspaceAccess,
   requireWorkspaceAccess,
   resolveProviderBindings,
 } from "./shared.ts";
+import { withCapsuleWriteIdempotency } from "./idempotency.ts";
 import {
   booleanValue,
   connectionCredentialFiles,
@@ -167,7 +169,7 @@ export async function handleCapsules(
   if (segments[0] === "capsules" && segments.length >= 2) {
     const capsuleId = decodeURIComponent(segments[1] ?? "");
     const capsule = await operations.capsules.getCapsule(capsuleId);
-    const auth = await requireWorkspaceAccess({
+    const auth = await requireResourceWorkspaceAccess({
       operations,
       store,
       workspaceId: capsule.workspaceId,
@@ -182,11 +184,38 @@ export async function handleCapsules(
         return await patchCapsule(request, operations, capsuleId);
       }
       if (method === "DELETE") {
-        return await deleteCapsule(operations, capsule, capsuleId);
+        return await deleteCapsule(
+          operations,
+          capsule,
+          capsuleId,
+          url.searchParams.get("mode"),
+        );
       }
       return methodNotAllowed("GET, PATCH, DELETE");
     }
     const leaf = segments[2];
+    // Capsule write lane under an optional Idempotency-Key: a retried
+    // plan/destroy-plan/drift-check/backup must not create a SECOND run.
+    const idempotentWrite = async (execute: () => Promise<Response>) =>
+      await withCapsuleWriteIdempotency(
+        ctx,
+        {
+          workspaceId: capsule.workspaceId,
+          // The real body must be part of the fingerprint. With an empty one,
+          // reusing a key with DIFFERENT options (a different compatibility
+          // report, a different runner profile) replayed the first response
+          // instead of rejecting the mismatch, so the caller believed a plan
+          // ran that never did.
+          body: new Uint8Array(await request.clone().arrayBuffer()),
+        },
+        execute,
+      );
+    if (leaf === "restore" && segments.length === 3) {
+      if (method !== "POST") return methodNotAllowed("POST");
+      const restored =
+        await operations.capsules.restoreUninstalledCapsule(capsuleId);
+      return json({ capsule: publicCapsule(restored) });
+    }
     if (leaf === "plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       const body = await readJsonObject(request.clone()).catch(() => null);
@@ -211,19 +240,21 @@ export async function handleCapsules(
           ? { managedPublicBaseDomain: ctx.managedPublicBaseDomain }
           : {}),
       });
-      const response = await operations.createCapsulePlan(
-        capsuleId,
-        compatibilityReportId || runnerProfileId
-          ? {
-              ...(compatibilityReportId ? { compatibilityReportId } : {}),
-              ...(runnerProfileId ? { runnerProfileId } : {}),
-            }
-          : undefined,
-      );
-      return jsonStatus(
-        await publicPlanActionResponse(operations, response),
-        201,
-      );
+      return await idempotentWrite(async () => {
+        const response = await operations.createCapsulePlan(
+          capsuleId,
+          compatibilityReportId || runnerProfileId
+            ? {
+                ...(compatibilityReportId ? { compatibilityReportId } : {}),
+                ...(runnerProfileId ? { runnerProfileId } : {}),
+              }
+            : undefined,
+        );
+        return jsonStatus(
+          await publicPlanActionResponse(operations, response),
+          201,
+        );
+      });
     }
     if (leaf === "destroy-plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
@@ -235,31 +266,37 @@ export async function handleCapsules(
               body.runnerProfileId.trim()
             ? body.runnerProfileId.trim()
             : undefined;
-      const response = await operations.createCapsuleDestroyPlan(
-        capsuleId,
-        runnerProfileId ? { runnerProfileId } : undefined,
-      );
-      return jsonStatus(
-        await publicPlanActionResponse(operations, response),
-        201,
-      );
+      return await idempotentWrite(async () => {
+        const response = await operations.createCapsuleDestroyPlan(
+          capsuleId,
+          runnerProfileId ? { runnerProfileId } : undefined,
+        );
+        return jsonStatus(
+          await publicPlanActionResponse(operations, response),
+          201,
+        );
+      });
     }
     if (leaf === "drift-check" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      const response = await operations.createCapsuleDriftCheck(capsuleId);
-      return jsonStatus(
-        await publicPlanActionResponse(operations, response),
-        201,
-      );
+      return await idempotentWrite(async () => {
+        const response = await operations.createCapsuleDriftCheck(capsuleId);
+        return jsonStatus(
+          await publicPlanActionResponse(operations, response),
+          201,
+        );
+      });
     }
     if (leaf === "backups" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      const backup = await operations.backups.createBackup({
-        workspaceId: capsule.workspaceId,
-        capsuleId: capsule.id,
-        environment: capsule.environment,
+      return await idempotentWrite(async () => {
+        const backup = await operations.backups.createBackup({
+          workspaceId: capsule.workspaceId,
+          capsuleId: capsule.id,
+          environment: capsule.environment,
+        });
+        return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
       });
-      return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
     }
     if (leaf === "usage-summary" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
@@ -436,6 +473,7 @@ async function deleteCapsule(
   operations: ControlPlaneOperations,
   capsule: Capsule,
   capsuleId: string,
+  mode: string | null,
 ): Promise<Response> {
   if (capsule.status === "destroyed") {
     return jsonStatus(
@@ -446,6 +484,13 @@ async function deleteCapsule(
       200,
     );
   }
+  if (mode !== null && mode !== "immediate" && mode !== "scheduled") {
+    return errorJson(
+      "invalid_request",
+      "mode may only be 'scheduled' (default) or 'immediate'",
+      400,
+    );
+  }
   if (!capsuleHasAppliedState(capsule)) {
     return await abandonUnappliedCapsule({
       operations,
@@ -453,8 +498,28 @@ async function deleteCapsule(
       reason: "delete requested before first successful apply",
     });
   }
-  const response = await operations.createCapsuleDestroyPlan(capsuleId);
-  return jsonStatus(await publicPlanActionResponse(operations, response), 202);
+  if (mode === "immediate") {
+    const response = await operations.createCapsuleDestroyPlan(capsuleId);
+    return jsonStatus(
+      await publicPlanActionResponse(operations, response),
+      202,
+    );
+  }
+  // Safe default: the two-phase uninstall. Nothing is destroyed yet; the
+  // Capsule is restorable until scheduledDestroyAt.
+  const scheduled =
+    await operations.capsules.scheduleCapsuleUninstall(capsuleId);
+  return jsonStatus(
+    {
+      capsule: publicCapsule(scheduled),
+      uninstall: {
+        ...(scheduled.scheduledDestroyAt
+          ? { scheduledDestroyAt: scheduled.scheduledDestroyAt }
+          : {}),
+      },
+    },
+    202,
+  );
 }
 
 function capsuleHasAppliedState(capsule: Capsule): boolean {
@@ -597,7 +662,7 @@ async function createDependency(
   // The consumer is the path Capsule; resolve its Workspace so the edge is
   // created in the right Workspace (mirrors the §30 dependency-create handler).
   const consumer = await operations.capsules.getCapsule(consumerCapsuleId);
-  const consumerAuth = await requireWorkspaceAccess({
+  const consumerAuth = await requireResourceWorkspaceAccess({
     operations,
     store,
     workspaceId: consumer.workspaceId,
@@ -605,7 +670,7 @@ async function createDependency(
   });
   if (!consumerAuth.ok) return consumerAuth.response;
   const producer = await operations.capsules.getCapsule(producerCapsuleId);
-  const producerAuth = await requireWorkspaceAccess({
+  const producerAuth = await requireResourceWorkspaceAccess({
     operations,
     store,
     workspaceId: producer.workspaceId,

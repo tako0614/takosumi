@@ -113,6 +113,7 @@ import {
   publicCapsule,
   publicPlanActionResponse,
   publicRun,
+  requireResourceWorkspaceAccess,
   requireWorkspaceAccess,
   resolveProviderBindings,
 } from "./shared.ts";
@@ -165,7 +166,7 @@ export async function handleInstallConfigs(
     const installConfigId = decodeURIComponent(segments[1] ?? "");
     const config = await operations.capsules.getInstallConfig(installConfigId);
     if (config.workspaceId !== undefined) {
-      const auth = await requireWorkspaceAccess({
+      const auth = await requireResourceWorkspaceAccess({
         operations,
         store,
         workspaceId: config.workspaceId,

@@ -103,6 +103,64 @@ describe("layerGraph", () => {
     expect(result.layers).toEqual([]);
     expect(ids(result.cyclic)).toEqual(["x", "y"]);
   });
+
+  test("preserves input order within a layer and ignores duplicate edges", () => {
+    const graph: WorkspaceGraph = {
+      nodes: [node("b", "B"), node("a", "A"), node("sink")],
+      edges: [edge("a", "sink"), edge("a", "sink"), edge("b", "sink")],
+    };
+
+    const result = layerGraph(graph);
+
+    expect(result.layers[0]!.map((item) => item.capsuleId)).toEqual(["b", "a"]);
+    expect(result.layers[1]!.map((item) => item.capsuleId)).toEqual(["sink"]);
+    expect(result.producersByConsumer.get("sink")).toEqual(["A", "B"]);
+  });
+
+  test("keeps a missing-producer dependency and its downstream unresolved", () => {
+    const graph: WorkspaceGraph = {
+      nodes: [node("downstream"), node("blocked"), node("root")],
+      edges: [edge("missing", "blocked"), edge("blocked", "downstream")],
+    };
+
+    const result = layerGraph(graph);
+
+    expect(
+      result.layers.map((layer) => layer.map((item) => item.capsuleId)),
+    ).toEqual([["root"]]);
+    expect(result.cyclic.map((item) => item.capsuleId)).toEqual([
+      "downstream",
+      "blocked",
+    ]);
+  });
+
+  test("layers a reverse-ordered long chain with linear node visits", () => {
+    const count = 300;
+    let capsuleIdReads = 0;
+    const nodes = Array.from({ length: count }, (_, index) => {
+      const id = `node-${count - index - 1}`;
+      const value = node(id);
+      Object.defineProperty(value, "capsuleId", {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          capsuleIdReads += 1;
+          return id;
+        },
+      });
+      return value;
+    });
+    const edges = Array.from({ length: count - 1 }, (_, index) =>
+      edge(`node-${index}`, `node-${index + 1}`),
+    );
+
+    const result = layerGraph({ nodes, edges });
+
+    expect(result.layers).toHaveLength(count);
+    expect(result.layers.every((layer) => layer.length === 1)).toBe(true);
+    expect(result.cyclic).toEqual([]);
+    expect(capsuleIdReads).toBeLessThanOrEqual(3 * count);
+  });
 });
 
 describe("filterGraphForDependencyView", () => {

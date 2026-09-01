@@ -27,6 +27,14 @@ Git/OpenTofu control-plane operations. External providers continue to run
 through plain Stack execution. Takosumi owns that Stack's Run, state, Output,
 and audit records; the provider and its state still own provider-side objects.
 
+In ordinary BYOC, the Workspace/customer owns the vendor account, credential,
+and resulting resource. The path is `ProviderConnection → CredentialRecipe →
+ProviderBinding → run-scoped runner materialization → standard OpenTofu provider
+→ customer-owned resource`. Managed Takoform supply uses an external Takoserver
+Host connection, but Takosumi never receives or selects Takoserver's parent
+provider credential, provider installation, backend, capacity, WfP
+namespace/dispatcher, native identity, or managed Offering.
+
 ## Discovery
 
 Every Takosumi endpoint exposes discovery.
@@ -79,8 +87,9 @@ Authorization: Bearer <token>
 ```
 
 Each Takosumi endpoint publishes the session / bearer token model enabled by
-its operator through capabilities. Takosumi Cloud API keys are Takosumi
-Accounts personal access tokens. Endpoints with their own standard signing
+its operator through capabilities. The old Takosumi Cloud API-key wording is
+historical; current Accounts authentication uses personal access tokens.
+Endpoints with their own standard signing
 model, such as S3-compatible storage, use that protocol's signature instead.
 
 ### Accounts personal access tokens
@@ -144,9 +153,9 @@ documentation. Non-secret `providerConfig` and `moduleInputDefaults` may carry
 endpoint, region, or ordinary module defaults; credential-shaped fields are
 rejected and secret values must use ProviderConnection values/files.
 
-Every Stack route is under `/api/v1`. The `/v1` routes are the separate
-Resource, Interface, Form, and capability control surface. Mixing the two
-prefixes produces a 404 even when authentication is valid.
+Every Stack route is under `/api/v1`. The `/v1` routes are the separate legacy
+Resource/Form compatibility and current Interface/capability control surface.
+Mixing the two prefixes produces a 404 even when authentication is valid.
 
 The authoritative session-route inventory is
 `accounts/service/src/control-route-inventory.ts`; it currently contains 80
@@ -291,11 +300,12 @@ hostname first-come-first-served.
 Managed hostname reservations and vanity slots belong to the Capsule lifetime.
 A successful Capsule destroy releases them; deleting an individual route does
 not. User-owned custom domains use a separate verified-domain lifecycle rather
-than this mode. In Takosumi Cloud that verification and certificate lifecycle is
-not implemented, so the feature is Planned and requests against Cloud-managed
-routes fail closed. This does not prevent an ordinary OpenTofu URL/route variable
-from being passed to a BYOC provider. The setting selects control-plane
-allocation policy; it does not bypass or replace the OpenTofu variables.
+than this mode. Verified-domain and certificate lifecycle is the responsibility
+of each operator/host; the retired Takosumi Cloud does not provide current
+availability or route authority. This does not prevent an ordinary OpenTofu
+URL/route variable from being passed to a BYOC provider. The setting selects
+control-plane allocation policy; it does not bypass or replace the OpenTofu
+variables.
 
 A Run stores:
 
@@ -340,10 +350,13 @@ a user-reviewed plan and does not independently start another auto-update
 plan/apply. Continue only after the returned SourceSyncRun is `succeeded` and
 its `sourceSnapshotId` is present in the Source snapshot list.
 
-## Generic Offering catalog, availability, and selection API
+## Generic Offering catalog (legacy/operator-only)
 
-An OSS operator can publish an exact noncommercial Offering catalog. A principal
-can query availability and resolve an exact selection:
+The following routes still exist in the current implementation, but they are not
+a supported Takosumi Core authority. They are a legacy/operator-only
+implementation conformance gap, unsupported for new integrations, and a
+removal-target migration surface. Managed-service Offerings and availability are
+owned by Takoserver.
 
 ```http
 POST /v1/offering-catalogs
@@ -353,20 +366,11 @@ POST /v1/offering-availability/query
 POST /v1/offering-selections/resolve
 ```
 
-Each Offering pins an exact `catalog id/version + offering id/version`, an open
-subject `type + ref + version + digest`, exact requirement references, audience,
-profile, region, maturity, and active state. The API returns that exact choice
-as an `OfferingSelection`. It pins the subject and requirements, resolver id,
-resolution fingerprint, and resolution time.
-There is no `latest` fallback. Unknown subject types, absent resolvers, inactive
-catalogs/Offerings, audience mismatches, and stale requirements fail closed. A
-resolver rechecks the exact subject and requirement evidence before returning a
-selection.
-
-OSS Offering and selection state contains no price, SKU, payment, manager,
-credentials, raw capacity, SLA, or support. A hosted service can attach those
-details through a separate extension after Core has returned an exact
-selection. It does not replace the OSS catalog or selection engine.
+Existing responses pin an exact catalog/Offering version, subject, requirements,
+audience, and resolver evidence as a compatibility wire. Do not interpret them as
+new authoring, managed capacity, pricing, SKU, payment, credential, SLA, or
+support authority. New users and integrations must use a Git module with the
+ordinary ProviderConnection/ProviderBinding path.
 
 
 ## OIDC / Workload Identity
@@ -386,8 +390,9 @@ public surface. Core does not expose fixed AWS, GCP, or Kubernetes federation
 routes or credential kinds. A future workload-identity surface must use generic
 OIDC principals, Resource Credential/Policy, or explicit Credential Recipe
 pre-run actions and ship only with matching implementation and discovery.
-Operator/Cloud may add Enterprise SSO, SCIM, and commercial audit export through
-that generic seam.
+Takosumi Hosted may add retail/client composition through a generic seam, while
+Takoserver adds managed-supply contracts. Authority for Enterprise SSO, SCIM,
+and commercial audit export is explicit in the owning external product.
 
 A Capsule-projected public OIDC client can declare required scopes through
 `installExperience.oidc_client.scopes`; `openid` is mandatory. A client id is
@@ -435,12 +440,11 @@ Cloudflare resources use a normal ProviderConnection and plain Stack flow.
 
 Compatibility profiles do not create hostnames implicitly. Runtime routes use a
 canonical `http.route` Interface plus InterfaceBinding, while hostname
-ownership belongs to the OSS reservation authority or the Operator/Cloud
+ownership belongs to the OSS reservation authority or the operator/host
 VerifiedDomain lifecycle. Routing caches and backend state are never hostname
-ownership authority.
-
-Takosumi Cloud-specific endpoint examples live in
-[Cloud endpoints](https://app.takosumi.com/docs/en/endpoints).
+ownership authority. Takosumi Hosted retail/client-composition endpoints and
+Takoserver managed supply endpoints are external contracts, not this OSS API's
+authority.
 
 ## Error Shape
 

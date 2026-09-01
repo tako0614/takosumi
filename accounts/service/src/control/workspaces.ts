@@ -141,6 +141,7 @@ import {
   requireWorkspaceAccess,
   resolveProviderBindings,
 } from "./shared.ts";
+import { withCapsuleWriteIdempotency } from "./idempotency.ts";
 import {
   booleanValue,
   connectionCredentialFiles,
@@ -180,6 +181,7 @@ import { ensureTakosumiAccountsOidcForCapsule } from "./capsule-oidc.ts";
 import {
   adoptRepoOwnedInstallConfig,
   hydrateRepoOwnedStoreConfig,
+  neutralInstallPresentation,
   latestSourceSnapshotForSource,
 } from "./repo-owned-install-config.ts";
 import { handleWorkspaceProjects } from "./projects.ts";
@@ -432,14 +434,25 @@ export async function handleWorkspaces(
       if (method === "GET")
         return await listWorkspaceCapsules(operations, workspaceId, url);
       if (method === "POST") {
-        return await createCapsule(
-          request,
-          operations,
-          store,
-          ctx.issuer,
-          ctx.session,
-          workspaceId,
-          ctx.managedPublicBaseDomain,
+        // The install POST is the highest-cost duplicate in the product: a
+        // retried "add this service" would otherwise create a SECOND Capsule
+        // with real provider resources behind it.
+        const installBody = new Uint8Array(
+          await request.clone().arrayBuffer(),
+        );
+        return await withCapsuleWriteIdempotency(
+          ctx,
+          { workspaceId, body: installBody },
+          () =>
+            createCapsule(
+              request,
+              operations,
+              store,
+              ctx.issuer,
+              ctx.session,
+              workspaceId,
+              ctx.managedPublicBaseDomain,
+            ),
         );
       }
       return methodNotAllowed("GET, POST");
@@ -1503,6 +1516,17 @@ async function createCapsule(
     storeMetadata,
     modulePath:
       repositoryDerivedModule.modulePath ?? modulePath,
+    // A Git-URL install has no listing to merge onto, so give the repository's
+    // own declared presentation a neutral base to overwrite. An app that
+    // names itself must look the same however the user reached it.
+    ...(storeMetadata
+      ? {}
+      : {
+          presentationFallback: neutralInstallPresentation({
+            gitUrl: source.url,
+            capsuleName: name,
+          }),
+        }),
   });
   const resolvedStoreMetadata = hydratedRepoConfig.storeMetadata;
   const resolvedModulePath = hydratedRepoConfig.modulePath;
@@ -1658,6 +1682,18 @@ async function createCapsule(
     installingPrincipalId: session.subject,
     ...(autoUpdate ? { autoUpdate: true } : {}),
   });
+  // Scheduled source sync exists to notice new commits FOR an installed
+  // Capsule. Enabling it at Source creation meant every abandoned install
+  // attempt left a Source the scheduler re-synced forever; enabling it here
+  // ties it to the Capsule that gives it a purpose, once, for every client.
+  // Best-effort: a Capsule that already exists must not be undone by this.
+  if (!source.autoSync) {
+    try {
+      await operations.patchSource(sourceId, { autoSync: true });
+    } catch {
+      // The next update check still works; only scheduled polling is delayed.
+    }
+  }
   if (resolvedInstallConfig && issuer) {
     try {
       await ensureTakosumiAccountsOidcForCapsule({
@@ -1906,6 +1942,23 @@ async function workspaceRuns(
       "limit must be a positive integer",
       400,
     );
+  }
+  const cursor = url.searchParams.get("cursor") ?? undefined;
+  // Keyset pagination when the controller supports it; `nextCursor` is
+  // absent on the final page. Legacy controllers fall back to first-page-only.
+  if (operations.listRunsPage) {
+    const page = await operations.listRunsPage(workspaceId, {
+      ...(limit ? { limit } : {}),
+      ...(cursor ? { cursor } : {}),
+    });
+    return json({
+      runs: await Promise.all(
+        page.runs.map((run) => publicRun(operations, run)),
+      ),
+      ...(page.nextCursor === undefined
+        ? {}
+        : { nextCursor: page.nextCursor }),
+    } satisfies ListRunsResponse);
   }
   const runs = await operations.listRuns(workspaceId, limit ? { limit } : {});
   return json({

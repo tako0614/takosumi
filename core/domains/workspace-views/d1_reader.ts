@@ -18,6 +18,7 @@ import type {
   WorkspaceResourceSummary,
 } from "./service.ts";
 import type { PublicCapsule } from "takosumi-contract/capsules";
+import { throwIfAborted } from "./abort.ts";
 
 export class D1WorkspaceResourcesProjectionReader
   implements WorkspaceResourcesProjectionReader
@@ -133,8 +134,4 @@ function workloadSql(hasCursor: boolean): string {
   where space_id = ? and status <> 'destroyed'
     ${hasCursor ? "and (created_at > ? or (created_at = ? and id > ?))" : ""}
   order by created_at asc, id asc limit ?`;
-}
-
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
 }

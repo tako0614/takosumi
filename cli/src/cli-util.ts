@@ -59,40 +59,6 @@ export function actorIdentityValue(value: unknown): string | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
-export function stringArrayValue(
-  value: unknown,
-  label: string,
-): readonly string[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${label} must be an array`);
-  }
-  const output: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string" || entry.length === 0) {
-      throw new TypeError(`${label} must contain non-empty strings`);
-    }
-    output.push(entry);
-  }
-  return output;
-}
-
-export function optionalStringRecord(
-  value: unknown,
-  label: string,
-): Record<string, string> | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value)) throw new TypeError(`${label} must be an object`);
-  const output: Record<string, string> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== "string" || entry.length === 0) {
-      throw new TypeError(`${label}.${key} must be a non-empty string`);
-    }
-    output[key] = entry;
-  }
-  return output;
-}
-
 export function parseJson(text: string): unknown {
   try {
     return JSON.parse(text);

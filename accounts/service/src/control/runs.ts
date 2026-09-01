@@ -3,6 +3,7 @@
  * control routes: read, approve, apply, logs/events/cancel/cost, grouped-run
  * read/approve. Extracted from `control-routes.ts` (P3 god-file split).
  */
+import { log } from "../../../../core/shared/log.ts";
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
@@ -111,6 +112,7 @@ import {
   publicCapsule,
   publicPlanActionResponse,
   publicRun,
+  requireResourceWorkspaceAccess,
   requireWorkspaceAccess,
   resolveProviderBindings,
 } from "./shared.ts";
@@ -153,7 +155,7 @@ export async function handleRuns(
   if (segments[0] === "runs" && segments.length >= 2) {
     const runId = decodeURIComponent(segments[1] ?? "");
     const run = await operations.getRun(runId);
-    const auth = await requireWorkspaceAccess({
+    const auth = await requireResourceWorkspaceAccess({
       operations,
       store,
       workspaceId: run.workspaceId,
@@ -231,9 +233,143 @@ function runSummaryKey(
     : "";
 }
 
-/** SSE stream of a run's status. Reads the in-process controller projection and
- * emits the run only when it changes; keeps the connection warm with comments;
- * closes on a terminal status or after a safety cap (the client reconnects). */
+// ---------------------------------------------------------------------------
+// Shared SSE fan-out (B-W4)
+// ---------------------------------------------------------------------------
+//
+// One poll loop per (operations, runId) reads the run projection and fans the
+// change out to every subscribed viewer, replacing the per-viewer D1 read
+// loop (N viewers used to cost N reads per tick; now 1). Each subscriber is
+// periodically RE-authorized inside the loop so a viewer whose workspace
+// membership is revoked mid-stream is disconnected instead of riding the
+// stream to terminal.
+
+const SSE_MIN_MS = 2500;
+const SSE_MAX_INTERVAL_MS = 8000;
+/** Per-subscriber lifetime cap; the client reconnects. */
+const SSE_SUBSCRIBER_MAX_MS = 8 * 60 * 1000;
+/** Consecutive projection-read failures tolerated before the hub gives up. */
+const SSE_READ_FAILURE_LIMIT = 3;
+/** How often each subscriber's workspace access is re-verified in-loop. */
+const SSE_REAUTHZ_INTERVAL_MS = 60 * 1000;
+
+interface RunStreamSubscriber {
+  enqueue(frame: Uint8Array): boolean;
+  close(): void;
+  reauthorize(): Promise<boolean>;
+  readonly expiresAtMs: number;
+  lastReauthzAtMs: number;
+}
+
+interface RunStreamHub {
+  readonly subscribers: Set<RunStreamSubscriber>;
+  /** Latest public projection the loop observed (joiners get it instantly). */
+  last: Awaited<ReturnType<typeof publicRun>>;
+  running: boolean;
+}
+
+const runStreamHubsByOperations = new WeakMap<
+  object,
+  Map<string, RunStreamHub>
+>();
+
+const sseEncoder = new TextEncoder();
+
+function sseDataFrame(payload: unknown): Uint8Array {
+  return sseEncoder.encode(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+const SSE_PING_FRAME = new TextEncoder().encode(`: ping\n\n`);
+
+/** Value key for live apply progress, so a new count pushes a frame. */
+function runProgressKey(
+  progress:
+    | { readonly completed?: number; readonly inFlight?: number }
+    | undefined,
+): string {
+  return progress ? `${progress.completed ?? 0}:${progress.inFlight ?? 0}` : "";
+}
+
+function isTerminalRunStatus(status: string): boolean {
+  return TERMINAL_RUN_STATUSES.has(status);
+}
+
+async function runStreamHubLoop(
+  operations: ControlDispatchContext["operations"],
+  runId: string,
+  hub: RunStreamHub,
+  hubs: Map<string, RunStreamHub>,
+): Promise<void> {
+  let interval = SSE_MIN_MS;
+  let consecutiveReadFailures = 0;
+  try {
+    while (hub.subscribers.size > 0 && !isTerminalRunStatus(hub.last.status)) {
+      await new Promise((resolve) => setTimeout(resolve, interval));
+      if (hub.subscribers.size === 0) break;
+      let current: Awaited<ReturnType<typeof publicRun>>;
+      try {
+        current = await publicRun(operations, await operations.getRun(runId));
+        consecutiveReadFailures = 0;
+      } catch (cause) {
+        // A single transient store error used to disconnect every viewer of
+        // this run, silently. Ride out a few, then give up loudly so the
+        // failure is diagnosable instead of looking like a normal close.
+        consecutiveReadFailures += 1;
+        if (consecutiveReadFailures < SSE_READ_FAILURE_LIMIT) continue;
+        log.warn("control.run_stream.read_failed", {
+          runId,
+          failures: consecutiveReadFailures,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+        break;
+      }
+      const changed =
+        current.status !== hub.last.status ||
+        current.heartbeatAt !== hub.last.heartbeatAt ||
+        runSummaryKey(current.summary) !== runSummaryKey(hub.last.summary) ||
+        runProgressKey(current.applyProgress) !==
+          runProgressKey(hub.last.applyProgress);
+      hub.last = current;
+      const frame = changed ? sseDataFrame({ run: current }) : SSE_PING_FRAME;
+      interval = changed
+        ? SSE_MIN_MS
+        : Math.min(SSE_MAX_INTERVAL_MS, Math.round(interval * 1.4));
+      const now = Date.now();
+      for (const subscriber of [...hub.subscribers]) {
+        if (now >= subscriber.expiresAtMs) {
+          hub.subscribers.delete(subscriber);
+          subscriber.close();
+          continue;
+        }
+        if (now - subscriber.lastReauthzAtMs >= SSE_REAUTHZ_INTERVAL_MS) {
+          subscriber.lastReauthzAtMs = now;
+          let stillAllowed = false;
+          try {
+            stillAllowed = await subscriber.reauthorize();
+          } catch {
+            stillAllowed = false;
+          }
+          if (!stillAllowed) {
+            hub.subscribers.delete(subscriber);
+            subscriber.close();
+            continue;
+          }
+        }
+        if (!subscriber.enqueue(frame)) {
+          hub.subscribers.delete(subscriber);
+          subscriber.close();
+        }
+      }
+    }
+  } finally {
+    for (const subscriber of hub.subscribers) subscriber.close();
+    hub.subscribers.clear();
+    hub.running = false;
+    if (hubs.get(runId) === hub) hubs.delete(runId);
+  }
+}
+
+/** SSE stream of a run's status backed by the shared per-run fan-out. */
 function runStatusStream(
   ctx: ControlDispatchContext,
   runId: string,
@@ -241,74 +377,70 @@ function runStatusStream(
     ReturnType<ControlDispatchContext["operations"]["getRun"]>
   >,
 ): Response {
-  const { operations, request } = ctx;
-  const encoder = new TextEncoder();
-  // Cost guard: this is a per-viewer server-side read loop, so keep the D1
-  // reads bounded — start modest, back off while nothing changes (deploys take
-  // minutes), reset to responsive on a change, and hard-cap the lifetime so a
-  // stream can never leak into an unbounded read loop (the client reconnects).
-  const MIN_MS = 2500;
-  const MAX_INTERVAL_MS = 8000;
-  const MAX_MS = 8 * 60 * 1000;
-  let cancelled = false;
-
+  const { operations, store, request, session } = ctx;
+  const workspaceId = initialRun.workspaceId;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const onAbort = () => {
-        cancelled = true;
-      };
-      request.signal.addEventListener("abort", onAbort);
-      const send = (payload: unknown) => {
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify(payload)}\n\n`),
-        );
-      };
-      const isTerminal = (status: string) => TERMINAL_RUN_STATUSES.has(status);
-      try {
-        let last = await publicRun(operations, initialRun);
-        send({ run: last });
-        const startedAt = Date.now();
-        let interval = MIN_MS;
-        while (
-          !cancelled &&
-          !isTerminal(last.status) &&
-          Date.now() - startedAt < MAX_MS
-        ) {
-          await new Promise((resolve) => setTimeout(resolve, interval));
-          if (cancelled) break;
-          let current;
-          try {
-            current = await publicRun(
-              operations,
-              await operations.getRun(runId),
-            );
-          } catch {
-            break;
-          }
-          if (
-            current.status !== last.status ||
-            current.heartbeatAt !== last.heartbeatAt ||
-            runSummaryKey(current.summary) !== runSummaryKey(last.summary)
-          ) {
-            send({ run: current });
-            last = current;
-            interval = MIN_MS; // responsive again right after a change
-          } else {
-            controller.enqueue(encoder.encode(`: ping\n\n`));
-            interval = Math.min(MAX_INTERVAL_MS, Math.round(interval * 1.4));
-          }
-        }
-      } finally {
-        request.signal.removeEventListener("abort", onAbort);
-        try {
-          controller.close();
-        } catch {
-          /* already closed */
-        }
+      const initial = await publicRun(operations, initialRun);
+      // A terminal run needs no hub: emit the snapshot and close.
+      if (isTerminalRunStatus(initial.status)) {
+        controller.enqueue(sseDataFrame({ run: initial }));
+        controller.close();
+        return;
       }
-    },
-    cancel() {
-      cancelled = true;
+      let hubs = runStreamHubsByOperations.get(operations);
+      if (!hubs) {
+        hubs = new Map();
+        runStreamHubsByOperations.set(operations, hubs);
+      }
+      let hub = hubs.get(runId);
+      if (!hub) {
+        hub = { subscribers: new Set(), last: initial, running: false };
+        hubs.set(runId, hub);
+      }
+      let closed = false;
+      const subscriber: RunStreamSubscriber = {
+        enqueue: (frame) => {
+          if (closed) return false;
+          try {
+            controller.enqueue(frame);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        close: () => {
+          if (closed) return;
+          closed = true;
+          try {
+            controller.close();
+          } catch {
+            /* already closed */
+          }
+        },
+        reauthorize: async () => {
+          const auth = await requireWorkspaceAccess({
+            operations,
+            store,
+            workspaceId,
+            session,
+          });
+          return auth.ok;
+        },
+        expiresAtMs: Date.now() + SSE_SUBSCRIBER_MAX_MS,
+        lastReauthzAtMs: Date.now(),
+      };
+      request.signal.addEventListener("abort", () => {
+        hub?.subscribers.delete(subscriber);
+        subscriber.close();
+      });
+      // The joiner sees the hub's freshest snapshot immediately.
+      subscriber.enqueue(sseDataFrame({ run: hub.last }));
+      hub.subscribers.add(subscriber);
+      if (!hub.running) {
+        hub.running = true;
+        void runStreamHubLoop(operations, runId, hub, hubs);
+      }
     },
   });
 
@@ -384,7 +516,7 @@ async function applyPlanRun(
   planRunId: string,
 ): Promise<Response> {
   const { planRun } = await operations.getPlanRun(planRunId);
-  const auth = await requireWorkspaceAccess({
+  const auth = await requireResourceWorkspaceAccess({
     operations,
     store,
     workspaceId: planRun.workspaceId,

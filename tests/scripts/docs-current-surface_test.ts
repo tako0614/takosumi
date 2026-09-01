@@ -43,6 +43,9 @@ const REQUIRED_PUBLIC_DOCS = [
   "docs/en/reference/operator-control-mcp.md",
   "docs/en/reference/app-handoff.md",
   "docs/en/reference/glossary.md",
+] as const;
+
+const REQUIRED_ARCHIVED_APP_DOCS = [
   "app-docs/index.md",
   "app-docs/resources.md",
   "app-docs/endpoints.md",
@@ -63,6 +66,7 @@ const REQUIRED_INTERNAL_DOCS = [
   "docs/internal/final-plan.md",
   "docs/internal/core-spec.md",
   "docs/internal/core-conformance.md",
+  "docs/internal/architecture.md",
 ] as const;
 
 const RETIRED_DOC_PATHS = [
@@ -152,6 +156,10 @@ test("Takosumi public docs are rebuilt around the current public surface", async
     const entry = await stat(new URL(path, ROOT));
     assert.equal(entry.isFile(), true, `missing ${path}`);
   }
+  for (const path of REQUIRED_ARCHIVED_APP_DOCS) {
+    const entry = await stat(new URL(path, ROOT));
+    assert.equal(entry.isFile(), true, `missing archived app doc ${path}`);
+  }
 
   for (const path of RETIRED_DOC_PATHS) {
     await assert.rejects(
@@ -174,8 +182,8 @@ test("Takosumi public docs are rebuilt around the current public surface", async
   assert.match(docs, /plain OpenTofu(?:\s*\/\s*Terraform)? (?:module|source)/);
   assert.match(docs, /compatibility_profiles|compatibilityProfiles/);
   assert.match(docs, /ordinary provider|通常の provider|通常の OpenTofu provider/);
-  assert.match(docs, /provider control plane|provider graph/);
-  assert.match(docs, /second resource ledger|別の resource ledger/);
+  assert.match(docs, /provider[- ]neutral|provider configuration|provider selection/i);
+  assert.match(docs, /second resource ledger|別の resource ledger|第二の Resource ledger/iu);
   assert.doesNotMatch(docs, /Compatibility API framework/);
   assert.doesNotMatch(docs, /Resource Shape API/);
   for (const concept of FINAL_PUBLIC_CONCEPTS) {
@@ -183,46 +191,41 @@ test("Takosumi public docs are rebuilt around the current public surface", async
   }
 });
 
-test("hosted Cloud docs keep lifecycle provider-owned", async () => {
-  for (const path of ["app-docs/resources.md", "app-docs/en/resources.md"]) {
+test("app docs are clearly archived and do not claim current Cloud authority", async () => {
+  for (const path of REQUIRED_ARCHIVED_APP_DOCS) {
     const doc = await readText(new URL(path, ROOT));
-    assert.match(doc, /required_providers/);
-    assert.match(doc, /provider (?:control plane|graph)/);
-    assert.match(doc, /authenticated[\s\S]{0,120}catalog|認証済み[\s\S]{0,120}catalog/i);
-    assert.doesNotMatch(doc, /takosumi\.edge_worker|takosumi:edge_worker/);
-    assert.doesNotMatch(doc, /TargetPool|NativeResource|ResolutionLock/);
-  }
-});
-
-test("hosted Cloud availability stays catalog-driven and separate from Form maturity", async () => {
-  const indexes = await Promise.all(
-    ["app-docs/index.md", "app-docs/en/index.md"].map((path) =>
-      readText(new URL(path, ROOT)),
-    ),
-  );
-  const pricing = await readText(new URL("app-docs/en/pricing.md", ROOT));
-  const resources = await readText(new URL("app-docs/en/resources.md", ROOT));
-  const endpoints = await readText(new URL("app-docs/en/endpoints.md", ROOT));
-
-  for (const index of indexes) {
-    assert.match(index, /Pre-GA/);
-    assert.match(index, /Form maturity/);
-    assert.match(index, /authenticated Cloud catalog|認証済み Cloud catalog/);
-    assert.match(index, /`available`/);
-    assert.doesNotMatch(
-      index,
-      /seven\s+Stable|7\s*つの Stable|eight offerings/,
+    const notice = doc.slice(0, 1_200);
+    assert.match(
+      notice,
+      /Historical archive|歴史資料（アーカイブ）/iu,
+      `${path} must carry the archive marker near the title`,
     );
-    assert.doesNotMatch(index, /\|\s*(?:Stable|Preview)\s*\|/);
+    assert.match(
+      notice,
+      /not current authority|現行の正本ではありません/iu,
+      `${path} must say that it is not current authority`,
+    );
+    assert.match(
+      notice,
+      /(?:退役した[\s>]*|retired[\s>]+)Takosumi Cloud|Takosumi Cloud[\s\S]{0,300}(?:retired|退役|historical|歴史)/iu,
+      `${path} must identify retired Takosumi Cloud`,
+    );
+    assert.match(
+      notice,
+      /(?:not current (?:availability|pricing|SLA|support|production)|(?:availability|pricing|SLA|support)[\s\S]{0,180}(?:not current authority|current authority ではありません|示しません)|現行サービスの根拠に使わない)/iu,
+      `${path} must deny current Cloud availability/pricing/SLA/support authority`,
+    );
+    assert.match(
+      notice,
+      /Takosumi Hosted[\s\S]{0,320}(?:retail|commerce|client)/iu,
+      `${path} must send current retail/client docs to Takosumi Hosted`,
+    );
+    assert.match(
+      notice,
+      /Takoserver[\s\S]{0,360}(?:managed supply|capacity|provider credential|Offerings?)|(?:managed supply|capacity|provider credential|Offerings?)[\s\S]{0,360}Takoserver/iu,
+      `${path} must send managed supply authority to Takoserver`,
+    );
   }
-
-  assert.match(pricing, /unpriced meter, inactive catalog, missing manager/);
-  assert.match(resources, /hard-coded resource list/);
-  assert.match(resources, /unpublished candidate is\s+never marked available/);
-  assert.match(endpoints, /data paths?, not creation APIs?|not an object lifecycle API/);
-  assert.match(endpoints, /\/compat\/s3\/v1/);
-  assert.match(endpoints, /\/gateway\/ai\/v1/);
-  assert.doesNotMatch(endpoints, /Resource Shape|TargetPool|NativeResource/);
 });
 
 test("Form package operations require exact Host Support facts, not retired admission authority", async () => {
@@ -231,15 +234,19 @@ test("Form package operations require exact Host Support facts, not retired admi
   );
   assert.match(runbook, /superseded/);
   assert.match(runbook, /(?:does not|no longer) host(?:s)? a Form Registry/);
-  assert.match(runbook, /Takosumi Cloud or another external\s+Host/);
+  assert.match(runbook, /Takoserver\s+or\s+another\s+external\s+Host/);
   assert.match(runbook, /exact `FormRef` and `packageDigest`/);
   assert.doesNotMatch(runbook, /exact `FormActivation` with principal audience/);
 });
 
-test("public docs explain generic OSS Offering selection without Cloud binding internals", async () => {
+test("public docs mark Generic Offering and Resource/Form Host as migration gaps", async () => {
   const paths = [
     "README.md",
     "README.en.md",
+    "docs/concepts/boundaries.md",
+    "docs/en/concepts/boundaries.md",
+    "docs/concepts/resources.md",
+    "docs/en/concepts/resources.md",
     "docs/reference/api.md",
     "docs/en/reference/api.md",
     "docs/reference/glossary.md",
@@ -253,20 +260,26 @@ test("public docs explain generic OSS Offering selection without Cloud binding i
   );
 
   const combined = docs.map(({ text }) => text).join("\n");
-  assert.match(combined, /OfferingSelection/);
-  assert.doesNotMatch(combined, /CommercialOfferingBinding/);
-  for (const { path, text } of docs) {
-    assert.doesNotMatch(
-      text,
-      /ServiceOffering/,
-      `${path} restored ServiceOffering`,
-    );
-  }
-  const api =
-    docs.find((doc) => doc.path === "docs/en/reference/api.md")?.text ?? "";
-  assert.match(api, /POST \/v1\/offering-catalogs/);
-  assert.match(api, /POST \/v1\/offering-availability\/query/);
-  assert.match(api, /POST \/v1\/offering-selections\/resolve/);
+  assert.match(
+    combined,
+    /Generic Offering[\s\S]{0,360}(?:not a supported|not .*Core|conformance gap|migration-only)/iu,
+  );
+  assert.match(
+    combined,
+    /Resource Shape[\s\S]{0,300}(?:migration internals|migration-only|not a supported)/iu,
+  );
+  assert.match(
+    combined,
+    /Takoserver[\s\S]{0,360}(?:managed(?:-service)? Offering|managed supply)/iu,
+  );
+  assert.match(
+    combined,
+    /Takosumi Hosted[\s\S]{0,260}(?:retail|commerce|client composition)/iu,
+  );
+  assert.doesNotMatch(
+    combined,
+    /Generic Offering(?: catalog)? is (?:a )?supported (?:Core )?(?:authority|surface)/iu,
+  );
 });
 
 test("self-hosted Takos keeps Takosumi control-plane services outside the product worker", async () => {
@@ -344,13 +357,32 @@ test("Takosumi internal authority docs stay outside the public docs surface", as
   );
   assert.match(productGoal, /active product destination and definition of done/);
   assert.match(productGoal, /not a\s+contract[\s\S]*roadmap\/backlog/);
-  assert.match(productGoal, /current public Takoform contract/);
-  assert.match(productGoal, /source candidate[\s\S]*isolated staging/);
-  assert.match(productGoal, /Production[\s\S]*immutable published identity/);
-  assert.match(productGoal, /self-host[\s\S]*hosted Cloud/);
+  assert.match(productGoal, /(?:current )?public Takoform contract/);
+  assert.match(productGoal, /source candidate[\s\S]*as a Registry release/);
+  assert.match(productGoal, /staging before production/);
+  assert.match(productGoal, /self-host[\s\S]*(?:Takosumi Hosted|Takoserver)/i);
   assert.match(productGoal, /Core Spec/);
-  assert.match(productGoal, /Cloud GA smoke/);
+  assert.match(productGoal, /Takosumi\s+Cloud[\s\S]{0,80}retired\s+historical identity/);
   assert.doesNotMatch(productGoal, /Final Plan.*current|authoritative.*roadmap/i);
+
+  const context = await readText(new URL("CONTEXT.md", ROOT));
+  assert.match(context, /BYOC[\s\S]{0,240}customer owns the vendor account and credential/i);
+  assert.match(context, /Takoserver is not part of a BYOC path/i);
+  assert.match(context, /Takoserver Host[\s\S]{0,360}(?:managed-service Offering|Workers for Platforms)/i);
+
+  const architecture = await readText(
+    new URL("docs/internal/architecture.md", ROOT),
+  );
+  assert.match(architecture, /customer BYOC control plane/i);
+  assert.match(
+    architecture,
+    /Generic Offering authority[\s\S]{0,500}(?:deletion\/migration custody|conformance gap)/iu,
+  );
+  assert.match(
+    architecture,
+    /Resource\/Form lifecycle[\s\S]{0,500}(?:migration|Freeze new desired state)/iu,
+  );
+  assert.match(architecture, /managed customer `ModuleWorker`[\s\S]{0,260}Takoserver/i);
 
   const historicalFormEvidence = await readText(
     new URL("docs/internal/form-lifecycle-and-host-evidence.md", ROOT),
@@ -363,8 +395,11 @@ test("Takosumi internal authority docs stay outside the public docs surface", as
     new URL("docs/internal/final-plan.md", ROOT),
   );
   assert.match(finalPlan, /historical planning record|superseded/);
-  assert.match(finalPlan, /present Takosumi OSS contract is \[Core Spec\]/);
+  assert.match(finalPlan, /present contract is \[Core Spec\]|current Takosumi OSS contract/);
   assert.match(finalPlan, /TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1/);
+  assert.match(finalPlan, /Generic Offering[\s\S]{0,260}(?:conformance gap|migration-only)/i);
+  assert.match(finalPlan, /Takosumi Hosted[\s\S]{0,120}retail/i);
+  assert.match(finalPlan, /Takosumi\s+Cloud[\s\S]{0,80}retired\s+historical identity/i);
   assert.doesNotMatch(finalPlan, /authoritative Takosumi product direction/);
   assert.doesNotMatch(finalPlan, /## 11\.|## 14\./);
 });
@@ -398,7 +433,7 @@ test("core spec names the final OSS model and excludes operator-provided capacit
       `missing ${concept}`,
     );
   }
-  assert.match(coreSpec, /Provider Connection/);
+  assert.match(coreSpec, /ProviderConnection/);
   assert.match(coreSpec, /CredentialRecipe/);
   assert.match(coreSpec, /ProviderBinding/);
   assert.match(coreSpec, /StateVersion storage and locking/);
@@ -408,13 +443,13 @@ test("core spec names the final OSS model and excludes operator-provided capacit
   assert.match(coreSpec, /invoice \/ payment integration/);
   assert.match(coreSpec, /rated billing and payment enforcement/);
   assert.match(coreSpec, /operator-provided deployment target capacity/);
-  assert.match(coreSpec, /official Takosumi native resource internals/);
+  assert.match(coreSpec, /Takoserver native managed-resource identities or internals/);
   assert.match(coreSpec, /official SLA \/ support \/ abuse tooling/);
-  assert.match(coreSpec, /one supported\s+Git\/OpenTofu\/Terraform deployment flow/);
+  assert.match(coreSpec, /one supported\s+Git\/OpenTofu\/Terraform deployment\s+flow/);
   assert.match(coreSpec, /any runner-installable OpenTofu\/Terraform\s+provider/);
   assert.match(coreSpec, /Takoform is an ordinary external provider/);
   assert.match(coreSpec, /does not host a Form Registry/);
-  assert.match(coreSpec, /Takosumi Cloud or another external Host/);
+  assert.match(coreSpec, /Takoserver[\s\S]{0,180}external\s+Host/);
   assert.match(coreSpec, /TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1/);
   assert.match(coreSpec, /recognized but retired operations return\s+`410`/);
   assert.doesNotMatch(coreSpec, /Final Plan.*current direction|Final Plan.*authoritative/);
@@ -442,8 +477,11 @@ test("Service Form migration docs keep portable identity separate from the old R
     await readText(new URL("docs/operations/exact-formref-migration.md", ROOT)),
     /old Resource wire-to-FormRef mapping remains\s+migration data/,
   );
-  assert.match(conformance, /Takoform owns portable Form definitions/);
-  assert.match(conformance, /No first-party provider source, release, custody, or public mirror lane exists/);
+  assert.match(conformance, /Takoform owns portable Form(?: definitions|\/provider semantics| semantics)/);
+  assert.match(
+    conformance,
+    /Takosumi has no parent Host credential,[\s\S]{0,220}(?:provider installation|backend|capacity|WfP namespace|native identity)/iu,
+  );
 });
 
 test("current docs keep the legacy drain bounded and externalize Form hosting", async () => {
@@ -466,7 +504,7 @@ test("current docs keep the legacy drain bounded and externalize Form hosting", 
   assert.match(combined, /default(?:s)?[^\n]*`404`|`404`[^\n]*default/s);
   assert.match(combined, /discovery[^\n]*(?:unavailable|remain unavailable)/i);
   assert.match(combined, /writes[^\n]*(?:unavailable|remain unavailable|disabled)/i);
-  assert.match(combined, /Takosumi Cloud (?:or another external )?Host/i);
+  assert.match(combined, /Takoserver[\s\S]{0,240}external\s+Host|external\s+Host[\s\S]{0,240}ordinary provider/i);
   assert.match(combined, /ordinary provider/i);
 
   const config = docs.find(({ path }) => path === "docs/reference/configuration.md")?.text ?? "";
@@ -491,7 +529,7 @@ test("workspace packages stay private source modules", async () => {
   }
 });
 
-test("hosted Cloud publishes the reviewed SLA and support boundary", async () => {
+test("archived Cloud SLA and support retain provenance without current authority", async () => {
   const jaSla = await readText(new URL("app-docs/sla.md", ROOT));
   const enSla = await readText(new URL("app-docs/en/sla.md", ROOT));
   const jaSupport = await readText(new URL("app-docs/support.md", ROOT));
@@ -499,6 +537,8 @@ test("hosted Cloud publishes the reviewed SLA and support boundary", async () =>
   const config = await readText(new URL("app-docs/.vitepress/config.ts", ROOT));
 
   for (const sla of [jaSla, enSla]) {
+    assert.match(sla, /(?:歴史資料|Historical archive)/);
+    assert.match(sla, /(?:現行の正本ではありません|not current authority)/);
     assert.match(sla, /99\.9%/);
     assert.match(sla, /99\.5%/);
     assert.match(sla, /status\.takosumi\.com/);
@@ -516,21 +556,11 @@ test("hosted Cloud publishes the reviewed SLA and support boundary", async () =>
   for (const route of ["/support", "/sla", "/en/support", "/en/sla"]) {
     assert.match(config, new RegExp(`link: "${route}"`));
   }
+  assert.match(config, /documentation archive/);
+  assert.match(config, /not current (?:service )?authority/);
 });
 
-test("public pricing and OSS readiness use prepaid-credit and quota-policy vocabulary", async () => {
-  const pricing = [
-    await readText(new URL("website/src/content/pricing.ts", ROOT)),
-    await readText(new URL("website/src/components/Pricing.tsx", ROOT)),
-    await readText(new URL("website/src/styles/global.css", ROOT)),
-  ].join("\n");
-  assert.match(pricing, /月額固定費なし/);
-  assert.match(pricing, /プリペイドクレジット/);
-  assert.match(pricing, /自動チャージは初期状態で無効/);
-  assert.doesNotMatch(pricing, /月額 \$1/);
-  assert.doesNotMatch(pricing, /Lite\s*\/\s*Plus\s*\/\s*Pro/);
-  assert.doesNotMatch(pricing, /subscription \+ usage/);
-
+test("OSS readiness uses quota-policy vocabulary without owning retail pricing", async () => {
   const readiness = await readText(
     new URL("cli/src/cli-platform-readiness-constants.ts", ROOT),
   );
@@ -545,6 +575,13 @@ test("public pricing and OSS readiness use prepaid-credit and quota-policy vocab
   );
   assert.doesNotMatch(readinessFixtures, /platform-capsule-lite/);
   assert.doesNotMatch(readinessFixtures, /policy:\/\/[^"\s]*lite/);
+
+  const boundaries = await readText(
+    new URL("docs/en/concepts/boundaries.md", ROOT),
+  );
+  assert.match(boundaries, /Takosumi Hosted[\s\S]{0,200}retail/);
+  assert.match(boundaries, /Takoserver[\s\S]{0,240}managed supply/);
+  assert.match(boundaries, /Takosumi Cloud[\s\S]{0,200}retired historical identity/);
 });
 
 test("repository manifest uses the general closed envelope and keeps install options separate", async () => {
@@ -590,7 +627,9 @@ test("repository manifest uses the general closed envelope and keeps install opt
 
 async function readPublicDocs(): Promise<string> {
   const chunks: string[] = [];
-  for (const root of [new URL("docs/", ROOT), new URL("app-docs/", ROOT)]) {
+  // `app-docs/` is a separate historical archive and is checked for an
+  // explicit notice above; it must not be folded into the current OSS surface.
+  for (const root of [new URL("docs/", ROOT)]) {
     for await (const file of walk(root)) {
       if (!file.pathname.endsWith(".md")) continue;
       if (file.pathname.includes("/docs/internal/")) continue;

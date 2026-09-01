@@ -69,6 +69,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | Secret                | 暗号化して保存される秘密の値です。                                                         | [認証情報](../concepts/credentials.md) |
 | secret partition      | 秘密を保存するときの暗号の区画を指す token です。Connection を作るときに指定します。       | [CLI](./cli.md)                        |
 | personal access token | Accounts が発行する API 用のトークンです。`read` / `write` / `admin` の scope を持ちます。 | [CLI](./cli.md)                        |
+| BYOC                  | Workspace/customer が vendor account、credential、作成される resource を所有する利用形態です。 | [製品の境界](../concepts/boundaries.md) |
 
 ## 実行時の連携
 
@@ -107,6 +108,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | observe           | 旧 Resource の読み取り専用差分確認 (migration only)。                                                        | [Resource migration](../concepts/resources.md) |
 | import            | 旧 Resource 台帳へ既存実物を取り込む操作 (migration only)。                                                   | [Resource migration](../concepts/resources.md) |
 | portability       | 旧 Resource 解決の移しやすさ (migration only)。                                                             | [Resource migration](../concepts/resources.md) |
+| Offering          | 旧 Generic Offering API の catalog / availability / selection 記録 (legacy/operator-only、migration/delete target)。managed Offering の authority は Takoserver です。 | [API](./api.md) |
 | Compatibility API | S3 や OCI のような標準プロトコルを、範囲と版を決めて受け付ける入口です。                                      | [API](./api.md)                             |
 
 ## 状態の読み方
@@ -121,16 +123,18 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 
 ## 横断して出てくる言葉
 
-| 用語                   | 意味                                                                                                                       | 詳しい説明                              |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| capability             | その endpoint で何が有効かを表す token です。edition の名前ではなくこれを見ます。                                          | [製品の境界](../concepts/boundaries.md) |
-| profile                | 範囲を決めて名前を付けた設定の束です。互換 API の `compat.s3.v1` や、EdgeWorker が実行環境に求める `profiles` があります。 | [API](./api.md)                         |
-| surface                | 外から使える入口のまとまりです。`/api/v1` と `/v1` は別の surface です。                                                   | [API](./api.md)                         |
-| digest                 | 内容から計算した SHA-256 の指紋です。同じ内容なら必ず同じ値になります。                                                    | [API](./api.md)                         |
-| fail closed            | 判断がつかないときに、通さずに止める動き方です。                                                                           | [Interface](../concepts/interfaces.md)  |
-| lease                  | 同じ対象を 2 か所で同時に処理しないよう、担当を期限つきで確保する仕組みです。                                              | [API](./api.md)                         |
-| CAS (compare-and-swap) | 更新の直前に、読んだときの版のままかを確かめ、変わっていたら書き込まない方式です。                                         | [API](./api.md)                         |
-| cursor                 | 一覧の続きを読むための不透明な token です。中身は解釈せず、次の要求にそのまま渡します。                                    | [API](./api.md)                         |
+| 用語                       | 意味                                                                                                                       | 詳しい説明                              |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| capability                 | その endpoint で何が有効かを表す token です。edition の名前ではなくこれを見ます。                                          | [製品の境界](../concepts/boundaries.md) |
+| profile                    | 範囲を決めて名前を付けた設定の束です。互換 API の `compat.s3.v1` や、EdgeWorker が実行環境に求める `profiles` があります。 | [API](./api.md)                         |
+| surface                    | 外から使える入口のまとまりです。`/api/v1` と `/v1` は別の surface です。                                                   | [API](./api.md)                         |
+| digest                     | 内容から計算した SHA-256 の指紋です。同じ内容なら必ず同じ値になります。                                                    | [API](./api.md)                         |
+| 安全側に停止 (fail closed) | 判断がつかないときに、通さずに止める動き方です。                                                                           | [Interface](../concepts/interfaces.md)  |
+| lease                      | 同じ対象を 2 か所で同時に処理しないよう、担当を期限つきで確保する仕組みです。                                              | [API](./api.md)                         |
+| CAS (compare-and-swap)     | 更新の直前に、読んだときの版のままかを確かめ、変わっていたら書き込まない方式です。                                         | [API](./api.md)                         |
+| cursor                     | 一覧の続きを読むための不透明な token です。中身は解釈せず、次の要求にそのまま渡します。                                    | [API](./api.md)                         |
+| 正本                       | どれを正しいとみなすかを決めた、ただ一つの出どころです。写しが食い違ったら正本が優先します。                               | [製品の境界](../concepts/boundaries.md) |
+| 変更不可 (immutable)       | 一度作ったら中身が変わらないことです。commit、digest、version はこれを前提にします。                                       | [API](./api.md)                         |
 
 その endpoint でどの capability が有効かは、endpoint 自身が答えます。
 
@@ -143,5 +147,7 @@ curl -s https://takosumi.example.com/.well-known/takosumi
 | 用語           | 意味                                                      | 詳しい説明                                       |
 | -------------- | --------------------------------------------------------- | ------------------------------------------------ |
 | Operator       | Takosumi を自分や自分のユーザーのために運用する主体です。 | [製品の境界](../concepts/boundaries.md)          |
-| Takosumi Cloud | 公式に運用している hosted サービスです。                  | [製品の境界](../concepts/boundaries.md)          |
+| Takosumi Hosted | retail、commerce、client composition を必要に応じて所有する別の hosted product です。managed supply の authority ではありません。 | [製品の境界](../concepts/boundaries.md) |
+| Takoserver      | optional managed supply の外部 Takoform Host です。Offering、capacity、provider installation/credential、backend、実行の authority を持ちます。 | [製品の境界](../concepts/boundaries.md) |
+| Takosumi Cloud  | 退役した historical identity です。`app.takosumi.com` の availability、pricing、SLA、support の current authority ではありません。 | [製品の境界](../concepts/boundaries.md) |
 | showback       | 使った量を記録して見せるところまでを行う課金モードです。  | [利用量と課金](../concepts/usage-and-billing.md) |

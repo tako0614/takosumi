@@ -3001,10 +3001,26 @@ export function capsuleAndInstallConfigSchemas(): Record<
             "stale",
             "error",
             "disabled",
+            "uninstalled",
             "destroyed",
           ],
         },
         autoUpdate: { type: "boolean" },
+        uninstalledAt: { type: "string" },
+        scheduledDestroyAt: { type: "string" },
+        preDestroyExport: {
+          type: "object",
+          required: ["status", "at"],
+          description:
+            "Evidence of the pre-destroy data export attempted before the scheduled destroy of an uninstalled Capsule.",
+          properties: {
+            status: { enum: ["exported", "failed", "skipped"] },
+            backupId: { type: "string" },
+            reason: { type: "string" },
+            at: { type: "string" },
+          },
+          additionalProperties: false,
+        },
         createdAt: { type: "string" },
         updatedAt: { type: "string" },
       },
@@ -4809,6 +4825,24 @@ export function workspaceProjectAndCapsuleRequestSchemas(): Record<
       required: ["capsule"],
       properties: {
         capsule: ref("Capsule"),
+      },
+      additionalProperties: false,
+    },
+    DeleteCapsuleResponse: {
+      type: "object",
+      description:
+        "One of three delete outcomes: a never-applied Capsule is abandoned (`capsule` + `abandoned`), the safe default schedules the two-phase uninstall (`capsule` + `uninstall`), and `?mode=immediate` creates the direct destroy-plan Run (`run`).",
+      properties: {
+        capsule: ref("Capsule"),
+        abandoned: { type: "boolean" },
+        uninstall: {
+          type: "object",
+          properties: {
+            scheduledDestroyAt: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+        run: ref("Run"),
       },
       additionalProperties: false,
     },

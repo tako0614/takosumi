@@ -276,16 +276,38 @@ function resolvedBindingForProvider(
   resolved: readonly ResolvedCapsuleProviderBinding[],
   provider: string,
 ): ResolvedCapsuleProviderBinding | undefined {
-  return resolved
-    .filter((entry) => sameProviderSource(provider, entry.provider))
-    .sort((left, right) => {
-      if (left.alias === right.alias) {
-        return compareText(left.connection.id, right.connection.id);
-      }
-      if (left.alias === undefined) return -1;
-      if (right.alias === undefined) return 1;
-      return compareText(left.alias, right.alias);
-    })[0];
+  let best: ResolvedCapsuleProviderBinding | undefined;
+  let bestAlias: string | undefined;
+  let bestConnectionId = "";
+
+  for (const entry of resolved) {
+    if (!sameProviderSource(provider, entry.provider)) continue;
+
+    const alias = entry.alias;
+    const connectionId = entry.connection.id;
+    if (best === undefined) {
+      best = entry;
+      bestAlias = alias;
+      bestConnectionId = connectionId;
+      continue;
+    }
+
+    const order =
+      alias === bestAlias
+        ? compareText(connectionId, bestConnectionId)
+        : alias === undefined
+          ? -1
+          : bestAlias === undefined
+            ? 1
+            : compareText(alias, bestAlias);
+    if (order < 0) {
+      best = entry;
+      bestAlias = alias;
+      bestConnectionId = connectionId;
+    }
+  }
+
+  return best;
 }
 
 function compareText(left: string, right: string): number {

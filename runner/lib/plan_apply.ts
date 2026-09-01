@@ -5,6 +5,10 @@
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 import {
+  beginApplyProgress,
+  endApplyProgress,
+} from "./apply_progress.ts";
+import {
   cp,
   mkdir,
   readFile,
@@ -82,17 +86,18 @@ import {
   verifyPlanArtifact,
 } from "./parsing.ts";
 import {
-  requiredProvidersForGeneratedRoot,
   assertRunnerPolicyBeforeInit,
   generatedRootTreeHasNoProviderUsage,
-  providersFromPlanJson,
   normalizedProviderList,
-  providerInstallationEvidence,
-  prepareStrictProviderMirrorInit,
-  withProviderPluginCacheInitLock,
-  summaryFromPlanJson,
-  resourceChangesFromPlanJson,
   plannedOutputsFromPlanJson,
+  prepareStrictProviderMirrorInit,
+  providerInstallationEvidence,
+  providersFromPlanJson,
+  requiredProvidersForGeneratedRoot,
+  resourceChangesFromPlanJson,
+  summaryFromPlanJson,
+  terraformConfigFileKind,
+  withProviderPluginCacheInitLock,
 } from "./providers.ts";
 import { runSourceBuild } from "./source_build.ts";
 
@@ -568,12 +573,25 @@ export async function runReviewedPlanApply(
       parseRequiredProviders(request),
       strictMirrorInit?.attestation,
     );
-    const result = await timer.measure("tofu_apply", () =>
-      runCommand(
-        ["tofu", "apply", "-input=false", "-no-color", workspace.planPath],
-        { cwd: moduleDir, context: applyContext },
-      ),
-    );
+    // Live progress for the install experience: the tracker reads OpenTofu's
+    // own narration as it streams, so a separate progress request can answer
+    // "3 of 7 resources" while this apply is still blocking. The command, its
+    // output, and the buffered result are unchanged.
+    const progress = beginApplyProgress(runId);
+    const result = await timer
+      .measure("tofu_apply", () =>
+        runCommand(
+          ["tofu", "apply", "-input=false", "-no-color", workspace.planPath],
+          {
+            cwd: moduleDir,
+            context: applyContext,
+            onStdoutChunk: (chunk) => progress.push(chunk),
+          },
+        ),
+      )
+      .finally(() => {
+        progress.finish();
+      });
     const outputs =
       action === "apply" && result.exitCode === 0
         ? await timer.measure("tofu_output", () =>
@@ -621,6 +639,7 @@ export async function runReviewedPlanApply(
       timer,
     );
   } finally {
+    endApplyProgress(runId);
     await preparedCredentials.cleanup();
   }
 }
@@ -864,9 +883,13 @@ export async function readCapsuleCompatibilityFiles(
         await walk(relativePath);
         continue;
       }
+      // OpenTofu executes `.tf` / `.tofu` and `.tf.json` / `.tofu.json`; the
+      // compatibility scan must see exactly the same files, or a provider
+      // declared in one of the other spellings reaches init unseen.
       if (
         !entry.isFile() ||
-        (!entry.name.endsWith(".tf") && entry.name !== ".terraform.lock.hcl")
+        (terraformConfigFileKind(entry.name) === undefined &&
+          entry.name !== ".terraform.lock.hcl")
       )
         continue;
       if (out.length >= CAPSULE_COMPATIBILITY_MAX_FILES) {
@@ -898,7 +921,7 @@ export async function readCapsuleCompatibilityFiles(
   // Store listings are discovery pointers only. The repository-owned install
   // presentation contract lives at this well-known path and must be read from
   // the same immutable SourceSnapshot as the OpenTofu module. Keep it separate
-  // from executable authority: compatibility analysis ignores non-.tf files,
+  // from executable authority: compatibility analysis ignores non-config files,
   // while the control plane may consume this bounded JSON document only for
   // display text and icons.
   const metadataRelativePath = ".well-known/tcs.json";

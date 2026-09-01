@@ -1676,14 +1676,8 @@ export class InterfaceService {
     capsuleId: string,
   ): Promise<readonly Interface[]> {
     const interfaces = await this.list({ workspaceId, includeRetired: false });
-    const affected = interfaces.filter(
-      (item) =>
-        (item.metadata.ownerRef.kind === "Capsule" &&
-          item.metadata.ownerRef.id === capsuleId) ||
-        Object.values(item.spec.inputs ?? {}).some(
-          (input) =>
-            input.source === "capsule_output" && input.capsuleId === capsuleId,
-        ),
+    const affected = interfaces.filter((item) =>
+      interfaceReferencesCapsule(item, capsuleId),
     );
     return await Promise.all(
       affected.map((item) =>
@@ -1786,15 +1780,8 @@ export class InterfaceService {
     resourceId: string,
   ): Promise<readonly Interface[]> {
     const interfaces = await this.list({ workspaceId, includeRetired: false });
-    const affected = interfaces.filter(
-      (item) =>
-        (item.metadata.ownerRef.kind === "Resource" &&
-          item.metadata.ownerRef.id === resourceId) ||
-        Object.values(item.spec.inputs ?? {}).some(
-          (input) =>
-            input.source === "resource_output" &&
-            input.resourceId === resourceId,
-        ),
+    const affected = interfaces.filter((item) =>
+      interfaceReferencesResource(item, resourceId),
     );
     return await Promise.all(
       affected.map((item) =>
@@ -1915,13 +1902,7 @@ export class InterfaceService {
   ): Promise<void> {
     const interfaces = await this.list({ workspaceId, includeRetired: false });
     for (const current of interfaces.filter(
-      (item) =>
-        (item.metadata.ownerRef.kind === "Capsule" &&
-          item.metadata.ownerRef.id === capsuleId) ||
-        Object.values(item.spec.inputs ?? {}).some(
-          (input) =>
-            input.source === "capsule_output" && input.capsuleId === capsuleId,
-        ),
+      (item) => interfaceReferencesCapsule(item, capsuleId),
     )) {
       await this.#markUnknown(current.metadata.id, message);
     }
@@ -1953,14 +1934,7 @@ export class InterfaceService {
   ): Promise<void> {
     const interfaces = await this.list({ workspaceId, includeRetired: false });
     for (const current of interfaces.filter(
-      (item) =>
-        (item.metadata.ownerRef.kind === "Resource" &&
-          item.metadata.ownerRef.id === resourceId) ||
-        Object.values(item.spec.inputs ?? {}).some(
-          (input) =>
-            input.source === "resource_output" &&
-            input.resourceId === resourceId,
-        ),
+      (item) => interfaceReferencesResource(item, resourceId),
     )) {
       await this.#markUnknown(current.metadata.id, message, "ResourceFailed");
     }
@@ -2852,6 +2826,20 @@ function interfaceReferencesCapsule(
     Object.values(iface.spec.inputs ?? {}).some(
       (input) =>
         input.source === "capsule_output" && input.capsuleId === capsuleId,
+    )
+  );
+}
+
+function interfaceReferencesResource(
+  iface: Interface,
+  resourceId: string,
+): boolean {
+  return (
+    (iface.metadata.ownerRef.kind === "Resource" &&
+      iface.metadata.ownerRef.id === resourceId) ||
+    Object.values(iface.spec.inputs ?? {}).some(
+      (input) =>
+        input.source === "resource_output" && input.resourceId === resourceId,
     )
   );
 }

@@ -13,13 +13,13 @@
 Takosumi の public source、private deploy-state repo、docs には production /
 staging の secret 値を置きません。ownership boundary は以下に固定します:
 
-- `takosumi/docs/operations/` は public runbook と secret class contract を所有する。
-- realized config は `takosumi-private/platform/wrangler.toml` が所有する。
+- `takosumi/docs/operations/` は public runbook と secret class contract を所有します。
+- realized config は `takosumi-private/platform/wrangler.toml` が所有します。
 - secret 値、rotation evidence、private rollback note は operator vault
   (`takosumi-private/.secrets/<env>/` または承認済み operator-local vault path)
-  と private run log に置き、repo にはコミットしない。
+  と private run log に置き、repo にはコミットしません。
 - Takosumi control plane は OpenTofu Capsule Run、ProviderConnection、CredentialRecipe、ProviderBinding、
-  Secret、credential mint audit、AuditEvent を所有する。
+  Secret、credential mint audit、AuditEvent を所有します。
 
 本 policy はすべての Takosumi operated 環境に適用します。account-plane OIDC metadataはpublic PKCE client metadataだけを
 扱い、client secret rotation trackを持ちません。runtime consumerの認可とcredential deliveryはInterfaceBindingが所有し、
@@ -68,11 +68,11 @@ ProviderConnection / Capsule integration secret の rotation contract:
 
 - source Git token、events webhook、showback usage report、operator extension token
   など secret-backed material は ProviderConnection / Secret / Run credential / Capsule integration secret
-  のいずれかとして scope を固定する。
+  のいずれかとして scope を固定します。
 - raw token は rotation 時に一度だけ返し、通常の projection / GET response には
-  expiry と non-secret metadata だけを出す。`secret_ref` / vault handle は public projection に出さない。
+  expiry と non-secret metadata だけを出す。`secret_ref` / vault handle は public projection に出しません。
 - rotation 時は new token を対応するInterfaceBinding delivery backendに反映し、grace window (>=10 min)
-  の間 old token を併用可能にする。
+  の間 old token を併用可能にします。
 - rotation 完了後、AuditEvent に Workspace id、Project id / Capsule id (該当する場合)、
   ProviderConnection id / Secret ref、scope、旧 secret ref、新 secret ref、rotation timestamp を残す。
 - Run credential の mint は secret rotation event ではなく、Run / AuditEvent
@@ -83,9 +83,9 @@ ProviderConnection / Capsule integration secret の rotation contract:
   旧tokenを拒否して該当Runを再実行することを明示する。raw keyやtoken bodyは
   rotation evidenceに残さない。
 - ProviderConnection credential rotation は ProviderConnection / Secret rotation として扱う。
-  secret-backed provider policy は provider binary trust record であり credential ではないため、token rotation で作り直さない。
+  secret-backed provider policy は provider binary trust record であり credential ではないため、token rotation で作り直しません。
 - confidential OIDC client が必要な operator extension は public PKCE projection
-  とは別の secret class としてこの policy に追加してから運用する。
+  とは別の secret class としてこの policy に追加してから運用します。
 
 ## Audit Requirements
 

@@ -27,11 +27,19 @@ import type { OpenTofuControlStore } from "../deploy-control/store.ts";
 import { log } from "../../shared/log.ts";
 import { redactRecord } from "../../shared/redaction.ts";
 
+type ActivityStore = Pick<
+  OpenTofuControlStore,
+  | "putActivityEvent"
+  | "listActivityEvents"
+  | "listActivityEventsForWorkspaces"
+  | "listActivityEventsForTargetPage"
+>;
+
 /** The {@link ActivityEvent} fields a caller supplies; id + createdAt are minted. */
 export type RecordActivityInput = Omit<ActivityEvent, "id" | "createdAt">;
 
 export interface ActivityServiceDependencies {
-  readonly store: OpenTofuControlStore;
+  readonly store: ActivityStore;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
 }
@@ -76,7 +84,7 @@ export const NOOP_ACTIVITY_RECORDER: ActivityRecorder = {
 };
 
 export class ActivityService implements ActivityLedger {
-  readonly #store: OpenTofuControlStore;
+  readonly #store: ActivityStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => Date;
   #lastTimestampMs = 0;

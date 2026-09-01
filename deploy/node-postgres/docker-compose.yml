@@ -1,9 +1,10 @@
-# Takosumi Accounts — Bun + Postgres reference stack.
+# Takosumi — Bun + Postgres self-host stack.
 #
-# Brings up Takosumi Accounts as a Bun service backed by Postgres,
-# fronted by Caddy for TLS termination. Mirrors the Cloudflare Workers
-# reference distribution but runs anywhere a Docker daemon does (single
-# VM, container host, k8s with kompose, etc.).
+# Brings up the composed Takosumi service (deploy control + dashboard +
+# accounts) as a Bun process backed by Postgres, an OpenTofu runner container
+# for real plan/apply execution, and Caddy for TLS termination. Mirrors the
+# Cloudflare Workers reference distribution but runs anywhere a Docker daemon
+# does (single VM, container host, k8s with kompose, etc.).
 #
 # Hardening defaults:
 #   - `accounts` and `migrations` run as the non-root `bun` user shipped
@@ -11,13 +12,19 @@
 #     1000:1000). `user:` is repeated here so an operator who swaps the
 #     base image still gets a non-root runtime.
 #   - `accounts` mounts the root filesystem read-only with a tmpfs at
-#     `/tmp` for runtime pid files and any temporary archive material.
+#     `/tmp` and ONE writable named volume at /var/lib/takosumi — sealed
+#     OpenTofu state artifacts and source archives are durable data and
+#     must survive restarts.
 #   - `cap_drop: [ALL]` removes every Linux capability the service grants
 #     containers by default; the accounts service only needs to bind to
 #     an unprivileged TCP port (>=1024) inside the docker network.
 #   - `security_opt: ["no-new-privileges:true"]` prevents setuid/setgid
 #     binaries inside the container from escalating, even on misconfigured
 #     hosts where the seccomp profile is permissive.
+#   - `opentofu-runner` has NO published ports; it is reachable only on the
+#     compose network and requires the shared bearer in
+#     TAKOSUMI_RUNNER_SHARED_TOKEN. It executes repository-supplied OpenTofu,
+#     so never grant it broad host mounts.
 
 x-node-postgres-build: &node-postgres-build
   context: ../..
@@ -63,6 +70,31 @@ services:
       - "accounts"
       - "migrate"
 
+  opentofu-runner:
+    # Standalone OpenTofu runner (pinned, checksum-verified tofu + git).
+    # Internal network only; jobs require the shared bearer. This is the
+    # container that actually executes repository OpenTofu, mirroring the
+    # runner container of the Cloudflare profile.
+    build:
+      context: ../..
+      dockerfile: runner/Dockerfile
+    restart: unless-stopped
+    environment:
+      TAKOSUMI_RUNNER_SHARED_TOKEN: ${TAKOSUMI_RUNNER_SHARED_TOKEN:?set TAKOSUMI_RUNNER_SHARED_TOKEN in .env}
+      TAKOSUMI_RUNNER_MAX_CONCURRENT_RUNS: ${TAKOSUMI_RUNNER_MAX_CONCURRENT_RUNS:-}
+    expose:
+      - "8080"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'bun -e ''await fetch("http://127.0.0.1:8080/healthz").then((r)=>{if(!r.ok)throw new Error(String(r.status))})''',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
   accounts:
     build: *node-postgres-build
     restart: unless-stopped
@@ -70,6 +102,10 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
+    volumes:
+      # Durable runtime data: sealed OpenTofu state artifacts + source
+      # archives (envOpenTofuRunner in src/server.ts reads/writes here).
+      - takosumi-runtime:/var/lib/takosumi
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     depends_on:
@@ -77,6 +113,8 @@ services:
         condition: service_healthy
       migrations:
         condition: service_completed_successfully
+      opentofu-runner:
+        condition: service_healthy
     environment:
       TAKOSUMI_ACCOUNTS_ISSUER: ${TAKOSUMI_ACCOUNTS_ISSUER:-https://app.example.com}
       TAKOSUMI_ACCOUNTS_BIND_HOST: ${TAKOSUMI_ACCOUNTS_BIND_HOST:-0.0.0.0}
@@ -87,6 +125,26 @@ services:
       TAKOSUMI_ACCOUNTS_CLIENT_SECRET: ${TAKOSUMI_ACCOUNTS_CLIENT_SECRET:-}
       TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD: ${TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD:-}
       TAKOSUMI_ACCOUNTS_ALLOWED_SCOPES: ${TAKOSUMI_ACCOUNTS_ALLOWED_SCOPES:-}
+      # --- Required secrets (see .env.example for generation commands). An
+      # https issuer fails closed at boot when these are absent, which is the
+      # actionable error; the `:-` expansion below therefore stays optional so
+      # THAT check fires instead of a bare compose interpolation failure.
+      TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK: ${TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK:-}
+      TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS: ${TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS:-}
+      TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET: ${TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET:-}
+      TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: ${TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:-}
+      TAKOSUMI_SECRET_STORE_PASSPHRASE: ${TAKOSUMI_SECRET_STORE_PASSPHRASE:-}
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: ${TAKOSUMI_DEPLOY_CONTROL_TOKEN:-}
+      # --- OpenTofu execution (the part that makes this a real app platform).
+      TAKOSUMI_OPENTOFU_RUNNER_URL: ${TAKOSUMI_OPENTOFU_RUNNER_URL:-http://opentofu-runner:8080}
+      TAKOSUMI_RUNNER_SHARED_TOKEN: ${TAKOSUMI_RUNNER_SHARED_TOKEN:?set TAKOSUMI_RUNNER_SHARED_TOKEN in .env}
+      TAKOSUMI_RUNTIME_DIR: /var/lib/takosumi
+      # --- Optional product configuration.
+      TAKOSUMI_TCS_STORE_URL: ${TAKOSUMI_TCS_STORE_URL:-}
+      TAKOSUMI_UNINSTALL_GRACE_DAYS: ${TAKOSUMI_UNINSTALL_GRACE_DAYS:-}
+      TAKOSUMI_RUNNER_CAPACITY_QUEUE_BUDGET_MINUTES: ${TAKOSUMI_RUNNER_CAPACITY_QUEUE_BUDGET_MINUTES:-}
+      TAKOSUMI_WORKSPACE_RUN_CONCURRENCY: ${TAKOSUMI_WORKSPACE_RUN_CONCURRENCY:-}
+      TAKOSUMI_CONTROL_WRITE_RATE_LIMIT: ${TAKOSUMI_CONTROL_WRITE_RATE_LIMIT:-}
     expose:
       - "8787"
     healthcheck:
@@ -122,5 +180,6 @@ services:
 
 volumes:
   postgres-data:
+  takosumi-runtime:
   caddy-data:
   caddy-config:

@@ -37,14 +37,7 @@ import {
 } from "../../components/ui/index.ts";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { activityEventHref } from "../../lib/activity-links.ts";
-
-function metaString(
-  metadata: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const v = metadata[key];
-  return typeof v === "string" && v.length > 0 ? v : undefined;
-}
+import { metaString } from "../../lib/activity-metadata.ts";
 
 function metaNumber(
   metadata: Record<string, unknown>,
@@ -163,13 +156,23 @@ function describeEvent(
     }
     case "capsule.stale": {
       const producer = metaString(m, "producerCapsuleName");
+      // The common case is the app's OWN source publishing a new version
+      // (reason: source_ref_changed); crediting that to "a dependency" was a
+      // lie. Only a producer-driven staleness names a dependency.
+      const sourceUpdate =
+        metaString(m, "reason") === "source_ref_changed" || !producer;
+      if (sourceUpdate) {
+        return {
+          title: name
+            ? t("notif.event.staleSourceNamed", { name })
+            : t("notif.event.staleSource"),
+        };
+      }
       return {
         title: name
           ? t("notif.event.staleNamed", { name })
           : t("notif.event.stale"),
-        detail: producer
-          ? t("notif.event.staleDetail", { producer })
-          : undefined,
+        detail: t("notif.event.staleDetail", { producer }),
       };
     }
     case "connection.created": {

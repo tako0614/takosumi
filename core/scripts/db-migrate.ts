@@ -26,7 +26,7 @@ import type {
   SqlQueryResult,
   SqlTransaction,
 } from "../adapters/storage/sql.ts";
-import { wrapPgResult } from "../adapters/storage/pg_result.ts";
+import { createPostgresSqlClient } from "./pg_sql_client.ts";
 
 // ---------------------------------------------------------------------------
 // CLI option parsing
@@ -207,112 +207,6 @@ function ledgerRowsAs<Row extends Record<string, unknown>>(
 }
 
 // ---------------------------------------------------------------------------
-// Postgres SqlClient — staging/production. Opt-in: only loaded if
-// DATABASE_URL is set. We import pg lazily so local dev never needs it.
-// ---------------------------------------------------------------------------
-
-interface PgPoolLike {
-  query(sql: string, values?: unknown[]): Promise<{ rows: unknown[] }>;
-  end(): Promise<void>;
-  connect(): Promise<{
-    query(sql: string, values?: unknown[]): Promise<{ rows: unknown[] }>;
-    release(): void;
-  }>;
-}
-
-async function createPostgresClient(databaseUrl: string): Promise<{
-  client: SqlClient;
-  close: () => Promise<void>;
-}> {
-  let pgModule: {
-    default?: { Pool: new (cfg: { connectionString: string }) => PgPoolLike };
-    Pool?: new (cfg: { connectionString: string }) => PgPoolLike;
-  };
-  const loadErrors: string[] = [];
-  try {
-    pgModule = await import("npm:pg@^8.11.0");
-  } catch (error) {
-    loadErrors.push(`npm:pg@^8.11.0: ${(error as Error).message}`);
-    try {
-      pgModule = await import("pg");
-    } catch (fallbackError) {
-      loadErrors.push(`pg: ${(fallbackError as Error).message}`);
-      throw new Error(
-        "failed to load pg for --env=staging|production migrations: " +
-          loadErrors.join("; "),
-      );
-    }
-  }
-  const Pool = pgModule.default?.Pool ?? pgModule.Pool;
-  if (!Pool) {
-    throw new Error("pg loaded but Pool export is missing");
-  }
-  const pool = new Pool({ connectionString: databaseUrl });
-
-  const poolQuery = async <Row extends Record<string, unknown>>(
-    sql: string,
-    parameters?: SqlParameters,
-  ): Promise<SqlQueryResult<Row>> => {
-    const { sql: rendered, values } = renderNamedParams(sql, parameters);
-    return wrapPgResult<Row>(await pool.query(rendered, values));
-  };
-
-  const client: SqlClient = {
-    query: poolQuery,
-    async transaction<T>(
-      fn: (transaction: SqlTransaction) => T | Promise<T>,
-    ): Promise<T> {
-      const conn = await pool.connect();
-      const connQuery = async <Row extends Record<string, unknown>>(
-        sql: string,
-        parameters?: SqlParameters,
-      ): Promise<SqlQueryResult<Row>> => {
-        const { sql: rendered, values } = renderNamedParams(sql, parameters);
-        return wrapPgResult<Row>(await conn.query(rendered, values));
-      };
-      try {
-        await conn.query("begin");
-        const txClient: SqlTransaction = {
-          query: connQuery,
-          async commit() {
-            await conn.query("commit");
-          },
-          async rollback() {
-            await conn.query("rollback");
-          },
-        };
-        const value = await fn(txClient);
-        await conn.query("commit");
-        return value;
-      } catch (error) {
-        await conn.query("rollback").catch(() => {});
-        throw error;
-      } finally {
-        conn.release();
-      }
-    },
-  };
-  return { client, close: () => pool.end() };
-}
-
-function renderNamedParams(
-  sql: string,
-  parameters?: SqlParameters,
-): { sql: string; values: unknown[] } {
-  if (!parameters) return { sql, values: [] };
-  if (Array.isArray(parameters)) {
-    return { sql, values: parameters as unknown[] };
-  }
-  const record = parameters as Readonly<Record<string, unknown>>;
-  const order: string[] = [];
-  const rendered = sql.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_, name) => {
-    order.push(name as string);
-    return `$${order.length}`;
-  });
-  return { sql: rendered, values: order.map((name) => record[name]) };
-}
-
-// ---------------------------------------------------------------------------
 // Resolve client per env
 // ---------------------------------------------------------------------------
 
@@ -348,7 +242,7 @@ async function resolveTarget(env: EnvName): Promise<ResolvedTarget> {
       `no database URL found for --env=${env} (set ${candidates.join(" or ")})`,
     );
   }
-  const { client, close } = await createPostgresClient(url);
+  const { client, close } = await createPostgresSqlClient(url);
   return { client, close, description: `postgres (env=${env})` };
 }
 
@@ -407,6 +301,11 @@ async function main(): Promise<number> {
     console.log(
       `[db-migrate] applied=${plan.applied.length} pending=${plan.pending.length}`,
     );
+    if (plan.legacyChecksumIds.length > 0) {
+      console.log(
+        `[db-migrate] ${plan.legacyChecksumIds.length} ledger row(s) still carry the pre-canonical checksum; a non-dry-run apply rewrites them.`,
+      );
+    }
     if (plan.applied.length > 0) {
       for (const row of plan.applied) {
         console.log(`  - skip (already applied): ${row.id} v${row.version}`);
@@ -427,6 +326,11 @@ async function main(): Promise<number> {
       return 0;
     }
     const result = await runner.applyPending();
+    if (result.reconciledChecksumIds.length > 0) {
+      console.log(
+        `[db-migrate] reconciled ${result.reconciledChecksumIds.length} pre-canonical checksum row(s).`,
+      );
+    }
     console.log(
       `[db-migrate] applied ${result.appliedNow.length} migration(s):`,
     );

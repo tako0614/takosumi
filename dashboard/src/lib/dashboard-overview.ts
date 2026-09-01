@@ -1,4 +1,5 @@
 import { getDashboardOverview, type DashboardOverview } from "./control-api.ts";
+import { isFreshCacheEntry } from "./cache.ts";
 import { primeCapsuleListCache } from "./capsule-list.ts";
 import { primeCurrentStateVersionCache } from "./current-state-versions.ts";
 import { primeWorkspaceListCache } from "./workspace-list.ts";
@@ -24,13 +25,6 @@ function cacheKey(
   return `${workspaceId ?? ""}:${options.capsuleLimit ?? "default"}`;
 }
 
-function fresh(
-  entry: CacheEntry | undefined,
-  now = Date.now(),
-): entry is CacheEntry {
-  return entry !== undefined && now - entry.cachedAt < CACHE_TTL_MS;
-}
-
 export function clearDashboardOverviewCache(workspaceId?: string): void {
   if (workspaceId === undefined) {
     cache.clear();
@@ -51,7 +45,9 @@ export async function getDashboardOverviewCached(
 ): Promise<DashboardOverview> {
   const key = cacheKey(workspaceId, options);
   const current = cache.get(key);
-  if (!options.force && fresh(current)) return current.overview;
+  if (!options.force && isFreshCacheEntry(current, CACHE_TTL_MS)) {
+    return current.overview;
+  }
   const currentInflight = inflight.get(key);
   if (!options.force && currentInflight) return currentInflight;
 

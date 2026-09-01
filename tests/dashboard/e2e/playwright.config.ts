@@ -5,6 +5,7 @@ import {
   resolveExternalStorageState,
   validateExpectedWorkerVersionId,
 } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
+import { portableE2EPort } from "../../../scripts/dashboard-browser-e2e/port.ts";
 
 const configDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(configDir, "../../..");
@@ -75,8 +76,9 @@ function publicLiveConfig(): { readonly baseURL: string } {
 
 const live = mode === "live" ? liveConfig() : undefined;
 const publicLive = mode === "public-live" ? publicLiveConfig() : undefined;
-const baseURL =
-  live?.baseURL ?? publicLive?.baseURL ?? "http://127.0.0.1:4179";
+const portablePort = portableE2EPort(process.env);
+const portableOrigin = `http://127.0.0.1:${portablePort}`;
+const baseURL = live?.baseURL ?? publicLive?.baseURL ?? portableOrigin;
 const portableStorageState = {
     cookies: [
       {
@@ -124,10 +126,10 @@ export default defineConfig({
       ? {
           command: "bun tests/dashboard/e2e/fixture-server.ts",
           cwd: repoRoot,
-          url: "http://127.0.0.1:4179/__e2e/ready",
+          url: `${portableOrigin}/__e2e/ready`,
           reuseExistingServer: false,
           timeout: 120_000,
-          env: { ...process.env, TAKOSUMI_E2E_PORT: "4179" },
+          env: { ...process.env, TAKOSUMI_E2E_PORT: String(portablePort) },
         }
       : undefined,
 });

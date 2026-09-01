@@ -1,5 +1,12 @@
 # Takosumi Cloud
 
+> **Historical archive — not current authority.** This page records the retired
+> Takosumi Cloud plan/implementation. It is not current availability, pricing,
+> SLA, support, or production authority. Takosumi Hosted owns new
+> retail/commerce/client-composition documentation; Takoserver owns managed
+> supply, capacity, provider credentials, and Offerings. Preserve the body as
+> historical evidence and do not use it as current service authority.
+
 Takosumi Cloud is hosted Takosumi for running OpenTofu modules from Git and
 connecting them to the cloud services they need. A Workspace keeps the plan,
 apply, state, outputs, audit, usage, and prepaid credit together.

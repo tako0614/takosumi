@@ -120,6 +120,13 @@ image_build_context = "../.."
 # 6 GiB RAM headroom for tofu init/plan/apply; 10 GB disk for the mirror +
 # workspace scratch.
 instance_type = { vcpu = 2, memory_mib = 6144, disk_mb = 10240 }
+# Concurrent-run ceiling — the operator capacity knob. Capacity refusals are
+# requeued by the control plane for up to
+# TAKOSUMI_RUNNER_CAPACITY_QUEUE_BUDGET_MINUTES (default 45), then fail as
+# runner_capacity_timeout; raise max_instances when the
+# takosumi_runner_capacity_exhausted_total counter shows sustained saturation.
+# 10 suits a small self-run deployment; a busy multi-tenant deployment wants
+# 40 or more.
 max_instances = 10
 
 # Optional platform extensions are not declared in the OSS template. The
@@ -171,11 +178,15 @@ TAKOSUMI_ENABLED_RUNNER_PROFILES = "opentofu-default"
 #   TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_REF / _DIGEST
-# OpenTofu runner capacity knob. Runner DO ids are currently run-scoped, so a
-# positive keepalive keeps that run's container alive but does not reuse it for
-# the next source_sync / compatibility / plan / apply run. Keep this at "0"
-# until stable runner affinity exists; otherwise bursty installs can exhaust
-# Cloudflare container max_instances.
+# OpenTofu runner keepalive (container sleepAfter grace), 0-900 seconds.
+# Runner DO ids are run-scoped, so this NEVER reuses a container for the next
+# source_sync / compatibility / plan run. It does cover one real hop: an apply
+# routes to the DO named by its PLAN's run id, so a warm container survives
+# approve -> apply and that apply skips a cold start. The trade is capacity:
+# a container held for the grace window still counts against max_instances,
+# so bursty installs can exhaust the ceiling sooner. "0" (the 30s floor) is
+# the safe default; raise it only after watching
+# takosumi_runner_capacity_exhausted_total and the runner-minute usage lane.
 TAKOSUMI_RUNNER_KEEPALIVE_SECONDS = "0"
 # Provider binaries only; credentials, generated roots, plans, state, and
 # outputs remain run/ledger scoped. This path is inside the runner container.
@@ -186,6 +197,21 @@ TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL = "1"
 # Keep scheduled source_sync from competing with user-facing plan/apply/destroy
 # runs for runner container capacity.
 TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH = "5"
+# How long (minutes) a run may wait for runner capacity before it fails as
+# runner_capacity_timeout (default 45).
+# TAKOSUMI_RUNNER_CAPACITY_QUEUE_BUDGET_MINUTES = "45"
+# Per-workspace concurrent run ceiling — fairness across tenants (default 2;
+# "0" disables).
+# TAKOSUMI_WORKSPACE_RUN_CONCURRENCY = "2"
+# "1" shards coordination leases across per-scope Durable Object instances
+# instead of the control-plane singleton instance. Cut over at a quiet moment:
+# leases held in the old instance are invisible to the new routing.
+# TAKOSUMI_COORDINATION_SHARDING = "0"
+# Write-lane throttle for the dashboard/API (per workspace, per minute;
+# per-isolate accounting on Workers). 429 + Retry-After; "0" disables.
+# TAKOSUMI_CONTROL_WRITE_RATE_LIMIT = "30"
+# Source webhook throttle (per source, per minute). "0" disables.
+# TAKOSUMI_SOURCE_HOOK_RATE_LIMIT = "60"
 # Read-only Resource Shape observation follows TAKOSUMI_RESOURCE_SHAPES by
 # default. Set TAKOSUMI_RESOURCE_OBSERVATION_ENABLED="0" to pause it, or "1"
 # to keep observing existing Resources while public shape creation is disabled.

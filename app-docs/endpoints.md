@@ -1,5 +1,12 @@
 # Data endpoints
 
+> **歴史資料（アーカイブ）— 現行の正本ではありません。** このページは退役した
+> Takosumi Cloud の計画・実装を記録したものです。現行の availability、pricing、SLA、
+> support、production authority を示しません。Takosumi Hosted が新しい
+> retail/commerce/client composition docs を所有し、managed supply、capacity、provider
+> credential、Offering は Takoserver が所有します。本文は歴史的証拠として保持しており、
+> 現行サービスの根拠に使わないでください。
+
 Takosumi Cloud は既存の service instance に標準 protocol で接続する data endpoint を提供
 できます。endpoint は object の lifecycle API ではありません。作成、更新、削除は Git
 repository の OpenTofu provider graph で行います。
@@ -62,7 +69,7 @@ data endpoint 固有の credential は、対応する service の Interface / cr
 ## Billing and failure behavior
 
 有料 request は backend call 前に Workspace、permission、availability、credit、quota を確認
-します。未構成、権限不足、残高不足は fail closed し、別 service へ自動 fallback しません。
+します。未構成、権限不足、残高不足は安全側に停止し、別 service へ自動 fallback しません。
 
 retryable error でも、同じ logical request を重複課金・重複 mutation しない fence が必要です。
 backend outcome が不明な場合は成功を返さず、同じ request identity で recovery します。

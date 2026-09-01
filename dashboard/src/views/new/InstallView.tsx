@@ -34,6 +34,7 @@ import {
 } from "../../components/ui/index.ts";
 import {
   checkCapsuleCompatibility,
+  ControlApiError,
   createCapsule,
   createWorkspace,
   extractRunId,
@@ -85,7 +86,6 @@ import {
   preferredProviderConnection,
   providerConnectionDisplayName,
 } from "../../lib/provider-connections.ts";
-import { friendlyError } from "../../lib/error-copy.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
 import {
@@ -103,6 +103,15 @@ import {
   setStoreJsonVariable,
   slugInputValue,
   storeDefaultInputValue,
+  compatibilityCheckLooksTransient,
+  compatibilityDiagnosticDisplay,
+  compatibilityLabel,
+  compatibilitySummaryDisplay,
+  compatibilityTone,
+  installFlowErrorMessage,
+  isDuplicateServiceError,
+  uniqueServiceIdCandidate,
+  storeEntryFromRepositoryConfig,
   storeEntryFromStoreListing,
   storeInputIsDerived,
   storeInputJsonValue,
@@ -237,8 +246,13 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   // Source/compatibility request and can select a different commit.
   const [gitRef, setGitRef] = createSignal(initial?.ref ?? "");
   const [modulePath, setModulePath] = createSignal(initial?.path || ".");
+  // Slugified like the manual field: an install link for `.../My_Repo.git`
+  // used to prefill `My_Repo` and then reject it as an invalid name the user
+  // never typed.
   const [name, setName] = createSignal(
-    initial?.name ?? (initial?.git ? capsuleNameFromUrl(initial.git) : ""),
+    slugInputValue(
+      initial?.name ?? (initial?.git ? capsuleNameFromUrl(initial.git) : ""),
+    ),
   );
   const [workspaceId, setWorkspaceId] = createSignal(currentWorkspaceId());
   const [workspaceHandle, setWorkspaceHandle] = createSignal<string>();
@@ -653,6 +667,27 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setAutoSelectedProviderRows(new Set<string>());
   };
 
+  /**
+   * The revision this install pins. An explicit ref always wins; otherwise the
+   * repository's highest stable SemVer release, falling back to HEAD when it
+   * publishes none (or the resolver cannot reach it, e.g. a private Source).
+   */
+  const resolveInstallRef = async (workspace: string): Promise<string> => {
+    const explicit = gitRef().trim();
+    if (explicit) return explicit;
+    try {
+      const resolved = await resolveStableSourceTag(workspace, gitUrl().trim());
+      // Show what was pinned: the Git form renders this field, and a shortened
+      // commit is what the review screen reports as source evidence.
+      setGitRef(resolved.commit);
+      return resolved.commit;
+    } catch {
+      return "";
+    }
+  };
+
+  const [sourceFetchElapsedMs, setSourceFetchElapsedMs] = createSignal(0);
+
   const prepareInstall = async () => {
     const validation = validateBasic();
     if (validation) {
@@ -669,11 +704,24 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       if (!workspaceIsCurrent(workspace)) return;
       const providers = await loadConnections(workspace);
       if (!workspaceIsCurrent(workspace)) return;
+      // An unspecified revision means "the current release", not "whatever is
+      // on the default branch right now". The chooser and the update lane
+      // already resolve it this way; installing was the odd one out, so a
+      // catalog install silently took HEAD — mid-development commits and all.
+      // Repositories that publish no stable tag still fall back to HEAD.
+      const effectiveRef = await resolveInstallRef(workspace);
+      if (!workspaceIsCurrent(workspace)) return;
+      setSourceFetchElapsedMs(0);
       const result = await checkCapsuleCompatibility({
+        onSourceSyncProgress: (progress) => {
+          if (workspaceIsCurrent(workspace)) {
+            setSourceFetchElapsedMs(progress.elapsedMs);
+          }
+        },
         workspaceId: workspace,
         sourceId: sourceId(),
         gitUrl: gitUrl().trim(),
-        ref: gitRef().trim(),
+        ref: effectiveRef,
         path: listing() ? "." : modulePath().trim() || ".",
         name: name().trim(),
         ...(sourceAuthConnectionId()
@@ -682,7 +730,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         ...(!listing()
           ? { installConfigId: DEFAULT_CAPSULE_INSTALL_CONFIG_ID }
           : {}),
-        compileInstallUx: listing() !== null,
+        // A catalog install always compiles the repository's install UX; a
+        // Git-URL install compiles it too WHEN the repository ships a
+        // manifest ("auto"). The app's own declaration is what decides, not
+        // whether a listing happened to exist.
+        compileInstallUx: listing() !== null ? true : "auto",
         onSourceCreated: (createdSourceId) => {
           if (workspaceIsCurrent(workspace)) setSourceId(createdSourceId);
         },
@@ -693,7 +745,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       // executable merely because the endpoint returned 200; stop before any
       // InstallConfig/Capsule creation and show its diagnostics to the user.
       if (result.level !== "ready") {
-        setError(result.summary || t("installStore.compatibilityFailed"));
+        // The compatibility panel below renders the localized explanation and
+        // its diagnostics; duplicating it in the top banner showed the same
+        // sentence twice, in the analyzer's English.
+        setError(undefined);
         setPhase("configure");
         return;
       }
@@ -707,7 +762,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       const selectedListing = listing();
       const entry = selectedListing
         ? storeEntryFromStoreListing(selectedListing, config)
-        : undefined;
+        : result.repositoryInstallUx?.status === "accepted"
+          ? storeEntryFromRepositoryConfig(config, {
+              gitUrl: gitUrl().trim(),
+              name: name().trim(),
+            })
+          : undefined;
       setStoreEntry(entry);
       setStoreAuthMode(
         entry ? (defaultStoreAuthMode(entry) ?? "oidc") : "oidc",
@@ -760,7 +820,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         await preparePlan(workspace, result, config, rows, undefined);
       }
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      setError(installFlowErrorMessage(cause));
       setPhase("configure");
     } finally {
       setBusy(false);
@@ -856,7 +916,15 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       setPlanRunId(runId);
       setPhase("review");
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      const apiError = cause instanceof ControlApiError ? cause : undefined;
+      if (isDuplicateServiceError(apiError)) {
+        const candidate = uniqueServiceIdCandidate(name().trim());
+        setSuggestedName(candidate);
+        setError(t("new.error.alreadyExistsUseName", { name: candidate }));
+      } else {
+        setSuggestedName(undefined);
+        setError(installFlowErrorMessage(cause));
+      }
       setPhase(storeEntry() ? "setup" : "configure");
     } finally {
       setBusy(false);
@@ -903,7 +971,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       setSourceAuthConnectionId("");
       setPhase("configure");
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      setError(installFlowErrorMessage(cause));
     } finally {
       setBusy(false);
     }
@@ -998,7 +1066,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       }
       setPhase("entry");
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      setError(installFlowErrorMessage(cause));
       setPhase(composition || options ? "entry-confirm" : "browse");
     } finally {
       setBusy(false);
@@ -1132,6 +1200,22 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const appConnectHref = () =>
     createAppHandoffConnectHref(appHandoff, interfaceUrl());
 
+  /**
+   * A name collision is the one install failure the user can fix in one click,
+   * and it only surfaces after the whole source analysis has run. Offer the
+   * free name rather than making them invent one and wait again.
+   */
+  const [suggestedName, setSuggestedName] = createSignal<string | undefined>(
+    undefined,
+  );
+  const acceptSuggestedName = () => {
+    const candidate = suggestedName();
+    if (!candidate) return;
+    setName(candidate);
+    setSuggestedName(undefined);
+    setError(undefined);
+  };
+
   const compatibilityBlocker = () => {
     const result = compatibility();
     return result && result.level !== "ready" ? result : undefined;
@@ -1172,6 +1256,17 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         {(message) => (
           <div class="iv-error" role="alert">
             {message()}
+            <Show when={suggestedName()}>
+              {(candidate) => (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={acceptSuggestedName}
+                >
+                  {t("new.error.useSuggestedName", { name: candidate() })}
+                </Button>
+              )}
+            </Show>
           </div>
         )}
       </Show>
@@ -1230,14 +1325,18 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           </div>
           <aside class="iv-source-evidence" role="note">
             <strong>
-              {compositionEntry() ? "Composition" : "CapsuleSourceOptions"}
+              {compositionEntry()
+                ? t("installStore.entryKindComposition")
+                : t("installStore.entryKindSourceOptions")}
             </strong>
             <p>
               <code>{externalDocument()?.git}</code>
             </p>
             <p>
               ref{" "}
-              <code>{externalDocument()?.ref ?? "latest stable SemVer"}</code> ·
+              <code>
+                {externalDocument()?.ref ?? t("installStore.refLatestStable")}
+              </code> ·
               file <code>{externalDocument()?.path}</code>
             </p>
           </aside>
@@ -1270,7 +1369,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           <Show when={entryEvidence()}>
             {(evidence) => (
               <aside class="iv-source-evidence" role="note">
-                <strong>Immutable source evidence</strong>
+                <strong>{t("installStore.evidenceTitle")}</strong>
                 <p>
                   <code>{evidence().url}</code> @{" "}
                   <code>{evidenceRef(evidence())}</code>
@@ -1286,7 +1385,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                     ({evidence().sizeBytes} bytes)
                   </Show>
                 </p>
-                <p>Only the explicitly selected source below will be added.</p>
+                <p>{t("installStore.evidenceOnlySelected")}</p>
               </aside>
             )}
           </Show>
@@ -1337,7 +1436,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           <Show when={entryEvidence()}>
             {(evidence) => (
               <aside class="iv-source-evidence" role="note">
-                <strong>Source evidence retained from the chooser</strong>
+                <strong>{t("installStore.evidenceRetained")}</strong>
                 <p>
                   <code>{evidence().url}</code> @{" "}
                   <code>{evidenceRef(evidence())}</code>
@@ -1346,27 +1445,46 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                   immutable commit <code>{evidence().commit}</code> · path{" "}
                   <code>{evidence().path}</code>
                 </p>
-                <p>Review this evidence before adding the selected service.</p>
+                <p>{t("installStore.evidenceReview")}</p>
               </aside>
             )}
           </Show>
           <Show when={compatibilityBlocker()}>
             {(result) => (
               <aside class="iv-compat-warning" role="alert">
-                <Badge
-                  tone={result().level === "unsupported" ? "danger" : "warn"}
-                >
-                  {result().level === "unsupported"
-                    ? "Cannot be added"
-                    : "Needs manual changes"}
+                <Badge tone={compatibilityTone(result().level)}>
+                  {compatibilityLabel(result().level)}
                 </Badge>
-                <p>
-                  {result().summary || t("installStore.compatibilityFailed")}
-                </p>
+                {/* The analyzer speaks English prose ("No .tf files were
+                    found..."); the display layer turns it into the product's
+                    own localized explanation. */}
+                <p>{compatibilitySummaryDisplay(result())}</p>
+                {/* The analyzer itself failed to run: that is not evidence
+                    the service is unsupported, so offer the retry instead of
+                    leaving a dead "cannot be added" verdict. */}
+                <Show when={compatibilityCheckLooksTransient(result())}>
+                  <p>{t("new.compat.retryTransient")}</p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    busy={busy()}
+                    onClick={() => void prepareInstall()}
+                  >
+                    {t("common.retry")}
+                  </Button>
+                </Show>
                 <For each={result().diagnostics}>
-                  {(diagnostic) => (
-                    <p>{diagnostic.detail || diagnostic.message}</p>
-                  )}
+                  {(diagnostic) => {
+                    const display = compatibilityDiagnosticDisplay(diagnostic);
+                    return (
+                      <p>
+                        {display.message}
+                        <Show when={display.detail}>
+                          {(detail) => <span> {detail()}</span>}
+                        </Show>
+                      </p>
+                    );
+                  }}
                 </For>
               </aside>
             )}
@@ -1464,7 +1582,14 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         >
           <Spinner size={24} />
           <h2>{t("installStore.preparing")}</h2>
-          <p>{t("installStore.preparingHint")}</p>
+          {/* Source fetch can legitimately run for a minute or more. A static
+              spinner for that long reads as "hung", so say what is happening
+              once the wait stops looking instantaneous. */}
+          <p>
+            {sourceFetchElapsedMs() > 5_000
+              ? t("installStore.preparingFetching")
+              : t("installStore.preparingHint")}
+          </p>
         </section>
       </Show>
 
@@ -1601,30 +1726,27 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               <>
                 <Show when={entry().setupProjectionInvalid}>
                   <aside class="iv-setup-note" role="alert">
-                    <strong>Service setup is unavailable</strong>
+                    <strong>{t("installStore.setupUnavailable")}</strong>
                     <p>{t("installStore.setupInvalid")}</p>
                   </aside>
                 </Show>
                 <Show when={storeSupportsOidc(entry())}>
                   <aside class="iv-setup-note" role="status">
-                    <strong>Takosumi account sign-in</strong>
-                    <p>
-                      This service uses its declared OIDC client projection. No
-                      password is sent as a Capsule variable.
-                    </p>
+                    <strong>{t("installStore.accountSignIn")}</strong>
+                    <p>{t("installStore.accountSignInHint")}</p>
                   </aside>
                 </Show>
                 <Show
                   when={storeRequiresUnavailableSecretMaterialization(entry())}
                 >
                   <aside class="iv-setup-note" role="alert">
-                    <strong>Secret setup is unavailable</strong>
+                    <strong>{t("installStore.secretSetupUnavailable")}</strong>
                     <p>{t("installStore.secretUnavailable")}</p>
                   </aside>
                 </Show>
                 <Show when={storePublicEndpoint(entry())}>
                   <FormField
-                    label="Managed hostname"
+                    label={t("installStore.managedHostname")}
                     hint="The selected mode is passed to the service-owned public endpoint allocation."
                   >
                     <Select
@@ -1645,7 +1767,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                 </Show>
                 <Show when={visibleStoreInstallFeatures(entry()).length > 0}>
                   <section class="iv-feature-list">
-                    <h3>Optional features</h3>
+                    <h3>{t("installStore.optionalFeatures")}</h3>
                     <For each={visibleStoreInstallFeatures(entry())}>
                       {(feature) => (
                         <div class="iv-feature">

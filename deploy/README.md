@@ -6,19 +6,25 @@ The public service surface is centered on Workspace, Project, Capsule, Source,
 ProviderConnection, CredentialRecipe, ProviderBinding, Secret, Run,
 StateVersion, Output, Runner, AuditEvent, and Operator. OSS Takosumi runs
 existing OpenTofu/Terraform providers as-is. Compatibility API framework and
-scoped provider compatibility profiles are Takosumi capabilities; official
-managed resources, billing enforcement, and operated backend capacity belong to
-Takosumi for Operator / Takosumi Cloud.
+scoped provider compatibility profiles are Takosumi capabilities. Managed
+resources, billing enforcement, and operated backend capacity are not OSS Core
+authority: Takosumi Hosted may own retail / commerce / client composition, while
+Takoserver owns managed supply, Offering, provider credentials, capacity, and
+Host execution.
 
 The directories under `deploy/` are therefore **build-target templates and
 substrate runbooks**, not a separate public product surface. The canonical
-operator target is the single Takosumi platform worker in `deploy/platform/`,
-served from `app.takosumi.com`, which composes the accounts plane, the
-in-process `/api` control plane, the dashboard SPA, and the OpenTofu runner
-container. There is no separate Cloudflare control-plane scaffold: the
+operator target is the single Takosumi platform Worker in `deploy/platform/`,
+served from an explicit operator-selected origin. It composes the Accounts
+plane, the in-process `/api` control plane, the dashboard SPA, and the OpenTofu
+runner container. There is no separate Cloudflare control-plane scaffold: the
 control-plane handler (`worker/src/handler.ts`) and account-plane handler
 (`deploy/accounts-cloudflare/src/handler.ts`) are composed directly by
 `deploy/platform/worker.ts`.
+
+The platform Worker deploys this control-plane component only. It does not deploy
+tenant customer module code, managed customer ModuleWorkers/WfP, or a Takoserver
+Host; those execute or deploy through their owning contracts.
 
 ## What lives here
 
@@ -26,7 +32,7 @@ control-plane handler (`worker/src/handler.ts`) and account-plane handler
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `platform/`            | Operator Takosumi platform worker (the single composed build target): accounts plane + in-process control plane + dashboard SPA + OpenTofu runner container. |
 | `accounts-cloudflare/` | Account-plane handler entry point (OIDC issuer / billing / dashboard / deploy facade), mounted in-process only by the operator Takosumi platform worker.     |
-| `node-postgres/`       | Bun + Postgres reference composer (`buildComposedServer`) consumed by `local-substrate/`'s cloud profile.                                                    |
+| `node-postgres/`       | Bun + Postgres self-host profile: compose stack with the bundled OpenTofu runner (also the composer `local-substrate/`'s cloud profile consumes).            |
 | `local-substrate/`     | Local Pebble + CoreDNS + Caddy dev substrate for production-equivalent hostname access.                                                                      |
 | `observability/`       | Reference observability wiring.                                                                                                                              |
 

@@ -83,13 +83,19 @@ the fixed generic collector classes; it cannot define a new collector DSL or
 attach host vocabulary to the OSS baseline.
 
 The OSS contract runs existing providers through ProviderConnection,
-CredentialRecipe, ProviderBinding, and per-run env/file injection. It must not
-define complete provider-compatible cloud APIs or official managed capacity as
-OSS product concepts. Compatibility API profiles are scoped capabilities such as
-`compat.s3.v1`, `compat.oci.v1`, `compat.cloudevents.v1`, and
-`compat.kubernetes.crd.v1`; operator-provided deployment targets, billing
-enforcement, quota, usage rating, support, and resource backends belong to
-Takosumi for Operator / Takosumi Cloud composition.
+CredentialRecipe, ProviderBinding, and per-run env/file injection. In the
+customer BYOC path, the Workspace/customer owns the vendor account, credential,
+and resulting resource. The contract must not define complete provider-compatible
+cloud APIs or managed capacity as OSS product concepts. Compatibility API profiles
+are scoped capabilities such as `compat.s3.v1`, `compat.oci.v1`,
+`compat.cloudevents.v1`, and `compat.kubernetes.crd.v1`.
+
+Takosumi Hosted may own retail, commerce, and client composition. Takoserver owns
+optional managed supply, Offerings, capacity, provider installation/credentials,
+backend, and Host execution. Takosumi OSS never receives or selects Takoserver's
+parent provider credential, WfP namespace/dispatcher, or native identity.
+Operator-provided deployment targets, billing enforcement, quota, usage rating,
+support, and resource backends are external to this OSS contract.
 
 A CredentialRecipe auth mode may carry localized `presentation`, `inputHints`,
 and an HTTPS setup guide. Those fields let any service-installed recipe render

@@ -10,6 +10,11 @@ import type {
   InterfaceResolutionResult,
 } from "./service.ts";
 
+export type InterfaceOutputStore = Pick<
+  OpenTofuControlStore,
+  "getCapsule" | "getOutput" | "getLatestStateVersion"
+>;
+
 type CapsuleOutputResolution =
   | {
       readonly ok: true;
@@ -68,7 +73,7 @@ export function resourceLifecycleInterfaceWorkspaceInput(event: {
 export class OutputBackedInterfaceInputResolver implements InterfaceInputResolver {
   constructor(
     readonly options: {
-      readonly opentofu: OpenTofuControlStore;
+      readonly opentofu: InterfaceOutputStore;
       readonly resources?: ResourceShapeStore;
       readonly resolveResourceWorkspace?: ResourceInterfaceWorkspaceResolver;
     },

@@ -1,9 +1,13 @@
 /**
- * TCS store servers the dashboard queries. An operator may configure one
- * canonical discovery server with VITE_TAKOSUMI_TCS_STORE_URL. OSS selects no
- * hosted store implicitly; users can add additional servers through
- * localStorage.
+ * TCS store servers the dashboard queries. An operator configures one
+ * canonical discovery server at RUNTIME via `TAKOSUMI_TCS_STORE_URL` (served
+ * through product discovery — see runtime-capabilities.ts), with the
+ * build-time VITE_TAKOSUMI_TCS_STORE_URL kept only as the Cloud build's
+ * fallback. OSS selects no hosted store implicitly; users can add additional
+ * servers through localStorage.
  */
+import { runtimeStoreUrl } from "./runtime-capabilities.ts";
+
 const LS_KEY = "tcs.stores";
 
 /**
@@ -15,11 +19,19 @@ export function resolveDefaultStoreUrl(configured: string | undefined): string {
 }
 
 /**
- * Canonical store this build queries by default. Empty means no default store.
+ * Build-time fallback store. Empty means no build-time default store.
  */
 export const DEFAULT_STORE_URL = resolveDefaultStoreUrl(
   import.meta.env.VITE_TAKOSUMI_TCS_STORE_URL,
 );
+
+/**
+ * Canonical store for THIS deployment: the runtime-configured endpoint wins
+ * over the build-time fallback. Empty means no default store.
+ */
+export function defaultStoreUrl(): string {
+  return resolveDefaultStoreUrl(runtimeStoreUrl()) || DEFAULT_STORE_URL;
+}
 
 export interface TcsServer {
   readonly base: string;
@@ -56,7 +68,7 @@ function writeUserServers(servers: string[]): void {
 }
 
 export function getTcsServers(): TcsServer[] {
-  const def = normalizeBase(DEFAULT_STORE_URL);
+  const def = normalizeBase(defaultStoreUrl());
   const users = readUserServers()
     .map(normalizeBase)
     .filter((b) => b && (!def || b !== def));
@@ -81,7 +93,7 @@ export function addTcsServer(raw: string): string | null {
     return null;
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  const def = normalizeBase(DEFAULT_STORE_URL);
+  const def = normalizeBase(defaultStoreUrl());
   if (def && base === def) return base;
   const users = readUserServers().map(normalizeBase);
   if (!users.includes(base)) writeUserServers([...users, base]);

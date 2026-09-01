@@ -1,0 +1,131 @@
+# Takosumi deploy-plane alert rules (Prometheus / Grafana-compatible).
+#
+# Every alert `docs/operations/oncall.md` names has a backing rule here, and
+# every metric referenced is emitted by the platform worker:
+#   - counters/histograms accumulate in durable aggregate rows
+#     (core/domains/observability/metric_layout.ts), so rate()/increase() are
+#     monotonic across event retention;
+#   - gauges are re-derived from the run ledger every scheduler tick
+#     (emitRunBacklogGauges in deploy/platform/worker.ts).
+#
+# Thresholds are starting points for a small deployment; operators tune them
+# in their own rule file rather than editing this artifact in place.
+groups:
+  - name: takosumi-deploy
+    rules:
+      - alert: TakosumiStaleQueuedRuns
+        expr: max(takosumi_run_queue_oldest_age_seconds) > 600
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Queued runs are not being claimed"
+          description: >-
+            The oldest queued run has waited more than 10 minutes. Check the
+            RunOwner Durable Object health and the runner container capacity
+            (docs/operations/troubleshooting.md, stuck-run table).
+
+      - alert: TakosumiRunnerHeartbeatStale
+        expr: max(takosumi_runs_heartbeat_stale) > 0
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: "Running runs with stale heartbeats"
+          description: >-
+            At least one run has stayed `running` past the heartbeat-stale
+            threshold. The repair sweep should reclaim it; if this alert
+            persists the sweep itself is failing (see TakosumiRepairFailures).
+
+      - alert: TakosumiRepairFailures
+        expr: sum(increase(takosumi_run_repair_total{outcome="failed"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Scheduled run repair is failing"
+          description: >-
+            The recovery sweep logged per-run repair failures
+            (`scheduled.run_repair_dispatch_failed` in the worker logs names
+            the runs). Stuck runs and unbilled applies stop healing while this
+            fires.
+
+      - alert: TakosumiBillingCaptureBacklog
+        expr: max(takosumi_billing_capture_pending) > 0
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Applies with unfinalized billing capture"
+          description: >-
+            Terminal applies still carry the durable billing.capture.pending
+            marker after 30 minutes. The repair sweep re-drives finalization;
+            a persistent backlog means the billing host or the sweep is down.
+
+      - alert: TakosumiWorkItemBacklogGrowing
+        expr: sum by (kind) (takosumi_work_items_backlog) > 25
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Scheduled-intent backlog is not draining"
+          description: >-
+            More than 25 due work items of one kind (deferred destroys,
+            auto-replans) have waited over 30 minutes. Check the cron drain
+            outcomes (takosumi_work_items_processed_total{outcome="failed"}).
+
+      - alert: TakosumiApplyFailureRate
+        expr: >-
+          sum(rate(takosumi_deploy_operation_count{operation_kind="apply",status="failed"}[15m]))
+            / clamp_min(sum(rate(takosumi_deploy_operation_count{operation_kind="apply"}[15m])), 1)
+          > 0.5
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: "More than half of applies are failing"
+          description: >-
+            Sustained apply failure across tenants usually means a provider or
+            runner substrate problem rather than user configuration.
+
+      - alert: TakosumiRunnerCapacitySaturated
+        expr: sum(rate(takosumi_runner_capacity_exhausted_total[15m])) > 0.05
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The runner fleet is refusing work for capacity"
+          description: >-
+            Runs are being requeued because every runner slot is taken. They
+            are not failing yet — the control plane waits out
+            TAKOSUMI_RUNNER_CAPACITY_QUEUE_BUDGET_MINUTES first — so this is
+            the window to raise the container ceiling (max_instances, or
+            TAKOSUMI_RUNNER_MAX_CONCURRENT_RUNS on the bundled runner) before
+            installs start timing out.
+
+      - alert: TakosumiRunnerCapacityTimeouts
+        expr: >-
+          sum(rate(takosumi_deploy_operation_count{status="failed"}[15m])) > 0
+          and
+          sum(rate(takosumi_runner_capacity_exhausted_total[15m])) > 0.05
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Runs are failing while the runner fleet is saturated"
+          description: >-
+            Capacity refusals have outlasted the queue budget, so user-visible
+            installs are now failing as runner_capacity_timeout. Raise the
+            runner ceiling; the budget only postpones this.
+
+      - alert: TakosumiMetricsScrapeAbsent
+        expr: absent(takosumi_metrics_scrape_info)
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The /metrics endpoint stopped answering scrapes"
+          description: >-
+            Prometheus has not scraped the platform worker for 10 minutes:
+            the scrape token, the worker, or the network path is broken —
+            every other alert is blind while this fires.

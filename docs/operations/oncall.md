@@ -57,9 +57,22 @@ exposure is SEV-1 until disproven.
 
 ## Paging Path
 
-1. Alert fires from Takosumi monitoring: HTTP 5xx / latency, deploy success
-   rate, stale queued Runs, RunOwner/runner health, persistence health, quota/showback ledger drift, secret rotation
-   failure.
+1. Alert fires from Takosumi monitoring. The shipped rule set is
+   `deploy/observability/prometheus/takosumi-alerts.yaml`; the rule names map
+   to this runbook as follows.
+
+   | Alert rule                       | What it means / first move                                          |
+   | -------------------------------- | ------------------------------------------------------------------- |
+   | `TakosumiStaleQueuedRuns`        | queued runs not claimed — RunOwner/runner capacity (troubleshooting.md stuck-run table) |
+   | `TakosumiRunnerHeartbeatStale`   | running runs with dead heartbeats — repair sweep should reclaim     |
+   | `TakosumiRepairFailures`         | the recovery sweep itself is failing — nothing else self-heals      |
+   | `TakosumiBillingCaptureBacklog`  | applies with unfinalized billing capture — billing host or sweep    |
+   | `TakosumiWorkItemBacklogGrowing` | deferred destroys / scheduled intent not draining                   |
+   | `TakosumiApplyFailureRate`       | cross-tenant apply failures — provider or runner substrate          |
+   | `TakosumiMetricsScrapeAbsent`    | monitoring itself is blind — fix before trusting any other signal   |
+
+   HTTP 5xx / latency, quota/showback ledger drift, and secret-rotation
+   failure alerts remain operator-composed on top of this base set.
 2. Paging provider routes to primary on-call.
 3. Primary acknowledges within target and opens incident channel.
 4. If primary does not ack within the configured target, page secondary and

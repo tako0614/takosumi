@@ -1,6 +1,32 @@
 import { expect, test } from "bun:test";
 
-import { wrapPgResult } from "../../../../core/adapters/storage/pg_result.ts";
+import {
+  isPostgresUniqueViolation,
+  wrapPgResult,
+} from "../../../../core/adapters/storage/pg_result.ts";
+
+test("isPostgresUniqueViolation recognizes Postgres unique-violation codes", () => {
+  expect(isPostgresUniqueViolation({ code: "23505" })).toBe(true);
+  expect(isPostgresUniqueViolation({ code: 23505 })).toBe(true);
+});
+
+test("isPostgresUniqueViolation recognizes duplicate and unique messages", () => {
+  expect(
+    isPostgresUniqueViolation({
+      message: "duplicate key value violates unique constraint",
+    }),
+  ).toBe(true);
+  expect(isPostgresUniqueViolation(new Error("duplicate key value"))).toBe(true);
+  expect(isPostgresUniqueViolation(new Error("unique constraint failed"))).toBe(true);
+});
+
+test("isPostgresUniqueViolation rejects unrelated errors", () => {
+  expect(isPostgresUniqueViolation(undefined)).toBe(false);
+  expect(isPostgresUniqueViolation("duplicate key value")).toBe(false);
+  expect(
+    isPostgresUniqueViolation({ code: "42P01", message: "relation missing" }),
+  ).toBe(false);
+});
 
 test("wrapPgResult returns empty rows for DDL (rows=undefined, rowCount=null)", () => {
   // What npm:pg returns for `CREATE TABLE`, `ALTER TABLE`, etc.

@@ -22,6 +22,11 @@ import type {
 } from "../resource-shape/mod.ts";
 import type { ResourceShapeService } from "../resource-shape/service.ts";
 
+export type WorkspaceViewControlStore = Pick<
+  OpenTofuControlStore,
+  "getWorkspace" | "getWorkspaceMember" | "listCapsulesPage"
+>;
+
 export type WorkspaceViewErrorCode =
   | "workspace_view_access_denied"
   | "workspace_view_cursor_invalid";
@@ -97,7 +102,7 @@ export interface WorkspaceResourcesProjectionReader {
   }>;
 }
 
-export type WorkspaceViewControlStoreFactory = () => OpenTofuControlStore;
+export type WorkspaceViewControlStoreFactory = () => WorkspaceViewControlStore;
 
 export interface WorkspaceViewsServiceOptions {
   readonly controlStoreFactory: WorkspaceViewControlStoreFactory;
@@ -272,7 +277,7 @@ export class WorkspaceViewsService implements WorkspaceViews {
   }
 
   async #readGenericProjection(input: {
-    readonly controlStore: OpenTofuControlStore;
+    readonly controlStore: WorkspaceViewControlStore;
     readonly space: string;
     readonly workspaceId: string;
     readonly resources: PageParams | null;

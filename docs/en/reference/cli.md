@@ -5,6 +5,18 @@ dashboard. The normal product flow is the dashboard `/install?git=...` / `/new`
 path: choose a service, choose the provider connection it should use, then
 plan / apply. The CLI can target any Takosumi endpoint.
 
+## Getting it
+
+The CLI is not published to npm yet; run it from a repository checkout.
+
+```bash
+bun install
+bun run cli -- status <run-id>
+```
+
+To type `takosumi <args>` directly, put it on your PATH with
+`cd cli && bun link`. The examples below use the linked `takosumi` form.
+
 ```bash
 export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com
 export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
@@ -15,7 +27,11 @@ takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
-When using Takosumi Cloud, the hosted endpoint is `https://app.takosumi.com`.
+Takosumi Cloud is a retired historical identity; do not use or advertise
+`https://app.takosumi.com` as a current hosted endpoint. Point the CLI at an
+explicit operator Takosumi origin. Takosumi Hosted retail/client composition and
+Takoserver managed supply use the client/endpoint contracts published by those
+products.
 
 The CLI does not run OpenTofu directly. The normal creation flow is dashboard
 Git URL install, which creates Source / Capsule / Run records and pins the Git
@@ -28,8 +44,8 @@ local-upload path for `takosumi deploy` / `takosumi plan` is retired.
 ## Platform Readiness Contributions
 
 `takosumi launch-readiness template` generates the baseline shared by OSS and
-Operator. When a hosted service or another edition requires additional
-operational evidence, the owner maintains a versioned
+Operator. When Takosumi Hosted or Takoserver requires additional operational
+evidence, the owner maintains a versioned
 `PlatformReadinessContribution` JSON and selects it at template-generation time
 with `--contribution-file <path>`.
 

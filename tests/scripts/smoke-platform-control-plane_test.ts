@@ -9,19 +9,37 @@ import {
   capsuleFromLedgerResponse,
   createdCapsuleFromCreateResponse,
   dryRunResult,
+  failedSmokeWorkerUrl,
   isSmokeProviderConnectionMatch,
   isSelectableCapsuleInstallConfig,
   main,
+  parseSmokeProviderBindings,
   resolveOptions,
   selectSmokeInstallConfigId,
   shouldMarkPendingSmokeCapsuleError,
   smokeCapsuleProviderBindingsBody,
+  smokeProviderBindingFromSource,
   smokeSourceCompatibilityCheckBody,
   smokeSourceCapsuleCreateBody,
   smokeCloudflareProviderConnectionMatch,
   smokeWorkspaceCloudflareConnectionBody,
   assertServiceIdentityResponse,
 } from "../../scripts/smoke-platform-control-plane.ts";
+
+test("failed platform smoke does not require projected Outputs before apply", () => {
+  expect(
+    failedSmokeWorkerUrl(
+      {
+        verificationMode: "cloudflare-worker",
+        runtimePublicUrlOutput: "launch_url",
+        cloudflareWorkerNameOutput: "service_runtime_name",
+        appName: "takos-smoke",
+        cloudflareWorkersSubdomain: "example",
+      },
+      undefined,
+    ),
+  ).toBe("");
+});
 
 test("Cloudflare public URL verification allows bounded edge propagation", () => {
   expect(CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS).toBe(180_000);
@@ -524,18 +542,226 @@ test("platform control-plane smoke accepts an existing ProviderConnection only i
 test("platform control-plane smoke binds an existing provider by its source", () => {
   expect(
     smokeCapsuleProviderBindingsBody({
-      providerConnectionId: "pcn_existing_takoform",
-      providerSource: "registry.opentofu.org/tako0614/takoform",
+      bindings: [
+        {
+          provider: "registry.terraform.io/tako0614/takoform",
+          moduleLocalName: "takoform",
+          connectionId: "pcn_existing_takoform",
+        },
+      ],
     }),
   ).toEqual({
     bindings: [
       {
-        provider: "registry.opentofu.org/tako0614/takoform",
-        alias: "main",
+        provider: "registry.terraform.io/tako0614/takoform",
+        moduleLocalName: "takoform",
         connectionId: "pcn_existing_takoform",
       },
     ],
   });
+});
+
+test("generated smoke bindings derive the exact module-local name from the source", () => {
+  expect(
+    smokeProviderBindingFromSource(
+      "registry.terraform.io/tako0614/takoform",
+      "pcn_takoform",
+    ),
+  ).toEqual({
+    provider: "registry.terraform.io/tako0614/takoform",
+    moduleLocalName: "takoform",
+    connectionId: "pcn_takoform",
+  });
+  expect(
+    smokeProviderBindingFromSource(
+      "registry.opentofu.org/cloudflare/cloudflare",
+      "pcn_cloudflare",
+    ),
+  ).toEqual({
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    moduleLocalName: "cloudflare",
+    connectionId: "pcn_cloudflare",
+  });
+});
+
+test("platform control-plane smoke preserves explicit child/root aliases", () => {
+  expect(
+    smokeCapsuleProviderBindingsBody({
+      bindings: [
+        {
+          provider: "registry.opentofu.org/cloudflare/cloudflare",
+          moduleLocalName: "cloudflare",
+          childAlias: "main",
+          rootAlias: "main",
+          connectionId: "pcn_cloudflare",
+        },
+      ],
+    }),
+  ).toEqual({
+    bindings: [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        moduleLocalName: "cloudflare",
+        childAlias: "main",
+        rootAlias: "main",
+        connectionId: "pcn_cloudflare",
+      },
+    ],
+  });
+});
+
+test("platform control-plane smoke rejects legacy-only or ambiguous ProviderBinding input", async () => {
+  const base = {
+    dryRun: true,
+    url: "https://app-staging.takosumi.com",
+    workspace: "ws_test",
+    cloudflareConnectionMode: "none",
+    verificationMode: "opentofu",
+    sourceGitUrl: "https://github.com/example/takoform.git",
+  } as const;
+  const env = { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token" };
+
+  await expect(
+    resolveOptions(
+      {
+        ...base,
+        providerBindingsJson: JSON.stringify([
+          {
+            provider: "registry.terraform.io/tako0614/takoform",
+            alias: "main",
+            connectionId: "pcn_takoform",
+          },
+        ]),
+      },
+      env,
+    ),
+  ).rejects.toThrow(/unknown fields: alias/u);
+  await expect(
+    resolveOptions(
+      {
+        ...base,
+        providerBindingsJson: JSON.stringify([
+          {
+            provider: "registry.terraform.io/tako0614/takoform",
+            connectionId: "pcn_takoform",
+          },
+        ]),
+      },
+      env,
+    ),
+  ).rejects.toThrow(/moduleLocalName.*non-empty string/u);
+  await expect(
+    resolveOptions(
+      {
+        ...base,
+        providerBindingsJson: JSON.stringify([
+          {
+            provider: "registry.terraform.io/tako0614/takoform",
+            moduleLocalName: "takoform",
+            connectionId: "pcn_takoform",
+          },
+          {
+            provider: "registry.terraform.io/tako0614/takoform",
+            moduleLocalName: "takoform",
+            connectionId: "pcn_other",
+          },
+        ]),
+      },
+      env,
+    ),
+  ).rejects.toThrow(/duplicate ProviderBinding address/u);
+  expect(() =>
+    smokeCapsuleProviderBindingsBody({
+      bindings: [
+        {
+          provider: "registry.terraform.io/tako0614/takoform",
+          moduleLocalName: "takoform",
+          connectionId: "pcn_takoform",
+          alias: "main",
+        } as never,
+      ],
+    }),
+  ).toThrow(/childAlias and rootAlias/u);
+  expect(() =>
+    smokeCapsuleProviderBindingsBody({
+      bindings: [
+        {
+          provider: "registry.terraform.io/tako0614/takoform",
+          connectionId: "pcn_takoform",
+        } as never,
+      ],
+    }),
+  ).toThrow(/moduleLocalName is required/u);
+
+  expect(
+    parseSmokeProviderBindings([
+      {
+        provider: "registry.terraform.io/tako0614/takoform",
+        moduleLocalName: "takoform",
+        connectionId: "pcn_takoform",
+      },
+    ]),
+  ).toEqual([
+    {
+      provider: "registry.terraform.io/tako0614/takoform",
+      moduleLocalName: "takoform",
+      connectionId: "pcn_takoform",
+    },
+  ]);
+});
+
+test("platform control-plane smoke accepts deterministic 0..N bindings from JSON config", async () => {
+  const bindings = [
+    {
+      provider: "registry.terraform.io/tako0614/takoform",
+      moduleLocalName: "takoform",
+      connectionId: "pcn_takoform",
+    },
+    {
+      provider: "registry.opentofu.org/hashicorp/aws",
+      moduleLocalName: "aws",
+      childAlias: "archive",
+      rootAlias: "production",
+      connectionId: "pcn_aws",
+    },
+  ];
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      sourceGitUrl: "https://github.com/example/multi-provider.git",
+      providerBindingsJson: JSON.stringify(bindings),
+    },
+    { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token" },
+  );
+
+  expect(options.providerBindings).toEqual([bindings[1], bindings[0]]);
+  expect(options.providerConnectionId).toBeUndefined();
+  expect(options.providerBindingsExplicit).toBe(true);
+  expect(dryRunResult(options).inputs.providerBindingCount).toBe(2);
+  expect(dryRunResult(options).inputs.providerBindingsDigest).toMatch(
+    /^sha256:[0-9a-f]{64}$/u,
+  );
+
+  const envOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      sourceGitUrl: "https://github.com/example/takoform.git",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      TAKOSUMI_SMOKE_PROVIDER_BINDINGS_JSON: JSON.stringify([bindings[0]]),
+    },
+  );
+  expect(envOptions.providerBindings).toEqual([bindings[0]]);
+  expect(envOptions.providerBindingsExplicit).toBe(true);
 });
 
 test("platform control-plane smoke records an existing ProviderConnection without revoking or leaking secrets", async () => {

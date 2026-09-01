@@ -22,7 +22,9 @@ case "$PROFILE" in
 		K6_REQUEST_RATE="${TAKOSUMI_K6_REQUEST_RATE:-1}"
 		;;
 	postgres)
-		K6_REQUEST_RATE="${TAKOSUMI_K6_REQUEST_RATE:-10}"
+		# The deploy-control read still terminates in the local Miniflare mirror
+		# on this profile; Postgres only changes the account-plane substrate.
+		K6_REQUEST_RATE="${TAKOSUMI_K6_REQUEST_RATE:-1}"
 		;;
 esac
 
@@ -33,8 +35,6 @@ local_substrate_docker_run --rm \
 	--network local-substrate_takos-local-internal \
 	-v "$SCRIPT_DIR:/scripts:ro" \
 	-v "$SUBSTRATE_DIR/caddy/runtime:/ca:ro" \
-	--add-host app.takosumi.test:host-gateway \
-	--add-host service.takosumi.test:host-gateway \
 	-e SSL_CERT_FILE=/ca/pebble-issuance-root.pem \
 	-e K6_CA_CERT_FILE=/ca/pebble-issuance-root.pem \
 	-e TAKOSUMI_K6_REQUEST_RATE="$K6_REQUEST_RATE" \

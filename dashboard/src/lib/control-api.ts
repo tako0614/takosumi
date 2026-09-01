@@ -39,6 +39,7 @@ import type {
   RunLogsResponse as ContractRunLogsResponse,
   Source as ContractSource,
   SourceBuildConfig,
+  PublicSourceSnapshot as ContractPublicSourceSnapshot,
   SourceSnapshot as ContractSourceSnapshot,
   SourceSnapshotFileResponse,
   StableSourceTagResolutionResponse,
@@ -406,7 +407,21 @@ export interface WorkspaceBilling {
 }
 
 export type CapsuleStatus =
-  "pending" | "active" | "stale" | "error" | "disabled" | "destroyed";
+  | "pending"
+  | "active"
+  | "stale"
+  | "error"
+  | "disabled"
+  | "uninstalled"
+  | "destroyed";
+
+/** Pre-destroy data-export evidence stamped before a scheduled destroy runs. */
+export interface CapsulePreDestroyExport {
+  readonly status: "exported" | "failed" | "skipped";
+  readonly backupId?: string;
+  readonly reason?: string;
+  readonly at: string;
+}
 
 export interface Capsule {
   readonly id: string;
@@ -436,6 +451,12 @@ export interface Capsule {
    * always stop and wait for the user.
    */
   readonly autoUpdate?: boolean;
+  /** Set while the two-phase uninstall grace period is running. */
+  readonly uninstalledAt?: string;
+  /** When the deferred destroy becomes due; restore is possible until then. */
+  readonly scheduledDestroyAt?: string;
+  /** Pre-destroy data-export evidence, once the finalizer attempted one. */
+  readonly preDestroyExport?: CapsulePreDestroyExport;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -544,6 +565,14 @@ export type RunStatus =
 
 export type RunPolicyStatus = "pass" | "warn" | "deny";
 
+/** Live resource progress of an executing apply/destroy. */
+export interface RunApplyProgress {
+  readonly completed: number;
+  readonly inFlight: number;
+  readonly currentResource?: string;
+  readonly observedAt: number;
+}
+
 export interface RunChangeSummary {
   readonly add?: number;
   readonly change?: number;
@@ -604,6 +633,8 @@ export interface Run {
   readonly planArtifactRef?: string;
   readonly applyExpected?: RunApplyExpectedGuard;
   readonly summary?: RunChangeSummary;
+  /** Live resource progress while an apply/destroy executes. */
+  readonly applyProgress?: RunApplyProgress;
   readonly planResources?: readonly RunPlanResource[];
   readonly policyStatus?: RunPolicyStatus;
   readonly providerResolutions?: readonly ProviderResolution[];
@@ -773,6 +804,12 @@ export interface SourceSnapshot {
   readonly archiveDigest: string;
   readonly archiveSizeBytes: number;
   readonly repositoryInstallMetadata?: ContractSourceSnapshot["repositoryInstallMetadata"];
+  /**
+   * Whether this snapshot carries a repository-owned install manifest. The
+   * install flow uses it to decide that the REPOSITORY's own declaration is
+   * authoritative, instead of assuming only catalog installs have one.
+   */
+  readonly repositoryManifest?: ContractPublicSourceSnapshot["repositoryManifest"];
   readonly fetchedByRunId: string;
   readonly fetchedAt: string;
 }
@@ -1485,6 +1522,8 @@ export interface DeleteCapsuleResult {
   readonly abandoned?: boolean;
   readonly alreadyDeleted?: boolean;
   readonly projectionStatus?: string;
+  /** Present when the safe default scheduled the two-phase uninstall. */
+  readonly uninstall?: { readonly scheduledDestroyAt?: string };
 }
 
 /**
@@ -1496,10 +1535,22 @@ export interface DeleteCapsuleResult {
  */
 export async function deleteCapsule(
   capsuleId: string,
+  options: { readonly mode?: "immediate" | "scheduled" } = {},
 ): Promise<DeleteCapsuleResult | unknown> {
+  const query = options.mode ? `?mode=${options.mode}` : "";
   return await controlFetch<DeleteCapsuleResult | unknown>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}`,
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}${query}`,
     { method: "DELETE" },
+  );
+}
+
+/** Restores an uninstalled Capsule during its grace period. */
+export async function restoreCapsule(
+  capsuleId: string,
+): Promise<{ readonly capsule: Capsule }> {
+  return await controlFetch<{ readonly capsule: Capsule }>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/restore`,
+    { method: "POST" },
   );
 }
 
@@ -1616,7 +1667,7 @@ export async function checkCapsuleCompatibility(input: {
    * declaration into a DB-owned InstallConfig before the dashboard renders it.
    * The repository document itself is never returned to this client.
    */
-  readonly compileInstallUx?: boolean;
+  readonly compileInstallUx?: boolean | "auto";
   readonly signal?: AbortSignal;
   readonly onSourceCreated?: (sourceId: string) => void;
   readonly onSourceSyncProgress?: (
@@ -1633,7 +1684,11 @@ export async function checkCapsuleCompatibility(input: {
         url: input.gitUrl,
         defaultRef: input.ref,
         defaultPath: ".",
-        autoSync: true,
+        // Auto-sync serves an installed Capsule; a Source with none has
+        // nothing to watch for. Creating it enabled meant every abandoned
+        // install attempt left a Source the scheduler re-synced forever.
+        // The install turns it on once a Capsule actually exists.
+        autoSync: false,
         ...(input.authConnectionId
           ? { authConnectionId: input.authConnectionId }
           : {}),
@@ -1656,6 +1711,23 @@ export async function checkCapsuleCompatibility(input: {
     onProgress: input.onSourceSyncProgress,
   });
   input.onSourceSnapshot?.(snapshot);
+  // "auto": let the REPOSITORY decide. A repo that ships an install manifest
+  // gets its own inputs, module path, and presentation compiled — whether the
+  // user arrived from a catalog listing or pasted the Git URL. Gating this on
+  // "a listing exists" made a correct app install worse for no reason the app
+  // could control. An explicitly pinned module path or InstallConfig means the
+  // user overrode the manifest on purpose, so auto stands down.
+  const manifestIsAuthoritative =
+    snapshot.repositoryManifest?.status === "present";
+  const pinnedModulePath = Boolean(input.path && input.path !== ".");
+  // A pinned module path always wins, including for a catalog install: the
+  // server refuses to accept both, and silently dropping the user's choice
+  // installed a different module than the one they selected.
+  const compileInstallUx = pinnedModulePath
+    ? false
+    : input.compileInstallUx === "auto"
+      ? manifestIsAuthoritative && !input.installConfigId
+      : input.compileInstallUx === true;
   const body = await controlFetch<{
     report: {
       readonly id: string;
@@ -1692,13 +1764,18 @@ export async function checkCapsuleCompatibility(input: {
       // Gate the pre-install check against the selected InstallConfig's policy
       // when one is supplied (the install view passes the Workspace's resolved
       // profile), otherwise fall back to the instance-wide default policy.
-      ...(input.installConfigId
+      // The server resolves installConfigId and modulePath itself when it
+      // compiles the repository manifest, and rejects the request if a client
+      // also supplies them.
+      ...(input.installConfigId && !compileInstallUx
         ? { installConfigId: input.installConfigId }
         : {}),
-      ...(input.compileInstallUx
+      ...(compileInstallUx
         ? { compileInstallUx: true, capsuleName: input.name }
         : {}),
-      ...(input.path && input.path !== "." ? { modulePath: input.path } : {}),
+      ...(pinnedModulePath && !compileInstallUx
+        ? { modulePath: input.path }
+        : {}),
     },
   });
   const diagnostics: CapsuleCompatibilityDiagnostic[] = (

@@ -1,5 +1,12 @@
 # Takosumi Cloud サポート
 
+> **歴史資料（アーカイブ）— 現行の正本ではありません。** このページは退役した
+> Takosumi Cloud の計画・実装を記録したものです。現行の availability、pricing、SLA、
+> support、production authority を示しません。Takosumi Hosted が新しい
+> retail/commerce/client composition docs を所有し、managed supply、capacity、provider
+> credential、Offering は Takoserver が所有します。本文は歴史的証拠として保持しており、
+> 現行サービスの根拠に使わないでください。
+
 ## 公式窓口
 
 Takosumi Cloudの公式サポート窓口は

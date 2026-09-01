@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
+import { PGlite } from "@electric-sql/pglite";
 import {
   PostgresAccountsStore,
   type PostgresQueryClient,
   type PostgresQueryResult,
 } from "../../../../accounts/service/src/postgres-store.ts";
+import { sha256Text } from "../../../../accounts/service/src/encoding.ts";
 import { requireAccountsBearer } from "../../../../accounts/service/src/account-session.ts";
 
 class RecordingPostgresClient implements PostgresQueryClient {
@@ -16,6 +18,10 @@ class RecordingPostgresClient implements PostgresQueryClient {
   ): Promise<PostgresQueryResult<T>> {
     this.calls.push({ sql, args });
     return Promise.resolve({ rows: (this.queuedRows.shift() ?? []) as T[] });
+  }
+
+  transaction<T>(run: (client: PostgresQueryClient) => Promise<T>): Promise<T> {
+    return run(this);
   }
 }
 
@@ -33,10 +39,17 @@ test("PostgresAccountsStore hashes OAuth credentials before writing", async () =
     expiresAt: 2_000,
   });
 
-  expect(client.calls[0].sql).toContain('"accounts_v1"."authorization_codes"');
-  expect(typeof client.calls[0].args[0]).toEqual("string");
-  expect(String(client.calls[0].args[0])).toContain("sha256:");
-  expect(client.calls[0].args[0]).not.toEqual("plain-code");
+  const legacyWrite = client.calls.find((call) =>
+    call.sql.includes("INSERT INTO accounts_v1.authorization_codes"),
+  );
+  const lifecycleWrite = client.calls.find((call) =>
+    call.sql.includes("INSERT INTO accounts_v1.authorization_code_redemptions"),
+  );
+  expect(legacyWrite).toBeDefined();
+  expect(lifecycleWrite).toBeDefined();
+  expect(String(legacyWrite?.args[0])).toStartWith("sha256:");
+  expect(legacyWrite?.args).not.toContain("plain-code");
+  expect(lifecycleWrite?.args).not.toContain("plain-code");
 });
 
 test("PostgresAccountsStore revokes a dynamic OIDC client by registration id", async () => {
@@ -548,10 +561,14 @@ test("PostgresAccountsStore maps personal access token records", async () => {
   });
 });
 
-test("PostgresAccountsStore consumes authorization codes with DELETE RETURNING mapping", async () => {
+test("PostgresAccountsStore opens a versioned authorization-code snapshot under row lock", async () => {
   const client = new RecordingPostgresClient();
   client.queuedRows.push([
     {
+      code_hash: "sha256:code-hash",
+      record_version: "record-version-a",
+      state: "active",
+      claim_id: null,
       client_id: "client-1",
       redirect_uri: "https://app.example.test/callback",
       scope: "openid",
@@ -563,29 +580,473 @@ test("PostgresAccountsStore consumes authorization codes with DELETE RETURNING m
       nonce: "nonce-1",
       code_challenge: "challenge",
       code_challenge_method: "S256",
+      access_token_hash: null,
+      refresh_token_hash: null,
+      created_at: new Date(1_000),
+      updated_at: new Date(1_000),
+      claimed_at: null,
+      issued_at: null,
+      replayed_at: null,
       expires_at: new Date(2_000),
     },
   ]);
   const store = new PostgresAccountsStore(client);
 
-  const record = await store.consumeAuthorizationCode("plain-code");
+  const opened = await store.openAuthorizationCodeRedemption("plain-code");
 
   expect(client.calls[0].sql).toContain(
-    'delete from "accounts_v1"."authorization_codes"',
+    "FROM accounts_v1.authorization_code_redemptions",
   );
-  expect(client.calls[0].sql).toContain("returning");
-  expect(record).toEqual({
-    clientId: "client-1",
-    redirectUri: "https://app.example.test/callback",
-    scope: "openid",
-    subject: "sub_pairwise",
-    takosumiSubject: "tsub_owner",
-    capsuleId: "inst_1",
-    workspaceId: "space_1",
-    role: "owner",
-    nonce: "nonce-1",
-    codeChallenge: "challenge",
-    codeChallengeMethod: "S256",
-    expiresAt: 2_000,
+  expect(client.calls[0].sql).toContain("FOR UPDATE");
+  expect(client.calls[0].args).not.toContain("plain-code");
+  expect(opened).toEqual({
+    status: "active",
+    candidate: {
+      redemptionId: "sha256:code-hash",
+      recordVersion: "record-version-a",
+      record: {
+        clientId: "client-1",
+        redirectUri: "https://app.example.test/callback",
+        scope: "openid",
+        subject: "sub_pairwise",
+        takosumiSubject: "tsub_owner",
+        capsuleId: "inst_1",
+        workspaceId: "space_1",
+        role: "owner",
+        nonce: "nonce-1",
+        codeChallenge: "challenge",
+        codeChallengeMethod: "S256",
+        expiresAt: 2_000,
+      },
+    },
   });
 });
+
+test("PostgresAccountsStore fails closed when a pinned transaction is unavailable", async () => {
+  let queries = 0;
+  const store = new PostgresAccountsStore({
+    queryObject<T>(): Promise<PostgresQueryResult<T>> {
+      queries += 1;
+      return Promise.resolve({ rows: [] });
+    },
+  });
+
+  await expect(
+    store.openAuthorizationCodeRedemption("plain-code"),
+  ).rejects.toThrow(
+    "Postgres authorization-code lifecycle requires a pinned transaction",
+  );
+  await expect(store.isRefreshRootRevoked("plain-refresh")).rejects.toThrow(
+    "Postgres refresh-root replay fence requires a pinned transaction",
+  );
+  expect(queries).toBe(0);
+});
+
+test("PostgresAccountsStore refresh replay fence locks lifecycle authority before reading the marker", async () => {
+  const client = new RecordingPostgresClient();
+  client.queuedRows.push(
+    [{ root_token_hash: "sha256:refresh-root" }],
+    [{ state: "issued" }],
+    [],
+  );
+  const store = new PostgresAccountsStore(client);
+
+  expect(await store.isRefreshRootRevoked("plain-refresh")).toBe(false);
+  expect(client.calls[0]?.sql).toContain("refresh_chain_links");
+  expect(client.calls[1]?.sql).toContain(
+    "accounts_v1.authorization_code_redemptions",
+  );
+  expect(client.calls[1]?.sql).toContain("auth_code_token_links");
+  expect(client.calls[1]?.sql).toContain("FOR UPDATE");
+  expect(client.calls[2]?.sql).toContain("revoked_refresh_roots");
+});
+
+test("PostgresAccountsStore claims the exact record version before deleting legacy authority", async () => {
+  const client = new RecordingPostgresClient();
+  client.queuedRows.push([
+    {
+      code_hash: "sha256:code-read",
+      record_version: "record-version-read",
+      state: "active",
+      claim_id: null,
+      client_id: "client-read",
+      redirect_uri: "https://app.example.test/callback",
+      scope: "openid",
+      subject: "sub_pairwise",
+      takosumi_subject: "tsub_owner",
+      capsule_id: null,
+      workspace_id: null,
+      role: null,
+      nonce: null,
+      code_challenge: "challenge",
+      code_challenge_method: "S256",
+      access_token_hash: null,
+      refresh_token_hash: null,
+      created_at: new Date(1_000),
+      updated_at: new Date(1_000),
+      claimed_at: null,
+      issued_at: null,
+      replayed_at: null,
+      expires_at: new Date(2_000),
+    },
+  ]);
+  const store = new PostgresAccountsStore(client);
+
+  const result = await store.claimValidatedAuthorizationCode({
+    redemptionId: "sha256:code-read",
+    recordVersion: "record-version-read",
+    record: {
+      clientId: "client-read",
+      redirectUri: "https://app.example.test/callback",
+      scope: "openid",
+      subject: "sub_pairwise",
+      codeChallenge: "challenge",
+      codeChallengeMethod: "S256",
+      expiresAt: 2_000,
+    },
+  });
+
+  expect(result).toMatchObject({ status: "claimed" });
+  expect(client.calls[0].sql).toContain("FOR UPDATE");
+  expect(client.calls[1].sql).toContain("state = 'issuing'");
+  expect(client.calls[1].args).toContain("record-version-read");
+  expect(client.calls[2].sql).toContain(
+    "DELETE FROM accounts_v1.authorization_codes",
+  );
+});
+
+test("PostgresAccountsStore linearizes claim, replay, finalize, and descendant revocation on PGlite", async () => {
+  const fixture = await createPostgresLifecycleFixture();
+  try {
+    const { store } = fixture;
+    const record = postgresAuthorizationCodeRecord("pg-race-owner");
+    const code = "pg-code-race";
+    await store.saveAuthorizationCode(code, record);
+    const first = await store.openAuthorizationCodeRedemption(code);
+    const second = await store.openAuthorizationCodeRedemption(code);
+    if (first.status !== "active" || second.status !== "active") {
+      throw new Error("expected two active validation snapshots");
+    }
+    const winner = await store.claimValidatedAuthorizationCode(first.candidate);
+    const loser = await store.claimValidatedAuthorizationCode(second.candidate);
+    expect(winner.status).toBe("claimed");
+    expect(loser).toEqual({ status: "replayed" });
+    if (winner.status !== "claimed") return;
+    expect(
+      await store.finalizeAuthorizationCodeRedemption({
+        code,
+        claimId: winner.claimId,
+        accessToken: "pg-access-after-replay",
+        accessRecord: postgresTokenRecord(record),
+      }),
+    ).toEqual({ status: "replayed" });
+    expect(
+      await store.findAccessToken("pg-access-after-replay"),
+    ).toBeUndefined();
+
+    const issuedCode = "pg-code-issued";
+    await store.saveAuthorizationCode(issuedCode, record);
+    const issuedOpen = await store.openAuthorizationCodeRedemption(issuedCode);
+    if (issuedOpen.status !== "active") throw new Error("expected active code");
+    const issuedClaim = await store.claimValidatedAuthorizationCode(
+      issuedOpen.candidate,
+    );
+    if (issuedClaim.status !== "claimed") throw new Error("expected claim");
+    expect(
+      await store.finalizeAuthorizationCodeRedemption({
+        code: issuedCode,
+        claimId: issuedClaim.claimId,
+        accessToken: "pg-access-root",
+        accessRecord: postgresTokenRecord(record),
+        refreshToken: "pg-refresh-root",
+        refreshRecord: postgresTokenRecord(record),
+      }),
+    ).toEqual({ status: "issued" });
+    expect(await store.isRefreshRootRevoked("pg-refresh-root")).toBe(false);
+    expect(
+      await store.addRefreshChainLink("pg-refresh-root", "pg-refresh-child"),
+    ).toBe(true);
+    await store.saveRefreshToken(
+      "pg-refresh-child",
+      postgresTokenRecord(record),
+    );
+    await store.saveAccessToken(
+      "pg-access-descendant",
+      postgresTokenRecord(record),
+    );
+    await store.linkAccessTokenToRefreshChain(
+      "pg-refresh-child",
+      "pg-access-descendant",
+    );
+    expect(await store.openAuthorizationCodeRedemption(issuedCode)).toEqual({
+      status: "replayed",
+    });
+    expect(await store.isRefreshRootRevoked("pg-refresh-root")).toBe(true);
+    expect(await store.findAccessToken("pg-access-root")).toBeUndefined();
+    expect(await store.findAccessToken("pg-access-descendant")).toBeUndefined();
+    expect(await store.findRefreshToken("pg-refresh-root")).toBeUndefined();
+    expect(await store.findRefreshToken("pg-refresh-child")).toBeUndefined();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("PostgresAccountsStore replay revokes every preserved legacy token link", async () => {
+  const fixture = await createPostgresLifecycleFixture();
+  try {
+    const { store, client } = fixture;
+    const code = "pg-code-multi-link-replay";
+    const record = postgresAuthorizationCodeRecord("pg-multi-link-replay");
+    await store.saveAuthorizationCode(code, record);
+    const opened = await store.openAuthorizationCodeRedemption(code);
+    if (opened.status !== "active") throw new Error("expected active code");
+    const claim = await store.claimValidatedAuthorizationCode(opened.candidate);
+    if (claim.status !== "claimed") throw new Error("expected claim winner");
+    expect(
+      await store.finalizeAuthorizationCodeRedemption({
+        code,
+        claimId: claim.claimId,
+        accessToken: "pg-multi-access-a",
+        accessRecord: postgresTokenRecord(record),
+        refreshToken: "pg-multi-refresh-a",
+        refreshRecord: postgresTokenRecord(record),
+      }),
+    ).toEqual({ status: "issued" });
+
+    const secondAccess = "pg-multi-access-b";
+    const secondRefresh = "pg-multi-refresh-b";
+    const secondChild = "pg-multi-refresh-b-child";
+    const secondDescendant = "pg-multi-access-b-descendant";
+    await store.saveAccessToken(secondAccess, postgresTokenRecord(record));
+    await store.saveRefreshToken(secondRefresh, postgresTokenRecord(record));
+    expect(await store.addRefreshChainLink(secondRefresh, secondChild)).toBe(
+      true,
+    );
+    await store.saveRefreshToken(secondChild, postgresTokenRecord(record));
+    await store.saveAccessToken(secondDescendant, postgresTokenRecord(record));
+    await store.linkAccessTokenToRefreshChain(secondChild, secondDescendant);
+    const [codeHash, accessHash, refreshHash] = await Promise.all([
+      sha256Text(code),
+      sha256Text(secondAccess),
+      sha256Text(secondRefresh),
+    ]);
+    await client.queryObject(
+      `INSERT INTO accounts_v1.auth_code_token_links (
+         code_hash, access_token_hash, refresh_root_hash, created_at
+       ) VALUES ($1, $2, $3, $4)`,
+      [codeHash, accessHash, refreshHash, new Date()],
+    );
+
+    expect(await store.openAuthorizationCodeRedemption(code)).toEqual({
+      status: "replayed",
+    });
+    expect(await store.findAccessToken("pg-multi-access-a")).toBeUndefined();
+    expect(await store.findRefreshToken("pg-multi-refresh-a")).toBeUndefined();
+    expect(await store.findAccessToken(secondAccess)).toBeUndefined();
+    expect(await store.findRefreshToken(secondRefresh)).toBeUndefined();
+    expect(await store.findRefreshToken(secondChild)).toBeUndefined();
+    expect(await store.findAccessToken(secondDescendant)).toBeUndefined();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("PostgresAccountsStore keeps a replacement claimable and rolls back failed finalize", async () => {
+  const fixture = await createPostgresLifecycleFixture();
+  try {
+    const { store, client } = fixture;
+    const code = "pg-code-substitution";
+    await store.saveAuthorizationCode(
+      code,
+      postgresAuthorizationCodeRecord("pg-record-a"),
+    );
+    const recordA = await store.openAuthorizationCodeRedemption(code);
+    if (recordA.status !== "active") throw new Error("expected record A");
+    await store.saveAuthorizationCode(
+      code,
+      postgresAuthorizationCodeRecord("pg-record-b"),
+    );
+    expect(
+      await store.claimValidatedAuthorizationCode(recordA.candidate),
+    ).toEqual({ status: "stale" });
+    const recordB = await store.openAuthorizationCodeRedemption(code);
+    if (recordB.status !== "active") throw new Error("expected record B");
+    expect(recordB.candidate.record.subject).toBe("pg-record-b");
+    const claim = await store.claimValidatedAuthorizationCode(
+      recordB.candidate,
+    );
+    if (claim.status !== "claimed") throw new Error("expected B claim");
+
+    client.failNextTransactionAt(3);
+    await expect(
+      store.finalizeAuthorizationCodeRedemption({
+        code,
+        claimId: claim.claimId,
+        accessToken: "pg-access-partial",
+        accessRecord: postgresTokenRecord(recordB.candidate.record),
+        refreshToken: "pg-refresh-partial",
+        refreshRecord: postgresTokenRecord(recordB.candidate.record),
+      }),
+    ).rejects.toThrow("injected Postgres lifecycle transaction failure");
+    expect(await store.findAccessToken("pg-access-partial")).toBeUndefined();
+    expect(await store.findRefreshToken("pg-refresh-partial")).toBeUndefined();
+    expect(await store.openAuthorizationCodeRedemption(code)).toEqual({
+      status: "replayed",
+    });
+  } finally {
+    await fixture.close();
+  }
+});
+
+function postgresAuthorizationCodeRecord(subject: string) {
+  return {
+    clientId: "pg-lifecycle-client",
+    redirectUri: "https://app.example.test/callback",
+    scope: "openid offline_access",
+    subject,
+    codeChallenge: "challenge",
+    codeChallengeMethod: "S256" as const,
+    expiresAt: Date.now() + 60_000,
+  };
+}
+
+function postgresTokenRecord(
+  record: ReturnType<typeof postgresAuthorizationCodeRecord>,
+) {
+  return {
+    clientId: record.clientId,
+    scope: record.scope,
+    subject: record.subject,
+    expiresAt: Date.now() + 60_000,
+  };
+}
+
+class PGlitePostgresClient implements PostgresQueryClient {
+  #failTransactionAt?: number;
+
+  constructor(private readonly db: PGlite) {}
+
+  async queryObject<T>(
+    sql: string,
+    args: readonly unknown[] = [],
+  ): Promise<PostgresQueryResult<T>> {
+    const result = await this.db.query(sql, [...args]);
+    return { rows: result.rows as T[] };
+  }
+
+  async transaction<T>(
+    run: (client: PostgresQueryClient) => Promise<T>,
+  ): Promise<T> {
+    const failAt = this.#failTransactionAt;
+    this.#failTransactionAt = undefined;
+    const result = await this.db.transaction(async (transaction) => {
+      let queryIndex = 0;
+      const handle: PostgresQueryClient = {
+        queryObject: async <Row>(
+          sql: string,
+          args: readonly unknown[] = [],
+        ): Promise<PostgresQueryResult<Row>> => {
+          if (queryIndex++ === failAt) {
+            throw new Error("injected Postgres lifecycle transaction failure");
+          }
+          const query = await transaction.query(sql, [...args]);
+          return { rows: query.rows as Row[] };
+        },
+        transaction: async (nested) => await nested(handle),
+      };
+      return await run(handle);
+    });
+    return result as T;
+  }
+
+  failNextTransactionAt(queryIndex: number): void {
+    this.#failTransactionAt = queryIndex;
+  }
+}
+
+async function createPostgresLifecycleFixture(): Promise<{
+  readonly store: PostgresAccountsStore;
+  readonly client: PGlitePostgresClient;
+  readonly close: () => Promise<void>;
+}> {
+  const db = new PGlite();
+  await db.exec(`
+    CREATE SCHEMA accounts_v1;
+    CREATE TABLE accounts_v1.authorization_codes (
+      code_hash text PRIMARY KEY,
+      client_id text NOT NULL,
+      redirect_uri text NOT NULL,
+      scope text NOT NULL,
+      subject text NOT NULL,
+      takosumi_subject text,
+      capsule_id text,
+      workspace_id text,
+      role text,
+      nonce text,
+      code_challenge text,
+      code_challenge_method text,
+      created_at timestamptz NOT NULL,
+      expires_at timestamptz NOT NULL
+    );
+    CREATE TABLE accounts_v1.oauth_access_tokens (
+      token_hash text PRIMARY KEY,
+      client_id text NOT NULL,
+      audience text,
+      scope text NOT NULL,
+      subject text NOT NULL,
+      takosumi_subject text,
+      capsule_id text,
+      workspace_id text,
+      role text,
+      interface_id text,
+      interface_binding_id text,
+      interface_resolved_revision bigint,
+      created_at timestamptz NOT NULL,
+      expires_at timestamptz NOT NULL
+    );
+    CREATE TABLE accounts_v1.oauth_refresh_tokens (
+      LIKE accounts_v1.oauth_access_tokens INCLUDING ALL
+    );
+    CREATE TABLE accounts_v1.refresh_chain_links (
+      parent_token_hash text PRIMARY KEY,
+      child_token_hash text NOT NULL,
+      root_token_hash text NOT NULL,
+      created_at timestamptz NOT NULL,
+      UNIQUE (child_token_hash)
+    );
+    CREATE TABLE accounts_v1.refresh_chain_access_tokens (
+      root_token_hash text NOT NULL,
+      access_token_hash text NOT NULL,
+      created_at timestamptz NOT NULL,
+      PRIMARY KEY (root_token_hash, access_token_hash)
+    );
+    CREATE TABLE accounts_v1.revoked_refresh_roots (
+      root_token_hash text PRIMARY KEY,
+      revoked_at timestamptz NOT NULL
+    );
+    CREATE TABLE accounts_v1.consumed_authorization_codes (
+      code_hash text PRIMARY KEY,
+      consumed_at timestamptz NOT NULL
+    );
+    CREATE TABLE accounts_v1.auth_code_token_links (
+      code_hash text NOT NULL,
+      access_token_hash text NOT NULL,
+      refresh_root_hash text NOT NULL,
+      created_at timestamptz NOT NULL,
+      PRIMARY KEY (code_hash, access_token_hash, refresh_root_hash)
+    );
+  `);
+  const migration = await Bun.file(
+    new URL(
+      "../../../../accounts/service/migrations/037_authorization_code_redemptions.sql",
+      import.meta.url,
+    ),
+  ).text();
+  await db.exec(migration);
+  const client = new PGlitePostgresClient(db);
+  return {
+    client,
+    store: new PostgresAccountsStore(client),
+    close: () => db.close(),
+  };
+}

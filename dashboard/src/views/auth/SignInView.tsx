@@ -96,8 +96,6 @@ export function SignInPanel() {
 
   const isEnabled = (p: Provider): boolean =>
     providers().some((provider) => provider.id === p && provider.enabled);
-  const enabledProviders = (): readonly TakosumiAccountsAuthProvider[] =>
-    providers().filter((provider) => provider.enabled);
   const hasEnabledProvider = (): boolean =>
     providers().some((provider) => provider.enabled);
   const providerSubText = (p: Provider): string | undefined => {

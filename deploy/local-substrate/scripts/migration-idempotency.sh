@@ -18,6 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SUBSTRATE_DIR"
 source "$SCRIPT_DIR/compose-helpers.sh"
+INGRESS_IP="$(local_substrate_ingress_ip)"
 # Recreating the worker re-runs the test-bed seeder, so carry the stack's
 # generated dev session bearer instead of recreating it with an empty one.
 export TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID="$(local_substrate_dev_session_id)"
@@ -28,7 +29,7 @@ materialize_d1() {
 	local host
 	for host in service-worker.takosumi.test service.takosumi.test; do
 		curl -sk --max-time 5 --cacert "$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem" \
-			--resolve "${host}:443:127.0.0.1" \
+			--resolve "${host}:443:${INGRESS_IP}" \
 			-o /dev/null \
 			"https://${host}/v1/capabilities" || true
 	done

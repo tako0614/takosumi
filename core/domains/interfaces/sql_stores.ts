@@ -9,6 +9,7 @@ import {
   UI_SURFACE_INTERFACE_VERSION,
 } from "takosumi-contract";
 import type { SqlClient, SqlValue } from "../../adapters/storage/sql.ts";
+import { isPostgresUniqueViolation } from "../../adapters/storage/pg_result.ts";
 import { deployControlPostgresTableNames as names } from "../../adapters/storage/drizzle/schema/logical.ts";
 import type {
   InterfaceAuthorizationPageInput,
@@ -148,7 +149,7 @@ class SqlInterfaceStore implements InterfaceStore {
       );
       return result.rowCount > 0;
     } catch (error) {
-      if (isUniqueConstraintError(error)) return false;
+      if (isPostgresUniqueViolation(error)) return false;
       throw error;
     }
   }
@@ -179,7 +180,7 @@ class SqlInterfaceStore implements InterfaceStore {
       );
       return result.rowCount > 0;
     } catch (error) {
-      if (isUniqueConstraintError(error)) return false;
+      if (isPostgresUniqueViolation(error)) return false;
       throw error;
     }
   }
@@ -409,11 +410,4 @@ export function createSqlInterfaceStores(client: SqlClient): InterfaceStores {
     bindings: new SqlInterfaceBindingStore(client),
     authorized: new SqlInterfaceAuthorizationQuery(client),
   };
-}
-
-function isUniqueConstraintError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const code = "code" in error ? String(error.code) : "";
-  const message = "message" in error ? String(error.message) : "";
-  return code === "23505" || /duplicate key|unique constraint/iu.test(message);
 }

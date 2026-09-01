@@ -36,12 +36,6 @@ export function primeWorkspaceListCache(
   cachedAt = Date.now();
 }
 
-function fetchWorkspacePage(
-  selectedWorkspaceId?: string,
-): Promise<readonly Workspace[]> {
-  return listWorkspaces({ selectedWorkspaceId });
-}
-
 async function fetchBootstrapWorkspaces(
   selectedWorkspaceId?: string,
 ): Promise<readonly Workspace[] | undefined> {
@@ -86,12 +80,16 @@ export async function listWorkspacesCached(
   const generation = cacheGeneration;
 
   const load = options.force
-    ? fetchWorkspacePage(scope || undefined)
+    ? listWorkspaces({ selectedWorkspaceId: scope || undefined })
     : fetchBootstrapWorkspaces(scope || undefined)
         .then(
-          (workspaces) => workspaces ?? fetchWorkspacePage(scope || undefined),
+          (workspaces) =>
+            workspaces ??
+            listWorkspaces({ selectedWorkspaceId: scope || undefined }),
         )
-        .catch(() => fetchWorkspacePage(scope || undefined));
+        .catch(() =>
+          listWorkspaces({ selectedWorkspaceId: scope || undefined }),
+        );
 
   const request = load
     .then((workspaces) => {

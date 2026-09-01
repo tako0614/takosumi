@@ -34,9 +34,10 @@ Takosumi has two modes and no others.
 | `showback` | Records usage but does not bill |
 
 **Running with real invoicing is not a feature of the software.** Halting execution when a
-balance runs out, holding a price list, reconciling against a payment method — none of
-that lives at this layer. For prices and limits on the official hosted service, see its
-own documentation ([Product boundaries](./boundaries.md)).
+balance runs out, holding a price list, or reconciling against a payment method does not
+live at this layer. Takosumi Hosted retail/commerce and Takoserver managed supply publish
+their own prices, limits, and payment contracts. Retired Takosumi Cloud pages are not
+current pricing authority ([Product boundaries](./boundaries.md)).
 
 When you self-host, usage records exist for your own visibility.
 

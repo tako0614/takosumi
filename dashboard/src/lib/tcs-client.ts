@@ -129,6 +129,128 @@ async function fetchTcsRead(
   return fetch(joinBase(base, v1Path), options);
 }
 
+interface TcsListingsPageInFlight {
+  readonly controller: AbortController;
+  readonly promise: Promise<TcsListingsPage>;
+  subscribers: number;
+  settled: boolean;
+}
+
+const tcsListingsPageInFlight = new Map<string, TcsListingsPageInFlight>();
+
+function canonicalTcsListingsPageKey(base: string, path: string): string {
+  const actualUrl = joinBase(base, path);
+  try {
+    return new URL(actualUrl).href;
+  } catch {
+    // Keep the existing fetch behavior for a relative or malformed base while
+    // still using the canonical absolute URL whenever one can be constructed.
+    return actualUrl;
+  }
+}
+
+function serializeTcsListingsPagePath(query: TcsPageQuery): string {
+  const params = new URLSearchParams();
+  // TCS 2.0 deliberately dropped the v1 name sort. Keep the runtime guard in
+  // addition to the narrow type because the browser select is DOM data at the
+  // boundary and stale callers may still pass an old value.
+  if (query.sort === "updated" || query.sort === "created") {
+    params.set("sort", query.sort);
+  }
+  if (query.limit) params.set("limit", String(query.limit));
+  if (query.cursor) params.set("cursor", query.cursor);
+  const path = query.q ? "/tcs/v2/listings/search" : "/tcs/v2/listings";
+  if (query.q) params.set("q", query.q);
+  const queryString = params.toString();
+  return `${path}${queryString ? `?${queryString}` : ""}`;
+}
+
+async function requestTcsListingsPage(
+  base: string,
+  path: string,
+  signal: AbortSignal,
+): Promise<TcsListingsPage> {
+  const res = await fetchTcsRead(
+    base,
+    path,
+    {
+      headers: { accept: "application/json" },
+      signal,
+    },
+  );
+  if (res.status === 501)
+    throw new TcsNotSupportedError("search not supported");
+  if (!res.ok) throw new Error(`listings ${res.status}`);
+  return sanitizeTcsListingsPage((await res.json()) as TcsListingsPage);
+}
+
+function getTcsListingsPageInFlight(
+  key: string,
+  base: string,
+  path: string,
+): TcsListingsPageInFlight {
+  const existing = tcsListingsPageInFlight.get(key);
+  if (existing) return existing;
+
+  const controller = new AbortController();
+  const entry: TcsListingsPageInFlight = {
+    controller,
+    promise: requestTcsListingsPage(base, path, controller.signal),
+    subscribers: 0,
+    settled: false,
+  };
+  tcsListingsPageInFlight.set(key, entry);
+
+  const onSettled = () => {
+    entry.settled = true;
+    if (tcsListingsPageInFlight.get(key) === entry) {
+      tcsListingsPageInFlight.delete(key);
+    }
+  };
+  entry.promise.then(onSettled, onSettled);
+  return entry;
+}
+
+function subscribeToTcsListingsPage(
+  key: string,
+  entry: TcsListingsPageInFlight,
+  signal?: AbortSignal,
+): Promise<TcsListingsPage> {
+  entry.subscribers += 1;
+
+  let cleaned = false;
+  let onAbort: (() => void) | undefined;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+    entry.subscribers -= 1;
+    if (entry.subscribers === 0 && !entry.settled) {
+      if (tcsListingsPageInFlight.get(key) === entry) {
+        tcsListingsPageInFlight.delete(key);
+      }
+      entry.controller.abort();
+    }
+  };
+
+  let abortPromise: Promise<never> | undefined;
+  if (signal) {
+    abortPromise = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    // The initial check in fetchTcsListingsPage avoids creating a subscriber
+    // for an already-aborted signal. Recheck after listener installation to
+    // close the race with an abort that happens during subscription setup.
+    if (signal.aborted) onAbort?.();
+  }
+
+  const settled = abortPromise
+    ? Promise.race([entry.promise, abortPromise])
+    : entry.promise;
+  return settled.then((page) => structuredClone(page)).finally(cleanup);
+}
+
 export async function fetchTcsServerInfo(
   base: string,
   signal?: AbortSignal,
@@ -147,30 +269,11 @@ export async function fetchTcsListingsPage(
   base: string,
   query: TcsPageQuery = {},
 ): Promise<TcsListingsPage> {
-  const params = new URLSearchParams();
-  // TCS 2.0 deliberately dropped the v1 name sort. Keep the runtime guard in
-  // addition to the narrow type because the browser select is DOM data at the
-  // boundary and stale callers may still pass an old value.
-  if (query.sort === "updated" || query.sort === "created") {
-    params.set("sort", query.sort);
-  }
-  if (query.limit) params.set("limit", String(query.limit));
-  if (query.cursor) params.set("cursor", query.cursor);
-  const path = query.q ? "/tcs/v2/listings/search" : "/tcs/v2/listings";
-  if (query.q) params.set("q", query.q);
-  const queryString = params.toString();
-  const res = await fetchTcsRead(
-    base,
-    `${path}${queryString ? `?${queryString}` : ""}`,
-    {
-      headers: { accept: "application/json" },
-      signal: query.signal,
-    },
-  );
-  if (res.status === 501)
-    throw new TcsNotSupportedError("search not supported");
-  if (!res.ok) throw new Error(`listings ${res.status}`);
-  return sanitizeTcsListingsPage((await res.json()) as TcsListingsPage);
+  if (query.signal?.aborted) throw query.signal.reason;
+  const path = serializeTcsListingsPagePath(query);
+  const key = canonicalTcsListingsPageKey(base, path);
+  const entry = getTcsListingsPageInFlight(key, base, path);
+  return await subscribeToTcsListingsPage(key, entry, query.signal);
 }
 
 export async function fetchTcsListing(

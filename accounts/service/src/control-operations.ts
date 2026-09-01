@@ -400,6 +400,11 @@ export interface ControlPlaneOperations {
     patchCapsuleStatus(id: string, status: Capsule["status"]): Promise<Capsule>;
     setCapsuleAutoUpdate(id: string, enabled: boolean): Promise<Capsule>;
     abandonUnappliedCapsule(id: string, reason: string): Promise<Capsule>;
+    scheduleCapsuleUninstall(
+      id: string,
+      options?: { readonly requestedBy?: string },
+    ): Promise<Capsule>;
+    restoreUninstalledCapsule(id: string): Promise<Capsule>;
     putProviderBindingSet(
       profile: ProviderBindingSet,
     ): Promise<ProviderBindingSet>;
@@ -598,6 +603,11 @@ export interface ControlPlaneOperations {
     workspaceId: string,
     options?: { readonly limit?: number },
   ): Promise<readonly Run[]>;
+  /** Newest-first keyset page; optional so older composed controllers keep working. */
+  listRunsPage?(
+    workspaceId: string,
+    options?: { readonly limit?: number; readonly cursor?: string },
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }>;
   createCapsulePlan(
     capsuleId: string,
     options?: {

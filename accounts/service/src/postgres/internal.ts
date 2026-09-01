@@ -25,6 +25,14 @@ export interface PostgresQueryClient {
     sql: string,
     args?: readonly unknown[],
   ): Promise<PostgresQueryResult<T>>;
+  /**
+   * Runs `run` on one pinned database connection inside BEGIN/COMMIT. Optional
+   * for legacy read-only adapters; authorization-code lifecycle operations
+   * require it and fail closed when it is absent.
+   */
+  transaction?<T>(
+    run: (client: PostgresQueryClient) => Promise<T>,
+  ): Promise<T>;
 }
 
 export function postgresDrizzle<TSchema extends Record<string, unknown>>(

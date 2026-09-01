@@ -10,6 +10,7 @@ import {
   createPortableDeclarationReader,
   ensureFormDescriptorInterfaces,
   InterfaceService,
+  type InterfaceOutputStore,
   OutputBackedInterfaceInputResolver,
   PortableDeclarationReadLimitError,
   RequiredFormInterfaceError,
@@ -26,6 +27,17 @@ const FORM: InstalledFormReference = {
   schemaDigest: `sha256:${"1".repeat(64)}`,
   packageDigest: `sha256:${"2".repeat(64)}`,
 };
+const RESOURCE_ONLY_OUTPUT_STORE = {
+  async getCapsule() {
+    return undefined;
+  },
+  async getOutput() {
+    return undefined;
+  },
+  async getLatestStateVersion() {
+    return undefined;
+  },
+} satisfies InterfaceOutputStore;
 
 test("portable Form descriptors preserve pair identity, exact document, and RFC 6901 output mappings", async () => {
   const resourceStores = createInMemoryResourceShapeStores();
@@ -56,7 +68,7 @@ test("portable Form descriptors preserve pair identity, exact document, and RFC 
   const interfaces = new InterfaceService({
     stores: createInMemoryInterfaceStores(),
     resolver: new OutputBackedInterfaceInputResolver({
-      opentofu: {} as never,
+      opentofu: RESOURCE_ONLY_OUTPUT_STORE,
       resources: resourceStores.resources,
       resolveResourceWorkspace: async () => "workspace_1",
     }),

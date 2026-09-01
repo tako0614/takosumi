@@ -92,6 +92,7 @@ import type {
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
 import type { AccountsStore } from "../store.ts";
+import type { PortableHostIdempotencyCoordinator } from "../../../../core/api/portable_host_idempotency.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
@@ -109,7 +110,10 @@ import {
   stringValue,
 } from "../http-helpers.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
-import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
+import {
+  DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE,
+  retryAfterSecondsFromDetails,
+} from "@takosumi/internal/deploy-control-api";
 
 /**
  * Per-resource dispatch context: the inputs each `control/<resource>.ts`
@@ -141,6 +145,12 @@ export interface ControlDispatchContext {
   readonly issuer?: string;
   readonly managedPublicBaseDomain?: string;
   readonly session: ControlSession;
+  /**
+   * Optional Idempotency-Key coordinator for the capsule write lane. Absent
+   * leaves the routes on their non-idempotent behavior; see
+   * ./idempotency.ts.
+   */
+  readonly idempotency?: PortableHostIdempotencyCoordinator;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -370,12 +380,21 @@ export function controllerErrorResponse(error: unknown): Response {
   const code = controllerErrorCode(error);
   if (code) {
     const publicError = publicControllerError(error);
+    // Mirror the backoff hint into the standard header the same way the
+    // internal lane does; the same controller error reaching a client through
+    // /api/v1 must not lose it.
+    const retryAfterSeconds =
+      code === "rate_limited" || code === "unavailable"
+        ? retryAfterSecondsFromDetails(publicError.details)
+        : undefined;
     return errorJson(
       code,
       publicError.message,
       DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE[code],
       undefined,
-      {},
+      retryAfterSeconds !== undefined
+        ? { "retry-after": String(retryAfterSeconds) }
+        : {},
       publicError.details,
     );
   }
@@ -545,6 +564,42 @@ export async function requireWorkspaceAccess(input: {
       "The authenticated session cannot access this Workspace.",
       403,
     ),
+  };
+}
+
+/**
+ * Authorization for an id-addressed resource (a Run, Capsule, Source, …) whose
+ * Workspace was resolved by reading the resource itself.
+ *
+ * Answering 403 here is an EXISTENCE ORACLE: a caller enumerating ids learns
+ * which ones name a real resource in someone else's Workspace, because an
+ * unknown id answers 404 and a foreign one answers 403. Collapse both to the
+ * same 404 — a resource the caller may not see does not exist as far as this
+ * API is concerned. Keep {@link requireWorkspaceAccess} for routes where the
+ * caller NAMED the Workspace (`/workspaces/:id/...`): there the 403 tells the
+ * caller nothing it did not already supply.
+ */
+export async function requireResourceWorkspaceAccess(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly store: AccountsStore;
+  readonly session: ControlSession;
+  readonly workspaceId: string;
+  readonly workspace?: Workspace;
+}): Promise<WorkspaceAccessResult> {
+  if (
+    await canAccessWorkspace({
+      operations: input.operations,
+      store: input.store,
+      session: input.session,
+      workspaceId: input.workspaceId,
+      ...(input.workspace ? { workspace: input.workspace } : {}),
+    })
+  ) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    response: errorJson("not_found", "not found", 404),
   };
 }
 

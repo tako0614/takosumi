@@ -24,6 +24,7 @@ import { InterpretedDraft202012Validator } from "../../shared/json-schema/draft_
 import { sha256HexAsync } from "../../shared/runtime/hash.ts";
 import { assertTakoformPortableDataOnly } from "../../adapters/takoform/package_verifier.ts";
 import { canonicalInterfaceOAuth2ResourceUri } from "./oauth_resource.ts";
+import { interfaceSpecsEqual } from "./interface_spec_equivalence.ts";
 
 const RESOURCE_PAGE_LIMIT = 51;
 const RESOURCE_READ_LIMIT = 50;
@@ -338,7 +339,7 @@ export function createPortableDeclarationWriter(
       let written: Interface;
       if (existing && existing.status.phase !== "Retired") {
         if (input.expectedGeneration === 0) {
-          if (!sameInterfaceSpec(existing.spec, spec)) {
+          if (!interfaceSpecsEqual(existing.spec, spec)) {
             throw new InterfaceServiceError(
               "already_exists",
               "portable Interface declaration already exists",
@@ -348,7 +349,7 @@ export function createPortableDeclarationWriter(
         } else if (existing.metadata.generation !== input.expectedGeneration) {
           if (
             existing.metadata.generation > input.expectedGeneration &&
-            sameInterfaceSpec(existing.spec, spec)
+            interfaceSpecsEqual(existing.spec, spec)
           ) {
             written = existing;
           } else {
@@ -357,7 +358,7 @@ export function createPortableDeclarationWriter(
               "portable Interface resourceVersion changed",
             );
           }
-        } else if (sameInterfaceSpec(existing.spec, spec)) {
+        } else if (interfaceSpecsEqual(existing.spec, spec)) {
           written = existing;
         } else {
           written = await options.interfaces.update(
@@ -761,21 +762,6 @@ async function portableIacRecordName(
     new TextEncoder().encode(`${name}\0${version}`),
   );
   return `iac.${name.slice(0, 96)}.${digest.slice(0, 24)}`;
-}
-
-function sameInterfaceSpec(left: InterfaceSpec, right: InterfaceSpec): boolean {
-  return canonicalJson(left) === canonicalJson(right);
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function portableInputsOf(

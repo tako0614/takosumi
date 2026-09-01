@@ -296,6 +296,28 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * off unless the operator deliberately sets this.
    */
   readonly TAKOSUMI_ALLOW_OPERATOR_BACKED_PROVIDER_ENVS?: string;
+  /** Two-phase uninstall grace period in days (OSS default 7). */
+  readonly TAKOSUMI_UNINSTALL_GRACE_DAYS?: string;
+  /** `0` disables the failed-first-install auto cleanup (default ON). */
+  readonly TAKOSUMI_FAILED_INSTALL_AUTO_CLEANUP?: string;
+  /**
+   * Queue-age budget in minutes for capacity_exhausted runner refusals before
+   * a run fails as runner_capacity_timeout. Default 45.
+   */
+  readonly TAKOSUMI_RUNNER_CAPACITY_QUEUE_BUDGET_MINUTES?: string;
+  /**
+   * Per-workspace concurrent run-slot ceiling (fairness). Default 2; "0"
+   * disables the fence.
+   */
+  readonly TAKOSUMI_WORKSPACE_RUN_CONCURRENCY?: string;
+  /**
+   * "1" routes coordination leases to per-scope Durable Object shards instead
+   * of the takosumi-control-plane singleton. Cut over at a quiet moment:
+   * leases held in the old instance are invisible to the new routing.
+   */
+  readonly TAKOSUMI_COORDINATION_SHARDING?: string;
+  /** Runtime store (TCS) endpoint advertised via product discovery. */
+  readonly TAKOSUMI_TCS_STORE_URL?: string;
   /** Public hostname namespace owned by the operator-provided deployment target. */
   readonly TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN?: string;
   /** Owner-account allowance for short names under the managed base domain. */

@@ -36,6 +36,11 @@
  *  - otherwise: `pretty` when `TAKOSUMI_ENVIRONMENT` / `NODE_ENV` is
  *    `local` or `development` (or unset), `json` everywhere else.
  *
+ * Silencing:
+ *  - `TAKOSUMI_LOG_SILENCE=1` drops `info` and `warn` from the default
+ *    sinks. Full-suite test runs set it; `error` and any injected sink are
+ *    never silenced.
+ *
  * Console severity:
  *  - `warn` → `console.warn` so runtimes such as Cloudflare Workers retain
  *    warning severity instead of reporting the event as an error
@@ -118,6 +123,23 @@ function resolveDefaultFormat(
   return "json";
 }
 
+/**
+ * Levels dropped when `TAKOSUMI_LOG_SILENCE` is on.
+ *
+ * Full-suite test runs set it so the reporter's output is the test result and
+ * not several hundred lines of boot diagnostics. `error` is never silenced —
+ * a failing test must keep its diagnostics — and an explicitly injected sink
+ * always wins, so tests that capture log output are unaffected.
+ */
+const SILENCEABLE_LEVELS: readonly TakosumiLogLevel[] = ["info", "warn"];
+
+function logSilenceRequested(
+  env: Readonly<Record<string, string | undefined>>,
+): boolean {
+  const raw = env.TAKOSUMI_LOG_SILENCE?.toLowerCase();
+  return raw === "1" || raw === "true";
+}
+
 function safeEnv(): Readonly<Record<string, string | undefined>> {
   // Read env via the runtime adapter so this module compiles and runs
   // on Bun, Node, Cloudflare Workers, or any Web-standard JS runtime.
@@ -138,6 +160,7 @@ class TakosumiLoggerImpl implements TakosumiLogger {
   readonly #stdout: (line: string) => void;
   readonly #warn: (line: string) => void;
   readonly #stderr: (line: string) => void;
+  readonly #silenced: ReadonlySet<TakosumiLogLevel>;
 
   constructor(options: TakosumiLoggerOptions = {}) {
     const env = options.env ?? safeEnv();
@@ -147,6 +170,16 @@ class TakosumiLoggerImpl implements TakosumiLogger {
     this.#stdout = options.stdout ?? defaultStdout;
     this.#warn = options.warn ?? options.stderr ?? defaultWarn;
     this.#stderr = options.stderr ?? defaultStderr;
+    const injected: ReadonlyMap<TakosumiLogLevel, boolean> = new Map([
+      ["info", options.stdout !== undefined],
+      ["warn", options.warn !== undefined || options.stderr !== undefined],
+      ["error", options.stderr !== undefined],
+    ]);
+    this.#silenced = logSilenceRequested(env)
+      ? new Set(
+        SILENCEABLE_LEVELS.filter((level) => injected.get(level) !== true),
+      )
+      : new Set();
   }
 
   info(event: string, fields?: TakosumiLogFields): void {
@@ -166,6 +199,7 @@ class TakosumiLoggerImpl implements TakosumiLogger {
     event: string,
     fields: TakosumiLogFields | undefined,
   ): void {
+    if (this.#silenced.has(level)) return;
     const ts = this.#now().toISOString();
     const data = normalizeFields(fields);
     const sink = level === "info"

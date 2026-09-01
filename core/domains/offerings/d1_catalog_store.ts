@@ -14,6 +14,7 @@ import type {
   OfferingCatalogStore,
   StoredOfferingCatalog,
 } from "./catalog_store.ts";
+import { offeringCatalogKey as catalogKey } from "./catalog_store.ts";
 
 interface CatalogRow {
   readonly record_json: string;
@@ -115,7 +116,7 @@ export class D1OfferingCatalogStore implements OfferingCatalogStore {
          from ${names.offeringCatalogs}
          where catalog_key = ? limit 1`,
       )
-      .bind(`${catalogId}@${catalogVersion}`)
+      .bind(catalogKey({ id: catalogId, version: catalogVersion }))
       .first<CatalogRow>();
     return row === null || row === undefined ? undefined : decodeRecord(row);
   }
@@ -133,8 +134,4 @@ function decodeRecord(row: CatalogRow): StoredOfferingCatalog {
     createdAt: row.created_at,
     createdBy: row.created_by,
   };
-}
-
-function catalogKey(catalog: OfferingCatalog): string {
-  return `${catalog.id}@${catalog.version}`;
 }

@@ -42,6 +42,15 @@ import {
   NOOP_ACTIVITY_RECORDER,
 } from "../activity/mod.ts";
 
+type RunGroupStore = Pick<
+  OpenTofuControlStore,
+  | "listCapsules"
+  | "listDependenciesByWorkspace"
+  | "putRunGroup"
+  | "getRunGroup"
+  | "getPlanRun"
+>;
+
 /**
  * The graphJson recorded on a `workspace_update` RunGroup row: the topological
  * layers (producer-before-consumer) over the member set and the per-member plan
@@ -55,7 +64,7 @@ export interface WorkspaceUpdateGraph {
 }
 
 export interface RunGroupsServiceDependencies {
-  readonly store: OpenTofuControlStore;
+  readonly store: RunGroupStore;
   /** Drives `createCapsulePlan` per member + unified `getRun` at read time. */
   readonly controller: OpenTofuController;
   readonly newId?: (prefix: string) => string;
@@ -70,7 +79,7 @@ export interface CreateWorkspaceDriftCheckOptions {
 }
 
 export class RunGroupsService {
-  readonly #store: OpenTofuControlStore;
+  readonly #store: RunGroupStore;
   readonly #controller: OpenTofuController;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => string;

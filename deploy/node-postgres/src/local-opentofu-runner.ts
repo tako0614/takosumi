@@ -304,12 +304,54 @@ export function createHttpOpenTofuRunner(input: {
   readonly archiveStore: SourceArchiveStore;
   readonly stateStore: LocalOpenTofuStateArtifactStore;
   readonly baseUrl: string;
+  /**
+   * Shared bearer presented to the runner process
+   * (`TAKOSUMI_RUNNER_SHARED_TOKEN`). Required for the promoted self-host
+   * profile whose runner listens on a compose network; local-substrate keeps
+   * its unauthenticated loopback wiring by omitting it.
+   */
+  readonly sharedToken?: string;
 }): OpenTofuRunner {
   return new LocalOpenTofuRunner(
     input.archiveStore,
     input.stateStore,
-    httpRunnerTransport(input.baseUrl),
+    httpRunnerTransport(input.baseUrl, input.sharedToken),
   );
+}
+
+export const SELF_HOST_OPENTOFU_RUNNER_PROFILE_ID =
+  "self-host-opentofu" as const;
+
+/**
+ * Runner profile for the promoted Bun + PostgreSQL self-host composition: the
+ * standalone runner container (runner/Dockerfile) reached over the compose
+ * network, with durable file-backed source archives and sealed state
+ * artifacts. Providers are operator policy — an empty allowlist means "decide
+ * per install", not "forbidden".
+ */
+export function createSelfHostOpenTofuRunnerProfile(
+  now = Date.now(),
+): RunnerProfile {
+  return {
+    ...createLocalOpenTofuRunnerProfile(now),
+    id: SELF_HOST_OPENTOFU_RUNNER_PROFILE_ID,
+    name: "Self-host OpenTofu",
+    description:
+      "Self-host OpenTofu runner container for the Bun + PostgreSQL profile.",
+    stateBackend: {
+      kind: "local",
+      ref: "state://self-host/opentofu",
+      lock: { kind: "operator", ref: "lock://self-host/opentofu" },
+    },
+    resourceLimits: {
+      maxRunSeconds: 900,
+      maxSourceArchiveBytes: 64 * 1024 * 1024,
+      maxSourceDecompressedBytes: 512 * 1024 * 1024,
+      cpu: "1",
+      memoryMb: 2048,
+    },
+    labels: { environment: "self-host" },
+  };
 }
 
 export function createLocalOpenTofuRunnerProfile(
@@ -361,6 +403,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     job: OpenTofuPlanJob,
     control?: RunExecutionControl,
   ): Promise<OpenTofuPlanResult> {
+    control = timeoutBoundControl(control);
     await this.restoreSourceArchive(
       job.planRun.id,
       job.sourceArchive,
@@ -414,6 +457,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     job: OpenTofuApplyJob,
     control?: RunExecutionControl,
   ): Promise<OpenTofuApplyResult> {
+    control = timeoutBoundControl(control);
     const replay = await this.adoptCommittedStateMutation(
       job.applyRun.id,
       "apply",
@@ -507,6 +551,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     job: OpenTofuDestroyJob,
     control?: RunExecutionControl,
   ): Promise<OpenTofuDestroyResult> {
+    control = timeoutBoundControl(control);
     const replay = await this.adoptCommittedStateMutation(
       job.applyRun.id,
       "destroy",
@@ -944,10 +989,17 @@ const inProcessRunnerTransport: RunnerTransport = {
     ),
 };
 
-function httpRunnerTransport(baseUrl: string): RunnerTransport {
+function httpRunnerTransport(
+  baseUrl: string,
+  sharedToken?: string,
+): RunnerTransport {
   const endpoint = normalizeRunnerBaseUrl(baseUrl);
   return {
-    fetch: async (path, init) => await fetch(new URL(path, endpoint), init),
+    fetch: async (path, init) => {
+      const headers = new Headers(init?.headers);
+      if (sharedToken) headers.set("authorization", `Bearer ${sharedToken}`);
+      return await fetch(new URL(path, endpoint), { ...init, headers });
+    },
   };
 }
 
@@ -1044,6 +1096,14 @@ async function runRunner(
       stringValue(body, "error") ??
       stringValue(body, "stderr") ??
       text.slice(0, 500);
+    if (reason === "capacity_exhausted") {
+      // Refused before any work started: infrastructure-shaped so the engine
+      // requeues under the queue-age budget instead of failing the run.
+      throw new OpenTofuRunnerInfrastructureError(
+        `OpenTofu runner refused ${action} run ${runId} at capacity${detail ? ` (${detail})` : ""}`,
+        { reason: "capacity_exhausted" },
+      );
+    }
     throw new OpenTofuRunnerExecutionError(
       `OpenTofu runner rejected ${action} run ${runId}: ${response.status}${detail ? ` (${detail})` : ""}`,
       { ...(reason ? { reason } : {}) },
@@ -1822,4 +1882,22 @@ function stringArray(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Folds an explicit `control.timeoutMs` into the threaded abort signal.
+ *
+ * Nothing derives this from the runner profile's `maxRunSeconds` any more:
+ * the runner enforces that per `tofu` command, and a whole-dispatch cap would
+ * abort the transport while the provider kept mutating. Callers that genuinely
+ * want a dispatch deadline still get one by setting `timeoutMs` themselves.
+ */
+function timeoutBoundControl(
+  control: RunExecutionControl | undefined,
+): RunExecutionControl | undefined {
+  const timeoutMs = control?.timeoutMs;
+  if (typeof timeoutMs !== "number" || !(timeoutMs > 0)) return control;
+  const signals = [AbortSignal.timeout(timeoutMs)];
+  if (control?.signal) signals.push(control.signal);
+  return { ...control, signal: AbortSignal.any(signals) };
 }

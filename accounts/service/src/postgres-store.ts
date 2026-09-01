@@ -2,8 +2,13 @@ import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
   AccountSessionRecord,
   AccountsStore,
+  AuthorizationCodeRedemptionCandidate,
   AuthorizationCodeRecord,
+  ClaimValidatedAuthorizationCodeResult,
+  FinalizeAuthorizationCodeRedemptionInput,
+  FinalizeAuthorizationCodeRedemptionResult,
   OidcClientRecord,
+  OpenAuthorizationCodeRedemptionResult,
   PasskeyCredentialRecord,
   PersonalAccessTokenInventoryPage,
   PersonalAccessTokenInventoryPageInput,
@@ -157,10 +162,22 @@ export class PostgresAccountsStore implements AccountsStore {
     return tokens.saveAuthorizationCode(this.#client, code, record);
   }
 
-  consumeAuthorizationCode(
+  openAuthorizationCodeRedemption(
     code: string,
-  ): Promise<AuthorizationCodeRecord | undefined> {
-    return tokens.consumeAuthorizationCode(this.#client, code);
+  ): Promise<OpenAuthorizationCodeRedemptionResult> {
+    return tokens.openAuthorizationCodeRedemption(this.#client, code);
+  }
+
+  claimValidatedAuthorizationCode(
+    candidate: AuthorizationCodeRedemptionCandidate,
+  ): Promise<ClaimValidatedAuthorizationCodeResult> {
+    return tokens.claimValidatedAuthorizationCode(this.#client, candidate);
+  }
+
+  finalizeAuthorizationCodeRedemption(
+    input: FinalizeAuthorizationCodeRedemptionInput,
+  ): Promise<FinalizeAuthorizationCodeRedemptionResult> {
+    return tokens.finalizeAuthorizationCodeRedemption(this.#client, input);
   }
 
   saveAccessToken(token: string, record: TokenRecord): Promise<void> {
@@ -274,27 +291,6 @@ export class PostgresAccountsStore implements AccountsStore {
     return refreshChain.revokeRefreshChain(this.#client, rootToken);
   }
 
-  markAuthorizationCodeConsumed(code: string): Promise<void> {
-    return refreshChain.markAuthorizationCodeConsumed(this.#client, code);
-  }
-
-  isAuthorizationCodeConsumed(code: string): Promise<boolean> {
-    return refreshChain.isAuthorizationCodeConsumed(this.#client, code);
-  }
-
-  linkAccessTokenToAuthCode(
-    code: string,
-    accessToken: string,
-    refreshTokenRoot?: string,
-  ): Promise<void> {
-    return refreshChain.linkAccessTokenToAuthCode(
-      this.#client,
-      code,
-      accessToken,
-      refreshTokenRoot,
-    );
-  }
-
   linkAccessTokenToRefreshChain(
     refreshTokenRoot: string,
     accessToken: string,
@@ -304,12 +300,6 @@ export class PostgresAccountsStore implements AccountsStore {
       refreshTokenRoot,
       accessToken,
     );
-  }
-
-  revokeTokensIssuedFromCode(
-    code: string,
-  ): Promise<{ access: readonly string[]; refresh: readonly string[] }> {
-    return refreshChain.revokeTokensIssuedFromCode(this.#client, code);
   }
 
   pruneRefreshChainPage(

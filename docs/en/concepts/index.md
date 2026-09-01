@@ -56,6 +56,15 @@ module. Cloudflare, AWS, Kubernetes, and Takoform are all ordinary providers.
 Takosumi delivers provider connections to the runner only for the Run and leaves
 provider state and provider-side objects to that provider's contract.
 
+In ordinary BYOC, the Workspace/customer owns the vendor account, credential, and
+resulting resource. The path is `ProviderConnection → CredentialRecipe →
+ProviderBinding → run-scoped runner materialization → standard OpenTofu provider
+→ customer-owned resource`. Managed Takoform supply is an external Takoserver
+Takoform Host concern; Takosumi handles a Host-scoped credential as an ordinary
+ProviderConnection. It never receives or selects Takoserver's parent provider
+credential, provider installation, backend, capacity, WfP namespace/dispatcher,
+native identity, or managed Offering.
+
 The former Resource Shape / Form Host path is not a supported product surface.
 Retained Resource APIs, schemas, TargetPool, and SpacePolicy are temporary
 migration internals for existing data. The [Resource migration note](./resources.md)
@@ -85,7 +94,10 @@ Read [State and outputs](./state-and-outputs.md) and
 ## Software and hosted operations
 
 These docs describe behavior shared by Takosumi OSS installations. Hosted Form
-instances, storage limits, pricing, and SLAs are operator decisions. Details
-specific to the official hosted service stay in the Takosumi Cloud docs.
+instances, storage limits, pricing, and SLAs are operator decisions. Takosumi
+Cloud is a retired historical identity, so `app.takosumi.com` availability,
+pricing, SLA, and support pages are not current authority. Current retail,
+commerce, and client-composition docs belong to Takosumi Hosted; managed supply
+and Offerings belong to Takoserver.
 
 See [Product boundaries](./boundaries.md) for the exact split.

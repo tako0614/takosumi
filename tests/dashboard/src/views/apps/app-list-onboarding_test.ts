@@ -71,7 +71,7 @@ describe("AppListView app launcher", () => {
     );
     expect(appListSource).toContain("function AppLauncher");
     expect(appListSource).toContain("function AppTileView");
-    expect(appListSource).toContain("isVisibleServiceCapsule");
+    expect(appListSource).toContain("isLaunchableCapsule");
     // One authorized Interface becomes one launcher tile.
     expect(appListSource).toContain("if (!surfaces) continue");
     expect(appListSource).not.toContain("key: `${inst.id}:store`");

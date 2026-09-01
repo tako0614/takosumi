@@ -14,7 +14,7 @@ TCS 2.0 listing から install authority として Takosumi が受け取るの�
 URL だけです。suggested name や表示情報は UI の初期値にできますが、実行対象を決めません。
 
 1. dashboard が listing の repository URL を受け取る。
-2. Takosumi がその URL の Source を root から sync し、ref を immutable commit に固定する。
+2. Takosumi がその URL の Source を root から sync し、ref を変更不可の commit に固定する。
 3. exact SourceSnapshot の
    [Repository manifest](./repository-manifest.md)から module を選ぶ。
 4. server が repository URL に一致する host policy override を一意に解決する。無い場合は
@@ -26,7 +26,7 @@ URL だけです。suggested name や表示情報は UI の初期値にできま
 Store client は `compileInstallUx: true` の request に `modulePath` や
 `installConfigId` を指定できません。single-module manifest では唯一の module を選び、
 multi-module manifest では `takosumi.com/v2.1` の exact `defaultModule` を要求します。
-host override が複数件なら fail closed です。override が0件でも repository manifest と
+host override が複数件なら安全側に停止します。override が0件でも repository manifest と
 汎用 host policy だけで install でき、Store への app 固有 InstallConfig 登録は不要です。
 host override は `sourceSelector.url` で一致する実行 policy であり、`store` 表示情報を
 持つ必要はありません。そのため lifecycle や credential policy を許可する operator

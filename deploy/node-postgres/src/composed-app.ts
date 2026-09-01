@@ -18,6 +18,7 @@
  *    app as a fallback so the composed app answers the account-plane surfaces
  *    that the Takosumi service deploy control routes do not claim.
  */
+import { createFileBackupArtifactStore } from "./file-backup-artifact-store.ts";
 import type { AccountsHandler } from "@takosjp/takosumi-accounts-service";
 import {
   issueInterfaceOAuthAccessToken,
@@ -27,6 +28,7 @@ import {
   createTakosumiService,
   type CreatedTakosumiService,
 } from "../../../core/bootstrap.ts";
+import { uninstallGraceMsFromDays } from "../../../core/domains/capsules/mod.ts";
 import { selectSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
 import {
@@ -235,6 +237,31 @@ export async function buildComposedApp(
             input.managedVanityHostnameSlotsPerOwner,
         }
       : {}),
+    ...(uninstallGraceMsFromDays(runtimeEnv.TAKOSUMI_UNINSTALL_GRACE_DAYS) !==
+        undefined
+      ? {
+          uninstallGraceMs: uninstallGraceMsFromDays(
+            runtimeEnv.TAKOSUMI_UNINSTALL_GRACE_DAYS,
+          ),
+        }
+      : {}),
+    ...(runtimeEnv.TAKOSUMI_FAILED_INSTALL_AUTO_CLEANUP === "0"
+      ? { failedInstallAutoCleanup: false }
+      : {}),
+    ...(runnerCapacityQueueBudgetMsFromEnv(
+      runtimeEnv.TAKOSUMI_RUNNER_CAPACITY_QUEUE_BUDGET_MINUTES,
+    )),
+    ...(workspaceRunConcurrencyFromEnv(
+      runtimeEnv.TAKOSUMI_WORKSPACE_RUN_CONCURRENCY,
+    )),
+    // Backups + the two-phase uninstall's pre-destroy export land on the same
+    // durable runtime volume as the sealed state artifacts. Without this the
+    // backup routes answered 501 and every scheduled removal recorded its
+    // export as `skipped`, despite the UI promising an attempt.
+    backupArtifactStore: createFileBackupArtifactStore(
+      `${runtimeEnv.TAKOSUMI_RUNTIME_DIR?.trim() || "/var/lib/takosumi"}/backups`,
+      secretCrypto,
+    ),
     ...(input.interfaceOAuth2ResourceAuthorizer
       ? {
           interfaceOAuth2ResourceAuthorizer:
@@ -471,4 +498,33 @@ function embeddedServiceRuntimeEnv(
 
 function nonEmpty(value: string | undefined): string | undefined {
   return value && value.length > 0 ? value : undefined;
+}
+
+/**
+ * Parses TAKOSUMI_RUNNER_CAPACITY_QUEUE_BUDGET_MINUTES into the bootstrap
+ * option; malformed or negative values keep the built-in 45-minute default.
+ * `0` disables the budget (wait for capacity indefinitely), matching what
+ * `0` means for TAKOSUMI_WORKSPACE_RUN_CONCURRENCY.
+ */
+function runnerCapacityQueueBudgetMsFromEnv(
+  raw: string | undefined,
+): { readonly runnerCapacityQueueBudgetMs?: number } {
+  if (raw === undefined || raw.trim() === "") return {};
+  const minutes = Number(raw);
+  if (!Number.isFinite(minutes) || minutes < 0) return {};
+  return { runnerCapacityQueueBudgetMs: minutes * 60_000 };
+}
+
+/**
+ * Parses TAKOSUMI_WORKSPACE_RUN_CONCURRENCY into the bootstrap option;
+ * malformed or negative values keep the built-in default (2). "0" disables
+ * the fairness fence.
+ */
+function workspaceRunConcurrencyFromEnv(
+  raw: string | undefined,
+): { readonly workspaceRunConcurrency?: number } {
+  if (raw === undefined || raw.trim() === "") return {};
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) return {};
+  return { workspaceRunConcurrency: parsed };
 }

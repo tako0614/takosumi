@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { Miniflare } from "miniflare";
 import {
   D1AccountsStore,
   type D1Database,
@@ -11,6 +12,7 @@ import {
   __resetSessionHashSaltConfigForTesting,
   registerSessionHashSaltConfig,
 } from "../../../../accounts/service/src/session-hash-salt.ts";
+import { sha256Text } from "../../../../accounts/service/src/encoding.ts";
 import { requireAccountsBearer } from "../../../../accounts/service/src/account-session.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
@@ -60,6 +62,305 @@ test("D1AccountsStore indexes Capsule OIDC registrations directly", async () => 
   await store.revokeOidcClient("oidc_d1");
   expect(await store.findOidcClient("oidc_d1")).toBeUndefined();
   expect(await store.findOidcClientForCapsule("cap_d1")).toBeUndefined();
+});
+
+test("D1AccountsStore claims and finalizes one authorization-code lifecycle", async () => {
+  const store = new D1AccountsStore(new SqliteFakeD1());
+  const record = {
+    clientId: "client_d1_code",
+    redirectUri: "https://app.example.test/callback",
+    scope: "openid",
+    subject: "tsub_d1_code",
+    codeChallenge: "challenge",
+    codeChallengeMethod: "S256" as const,
+    expiresAt: 60_000,
+  };
+  await store.saveAuthorizationCode("plain-d1-code", record);
+
+  const opened = await store.openAuthorizationCodeRedemption("plain-d1-code");
+  expect(opened.status).toBe("active");
+  if (opened.status !== "active") return;
+  expect(opened.candidate.record).toEqual(record);
+  const claim = await store.claimValidatedAuthorizationCode(opened.candidate);
+  expect(claim.status).toBe("claimed");
+  if (claim.status !== "claimed") return;
+  expect(
+    await store.finalizeAuthorizationCodeRedemption({
+      code: "plain-d1-code",
+      claimId: claim.claimId,
+      accessToken: "plain-d1-access",
+      accessRecord: {
+        clientId: record.clientId,
+        scope: record.scope,
+        subject: record.subject,
+        expiresAt: 120_000,
+      },
+    }),
+  ).toEqual({ status: "issued" });
+  expect((await store.findAccessToken("plain-d1-access"))?.subject).toBe(
+    record.subject,
+  );
+});
+
+test("D1AccountsStore makes a second validated claim replay the first", async () => {
+  const store = new D1AccountsStore(new SqliteFakeD1());
+  const record = authorizationCodeRecord("d1-two-claimants");
+  await store.saveAuthorizationCode("d1-code-two-claimants", record);
+  const first = await store.openAuthorizationCodeRedemption(
+    "d1-code-two-claimants",
+  );
+  const second = await store.openAuthorizationCodeRedemption(
+    "d1-code-two-claimants",
+  );
+  if (first.status !== "active" || second.status !== "active") {
+    throw new Error("expected two active validation snapshots");
+  }
+  const winner = await store.claimValidatedAuthorizationCode(first.candidate);
+  const loser = await store.claimValidatedAuthorizationCode(second.candidate);
+  expect(winner.status).toBe("claimed");
+  expect(loser).toEqual({ status: "replayed" });
+  if (winner.status !== "claimed") return;
+  expect(
+    await store.finalizeAuthorizationCodeRedemption({
+      code: "d1-code-two-claimants",
+      claimId: winner.claimId,
+      accessToken: "d1-access-loser",
+      accessRecord: oauthTokenRecord(record),
+    }),
+  ).toEqual({ status: "replayed" });
+  expect(await store.findAccessToken("d1-access-loser")).toBeUndefined();
+});
+
+test("D1AccountsStore replay atomically revokes issued and rotated descendants", async () => {
+  const store = new D1AccountsStore(new SqliteFakeD1());
+  const code = "d1-code-replay-descendants";
+  const record = authorizationCodeRecord("d1-replay-descendants");
+  await store.saveAuthorizationCode(code, record);
+  const opened = await store.openAuthorizationCodeRedemption(code);
+  if (opened.status !== "active") throw new Error("expected active code");
+  const claim = await store.claimValidatedAuthorizationCode(opened.candidate);
+  if (claim.status !== "claimed") throw new Error("expected claim winner");
+  expect(
+    await store.finalizeAuthorizationCodeRedemption({
+      code,
+      claimId: claim.claimId,
+      accessToken: "d1-access-root",
+      accessRecord: oauthTokenRecord(record),
+      refreshToken: "d1-refresh-root",
+      refreshRecord: oauthTokenRecord(record),
+    }),
+  ).toEqual({ status: "issued" });
+  expect(
+    await store.addRefreshChainLink("d1-refresh-root", "d1-refresh-child"),
+  ).toBe(true);
+  await store.saveRefreshToken("d1-refresh-child", oauthTokenRecord(record));
+  await store.saveAccessToken("d1-access-descendant", oauthTokenRecord(record));
+  await store.linkAccessTokenToRefreshChain(
+    "d1-refresh-child",
+    "d1-access-descendant",
+  );
+
+  expect(await store.openAuthorizationCodeRedemption(code)).toEqual({
+    status: "replayed",
+  });
+  expect(await store.findAccessToken("d1-access-root")).toBeUndefined();
+  expect(await store.findAccessToken("d1-access-descendant")).toBeUndefined();
+  expect(await store.findRefreshToken("d1-refresh-root")).toBeUndefined();
+  expect(await store.findRefreshToken("d1-refresh-child")).toBeUndefined();
+});
+
+test("D1AccountsStore replay revokes every preserved legacy token link", async () => {
+  const db = new SqliteFakeD1();
+  const store = new D1AccountsStore(db);
+  const code = "d1-code-multi-link-replay";
+  const record = authorizationCodeRecord("d1-multi-link-replay");
+  await store.saveAuthorizationCode(code, record);
+  const opened = await store.openAuthorizationCodeRedemption(code);
+  if (opened.status !== "active") throw new Error("expected active code");
+  const claim = await store.claimValidatedAuthorizationCode(opened.candidate);
+  if (claim.status !== "claimed") throw new Error("expected claim winner");
+  expect(
+    await store.finalizeAuthorizationCodeRedemption({
+      code,
+      claimId: claim.claimId,
+      accessToken: "d1-multi-access-a",
+      accessRecord: oauthTokenRecord(record),
+      refreshToken: "d1-multi-refresh-a",
+      refreshRecord: oauthTokenRecord(record),
+    }),
+  ).toEqual({ status: "issued" });
+
+  const secondAccess = "d1-multi-access-b";
+  const secondRefresh = "d1-multi-refresh-b";
+  const secondChild = "d1-multi-refresh-b-child";
+  const secondDescendant = "d1-multi-access-b-descendant";
+  await store.saveAccessToken(secondAccess, oauthTokenRecord(record));
+  await store.saveRefreshToken(secondRefresh, oauthTokenRecord(record));
+  expect(await store.addRefreshChainLink(secondRefresh, secondChild)).toBe(
+    true,
+  );
+  await store.saveRefreshToken(secondChild, oauthTokenRecord(record));
+  await store.saveAccessToken(secondDescendant, oauthTokenRecord(record));
+  await store.linkAccessTokenToRefreshChain(secondChild, secondDescendant);
+
+  const [codeHash, accessHash, refreshHash] = await Promise.all([
+    sha256Text(code),
+    sha256Text(secondAccess),
+    sha256Text(secondRefresh),
+  ]);
+  const linkKey = `${codeHash}\n${accessHash}\n${refreshHash}`;
+  await db
+    .prepare(
+      `INSERT INTO takosumi_accounts_documents (
+         bucket, key, document, updated_at
+       ) VALUES ('auth_code_token_links', ?, ?, ?)`,
+    )
+    .bind(
+      linkKey,
+      JSON.stringify({
+        codeHash,
+        accessTokenHash: accessHash,
+        refreshRootHash: refreshHash,
+        createdAt: Date.now(),
+      }),
+      Date.now(),
+    )
+    .run();
+
+  expect(await store.openAuthorizationCodeRedemption(code)).toEqual({
+    status: "replayed",
+  });
+  expect(await store.findAccessToken("d1-multi-access-a")).toBeUndefined();
+  expect(await store.findRefreshToken("d1-multi-refresh-a")).toBeUndefined();
+  expect(await store.findAccessToken(secondAccess)).toBeUndefined();
+  expect(await store.findRefreshToken(secondRefresh)).toBeUndefined();
+  expect(await store.findRefreshToken(secondChild)).toBeUndefined();
+  expect(await store.findAccessToken(secondDescendant)).toBeUndefined();
+});
+
+test("D1AccountsStore rejects a stale candidate without deleting its replacement", async () => {
+  const store = new D1AccountsStore(new SqliteFakeD1());
+  const code = "d1-code-substitution";
+  await store.saveAuthorizationCode(code, authorizationCodeRecord("record-a"));
+  const recordA = await store.openAuthorizationCodeRedemption(code);
+  if (recordA.status !== "active") throw new Error("expected record A");
+  await store.saveAuthorizationCode(code, authorizationCodeRecord("record-b"));
+
+  expect(
+    await store.claimValidatedAuthorizationCode(recordA.candidate),
+  ).toEqual({ status: "stale" });
+  const recordB = await store.openAuthorizationCodeRedemption(code);
+  expect(recordB.status).toBe("active");
+  if (recordB.status === "active") {
+    expect(recordB.candidate.record.subject).toBe("record-b");
+  }
+});
+
+test("D1AccountsStore rolls back a failed finalize batch without partial tokens", async () => {
+  const db = new FailingBatchD1();
+  const store = new D1AccountsStore(db);
+  const code = "d1-code-batch-failure";
+  const record = authorizationCodeRecord("d1-batch-failure");
+  await store.saveAuthorizationCode(code, record);
+  const opened = await store.openAuthorizationCodeRedemption(code);
+  if (opened.status !== "active") throw new Error("expected active code");
+  const claim = await store.claimValidatedAuthorizationCode(opened.candidate);
+  if (claim.status !== "claimed") throw new Error("expected claim winner");
+
+  db.failNextBatchAt(2);
+  await expect(
+    store.finalizeAuthorizationCodeRedemption({
+      code,
+      claimId: claim.claimId,
+      accessToken: "d1-access-partial",
+      accessRecord: oauthTokenRecord(record),
+      refreshToken: "d1-refresh-partial",
+      refreshRecord: oauthTokenRecord(record),
+    }),
+  ).rejects.toThrow("injected D1 lifecycle batch failure");
+  expect(await store.findAccessToken("d1-access-partial")).toBeUndefined();
+  expect(await store.findRefreshToken("d1-refresh-partial")).toBeUndefined();
+  expect(await store.openAuthorizationCodeRedemption(code)).toEqual({
+    status: "replayed",
+  });
+});
+
+test("workerd D1 linearizes replay before finalize without persisting tokens", async () => {
+  const runtime = new Miniflare({
+    compatibilityDate: "2026-07-17",
+    modules: [
+      {
+        type: "ESModule",
+        path: "authorization-code-lifecycle-workerd.mjs",
+        contents: "export default {fetch(){return new Response('ok')}}",
+      },
+    ],
+    d1Databases: { ACCOUNTS: "authorization-code-lifecycle-workerd" },
+  });
+  try {
+    const rawDb = await runtime.getD1Database("ACCOUNTS");
+    const store = new D1AccountsStore(rawDb as unknown as D1Database);
+    const code = "workerd-code-replay-before-finalize";
+    const record = authorizationCodeRecord("workerd-replay-before-finalize");
+    await store.saveAuthorizationCode(code, record);
+    const opened = await store.openAuthorizationCodeRedemption(code);
+    if (opened.status !== "active") throw new Error("expected active code");
+    const claim = await store.claimValidatedAuthorizationCode(opened.candidate);
+    if (claim.status !== "claimed") throw new Error("expected claim winner");
+
+    expect(await store.openAuthorizationCodeRedemption(code)).toEqual({
+      status: "replayed",
+    });
+    expect(
+      await store.finalizeAuthorizationCodeRedemption({
+        code,
+        claimId: claim.claimId,
+        accessToken: "workerd-access-must-not-survive",
+        accessRecord: oauthTokenRecord(record),
+        refreshToken: "workerd-refresh-must-not-survive",
+        refreshRecord: oauthTokenRecord(record),
+      }),
+    ).toEqual({ status: "replayed" });
+    expect(
+      await store.findAccessToken("workerd-access-must-not-survive"),
+    ).toBeUndefined();
+    expect(
+      await store.findRefreshToken("workerd-refresh-must-not-survive"),
+    ).toBeUndefined();
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test("D1 authorization-code transitions use exactly one durable batch each", async () => {
+  const db = new CountingD1Database();
+  const store = new D1AccountsStore(db);
+  await store.initialize();
+  db.resetBatchCount();
+  const code = "d1-single-batch-code";
+  const record = authorizationCodeRecord("d1-single-batch");
+
+  await store.saveAuthorizationCode(code, record);
+  expect(db.batchCount).toBe(1);
+  const opened = await store.openAuthorizationCodeRedemption(code);
+  expect(db.batchCount).toBe(2);
+  if (opened.status !== "active") throw new Error("expected active code");
+  const claim = await store.claimValidatedAuthorizationCode(opened.candidate);
+  expect(db.batchCount).toBe(3);
+  if (claim.status !== "claimed") throw new Error("expected claim winner");
+  expect(
+    await store.finalizeAuthorizationCodeRedemption({
+      code,
+      claimId: claim.claimId,
+      accessToken: "d1-single-batch-access",
+      accessRecord: oauthTokenRecord(record),
+    }),
+  ).toEqual({ status: "issued" });
+  expect(db.batchCount).toBe(4);
+  expect(await store.openAuthorizationCodeRedemption(code)).toEqual({
+    status: "replayed",
+  });
+  expect(db.batchCount).toBe(5);
 });
 
 test("D1AccountsStore predeployed mode performs zero DDL across document operations", async () => {
@@ -259,10 +560,96 @@ test("D1AccountsStore updates account documents and verified-email indexes atomi
   ).toBeUndefined();
 });
 
+function authorizationCodeRecord(subject: string) {
+  return {
+    clientId: "client_d1_lifecycle",
+    redirectUri: "https://app.example.test/callback",
+    scope: "openid offline_access",
+    subject,
+    codeChallenge: "challenge",
+    codeChallengeMethod: "S256" as const,
+    expiresAt: Date.now() + 60_000,
+  };
+}
+
+function oauthTokenRecord(record: ReturnType<typeof authorizationCodeRecord>) {
+  return {
+    clientId: record.clientId,
+    scope: record.scope,
+    subject: record.subject,
+    expiresAt: Date.now() + 60_000,
+  };
+}
+
+class FailingBatchD1 implements D1Database {
+  readonly #delegate = new SqliteFakeD1();
+  #failAt?: number;
+
+  prepare(query: string): D1PreparedStatement {
+    return this.#delegate.prepare(query);
+  }
+
+  exec(query: string): Promise<D1ExecResult> {
+    return this.#delegate.exec(query);
+  }
+
+  batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    const failAt = this.#failAt;
+    this.#failAt = undefined;
+    if (failAt === undefined) {
+      return this.#delegate.batch(statements) as Promise<
+        readonly D1Result<T>[]
+      >;
+    }
+    let index = 0;
+    const wrapped = statements.map(
+      (statement) =>
+        new FailingD1Statement(statement, () => index++ === failAt),
+    );
+    return this.#delegate.batch(wrapped) as Promise<readonly D1Result<T>[]>;
+  }
+
+  failNextBatchAt(statementIndex: number): void {
+    this.#failAt = statementIndex;
+  }
+}
+
+class FailingD1Statement implements D1PreparedStatement {
+  constructor(
+    private readonly delegate: D1PreparedStatement,
+    private readonly shouldFail: () => boolean,
+  ) {}
+
+  bind(...values: readonly D1Value[]): D1PreparedStatement {
+    return new FailingD1Statement(
+      this.delegate.bind(...values),
+      this.shouldFail,
+    );
+  }
+
+  run<T = unknown>(): Promise<D1Result<T>> {
+    if (this.shouldFail()) {
+      throw new Error("injected D1 lifecycle batch failure");
+    }
+    return this.delegate.run() as Promise<D1Result<T>>;
+  }
+
+  first<T = unknown>(column?: string): Promise<T | null> {
+    return this.delegate.first<T>(column);
+  }
+
+  all<T = unknown>(): Promise<D1Result<T>> {
+    return this.delegate.all<T>();
+  }
+}
+
 class CountingD1Database implements D1Database {
   readonly #delegate = new SqliteFakeD1();
   execCount = 0;
   prepareCount = 0;
+  batchCount = 0;
 
   prepare(query: string): D1PreparedStatement {
     this.prepareCount += 1;
@@ -277,7 +664,12 @@ class CountingD1Database implements D1Database {
   batch<T = unknown>(
     statements: readonly D1PreparedStatement[],
   ): Promise<readonly D1Result<T>[]> {
+    this.batchCount += 1;
     return this.#delegate.batch(statements) as Promise<readonly D1Result<T>[]>;
+  }
+
+  resetBatchCount(): void {
+    this.batchCount = 0;
   }
 
   resetPrepareCount(): void {

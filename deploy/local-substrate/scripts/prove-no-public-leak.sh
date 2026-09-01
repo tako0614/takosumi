@@ -15,6 +15,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SUBSTRATE_DIR"
+source "$SCRIPT_DIR/compose-helpers.sh"
+INGRESS_IP="$(local_substrate_ingress_ip)"
 
 PASS=0
 FAIL=0
@@ -43,7 +45,7 @@ assert_internal_seam_not_edge_reachable() {
 		local http_code
 		http_code=$(curl -sk \
 			--cacert caddy/runtime/pebble-issuance-root.pem \
-			--resolve app.takosumi.test:443:127.0.0.1 \
+			--resolve "app.takosumi.test:443:$INGRESS_IP" \
 			-H "Authorization: Bearer ${TAKOSUMI_DEPLOY_CONTROL_TOKEN:-local-substrate-deploy-control-token}" \
 			-H "Content-Type: application/json" \
 			-o /dev/null \

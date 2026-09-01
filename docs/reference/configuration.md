@@ -4,6 +4,12 @@ Takosumi の endpoint を動かす側が設定する環境変数の一覧です�
 `[vars]` と `wrangler secret put`、Bun と PostgreSQL の構成ではプロセスの環境変数として
 渡します。導入の手順は[自分で動かす](../concepts/self-host.md)にあります。
 
+通常の BYOC では Workspace/customer が vendor account と credential を用意します。
+`ProviderConnection → CredentialRecipe → ProviderBinding → run-scoped runner materialization`
+を通じて standard OpenTofu provider に渡し、作成される resource は customer が所有します。
+managed supply の Host-scoped credential を設定する場合も、external Takoserver Host の
+authority を Takosumi に移しません。Takosumi Cloud は退役した historical identity です。
+
 秘密の値は「必須」欄に**秘密**と書いてあります。これらは設定ファイルに書かず、
 secret ストアから渡してください。
 
@@ -11,7 +17,7 @@ secret ストアから渡してください。
 
 | 変数 | 必須 | 既定値 | 決めること |
 | --- | --- | --- | --- |
-| `TAKOSUMI_ENVIRONMENT` | 任意 | `local` | `local` / `development` / `test` / `staging` / `production` のどれか。`staging` と `production` では暗号鍵と永続ストアの検査が fail-closed になります。`NODE_ENV`、`ENVIRONMENT` も同じ順で読みます |
+| `TAKOSUMI_ENVIRONMENT` | 任意 | `local` | `local` / `development` / `test` / `staging` / `production` のどれか。`staging` と `production` では暗号鍵と永続ストアの検査は安全側に停止します。`NODE_ENV`、`ENVIRONMENT` も同じ順で読みます |
 | `TAKOSUMI_DEV_MODE` | 任意 | 未設定 | `1` / `true` / `yes` / `on` / `enabled` のどれかにすると、非本番で暗号鍵を設定しないまま起動できます。`staging` と `production` では効きません |
 | `PORT` | 任意 | `8788` | `bun core/index.ts` で起動したときの待ち受けポート |
 | `TAKOSUMI_DATABASE_URL` | `bun core/index.ts` で control plane を単体で動かすとき必須 | なし | control plane の PostgreSQL 接続先。`DATABASE_URL` も同じ用途で読みます。同梱の compose は control plane と accounts を 1 つの接続で動かすので、そちらでは `TAKOSUMI_ACCOUNTS_DATABASE_URL` だけを設定します |
@@ -114,15 +120,14 @@ bounded observation だけを実行します。flag を外すと observation も
 期間だけ、retained rowの観測batch/concurrency/interval/leaseを制御します。
 これらでResource/Formのdiscoveryやwriteを公開する手順はありません。
 
-例外となる frozen v1alpha1 maintenance lane は environment variable ではありません。
-composing Host の code が
-`TAKOSUMI_TAKOFORM_V1ALPHA1_COMPATIBILITY_HOST`、
+same-origin compatibility Host や Form-transition lane を有効にする supported configuration
+はありません。`TAKOSUMI_TAKOFORM_V1ALPHA1_COMPATIBILITY_HOST`、
 `TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST`、
-`TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE` を runtime object として同時に注入し、
-Run credential secret、deploy-control token、current Capsule/ProviderBinding/Connection/
-CredentialRecipe ledger を構成した場合だけ mount されます。文字列/JSON の Worker var、
-transition port 単体、legacy drain flag では有効になりません。詳細は
-[Takoform provider integration](./takoform-host.md) を参照してください。
+`TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE` など source に残る名前は
+implementation conformance gap と migration/delete custody であり、通常の platform
+Workerへ注入しません。provider mutation が必要な既存データ移行は、public route/Core
+compositionではなく対象固定の一回限り operator migration tool で行います。詳細は
+[External Takoform Host の境界](./takoform-host.md) を参照してください。
 
 ## Run と runner
 
@@ -136,6 +141,15 @@ transition port 単体、legacy drain flag では有効になりません。詳�
 | `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL` | 任意 | `3` | SourceSnapshot を固める zstd の圧縮レベル。`1` から `19` まで。低いほど書庫は大きく、初回の取り込みは速くなります |
 | `TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH` | 任意 | `5` | 定期ポーリング 1 回で拾う自動同期 Source の上限 |
 | `TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS` | 任意 | `45000` | 互換チェックのソース展開をリクエスト経路で待つ上限 (ミリ秒) |
+| `TAKOSUMI_UNINSTALL_GRACE_DAYS` | 任意 | `7` | 削除の猶予期間 (日)。この間サービスは復元でき、期限が来るとデータのエクスポートを試みてから完全に削除します。`0` で次の定期処理から即時 |
+| `TAKOSUMI_FAILED_INSTALL_AUTO_CLEANUP` | 任意 | 有効 | `0` で、初回インストール失敗時の自動クリーンアップ (部分 state の破棄) を止めます |
+| `TAKOSUMI_TCS_STORE_URL` | 任意 | なし | dashboard の「サービスを追加」が読み込むストア (TCS) の endpoint。discovery 文書経由で配られるので、変更に SPA の再ビルドは要りません |
+| `TAKOSUMI_RUNNER_CAPACITY_QUEUE_BUDGET_MINUTES` | 任意 | `45` | runner が満杯 (`capacity_exhausted`) の Run を再キューし続ける時間の上限 (分)。超えると `runner_capacity_timeout` として失敗します。計測は**最初に満杯を告げられた時点**からで、待ちの上限であって再試行回数の上限ではありません。`0` で無制限に待ちます |
+| `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` | 任意 | `0` | runner コンテナを実行後も生かしておく秒数 (0-900)。Run ごとに別コンテナなので次の Run には効きませんが、apply は plan と同じコンテナに入るため、承認から apply までの冷起動を省けます。生かしている間も同時実行数を消費します |
+| `TAKOSUMI_CONTROL_WRITE_RATE_LIMIT` | 任意 | `30` | dashboard/API の書き込み系呼び出しの上限 (workspace ごと・毎分)。超過は 429 + `Retry-After`。`0` で無効 |
+| `TAKOSUMI_SOURCE_HOOK_RATE_LIMIT` | 任意 | `60` | source webhook (`POST /hooks/sources/:id`) の上限 (source ごと・毎分)。超過は 429。`0` で無効 |
+| `TAKOSUMI_WORKSPACE_RUN_CONCURRENCY` | 任意 | `2` | workspace ごとの同時実行 Run 数 (plan/apply)。超過分は queued のまま待ち、失敗にはなりません。`0` で無効 (無制限)。coordination seam が無い構成 (単一プロセス) では効きません |
+| `TAKOSUMI_RUNNER_MAX_CONCURRENT_RUNS` | 任意 | `10` | 同梱 runner (標準構成の opentofu-runner コンテナ / in-process runner) が同時に実行する Run の上限。超過分は開始前に断られ、control plane が上の予算内で再キューします。`0` は排水モード (新規 Run を全部断り、実行中だけ終わらせる)。Cloudflare 構成ではこの値ではなく wrangler.toml の `max_instances` が上限です |
 
 `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` を空にすると、runner は Run ごとの作業領域に
 provider を展開します。共有しない代わりに、Run のあいだの取り違えが起きません。
@@ -147,10 +161,15 @@ export TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR="/tmp/takosumi-provider-cache"
 
 ## Form Package configuration (external Host only)
 
-Takosumi OSS does not install or host Form Packages. A Cloud or operator
-composition that owns a Form Host may document its private trust policy and
-artifact bindings in that Host's runbook; those settings are not a supported
-Takosumi OSS deployment path and do not create a FormActivation or Offering.
+Takosumi OSS does not install or host Form Packages. An external Host composition
+such as Takoserver may document its private trust policy and artifact bindings in
+that Host's runbook; those settings are not a supported Takosumi OSS deployment
+path and do not create a FormActivation or Generic Offering in Takosumi Core.
+Managed Offerings remain Takoserver authority.
+
+Generic Offering routes/stores that still exist are legacy/operator-only
+implementation conformance gaps and removal-target migration custody. They are
+not enabled by any configuration variable in this page.
 
 ## Cloudflare 構成で使うもの
 
@@ -185,6 +204,9 @@ bunx wrangler secret put TAKOSUMI_RELEASE_ACTIVATOR_TOKEN \
 | `TAKOSUMI_ACCOUNTS_PG_SSL_MODE` | 任意 | `disable` | `disable` / `require` / `verify-ca` / `verify-full` |
 | `TAKOSUMI_ACCOUNTS_PG_SSL_ROOT_CERT` | `verify-ca` / `verify-full` で必須 | なし | PEM の CA バンドル |
 | `POSTGRES_PASSWORD` | compose を使う場合は必須・**秘密** | なし | 同梱の compose が PostgreSQL に設定するパスワード |
+| `TAKOSUMI_OPENTOFU_RUNNER_URL` | plan/apply を動かすなら必須 | compose では `http://opentofu-runner:8080` | OpenTofu runner コンテナの endpoint。未設定だと Run は実行できず、起動時にその旨を記録します |
+| `TAKOSUMI_RUNNER_SHARED_TOKEN` | runner を使う場合は必須・**秘密** | なし | サービスと runner コンテナの間の共有 bearer。両側に同じ値を渡します |
+| `TAKOSUMI_RUNTIME_DIR` | 任意 | `/var/lib/takosumi` | source archive と封印済み state の永続置き場。compose は `takosumi-runtime` volume をここに当てます |
 
 同梱の compose は `deploy/node-postgres/.env` からこれらを読みます。
 

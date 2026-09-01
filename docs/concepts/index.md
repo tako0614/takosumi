@@ -52,6 +52,15 @@ Cloudflare、AWS、Kubernetes、Takoform などはすべて通常の provider �
 provider の接続情報を ProviderConnection / ProviderBinding から Run の間だけ runner に
 渡し、provider の state と実体は provider 側の契約に任せます。
 
+通常の BYOC では Workspace/customer が vendor account と credential、作成される resource
+を所有します。経路は `ProviderConnection → CredentialRecipe → ProviderBinding →
+run-scoped runner materialization → standard OpenTofu provider → customer-owned resource`
+です。Takoform を使う managed supply は external Takoserver Takoform Host の責任で、
+Takosumi は Host-scoped credential を通常の ProviderConnection として扱うだけです。
+Takoserver の親 provider credential、provider installation、backend、capacity、WfP
+namespace/dispatcher/native identity、managed Offering を Takosumi が受け取ったり選択したり
+することはありません。
+
 以前の Resource Shape / Form Host 経路は supported product ではありません。残る
 Resource API、schema、TargetPool、SpacePolicy は既存データを移行するための temporary
 migration internals です。[Resource の移行メモ](./resources.md) はこの扱いを説明します。
@@ -80,7 +89,9 @@ Takosumi では、デプロイしたものが提供する接続方法の説明�
 ## ソフトウェアと運用サービス
 
 このドキュメントは Takosumi OSS の共通動作を説明します。hosted Form instance、
-保存容量、料金、SLA は endpoint の運用者が決めます。公式ホスティング固有の内容は
-Takosumi Cloud のドキュメントに分けています。
+保存容量、料金、SLA は endpoint の運用者が決めます。Takosumi Cloud は退役した historical
+identity で、`app.takosumi.com` の availability、pricing、SLA、support は current
+authority ではありません。retail、commerce、client composition の現行 docs は
+Takosumi Hosted、managed supply と Offering は Takoserver が所有します。
 
 [製品の境界](./boundaries.md)で、どこまでがソフトウェアの責任かを確認できます。

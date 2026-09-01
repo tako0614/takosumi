@@ -174,6 +174,13 @@ export interface Run {
   readonly restoredFromStateVersionId?: string;
   readonly restoredServiceData?: RunServiceDataRestoreResult;
   readonly errorCode?: string;
+  /**
+   * Live resource progress while an apply/destroy executes, so the install
+   * screen can say "creating resources (3 of 7)" instead of showing a
+   * status-only spinner. Absent before execution, after it, and whenever the
+   * runner does not report progress.
+   */
+  readonly applyProgress?: RunApplyProgress;
   readonly createdBy: string;
   readonly createdAt: string;
   readonly startedAt?: string;
@@ -187,6 +194,14 @@ export interface Run {
   readonly finishedAt?: string;
 }
 
+/** Resource-level progress of an executing apply/destroy. */
+export interface RunApplyProgress {
+  readonly completed: number;
+  readonly inFlight: number;
+  readonly currentResource?: string;
+  readonly observedAt: number;
+}
+
 export type PublicRun = Omit<Run, "providerResolutions"> & {
   readonly providerResolutions?: readonly PublicProviderResolution[];
 };
@@ -194,6 +209,8 @@ export type PublicRun = Omit<Run, "providerResolutions"> & {
 /** Body of `GET /api/v1/workspaces/:workspaceId/runs`. */
 export interface ListRunsResponse {
   readonly runs: readonly PublicRun[];
+  /** Keyset resume cursor; absent on the final page. */
+  readonly nextCursor?: string;
 }
 
 export interface RunDiagnostic {

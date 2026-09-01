@@ -42,11 +42,29 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("refInputValue(");
     expect(view).toContain('createSignal(initial?.ref ?? "")');
     expect(view).toContain("setGitRef(ref);");
-    expect(view).toContain("ref: gitRef().trim()");
+    // The ref that reaches the API is the EXACT revision, never a display
+    // value: either what the user typed, or the resolved release commit.
+    expect(view).toContain("const explicit = gitRef().trim();");
+    expect(view).toContain("if (explicit) return explicit;");
+    expect(view).toContain("ref: effectiveRef,");
     expect(view).toContain("setCapsuleId(undefined)");
     expect(view).toContain("setPlanRunId(undefined)");
     expect(view).toContain("resetPreparedSource();");
   });
+  test("an unspecified revision resolves to the current release, not HEAD", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    // One rule for every entry point. A catalog install used to be the only
+    // path with no ref field at all, so it silently took the default branch.
+    expect(view).toContain("const resolveInstallRef = async");
+    expect(view).toContain("resolveStableSourceTag(workspace, gitUrl().trim())");
+    expect(view).toContain("setGitRef(resolved.commit);");
+    // A repository publishing no stable tag keeps working: the resolver
+    // throws, and an empty ref means HEAD server-side.
+    expect(view).toContain("} catch {\n      return \"\";\n    }");
+    // No listing-shaped special case reintroduced.
+    expect(view).not.toContain('listing() ? "" : gitRef()');
+  });
+
 
   test("workspace and provider discovery stay lazy until an explicit action", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");

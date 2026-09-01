@@ -85,8 +85,9 @@ The ownership split is:
 - the selected module owns variable types, defaults, validation, resources, and
   Outputs;
 - a TCS Store node owns discovery and browse presentation only;
-- an operator or Takosumi Cloud owns which targets, domains, providers, and
-  managed integrations are actually available.
+- an operator owns its BYOC targets and provider connections; Takoserver owns
+  managed-supply availability, while Takosumi Hosted may own retail/client
+  presentation.
 
 The ordinary Yurucommu install should require zero values when Takosumi-managed
 hostname allocation and Takosumi Accounts OIDC are available. A user may
@@ -384,7 +385,7 @@ It must not contain:
 - arbitrary commands, lifecycle actions, scripts, hooks, or executable code;
 - output allowlist/exposure policy;
 - runner id, target selection, adapter selection, billing, quota, price, or
-  Cloud capacity;
+  managed Host capacity;
 - Interface authorization/binding grants;
 - arbitrary environment-variable injection;
 - a bypass for compatibility, policy, Plan review, or Run approval.

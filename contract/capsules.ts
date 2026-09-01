@@ -38,9 +38,33 @@ export type {
  * required post-apply lifecycle action has failed or stayed non-terminal. It
  * is never runtime Ready; a later successful reviewed plan/apply is the generic
  * recovery path back to `active`.
+ *
+ * `uninstalled` is the two-phase uninstall grace state: the Capsule is hidden
+ * from the launcher and excluded from stale marking / auto-update / drift, but
+ * its provider resources (and their data) still exist and still meter. The
+ * actual destroy runs only after `scheduledDestroyAt`; until then the ONLY
+ * exits are the explicit restore route (back to `active`) or destroy
+ * completion (`destroyed`). While uninstalled the Capsule keeps its name
+ * reservation — a same-name reinstall needs the grace period to end first.
  */
 export type CapsuleStatus =
-  "pending" | "active" | "stale" | "error" | "disabled" | "destroyed";
+  | "pending"
+  | "active"
+  | "stale"
+  | "error"
+  | "disabled"
+  | "uninstalled"
+  | "destroyed";
+
+/** Evidence of the pre-destroy data export attempted before a scheduled destroy. */
+export interface CapsulePreDestroyExport {
+  readonly status: "exported" | "failed" | "skipped";
+  /** Backup record id when `exported`. */
+  readonly backupId?: string;
+  /** Why the export failed or was skipped (public-safe reason token). */
+  readonly reason?: string;
+  readonly at: string;
+}
 
 /**
  * Capsule ledger record.
@@ -95,6 +119,34 @@ export interface Capsule {
    * of public reads.
    */
   readonly autoUpdateAttemptSourceSnapshotId?: string;
+  /** When the two-phase uninstall was requested (status `uninstalled`). */
+  readonly uninstalledAt?: string;
+  /**
+   * When the deferred destroy becomes due. Public so the dashboard can show
+   * "deleted permanently on {date}" and offer restore until then.
+   */
+  readonly scheduledDestroyAt?: string;
+  /** Evidence of the pre-destroy data export attempt, once one ran. */
+  readonly preDestroyExport?: CapsulePreDestroyExport;
+  /** Internal: the Principal that requested the uninstall. Never projected. */
+  readonly uninstallRequestedBy?: string;
+  /** Internal: scheduled-destroy attempts so far (marker-first stamped). */
+  readonly scheduledDestroyAttempts?: number;
+  /**
+   * Internal one-shot marker: the failed first-install ApplyRun a cleanup
+   * destroy was attempted for. Burned before the cleanup plan is created so a
+   * crashed cleanup can never loop.
+   */
+  readonly installCleanupAttemptApplyRunId?: string;
+  /**
+   * Internal auto-replan backoff marker (same discipline as
+   * {@link Capsule.autoUpdateAttemptSourceSnapshotId}): bounded automatic
+   * re-plans after a failed update apply, per source snapshot.
+   */
+  readonly autoReplanAttempt?: {
+    readonly sourceSnapshotId: string;
+    readonly count: number;
+  };
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -105,6 +157,10 @@ export type PublicCapsule = Omit<
   | "currentOutputId"
   | "autoUpdateAttemptSourceSnapshotId"
   | "installingPrincipalId"
+  | "uninstallRequestedBy"
+  | "scheduledDestroyAttempts"
+  | "installCleanupAttemptApplyRunId"
+  | "autoReplanAttempt"
 >;
 
 // ---------------------------------------------------------------------------

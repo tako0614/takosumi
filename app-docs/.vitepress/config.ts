@@ -1,36 +1,36 @@
 import type { DefaultTheme, UserConfig } from "vitepress";
 
 const jaNav: DefaultTheme.NavItem[] = [
-  { text: "Cloud", link: "/" },
-  { text: "Pricing", link: "/pricing" },
-  { text: "Resources", link: "/resources" },
-  { text: "Endpoints", link: "/endpoints" },
-  { text: "Support", link: "/support" },
-  { text: "SLA", link: "/sla" },
-  { text: "Software docs", link: "https://takosumi.com/docs/" },
+  { text: "アーカイブ", link: "/" },
+  { text: "旧料金", link: "/pricing" },
+  { text: "旧リソース", link: "/resources" },
+  { text: "旧エンドポイント", link: "/endpoints" },
+  { text: "旧サポート", link: "/support" },
+  { text: "旧SLA", link: "/sla" },
+  { text: "OSS 文書", link: "https://takosumi.com/docs/" },
 ];
 
 const enNav: DefaultTheme.NavItem[] = [
-  { text: "Cloud", link: "/en/" },
-  { text: "Pricing", link: "/en/pricing" },
-  { text: "Resources", link: "/en/resources" },
-  { text: "Endpoints", link: "/en/endpoints" },
-  { text: "Support", link: "/en/support" },
-  { text: "SLA", link: "/en/sla" },
+  { text: "Archive", link: "/en/" },
+  { text: "Archived pricing", link: "/en/pricing" },
+  { text: "Archived resources", link: "/en/resources" },
+  { text: "Archived endpoints", link: "/en/endpoints" },
+  { text: "Archived support", link: "/en/support" },
+  { text: "Archived SLA", link: "/en/sla" },
   { text: "Software docs", link: "https://takosumi.com/docs/en/" },
 ];
 
 const jaSidebar: DefaultTheme.SidebarMulti = {
   "/": [
     {
-      text: "Takosumi Cloud",
+      text: "Takosumi Cloud 文書アーカイブ",
       items: [
-        { text: "Overview", link: "/" },
-        { text: "Pricing", link: "/pricing" },
-        { text: "Resources", link: "/resources" },
-        { text: "Endpoints", link: "/endpoints" },
-        { text: "Support", link: "/support" },
-        { text: "SLA", link: "/sla" },
+        { text: "概要", link: "/" },
+        { text: "旧料金", link: "/pricing" },
+        { text: "旧リソース", link: "/resources" },
+        { text: "旧エンドポイント", link: "/endpoints" },
+        { text: "旧サポート", link: "/support" },
+        { text: "旧SLA", link: "/sla" },
       ],
     },
   ],
@@ -39,7 +39,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
 const enSidebar: DefaultTheme.SidebarMulti = {
   "/en/": [
     {
-      text: "Takosumi Cloud",
+      text: "Takosumi Cloud documentation archive",
       items: [
         { text: "Overview", link: "/en/" },
         { text: "Pricing", link: "/en/pricing" },
@@ -53,8 +53,9 @@ const enSidebar: DefaultTheme.SidebarMulti = {
 };
 
 const config: UserConfig = {
-  title: "Takosumi Cloud",
-  description: "Hosted Takosumi Cloud service documentation",
+  title: "Takosumi Cloud documentation archive",
+  description:
+    "Historical Takosumi Cloud documentation; not current service authority",
   lang: "ja",
   // Local-search indexing mutates MiniSearch as pages finish. A single worker
   // keeps document ids and content-hashed chunks reproducible for release pins.
@@ -83,8 +84,9 @@ const config: UserConfig = {
     root: {
       label: "日本語",
       lang: "ja",
-      title: "Takosumi Cloud",
-      description: "Hosted Takosumi Cloud service documentation",
+      title: "Takosumi Cloud 文書アーカイブ",
+      description:
+        "退役した Takosumi Cloud の歴史資料。現在のサービス仕様ではありません。",
       themeConfig: {
         nav: jaNav,
         sidebar: jaSidebar,
@@ -95,7 +97,8 @@ const config: UserConfig = {
         sidebarMenuLabel: "メニュー",
         returnToTopLabel: "トップへ戻る",
         footer: {
-          message: "Takosumi Cloud hosted service docs",
+          message:
+            "歴史資料: 現在の availability、料金、SLA、support の正本ではありません",
           copyright: "© Takosumi contributors",
         },
         editLink: {
@@ -109,8 +112,9 @@ const config: UserConfig = {
       label: "English",
       link: "/en/",
       lang: "en-US",
-      title: "Takosumi Cloud",
-      description: "Hosted Takosumi Cloud service documentation",
+      title: "Takosumi Cloud documentation archive",
+      description:
+        "Historical Takosumi Cloud documentation; not current service authority",
       themeConfig: {
         nav: enNav,
         sidebar: enSidebar,
@@ -121,7 +125,8 @@ const config: UserConfig = {
         sidebarMenuLabel: "Menu",
         returnToTopLabel: "Return to top",
         footer: {
-          message: "Takosumi Cloud hosted service docs",
+          message:
+            "Historical archive: not current authority for availability, pricing, SLA, or support",
           copyright: "© Takosumi contributors",
         },
         editLink: {

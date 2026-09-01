@@ -16,6 +16,11 @@
 // name them.
 
 import {
+  InMemoryTokenBucketRateLimiter,
+  rateLimitPerMinuteFromEnv,
+  type WriteRateLimiter,
+} from "../../core/shared/rate_limit.ts";
+import {
   type CloudflareWorkerEnv as AccountsCloudflareWorkerEnv,
   accountsExternalLoginConfigured,
   configuredTakosumiMobileOidcClientId,
@@ -56,6 +61,13 @@ import type {
   OpenTofuControlStore,
 } from "../../core/domains/deploy-control/store.ts";
 import { recordWorkerMetric } from "../../worker/src/metrics.ts";
+import { log } from "../../core/shared/log.ts";
+import type { ControlWorkItem } from "../../core/domains/deploy-control/store.ts";
+import { CAPSULE_DEFERRED_DESTROY_WORK_ITEM_KIND } from "../../core/domains/capsules/mod.ts";
+import {
+  finalizeScheduledCapsuleUninstall,
+  type UninstallFinalizeOperations,
+} from "../../core/domains/capsules/uninstall_finalize.ts";
 import {
   driftSweep,
   type DriftSweepOperations,
@@ -81,6 +93,7 @@ import {
   type RuntimeCapabilityReader,
 } from "../../core/domains/interfaces/runtime_capability_reader.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
+import { controlIdempotencyFromEnv } from "../../worker/src/worker_service.ts";
 import { TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER } from "../../core/api/resource_routes.ts";
 import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
 import {
@@ -1142,6 +1155,9 @@ const accountsWorker = createCloudflareWorker<CloudflareWorkerEnv>({
   // in-process operations facade adapted to the `ControlPlaneOperations`
   // shape (see `controlPlaneOperationsFor`).
   controlPlaneOperations: (env) => controlPlaneOperationsFor(env),
+  // Idempotency-Key support for the capsule write lane (install / plan /
+  // destroy-plan / drift-check / backup), over the Control D1 ledger.
+  controlIdempotency: (env) => controlIdempotencyFromEnv(env),
   // PAT self authority is one bounded Control D1 membership SELECT. It must
   // not initialize the full deploy-control service or run schema/bootstrap.
   patWorkspaceMembershipReader: (env) =>
@@ -1353,6 +1369,8 @@ export default {
     );
     await runScheduledSourcePoll(env);
     await runScheduledOpenTofuRunRepair(env);
+    await runScheduledWorkItemDrain(env);
+    await emitRunBacklogGauges(env);
     // Never resume old direct Resource operations from cron. In particular,
     // preview/apply/import/refresh/create/update repair (including recoverApply)
     // remains disabled even while an operator has the legacy drain flag on.
@@ -1408,7 +1426,8 @@ export async function runScheduledAccountsRefreshChainRetention(
           result.chainAccessTokens +
           result.revokedRoots +
           result.consumedCodes +
-          result.authCodeTokenLinks,
+          result.authCodeTokenLinks +
+          result.authorizationCodeRedemptions,
         done: result.done,
       }),
     );
@@ -1426,6 +1445,7 @@ export async function runScheduledAccountsRefreshChainRetention(
       revokedRoots: 0,
       consumedCodes: 0,
       authCodeTokenLinks: 0,
+      authorizationCodeRedemptions: 0,
       scanned: 0,
       pages: 0,
       done: false,
@@ -1443,6 +1463,21 @@ export async function schedulePlatformSideEffect(
     return;
   }
   await task;
+}
+
+/** Validated absolute http(s) store endpoint from `TAKOSUMI_TCS_STORE_URL`. */
+function runtimeTcsStoreUrl(env: CloudflareWorkerEnv): string | undefined {
+  const raw = env.TAKOSUMI_TCS_STORE_URL;
+  if (typeof raw !== "string" || raw.trim().length === 0) return undefined;
+  try {
+    const url = new URL(raw.trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return undefined;
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function platformDiscoveryOptions(
@@ -1481,6 +1516,12 @@ function platformDiscoveryOptions(
         ...Object.entries(extensionDiscovery.endpoints),
         ...(operatorControlMcp
           ? ([["mcp.operator-control.v1", OPERATOR_CONTROL_MCP_PATH]] as const)
+          : []),
+        // Operator-configured store endpoint: the dashboard reads this from
+        // the discovery document at runtime, so pointing a deployment at a
+        // store never requires rebuilding the SPA.
+        ...(runtimeTcsStoreUrl(env)
+          ? ([["takosumi.tcs-store.v1", runtimeTcsStoreUrl(env)!]] as const)
           : []),
       ].map(([token, path]) => [token, new URL(path, origin).toString()]),
     ),
@@ -6581,16 +6622,22 @@ export interface SourcePollOperations extends SourceWebhookOperations {
 
 export interface OpenTofuRunRepairOperations {
   readonly workspaces: {
-    listWorkspaces(): Promise<
-      readonly { readonly id: string; readonly archivedAt?: string }[]
-    >;
+    getWorkspace(
+      id: string,
+    ): Promise<{ readonly id: string; readonly archivedAt?: string }>;
   };
   readonly controller: {
     listRecoverableOpenTofuRuns(options: {
       readonly staleQueuedBeforeMs: number;
       readonly staleRunningBeforeMs: number;
       readonly limit?: number;
-    }): Promise<readonly Run[]>;
+      readonly cursor?: string;
+    }): Promise<{
+      readonly runs: readonly Run[];
+      readonly nextCursor?: string;
+    }>;
+    getSweepCursor(name: string): Promise<string | undefined>;
+    putSweepCursor(name: string, cursor: string | undefined): Promise<void>;
   };
 }
 
@@ -6598,9 +6645,16 @@ type RepairRunAction = "plan" | "apply" | "source_sync" | "restore";
 
 export interface StaleCapsuleAutoPlanOperations {
   readonly workspaces: {
-    listWorkspaces(): Promise<
-      readonly { readonly id: string; readonly archivedAt?: string }[]
-    >;
+    listWorkspacesPage(params: {
+      readonly limit?: number;
+      readonly cursor?: string;
+    }): Promise<{
+      readonly items: readonly {
+        readonly id: string;
+        readonly archivedAt?: string;
+      }[];
+      readonly nextCursor?: string;
+    }>;
   };
   readonly capsules: {
     listCapsules(workspaceId: string): Promise<readonly Capsule[]>;
@@ -6610,6 +6664,8 @@ export interface StaleCapsuleAutoPlanOperations {
       workspaceId: string,
       options?: { readonly limit?: number },
     ): Promise<readonly Run[]>;
+    getSweepCursor(name: string): Promise<string | undefined>;
+    putSweepCursor(name: string, cursor: string | undefined): Promise<void>;
   };
   createCapsulePlan(capsuleId: string): Promise<unknown>;
 }
@@ -6622,13 +6678,31 @@ export interface OpenTofuRunRepairScheduler {
   }): Promise<void>;
 }
 
+// Per-isolate token bucket for the source webhook lane. A forge that
+// misfires (or a hook secret that leaks into CI) must not translate into an
+// unbounded stream of source_sync runs; per-isolate bounding is enough
+// because each refusal costs the caller a full request anyway.
+const sourceWebhookRateLimiter = new InMemoryTokenBucketRateLimiter();
+const DEFAULT_SOURCE_HOOK_RATE_LIMIT_PER_MINUTE = 60;
+
+export function sourceHookRateLimitPerMinute(env: DeployControlEnv): number {
+  return rateLimitPerMinuteFromEnv(
+    (env as { readonly TAKOSUMI_SOURCE_HOOK_RATE_LIMIT?: string })
+      .TAKOSUMI_SOURCE_HOOK_RATE_LIMIT,
+    DEFAULT_SOURCE_HOOK_RATE_LIMIT_PER_MINUTE,
+  );
+}
+
 async function handleSourceWebhook(
   request: Request,
   url: URL,
   env: CloudflareWorkerEnv,
 ): Promise<Response> {
   const operations = await deployControlSeam(env).operations();
-  return await handleSourceWebhookRequest(request, url, operations);
+  return await handleSourceWebhookRequest(request, url, operations, {
+    limiter: sourceWebhookRateLimiter,
+    limitPerMinute: sourceHookRateLimitPerMinute(env),
+  });
 }
 
 /**
@@ -6641,6 +6715,10 @@ export async function handleSourceWebhookRequest(
   request: Request,
   url: URL,
   operations: SourceWebhookOperations,
+  rateLimit?: {
+    readonly limiter: WriteRateLimiter;
+    readonly limitPerMinute: number;
+  },
 ): Promise<Response> {
   if (request.method !== "POST") {
     return Response.json({ error: "method not allowed" }, { status: 405 });
@@ -6665,6 +6743,27 @@ export async function handleSourceWebhookRequest(
   }
   if (!valid) {
     return Response.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  // Throttle AFTER authn so anonymous traffic can never spend a source's
+  // bucket; a refusal is 429 + Retry-After (the forge redelivers).
+  if (rateLimit) {
+    const admission = await rateLimit.limiter.admit({
+      scope: `source-hook:${sourceId}`,
+      limitPerMinute: rateLimit.limitPerMinute,
+    });
+    if (!admission.admitted) {
+      const retryAfterSeconds = admission.retryAfterSeconds ?? 1;
+      return Response.json(
+        {
+          error: "rate_limited",
+          retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: { "retry-after": String(retryAfterSeconds) },
+        },
+      );
+    }
   }
   // Payload is untrusted and ignored; effect is a deduped re-resolution.
   const { run } = await operations.createSourceSync(sourceId, { dedupe: true });
@@ -6714,6 +6813,7 @@ export async function pollAutoSyncSources(
 
 const SCHEDULED_STALE_AUTO_PLAN_WORKSPACE_LIMIT = 25;
 const SCHEDULED_STALE_AUTO_PLAN_RUN_LOOKBACK = 100;
+const STALE_AUTO_PLAN_SWEEP_CURSOR = "stale_auto_plan";
 
 /**
  * Operator/Cloud opt-in: turn stale Capsules into reviewable update plans.
@@ -6733,17 +6833,44 @@ export function autoPlanStaleCapsulesEnabled(
 async function runScheduledStaleCapsuleAutoPlan(
   env: DeployControlEnv,
 ): Promise<void> {
-  const operations = await deployControlSeam(env).operations();
-  await planStaleCapsuleUpdates(operations, {
+  const service = await cachedDeployControlService(env);
+  const result = await planStaleCapsuleUpdates(service.operations, {
     workspaceLimit: SCHEDULED_STALE_AUTO_PLAN_WORKSPACE_LIMIT,
     runLookback: SCHEDULED_STALE_AUTO_PLAN_RUN_LOOKBACK,
   });
+  await Promise.all([
+    recordWorkerMetric({
+      observability: service.context.adapters.observability,
+      env,
+      name: "takosumi_sweep_scanned_total",
+      kind: "counter",
+      value: result.workspacesScanned,
+      tags: { sweep: "stale_auto_plan" },
+    }),
+    recordWorkerMetric({
+      observability: service.context.adapters.observability,
+      env,
+      name: "takosumi_stale_auto_plan_total",
+      kind: "counter",
+      value: result.plansCreated,
+      tags: { outcome: "plan_created" },
+    }),
+    recordWorkerMetric({
+      observability: service.context.adapters.observability,
+      env,
+      name: "takosumi_stale_auto_plan_total",
+      kind: "counter",
+      value: result.failures,
+      tags: { outcome: "failed" },
+    }),
+  ]);
 }
 
 export interface StaleCapsuleAutoPlanResult {
   readonly workspacesScanned: number;
   readonly staleCapsulesScanned: number;
   readonly plansCreated: number;
+  readonly failures: number;
 }
 
 export async function planStaleCapsuleUpdates(
@@ -6761,51 +6888,102 @@ export async function planStaleCapsuleUpdates(
     options.runLookback,
     SCHEDULED_STALE_AUTO_PLAN_RUN_LOOKBACK,
   );
-  const workspaces = (await operations.workspaces.listWorkspaces())
-    .filter((workspace) => !workspace.archivedAt)
-    .slice(0, workspaceLimit);
+  // Rotation cursor: each tick takes the next Workspace page instead of
+  // re-reading the oldest N Workspaces forever (which silently starved every
+  // Workspace beyond the first page).
+  let cursor: string | undefined;
+  try {
+    cursor = await operations.controller.getSweepCursor(
+      STALE_AUTO_PLAN_SWEEP_CURSOR,
+    );
+  } catch {
+    cursor = undefined;
+  }
+  let page: {
+    readonly items: readonly {
+      readonly id: string;
+      readonly archivedAt?: string;
+    }[];
+    readonly nextCursor?: string;
+  };
+  try {
+    page = await operations.workspaces.listWorkspacesPage({
+      limit: workspaceLimit,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+  } catch (error) {
+    log.warn("scheduled.stale_auto_plan_scan_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      workspacesScanned: 0,
+      staleCapsulesScanned: 0,
+      plansCreated: 0,
+      failures: 1,
+    };
+  }
+  const workspaces = page.items.filter((workspace) => !workspace.archivedAt);
   let staleCapsulesScanned = 0;
   let plansCreated = 0;
+  let failures = 0;
   for (const workspace of workspaces) {
-    let staleCapsules: readonly Capsule[];
     try {
-      staleCapsules = (
+      const staleCapsules = (
         await operations.capsules.listCapsules(workspace.id)
       ).filter((capsule) => capsule.status === "stale");
-    } catch {
-      continue;
-    }
-    if (staleCapsules.length === 0) continue;
-    staleCapsulesScanned += staleCapsules.length;
-    let pendingRuns: readonly Run[];
-    try {
-      pendingRuns = await operations.controller.listRuns(workspace.id, {
+      if (staleCapsules.length === 0) continue;
+      staleCapsulesScanned += staleCapsules.length;
+      const pendingRuns = await operations.controller.listRuns(workspace.id, {
         limit: runLookback,
       });
-    } catch {
-      continue;
-    }
-    const pendingPlanCapsuleIds = new Set(
-      pendingRuns
-        .filter(isPendingCapsulePlan)
-        .map((run) => run.capsuleId)
-        .filter((id): id is string => typeof id === "string" && id.length > 0),
-    );
-    for (const capsule of staleCapsules) {
-      if (pendingPlanCapsuleIds.has(capsule.id)) continue;
-      try {
-        await operations.createCapsulePlan(capsule.id);
-        pendingPlanCapsuleIds.add(capsule.id);
-        plansCreated += 1;
-      } catch {
-        // Best-effort: one bad Capsule must not abort other update plans.
+      const pendingPlanCapsuleIds = new Set(
+        pendingRuns
+          .filter(isPendingCapsulePlan)
+          .map((run) => run.capsuleId)
+          .filter(
+            (id): id is string => typeof id === "string" && id.length > 0,
+          ),
+      );
+      for (const capsule of staleCapsules) {
+        if (pendingPlanCapsuleIds.has(capsule.id)) continue;
+        try {
+          await operations.createCapsulePlan(capsule.id);
+          pendingPlanCapsuleIds.add(capsule.id);
+          plansCreated += 1;
+        } catch (error) {
+          // One bad Capsule must not abort other update plans — but the
+          // failure must be visible, not swallowed.
+          failures += 1;
+          log.warn("scheduled.stale_auto_plan_capsule_failed", {
+            capsuleId: capsule.id,
+            workspaceId: workspace.id,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
+    } catch (error) {
+      failures += 1;
+      log.warn("scheduled.stale_auto_plan_workspace_failed", {
+        workspaceId: workspace.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
+  }
+  try {
+    await operations.controller.putSweepCursor(
+      STALE_AUTO_PLAN_SWEEP_CURSOR,
+      page.nextCursor,
+    );
+  } catch (error) {
+    log.warn("scheduled.stale_auto_plan_cursor_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
   }
   return {
     workspacesScanned: workspaces.length,
     staleCapsulesScanned,
     plansCreated,
+    failures,
   };
 }
 
@@ -6826,32 +7004,56 @@ function positiveInteger(value: number | undefined, fallback: number): number {
   return Math.floor(value);
 }
 
-const SCHEDULED_RUN_REPAIR_WORKSPACE_LIMIT = 100;
-const SCHEDULED_RUN_REPAIR_RUNS_PER_WORKSPACE = 50;
+const SCHEDULED_RUN_REPAIR_RUN_LIMIT = 500;
 const SCHEDULED_RUN_REPAIR_QUEUED_STALE_MS = 2 * 60 * 1000;
+const RUN_REPAIR_SWEEP_CURSOR = "run_repair";
 
 export interface OpenTofuRunRepairResult {
-  readonly workspacesScanned: number;
   readonly runsScanned: number;
   readonly rescheduled: number;
+  readonly skipped: number;
+  readonly failures: number;
+  /** true when the scan reached the end of the ledger and the cursor reset. */
+  readonly wrapped: boolean;
 }
 
 async function runScheduledOpenTofuRunRepair(
   env: DeployControlEnv,
 ): Promise<void> {
   if (!env.RUN_OWNER) return;
-  const operations = await deployControlSeam(env).operations();
-  await repairStaleOpenTofuRuns(
-    operations,
+  const service = await cachedDeployControlService(env);
+  const result = await repairStaleOpenTofuRuns(
+    service.operations,
     {
       schedule: (dispatch) => scheduleRunOwnerRepair(env, dispatch),
     },
-    {
-      now: Date.now(),
-      workspaceLimit: SCHEDULED_RUN_REPAIR_WORKSPACE_LIMIT,
-      runsPerWorkspace: SCHEDULED_RUN_REPAIR_RUNS_PER_WORKSPACE,
-    },
+    { now: Date.now() },
   );
+  const outcomes = {
+    rescheduled: result.rescheduled,
+    skipped: result.skipped,
+    failed: result.failures,
+  } as const;
+  await Promise.all([
+    ...Object.entries(outcomes).map(([outcome, value]) =>
+      recordWorkerMetric({
+        observability: service.context.adapters.observability,
+        env,
+        name: "takosumi_run_repair_total",
+        kind: "counter",
+        value,
+        tags: { outcome },
+      })
+    ),
+    recordWorkerMetric({
+      observability: service.context.adapters.observability,
+      env,
+      name: "takosumi_sweep_scanned_total",
+      kind: "counter",
+      value: result.runsScanned,
+      tags: { sweep: "run_repair" },
+    }),
+  ]);
 }
 
 /**
@@ -6860,61 +7062,126 @@ async function runScheduledOpenTofuRunRepair(
  * owner alarm/record was lost and terminal provider-applied rows with a durable
  * pending billing-finalization marker. The controller consumers stay
  * idempotent and own all state changes.
+ *
+ * The scan is a rotating keyset page over the WHOLE recoverable ledger (cursor
+ * persisted in `control_sweep_cursors`), so a backlog larger than one tick's
+ * budget drains across ticks — no Workspace is ever starved by an oldest-N
+ * Workspace window, and per-run failures are counted and logged instead of
+ * silently aborting the tick.
  */
 export async function repairStaleOpenTofuRuns(
   operations: OpenTofuRunRepairOperations,
   scheduler: OpenTofuRunRepairScheduler,
   options: {
     readonly now?: number;
-    readonly workspaceLimit?: number;
-    readonly runsPerWorkspace?: number;
+    readonly runLimit?: number;
     readonly queuedStaleMs?: number;
     readonly runningStaleMs?: number;
   } = {},
 ): Promise<OpenTofuRunRepairResult> {
   const now = options.now ?? Date.now();
-  const workspaceLimit =
-    options.workspaceLimit ?? SCHEDULED_RUN_REPAIR_WORKSPACE_LIMIT;
-  const runsPerWorkspace =
-    options.runsPerWorkspace ?? SCHEDULED_RUN_REPAIR_RUNS_PER_WORKSPACE;
+  const runLimit = positiveInteger(
+    options.runLimit,
+    SCHEDULED_RUN_REPAIR_RUN_LIMIT,
+  );
   const queuedStaleMs =
     options.queuedStaleMs ?? SCHEDULED_RUN_REPAIR_QUEUED_STALE_MS;
   const runningStaleMs = options.runningStaleMs ?? RUN_HEARTBEAT_STALE_MS;
-  const workspaces = (await operations.workspaces.listWorkspaces())
-    .filter((workspace) => !workspace.archivedAt)
-    .slice(0, Math.max(0, Math.floor(workspaceLimit)));
-  const activeWorkspaceIds = new Set(
-    workspaces.map((workspace) => workspace.id),
-  );
-  const runLimit = Math.max(
-    0,
-    Math.floor(runsPerWorkspace) * Math.max(1, workspaces.length),
-  );
-  let runsScanned = 0;
-  let rescheduled = 0;
+  let cursor: string | undefined;
   try {
-    const runs = await operations.controller.listRecoverableOpenTofuRuns({
+    cursor = await operations.controller.getSweepCursor(
+      RUN_REPAIR_SWEEP_CURSOR,
+    );
+  } catch {
+    // A missing cursor read degrades to a from-the-top scan, never a skip.
+    cursor = undefined;
+  }
+  let page: { readonly runs: readonly Run[]; readonly nextCursor?: string };
+  try {
+    page = await operations.controller.listRecoverableOpenTofuRuns({
       staleQueuedBeforeMs: now - queuedStaleMs,
       staleRunningBeforeMs: now - runningStaleMs,
       limit: runLimit,
+      ...(cursor === undefined ? {} : { cursor }),
     });
-    runsScanned = runs.length;
-    for (const run of runs) {
+  } catch (error) {
+    log.warn("scheduled.run_repair_scan_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      runsScanned: 0,
+      rescheduled: 0,
+      skipped: 0,
+      failures: 1,
+      wrapped: false,
+    };
+  }
+  // Bounded per-page archived/missing-Workspace check (distinct ids ≤ page
+  // size) replaces the old oldest-100 Workspace window.
+  const workspaceStates = new Map<string, "active" | "skip">();
+  let rescheduled = 0;
+  let skipped = 0;
+  let failures = 0;
+  for (const run of page.runs) {
+    try {
       const workspaceId = run.workspaceId;
-      if (!workspaceId || !activeWorkspaceIds.has(workspaceId)) continue;
+      if (!workspaceId) {
+        skipped += 1;
+        continue;
+      }
+      let state = workspaceStates.get(workspaceId);
+      if (state === undefined) {
+        try {
+          const workspace =
+            await operations.workspaces.getWorkspace(workspaceId);
+          state = workspace.archivedAt ? "skip" : "active";
+        } catch {
+          // A deleted Workspace has no RunOwner to repair into.
+          state = "skip";
+        }
+        workspaceStates.set(workspaceId, state);
+      }
+      if (state === "skip") {
+        skipped += 1;
+        continue;
+      }
       const dispatch = recoverableRunDispatch(run, now, {
         queuedStaleMs,
         runningStaleMs,
         fallbackWorkspaceId: workspaceId,
       });
-      if (!dispatch) continue;
+      if (!dispatch) {
+        skipped += 1;
+        continue;
+      }
       await scheduler.schedule(dispatch);
       rescheduled += 1;
+    } catch (error) {
+      // One failing run must not abort the tick — and must be visible.
+      failures += 1;
+      log.warn("scheduled.run_repair_dispatch_failed", {
+        runId: run.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
-  } catch {
-    // Best-effort: a repair failure must not abort the cron tick.
   }
-  return { workspacesScanned: workspaces.length, runsScanned, rescheduled };
+  try {
+    await operations.controller.putSweepCursor(
+      RUN_REPAIR_SWEEP_CURSOR,
+      page.nextCursor,
+    );
+  } catch (error) {
+    log.warn("scheduled.run_repair_cursor_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return {
+    runsScanned: page.runs.length,
+    rescheduled,
+    skipped,
+    failures,
+    wrapped: page.nextCursor === undefined,
+  };
 }
 
 function recoverableRunDispatch(
@@ -7014,6 +7281,232 @@ async function scheduleRunOwnerRepair(
     );
   if (!response.ok) {
     throw new Error("opentofu run owner repair scheduling failed");
+  }
+}
+
+// -- Scheduled-intent work items (control_work_items drain) -------------------
+
+const SCHEDULED_WORK_ITEM_DRAIN_LIMIT = 50;
+const SCHEDULED_WORK_ITEM_LEASE_MS = 10 * 60 * 1000;
+const SCHEDULED_WORK_ITEM_RETRY_DELAY_MS = 15 * 60 * 1000;
+
+export type ControlWorkItemHandler = (item: ControlWorkItem) => Promise<void>;
+
+export interface WorkItemDrainOperations {
+  readonly controller: {
+    claimDueWorkItems(input: {
+      readonly now: string;
+      readonly limit: number;
+      readonly kinds?: readonly string[];
+      readonly lockedBy: string;
+      readonly leaseMs: number;
+    }): Promise<readonly ControlWorkItem[]>;
+    completeWorkItem(
+      id: string,
+      options: { readonly lockedBy: string; readonly now: string },
+    ): Promise<void>;
+    failWorkItem(
+      id: string,
+      options: {
+        readonly lockedBy: string;
+        readonly error: string;
+        readonly now: string;
+        readonly retryDelayMs: number;
+      },
+    ): Promise<void>;
+  };
+}
+
+export interface WorkItemDrainResult {
+  readonly claimed: number;
+  readonly completed: number;
+  readonly failed: number;
+}
+
+/**
+ * Registered per-kind handlers for durable scheduled intent. Handlers must be
+ * idempotent: a crashed drain re-delivers after the item lease expires, and
+ * every handler re-verifies the CURRENT ledger row before acting.
+ */
+export function platformScheduledWorkItemHandlers(
+  operations: UninstallFinalizeOperations,
+): Readonly<Record<string, ControlWorkItemHandler>> {
+  return {
+    [CAPSULE_DEFERRED_DESTROY_WORK_ITEM_KIND]: async (item) => {
+      const outcome = await finalizeScheduledCapsuleUninstall(operations, item);
+      log.info("scheduled.capsule_deferred_destroy", {
+        workItemId: item.id,
+        capsuleId: item.capsuleId,
+        outcome,
+      });
+    },
+  };
+}
+
+async function runScheduledWorkItemDrain(env: DeployControlEnv): Promise<void> {
+  const service = await cachedDeployControlService(env);
+  const handlers = platformScheduledWorkItemHandlers(service.operations);
+  if (Object.keys(handlers).length === 0) return;
+  const result = await drainScheduledWorkItems(service.operations, handlers);
+  await Promise.all(
+    Object.entries({
+      completed: result.completed,
+      failed: result.failed,
+    }).map(([outcome, value]) =>
+      recordWorkerMetric({
+        observability: service.context.adapters.observability,
+        env,
+        name: "takosumi_work_items_processed_total",
+        kind: "counter",
+        value,
+        tags: { outcome },
+      })
+    ),
+  );
+}
+
+export async function drainScheduledWorkItems(
+  operations: WorkItemDrainOperations,
+  handlers: Readonly<Record<string, ControlWorkItemHandler>>,
+  options: { readonly now?: number; readonly limit?: number } = {},
+): Promise<WorkItemDrainResult> {
+  const kinds = Object.keys(handlers);
+  if (kinds.length === 0) return { claimed: 0, completed: 0, failed: 0 };
+  const now = new Date(options.now ?? Date.now()).toISOString();
+  const lockedBy = `cron:${crypto.randomUUID()}`;
+  let items: readonly ControlWorkItem[];
+  try {
+    items = await operations.controller.claimDueWorkItems({
+      now,
+      limit: positiveInteger(options.limit, SCHEDULED_WORK_ITEM_DRAIN_LIMIT),
+      kinds,
+      lockedBy,
+      leaseMs: SCHEDULED_WORK_ITEM_LEASE_MS,
+    });
+  } catch (error) {
+    log.warn("scheduled.work_item_claim_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { claimed: 0, completed: 0, failed: 0 };
+  }
+  let completed = 0;
+  let failed = 0;
+  for (const item of items) {
+    const handler = handlers[item.kind];
+    try {
+      if (!handler) {
+        throw new Error(`no handler registered for work item kind ${item.kind}`);
+      }
+      await handler(item);
+      await operations.controller.completeWorkItem(item.id, {
+        lockedBy,
+        now,
+      });
+      completed += 1;
+    } catch (error) {
+      failed += 1;
+      const message = error instanceof Error ? error.message : String(error);
+      log.warn("scheduled.work_item_failed", {
+        workItemId: item.id,
+        kind: item.kind,
+        attempts: item.attempts,
+        message,
+      });
+      try {
+        await operations.controller.failWorkItem(item.id, {
+          lockedBy,
+          error: message,
+          now,
+          retryDelayMs: SCHEDULED_WORK_ITEM_RETRY_DELAY_MS,
+        });
+      } catch {
+        // The item lease expires on its own; the next drain reclaims it.
+      }
+    }
+  }
+  return { claimed: items.length, completed, failed };
+}
+
+/**
+ * Ledger-derived backlog gauges, emitted once per cron tick from durable
+ * ground truth (never isolate-local state): queue depth and age, running and
+ * stale-heartbeat counts, the pending billing-finalization backlog, and the
+ * due scheduled-intent backlog per kind.
+ */
+async function emitRunBacklogGauges(env: DeployControlEnv): Promise<void> {
+  const service = await cachedDeployControlService(env);
+  const observability = service.context.adapters.observability;
+  const now = Date.now();
+  try {
+    const stats = await service.operations.controller.getRunBacklogStats({
+      now,
+      staleRunningBeforeMs: now - RUN_HEARTBEAT_STALE_MS,
+    });
+    const gauges: readonly {
+      readonly name: string;
+      readonly value: number;
+      readonly tags?: Record<string, string>;
+    }[] = [
+      ...Object.entries(stats.queuedByType).map(([runType, value]) => ({
+        name: "takosumi_run_queue_depth",
+        value,
+        tags: { operation_kind: runType },
+      })),
+      ...Object.entries(stats.runningByType).map(([runType, value]) => ({
+        name: "takosumi_runs_running",
+        value,
+        tags: { operation_kind: runType },
+      })),
+      {
+        name: "takosumi_run_queue_oldest_age_seconds",
+        value: Math.round((stats.oldestQueuedAgeMs ?? 0) / 1000),
+      },
+      {
+        name: "takosumi_runs_heartbeat_stale",
+        value: stats.staleHeartbeatRunning,
+      },
+      {
+        name: "takosumi_billing_capture_pending",
+        value: stats.billingCapturePending,
+      },
+    ];
+    await Promise.all(
+      gauges.map((gauge) =>
+        recordWorkerMetric({
+          observability,
+          env,
+          name: gauge.name,
+          kind: "gauge",
+          value: gauge.value,
+          ...(gauge.tags ? { tags: gauge.tags } : {}),
+        })
+      ),
+    );
+  } catch (error) {
+    log.warn("scheduled.run_backlog_gauges_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  try {
+    const backlog = await service.operations.controller.countWorkItemBacklog(
+      new Date(now).toISOString(),
+    );
+    await Promise.all(
+      Object.entries(backlog).map(([kind, value]) =>
+        recordWorkerMetric({
+          observability,
+          env,
+          name: "takosumi_work_items_backlog",
+          kind: "gauge",
+          value,
+          tags: { kind },
+        })
+      ),
+    );
+  } catch (error) {
+    log.warn("scheduled.work_item_backlog_gauge_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -7232,13 +7725,83 @@ export function driftCheckEnabled(env: CloudflareWorkerEnv): boolean {
   return typeof flag === "string" && flag === "1";
 }
 
+const DRIFT_SWEEP_CURSOR = "drift_sweep";
+const SCHEDULED_DRIFT_SWEEP_WORKSPACE_PAGE = 25;
+
+/**
+ * Rotating active-Capsule scan for the drift sweep: one Workspace page per
+ * tick (cursor persisted in `control_sweep_cursors`), bounded per-Workspace
+ * Capsule reads. Replaces the platform-wide `listCapsules()` load that both
+ * scanned every Capsule each tick and starved everything beyond the first
+ * `limit` rows forever.
+ */
+async function listActiveCapsulesRotating(
+  operations: StaleCapsuleAutoPlanOperations,
+  limit: number,
+): Promise<readonly { readonly id: string; readonly workspaceId: string }[]> {
+  let cursor: string | undefined;
+  try {
+    cursor = await operations.controller.getSweepCursor(DRIFT_SWEEP_CURSOR);
+  } catch {
+    cursor = undefined;
+  }
+  let page: {
+    readonly items: readonly {
+      readonly id: string;
+      readonly archivedAt?: string;
+    }[];
+    readonly nextCursor?: string;
+  };
+  try {
+    page = await operations.workspaces.listWorkspacesPage({
+      limit: SCHEDULED_DRIFT_SWEEP_WORKSPACE_PAGE,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+  } catch (error) {
+    log.warn("scheduled.drift_sweep_scan_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+  const capsules: { readonly id: string; readonly workspaceId: string }[] = [];
+  for (const workspace of page.items) {
+    if (workspace.archivedAt) continue;
+    if (capsules.length >= limit) break;
+    try {
+      const active = (
+        await operations.capsules.listCapsules(workspace.id)
+      ).filter((capsule) => capsule.status === "active");
+      for (const capsule of active) {
+        if (capsules.length >= limit) break;
+        capsules.push({ id: capsule.id, workspaceId: workspace.id });
+      }
+    } catch (error) {
+      log.warn("scheduled.drift_sweep_workspace_failed", {
+        workspaceId: workspace.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  try {
+    await operations.controller.putSweepCursor(
+      DRIFT_SWEEP_CURSOR,
+      page.nextCursor,
+    );
+  } catch (error) {
+    log.warn("scheduled.drift_sweep_cursor_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return capsules;
+}
+
 async function runScheduledDriftSweep(env: DeployControlEnv): Promise<void> {
   const operations = await deployControlSeam(env).operations();
-  // Adapt the two methods the sweep needs: active Capsule listing from the
-  // controller and grouped drift checks through the current compatibility service.
+  // Adapt the two methods the sweep needs: a rotating active-Capsule page and
+  // grouped drift checks through the current compatibility service.
   const driftOps: DriftSweepOperations = {
     listActiveCapsules: (limit) =>
-      operations.controller.listActiveCapsules(limit),
+      listActiveCapsulesRotating(operations, limit),
     createWorkspaceDriftCheck: (workspaceId, options) =>
       operations.runGroups.createWorkspaceDriftCheck(workspaceId, options),
   };

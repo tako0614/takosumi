@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   compatibilityCheckLooksTransient,
+  installFlowErrorMessage,
   compatibilityDiagnosticDisplay,
   compatibilitySummaryDisplay,
   providerNameFromDiagnostic,
@@ -19,6 +20,8 @@ import {
 } from "../../../../../dashboard/src/views/new/install-helpers.ts";
 import type { TcsListing } from "../../../../../dashboard/src/lib/tcs-client.ts";
 import type { InstallConfig } from "../../../../../dashboard/src/lib/control-api.ts";
+import { ControlApiError } from "../../../../../dashboard/src/lib/control-api.ts";
+import { t } from "../../../../../dashboard/src/i18n/index.ts";
 
 describe("compatibility diagnostics", () => {
   test("uses code and structured context instead of parsing display text", () => {
@@ -697,3 +700,47 @@ function installConfig(fields: Partial<InstallConfig>): InstallConfig {
     updatedAt: "2026-07-10T00:00:00.000Z",
   };
 }
+
+describe("install failure copy", () => {
+  // Assert the KEY that gets chosen, not one locale's wording: the suite's
+  // locale depends on whichever tests ran first.
+  const RAW_GIT_STDERR =
+    "git ls-remote failed: fatal: could not read Username for 'https://github.com'";
+
+  test("a private repository fetch failure names the connection as a cause", () => {
+    const message = installFlowErrorMessage(
+      new ControlApiError(409, "source_sync_failed", RAW_GIT_STDERR),
+    );
+    // Raw git stderr used to reach the user verbatim; now it is wrapped in the
+    // copy that names private-repository access as a cause to check.
+    expect(message).not.toBe(RAW_GIT_STDERR);
+    expect(message).toBe(
+      t("new.error.sourceFetchFailed", { message: RAW_GIT_STDERR }),
+    );
+  });
+
+  test("a duplicate service is explained instead of echoing the server", () => {
+    const message = installFlowErrorMessage(
+      new ControlApiError(409, "failed_precondition", "capsule already exists", {
+        error: { details: { reason: "duplicate_capsule" } },
+      }),
+    );
+    expect(message).toBe(t("new.error.alreadyExistsGeneric"));
+    expect(message).not.toContain("capsule already exists");
+  });
+
+  test("an unclassified failure still says something actionable", () => {
+    const message = installFlowErrorMessage(
+      new ControlApiError(500, "internal_error", "internal error"),
+    );
+    // The bucket phrase ("internal error") is suppressed rather than being
+    // shown to the user as a detail.
+    expect(message).toBe(t("new.error.generic"));
+  });
+
+  test("a non-API failure keeps its own message", () => {
+    expect(installFlowErrorMessage(new Error("plan run id missing"))).toBe(
+      "plan run id missing",
+    );
+  });
+});

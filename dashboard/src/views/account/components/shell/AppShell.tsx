@@ -48,7 +48,7 @@ export default function AppShell(props: Props) {
     const segments = location.pathname.split("/").filter(Boolean);
     const isDetailTab =
       segments.length === 3 &&
-      (segments[0] === "services" || segments[0] === "advanced");
+      (segments[0] === "workloads" || segments[0] === "advanced");
     return isDetailTab ? segments.slice(0, 2).join("/") : location.pathname;
   };
   createEffect(

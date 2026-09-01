@@ -308,3 +308,102 @@ test("Cloudflare D1 observability sink persists traces and applies queries", asy
   ]);
   expect(await reader.listTraces({ status: "error" })).toHaveLength(1);
 });
+
+test("counter aggregates accumulate durably across event retention deletes", async () => {
+  const db = await canonicalObservabilityDb();
+  const sink = new CloudflareD1ObservabilitySink({ db });
+  const tags = {
+    environment: "test",
+    operation_kind: "apply",
+    status: "succeeded",
+  };
+  for (let index = 0; index < 3; index += 1) {
+    await sink.recordMetric({
+      id: `metric_agg_${index}`,
+      name: "takosumi_deploy_operation_count",
+      kind: "counter",
+      value: 1,
+      tags,
+      observedAt: "2026-08-23T00:00:00.000Z",
+    });
+  }
+  // Simulate the retention sweep wiping the raw events entirely.
+  await db.prepare("delete from takosumi_observability_metrics").run();
+
+  const aggregates = await sink.listMetricAggregates();
+  const counter = aggregates.find(
+    (row) =>
+      row.name === "takosumi_deploy_operation_count" && row.le === "",
+  );
+  expect(counter?.value).toBe(3);
+  expect(counter?.labels).toEqual(tags);
+});
+
+test("histogram aggregates keep cumulative buckets, sum, and count", async () => {
+  const db = await canonicalObservabilityDb();
+  const sink = new CloudflareD1ObservabilitySink({ db });
+  await sink.recordMetric({
+    id: "metric_hist_1",
+    name: "takosumi_apply_duration_seconds",
+    kind: "histogram",
+    value: 90,
+    tags: { environment: "test", operation_kind: "apply" },
+    observedAt: "2026-08-23T00:00:00.000Z",
+  });
+  await sink.recordMetric({
+    id: "metric_hist_2",
+    name: "takosumi_apply_duration_seconds",
+    kind: "histogram",
+    value: 400,
+    tags: { environment: "test", operation_kind: "apply" },
+    observedAt: "2026-08-23T00:01:00.000Z",
+  });
+  const rows = await sink.listMetricAggregates();
+  const byLe = new Map(
+    rows
+      .filter((row) => row.name === "takosumi_apply_duration_seconds")
+      .map((row) => [row.le, row.value]),
+  );
+  expect(byLe.get("120")).toBe(1);
+  expect(byLe.get("600")).toBe(2);
+  expect(byLe.get("+Inf")).toBe(2);
+  expect(byLe.get("count")).toBe(2);
+  expect(byLe.get("sum")).toBe(490);
+});
+
+test("audit chain verification advances a checkpoint and re-anchors on it", async () => {
+  const db = await canonicalObservabilityDb();
+  const sink = new CloudflareD1ObservabilitySink({ db });
+  for (let index = 0; index < 5; index += 1) {
+    await sink.appendAudit({
+      id: `audit_ckpt_${index}`,
+      action: "test.event",
+      occurredAt: `2026-08-23T00:00:0${index}.000Z`,
+    } as never);
+  }
+  expect(await sink.verifyAuditChain()).toBe(true);
+  const checkpoint = await db
+    .prepare(
+      `select sequence from takosumi_observability_audit_verify_checkpoint
+        where singleton = 1`,
+    )
+    .first<{ readonly sequence: number }>();
+  expect(checkpoint?.sequence).toBe(5);
+
+  // Later appends verify forward FROM the checkpoint (no full-chain reload).
+  await sink.appendAudit({
+    id: "audit_ckpt_tail",
+    action: "test.event",
+    occurredAt: "2026-08-23T00:00:10.000Z",
+  } as never);
+  expect(await sink.verifyAuditChain()).toBe(true);
+
+  // A tampered post-checkpoint record is caught by the windowed verify.
+  await db
+    .prepare(
+      `update takosumi_observability_audit set hash = 'tampered'
+        where sequence = 6`,
+    )
+    .run();
+  expect(await sink.verifyAuditChain()).toBe(false);
+});

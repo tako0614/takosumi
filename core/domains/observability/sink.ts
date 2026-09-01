@@ -10,6 +10,10 @@ import type {
   TraceSpanEvent,
   TraceSpanQuery,
 } from "./types.ts";
+import {
+  type MetricAggregate,
+  MetricAggregateAccumulator,
+} from "./metric_layout.ts";
 
 export interface ObservabilitySink {
   appendAudit(event: AuditEvent): Promise<ChainedAuditEvent>;
@@ -17,6 +21,13 @@ export interface ObservabilitySink {
   verifyAuditChain(): Promise<boolean>;
   recordMetric(event: MetricEvent): Promise<MetricEvent>;
   listMetrics(query?: MetricEventQuery): Promise<readonly MetricEvent[]>;
+  /**
+   * Monotonic counter/histogram aggregate rows accumulated at record time
+   * (see metric_layout.ts). Sinks that implement this make Prometheus
+   * `rate()`/`increase()` correct across event retention; the renderer falls
+   * back to event re-aggregation when absent.
+   */
+  listMetricAggregates?(): Promise<readonly MetricAggregate[]>;
   recordTrace(event: TraceSpanEvent): Promise<TraceSpanEvent>;
   listTraces(query?: TraceSpanQuery): Promise<readonly TraceSpanEvent[]>;
 }
@@ -25,6 +36,7 @@ export class InMemoryObservabilitySink implements ObservabilitySink {
   readonly #auditRecords: ChainedAuditEvent[] = [];
   readonly #metrics: MetricEvent[] = [];
   readonly #traces: TraceSpanEvent[] = [];
+  readonly #aggregates = new MetricAggregateAccumulator();
 
   async appendAudit(event: AuditEvent): Promise<ChainedAuditEvent> {
     const previous = this.#auditRecords.at(-1);
@@ -43,7 +55,12 @@ export class InMemoryObservabilitySink implements ObservabilitySink {
 
   recordMetric(event: MetricEvent): Promise<MetricEvent> {
     this.#metrics.push(cloneMetricEvent(event));
+    this.#aggregates.record(event);
     return Promise.resolve(event);
+  }
+
+  listMetricAggregates(): Promise<readonly MetricAggregate[]> {
+    return Promise.resolve(this.#aggregates.list());
   }
 
   listMetrics(query: MetricEventQuery = {}): Promise<readonly MetricEvent[]> {

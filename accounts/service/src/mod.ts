@@ -121,6 +121,8 @@ import {
   handleControlRoute,
   isControlRoutePath,
 } from "./control-routes.ts";
+import { InMemoryTokenBucketRateLimiter } from "../../../core/shared/rate_limit.ts";
+import type { PortableHostIdempotencyCoordinator } from "../../../core/api/portable_host_idempotency.ts";
 import type {
   InterfaceOAuthActivityEvidence,
   InterfaceOAuthActivityValidator,
@@ -181,6 +183,17 @@ export interface AccountsHandlerOptions {
    */
   controlPlaneOperations?: ControlPlaneOperations;
   /**
+   * Per-minute write budget for the session-authed `/api/v1/*` control lane,
+   * scoped per workspace (or subject). Default 30; `0` disables the throttle.
+   */
+  controlWriteRateLimitPerMinute?: number;
+  /**
+   * Optional Idempotency-Key coordinator for the capsule write lane (install,
+   * plan, destroy-plan, drift-check, backup). Absent leaves those routes
+   * non-idempotent, which is today's behavior.
+   */
+  controlIdempotency?: PortableHostIdempotencyCoordinator;
+  /**
    * Request-time resolver for compositions whose Control plane is expensive to
    * construct. Session-control routes call it only after a credential has been
    * authenticated; the resolver must cache only composition state, never
@@ -216,6 +229,8 @@ export interface EphemeralAccountsHandlerOptions {
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
   controlPlaneOperations?: ControlPlaneOperations;
+  controlWriteRateLimitPerMinute?: number;
+  controlIdempotency?: PortableHostIdempotencyCoordinator;
   resolveControlPlaneOperations?: () => Promise<
     ControlPlaneOperations | undefined
   >;
@@ -338,6 +353,15 @@ export async function createEphemeralAccountsHandler(
     upstreamOAuth: options.upstreamOAuth,
     passkeys: options.passkeys,
     controlPlaneOperations: options.controlPlaneOperations,
+    ...(options.controlWriteRateLimitPerMinute !== undefined
+      ? {
+          controlWriteRateLimitPerMinute:
+            options.controlWriteRateLimitPerMinute,
+        }
+      : {}),
+    ...(options.controlIdempotency
+      ? { controlIdempotency: options.controlIdempotency }
+      : {}),
     resolveControlPlaneOperations: options.resolveControlPlaneOperations,
     patWorkspaceMembershipReader: options.patWorkspaceMembershipReader,
     interfaceOAuthActivityValidator: options.interfaceOAuthActivityValidator,
@@ -481,6 +505,15 @@ export function createAccountsHandler(
     (options.controlPlaneOperations
       ? () => Promise.resolve(options.controlPlaneOperations)
       : undefined);
+  // Session-control write-lane throttle (B-W4): one bucket per workspace or
+  // subject. Authoritative on single-process substrates; per-isolate
+  // best-effort on Workers.
+  const controlWriteRateLimitPerMinute =
+    options.controlWriteRateLimitPerMinute ?? 30;
+  const controlWriteRateLimiter =
+    controlWriteRateLimitPerMinute > 0
+      ? new InMemoryTokenBucketRateLimiter()
+      : undefined;
   const interfaceOAuthActivityValidator =
     options.interfaceOAuthActivityValidator ??
     (resolveControlPlaneOperations
@@ -826,6 +859,17 @@ export function createAccountsHandler(
             issuer,
             operations: options.controlPlaneOperations,
             resolveOperations: resolveControlPlaneOperations,
+            ...(controlWriteRateLimiter
+              ? {
+                  writeRateLimit: {
+                    limiter: controlWriteRateLimiter,
+                    limitPerMinute: controlWriteRateLimitPerMinute,
+                  },
+                }
+              : {}),
+            ...(options.controlIdempotency
+              ? { idempotency: options.controlIdempotency }
+              : {}),
             ...(options.managedPublicBaseDomain
               ? { managedPublicBaseDomain: options.managedPublicBaseDomain }
               : {}),

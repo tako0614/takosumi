@@ -18,6 +18,13 @@ export interface PgResultLike {
   readonly rowCount?: number | null;
 }
 
+export function isPostgresUniqueViolation(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = "code" in error ? String(error.code) : "";
+  const message = "message" in error ? String(error.message) : "";
+  return code === "23505" || /duplicate key|unique constraint/iu.test(message);
+}
+
 export function wrapPgResult<Row extends Record<string, unknown>>(
   result: PgResultLike,
 ): SqlQueryResult<Row> {

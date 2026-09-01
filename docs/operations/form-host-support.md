@@ -10,10 +10,11 @@ providers. Takosumi OSS does not install packages, execute hosted Forms,
 publish FormActivation, select TargetPool, or expose Form Host discovery.
 
 Takoform owns portable Form schemas, packages, provider releases, and lifecycle
-labels. Takosumi Cloud (or another external Host) owns any hosted Form
-registry, executable implementation, activation/audience policy, targets,
-backend lifecycle, and commercial offering. Portable maturity or historical
-package evidence does not grant runtime support.
+labels. Takoserver (or another external Host) owns any managed Form registry,
+executable implementation, activation/audience policy, targets, backend
+lifecycle, provider credentials, and commercial Offering. Takosumi Hosted may
+present retail/client composition but does not own that supply. Portable
+maturity or historical package evidence does not grant runtime support.
 
 For retained Resource rows, use the bounded legacy drain documented in
 [Core Spec](../internal/core-spec.md#legacy-resourceform-drain): it is disabled

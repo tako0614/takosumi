@@ -17,6 +17,10 @@ export const deployControlLogicalTables = [
   "outputShares",
   "runGroups",
   "runs",
+  // Scheduled-intent queue + sweep rotation cursors for the cron lane
+  // (deferred Capsule destroys, bounded auto-replans, sweep resumption).
+  "controlWorkItems",
+  "controlSweepCursors",
   "planRunInputs",
   "stateVersions",
   "artifacts",
@@ -69,6 +73,8 @@ export const deployControlD1TableNames = {
   outputShares: "output_shares",
   runGroups: "run_groups",
   runs: "runs",
+  controlWorkItems: "control_work_items",
+  controlSweepCursors: "control_sweep_cursors",
   planRunInputs: "runs_inputs",
   stateVersions: "state_versions",
   artifacts: "artifacts",
@@ -110,6 +116,8 @@ export const deployControlPostgresTableNames = {
   outputShares: "takosumi_output_shares",
   runGroups: "takosumi_run_groups",
   runs: "takosumi_runs",
+  controlWorkItems: "takosumi_control_work_items",
+  controlSweepCursors: "takosumi_control_sweep_cursors",
   planRunInputs: "takosumi_plan_run_inputs",
   stateVersions: "takosumi_state_versions",
   artifacts: "takosumi_artifacts",

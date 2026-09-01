@@ -33,6 +33,7 @@ import type {
   RunStatus,
   RunnerProfile,
   RunnerSecretExposurePolicy,
+  RunApplyProgress,
 } from "@takosumi/internal/deploy-control-api";
 import type { CreateRestoreRequest } from "takosumi-contract/backups";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
@@ -107,6 +108,7 @@ import {
   withCapsuleLease,
   withCapsuleResourceAdmission,
   withPlanLease,
+  withWorkspaceRunSlotLease,
 } from "../capsule_lease.ts";
 import {
   type CapsulePlanContext,
@@ -297,7 +299,22 @@ function isSafeMutatingRunnerInfrastructureRetryError(
   );
 }
 
+function isCapacityExhaustedRunnerError(error: unknown): boolean {
+  return (
+    error instanceof OpenTofuRunnerInfrastructureError &&
+    error.reason === "capacity_exhausted"
+  );
+}
+
 const RUNNER_INFRASTRUCTURE_RETRY_LIMIT = 1;
+// Capacity refusals are bounded by how long the run has been waiting, not by a
+// retry count: a busy fleet can refuse many times without proving anything is
+// broken. After this queue-age budget the run fails as `runner_capacity_timeout`
+// instead of waiting forever. The plan is NOT burned by capacity requeues.
+const RUNNER_CAPACITY_QUEUE_BUDGET_DEFAULT_MS = 45 * 60_000;
+// Per-workspace concurrent run slots (fairness): one workspace's install
+// burst must not monopolize the runner fleet for every other tenant.
+const WORKSPACE_RUN_CONCURRENCY_DEFAULT = 2;
 const PLAN_CREATION_STAGE_TIMEOUT_MS = 25_000;
 const RUN_EXECUTION_LEASE_LOST_REASON = "run_execution_lease_lost";
 const RUN_EXECUTION_RENEWAL_UNAVAILABLE_REASON =
@@ -339,8 +356,48 @@ function runnerInfrastructureRetryCount(
   run: PlanRun | ApplyRun,
   retryEventTypes: readonly string[],
 ): number {
-  return run.auditEvents.filter((event) => retryEventTypes.includes(event.type))
-    .length;
+  // Markers stamped for capacity refusals never consume the infrastructure
+  // retry budget — those attempts are bounded by the queue-age budget instead.
+  return run.auditEvents.filter(
+    (event) =>
+      retryEventTypes.includes(event.type) &&
+      event.data?.errorCode !== "capacity_exhausted",
+  ).length;
+}
+
+/**
+ * Dispatch control for a runner action: the cancel/renewal signal.
+ *
+ * The profile's `maxRunSeconds` is deliberately NOT applied here. The runner
+ * already enforces it per `tofu` command (see runner/lib/credentials.ts), and
+ * re-applying it to the WHOLE dispatch would silently shorten the budget to
+ * cover init + apply + output + artifact transfer together. A real apply that
+ * ran past it would be aborted at the transport while `tofu` kept mutating the
+ * provider — a failure recorded against changes that are still happening. The
+ * heartbeat/lease fence, not a transport timer, is what bounds a run here.
+ */
+function runnerExecutionControl(
+  profile: RunnerProfile,
+  signal: AbortSignal,
+): { readonly signal: AbortSignal } {
+  void profile;
+  return { signal };
+}
+
+/** Plan coordinate a runner executes an apply under (see OpenTofuRunner). */
+interface ApplyProgressTarget {
+  readonly planRunId: string;
+  readonly planArtifact?: PlanRun["planArtifact"];
+}
+
+function runnerCapacityTimeoutError(phase: string, budgetMs: number): Error {
+  return new OpenTofuControllerError(
+    "failed_precondition",
+    `runner_capacity_timeout: ${phase} run waited past the ${
+      Math.round(budgetMs / 60_000)
+    }-minute runner capacity queue budget`,
+    { reason: "runner_capacity_timeout", phase, budgetMs },
+  );
 }
 
 function runnerInfrastructureRetryExhaustedError(phase: string): Error {
@@ -1112,6 +1169,27 @@ export interface RunEngineDependencies {
   readonly managedVanityHostnameSlotsPerOwner?: number;
   /** Optional host-owned Resource lifecycle fence; absent keeps legacy behavior. */
   readonly capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
+  /**
+   * Kill switch for the failed-first-install auto cleanup
+   * (`TAKOSUMI_FAILED_INSTALL_AUTO_CLEANUP=0` at the host layer). Default ON.
+   */
+  readonly failedInstallAutoCleanup?: boolean;
+  /**
+   * Queue-age budget for `capacity_exhausted` runner refusals, after which the
+   * run fails as `runner_capacity_timeout`. Default 45 minutes.
+   */
+  readonly runnerCapacityQueueBudgetMs?: number;
+  /**
+   * Per-workspace concurrent run-slot ceiling for runner-executing runs
+   * (plan + apply lanes), enforced through the coordination lease seam.
+   * Default 2. `0` disables the fence (unlimited).
+   */
+  readonly workspaceRunConcurrency?: number;
+  /**
+   * Whether the workspace fairness fence may park a run. It parks by throwing
+   * for an external run owner to re-arm, so it is only safe when one exists.
+   */
+  readonly workspaceRunSlotsEnabled?: boolean;
 }
 
 export class RunEngine {
@@ -1145,6 +1223,17 @@ export class RunEngine {
   readonly #capsules: CapsuleQuery;
   readonly #runSerialized: RunSerialized;
   readonly #managedVanityHostnameSlotsPerOwner?: number;
+  readonly #failedInstallAutoCleanup: boolean;
+  readonly #runnerCapacityQueueBudgetMs: number;
+  readonly #workspaceRunConcurrency: number;
+  readonly #workspaceRunSlotsEnabled: boolean;
+  /**
+   * In-flight run executions by run id, for the best-effort cancel kill: a
+   * same-isolate cancel aborts the signal threaded into the runner dispatch
+   * immediately instead of waiting for the executor's next heartbeat tick to
+   * lose. Cross-isolate executors converge through the heartbeat fence.
+   */
+  readonly #inFlightRunAborts = new Map<string, AbortController>();
   #capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
   #connectionsService?: ConnectionsService;
   #terminalObserver?: (run: PlanRun | ApplyRun) => Promise<void>;
@@ -1192,6 +1281,76 @@ export class RunEngine {
     this.#managedVanityHostnameSlotsPerOwner =
       deps.managedVanityHostnameSlotsPerOwner;
     this.#capsuleOwnedResourceFence = deps.capsuleOwnedResourceFence;
+    this.#failedInstallAutoCleanup = deps.failedInstallAutoCleanup !== false;
+    this.#runnerCapacityQueueBudgetMs =
+      deps.runnerCapacityQueueBudgetMs !== undefined &&
+        Number.isFinite(deps.runnerCapacityQueueBudgetMs) &&
+        deps.runnerCapacityQueueBudgetMs >= 0
+        ? deps.runnerCapacityQueueBudgetMs
+        : RUNNER_CAPACITY_QUEUE_BUDGET_DEFAULT_MS;
+    this.#workspaceRunConcurrency =
+      deps.workspaceRunConcurrency !== undefined &&
+        Number.isInteger(deps.workspaceRunConcurrency) &&
+        deps.workspaceRunConcurrency >= 0
+        ? deps.workspaceRunConcurrency
+        : WORKSPACE_RUN_CONCURRENCY_DEFAULT;
+    this.#workspaceRunSlotsEnabled = deps.workspaceRunSlotsEnabled === true;
+  }
+
+  /**
+   * Workspace fairness fence: at most `#workspaceRunConcurrency`
+   * runner-executing runs per workspace run concurrently. The rest stay
+   * `queued`; all-slots-busy throws {@link CapsuleLeaseBusyError}, riding the
+   * same run-owner re-arm as the capsule lease — nothing is failed, no plan
+   * is burned. Absent coordination (single-process substrates) or a zero
+   * limit disables the fence.
+   */
+  async #withWorkspaceRunSlots<T>(
+    workspaceId: string,
+    holderId: string,
+    /**
+     * Receives the held slot lease so a long run can renew it on the same
+     * heartbeat tick as its capsule lease. Without renewal the slot expired
+     * after the lease TTL and the fence quietly stopped holding — exactly
+     * when runs are long enough for fairness to matter.
+     */
+    work: (slotLease?: LeaseHandle) => Promise<T>,
+  ): Promise<T> {
+    if (
+      !this.#workspaceRunSlotsEnabled ||
+      !this.#capsuleCoordination ||
+      this.#workspaceRunConcurrency <= 0
+    ) {
+      return await work();
+    }
+    return await withWorkspaceRunSlotLease(
+      this.#capsuleCoordination,
+      {
+        workspaceId,
+        holderId,
+        slots: this.#workspaceRunConcurrency,
+      },
+      (handle) => work(handle),
+    );
+  }
+
+  /** True when a capacity-refused run has waited past its queue-age budget. */
+  #capacityQueueBudgetExceeded(run: PlanRun | ApplyRun): boolean {
+    // The budget measures how long this run has been WAITING FOR CAPACITY, not
+    // how old it is. Measuring from createdAt spent the whole budget on time
+    // the run was queued for unrelated reasons (a workspace slot, an approval),
+    // so the first refusal after a long wait failed instantly with zero
+    // retries. The first capacity marker is the durable start of the wait.
+    const firstRefusalAt = run.auditEvents.find(
+      (event) =>
+        event.type.endsWith("retry_scheduled") &&
+        event.data?.errorCode === "capacity_exhausted",
+    )?.at;
+    // No marker yet: this refusal is the first, so the wait starts now.
+    if (firstRefusalAt === undefined) return false;
+    // 0 disables the budget, the same way 0 disables the workspace fence.
+    if (this.#runnerCapacityQueueBudgetMs <= 0) return false;
+    return this.#now() - firstRefusalAt >= this.#runnerCapacityQueueBudgetMs;
   }
 
   /** Late-binds the host-owned Resource inventory fence after composition. */
@@ -1566,6 +1725,9 @@ export class RunEngine {
       ...(internal.autoApplyRequested
         ? { autoApplyRequested: true as const }
         : {}),
+      ...(internal.systemDestroy && operation === "destroy"
+        ? { systemDestroy: internal.systemDestroy }
+        : {}),
       // A create-time policy denial is a terminal `failed` run carrying the
       // policy reason (the retired `blocked` status is gone); a passed plan is
       // `queued` for the consumer to execute.
@@ -1781,7 +1943,7 @@ export class RunEngine {
     context: DeployControlActorContext = {},
     internal: Pick<
       CreateCapsulePlanInternal,
-      "runnerProfileId" | "sourceSnapshotId"
+      "runnerProfileId" | "sourceSnapshotId" | "systemDestroy"
     > = {},
   ): Promise<PlanRunResponse> {
     return await this.#createCapsulePlanRun(capsuleId, true, context, internal);
@@ -1830,6 +1992,16 @@ export class RunEngine {
       "capsule_load",
       this.#requireCapsule(capsuleId),
     );
+    // An uninstalled Capsule is frozen: no updates, no drift, no rollback —
+    // only the scheduled (or explicit immediate) destroy may plan against it.
+    // Restore is the route back to a plannable Capsule.
+    if (capsule.status === "uninstalled" && !destroy) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${capsuleId} is uninstalled; restore it before planning changes`,
+        { reason: "capsule_uninstalled" },
+      );
+    }
     const installConfig = await planCreationStage(
       "install_config_load",
       this.#store.getInstallConfig(capsule.installConfigId),
@@ -2105,6 +2277,9 @@ export class RunEngine {
         ...(internal.driftCheck ? { driftCheck: true as const } : {}),
         ...(internal.autoApplyRequested
           ? { autoApplyRequested: true as const }
+          : {}),
+        ...(internal.systemDestroy && destroy
+          ? { systemDestroy: internal.systemDestroy }
           : {}),
       }),
     );
@@ -3973,13 +4148,14 @@ export class RunEngine {
    * store.
    */
   async runQueuedPlan(runId: string): Promise<PlanRun | undefined> {
-    let planRun = await this.#store.getPlanRun(runId);
-    if (!planRun) {
+    const fetchedPlanRun = await this.#store.getPlanRun(runId);
+    if (!fetchedPlanRun) {
       throw new OpenTofuControllerError(
         "not_found",
         `plan run ${runId} not found`,
       );
     }
+    let planRun: PlanRun = fetchedPlanRun;
     if (!this.#shouldProcessRun(planRun.status, planRun.heartbeatAt)) {
       // Terminal, or a sibling consumer holds it with a fresh heartbeat: no-op.
       return planRun;
@@ -3988,70 +4164,79 @@ export class RunEngine {
     // An asynchronous dispatcher is execution authority: a missing explicit executor
     // binding is a hard configuration failure, never a silent fallback.
     this.#runnerForProfile(profile);
-    try {
-      planRun = await this.#ensureQueuedPlanCompatibilityReport(planRun);
-    } catch (error) {
-      await this.#store.deletePlanRunInputs(runId);
-      return await this.#failPlanRun(planRun, undefined, error);
-    }
-    // The sidecar is sealed at rest when a sensitive dependency value was
-    // injected; #getPlanRunInputs unseals it transparently here so the plan runs
-    // against the same inputs / generated root it was created with.
-    const inputs = await this.#getPlanRunInputs(runId);
-    const variables = normalizeVariables(inputs?.variables);
-    const dispatch = moduleDispatchFromInputs(inputs);
-    try {
-      await this.#verification.assertCapsuleCompatibilityAllowsRun(planRun);
-    } catch (error) {
-      await this.#store.deletePlanRunInputs(runId);
-      return await this.#failPlanRun(planRun, undefined, error);
-    }
-    const claim = await this.#markPlanRunning(planRun);
-    if (!claim.won) {
-      // A sibling consumer already claimed this run (or a cancel won the row).
-      // Do NOT dispatch the runner; return the row the winner persisted.
-      return claim.run;
-    }
-    const running = claim.run;
-    let result: PlanRun;
-    try {
-      const runEnvironment = await this.#runEnv.resolveRunEnvironment({
-        planRun,
-        phase: "plan",
-        auditRunId: planRun.id,
-      });
-      const runningWithEnv = withRunEnvironmentEvidence(
-        running,
-        runEnvironment,
-      );
-      result = await this.#executePlan(
-        runningWithEnv,
-        claim.leaseToken,
-        profile,
-        variables,
-        runEnvironment,
-        dispatch,
-      );
-    } catch (error) {
-      if (isRunnerInfrastructureRequeueError(error)) throw error;
-      await this.#store.deletePlanRunInputs(runId);
-      const failedRun = runEnvironmentFailedRun(running, error);
-      return await this.#failPlanRun(failedRun, claim.leaseToken, error);
-    }
-    // Retain the inputs sidecar for an applyable Capsule run: direct-root runs
-    // also need the same variables, Output policy, source build, and lifecycle
-    // actions reviewed by plan. An applyable plan is one that
-    // completed `succeeded`, OR parked `waiting_approval` (it becomes applyable
-    // once approved — the sidecar must survive the approval gate). It is deleted
-    // once the plan is applied (apply-once) or the run is failed. Other terminal
-    // plans drop the sidecar now.
-    const retainForApply =
-      (result.status === "succeeded" || result.status === "waiting_approval") &&
-      inputs !== undefined;
-    if (!retainForApply) {
-      await this.#store.deletePlanRunInputs(runId);
-    }
-    return result;
+    // Workspace fairness: plan runs execute tofu too, so they consume a
+    // workspace run slot. All-slots-busy throws for run-owner re-arm and the
+    // run stays queued.
+    return await this.#withWorkspaceRunSlots(
+      planRun.workspaceId,
+      planRun.id,
+      async () => {
+      try {
+        planRun = await this.#ensureQueuedPlanCompatibilityReport(planRun);
+      } catch (error) {
+        await this.#store.deletePlanRunInputs(runId);
+        return await this.#failPlanRun(planRun, undefined, error);
+      }
+      // The sidecar is sealed at rest when a sensitive dependency value was
+      // injected; #getPlanRunInputs unseals it transparently here so the plan runs
+      // against the same inputs / generated root it was created with.
+      const inputs = await this.#getPlanRunInputs(runId);
+      const variables = normalizeVariables(inputs?.variables);
+      const dispatch = moduleDispatchFromInputs(inputs);
+      try {
+        await this.#verification.assertCapsuleCompatibilityAllowsRun(planRun);
+      } catch (error) {
+        await this.#store.deletePlanRunInputs(runId);
+        return await this.#failPlanRun(planRun, undefined, error);
+      }
+      const claim = await this.#markPlanRunning(planRun);
+      if (!claim.won) {
+        // A sibling consumer already claimed this run (or a cancel won the row).
+        // Do NOT dispatch the runner; return the row the winner persisted.
+        return claim.run;
+      }
+      const running = claim.run;
+      let result: PlanRun;
+      try {
+        const runEnvironment = await this.#runEnv.resolveRunEnvironment({
+          planRun,
+          phase: "plan",
+          auditRunId: planRun.id,
+        });
+        const runningWithEnv = withRunEnvironmentEvidence(
+          running,
+          runEnvironment,
+        );
+        result = await this.#executePlan(
+          runningWithEnv,
+          claim.leaseToken,
+          profile,
+          variables,
+          runEnvironment,
+          dispatch,
+        );
+      } catch (error) {
+        if (isRunnerInfrastructureRequeueError(error)) throw error;
+        await this.#store.deletePlanRunInputs(runId);
+        const failedRun = runEnvironmentFailedRun(running, error);
+        return await this.#failPlanRun(failedRun, claim.leaseToken, error);
+      }
+      // Retain the inputs sidecar for an applyable Capsule run: direct-root runs
+      // also need the same variables, Output policy, source build, and lifecycle
+      // actions reviewed by plan. An applyable plan is one that
+      // completed `succeeded`, OR parked `waiting_approval` (it becomes applyable
+      // once approved — the sidecar must survive the approval gate). It is deleted
+      // once the plan is applied (apply-once) or the run is failed. Other terminal
+      // plans drop the sidecar now.
+      const retainForApply =
+        (result.status === "succeeded" || result.status === "waiting_approval") &&
+        inputs !== undefined;
+      if (!retainForApply) {
+        await this.#store.deletePlanRunInputs(runId);
+      }
+      return result;
+    },
+    );
   }
 
   /**
@@ -4131,35 +4316,51 @@ export class RunEngine {
         return await execute();
       });
     };
-    if (this.#capsuleCoordination && planRun.capsuleId) {
-      const environment =
-        planRun.capsuleContext?.environment ??
-        (await this.#requireCapsule(planRun.capsuleId)).environment;
-      return await withCapsuleLease(
-        this.#capsuleCoordination,
-        {
-          capsuleId: planRun.capsuleId,
-          environment,
-          holderId: applyRun.id,
-        },
-        runWork,
-      );
-    }
-    // SECURITY (apply-once / S5): a `create` plan has no capsuleId yet, so
-    // the capsule lease above cannot cover it. Without a cross-isolate
-    // guard two concurrent create-applies of the SAME plan both observe
-    // `appliedApplyRunId` undefined and each allocate a brand-new Capsule +
-    // apply (real duplicate cloud resources). Take the `plan:{planRunId}`
-    // lease so create-applies serialize; the inner #executeApply re-reads the
-    // persisted PlanRun and rejects a sibling that already marked it applied.
-    if (this.#capsuleCoordination) {
-      return await withPlanLease(
-        this.#capsuleCoordination,
-        { planRunId: planRun.id, holderId: applyRun.id },
-        runWork,
-      );
-    }
-    return await runWork();
+    const dispatchLeased = async (
+      slotLease?: LeaseHandle,
+    ): Promise<ApplyRunResponse> => {
+      // The slot lease is renewed alongside the capsule/plan lease, so a long
+      // apply keeps its fairness slot instead of silently releasing it at TTL.
+      const withSlot = (handle?: LeaseHandle) =>
+        runWork(combinedLeaseHandle(handle, slotLease));
+      if (this.#capsuleCoordination && planRun.capsuleId) {
+        const environment =
+          planRun.capsuleContext?.environment ??
+          (await this.#requireCapsule(planRun.capsuleId)).environment;
+        return await withCapsuleLease(
+          this.#capsuleCoordination,
+          {
+            capsuleId: planRun.capsuleId,
+            environment,
+            holderId: applyRun.id,
+          },
+          withSlot,
+        );
+      }
+      // SECURITY (apply-once / S5): a `create` plan has no capsuleId yet, so
+      // the capsule lease above cannot cover it. Without a cross-isolate
+      // guard two concurrent create-applies of the SAME plan both observe
+      // `appliedApplyRunId` undefined and each allocate a brand-new Capsule +
+      // apply (real duplicate cloud resources). Take the `plan:{planRunId}`
+      // lease so create-applies serialize; the inner #executeApply re-reads the
+      // persisted PlanRun and rejects a sibling that already marked it applied.
+      if (this.#capsuleCoordination) {
+        return await withPlanLease(
+          this.#capsuleCoordination,
+          { planRunId: planRun.id, holderId: applyRun.id },
+          withSlot,
+        );
+      }
+      return await withSlot();
+    };
+    // Workspace fairness: the slot fence wraps the capsule/plan lease so a
+    // busy workspace parks here (queued) before contending on the run's own
+    // serialization scopes.
+    return await this.#withWorkspaceRunSlots(
+      applyRun.workspaceId,
+      applyRun.id,
+      dispatchLeased,
+    );
   }
 
   /**
@@ -4586,6 +4787,252 @@ export class RunEngine {
    * failure records an Activity event and leaves the succeeded plan for manual
    * continuation; it never fails the plan itself.
    */
+  /**
+   * Dedicated auto-continue for SYSTEM-initiated destroy plans (two-phase
+   * uninstall finalization; failed-first-install cleanup). Deliberately
+   * SEPARATE from {@link #maybeAutoApplyCompletedPlan}, whose "never destroy"
+   * guardrail stays intact: this path runs only for plans carrying the
+   * internal {@link PlanRun.systemDestroy} marker, re-verifies the recorded
+   * evidence against the CURRENT Capsule row (a restore or manual change in
+   * the meantime wins), requires the plan to be delete-only, and then walks
+   * the ordinary approval gate with a system actor — the destroy semantics
+   * themselves are never weakened.
+   */
+  async #maybeAutoContinueSystemDestroyPlan(planRun: PlanRun): Promise<void> {
+    const marker = planRun.systemDestroy;
+    if (!marker) return;
+    if (planRun.operation !== "destroy") return;
+    if (planRun.driftCheck === true) return;
+    if (planRun.appliedApplyRunId) return;
+    // Destroy plans park `waiting_approval` after completion; anything else
+    // (failed, still running, already approved-and-applied) is not continuable.
+    if (
+      planRun.status !== "waiting_approval" &&
+      planRun.status !== "succeeded"
+    ) {
+      return;
+    }
+    if (!planRun.capsuleId) return;
+    const actor =
+      marker.reason === "scheduled_uninstall"
+        ? "system:scheduled-uninstall"
+        : "system:install-cleanup";
+    try {
+      if (!planDeleteOnly(planRun)) {
+        await this.#recordActivity({
+          workspaceId: planRun.workspaceId,
+          action: "capsule.system_destroy_blocked",
+          targetType: "capsule",
+          targetId: planRun.capsuleId,
+          metadata: {
+            planRunId: planRun.id,
+            reason: marker.reason,
+            blocked: "plan_not_delete_only",
+          },
+        });
+        return;
+      }
+      const capsule = await this.#store.getCapsule(planRun.capsuleId);
+      if (!capsule) return;
+      if (
+        !(await this.#systemDestroyEvidenceHolds(marker, capsule))
+      ) {
+        // The evidence no longer holds (restored, re-scheduled, or recovered):
+        // leave the plan parked. It is inert without an approval.
+        return;
+      }
+      await this.approveRun(planRun.id, {
+        approvedBy: actor,
+        reason: marker.reason,
+      });
+      const approved = await this.#store.getPlanRun(planRun.id);
+      if (!approved || approved.status !== "succeeded") return;
+      await this.createApplyRun(
+        {
+          planRunId: approved.id,
+          expected: applyExpectedGuardFromPlanRun(approved),
+        },
+        { actor },
+      );
+    } catch (error) {
+      await this.#recordActivity({
+        workspaceId: planRun.workspaceId,
+        action: "capsule.system_destroy_continue_failed",
+        targetType: "capsule",
+        targetId: planRun.capsuleId,
+        metadata: {
+          planRunId: planRun.id,
+          reason: marker.reason,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  /**
+   * Failed-first-install auto cleanup ("a failed install leaves nothing
+   * behind"): when the FIRST apply of a Capsule fails after committing partial
+   * generation-1 state, automatically create the compensating destroy plan.
+   * Trigger-eligibility is the narrow {@link failedFirstApplyCleanupSafe}
+   * proof; the one-shot `installCleanupAttemptApplyRunId` marker is burned
+   * BEFORE the plan is created so a crashed cleanup can never loop; and the
+   * created plan carries the `systemDestroy` marker whose evidence the
+   * dedicated auto-continue re-verifies before its system approval. Never
+   * fires for generation > 1 — an updated Capsule always keeps its state.
+   */
+  async #maybeScheduleFailedFirstInstallCleanup(input: {
+    readonly failed: ApplyRun;
+    readonly capsule: Capsule;
+    readonly planRun: PlanRun;
+  }): Promise<void> {
+    if (!this.#failedInstallAutoCleanup) return;
+    if (input.planRun.operation !== "create") return;
+    const capsule = input.capsule;
+    if (capsule.installCleanupAttemptApplyRunId) return;
+    if (!failedFirstApplyCleanupSafe(capsule, input.failed)) return;
+    try {
+      // Marker-first stamping: burn the one-shot attempt before any plan
+      // exists so a crash between the two never re-fires the cleanup.
+      const marked = await this.#store.patchCapsule(capsule.id, {
+        installCleanupAttemptApplyRunId: input.failed.id,
+        updatedAt: new Date(this.#now()).toISOString(),
+      });
+      if (!marked) return;
+      await this.#recordActivity({
+        workspaceId: capsule.workspaceId,
+        action: "capsule.install_cleanup_started",
+        targetType: "capsule",
+        targetId: capsule.id,
+        metadata: { failedApplyRunId: input.failed.id },
+      });
+      await this.createCapsuleDestroyPlan(
+        capsule.id,
+        { actor: "system:install-cleanup" },
+        {
+          systemDestroy: {
+            reason: "failed_first_install_cleanup",
+            evidence: { failedApplyRunId: input.failed.id },
+          },
+        },
+      );
+    } catch (error) {
+      // The marker stays burned: the Capsule parks in `error` for the normal
+      // needs-attention lane instead of looping the cleanup.
+      await this.#recordActivity({
+        workspaceId: capsule.workspaceId,
+        action: "capsule.install_cleanup_failed",
+        targetType: "capsule",
+        targetId: capsule.id,
+        metadata: {
+          failedApplyRunId: input.failed.id,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  /**
+   * Update-failure auto re-plan ("failures converge forward"): after a failed
+   * UPDATE apply parks the Capsule in `error`, automatically create the next
+   * plan against the SAME pinned source snapshot. A clean re-plan converges
+   * through the existing auto-apply guardrails (destructive / approval-parked
+   * / policy-blocked plans always stop for a human); at most two automatic
+   * re-plans per snapshot (marker-first, same discipline as
+   * {@link Capsule.autoUpdateAttemptSourceSnapshotId}), reset by the next new
+   * snapshot or a manual update. Never fires for create or destroy plans.
+   */
+  async #maybeScheduleUpdateAutoReplan(input: {
+    readonly capsule: Capsule;
+    readonly planRun: PlanRun;
+  }): Promise<void> {
+    const planRun = input.planRun;
+    if (planRun.operation !== "update") return;
+    if (planRun.driftCheck === true || planRun.refreshOnly === true) return;
+    const snapshotId = planRun.sourceSnapshotId;
+    if (!snapshotId) return;
+    const capsule = await this.#store.getCapsule(input.capsule.id);
+    if (!capsule || capsule.status !== "error") return;
+    // The failed-first-install cleanup owns generation-1 create failures.
+    if (capsule.installCleanupAttemptApplyRunId) return;
+    const attempt = capsule.autoReplanAttempt;
+    const count = attempt?.sourceSnapshotId === snapshotId ? attempt.count : 0;
+    if (count >= 2) return;
+    try {
+      // Marker-first stamping: bound the loop before the plan exists.
+      const marked = await this.#store.patchCapsule(capsule.id, {
+        autoReplanAttempt: { sourceSnapshotId: snapshotId, count: count + 1 },
+        updatedAt: new Date(this.#now()).toISOString(),
+      });
+      if (!marked) return;
+      await this.#recordActivity({
+        workspaceId: capsule.workspaceId,
+        action: "capsule.auto_replan_started",
+        targetType: "capsule",
+        targetId: capsule.id,
+        metadata: {
+          failedPlanRunId: planRun.id,
+          sourceSnapshotId: snapshotId,
+          attempt: count + 1,
+        },
+      });
+      await this.createCapsulePlan(
+        capsule.id,
+        { actor: "system:auto-replan" },
+        {
+          sourceSnapshotId: snapshotId,
+          // Auto-apply only continues an auto-update pipeline the user opted
+          // into; a manually-driven update parks its re-plan for review.
+          ...(planRun.autoApplyRequested === true &&
+          capsule.autoUpdate === true
+            ? { autoApplyRequested: true as const }
+            : {}),
+        },
+      );
+    } catch (error) {
+      await this.#recordActivity({
+        workspaceId: capsule.workspaceId,
+        action: "capsule.auto_replan_failed",
+        targetType: "capsule",
+        targetId: capsule.id,
+        metadata: {
+          failedPlanRunId: planRun.id,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  /** Re-verifies a system-destroy marker against the CURRENT Capsule row. */
+  async #systemDestroyEvidenceHolds(
+    marker: NonNullable<PlanRun["systemDestroy"]>,
+    capsule: Capsule,
+  ): Promise<boolean> {
+    if (marker.reason === "scheduled_uninstall") {
+      const scheduledDestroyAt = marker.evidence?.scheduledDestroyAt;
+      return (
+        capsule.status === "uninstalled" &&
+        scheduledDestroyAt !== undefined &&
+        capsule.scheduledDestroyAt === scheduledDestroyAt &&
+        scheduledDestroyAt <= new Date(this.#now()).toISOString()
+      );
+    }
+    // failed_first_install_cleanup: the one-shot marker must still name the
+    // exact failed first apply, and the Capsule must still hold ONLY that
+    // partial first generation — any later successful apply or manual
+    // recovery invalidates the cleanup.
+    const failedApplyRunId = marker.evidence?.failedApplyRunId;
+    if (!failedApplyRunId) return false;
+    if (capsule.installCleanupAttemptApplyRunId !== failedApplyRunId) {
+      return false;
+    }
+    if (capsule.status !== "error") return false;
+    if (capsule.currentStateGeneration > 1) return false;
+    const failedApply = await this.#store.getApplyRun(failedApplyRunId);
+    if (!failedApply || failedApply.status !== "failed") return false;
+    if (failedApply.capsuleId !== capsule.id) return false;
+    return failedFirstApplyCleanupSafe(capsule, failedApply);
+  }
+
   async #maybeAutoApplyCompletedPlan(planRun: PlanRun): Promise<void> {
     if (planRun.autoApplyRequested !== true) return;
     if (planRun.driftCheck === true) return;
@@ -4844,15 +5291,19 @@ export class RunEngine {
   }
 
   /**
-   * Cancels a run that has not started executing. Only `queued` plan/apply runs
-   * (or a plan parked in the persisted `waiting_approval` status) may be
-   * cancelled; a `running` or terminal run is rejected. Returns the resulting
-   * unified Run.
+   * Cancels a plan/apply run. `queued` (and plan `waiting_approval`) runs are
+   * cancelled with the pre-start fences below; a `running` run gets the
+   * best-effort kill (cancel v1) in {@link #cancelRunningPlanRun} /
+   * {@link #cancelRunningApplyRun}. Terminal runs are rejected. Returns the
+   * resulting unified Run.
    */
   async cancelRun(id: string): Promise<Run> {
     requireNonEmptyString(id, "runId");
     const planRun = await this.#store.getPlanRun(id);
     if (planRun) {
+      if (planRun.status === "running") {
+        return await this.#cancelRunningPlanRun(planRun);
+      }
       if (
         planRun.status !== "queued" &&
         !(await this.#runQuery.planAwaitsApproval(planRun))
@@ -4902,6 +5353,9 @@ export class RunEngine {
     }
     const applyRun = await this.#store.getApplyRun(id);
     if (applyRun) {
+      if (applyRun.status === "running") {
+        return await this.#cancelRunningApplyRun(applyRun);
+      }
       // A retryable runner-infrastructure failure deliberately requeues the
       // SAME ApplyRun after it has started. Such a row may already carry
       // provider/lifecycle mutation evidence (notably a succeeded pre_destroy
@@ -4961,6 +5415,162 @@ export class RunEngine {
       );
     }
     throw new OpenTofuControllerError("not_found", `run ${id} not found`);
+  }
+
+  /**
+   * Best-effort cancel of a RUNNING plan run (cancel v1). Plans are read-only
+   * against provider state, so cancelling one is always safe. The fenced CAS
+   * (`running` → `cancelled`) races the executor's own transitions: exactly one
+   * side wins the row. A losing executor observes the loss at its next
+   * heartbeat tick (its work signal aborts, killing the runner fetch) or at its
+   * terminal commit; a same-isolate executor is aborted immediately through the
+   * in-flight registry. At-most-once is untouched — a cancelled row wins every
+   * later claim/requeue CAS.
+   */
+  async #cancelRunningPlanRun(planRun: PlanRun): Promise<Run> {
+    const now = this.#now();
+    const cancelled: PlanRun = {
+      ...planRun,
+      status: "cancelled",
+      diagnostics: [
+        {
+          severity: "warning",
+          code: "cancel_requested",
+          message:
+            "cancelled while executing; the plan had no provider effects",
+        },
+      ],
+      auditEvents: [
+        ...planRun.auditEvents,
+        auditEvent(planRun.id, "plan.cancel.requested", now),
+        auditEvent(planRun.id, "plan.cancelled", now),
+      ],
+      updatedAt: now,
+      finishedAt: now,
+    };
+    const result = await this.#store.transitionRun({
+      id: planRun.id,
+      kind: "plan",
+      expectFrom: ["running"],
+      run: cancelled,
+      clearLeaseToken: true,
+      clearHeartbeat: true,
+    });
+    if (!result.won) {
+      const current = (result.run as PlanRun | undefined) ?? planRun;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan run ${planRun.id} is ${current.status}; it finished before the cancel landed`,
+      );
+    }
+    this.#inFlightRunAborts.get(planRun.id)?.abort(
+      new OpenTofuControllerError(
+        "failed_precondition",
+        `plan run ${planRun.id} was cancelled`,
+        { reason: "cancel_requested" },
+      ),
+    );
+    await this.#store.deletePlanRunInputs(planRun.id);
+    await this.#notifyTerminal(cancelled);
+    await this.#recordActivity({
+      workspaceId: cancelled.workspaceId,
+      action: "run.cancelled",
+      targetType: "run",
+      targetId: cancelled.id,
+      runId: cancelled.id,
+      metadata: {
+        phase: cancelled.operation === "destroy" ? "destroy_plan" : "plan",
+        wasRunning: true,
+        ...(cancelled.capsuleId ? { capsuleId: cancelled.capsuleId } : {}),
+      },
+    });
+    return projectPlanRun(cancelled, {
+      awaitingApproval: false,
+      ...this.#runQuery.capsuleProjection(cancelled),
+    });
+  }
+
+  /**
+   * Best-effort cancel of a RUNNING apply run (cancel v1). The provider may
+   * already hold partial mutations when the kill lands, so the diagnostics say
+   * exactly that: the Capsule keeps its pre-apply state pointer and the NEXT
+   * plan reconciles real provider state (standard OpenTofu drift handling).
+   * The fenced CAS mirrors {@link #cancelRunningPlanRun}; the apply billing
+   * reservation is released here because the fenced-out executor deliberately
+   * performs no side effects after losing its heartbeat.
+   */
+  async #cancelRunningApplyRun(applyRun: ApplyRun): Promise<Run> {
+    const planRun = await this.#requirePlanRun(applyRun.planRunId);
+    const now = this.#now();
+    const cancelled: ApplyRun = {
+      ...applyRun,
+      status: "cancelled",
+      diagnostics: [
+        {
+          severity: "warning",
+          code: "cancel_requested",
+          message:
+            "cancelled while executing; provider changes may have partially applied — the next plan reads real provider state and reconciles",
+        },
+      ],
+      auditEvents: [
+        ...applyRun.auditEvents,
+        auditEvent(applyRun.id, "apply.cancel.requested", now),
+        auditEvent(
+          applyRun.id,
+          applyRun.operation === "destroy"
+            ? "destroy.cancelled"
+            : "apply.cancelled",
+          now,
+        ),
+      ],
+      updatedAt: now,
+      finishedAt: now,
+    };
+    const result = await this.#store.transitionRun({
+      id: applyRun.id,
+      kind: "apply",
+      expectFrom: ["running"],
+      run: cancelled,
+      clearLeaseToken: true,
+      clearHeartbeat: true,
+    });
+    if (!result.won) {
+      const current = (result.run as ApplyRun | undefined) ?? applyRun;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `apply run ${applyRun.id} is ${current.status}; it finished before the cancel landed`,
+      );
+    }
+    this.#inFlightRunAborts.get(applyRun.id)?.abort(
+      new OpenTofuControllerError(
+        "failed_precondition",
+        `apply run ${applyRun.id} was cancelled`,
+        { reason: "cancel_requested" },
+      ),
+    );
+    try {
+      await this.#billing.releaseApplyBilling(planRun);
+    } catch (error) {
+      log.warn("deploy_control.cancel_billing_release_failed", {
+        runId: applyRun.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    await this.#notifyTerminal(cancelled);
+    await this.#recordActivity({
+      workspaceId: cancelled.workspaceId,
+      action: "run.cancelled",
+      targetType: "run",
+      targetId: cancelled.id,
+      runId: cancelled.id,
+      metadata: {
+        phase: cancelled.operation === "destroy" ? "destroy_apply" : "apply",
+        wasRunning: true,
+        ...(cancelled.capsuleId ? { capsuleId: cancelled.capsuleId } : {}),
+      },
+    });
+    return projectApplyRun(cancelled);
   }
 
   /**
@@ -5227,6 +5837,27 @@ export class RunEngine {
         : {}),
       heartbeatAt,
     });
+    if (result.won && fromStatus !== "running") {
+      // Winning the queued→running claim is the queue-latency observation
+      // point: how long did this run wait before an executor picked it up.
+      const createdAt = Number(running.createdAt);
+      if (Number.isFinite(createdAt) && createdAt > 0) {
+        await this.#recordMetric({
+          name: "takosumi_run_queue_latency_seconds",
+          kind: "histogram",
+          value: Math.max(0, heartbeatAt - createdAt) / 1000,
+          tags: {
+            ...this.#metricTags,
+            operation_kind:
+              kind === "apply"
+                ? running.operation === "destroy"
+                  ? "destroy_apply"
+                  : "apply"
+                : "plan",
+          },
+        });
+      }
+    }
     const run = (result.run ?? running) as R;
     return result.won ? { won: true, run, leaseToken } : { won: false, run };
   }
@@ -5268,6 +5899,7 @@ export class RunEngine {
     kind: "plan" | "apply" | "restore",
     run: PlanRun | ApplyRun | Run,
     leaseToken: string,
+    applyProgress?: RunApplyProgress,
   ): Promise<{ readonly won: boolean; readonly heartbeatAt: number }> {
     const now = this.#now();
     const result = await this.#store.transitionRun({
@@ -5275,10 +5907,40 @@ export class RunEngine {
       kind,
       expectFrom: ["running"],
       expectLeaseToken: leaseToken,
-      run: { ...run, heartbeatAt: now, updatedAt: now },
+      run: {
+        ...run,
+        heartbeatAt: now,
+        updatedAt: now,
+        ...(applyProgress ? { applyProgress } : {}),
+      },
       heartbeatAt: now,
     });
     return { won: result.won, heartbeatAt: now };
+  }
+
+  /**
+   * Samples live apply progress from the runner. Every failure answers
+   * `undefined`: a status sample must never fail (or slow) the run it watches.
+   */
+  async #readApplyProgress(
+    runner: OpenTofuRunner | undefined,
+    progressTarget: ApplyProgressTarget | undefined,
+  ): Promise<RunApplyProgress | undefined> {
+    if (!runner?.applyProgress || !progressTarget) return undefined;
+    try {
+      const progress = await runner.applyProgress(progressTarget);
+      if (!progress || !Number.isFinite(progress.completed)) return undefined;
+      return {
+        completed: Math.max(0, Math.floor(progress.completed)),
+        inFlight: Math.max(0, Math.floor(progress.inFlight)),
+        ...(progress.currentResource
+          ? { currentResource: progress.currentResource }
+          : {}),
+        observedAt: this.#now(),
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -5298,8 +5960,16 @@ export class RunEngine {
     leaseToken: string,
     lease: LeaseHandle | undefined,
     work: (signal: AbortSignal) => Promise<T>,
+    /**
+     * Runner to sample live apply progress from on each tick. Optional: a
+     * composition without progress support simply reports none.
+     */
+    progressRunner?: OpenTofuRunner,
+    /** The plan coordinate the runner dispatches this apply under. */
+    progressTarget?: ApplyProgressTarget,
   ): Promise<T> {
     const abortController = new AbortController();
+    this.#inFlightRunAborts.set(run.id, abortController);
     const initialFenceAt = run.heartbeatAt ?? this.#now();
     let lastHeartbeatAt = initialFenceAt;
     let runHeartbeatDeadline = initialFenceAt + RUN_HEARTBEAT_STALE_MS;
@@ -5337,10 +6007,20 @@ export class RunEngine {
         attempts += 1;
         let heartbeat: { readonly won: boolean; readonly heartbeatAt: number };
         try {
+          // The heartbeat tick is the only moment the control plane is awake
+          // while the runner call blocks, so it is where live apply progress
+          // is sampled. Best-effort by construction: a runner without the
+          // capability, or any read failure, simply leaves the last snapshot
+          // (or none) on the row.
+          const progress =
+            kind === "apply"
+              ? await this.#readApplyProgress(progressRunner, progressTarget)
+              : undefined;
           heartbeat = await this.#heartbeatRunningRun(
             kind,
             run,
             leaseToken,
+            progress,
           );
         } catch (error) {
           if (
@@ -5422,6 +6102,12 @@ export class RunEngine {
     // takeover that already happened.
     await runTick();
     if (abortController.signal.aborted) {
+      // Losing the fence here skips the `work` try/finally below, so the
+      // registry entry must be released on this path too or it accumulates
+      // one AbortController per fenced-out run for the process lifetime.
+      if (this.#inFlightRunAborts.get(run.id) === abortController) {
+        this.#inFlightRunAborts.delete(run.id);
+      }
       throw abortController.signal.reason;
     }
     const intervalMs = this.#runRenewalIntervalMs;
@@ -5443,6 +6129,9 @@ export class RunEngine {
       workFailed = true;
       workError = error;
     } finally {
+      if (this.#inFlightRunAborts.get(run.id) === abortController) {
+        this.#inFlightRunAborts.delete(run.id);
+      }
       if (timer) clearInterval(timer);
       if (activeTick) await activeTick;
     }
@@ -6059,7 +6748,7 @@ export class RunEngine {
               ? { credentials: environment.credentials }
               : {}),
           },
-          { signal },
+          runnerExecutionControl(profile, signal),
         );
       const result = await this.#withRunRenewal(
         "plan",
@@ -6101,6 +6790,7 @@ export class RunEngine {
         capsuleId: updated.capsuleId,
         startedAt: effectiveRunning.startedAt,
         finishedAt: now,
+        attemptEvents: updated.auditEvents,
       });
       await this.#recordDeployOperationMetric({
         run: updated,
@@ -6118,6 +6808,7 @@ export class RunEngine {
         );
       }
       await this.#maybeAutoApplyCompletedPlan(updated);
+      await this.#maybeAutoContinueSystemDestroyPlan(updated);
       return updated;
     } catch (error) {
       if (isRetryableRunnerInfrastructureError(error)) {
@@ -6125,16 +6816,23 @@ export class RunEngine {
           running.operation === "destroy"
             ? "destroy_plan.retry_scheduled"
             : "plan.retry_scheduled";
-        if (
-          runnerInfrastructureRetryCount(running, [retryEvent]) >=
-          RUNNER_INFRASTRUCTURE_RETRY_LIMIT
-        ) {
+        const phaseName =
+          running.operation === "destroy" ? "destroy_plan" : "plan";
+        const capacityRefused = isCapacityExhaustedRunnerError(error);
+        const budgetExhausted = capacityRefused
+          ? this.#capacityQueueBudgetExceeded(running)
+          : runnerInfrastructureRetryCount(running, [retryEvent]) >=
+            RUNNER_INFRASTRUCTURE_RETRY_LIMIT;
+        if (budgetExhausted) {
           return await this.#failPlanRun(
             running,
             leaseToken,
-            runnerInfrastructureRetryExhaustedError(
-              running.operation === "destroy" ? "destroy_plan" : "plan",
-            ),
+            capacityRefused
+              ? runnerCapacityTimeoutError(
+                  phaseName,
+                  this.#runnerCapacityQueueBudgetMs,
+                )
+              : runnerInfrastructureRetryExhaustedError(phaseName),
           );
         }
         const queued = await this.#requeuePlanRunAfterRunnerInfrastructureError(
@@ -6500,6 +7198,15 @@ export class RunEngine {
     readonly capsuleId?: string;
     readonly startedAt?: number;
     readonly finishedAt: number;
+    /**
+     * Audit events of the run being metered. The idempotency key carries the
+     * ATTEMPT index derived from the durable `*retry_scheduled` markers, so a
+     * run requeued after a capacity/infrastructure failure bills each executed
+     * attempt — a per-run key was first-write-wins and metered only the first
+     * (often failed) attempt. A crashed replay of the SAME attempt still
+     * deduplicates because the marker count is durable on the run row.
+     */
+    readonly attemptEvents?: readonly { readonly type: string }[];
   }): Promise<void> {
     if (input.startedAt === undefined) return;
     const durationMs = Math.max(0, input.finishedAt - input.startedAt);
@@ -6526,7 +7233,11 @@ export class RunEngine {
       usdMicros: rating.usdMicros,
       ratingStatus: rating.ratingStatus,
       source: "runner",
-      idempotencyKey: `${input.runId}:runner_minute`,
+      idempotencyKey: `${input.runId}:runner_minute:${
+        (input.attemptEvents ?? []).filter((event) =>
+          event.type.endsWith("retry_scheduled")
+        ).length
+      }`,
       createdAt,
     });
   }
@@ -6567,10 +7278,12 @@ export class RunEngine {
     readonly operationKind: "plan" | "apply" | "destroy_apply";
     readonly status: RunStatus;
   }): Record<string, string> {
+    // Bounded label set only (metric_layout.ts): per-workspace/per-capsule ids
+    // made every deploy series a cardinality bomb and leaked the tenant
+    // inventory to any scrape-token holder. Per-workspace visibility lives in
+    // the usage/showback lane, never on Prometheus labels.
     return {
       ...this.#metricTags,
-      workspace_id: input.run.workspaceId,
-      capsule_id: input.run.capsuleId ?? "unbound",
       operation_kind: input.operationKind,
       status: input.status,
     };
@@ -6703,6 +7416,11 @@ export class RunEngine {
             },
             signal,
           }),
+        this.#runnerForProfile(profile),
+        {
+          planRunId: planRun.id,
+          ...(planRun.planArtifact ? { planArtifact: planRun.planArtifact } : {}),
+        },
       );
       const now = this.#now();
       if (result.providerExecutionFailure) {
@@ -6731,12 +7449,22 @@ export class RunEngine {
           return { applyRun: (await this.getApplyRun(applyRun.id)).applyRun };
         }
         ledgerCommitted = true;
-        return await this.#completeFailedProviderApply({
+        const failedResponse = await this.#completeFailedProviderApply({
           ...committedFailure,
           planRun,
           startedAt,
           now,
         });
+        await this.#maybeScheduleFailedFirstInstallCleanup({
+          failed: committedFailure.failed,
+          capsule: committedFailure.capsule,
+          planRun,
+        });
+        await this.#maybeScheduleUpdateAutoReplan({
+          capsule: committedFailure.capsule,
+          planRun,
+        });
+        return failedResponse;
       }
       if (planRun.resourceContext) {
         return await this.#commitResourceApply({
@@ -6963,11 +7691,13 @@ export class RunEngine {
           runningForFailure,
           error,
         );
-        if (
-          runnerInfrastructureRetryCount(runningWithEnvironmentFailure, [
-            "apply.retry_scheduled",
-          ]) >= RUNNER_INFRASTRUCTURE_RETRY_LIMIT
-        ) {
+        const capacityRefused = isCapacityExhaustedRunnerError(error);
+        const budgetExhausted = capacityRefused
+          ? this.#capacityQueueBudgetExceeded(runningWithEnvironmentFailure)
+          : runnerInfrastructureRetryCount(runningWithEnvironmentFailure, [
+              "apply.retry_scheduled",
+            ]) >= RUNNER_INFRASTRUCTURE_RETRY_LIMIT;
+        if (budgetExhausted) {
           await this.#billing.releaseApplyBilling(planRun);
           const failed = await this.#failApplyRun(
             runningWithEnvironmentFailure,
@@ -6975,7 +7705,12 @@ export class RunEngine {
             profile,
             startedAt,
             "apply.failed",
-            runnerInfrastructureRetryExhaustedError("apply"),
+            capacityRefused
+              ? runnerCapacityTimeoutError(
+                  "apply",
+                  this.#runnerCapacityQueueBudgetMs,
+                )
+              : runnerInfrastructureRetryExhaustedError("apply"),
             true,
           );
           if (failed.finishedAt !== undefined) {
@@ -6985,6 +7720,7 @@ export class RunEngine {
               capsuleId: failed.capsuleId,
               startedAt,
               finishedAt: failed.finishedAt,
+              attemptEvents: failed.auditEvents,
             });
           }
           return { applyRun: failed };
@@ -7003,13 +7739,20 @@ export class RunEngine {
             `retryable_runner_infrastructure_error: apply run ${queued.id} requeued after runner infrastructure failure`,
             { reason: RUNNER_INFRASTRUCTURE_REQUEUED_REASON },
           );
-          if (queued.updatedAt !== undefined) {
+          // A capacity refusal means the runner never accepted the job, so no
+          // runner time was consumed. Billing it charged the customer for the
+          // control plane's own backoff — invisible before the per-attempt key
+          // because first-write-wins hid every retry.
+          if (queued.updatedAt !== undefined && !capacityRefused) {
             await this.#recordRunnerMinuteUsage({
               workspaceId: queued.workspaceId,
               runId: queued.id,
               capsuleId: queued.capsuleId,
               startedAt,
               finishedAt: queued.updatedAt,
+              // Pre-requeue events: `queued` already carries the marker for the
+              // NEXT attempt; this metering bills the attempt that just ran.
+              attemptEvents: runningWithEnvironmentFailure.auditEvents,
             });
           }
           throw retryError;
@@ -7032,6 +7775,7 @@ export class RunEngine {
           capsuleId: failed.capsuleId,
           startedAt,
           finishedAt: failed.finishedAt,
+          attemptEvents: failed.auditEvents,
         });
       }
       return { applyRun: failed };
@@ -7155,6 +7899,7 @@ export class RunEngine {
         runId: completed.id,
         startedAt: input.startedAt,
         finishedAt: input.now,
+        attemptEvents: completed.auditEvents,
       });
       await this.#recordDeployOperationMetric({
         run: completed,
@@ -7347,7 +8092,7 @@ export class RunEngine {
         ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
         ...(credentials ? { credentials } : {}),
       },
-      { signal: input.signal },
+      runnerExecutionControl(profile, input.signal),
     );
     if (result.providerExecutionFailure) {
       const stateWasPersisted =
@@ -7666,6 +8411,7 @@ export class RunEngine {
         capsuleId: input.failed.capsuleId,
         startedAt: input.startedAt,
         finishedAt: input.now,
+        attemptEvents: input.failed.auditEvents,
       });
       await this.#recordDeployOperationMetric({
         run: input.failed,
@@ -8498,6 +9244,7 @@ export class RunEngine {
         capsuleId: completed.capsuleId,
         startedAt,
         finishedAt: now,
+        attemptEvents: completed.auditEvents,
       });
       await this.#recordDeployOperationMetric({
         run: completed,
@@ -8773,8 +9520,13 @@ export class RunEngine {
                 : {}),
               ...(credentials ? { credentials } : {}),
             },
-            { signal },
+            runnerExecutionControl(profile, signal),
           ),
+        runner,
+        {
+          planRunId: planRun.id,
+          ...(planRun.planArtifact ? { planArtifact: planRun.planArtifact } : {}),
+        },
       );
       const now = this.#now();
       // Build the post-teardown StateVersion at the generation persisted by the
@@ -8885,6 +9637,7 @@ export class RunEngine {
           capsuleId: completed.capsuleId,
           startedAt,
           finishedAt: now,
+          attemptEvents: completed.auditEvents,
         });
         await this.#recordDeployOperationMetric({
           run: completed,
@@ -8970,11 +9723,13 @@ export class RunEngine {
           effectiveRunning,
           error,
         );
-        if (
-          runnerInfrastructureRetryCount(runningWithEnvironmentFailure, [
-            "destroy.retry_scheduled",
-          ]) >= RUNNER_INFRASTRUCTURE_RETRY_LIMIT
-        ) {
+        const capacityRefused = isCapacityExhaustedRunnerError(error);
+        const budgetExhausted = capacityRefused
+          ? this.#capacityQueueBudgetExceeded(runningWithEnvironmentFailure)
+          : runnerInfrastructureRetryCount(runningWithEnvironmentFailure, [
+              "destroy.retry_scheduled",
+            ]) >= RUNNER_INFRASTRUCTURE_RETRY_LIMIT;
+        if (budgetExhausted) {
           await this.#billing.releaseApplyBilling(planRun);
           const failed = await this.#failApplyRun(
             runningWithEnvironmentFailure,
@@ -8982,7 +9737,12 @@ export class RunEngine {
             profile,
             startedAt,
             "destroy.failed",
-            runnerInfrastructureRetryExhaustedError("destroy_apply"),
+            capacityRefused
+              ? runnerCapacityTimeoutError(
+                  "destroy_apply",
+                  this.#runnerCapacityQueueBudgetMs,
+                )
+              : runnerInfrastructureRetryExhaustedError("destroy_apply"),
             true,
           );
           if (failed.finishedAt !== undefined) {
@@ -8992,6 +9752,7 @@ export class RunEngine {
               capsuleId: failed.capsuleId,
               startedAt,
               finishedAt: failed.finishedAt,
+              attemptEvents: failed.auditEvents,
             });
           }
           return {
@@ -9014,13 +9775,20 @@ export class RunEngine {
             `retryable_runner_infrastructure_error: destroy apply run ${queued.id} requeued after runner infrastructure failure`,
             { reason: RUNNER_INFRASTRUCTURE_REQUEUED_REASON },
           );
-          if (queued.updatedAt !== undefined) {
+          // A capacity refusal means the runner never accepted the job, so no
+          // runner time was consumed. Billing it charged the customer for the
+          // control plane's own backoff — invisible before the per-attempt key
+          // because first-write-wins hid every retry.
+          if (queued.updatedAt !== undefined && !capacityRefused) {
             await this.#recordRunnerMinuteUsage({
               workspaceId: queued.workspaceId,
               runId: queued.id,
               capsuleId: queued.capsuleId,
               startedAt,
               finishedAt: queued.updatedAt,
+              // Pre-requeue events: `queued` already carries the marker for the
+              // NEXT attempt; this metering bills the attempt that just ran.
+              attemptEvents: runningWithEnvironmentFailure.auditEvents,
             });
           }
           throw retryError;
@@ -9048,6 +9816,7 @@ export class RunEngine {
           capsuleId: failed.capsuleId,
           startedAt,
           finishedAt: failed.finishedAt,
+          attemptEvents: failed.auditEvents,
         });
       }
       return {
@@ -9130,7 +9899,7 @@ export class RunEngine {
               : {}),
             ...(input.credentials ? { credentials: input.credentials } : {}),
           },
-          { signal },
+          runnerExecutionControl(profile, signal),
         ),
     );
     const now = this.#now();
@@ -9206,6 +9975,7 @@ export class RunEngine {
         runId: completed.id,
         startedAt: input.startedAt,
         finishedAt: now,
+        attemptEvents: completed.auditEvents,
       });
       await this.#recordDeployOperationMetric({
         run: completed,
@@ -9390,6 +10160,75 @@ function assertExactApplyRunResponse(
       `ApplyRun recovery did not return exact ApplyRun ${expectedApplyRunId}`,
     );
   }
+}
+
+/**
+ * True when a completed destroy plan contains ONLY delete (or read/no-op)
+ * actions. The system auto-continue refuses anything else: a destroy plan
+ * that would also create or change resources is left parked for a human.
+ */
+function planDeleteOnly(planRun: PlanRun): boolean {
+  const changes = planRun.planResourceChanges;
+  if (changes !== undefined) {
+    return changes.every((change) =>
+      change.actions.every(
+        (action) =>
+          action === "delete" ||
+          action === "read" ||
+          action === "no-op" ||
+          action === "noop",
+      ),
+    );
+  }
+  const summary = planRun.summary;
+  if (!summary) return false;
+  return (summary.add ?? 0) === 0 && (summary.change ?? 0) === 0;
+}
+
+/**
+ * Trigger-eligibility proof for the failed-first-install auto cleanup: the
+ * Capsule holds ONLY the partial generation-1 state a provider-dispatched
+ * failed CREATE left behind, no Output exists, and no lifecycle action was
+ * ever dispatched. Shared between the cleanup trigger and the destroy-time
+ * auto-continue re-verification so the two can never drift apart.
+ */
+function failedFirstApplyCleanupSafe(
+  capsule: Capsule,
+  failedApply: ApplyRun,
+): boolean {
+  if (failedApply.operation !== "create") return false;
+  if (failedApply.status !== "failed") return false;
+  if (failedApply.outputId !== undefined) return false;
+  if (capsule.currentOutputId !== undefined) return false;
+  if (capsule.currentStateGeneration !== 1) return false;
+  if (
+    failedApply.stateVersionId === undefined ||
+    capsule.currentStateVersionId !== failedApply.stateVersionId
+  ) {
+    return false;
+  }
+  const providerFailureEvidence = failedApply.auditEvents.some((event) => {
+    if (event.type !== "apply.failed") return false;
+    const data = event.data;
+    return (
+      data?.providerDispatched === true &&
+      data.providerApplySucceeded === false &&
+      data.statePersistence === "persisted" &&
+      data.stateVersionId === failedApply.stateVersionId
+    );
+  });
+  if (!providerFailureEvidence) return false;
+  // Any lifecycle dispatch invalidates the compensation proof: a post_apply
+  // action may have mutated an external system even without an Output.
+  const lifecycleDispatched = failedApply.auditEvents.some((event) => {
+    const data = event.data;
+    return (
+      data?.lifecycleActionDispatched === true ||
+      (event.type.startsWith("lifecycle_action.") &&
+        data?.actionDispatched === true)
+    );
+  });
+  return !lifecycleDispatched;
 }
 
 function isEligibleLegacySourcelessPlan(planRun: PlanRun): boolean {

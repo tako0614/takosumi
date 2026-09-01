@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { InMemoryTokenBucketRateLimiter } from "../../../core/shared/rate_limit.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 import {
   CloudflareD1OpenTofuControlStore,
@@ -516,14 +517,20 @@ test("stale Capsule auto-plan is opt-in", () => {
 
 test("stale Capsule auto-plan creates one pending update plan per stale Capsule", async () => {
   const planned: string[] = [];
+  const cursorPuts: (string | undefined)[] = [];
   const result = await planStaleCapsuleUpdates(
     {
       workspaces: {
-        listWorkspaces: () =>
-          Promise.resolve([
-            { id: "space_a" },
-            { id: "space_archived", archivedAt: "2026-07-01T00:00:00.000Z" },
-          ]),
+        listWorkspacesPage: () =>
+          Promise.resolve({
+            items: [
+              { id: "space_a" },
+              {
+                id: "space_archived",
+                archivedAt: "2026-07-01T00:00:00.000Z",
+              },
+            ],
+          }),
       },
       capsules: {
         listCapsules: (workspaceId) =>
@@ -586,6 +593,11 @@ test("stale Capsule auto-plan creates one pending update plan per stale Capsule"
               capsuleId: "inst_has_plan",
             }),
           ]),
+        getSweepCursor: () => Promise.resolve(undefined),
+        putSweepCursor: (_name, cursor) => {
+          cursorPuts.push(cursor);
+          return Promise.resolve();
+        },
       },
       createCapsulePlan: (capsuleId) => {
         planned.push(capsuleId);
@@ -596,10 +608,13 @@ test("stale Capsule auto-plan creates one pending update plan per stale Capsule"
   );
 
   expect(planned).toEqual(["inst_needs_plan"]);
+  // An exhausted Workspace page resets the rotation cursor for the next tick.
+  expect(cursorPuts).toEqual([undefined]);
   expect(result).toEqual({
     workspacesScanned: 1,
     staleCapsulesScanned: 2,
     plansCreated: 1,
+    failures: 0,
   });
 });
 
@@ -607,19 +622,28 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
   const now = Date.parse("2026-07-01T23:40:00.000Z");
   const recoveryQueries: unknown[] = [];
   const scheduled: unknown[] = [];
+  const cursorPuts: (string | undefined)[] = [];
   const result = await repairStaleOpenTofuRuns(
     {
       workspaces: {
-        listWorkspaces: () =>
-          Promise.resolve([
-            { id: "space_a" },
-            { id: "space_archived", archivedAt: "2026-07-01T00:00:00.000Z" },
-          ]),
+        getWorkspace: (id) =>
+          id === "space_archived"
+            ? Promise.resolve({
+                id,
+                archivedAt: "2026-07-01T00:00:00.000Z",
+              })
+            : Promise.resolve({ id }),
       },
       controller: {
+        getSweepCursor: () => Promise.resolve(undefined),
+        putSweepCursor: (_name, cursor) => {
+          cursorPuts.push(cursor);
+          return Promise.resolve();
+        },
         listRecoverableOpenTofuRuns: (options) => {
           recoveryQueries.push(options);
-          return Promise.resolve([
+          return Promise.resolve({
+            runs: [
             runRecord({
               id: "apply_stale_destroy",
               type: "destroy_apply",
@@ -680,7 +704,8 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
               status: "queued",
               createdAt: new Date(now - 10_000).toISOString(),
             }),
-          ]);
+            ],
+          });
         },
       },
     },
@@ -701,7 +726,7 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
     {
       staleQueuedBeforeMs: now - 1_000,
       staleRunningBeforeMs: now - 1_000,
-      limit: 50,
+      limit: 500,
     },
   ]);
   expect(scheduled).toEqual([
@@ -726,10 +751,14 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
       workspaceId: "space_a",
     },
   ]);
+  // An exhausted scan resets the rotation cursor for the next tick.
+  expect(cursorPuts).toEqual([undefined]);
   expect(result).toEqual({
-    workspacesScanned: 1,
     runsScanned: 9,
     rescheduled: 4,
+    skipped: 5,
+    failures: 0,
+    wrapped: true,
   });
 });
 
@@ -4478,4 +4507,34 @@ test("scheduled poll continues past a failing source", async () => {
   };
   await pollAutoSyncSources(ops, 50);
   expect(syncCalls).toEqual(["src_a", "src_b"]);
+});
+
+test("webhook writes past the per-source budget get 429 + Retry-After", async () => {
+  const { ops, syncCalls } = makeWebhookOps();
+  const rateLimit = {
+    limiter: new InMemoryTokenBucketRateLimiter(),
+    limitPerMinute: 1,
+  };
+  const first = webhookRequest({}, { bearer: "ok" });
+  expect(
+    (
+      await handleSourceWebhookRequest(
+        first.request,
+        first.url,
+        ops,
+        rateLimit,
+      )
+    ).status,
+  ).toBe(202);
+  const second = webhookRequest({}, { bearer: "ok" });
+  const refused = await handleSourceWebhookRequest(
+    second.request,
+    second.url,
+    ops,
+    rateLimit,
+  );
+  expect(refused.status).toBe(429);
+  expect(refused.headers.get("retry-after")).toBeTruthy();
+  // The refusal happened before run creation: only the first sync fired.
+  expect(syncCalls).toHaveLength(1);
 });

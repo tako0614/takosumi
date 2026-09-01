@@ -51,6 +51,7 @@ import type {
   PlanRun,
   PlanRunResourceContext,
   PlanRunResponse,
+  PlanRunSystemDestroy,
   PublicPlanRun,
   PlanRunSummary,
   PolicyDecision,
@@ -113,8 +114,14 @@ import {
   InMemoryOpenTofuControlStore,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
+  type ClaimWorkItemsInput,
+  type ControlWorkItem,
+  type EnqueueWorkItemInput,
+  type FailWorkItemOptions,
   type OpenTofuControlStore,
   type PlanRunInputs,
+  type RunBacklogStats,
+  type RunBacklogStatsInput,
 } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import {
@@ -277,6 +284,10 @@ export function publicCapsule(capsule: Capsule): PublicCapsule {
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttemptSourceSnapshotId,
     installingPrincipalId: _installingPrincipalId,
+    uninstallRequestedBy: _uninstallRequestedBy,
+    scheduledDestroyAttempts: _scheduledDestroyAttempts,
+    installCleanupAttemptApplyRunId: _installCleanupAttemptApplyRunId,
+    autoReplanAttempt: _autoReplanAttempt,
     ...publicRecord
   } = capsule;
   return publicRecord;
@@ -395,8 +406,24 @@ export interface RunExecutionDispatch {
  * into their transport/process boundary so a fenced-out executor cannot keep
  * performing provider or lifecycle side effects.
  */
+/**
+ * Live progress of an executing apply/destroy, read from the runner while the
+ * run is still in flight. Counts are resource-level, never byte- or
+ * line-level, so they line up with the plan's resource change summary.
+ */
+export interface OpenTofuApplyProgress {
+  readonly completed: number;
+  readonly inFlight: number;
+  readonly currentResource?: string;
+}
+
 export interface RunExecutionControl {
   readonly signal?: AbortSignal;
+  /**
+   * Wall-clock budget for the runner action, derived from the runner
+   * profile's `maxRunSeconds`. Adapters abort the dispatch when it elapses.
+   */
+  readonly timeoutMs?: number;
 }
 
 export interface OpenTofuPlanJob
@@ -663,6 +690,24 @@ export interface OpenTofuRunner {
     job: ReleaseCommandRunJob,
     control?: RunExecutionControl,
   ): Promise<ReleaseCommandRunResult>;
+  /**
+   * Optional live progress of an executing apply/destroy. Read on the run
+   * heartbeat tick while the runner call is still blocked, so a long install
+   * can report "3 of 7 resources" instead of a status-only spinner. Every
+   * failure mode answers `undefined`; a runner without the capability simply
+   * omits it.
+   */
+  applyProgress?(input: {
+    /**
+     * The PlanRun whose reviewed plan this apply executes. The runner runs an
+     * apply under the PLAN's dispatch identity (the saved plan artifact lives
+     * there), so progress must be read with the same coordinate the dispatch
+     * used — reading it under the ApplyRun id addresses a runner that never
+     * ran anything.
+     */
+    readonly planRunId: string;
+    readonly planArtifact?: OpenTofuPlanResult["planArtifact"];
+  }): Promise<OpenTofuApplyProgress | undefined>;
   restore?(job: OpenTofuRestoreJob): Promise<OpenTofuRestoreResult>;
   restoreServiceData?(
     job: OpenTofuServiceDataRestoreJob,
@@ -994,6 +1039,18 @@ export interface OpenTofuControllerDependencies {
    * scoped managed hostnames never consume this allowance.
    */
   readonly managedVanityHostnameSlotsPerOwner?: number;
+  /** Kill switch for the failed-first-install auto cleanup (default ON). */
+  readonly failedInstallAutoCleanup?: boolean;
+  /**
+   * Queue-age budget for `capacity_exhausted` runner refusals before the run
+   * fails as `runner_capacity_timeout`. Default 45 minutes.
+   */
+  readonly runnerCapacityQueueBudgetMs?: number;
+  /**
+   * Per-workspace concurrent run-slot ceiling (fairness), enforced through the
+   * coordination lease seam. Default 2; `0` disables.
+   */
+  readonly workspaceRunConcurrency?: number;
 }
 
 export interface DeployControlActorContext {
@@ -1073,6 +1130,8 @@ export interface PlanRunInternalContext {
    * is CLEAN (`succeeded`). See {@link PlanRun.autoApplyRequested}.
    */
   readonly autoApplyRequested?: true;
+  /** System-initiated destroy marker. See {@link PlanRun.systemDestroy}. */
+  readonly systemDestroy?: PlanRunSystemDestroy;
   /**
    * Dependency pins resolved by the Capsule planning path before the PlanRun
    * row exists. `createPlanRun` persists them immediately after creating the run
@@ -1151,6 +1210,12 @@ export interface CreateCapsulePlanInternal {
    * `waiting_approval`, and is rejected by `createApplyRun`.
    */
   readonly driftCheck?: true;
+  /**
+   * Marks the destroy plan as system-initiated (deferred uninstall
+   * finalization or failed-first-install cleanup). See
+   * {@link PlanRun.systemDestroy}. Only meaningful with a destroy plan.
+   */
+  readonly systemDestroy?: PlanRunSystemDestroy;
 }
 
 /**
@@ -1415,6 +1480,12 @@ export class OpenTofuController {
       now: this.#now,
       enqueueRun: this.#enqueueRun,
       enqueueArtifactLedgerRetry: this.#usesExternalRunDispatcher,
+      // The workspace fairness fence parks a run by throwing so an EXTERNAL
+      // run owner re-arms it. An inline dispatcher has no owner to re-arm:
+      // the busy error would escape to the caller as a 500, and a nested
+      // dispatch (plan -> auto-apply, or the failed-install cleanup plan)
+      // would deadlock against the slot its own pipeline already holds.
+      workspaceRunSlotsEnabled: this.#usesExternalRunDispatcher,
       capsuleCoordination: this.#capsuleCoordination,
       runRenewalIntervalMs: this.#runRenewalIntervalMs,
       activity: this.#activity,
@@ -1444,6 +1515,18 @@ export class OpenTofuController {
               Math.floor(dependencies.managedVanityHostnameSlotsPerOwner),
             ),
           }
+        : {}),
+      ...(dependencies.failedInstallAutoCleanup !== undefined
+        ? { failedInstallAutoCleanup: dependencies.failedInstallAutoCleanup }
+        : {}),
+      ...(dependencies.runnerCapacityQueueBudgetMs !== undefined
+        ? {
+            runnerCapacityQueueBudgetMs:
+              dependencies.runnerCapacityQueueBudgetMs,
+          }
+        : {}),
+      ...(dependencies.workspaceRunConcurrency !== undefined
+        ? { workspaceRunConcurrency: dependencies.workspaceRunConcurrency }
         : {}),
     });
   }
@@ -1589,7 +1672,7 @@ export class OpenTofuController {
     context: DeployControlActorContext = {},
     internal: Pick<
       CreateCapsulePlanInternal,
-      "runnerProfileId" | "sourceSnapshotId"
+      "runnerProfileId" | "sourceSnapshotId" | "systemDestroy"
     > = {},
   ): Promise<PlanRunResponse> {
     return this.#runEngine.createCapsuleDestroyPlan(
@@ -2053,12 +2136,64 @@ export class OpenTofuController {
     return await this.#runQuery.listRuns(workspaceId, options);
   }
 
+  /** Newest-first keyset page over a Workspace's runs (see RunQueryService). */
+  async listRunsPage(
+    workspaceId: string,
+    options: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }> {
+    return await this.#runQuery.listRunsPage(workspaceId, options);
+  }
+
   async listRecoverableOpenTofuRuns(options: {
     readonly staleQueuedBeforeMs: number;
     readonly staleRunningBeforeMs: number;
     readonly limit?: number;
-  }): Promise<readonly Run[]> {
+    readonly cursor?: string;
+  }): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }> {
     return await this.#runQuery.listRecoverableOpenTofuRuns(options);
+  }
+
+  // -- Cron-lane store passthroughs (sweep rotation + scheduled intent) -------
+
+  async getRunBacklogStats(
+    input: RunBacklogStatsInput,
+  ): Promise<RunBacklogStats> {
+    return await this.#store.getRunBacklogStats(input);
+  }
+
+  async getSweepCursor(name: string): Promise<string | undefined> {
+    return await this.#store.getSweepCursor(name);
+  }
+
+  async putSweepCursor(name: string, cursor: string | undefined): Promise<void> {
+    await this.#store.putSweepCursor(name, cursor);
+  }
+
+  async enqueueWorkItem(input: EnqueueWorkItemInput): Promise<ControlWorkItem> {
+    return await this.#store.enqueueWorkItem(input);
+  }
+
+  async claimDueWorkItems(
+    input: ClaimWorkItemsInput,
+  ): Promise<readonly ControlWorkItem[]> {
+    return await this.#store.claimDueWorkItems(input);
+  }
+
+  async completeWorkItem(
+    id: string,
+    options: { readonly lockedBy: string; readonly now: string },
+  ): Promise<void> {
+    await this.#store.completeWorkItem(id, options);
+  }
+
+  async failWorkItem(id: string, options: FailWorkItemOptions): Promise<void> {
+    await this.#store.failWorkItem(id, options);
+  }
+
+  async countWorkItemBacklog(
+    now: string,
+  ): Promise<Readonly<Record<string, number>>> {
+    return await this.#store.countWorkItemBacklog(now);
   }
 
   async getRunLogs(id: string): Promise<RunLogsResponse> {

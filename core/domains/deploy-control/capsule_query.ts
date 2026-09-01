@@ -22,10 +22,24 @@ import type {
   CapsuleCurrentResourceInventoryResponse,
 } from "takosumi-contract/current-resource-inventory";
 
+type CapsuleQueryStore = Pick<
+  OpenTofuControlStore,
+  | "getApplyRun"
+  | "getCapsule"
+  | "getOutput"
+  | "listCapsules"
+  | "listStateVersionsPage"
+  | "listStateVersionsByWorkspace"
+  | "getStateVersionsByIds"
+  | "getStateVersion"
+  | "getWorkspace"
+  | "getPlanRun"
+>;
+
 export type PublicCapsuleProjector = (capsule: Capsule) => PublicCapsule;
 
 export async function requireCapsule(
-  store: OpenTofuControlStore,
+  store: Pick<OpenTofuControlStore, "getCapsule">,
   id: string,
 ): Promise<Capsule> {
   requireNonEmptyString(id, "capsuleId");
@@ -37,11 +51,11 @@ export async function requireCapsule(
 }
 
 export class CapsuleQuery {
-  readonly #store: OpenTofuControlStore;
+  readonly #store: CapsuleQueryStore;
   readonly #publicCapsule: PublicCapsuleProjector;
 
   constructor(
-    store: OpenTofuControlStore,
+    store: CapsuleQueryStore,
     publicCapsule: PublicCapsuleProjector,
   ) {
     this.#store = store;

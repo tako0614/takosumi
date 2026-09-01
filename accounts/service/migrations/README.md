@@ -9,6 +9,9 @@ the former commercial billing persistence after host extensions became its
 sole owner. Migration `035` persists the optional upstream profile image used
 by ordinary OAuth UserInfo responses. Migration `036` adds the
 timestamp-and-primary-key indexes used by bounded refresh-chain retention.
+Migration `037` additively introduces the authorization-code redemption
+lifecycle and backfills existing active and consumed evidence without dropping
+the expand-window legacy tables.
 
 - **Substrate**: Postgres (the `node-postgres` reference distribution and any
   compatible operator deployment).

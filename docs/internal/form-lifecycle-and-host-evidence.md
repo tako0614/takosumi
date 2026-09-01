@@ -12,8 +12,9 @@ Takosumi does not publish, approve, or classify a Standard Form set. Takoform
 owns exact FormRef/package identity, package publication, conformance material,
 and the Proposal/Experimental/Stable/Legacy lifecycle. A hosted Form
 implementation, exact availability, activation, target/adapter evidence,
-principal audience, and backend lifecycle belong to Takosumi Cloud or another
-external Host. Takosumi OSS retains only generic contracts and migration
+principal audience, backend lifecycle, and provider credentials belong to
+Takoserver or another external Host. Takosumi Hosted may present retail/client
+composition but does not own managed supply. Takosumi OSS retains only generic contracts and migration
 evidence; it does not own a Form Registry or hosted Form lifecycle.
 
 Historical package/checkpoint artifacts are not a current Takosumi default or

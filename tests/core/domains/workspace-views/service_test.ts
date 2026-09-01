@@ -3,12 +3,14 @@ import type { Capsule } from "takosumi-contract/capsules";
 import type { ActorContext } from "takosumi-contract";
 import type { Page } from "takosumi-contract/pagination";
 import type { WorkspaceMember } from "takosumi-contract/workspaces";
-import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import type {
   ResolutionLockRecord,
   ResourceShapeRecord,
 } from "../../../../core/domains/resource-shape/records.ts";
-import { WorkspaceViewsService } from "../../../../core/domains/workspace-views/mod.ts";
+import {
+  WorkspaceViewsService,
+  type WorkspaceViewControlStore,
+} from "../../../../core/domains/workspace-views/mod.ts";
 
 const timestamp = "2026-08-03T00:00:00.000Z";
 
@@ -67,7 +69,7 @@ test("owner read resolves one control store and returns redacted live projection
     }),
     getWorkspaceMember: async () => undefined,
     listCapsulesPage: async () => ({ items: [capsule] }),
-  } as unknown as OpenTofuControlStore;
+  } satisfies WorkspaceViewControlStore;
   const service = new WorkspaceViewsService({
     controlStoreFactory: () => {
       factoryCalls += 1;
@@ -351,7 +353,7 @@ test("malformed, foreign, and wrong-version cursors use the typed cursor error",
 });
 
 test("concurrent view reads each retain one distinct factory result", async () => {
-  const stores: OpenTofuControlStore[] = [];
+  const stores: WorkspaceViewControlStore[] = [];
   const base = workspaceViewHarness({
     controlStoreFactory: () => {
       const store = workspaceViewControlStore();
@@ -404,7 +406,7 @@ interface HarnessOptions {
   readonly member?: WorkspaceMember;
   readonly resourceFailure?: Error;
   readonly afterDataRead?: () => void;
-  readonly controlStoreFactory?: () => OpenTofuControlStore;
+  readonly controlStoreFactory?: () => WorkspaceViewControlStore;
   readonly resourcePage?: (
     cursor: string | undefined,
   ) => Page<ResourceShapeRecord> | Promise<Page<ResourceShapeRecord>>;
@@ -519,8 +521,8 @@ function workspaceViewHarness(options: HarnessOptions = {}) {
 }
 
 function workspaceViewControlStore(
-  methods: Partial<OpenTofuControlStore> = {},
-): OpenTofuControlStore {
+  methods: Partial<WorkspaceViewControlStore> = {},
+): WorkspaceViewControlStore {
   return {
     getWorkspace: async () => ({
       id: "ws_1",
@@ -535,7 +537,7 @@ function workspaceViewControlStore(
       workspaceMember("member_1", ["viewer"], "active"),
     listCapsulesPage: async () => ({ items: [] }),
     ...methods,
-  } as unknown as OpenTofuControlStore;
+  };
 }
 
 function workspaceMember(

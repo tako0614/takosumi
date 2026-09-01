@@ -5,50 +5,16 @@ import {
 } from "../../../../core/domains/deploy-control/store.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import {
+  seedCapsule,
+  seedWorkspace,
+} from "./public_host_reservations_fixtures.ts";
 
 function stores(): readonly [string, OpenTofuControlStore][] {
   return [
     ["memory", new InMemoryOpenTofuControlStore()],
     ["d1", new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())],
   ];
-}
-
-async function seedWorkspace(
-  store: OpenTofuControlStore,
-  id: string,
-  ownerUserId: string,
-): Promise<void> {
-  await store.putWorkspace({
-    id,
-    handle: id.replaceAll("_", "-"),
-    displayName: id,
-    type: "personal",
-    ownerUserId,
-    createdAt: "2026-07-11T00:00:00.000Z",
-    updatedAt: "2026-07-11T00:00:00.000Z",
-  });
-}
-
-async function seedCapsule(
-  store: OpenTofuControlStore,
-  id: string,
-  workspaceId: string,
-  status: "pending" | "destroyed" = "pending",
-): Promise<void> {
-  await store.putCapsule({
-    id,
-    workspaceId,
-    projectId: `project_${workspaceId}`,
-    name: id,
-    slug: id,
-    sourceId: `source_${id}`,
-    installConfigId: `config_${id}`,
-    environment: "production",
-    currentStateGeneration: 0,
-    status,
-    createdAt: "2026-07-11T00:00:00.000Z",
-    updatedAt: "2026-07-11T00:00:00.000Z",
-  });
 }
 
 test("managed hostname vanity slots are owner-scoped while scoped names remain available", async () => {

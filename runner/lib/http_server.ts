@@ -31,6 +31,31 @@ import {
   runCompatibilityCheck,
 } from "./plan_apply.ts";
 import { classifyOpenTofuFailure } from "./exec.ts";
+import { readApplyProgress } from "./apply_progress.ts";
+
+// Run-slot ceiling for the standalone / in-process runner. The Cloudflare
+// profile bounds concurrency with the platform's container `max_instances`;
+// the self-host runner needs its own ceiling or a burst of installs launches
+// an unbounded number of tofu processes on one host. The refusal happens
+// BEFORE any work starts, which is what makes it safe for the control plane
+// to requeue (`capacity_exhausted` is a safe-mutating retry reason). The
+// message embeds the same phrase the Cloudflare classifier matches.
+const DEFAULT_MAX_CONCURRENT_RUNS = 10;
+let activeTofuRuns = 0;
+
+function maxConcurrentRuns(): number {
+  const raw = (globalThis as {
+    Bun?: { env: Record<string, string | undefined> };
+  }).Bun?.env.TAKOSUMI_RUNNER_MAX_CONCURRENT_RUNS?.trim();
+  if (!raw) return DEFAULT_MAX_CONCURRENT_RUNS;
+  const parsed = Number(raw);
+  // 0 is a deliberate drain mode: refuse every new run while in-flight work
+  // finishes (the control plane keeps them queued under its capacity budget).
+  return Number.isInteger(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_MAX_CONCURRENT_RUNS;
+}
+
 export async function handleRunnerRequest(request: Request): Promise<Response> {
   {
     const url = new URL(request.url);
@@ -52,6 +77,24 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
       /^\/runs\/([^/]+)\/source-archive\/restore$/.exec(url.pathname);
     const depStateRestoreMatch =
       /^\/runs\/([^/]+)\/deps\/([^/]+)\/restore$/.exec(url.pathname);
+    // Live apply progress, read while the run's own request is still blocked
+    // inside `tofu apply`. Read-only and cheap; absent for a run that is not
+    // applying (or whose output has not narrated a resource yet).
+    const progressMatch = /^\/runs\/([^/]+)\/progress$/.exec(url.pathname);
+    if (progressMatch) {
+      if (request.method !== "GET") {
+        return Response.json(
+          { error: "method not allowed" },
+          { status: 405, headers: { allow: "GET" } },
+        );
+      }
+      const runId = decodeURIComponent(progressMatch[1]!);
+      const progress = readApplyProgress(runId);
+      return Response.json(
+        progress ? { runId, progress } : { runId },
+        { status: 200 },
+      );
+    }
     if (depStateRestoreMatch) {
       return await handleDepStateRestoreRequest(
         decodeURIComponent(depStateRestoreMatch[1]!),
@@ -167,6 +210,26 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
       );
     }
 
+    // Only actions that actually execute provider work consume a run slot.
+    // Counting read-only preflight (compatibility_check) against the same
+    // ceiling let a burst of install checks refuse the applies they were
+    // checking for — the run then waits out the capacity budget and fails.
+    const consumesRunSlot =
+      action === "apply" || action === "destroy" || action === "plan";
+    const runSlotLimit = maxConcurrentRuns();
+    if (consumesRunSlot && activeTofuRuns >= runSlotLimit) {
+      return Response.json(
+        {
+          runId,
+          action,
+          errorCode: "capacity_exhausted",
+          error:
+            `Maximum number of running container instances exceeded: ${runSlotLimit} concurrent runs already executing. Try again later, or raise TAKOSUMI_RUNNER_MAX_CONCURRENT_RUNS`,
+        },
+        { status: 503, headers: { "retry-after": "30" } },
+      );
+    }
+    if (consumesRunSlot) activeTofuRuns += 1;
     try {
       const result =
         action === "compatibility_check"
@@ -200,6 +263,8 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
         },
         { status: 500 },
       );
+    } finally {
+      if (consumesRunSlot) activeTofuRuns -= 1;
     }
   }
 }

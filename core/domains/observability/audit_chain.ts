@@ -85,6 +85,18 @@ export async function verifyAuditHashChain(
   return { valid: true };
 }
 
+/** Recomputes ONE record's own hash (sequence + event + previousHash). */
+export async function verifyChainedRecordHash(
+  record: ChainedAuditEvent,
+): Promise<boolean> {
+  const expected = await hashAuditRecord({
+    sequence: record.sequence,
+    event: record.event,
+    previousHash: record.previousHash,
+  });
+  return record.hash === expected;
+}
+
 async function hashAuditRecord(input: {
   readonly sequence: number;
   readonly event: AuditEvent;

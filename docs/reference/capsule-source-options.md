@@ -13,7 +13,7 @@ https://<operator>/install?kind=capsule-source-options&git=<document-git-url>&pa
 - `ref` を指定した場合は、その値を通常の Git ref として exact source sync します。
 - `ref` を省略した場合、runner は `git ls-remote --tags` で最も新しい stable SemVer tag を解決します。`vX.Y.Z` と `X.Y.Z` だけを認め、prerelease、build metadata、HEAD、default branch、forge API へ fallback しません。同じ version に `vX.Y.Z` と `X.Y.Z` が両方ある場合は曖昧として失敗します。
 
-tag resolver は tag と immutable commit だけを返します。chooser は commit を Source sync に使うため、tag が後から動いても読み取る文書は変わりません。
+tag resolver は tag と変更不可の commit だけを返します。chooser は commit を Source sync に使うため、tag が後から動いても読み取る文書は変わりません。
 
 ## Closed document
 
@@ -48,14 +48,14 @@ tag resolver は tag と immutable commit だけを返します。chooser は co
 }
 ```
 
-`options` は 1〜32 件、`id` は文書内で一意です。root、metadata、option、source は closed object で、未知 field を拒否します。credential、provider config、region、pricing、capacity、Interface、dependency、policy、自動 install 宣言は含められません。選択した option の `ref` が省略されている場合も、同じ stable SemVer resolver で immutable commit に固定してから `/new` へ渡します。
+`options` は 1〜32 件、`id` は文書内で一意です。root、metadata、option、source は closed object で、未知 field を拒否します。credential、provider config、region、pricing、capacity、Interface、dependency、policy、自動 install 宣言は含められません。選択した option の `ref` が省略されている場合も、同じ stable SemVer resolver で変更不可の commit に固定してから `/new` へ渡します。
 
-## Immutable evidence and API
+## 変更不可の evidence と API
 
 chooser は Source sync で作った exact `SourceSnapshot` から 128 KiB 以下の regular UTF-8 JSON file を runner 境界で読み、次を表示します。
 
 - 文書の Git URL、要求 ref または解決 tag
-- immutable commit と file path
+- 変更不可の commit と file path
 - file の exact bytes に対する `sha256:` digest と byte size
 
 account session API は次の 2 endpoint を提供します。

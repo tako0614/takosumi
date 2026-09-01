@@ -18,6 +18,7 @@ import type {
   WorkspaceResourcesProjectionReader,
   WorkspaceResourceSummary,
 } from "./service.ts";
+import { throwIfAborted } from "./abort.ts";
 
 export class SqlWorkspaceResourcesProjectionReader
   implements WorkspaceResourcesProjectionReader
@@ -107,8 +108,4 @@ function workloadSql(hasCursor: boolean, limitIndex: number): string {
   where space_id = $1 and status <> 'destroyed'
     ${hasCursor ? "and (created_at > $2 or (created_at = $2 and id > $3))" : ""}
   order by created_at asc, id asc limit $${limitIndex}`;
-}
-
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
 }

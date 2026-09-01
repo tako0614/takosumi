@@ -107,8 +107,10 @@ export async function listAuthorizedUiSurfaces(
     params.set("capsuleId", normalizedCapsuleId);
   }
   const basePath = `/api/v1/workspaces/${encodeURIComponent(normalizedWorkspaceId)}/ui-surfaces`;
-  const interfaces: unknown[] = [];
+  const surfaces: AuthorizedUiSurface[] = [];
   const seenCursors = new Set<string>();
+  let parsingFailed = false;
+  let parseError: unknown;
   let cursor: string | undefined;
   for (let page = 0; page < MAX_UI_SURFACE_PAGES; page += 1) {
     const pageParams = new URLSearchParams(params);
@@ -118,35 +120,55 @@ export async function listAuthorizedUiSurfaces(
     if (!isRecord(body) || !Array.isArray(body.interfaces)) {
       throw new Error("UI surface list response is invalid");
     }
-    interfaces.push(...body.interfaces);
+    let nextCursor: string | undefined;
+    if (body.nextCursor !== undefined) {
+      if (
+        typeof body.nextCursor !== "string" ||
+        body.nextCursor.trim() === ""
+      ) {
+        throw new Error("UI surface list pagination cursor is invalid");
+      }
+      if (seenCursors.has(body.nextCursor)) {
+        throw new Error("UI surface list pagination cursor repeated");
+      }
+      nextCursor = body.nextCursor;
+    }
 
-    if (body.nextCursor === undefined) {
+    if (!parsingFailed) {
+      try {
+        for (const value of body.interfaces) {
+          const candidate = parseUiSurfaceInterface(
+            value,
+            normalizedWorkspaceId,
+          );
+          if (
+            candidate !== null &&
+            (normalizedCapsuleId === undefined ||
+              candidate.capsuleId === normalizedCapsuleId)
+          ) {
+            surfaces.push(stripInterface(candidate));
+          }
+        }
+      } catch (error) {
+        // Fetch and validate every cursor before surfacing a parser failure,
+        // matching the previous all-pages-then-parse error precedence.
+        parsingFailed = true;
+        parseError = error;
+      }
+    }
+
+    if (nextCursor === undefined) {
       cursor = undefined;
       break;
     }
-    if (typeof body.nextCursor !== "string" || body.nextCursor.trim() === "") {
-      throw new Error("UI surface list pagination cursor is invalid");
-    }
-    if (seenCursors.has(body.nextCursor)) {
-      throw new Error("UI surface list pagination cursor repeated");
-    }
-    seenCursors.add(body.nextCursor);
-    cursor = body.nextCursor;
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
   }
   if (cursor !== undefined) {
     throw new Error("UI surface list pagination exceeded its safety limit");
   }
-
-  const candidates = interfaces
-    .map((value) => parseUiSurfaceInterface(value, normalizedWorkspaceId))
-    .filter(
-      (value): value is UiSurfaceCandidate =>
-        value !== null &&
-        (normalizedCapsuleId === undefined ||
-          value.capsuleId === normalizedCapsuleId),
-    );
-
-  return candidates.map(stripInterface).sort(compareAuthorizedUiSurfaces);
+  if (parsingFailed) throw parseError;
+  return surfaces.sort(compareAuthorizedUiSurfaces);
 }
 
 export function parseUiSurfaceInterface(

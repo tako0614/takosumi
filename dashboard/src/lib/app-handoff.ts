@@ -51,7 +51,7 @@ export function appHandoffProductLabel(product: string): string {
  * hand-crafted `/install?handoff=<benign>&auto=1&tcsBase=…&tcsListing=…` link
  * cannot smuggle the auto-install trigger past the prefill-only gate. Capsule-
  * only: no `kind`, so it always lands on `/new`. Invalid payloads fall back to a
- * bare `/new`. Spec: docs/integration/remote-install.md.
+ * bare `/new`. Spec: docs/reference/app-handoff.md.
  */
 export function installHandoffTarget(handoff: string): string {
   const fields = parseTakosumiAppInstallScheme(handoff);

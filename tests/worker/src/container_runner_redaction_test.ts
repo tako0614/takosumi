@@ -39,7 +39,10 @@ test("container runner redacts stderr before plan diagnostics are returned", asy
   expect(diagnostics).not.toContain("diag-aws-secret");
   expect(diagnostics).not.toContain("diag-db-pass");
   expect(diagnostics).not.toContain("diag-auth");
-  expect(diagnostics).toContain("runner_diagnostics_redacted");
+  // The diagnostic now CARRIES the runner text (erasing it made a failed
+  // install impossible to diagnose); every secret above is still redacted.
+  expect(diagnostics).toContain("runner_diagnostics");
+  expect(diagnostics).toContain("[redacted]");
 });
 
 test("container runner returns provider installation attestation from plan result", async () => {
@@ -399,7 +402,10 @@ test("container runner redacts stderr before apply diagnostics are returned", as
   const diagnostics = JSON.stringify(result.diagnostics);
   expect(diagnostics).not.toContain("apply-diag-password");
   expect(diagnostics).not.toContain("apply-diag-auth");
-  expect(diagnostics).toContain("runner_diagnostics_redacted");
+  // The diagnostic now CARRIES the runner text (erasing it made a failed
+  // install impossible to diagnose); every secret above is still redacted.
+  expect(diagnostics).toContain("runner_diagnostics");
+  expect(diagnostics).toContain("[redacted]");
 });
 
 test("container runner surfaces non-2xx apply stderr instead of raw JSON envelope", async () => {
@@ -1009,3 +1015,110 @@ function envStalling(
     },
   } as unknown as CloudflareWorkerEnv;
 }
+
+test("a plain OpenTofu failure reaches the run ledger so the user can fix it", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning({
+      planDigest: PLAN_DIGEST,
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_cause/tfplan",
+        digest: PLAN_DIGEST,
+      },
+      stderr:
+        'Error: Missing required argument\n\n  on main.tf line 3, in module "child":\n' +
+        '   3:   source = "./module"\n\n' +
+        'The argument "db_password" is required, but no definition was found.',
+    }),
+  );
+
+  const result = await runner.plan({
+    planRun: { id: "plan_cause" },
+  } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+
+  const detail = result.diagnostics?.find(
+    (entry) => entry.code === "runner_diagnostics",
+  )?.detail;
+  // This is the whole point: the name of the missing input survives.
+  expect(detail).toContain("db_password");
+  expect(detail).toContain("Missing required argument");
+});
+
+test("a runaway runner log is bounded before it enters the ledger", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning({
+      planDigest: PLAN_DIGEST,
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_flood/tfplan",
+        digest: PLAN_DIGEST,
+      },
+      stderr: `${"noise\n".repeat(20_000)}Error: the actual cause`,
+    }),
+  );
+
+  const result = await runner.plan({
+    planRun: { id: "plan_flood" },
+  } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+
+  const detail =
+    result.diagnostics?.find((entry) => entry.code === "runner_diagnostics")
+      ?.detail ?? "";
+  expect(detail.length).toBeLessThanOrEqual(4_100);
+  // The tail is kept, because that is where the error is.
+  expect(detail).toContain("Error: the actual cause");
+});
+
+test("minted credential VALUES are redacted from run diagnostics, not just patterns", async () => {
+  const secret = "s3cr3t-value-with-no-recognizable-shape";
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning({
+      planDigest: PLAN_DIGEST,
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_values/tfplan",
+        digest: PLAN_DIGEST,
+      },
+      // No `KEY=` shape, no Bearer prefix: pattern redaction cannot catch it.
+      stderr: `Error: provider rejected the call using ${secret} at line 3`,
+    }),
+  );
+
+  const result = await runner.plan({
+    planRun: { id: "plan_values" },
+    credentials: { env: { CLOUDFLARE_API_TOKEN: secret }, manifest: {} },
+  } as unknown as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+
+  const diagnostics = JSON.stringify(result.diagnostics);
+  expect(diagnostics).not.toContain(secret);
+  expect(diagnostics).toContain("[redacted]");
+  // The rest of the message still survives so the failure stays diagnosable.
+  expect(diagnostics).toContain("provider rejected the call");
+});
+
+test("a profile that requires redacted logs carries no runner text at all", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning({
+      planDigest: PLAN_DIGEST,
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_withheld/tfplan",
+        digest: PLAN_DIGEST,
+      },
+      stderr: "Error: something the operator policy will not publish",
+    }),
+  );
+
+  const result = await runner.plan({
+    planRun: { id: "plan_withheld" },
+    runnerProfile: { secretExposurePolicy: { redactLogs: true } },
+  } as unknown as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+
+  const withheld = result.diagnostics?.find(
+    (entry) => entry.code === "runner_diagnostics_withheld",
+  );
+  expect(withheld).toBeDefined();
+  expect(JSON.stringify(result.diagnostics)).not.toContain(
+    "will not publish",
+  );
+});

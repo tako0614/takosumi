@@ -1,6 +1,15 @@
-# Takosumi Account Plane — Bun + Postgres substrate
+# Takosumi — Bun + Postgres self-host profile
 
-Substrate-neutral counterpart to `deploy/accounts-cloudflare/`. The account-plane handler runs on Bun against a Postgres database, fronted by Caddy for TLS. Use this when the composed Takosumi origin is hosted on a VM, container host, or Kubernetes pod instead of Cloudflare.
+The composed Takosumi service (control plane + dashboard + accounts) running on
+Bun against Postgres, with the bundled `opentofu-runner` container executing
+plan / apply and Caddy terminating TLS. Use this when the Takosumi origin is
+hosted on a VM, container host, or Kubernetes pod instead of Cloudflare. The
+end-to-end walkthrough lives in `docs/concepts/self-host.md`; the operations
+guide (upgrade / backup / troubleshooting) in `docs/self-host/`.
+
+Runtime data (source archives + sealed OpenTofu state) persists in the
+`takosumi-runtime` volume at `/var/lib/takosumi` — include it in backups; the
+runner is compose-network-only and requires `TAKOSUMI_RUNNER_SHARED_TOKEN`.
 
 The handler is the same `createAccountsHandler` mounted in the platform worker. Only the substrate plumbing differs:
 

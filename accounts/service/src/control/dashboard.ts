@@ -409,9 +409,10 @@ async function listDashboardNotifications(
       ].slice(0, DASHBOARD_NOTIFICATION_WORKSPACE_LIMIT)
     : recent;
   if (candidates.length === 0) return [];
-  const handles = new Map(
-    candidates.map((workspace) => [workspace.id, workspace.handle]),
-  );
+  const handles = new Map<string, string>();
+  for (const workspace of candidates) {
+    handles.set(workspace.id, workspace.handle);
+  }
   const deadline = Date.now() + DASHBOARD_OPTIONAL_PROJECTION_TIMEOUT_MS;
   const events = await optionalDashboardProjection(
     operations.activity.listAcrossWorkspaces(
@@ -422,13 +423,14 @@ async function listDashboardNotifications(
     remainingDashboardProjectionMs(deadline),
   );
   if (events.length === 0) return [];
-  const capsuleIds = [
-    ...new Set(
-      events
-        .map(dashboardActivityCapsuleId)
-        .filter((id): id is string => id !== undefined),
-    ),
-  ];
+  const capsuleIds: string[] = [];
+  const seenCapsuleIds = new Set<string>();
+  for (const event of events) {
+    const capsuleId = dashboardActivityCapsuleId(event);
+    if (capsuleId === undefined || seenCapsuleIds.has(capsuleId)) continue;
+    seenCapsuleIds.add(capsuleId);
+    capsuleIds.push(capsuleId);
+  }
   const remainingMs = remainingDashboardProjectionMs(deadline);
   const capsules =
     capsuleIds.length === 0 || remainingMs === 0
@@ -438,9 +440,10 @@ async function listDashboardNotifications(
           [],
           remainingMs,
         );
-  const capsulesById = new Map(
-    capsules.map((capsule) => [capsule.id, capsule] as const),
-  );
+  const capsulesById = new Map<string, Capsule>();
+  for (const capsule of capsules) {
+    capsulesById.set(capsule.id, capsule);
+  }
   return events.map((event) => ({
     event: compactDashboardActivityEvent(
       event,

@@ -16,7 +16,7 @@ import type {
   PolicyDecision,
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
-import { evaluateProviderAllowlist, providerMatches } from "takosumi-policy";
+import { evaluateProviderAllowlist } from "takosumi-policy";
 
 export function evaluatePolicy(input: {
   readonly profile: RunnerProfile;

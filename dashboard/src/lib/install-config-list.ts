@@ -4,6 +4,7 @@ import {
   type InstallConfig,
   type InstallConfigView,
 } from "./control-api.ts";
+import { clearWorkspaceCache, isFreshCacheEntry } from "./cache.ts";
 
 export { STORE_VIEW };
 
@@ -24,25 +25,8 @@ function cacheKey(
   return `${workspaceId ?? ""}:${options.view ?? "all"}`;
 }
 
-function fresh(
-  entry: CacheEntry | undefined,
-  now = Date.now(),
-): entry is CacheEntry {
-  return entry !== undefined && now - entry.cachedAt < CACHE_TTL_MS;
-}
-
 export function clearInstallConfigListCache(workspaceId?: string): void {
-  if (!workspaceId) {
-    cache.clear();
-    inflight.clear();
-    return;
-  }
-  for (const key of [...cache.keys()]) {
-    if (key.startsWith(`${workspaceId}:`)) cache.delete(key);
-  }
-  for (const key of [...inflight.keys()]) {
-    if (key.startsWith(`${workspaceId}:`)) inflight.delete(key);
-  }
+  clearWorkspaceCache(cache, inflight, workspaceId);
 }
 
 export function primeInstallConfigListCache(
@@ -65,7 +49,9 @@ export async function listInstallConfigsCached(
 ): Promise<readonly InstallConfig[]> {
   const key = cacheKey(workspaceId, options);
   const current = cache.get(key);
-  if (!options.force && fresh(current)) return current.installConfigs;
+  if (!options.force && isFreshCacheEntry(current, CACHE_TTL_MS)) {
+    return current.installConfigs;
+  }
   const currentInflight = inflight.get(key);
   if (!options.force && currentInflight) return currentInflight;
 

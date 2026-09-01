@@ -92,23 +92,6 @@ export function optionalIntegerOption(
   return parsed;
 }
 
-export function optionalNonNegativeIntegerOption(
-  options: Record<string, string | boolean>,
-  key: string,
-): number | undefined {
-  const value = options[key];
-  if (value === undefined || value === false) return undefined;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    const flagName = key.replace(
-      /[A-Z]/g,
-      (letter) => `-${letter.toLowerCase()}`,
-    );
-    throw new TypeError(`--${flagName} must be a non-negative integer`);
-  }
-  return parsed;
-}
-
 export function optionalNonNegativeIntegerStrictOption(
   options: Record<string, string | boolean>,
   key: string,

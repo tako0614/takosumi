@@ -7,6 +7,14 @@ Takosumi は、Git に置いた OpenTofu / Terraform module を、**計画 → �
 module や provider はそのまま使います。Takosumi 専用の設定言語はありません。
 Takosumi は first-party Terraform/OpenTofu provider を同梱しません。
 
+通常の BYOC では Workspace/customer が vendor account と credential、作成される resource
+を所有します。実行は `ProviderConnection → CredentialRecipe → ProviderBinding →
+run-scoped runner materialization → standard OpenTofu provider → customer-owned resource`
+の順です。managed supply を選ぶ場合は external Takoserver Takoform Host を通常の
+provider として接続しますが、Takosumi は Takoserver の親 provider credential、provider
+installation、backend、capacity、WfP namespace/dispatcher/native identity、managed
+Offering を受け取りません。
+
 ## Takosumi を使う理由
 
 ### 確認した変更だけを反映する
@@ -78,8 +86,12 @@ dashboard、サインイン、永続データベース、OpenTofu runner を含�
   [API](./reference/api.md) / [CLI](./reference/cli.md) /
   [設定](./reference/configuration.md)
 
-旧 Resource Shape / Form Host API の資料は [Resource の移行メモ](./concepts/resources.md)
-にまとめています。新しい authoring surface ではありません。
+旧 Resource Shape / Form Host API と Generic Offering の資料は [Resource の移行メモ](./concepts/resources.md)
+にまとめています。現存する route / store は legacy/operator-only の implementation
+conformance gap であり、新しい authoring surface ではありません。managed Offering は
+Takoserver が所有します。
 
-公式ホスティングの料金、hosted service、サポートは
-[Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)にあります。
+Takosumi Cloud は退役した historical identity です。`app.takosumi.com` の availability、
+pricing、SLA、support 文書は current authority ではありません。retail、commerce、client
+composition の現行 hosted docs は Takosumi Hosted が公開し、managed supply は Takoserver が
+所有します。

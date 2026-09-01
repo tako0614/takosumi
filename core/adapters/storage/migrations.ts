@@ -42,12 +42,33 @@ export interface StorageMigrationStatement {
    *     this migration added);
    *   - operate only on disposable fixture data;
    *   - be idempotent (`drop table if exists`, `drop column if exists`).
-   * This field remains part of the immutable migration checksum, so released
-   * entries cannot be rewritten merely because production down authority was
-   * removed.
+   * This field is editorial: it never reaches a protected database and is
+   * excluded from the canonical migration checksum, so it can be added,
+   * corrected, or removed without invalidating an applied ledger.
    */
   readonly down?: string;
 }
+
+/**
+ * A released migration that was later removed from the catalog on purpose.
+ *
+ * Migration history is append-only in the ledger, but the catalog is code:
+ * without this record, deleting an entry would make every database that ran
+ * it permanently unbootable. Declaring the retirement keeps those ledger rows
+ * valid while the id and version stay burned forever.
+ *
+ * Retire a migration only when a fresh database no longer needs it — that is,
+ * when no later migration depends on the shape it produced.
+ */
+export interface RetiredStorageMigration {
+  readonly id: string;
+  readonly version: number;
+  /** Why the entry left the catalog; kept for operators reading a ledger. */
+  readonly reason: string;
+}
+
+export const retiredStorageMigrations: readonly RetiredStorageMigration[] =
+  Object.freeze([]);
 
 export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] =
   Object.freeze([
@@ -546,6 +567,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "heartbeat_at",
         "created_at",
         "run_json",
+        "billing_capture_pending",
       ],
       primaryKey: ["id"],
       indexes: [
@@ -556,7 +578,44 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         ["installation_id"],
         ["installation_id", "created_at"],
         ["created_at"],
+        ["status", "kind", "created_at"],
       ],
+    },
+    {
+      // Durable scheduled-intent queue drained by the cron/scheduler lane
+      // (deferred Capsule destroys, bounded auto-replans). Repair itself stays
+      // ledger-derived; these rows carry intent not derivable from the ledger.
+      name: "takosumi_control_work_items",
+      domain: "deploy",
+      columns: [
+        "id",
+        "kind",
+        "dedupe_key",
+        "workspace_id",
+        "capsule_id",
+        "run_id",
+        "due_at",
+        "priority",
+        "attempts",
+        "max_attempts",
+        "status",
+        "locked_until",
+        "locked_by",
+        "payload_json",
+        "last_error",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      indexes: [["status", "due_at"], ["kind"]],
+    },
+    {
+      // Durable rotation cursors so the scheduled sweeps resume where the
+      // previous tick stopped instead of re-reading the oldest rows forever.
+      name: "takosumi_control_sweep_cursors",
+      domain: "deploy",
+      columns: ["sweep_name", "cursor", "updated_at"],
+      primaryKey: ["sweep_name"],
     },
     {
       // §30 artifact ledger (R2 pointer metadata for plan / state archives).
@@ -4666,5 +4725,94 @@ drop function if exists takosumi_bump_capsule_execution_authority_epoch();
 drop index if exists takosumi_capsules_execution_authority_exact_idx;
 alter table takosumi_capsules
   drop column if exists execution_authority_epoch;`,
+    },
+    {
+      id: "deploy.recovery_lane_backlog_columns.add",
+      version: 109,
+      domain: "deploy",
+      description:
+        "Add the write-time billing_capture_pending projection to runs (backfilled once from run_json audit events) with a partial backlog index and a (status, kind, created_at) sweep index, plus the durable control_work_items scheduled-intent queue (live dedupe unique index) and control_sweep_cursors rotation cursors for the scheduled sweeps.",
+      sql: `alter table takosumi_runs
+  add column if not exists billing_capture_pending integer;
+update takosumi_runs set billing_capture_pending = 1
+  where kind in ('apply', 'destroy_apply')
+    and status in ('succeeded', 'failed')
+    and exists (
+      select 1 from jsonb_array_elements(
+        coalesce(run_json -> 'auditEvents', '[]'::jsonb)
+      ) as e
+      where e ->> 'type' = 'billing.capture.pending'
+    )
+    and not exists (
+      select 1 from jsonb_array_elements(
+        coalesce(run_json -> 'auditEvents', '[]'::jsonb)
+      ) as e
+      where e ->> 'type' = 'billing.capture.completed'
+    );
+create index if not exists takosumi_runs_billing_capture_pending_idx
+  on takosumi_runs (billing_capture_pending)
+  where billing_capture_pending = 1;
+create index if not exists takosumi_runs_status_kind_created_idx
+  on takosumi_runs (status, kind, created_at);
+create table if not exists takosumi_control_work_items (
+  id           text primary key,
+  kind         text not null,
+  dedupe_key   text,
+  workspace_id text,
+  capsule_id   text,
+  run_id       text,
+  due_at       text not null,
+  priority     integer not null default 0,
+  attempts     integer not null default 0,
+  max_attempts integer not null default 5,
+  status       text not null default 'pending'
+    check (status in ('pending', 'leased', 'done', 'dead')),
+  locked_until text,
+  locked_by    text,
+  payload_json jsonb,
+  last_error   text,
+  created_at   text not null,
+  updated_at   text not null
+);
+create index if not exists takosumi_control_work_items_due_idx
+  on takosumi_control_work_items (status, due_at);
+create index if not exists takosumi_control_work_items_kind_idx
+  on takosumi_control_work_items (kind);
+create unique index if not exists takosumi_control_work_items_dedupe_unique
+  on takosumi_control_work_items (kind, dedupe_key)
+  where dedupe_key is not null and status in ('pending', 'leased');
+create table if not exists takosumi_control_sweep_cursors (
+  sweep_name text primary key,
+  cursor     text,
+  updated_at text not null
+);`,
+      down: `drop table if exists takosumi_control_sweep_cursors;
+drop index if exists takosumi_control_work_items_dedupe_unique;
+drop index if exists takosumi_control_work_items_kind_idx;
+drop index if exists takosumi_control_work_items_due_idx;
+drop table if exists takosumi_control_work_items;
+drop index if exists takosumi_runs_status_kind_created_idx;
+drop index if exists takosumi_runs_billing_capture_pending_idx;
+alter table takosumi_runs
+  drop column if exists billing_capture_pending;`,
+    },
+    {
+      id: "deploy.capsule_status_uninstalled.add",
+      version: 110,
+      domain: "deploy",
+      description:
+        "Admit the two-phase uninstall grace status 'uninstalled' into the Capsule status CHECK. The constraint kept its auto-generated pre-rename name (the v35 create ran against takosumi_opentofu_installations and PostgreSQL does not rename constraints with the table); both spellings are dropped defensively before the widened constraint is re-added.",
+      sql: `alter table takosumi_capsules
+  drop constraint if exists takosumi_opentofu_installations_status_check;
+alter table takosumi_capsules
+  drop constraint if exists takosumi_capsules_status_check;
+alter table takosumi_capsules
+  add constraint takosumi_capsules_status_check
+    check (status in ('pending','active','stale','error','disabled','uninstalled','destroyed'));`,
+      down: `alter table takosumi_capsules
+  drop constraint if exists takosumi_capsules_status_check;
+alter table takosumi_capsules
+  add constraint takosumi_capsules_status_check
+    check (status in ('pending','active','stale','error','disabled','destroyed'));`,
     },
   ]);

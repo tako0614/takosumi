@@ -1,17 +1,15 @@
-// F30: persistent OIDC refresh-token rotation chain and authorization
-// code consumption tracking. Free-function module that the
-// PostgresAccountsStore delegates to; mirrors the layout of
-// `postgres/tokens.ts` and friends.
+// Persistent OIDC refresh-token rotation-chain operations and bounded
+// retention for both legacy code evidence and the current redemption
+// lifecycle. Free-function module that PostgresAccountsStore delegates to.
 //
 // All token / code values are hashed (sha256:base64url) before they
 // reach the database so a read-only leak yields no raw tokens or codes.
 // See migrations/019_refresh_chain.sql for the table shapes.
 //
-// Design note: the chain tables store hashes, so the store-side cascade
-// revoke methods perform the OAuth-table DELETE internally (against the
-// recorded hashes) rather than returning raw tokens to the caller.
-// The returned arrays carry token-hash identifiers and are intended
-// for diagnostics / test assertions only.
+// Design note: the chain tables store hashes, so store-side cascade revoke
+// performs OAuth-table DELETEs internally. Authorization-code replay is owned
+// atomically by postgres/tokens.ts; the historical evidence tables remain
+// here only as expand-window retention phases.
 
 import { eq, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
@@ -51,21 +49,6 @@ const revokedRefreshRoots = accountsV1.table("revoked_refresh_roots", {
   revokedAt: timestamp("revoked_at", { withTimezone: true }).notNull(),
 });
 
-const consumedAuthorizationCodes = accountsV1.table(
-  "consumed_authorization_codes",
-  {
-    codeHash: text("code_hash").primaryKey(),
-    consumedAt: timestamp("consumed_at", { withTimezone: true }).notNull(),
-  },
-);
-
-const authCodeTokenLinks = accountsV1.table("auth_code_token_links", {
-  codeHash: text("code_hash").notNull(),
-  accessTokenHash: text("access_token_hash").notNull(),
-  refreshRootHash: text("refresh_root_hash").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
-});
-
 const refreshChainAccessTokens = accountsV1.table(
   "refresh_chain_access_tokens",
   {
@@ -87,8 +70,6 @@ const db = drizzle(async () => ({ rows: [] }), {
   schema: {
     refreshChainLinks,
     revokedRefreshRoots,
-    consumedAuthorizationCodes,
-    authCodeTokenLinks,
     refreshChainAccessTokens,
     oauthAccessTokens,
     oauthRefreshTokens,
@@ -283,136 +264,46 @@ export async function isRefreshRootRevoked(
   token: string,
 ): Promise<boolean> {
   const presentedHash = await hashSecret(token);
-  const rootHash = await resolveRootHash(client, presentedHash);
-  const revoked = await runDrizzleFirst<{ root_token_hash: string }>(
-    client,
-    db
-      .select({ root_token_hash: revokedRefreshRoots.rootTokenHash })
-      .from(revokedRefreshRoots)
-      .where(eq(revokedRefreshRoots.rootTokenHash, rootHash)),
-  );
-  return revoked !== undefined;
-}
-
-export async function markAuthorizationCodeConsumed(
-  client: PostgresQueryClient,
-  code: string,
-): Promise<void> {
-  const codeHash = await hashSecret(code);
-  await runDrizzle(
-    client,
-    db
-      .insert(consumedAuthorizationCodes)
-      .values({ codeHash, consumedAt: toDate(Date.now()) })
-      .onConflictDoNothing({ target: consumedAuthorizationCodes.codeHash }),
-  );
-}
-
-export async function isAuthorizationCodeConsumed(
-  client: PostgresQueryClient,
-  code: string,
-): Promise<boolean> {
-  const codeHash = await hashSecret(code);
-  const row = await runDrizzleFirst<{ code_hash: string }>(
-    client,
-    db
-      .select({ code_hash: consumedAuthorizationCodes.codeHash })
-      .from(consumedAuthorizationCodes)
-      .where(eq(consumedAuthorizationCodes.codeHash, codeHash)),
-  );
-  return row !== undefined;
-}
-
-export async function linkAccessTokenToAuthCode(
-  client: PostgresQueryClient,
-  code: string,
-  accessToken: string,
-  refreshTokenRoot?: string,
-): Promise<void> {
-  const codeHash = await hashSecret(code);
-  const accessHash = await hashSecret(accessToken);
-  // Absent refresh root is stored as the empty-string sentinel '', NOT NULL.
-  // refresh_root_hash is part of the PRIMARY KEY (migration 021) and Postgres
-  // forbids NULL in any PK column, so the no-offline_access case must use the
-  // same '' sentinel the D1 store uses.
-  const refreshRootHash =
-    refreshTokenRoot === undefined ? "" : await hashSecret(refreshTokenRoot);
-  await runDrizzle(
-    client,
-    db
-      .insert(authCodeTokenLinks)
-      .values({
-        codeHash,
-        accessTokenHash: accessHash,
-        refreshRootHash,
-        createdAt: toDate(Date.now()),
-      })
-      .onConflictDoNothing({
-        target: [
-          authCodeTokenLinks.codeHash,
-          authCodeTokenLinks.accessTokenHash,
-          authCodeTokenLinks.refreshRootHash,
-        ],
-      }),
-  );
-}
-
-export async function revokeTokensIssuedFromCode(
-  client: PostgresQueryClient,
-  code: string,
-): Promise<{ access: readonly string[]; refresh: readonly string[] }> {
-  const codeHash = await hashSecret(code);
-  const rows = await runDrizzleRows<{
-    access_token_hash: string;
-    refresh_root_hash: string;
-  }>(
-    client,
-    db
-      .select({
-        access_token_hash: authCodeTokenLinks.accessTokenHash,
-        refresh_root_hash: authCodeTokenLinks.refreshRootHash,
-      })
-      .from(authCodeTokenLinks)
-      .where(eq(authCodeTokenLinks.codeHash, codeHash)),
-  );
-  const accessHashes = new Set<string>();
-  const refreshRootHashes = new Set<string>();
-  for (const row of rows) {
-    // '' is the absent-value sentinel (migration 021), so a real hash is any
-    // non-empty value. Skip the sentinel for both columns.
-    if (row.access_token_hash !== "") accessHashes.add(row.access_token_hash);
-    if (row.refresh_root_hash !== "") {
-      refreshRootHashes.add(row.refresh_root_hash);
-    }
+  if (!client.transaction) {
+    throw new Error(
+      "Postgres refresh-root replay fence requires a pinned transaction",
+    );
   }
-  for (const hash of accessHashes) {
-    await deleteAccessTokenHash(client, hash);
-  }
-  for (const rootHash of refreshRootHashes) {
-    await revokeRefreshChainByRootHash(client, rootHash);
-  }
-  return {
-    access: [...accessHashes],
-    refresh: [...refreshRootHashes],
-  };
-}
-
-/**
- * Internal cascade-revoke helper for the case where the caller already
- * holds the root token's hash (e.g. derived from
- * `auth_code_token_links.refresh_root_hash`). Symmetric to
- * `revokeRefreshChain` but skips the input hashing step.
- */
-async function revokeRefreshChainByRootHash(
-  client: PostgresQueryClient,
-  rootHash: string,
-): Promise<void> {
-  await markRefreshRootRevoked(client, rootHash);
-  const hashes = await chainRefreshHashes(client, rootHash);
-  for (const hash of hashes) {
-    await deleteRefreshTokenHash(client, hash);
-  }
-  await cascadeRevokeChainAccessTokens(client, rootHash);
+  return await client.transaction(async (transaction) => {
+    const rootHash = await resolveRootHash(transaction, presentedHash);
+    // Authorization-code replay locks its lifecycle row before it writes the
+    // revoked marker and deletes descendants. Lock the same row before the
+    // refresh route's final marker check. Under PostgreSQL READ COMMITTED this
+    // makes an in-flight replay commit (or roll back) before we decide whether
+    // late rotation writes may be returned; a plain marker SELECT cannot see
+    // an uncommitted replay and is therefore not a sufficient fence.
+    const lifecycleRows = (
+      await runQuery<{ readonly state: string }>(
+        transaction,
+        `SELECT redemption.state
+           FROM accounts_v1.authorization_code_redemptions AS redemption
+          WHERE redemption.refresh_token_hash = $1
+             OR EXISTS (
+               SELECT 1
+                 FROM accounts_v1.auth_code_token_links AS link
+                WHERE link.code_hash = redemption.code_hash
+                  AND NULLIF(link.refresh_root_hash, '') = $1
+             )
+          ORDER BY redemption.code_hash
+          FOR UPDATE`,
+        [rootHash],
+      )
+    ).rows;
+    if (lifecycleRows.some((row) => row.state === "replayed")) return true;
+    const revoked = await runDrizzleFirst<{ root_token_hash: string }>(
+      transaction,
+      db
+        .select({ root_token_hash: revokedRefreshRoots.rootTokenHash })
+        .from(revokedRefreshRoots)
+        .where(eq(revokedRefreshRoots.rootTokenHash, rootHash)),
+    );
+    return revoked !== undefined;
+  });
 }
 
 async function markRefreshRootRevoked(
@@ -453,6 +344,7 @@ interface RetentionKeyRow {
   readonly key_a: string;
   readonly key_b?: string;
   readonly key_c?: string;
+  readonly record_version?: string;
 }
 
 /**
@@ -471,7 +363,7 @@ export async function pruneRefreshChainPage(
   }
   const after = decodePostgresRetentionCursor(input.cursor?.after);
   const cutoff =
-    phase === "consumed_codes" || phase === "auth_code_token_links"
+    phase === "consumed_codes"
       ? toDate(input.consumedCodeBefore)
       : toDate(input.chainBefore);
   const rows = await selectRetentionCandidates(
@@ -483,7 +375,7 @@ export async function pruneRefreshChainPage(
   );
   const counts = emptyRefreshChainPruneResult();
   for (const row of rows) {
-    const deleted = await deleteRetentionCandidate(client, phase, row);
+    const deleted = await deleteRetentionCandidate(client, phase, row, cutoff);
     if (deleted) incrementRetentionCount(counts, phase);
   }
   const last = rows.at(-1);
@@ -540,13 +432,7 @@ async function selectRetentionCandidates(
                 ($2, $3, $4)
           ORDER BY created_at, root_token_hash, access_token_hash
           LIMIT $5`,
-        [
-          cutoff,
-          after.at,
-          after.keys[0] ?? "",
-          after.keys[1] ?? "",
-          limit,
-        ],
+        [cutoff, after.at, after.keys[0] ?? "", after.keys[1] ?? "", limit],
       )
     ).rows;
   }
@@ -568,35 +454,83 @@ async function selectRetentionCandidates(
     return (
       await runQuery<RetentionKeyRow>(
         client,
-        `SELECT consumed_at AS retention_at, code_hash AS key_a
-           FROM accounts_v1.consumed_authorization_codes
-          WHERE consumed_at <= $1
-            AND (consumed_at, code_hash) > ($2, $3)
-          ORDER BY consumed_at, code_hash
+        `SELECT consumed.consumed_at AS retention_at,
+                consumed.code_hash AS key_a
+           FROM accounts_v1.consumed_authorization_codes AS consumed
+          WHERE consumed.consumed_at <= $1
+            AND NOT EXISTS (
+              SELECT 1
+                FROM accounts_v1.authorization_code_redemptions AS redemption
+               WHERE redemption.code_hash = consumed.code_hash
+            )
+            AND (consumed.consumed_at, consumed.code_hash) > ($2, $3)
+          ORDER BY consumed.consumed_at, consumed.code_hash
           LIMIT $4`,
         [cutoff, after.at, after.keys[0] ?? "", limit],
+      )
+    ).rows;
+  }
+  if (phase === "auth_code_token_links") {
+    return (
+      await runQuery<RetentionKeyRow>(
+        client,
+        `SELECT auth_link.created_at AS retention_at,
+                auth_link.code_hash AS key_a,
+                auth_link.access_token_hash AS key_b,
+                auth_link.refresh_root_hash AS key_c
+           FROM accounts_v1.auth_code_token_links AS auth_link
+          WHERE auth_link.created_at <= $1
+            AND NOT EXISTS (
+              SELECT 1
+                FROM accounts_v1.authorization_code_redemptions AS redemption
+               WHERE redemption.code_hash = auth_link.code_hash
+            )
+            AND (auth_link.created_at, auth_link.code_hash,
+                 auth_link.access_token_hash, auth_link.refresh_root_hash) >
+                ($2, $3, $4, $5)
+          ORDER BY auth_link.created_at, auth_link.code_hash,
+                   auth_link.access_token_hash, auth_link.refresh_root_hash
+          LIMIT $6`,
+        [
+          cutoff,
+          after.at,
+          after.keys[0] ?? "",
+          after.keys[1] ?? "",
+          after.keys[2] ?? "",
+          limit,
+        ],
       )
     ).rows;
   }
   return (
     await runQuery<RetentionKeyRow>(
       client,
-      `SELECT created_at AS retention_at, code_hash AS key_a,
-              access_token_hash AS key_b, refresh_root_hash AS key_c
-         FROM accounts_v1.auth_code_token_links
-        WHERE created_at <= $1
-          AND (created_at, code_hash, access_token_hash, refresh_root_hash) >
-              ($2, $3, $4, $5)
-        ORDER BY created_at, code_hash, access_token_hash, refresh_root_hash
-        LIMIT $6`,
-      [
-        cutoff,
-        after.at,
-        after.keys[0] ?? "",
-        after.keys[1] ?? "",
-        after.keys[2] ?? "",
-        limit,
-      ],
+      `SELECT COALESCE(replayed_at, issued_at) AS retention_at,
+              code_hash AS key_a, record_version
+         FROM accounts_v1.authorization_code_redemptions AS redemption
+        WHERE redemption.state IN ('issued', 'replayed')
+          AND COALESCE(redemption.replayed_at, redemption.issued_at) <= $1
+          AND NOT EXISTS (
+            SELECT 1
+             FROM accounts_v1.refresh_chain_links AS chain
+             WHERE chain.created_at > $1
+               AND (
+                 chain.root_token_hash = redemption.refresh_token_hash
+                 OR EXISTS (
+                   SELECT 1
+                     FROM accounts_v1.auth_code_token_links AS auth_link
+                    WHERE auth_link.code_hash = redemption.code_hash
+                      AND NULLIF(auth_link.refresh_root_hash, '') =
+                          chain.root_token_hash
+                 )
+               )
+          )
+          AND (COALESCE(redemption.replayed_at, redemption.issued_at),
+               redemption.code_hash) > ($2, $3)
+        ORDER BY COALESCE(redemption.replayed_at, redemption.issued_at),
+                 redemption.code_hash
+        LIMIT $4`,
+      [cutoff, after.at, after.keys[0] ?? "", limit],
     )
   ).rows;
 }
@@ -605,6 +539,7 @@ async function deleteRetentionCandidate(
   client: PostgresQueryClient,
   phase: RefreshChainRetentionPhase,
   row: RetentionKeyRow,
+  cutoff: Date,
 ): Promise<boolean> {
   let result;
   if (phase === "chain_links") {
@@ -626,28 +561,69 @@ async function deleteRetentionCandidate(
     result = await runQuery(
       client,
       `DELETE FROM accounts_v1.revoked_refresh_roots
-        WHERE root_token_hash = $1 RETURNING root_token_hash`,
-      [row.key_a],
+        WHERE root_token_hash = $1 AND revoked_at = $2
+        RETURNING root_token_hash`,
+      [row.key_a, toDate(retentionTimestamp(row.retention_at))],
     );
   } else if (phase === "consumed_codes") {
     result = await runQuery(
       client,
       `DELETE FROM accounts_v1.consumed_authorization_codes
-        WHERE code_hash = $1 RETURNING code_hash`,
-      [row.key_a],
+        WHERE code_hash = $1 AND consumed_at = $2
+          AND NOT EXISTS (
+            SELECT 1
+              FROM accounts_v1.authorization_code_redemptions AS redemption
+             WHERE redemption.code_hash = $1
+          )
+        RETURNING code_hash`,
+      [row.key_a, toDate(retentionTimestamp(row.retention_at))],
     );
-  } else {
+  } else if (phase === "auth_code_token_links") {
     result = await runQuery(
       client,
       `DELETE FROM accounts_v1.auth_code_token_links
         WHERE code_hash = $1 AND access_token_hash = $2
           AND refresh_root_hash = $3
+          AND NOT EXISTS (
+            SELECT 1
+              FROM accounts_v1.authorization_code_redemptions AS redemption
+             WHERE redemption.code_hash = $1
+          )
         RETURNING code_hash`,
       [
         row.key_a,
         requiredRetentionKey(row.key_b),
         requiredRetentionKey(row.key_c),
       ],
+    );
+  } else {
+    result = await runQuery(
+      client,
+      `DELETE FROM accounts_v1.authorization_code_redemptions
+        WHERE code_hash = $1 AND record_version = $2
+          AND state IN ('issued', 'replayed')
+          AND COALESCE(replayed_at, issued_at) <= $3
+          AND NOT EXISTS (
+            SELECT 1
+             FROM accounts_v1.refresh_chain_links AS chain
+             WHERE chain.created_at > $3
+               AND (
+                 chain.root_token_hash = (
+                   SELECT current.refresh_token_hash
+                     FROM accounts_v1.authorization_code_redemptions AS current
+                    WHERE current.code_hash = $1
+                 )
+                 OR EXISTS (
+                   SELECT 1
+                     FROM accounts_v1.auth_code_token_links AS auth_link
+                    WHERE auth_link.code_hash = $1
+                      AND NULLIF(auth_link.refresh_root_hash, '') =
+                          chain.root_token_hash
+                 )
+               )
+          )
+        RETURNING code_hash`,
+      [row.key_a, requiredRetentionKey(row.record_version), cutoff],
     );
   }
   return result.rows.length > 0;
@@ -661,7 +637,8 @@ function incrementRetentionCount(
   else if (phase === "chain_access_tokens") counts.chainAccessTokens += 1;
   else if (phase === "revoked_roots") counts.revokedRoots += 1;
   else if (phase === "consumed_codes") counts.consumedCodes += 1;
-  else counts.authCodeTokenLinks += 1;
+  else if (phase === "auth_code_token_links") counts.authCodeTokenLinks += 1;
+  else counts.authorizationCodeRedemptions += 1;
 }
 
 function encodePostgresRetentionCursor(row: RetentionKeyRow): string {
@@ -674,9 +651,10 @@ function encodePostgresRetentionCursor(row: RetentionKeyRow): string {
   return JSON.stringify(values);
 }
 
-function decodePostgresRetentionCursor(
-  value: string | undefined,
-): { readonly at: Date; readonly keys: readonly string[] } {
+function decodePostgresRetentionCursor(value: string | undefined): {
+  readonly at: Date;
+  readonly keys: readonly string[];
+} {
   if (value === undefined) return { at: new Date(0), keys: [] };
   let parsed: unknown;
   try {

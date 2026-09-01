@@ -8,11 +8,12 @@
 
 import type { DeployControlErrorCode } from "@takosumi/internal/deploy-control-api";
 import { ConnectionVaultError } from "../../adapters/vault/mod.ts";
+import { isRecord } from "../../shared/guards.ts";
 
 // Re-exported from the shared guard home so deploy-control consumers can keep
 // importing `isRecord` from this module while there is a single canonical
 // (non-array) definition for the whole service.
-export { isRecord } from "../../shared/mod.ts";
+export { isRecord };
 
 export type OpenTofuControllerErrorCode = DeployControlErrorCode;
 
@@ -122,10 +123,10 @@ export function structuredErrorReason(error: unknown): string | undefined {
   const details =
     error instanceof OpenTofuControllerError
       ? error.details
-      : isErrorRecord(error)
+      : isRecord(error)
         ? error.details
         : undefined;
-  const detailReason = isErrorRecord(details) ? details.reason : undefined;
+  const detailReason = isRecord(details) ? details.reason : undefined;
   if (isStructuredErrorReason(detailReason)) return detailReason;
 
   if (
@@ -144,10 +145,6 @@ export function runErrorCode(error: unknown, fallback: string): string {
 
 function isStructuredErrorReason(value: unknown): value is string {
   return typeof value === "string" && STRUCTURED_ERROR_REASON_RE.test(value);
-}
-
-function isErrorRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /** True only for the controller's structured requeue signal. */

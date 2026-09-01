@@ -15,7 +15,7 @@ route は、選択された control-ledger record の **部分的な export** �
 - `/internal/v1/workspaces/:workspaceId/backups/:backupId/restores`
 - dashboard の restore action
 
-`--backup-restore-rehearsal` も、dry-run を含め fail-closed で拒否します。
+`--backup-restore-rehearsal` も、dry-run を含めて安全側に停止します。
 state archive や artifact manifest が存在するだけで restore evidence を
 `passed` にしてはいけません。
 
@@ -57,7 +57,7 @@ operator-owned **Backup/Restore layers**:
    operator quota/showback ledger、AuditEvent ledger。
 2. **Service-data backup** (Capsule 所有 / optional): messages、attachments、files、
    posts、profiles など Capsule が作成した service 固有データ。現時点では generic restore は未実装で、対応 provider
-   adapter または Capsule-defined export がある Capsule だけを対象にする。
+   adapter または Capsule-defined export がある Capsule だけを対象にします。
 
 合格する operator restore は Project / Capsule graph と StateVersion / Output
 世代を復元します。現在の OSS control export はこの要件を満たしません。
@@ -116,7 +116,7 @@ artifact releaseへ一律に適用しません。
 ## Control Backup Restore Minimum
 
 目的: Capsule service-data を reattach する前に、Takosumi control ledger を
-単独で restore できることを証明する。
+単独で restore できることを証明します。
 
 この gate は selected persistence adapter の verified backup/importer に対する
 ものです。現在の OSS `BackupRecord` export を入力にして実施したことにしては
@@ -124,10 +124,10 @@ artifact releaseへ一律に適用しません。
 
 手順:
 
-1. 同じ release train の最新 staging operator backup を選ぶ。
+1. 同じ release train の最新 staging operator backup を選びます。
 2. non-production issuer URL / hostname を持つ isolated restore target に restore
-   する。
-3. 以下を検証する:
+   します。
+3. 以下を検証します:
    - Workspace / Project / Capsule / Source metadata /
      ProviderConnection metadata and policy / CredentialRecipe / ProviderBinding /
      compatibility reports / Run / StateVersion / Output / Backup metadata /
@@ -143,8 +143,8 @@ artifact releaseへ一律に適用しません。
    - Takosumi platform worker の identity / OIDC records を含む restore では、
      復元した issuer から OIDC discovery と JWKS が serve され、必要な public
      client metadata が secret なしで resolve できること
-4. RTO/RPO sample と復元 target URL を記録する。
-5. evidence を添付したら、isolated restore target を削除する。
+4. RTO/RPO sample と復元 target URL を記録します。
+5. evidence を添付したら、isolated restore target を削除します。
 
 この drill が揃って初めて、operator は control/state restore readiness を満たしたとみなします。Service-data restore evidence は、
 service-data backup を有効にした supported Capsule を public promise に含める前の追加 gate です。
@@ -152,29 +152,29 @@ service-data backup を有効にした supported Capsule を public promise に�
 ## Scheduled Isolated Restore
 
 目的: 本番 user/tenant data を不用意に複製せず、実 backup から isolated 環境を restore
-できることを証明する。
+できることを証明します。
 
 手順:
 
-1. write 中でないことを selected adapter が証明できる最新の staging backup を選ぶ。
-2. 以下を記録する:
+1. write 中でないことを selected adapter が証明できる最新の staging backup を選びます。
+2. 以下を記録します:
    - backup id / timestamp
    - source environment
    - schema version
    - audit chain head (hash-chain sink を有効化している場合)
    - encrypted secret partition id
-3. isolated restore target を作る。active staging を上書きしてはいけない。
+3. isolated restore target を作ります。active staging を上書きしてはいけません。
 4. operator backup manifest と state/artifact inventory に従って logical restore
-   を実行する。
-5. 以下を検証する:
+   を実行します。
+5. 以下を検証します:
    - critical record の skip 無しで restore が完了する
    - hash-chain sink を有効化している場合、audit chain が genesis から restored head まで verify される
    - Run / StateVersion / Output record を list できる
    - 既知の staging Capsule の public route または Resolved Interface が応答する
    - compatibility / plan を 1 件 resolve できる (apply はしない)
    - runner queue が empty、または意図的に paused であること
-6. 実測 RTO と backup age を RPO sample として記録する。
-7. evidence を添付したら、isolated restore target を削除する。
+6. 実測 RTO と backup age を RPO sample として記録します。
+7. evidence を添付したら、isolated restore target を削除します。
 
 合格条件:
 
@@ -186,7 +186,7 @@ service-data backup を有効にした supported Capsule を public promise に�
 ## Production Restore Simulation
 
 目的: live production を上書きせずに、production backup / access / key / restore
-手順を検証する。
+手順を検証します。
 
 許可される操作:
 

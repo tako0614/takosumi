@@ -33,12 +33,13 @@ OSS requirements are deliberately generic:
   reconcile;
 - unmounted extension routes are absent rather than emulated by an OSS fallback.
 
-Official hosted routing, model catalogs, upstream credentials, enforced
-billing, usage meters, smoke inputs, and failure codes are owned by the closed
-Cloud delta. Its operator runbook lives at
-`takosumi-cloud/docs/operations/ai-gateway.md`; customer-facing behavior lives
-in `app-docs`.
+An external service owns routing, model catalogs, upstream credentials,
+enforced billing, usage meters, smoke inputs, and failure codes. Takoserver may
+offer an OpenAI-compatible data plane as a standard protocol without turning it
+into a Form or Takosumi Core resource. Takosumi Hosted may own the retail/client
+presentation, but it does not take over Takoserver provider or supply authority.
+Takosumi Cloud and its app-docs are retained history, not current authority.
 
 See [Core Spec](core-spec.md#interfaces-and-interfacebindings) for the
-authoritative generic boundary. Hosted routing and evidence remain owned by
-the Cloud runbook linked above.
+authoritative generic boundary. Routing and evidence remain with the external
+service owner.

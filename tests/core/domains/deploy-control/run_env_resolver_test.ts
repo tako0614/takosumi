@@ -367,6 +367,170 @@ test("RunEnvResolver delivers deterministic alias-aware non-secret provider conf
   );
 });
 
+test("RunEnvResolver chooses the lexical alias, connection id, and first equal candidate", async () => {
+  const resolved: readonly ResolvedCapsuleProviderBinding[] = [
+    {
+      provider: CLOUDFLARE_PROVIDER,
+      alias: "zeta",
+      rootAlias: "root-zeta",
+      materialization: "secret",
+      connection: connection({
+        id: "conn_zeta",
+        envNames: ["ZETA_TOKEN"],
+      }),
+    },
+    {
+      // The shorthand source must still match the fully-qualified requirement.
+      provider: "cloudflare/cloudflare",
+      alias: "alpha",
+      rootAlias: "root-alpha-z",
+      materialization: "secret",
+      connection: connection({
+        id: "conn_z",
+        envNames: ["ALPHA_Z_TOKEN"],
+      }),
+    },
+    {
+      provider: CLOUDFLARE_PROVIDER,
+      alias: "alpha",
+      rootAlias: "root-alpha-first",
+      materialization: "first-candidate",
+      connection: connection({
+        id: "conn_a",
+        envNames: ["ALPHA_FIRST_TOKEN"],
+      }),
+    },
+    {
+      provider: CLOUDFLARE_PROVIDER,
+      alias: "alpha",
+      rootAlias: "root-alpha-second",
+      materialization: "second-candidate",
+      connection: connection({
+        id: "conn_a",
+        envNames: ["ALPHA_SECOND_TOKEN"],
+      }),
+    },
+    {
+      provider: CLOUDFLARE_PROVIDER,
+      alias: "beta",
+      rootAlias: "root-beta",
+      materialization: "secret",
+      connection: connection({
+        id: "conn_0",
+        envNames: ["BETA_TOKEN"],
+      }),
+    },
+  ];
+
+  const result = await resolver({
+    resolved,
+    credentials: () => undefined,
+  }).resolveRunEnvironment({
+    planRun: planRun(),
+    phase: "plan",
+    auditRunId: "plan_1",
+    mintCredentials: false,
+  });
+
+  expect(result.providerResolutions).toHaveLength(1);
+  expect(result.providerResolutions[0]).toMatchObject({
+    connectionId: "conn_a",
+    materialization: "first-candidate",
+    evidence: {
+      provider: CLOUDFLARE_PROVIDER,
+      connectionId: "conn_a",
+      materialization: "first-candidate",
+      requiredEnvNames: ["ALPHA_FIRST_TOKEN"],
+    },
+  });
+});
+
+test("RunEnvResolver orders an absent alias before an empty alias", async () => {
+  const resolved: readonly ResolvedCapsuleProviderBinding[] = [
+    {
+      provider: CLOUDFLARE_PROVIDER,
+      alias: "",
+      rootAlias: "root-empty",
+      materialization: "empty-alias",
+      connection: connection({
+        id: "conn_a",
+        envNames: ["EMPTY_ALIAS_TOKEN"],
+      }),
+    },
+    {
+      provider: CLOUDFLARE_PROVIDER,
+      rootAlias: "root-absent",
+      materialization: "absent-alias",
+      connection: connection({
+        id: "conn_z",
+        envNames: ["ABSENT_ALIAS_TOKEN"],
+      }),
+    },
+  ];
+
+  const result = await resolver({
+    resolved,
+    credentials: () => undefined,
+  }).resolveRunEnvironment({
+    planRun: planRun(),
+    phase: "plan",
+    auditRunId: "plan_1",
+    mintCredentials: false,
+  });
+
+  expect(result.providerResolutions[0]).toMatchObject({
+    connectionId: "conn_z",
+    materialization: "absent-alias",
+    evidence: {
+      connectionId: "conn_z",
+      materialization: "absent-alias",
+      requiredEnvNames: ["ABSENT_ALIAS_TOKEN"],
+    },
+  });
+});
+
+test("RunEnvResolver scans matching bindings without rereading connection ids", async () => {
+  const matchCount = 64;
+  let connectionIdReads = 0;
+  const resolved: readonly ResolvedCapsuleProviderBinding[] = Array.from(
+    { length: matchCount },
+    (_, index) => {
+      const id = `conn_${String(matchCount - index).padStart(3, "0")}`;
+      const providerConnection = connection({ id });
+      Object.defineProperty(providerConnection, "id", {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          connectionIdReads += 1;
+          return id;
+        },
+      });
+      return {
+        provider: CLOUDFLARE_PROVIDER,
+        alias: "shared",
+        rootAlias: `root-${index}`,
+        materialization: "secret",
+        connection: providerConnection,
+      };
+    },
+  );
+
+  const result = await resolver({
+    resolved,
+    credentials: () => undefined,
+  }).resolveRunEnvironment({
+    planRun: planRun(),
+    phase: "plan",
+    auditRunId: "plan_1",
+    mintCredentials: false,
+  });
+
+  expect(result.providerResolutions[0]?.connectionId).toBe("conn_001");
+  // One read per candidate during selection, plus the selected resolution's
+  // two id projections. Sorting the candidates rereads ids in its comparator.
+  expect(connectionIdReads).toBe(matchCount + 2);
+});
+
 test("RunEnvResolver rejects secret-like provider configuration keys and values before lifecycle dispatch", async () => {
   const secretValue = "postgres://user:password@example.test/database";
   for (const providerConfig of [

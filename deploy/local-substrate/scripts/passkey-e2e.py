@@ -104,6 +104,7 @@ def http_request(method: str, path: str, body: dict | None = None,
     req = urllib.request.Request(target, data=data, method=method)
     if data is not None:
         req.add_header("Content-Type", "application/json")
+        req.add_header("Origin", ORIGIN)
     opener = urllib.request.build_opener(
         urllib.request.HTTPSHandler(context=SSL_CTX),
         urllib.request.HTTPCookieProcessor(_COOKIE_JAR),

@@ -26,6 +26,8 @@
 
 import { isApiV1Path, API_V1_PREFIX } from "takosumi-contract";
 import { errorJson } from "./http-helpers.ts";
+import type { WriteRateLimiter } from "../../../core/shared/rate_limit.ts";
+import type { PortableHostIdempotencyCoordinator } from "../../../core/api/portable_host_idempotency.ts";
 import {
   requireAccountsBearer,
   type AccountsBearerRequiredScope,
@@ -161,6 +163,16 @@ interface ControlRouteContext {
   >;
   readonly issuer?: string;
   readonly managedPublicBaseDomain?: string;
+  /**
+   * Edge write-lane throttle. Scoped per workspace when the bearer carries
+   * one, otherwise per authenticated subject. Absent -> no throttling.
+   */
+  readonly writeRateLimit?: {
+    readonly limiter: WriteRateLimiter;
+    readonly limitPerMinute: number;
+  };
+  /** Optional Idempotency-Key coordinator for the capsule write lane. */
+  readonly idempotency?: PortableHostIdempotencyCoordinator;
 }
 
 /**
@@ -247,6 +259,9 @@ async function dispatchAuthenticatedControlRoute(
             ? { managedPublicBaseDomain: context.managedPublicBaseDomain }
             : {}),
           session: context.session,
+          ...(context.idempotency
+            ? { idempotency: context.idempotency }
+            : {}),
         }),
     );
     return appendServerTiming(response, timings);
@@ -319,6 +334,39 @@ export async function handleControlRoute(
   );
   if (!bearer.ok) return appendServerTiming(bearer.response, timings);
 
+  // Edge write-lane throttle (429 + Retry-After). Reads stay unthrottled;
+  // authenticated writes share one token bucket per workspace (or subject for
+  // session bearers), so one tenant's install burst cannot monopolize the
+  // write lane. Applied AFTER authn so anonymous traffic can never spend a
+  // tenant's bucket.
+  if (
+    context.writeRateLimit &&
+    controlRouteRequiredScope(request) === "write"
+  ) {
+    const admission = await context.writeRateLimit.limiter.admit({
+      // Workspace-scoped credentials get a per-workspace budget; a session
+      // bearer is not bound to one, so it shares a per-account budget across
+      // whatever workspaces it touches. The copy above therefore does not
+      // claim a workspace.
+      scope: `control-write:${bearer.auth.workspaceId ?? bearer.auth.subject}`,
+      limitPerMinute: context.writeRateLimit.limitPerMinute,
+    });
+    if (!admission.admitted) {
+      const retryAfterSeconds = admission.retryAfterSeconds ?? 1;
+      return appendServerTiming(
+        errorJson(
+          "rate_limited",
+          "write rate limit exceeded; retry shortly",
+          429,
+          request,
+          { "retry-after": String(retryAfterSeconds) },
+          { retryAfterSeconds },
+        ),
+        timings,
+      );
+    }
+  }
+
   return await dispatchAuthenticatedControlRoute(
     {
       ...context,
@@ -382,6 +430,7 @@ interface DispatchInput {
   readonly issuer?: string;
   readonly managedPublicBaseDomain?: string;
   readonly session: ControlSession;
+  readonly idempotency?: PortableHostIdempotencyCoordinator;
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
@@ -404,6 +453,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
         ? { managedPublicBaseDomain: input.managedPublicBaseDomain }
         : {}),
       session: input.session,
+      ...(input.idempotency ? { idempotency: input.idempotency } : {}),
     };
     const response = await handler(ctx, segments, method);
     if (response) return response;

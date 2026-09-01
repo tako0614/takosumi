@@ -1,55 +1,18 @@
 import { afterEach, expect, test } from "bun:test";
 
-import type {
-  OpenTofuControlStore,
-  ReservePublicHostInput,
-} from "../../../../core/domains/deploy-control/store.ts";
+import type { ReservePublicHostInput } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
+import {
+  seedCapsule,
+  seedWorkspace,
+} from "./public_host_reservations_fixtures.ts";
 
 const clients: PGliteSqlClient[] = [];
 
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
 });
-
-async function seedWorkspace(
-  store: OpenTofuControlStore,
-  id: string,
-  ownerUserId: string,
-): Promise<void> {
-  await store.putWorkspace({
-    id,
-    handle: id.replaceAll("_", "-"),
-    displayName: id,
-    type: "personal",
-    ownerUserId,
-    createdAt: "2026-07-11T00:00:00.000Z",
-    updatedAt: "2026-07-11T00:00:00.000Z",
-  });
-}
-
-async function seedCapsule(
-  store: OpenTofuControlStore,
-  id: string,
-  workspaceId: string,
-  status: "pending" | "destroyed" = "pending",
-): Promise<void> {
-  await store.putCapsule({
-    id,
-    workspaceId,
-    projectId: `project_${workspaceId}`,
-    name: id,
-    slug: id,
-    sourceId: `source_${id}`,
-    installConfigId: `config_${id}`,
-    environment: "production",
-    currentStateGeneration: 0,
-    status,
-    createdAt: "2026-07-11T00:00:00.000Z",
-    updatedAt: "2026-07-11T00:00:00.000Z",
-  });
-}
 
 test("Postgres serializes owner vanity slots without counting scoped reservations", async () => {
   const client = await PGliteSqlClient.create();

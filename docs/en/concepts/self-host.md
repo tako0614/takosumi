@@ -96,8 +96,11 @@ Apply the accounts D1 schema. This calls `bunx wrangler d1 execute` once per pen
 migration, and the versions it applied stay in `takosumi_accounts_schema_migrations`.
 
 ```bash
-takosumi accounts migrate-d1 --database-id takosumi-accounts --remote
+bun run cli -- accounts migrate-d1 --database-id takosumi-accounts --remote
 ```
+
+The `takosumi` command runs from a checkout via `bun run cli --`; it is not published
+to npm yet.
 
 The command cannot be rolled back. Running it from two jobs at once makes one of them fail
 on the primary key collision for a version, so call it from a single deploy job. To watch
@@ -116,9 +119,11 @@ bunx wrangler deploy --config deploy/platform/wrangler.toml
 
 ## Putting it on Bun and PostgreSQL
 
-The compose file in `deploy/node-postgres/` starts PostgreSQL, the migrations, the service
-itself, and Caddy in that order. The service is a single process carrying accounts, the
-control plane, and the dashboard on the same origin. Start from the repository root.
+The compose file in `deploy/node-postgres/` starts PostgreSQL, the migrations, the
+OpenTofu runner, the service itself, and Caddy in that order. The service is a single
+process carrying accounts, the control plane, and the dashboard on the same origin;
+plan / apply execution runs in the bundled `opentofu-runner` container. Start from the
+repository root.
 
 ```bash
 cd deploy/node-postgres
@@ -126,14 +131,9 @@ cp .env.example .env
 ```
 
 Edit `.env`. What you change here is `POSTGRES_PASSWORD`, `TAKOSUMI_ACCOUNTS_ISSUER`,
-`TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME`, and the OIDC client registration.
-
-Values in `.env` are only used for variable expansion in the compose file; they are not
-passed into the container as they are. The bundled `docker-compose.yml` gives the
-`accounts` service only the issuer, the connection settings, and the client registration
-listed above. Add the remaining secrets to the `accounts` service's `environment:`
-yourself. With compose, `docker-compose.override.yml` in the same directory is the place
-for that.
+`TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME`, the OIDC client registration, and the secrets
+below. `.env.example` carries a template for each with a generation command — replace
+every `replace-me` and you are done.
 
 | Variable | Why it is needed |
 | --- | --- |
@@ -142,10 +142,16 @@ for that.
 | `TAKOSUMI_ACCOUNT_SESSION_HASH_SALT` | The salt that hashes session IDs at rest |
 | `TAKOSUMI_SECRET_STORE_PASSPHRASE` | The sealing key for credentials and state |
 | `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | The bearer for the operator-only API |
+| `TAKOSUMI_RUNNER_SHARED_TOKEN` | The shared bearer between the service and the runner container |
 
-When the issuer is https and the signing key has not arrived, the service refuses to
-start. Otherwise each process would sign id_tokens with a different key, and verification
-would break across restarts and replicas.
+The bundled `docker-compose.yml` passes all of these through to the `accounts` service;
+no override file is needed. When the issuer is https and the signing key has not
+arrived, the service refuses to start. Otherwise each process would sign id_tokens with
+a different key, and verification would break across restarts and replicas.
+
+Optional settings live in the same `.env`. Setting `TAKOSUMI_TCS_STORE_URL` fills the
+dashboard's "Add a service" grid from that store; without it, adding from a Git URL
+still works.
 
 Bring it up.
 
@@ -156,6 +162,12 @@ docker compose up -d
 The `migrations` container runs `takosumi accounts migrate` once, and then the service
 starts. That covers the accounts tables only. The control plane tables are created
 separately, against the same database.
+
+Plan / apply execution lives in the `opentofu-runner` container. It listens only on the
+compose-internal network and accepts no job without the `TAKOSUMI_RUNNER_SHARED_TOKEN`
+bearer. Source archives and sealed state artifacts persist in the `takosumi-runtime`
+volume (`/var/lib/takosumi`); deleting that volume loses applied state, so include it in
+your backups.
 
 Run the control plane migrations from a checkout of the repository; they are not in the
 bundled image. The bundled compose exposes PostgreSQL only on the internal network, so

@@ -84,6 +84,10 @@ export class CoordinationObject {
       metadata: input.metadata,
     };
     await this.state.storage.put(leaseKey(input.scope), lease);
+    // Arm the DO alarm at the lease expiry so a holder that dies without
+    // releasing is reclaimed BY the alarm instead of waiting for the next
+    // unrelated coordination call to sweep it.
+    await this.rescheduleDurableObjectAlarm();
     return lease;
   }
 
@@ -108,6 +112,7 @@ export class CoordinationObject {
       expiresAt: new Date(Date.now() + input.ttlMs).toISOString(),
     };
     await this.state.storage.put(leaseKey(input.scope), lease);
+    await this.rescheduleDurableObjectAlarm();
     return lease;
   }
 
@@ -174,6 +179,8 @@ export class CoordinationObject {
 
   async alarm(): Promise<void> {
     try {
+      // runDueAlarms also sweeps expired leases and re-arms for the earliest
+      // remaining alarm OR lease expiry.
       await this.runDueAlarms(Date.now());
     } catch {
       await this.rescheduleDurableObjectAlarm(Date.now() + 60_000);
@@ -227,6 +234,18 @@ export class CoordinationObject {
       if (!Number.isFinite(fireAtMs)) continue;
       if (nextAlarmMs === undefined || fireAtMs < nextAlarmMs) {
         nextAlarmMs = fireAtMs;
+      }
+    }
+    // Live leases keep the alarm armed at their earliest expiry so expiry
+    // reclamation is alarm-driven, not dependent on unrelated traffic.
+    const leases = await this.state.storage.list<CoordinationLease>({
+      prefix: "lease:",
+    });
+    for (const lease of leases.values()) {
+      const expiresAtMs = Date.parse(lease.expiresAt);
+      if (!Number.isFinite(expiresAtMs)) continue;
+      if (nextAlarmMs === undefined || expiresAtMs < nextAlarmMs) {
+        nextAlarmMs = expiresAtMs;
       }
     }
     if (nextAlarmMs === undefined) {

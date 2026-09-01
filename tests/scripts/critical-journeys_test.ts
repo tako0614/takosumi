@@ -7,6 +7,7 @@ import {
   validateCriticalJourneyInventory,
 } from "../../scripts/run-critical-journeys.ts";
 import { PORTABLE_GATE_PHASES } from "../../scripts/check-portable-gate.ts";
+import { TEST_STAGES } from "../../scripts/run-test-suites.ts";
 
 const root = resolve(import.meta.dir, "../..");
 
@@ -59,19 +60,31 @@ test("package exposes the focused command without changing the complete gate", a
   expect(packageJson.scripts?.["test:critical-journeys"]).toBe(
     "bun scripts/run-critical-journeys.ts",
   );
-  expect(packageJson.scripts?.["test:workerd"]).toBe(
-    "bun test --isolate tests/runner/compatibility_check_test.ts tests/core/domains/interfaces/runtime_capability_reader_workerd_test.ts tests/core/domains/deploy-control/capsule_execution_authority_test.ts",
-  );
-  expect(packageJson.scripts?.test).toContain("bun run test:workerd");
+  const workerd = packageJson.scripts?.["test:workerd"] ?? "";
+  const portable = packageJson.scripts?.["test:portable"] ?? "";
+  expect(workerd).toContain("bun test --isolate");
+  // The isolated stage starts a real workerd / OpenTofu process; bun's 5s
+  // default timeout is not a budget it can meet on a cold host.
+  expect(workerd).toContain("--timeout=");
+  // Both stages run: the isolated files are excluded from the portable sweep
+  // and each is named exactly once in the isolated stage.
   for (const isolatedWorkerdTest of [
     "tests/runner/compatibility_check_test.ts",
     "tests/core/domains/interfaces/runtime_capability_reader_workerd_test.ts",
     "tests/core/domains/deploy-control/capsule_execution_authority_test.ts",
   ]) {
-    expect(packageJson.scripts?.test).toContain(
+    expect(portable).toContain(
       `--path-ignore-patterns=${isolatedWorkerdTest}`,
     );
+    expect(workerd).toContain(isolatedWorkerdTest);
   }
+  // `bun run test` must not chain the stages, or one stage's failure hides
+  // the other stage's result.
+  expect(packageJson.scripts?.test).toBe("bun scripts/run-test-suites.ts");
+  expect(TEST_STAGES.map((stage) => stage.script)).toEqual([
+    "test:portable",
+    "test:workerd",
+  ]);
   expect(packageJson.scripts?.check).toBe("bun scripts/check-portable-gate.ts");
   expect(
     PORTABLE_GATE_PHASES.some(

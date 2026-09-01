@@ -28,6 +28,7 @@ import Button from "../../components/ui/Button.tsx";
 import Skeleton from "../../components/ui/Skeleton.tsx";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { activityEventHref } from "../../lib/activity-links.ts";
+import { metaString } from "../../lib/activity-metadata.ts";
 import { A } from "@solidjs/router";
 
 const ACTIVITY_PAGE_SIZE = 100;
@@ -56,14 +57,6 @@ function MetadataChips(props: { metadata: Record<string, unknown> }) {
       </div>
     </Show>
   );
-}
-
-function metaString(
-  metadata: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const value = metadata[key];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function activityTitle(event: ActivityEvent): string {
@@ -115,6 +108,50 @@ function activityTitle(event: ActivityEvent): string {
       return t("notif.event.shareRevoked");
     case "run_group.created":
       return t("notif.event.groupCreated");
+    case "capsule.abandoned":
+      return t("notif.event.capsuleAbandoned");
+    case "capsule.auto_replan_started":
+      return t("notif.event.capsuleAutoReplanStarted");
+    case "capsule.auto_replan_failed":
+      return t("notif.event.capsuleAutoReplanFailed");
+    case "capsule.auto_update_apply_failed":
+      return t("notif.event.capsuleAutoUpdateApplyFailed");
+    case "capsule.install_cleanup_started":
+      return t("notif.event.capsuleInstallCleanupStarted");
+    case "capsule.install_cleanup_failed":
+      return t("notif.event.capsuleInstallCleanupFailed");
+    case "capsule.stale":
+      return t("notif.event.capsuleStale");
+    case "capsule.system_destroy_blocked":
+      return t("notif.event.capsuleSystemDestroyBlocked");
+    case "capsule.system_destroy_continue_failed":
+      return t("notif.event.capsuleSystemDestroyContinueFailed");
+    case "capsule.uninstall_scheduled":
+      return t("notif.event.capsuleUninstallScheduled");
+    case "capsule.uninstall_restored":
+      return t("notif.event.capsuleUninstallRestored");
+    case "capsule.pre_destroy_export.completed":
+      return t("notif.event.capsulePreDestroyExportCompleted");
+    case "capsule.pre_destroy_export.failed":
+      return t("notif.event.capsulePreDestroyExportFailed");
+    case "capsule.pre_destroy_export.skipped":
+      return t("notif.event.capsulePreDestroyExportSkipped");
+    case "restore.created":
+      return t("notif.event.restoreCreated");
+    case "restore.succeeded":
+      return t("notif.event.restoreSucceeded");
+    case "run.cancelled":
+      return t("notif.event.runCancelled");
+    case "run.retry_scheduled":
+      return t("notif.event.runRetryScheduled");
+    case "run.artifact_ledger_retry_scheduled":
+      return t("notif.event.runArtifactLedgerRetryScheduled");
+    case "run.idempotent_replay":
+      return t("notif.event.runIdempotentReplay");
+    case "resource.run.destroyed":
+      return t("notif.event.resourceRunDestroyed");
+    case "release_activation.not_applicable":
+      return t("notif.event.releaseActivationNotApplicable");
     default:
       return t("activity.recorded");
   }

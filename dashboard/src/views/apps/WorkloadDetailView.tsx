@@ -55,6 +55,8 @@ import {
   createStateVersionRollbackPlan,
   createCapsuleBackup,
   deleteCapsule,
+  restoreCapsule,
+  resolveStableSourceTag,
   extractRunId,
   getStateVersion,
   getInstallConfig,
@@ -100,6 +102,7 @@ import {
   parseInterfaceBlueprintsJson,
 } from "../../lib/interface-blueprints.ts";
 import {
+  formatDate,
   formatDateTime,
   locale,
   setDocumentTitle,
@@ -134,6 +137,7 @@ import {
   type AuthorizedUiSurface,
 } from "../../lib/ui-surface-interfaces.ts";
 import { isProviderConnectionCandidate } from "../../lib/provider-connections.ts";
+import { planWorkloadDetailSupplementalReads } from "../../lib/workload-detail-read-plan.ts";
 
 type TabId = "overview" | "deploys" | "settings" | "danger";
 
@@ -192,6 +196,14 @@ function Inner() {
     tab() === "overview" ? (workspaceId() ?? null) : null;
   const currentStateVersionId = () =>
     capsuleData()?.currentStateVersionId ?? null;
+  const supplementalReadPlan = createMemo(() =>
+    planWorkloadDetailSupplementalReads({
+      tab: tab(),
+      capsuleId: capsuleId(),
+      workspaceId: workspaceId(),
+      currentStateVersionId: currentStateVersionId(),
+    }),
+  );
   const [providerBindingSet, { refetch: refetchProviderBindingSet }] =
     createResource(settingsCapsuleId, getCapsuleProviderBindingSet);
   // Fetched on every tab (not just settings): the header shows the store
@@ -230,7 +242,7 @@ function Inner() {
     getCurrentResourceInventory,
   );
   const [currentStateVersionResource] = createResource(
-    currentStateVersionId,
+    () => supplementalReadPlan().stateVersionId,
     getStateVersion,
   );
   const uiSurfaceKey = createMemo(() => {
@@ -252,11 +264,8 @@ function Inner() {
     settingsWorkspaceId,
     listProviderConnections,
   );
-  const activityWorkspaceId = () => {
-    const id = workspaceId();
-    if (!id) return null;
-    return tab() === "deploys" || currentStateVersionId() ? id : null;
-  };
+  const activityWorkspaceId = () =>
+    supplementalReadPlan().activityWorkspaceId;
   const [activity] = createResource(activityWorkspaceId, (id) =>
     listActivity(id, 100),
   );
@@ -313,13 +322,74 @@ function Inner() {
   });
   const currentSourceRevision = () =>
     sourceRevisionReadback() ?? source()?.defaultRef;
-  const sourceRevisionReady = () => {
+  // Tag-based updates: when the Source tracks a branch/tag instead of an exact
+  // commit, resolve its latest stable SemVer release the same way the install
+  // flow does — the user should never have to paste a 40-character commit.
+  const [updateCandidate] = createResource(
+    () => {
+      const src = source();
+      const ws = workspaceId();
+      if (!src || !ws) return undefined;
+      const current = sourceRevisionReadback() ?? src.defaultRef;
+      if (current !== undefined && isImmutableSourceRevision(current)) {
+        return undefined;
+      }
+      return { ws, url: src.url } as const;
+    },
+    async (input) => {
+      try {
+        return await resolveStableSourceTag(input.ws, input.url);
+      } catch {
+        // No SemVer releases (or a private Source): the manual exact-revision
+        // input below stays the fallback.
+        return undefined;
+      }
+    },
+  );
+  /** The exact revision an update would plan against, with its display tag. */
+  const resolvedUpdateRevision = ():
+    | { readonly revision: string; readonly tag?: string }
+    | undefined => {
     const revision = currentSourceRevision();
+    if (revision !== undefined && isImmutableSourceRevision(revision)) {
+      return { revision };
+    }
+    const candidate = updateCandidate.error ? undefined : updateCandidate();
+    if (candidate && isImmutableSourceRevision(candidate.commit)) {
+      return { revision: candidate.commit, tag: candidate.tag };
+    }
+    return undefined;
+  };
+  const sourceRevisionReady = () => {
     return (
       !sourceRevisionPendingReadback() &&
-      revision !== undefined &&
-      isImmutableSourceRevision(revision)
+      resolvedUpdateRevision() !== undefined
     );
+  };
+  /** Pins the resolved release commit onto the Source before planning. */
+  const ensurePlannableRevision = async (): Promise<string> => {
+    const identity = sourceIdentity();
+    const resolved = resolvedUpdateRevision();
+    if (!identity || !resolved) {
+      throw new ControlApiError(
+        409,
+        "invalid_source_revision",
+        "An exact Source revision is required before updating this service.",
+      );
+    }
+    if (currentSourceRevision() === resolved.revision) return resolved.revision;
+    const updated = await updateCapsuleSourceRevision(
+      capsuleId(),
+      identity,
+      resolved.revision,
+      {
+        affectedCapsuleIds: affectedSourceCapsules().map(
+          (candidate) => candidate.id,
+        ),
+      },
+    );
+    setSourceRevisionReadback(updated.defaultRef);
+    return updated.defaultRef;
   };
   const sourceIdentity = () => {
     const inst = capsuleData();
@@ -471,14 +541,14 @@ function Inner() {
   });
   const plan = createAction(async () => {
     const identity = sourceIdentity();
-    const revision = currentSourceRevision();
-    if (!identity || !revision || !isImmutableSourceRevision(revision)) {
+    if (!identity) {
       throw new ControlApiError(
         409,
         "invalid_source_revision",
         "Review changes requires an exact Source revision readback.",
       );
     }
+    const revision = await ensurePlannableRevision();
     const envelope = await planCapsuleUpdate(capsuleId(), {
       sourceRevision: revision,
       sourceIdentity: identity,
@@ -492,14 +562,14 @@ function Inner() {
   // token with the URL — the flag alone never authorizes it.
   const update = createAction(async () => {
     const identity = sourceIdentity();
-    const revision = currentSourceRevision();
-    if (!identity || !revision || !isImmutableSourceRevision(revision)) {
+    if (!identity) {
       throw new ControlApiError(
         409,
         "invalid_source_revision",
         "An exact Source revision is required before updating this service.",
       );
     }
+    const revision = await ensurePlannableRevision();
     const envelope = await planCapsuleUpdate(capsuleId(), {
       sourceRevision: revision,
       sourceIdentity: identity,
@@ -513,18 +583,38 @@ function Inner() {
   });
   // Per-app showback: rendered only when usage was actually recorded, so
   // self-host with billing disabled never shows an empty money card.
-  const [usageSummary] = createResource(capsuleId, (id) =>
-    getCapsuleUsageSummary(id).catch(() => undefined),
+  const [usageSummary] = createResource(
+    () => supplementalReadPlan().usageCapsuleId,
+    (id) => getCapsuleUsageSummary(id).catch(() => undefined),
   );
-  const destroyPlan = createAction(async () => {
+  const clearWorkspaceCaches = () => {
     const workspace = capsuleData()?.workspaceId;
-    const envelope = await deleteCapsule(capsuleId());
-    const runId = extractRunId(envelope);
     if (workspace) {
       clearCapsuleListCache(workspace);
       clearCurrentStateVersionCache(workspace);
       clearDashboardOverviewCache(workspace);
     }
+  };
+  /**
+   * Safe default delete: schedules the two-phase uninstall. Resources — and
+   * the service's DATA — stay until the grace period ends, so the service can
+   * be restored from this same screen; the confirm names the data and the
+   * exact permanent-deletion date.
+   */
+  const scheduleUninstall = createAction(async () => {
+    await deleteCapsule(capsuleId());
+    clearWorkspaceCaches();
+    await refetchCapsule();
+  });
+  const restore = createAction(async () => {
+    await restoreCapsule(capsuleId());
+    clearWorkspaceCaches();
+    await refetchCapsule();
+  });
+  const destroyPlan = createAction(async () => {
+    const envelope = await deleteCapsule(capsuleId(), { mode: "immediate" });
+    const runId = extractRunId(envelope);
+    clearWorkspaceCaches();
     if (runId) {
       navigate(`/runs/${runId}`);
       return;
@@ -532,18 +622,49 @@ function Inner() {
     navigate("/workloads");
   });
   /**
-   * Delete is confirmed exactly once — normally at destroy-APPLY on the run
-   * screen, where the plan shows what will be removed. Creating a plan removes
-   * nothing, so an upfront modal there would be a second, less informed
-   * confirmation.
+   * The scheduled uninstall confirms HERE (it acts immediately, hiding the
+   * service and starting the countdown), naming the data and the permanent
+   * deletion date.
    *
-   * The exception: a service that has never applied has no state to plan
-   * against, and the backend abandons it immediately (see
-   * `deleteCapsule` in lib/control-api.ts). That path produces no run and
-   * therefore never reached the destroy-apply confirmation at all — so it, and
-   * only it, confirms here.
+   * The IMMEDIATE destroy keeps the plan-first philosophy: it is confirmed
+   * exactly once at destroy-APPLY on the run screen, where the plan shows what
+   * will be removed. The exception stays: a service that never applied has no
+   * state to plan against and is abandoned in place, so it — and only it —
+   * confirms here.
    */
   const destroyIsImmediate = () => !currentStateVersionId();
+  const confirmScheduledUninstall = async (): Promise<void> => {
+    if (destroyIsImmediate()) {
+      await confirmDestroy();
+      return;
+    }
+    const ok = await confirm({
+      title: t("app.danger.uninstallConfirmTitle"),
+      message: `${t("app.danger.uninstallConfirmMessage", {
+        name: serviceLabel(),
+      })}${dependentsWarning()}`,
+      confirmText: t("app.danger.uninstallCta"),
+      cancelText: t("common.cancel"),
+      danger: true,
+    });
+    if (!ok) return;
+    await scheduleUninstall.run();
+  };
+  /**
+   * Names the services that consume this one's outputs, appended to every
+   * removal confirmation. The graph was already loaded for the dependencies
+   * view; the destructive path just never asked it, so a user could schedule
+   * the removal of something another app depends on and be told only about
+   * data and billing.
+   */
+  const dependentsWarning = (): string => {
+    const names = consumers()
+      .map((row) => row.name)
+      .filter((name): name is string => Boolean(name));
+    if (names.length === 0) return "";
+    return ` ${t("app.danger.dependentsWarning", { names: names.join("、") })}`;
+  };
+
   const confirmDestroy = async (): Promise<void> => {
     if (!destroyIsImmediate()) {
       await destroyPlan.run();
@@ -551,7 +672,9 @@ function Inner() {
     }
     const ok = await confirm({
       title: t("app.danger.destroyConfirmTitle"),
-      message: t("app.danger.destroyConfirmMessage", { name: serviceLabel() }),
+      message: `${t("app.danger.destroyConfirmMessage", {
+        name: serviceLabel(),
+      })}${dependentsWarning()}`,
       confirmText: t("app.danger.destroyCta"),
       cancelText: t("common.cancel"),
       danger: true,
@@ -679,7 +802,11 @@ function Inner() {
                         onClick={() => void update.run()}
                         icon={<RefreshCw size={16} />}
                       >
-                        {t("app.updateNow")}
+                        {resolvedUpdateRevision()?.tag
+                          ? t("app.updateNowTagged", {
+                              tag: resolvedUpdateRevision()!.tag!,
+                            })
+                          : t("app.updateNow")}
                       </Button>
                     </Show>
                     {/* One delete flow: the header button routes to the 削除
@@ -699,8 +826,53 @@ function Inner() {
                 }
               />
 
-              <Show when={update.error() ?? destroyPlan.error()}>
+              <Show
+                when={
+                  update.error() ??
+                    destroyPlan.error() ??
+                    scheduleUninstall.error() ??
+                    restore.error()
+                }
+              >
                 {(message) => <Toast tone="error">{message()}</Toast>}
+              </Show>
+
+              {/* Two-phase uninstall banner: the service is hidden from the
+                  launcher and counting down to permanent deletion; restoring
+                  is a pure ledger transition until then. */}
+              <Show
+                when={inst().status === "uninstalled" && inst().scheduledDestroyAt}
+              >
+                {(scheduledAt) => (
+                  <div class="av-setup-incomplete" role="status">
+                    <p class="av-setup-incomplete-text">
+                      {t("app.uninstalled.banner", {
+                        date: formatDate(scheduledAt()),
+                      })}
+                    </p>
+                    <div class="av-actions">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        type="button"
+                        busy={restore.busy()}
+                        disabled={restore.busy()}
+                        onClick={() => void restore.run()}
+                      >
+                        {t("app.uninstalled.restore")}
+                      </Button>
+                      <Show when={tab() !== "danger"}>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          href={`/workloads/${encodeURIComponent(capsuleId())}/danger`}
+                        >
+                          {t("app.uninstalled.deleteNow")}
+                        </Button>
+                      </Show>
+                    </div>
+                  </div>
+                )}
               </Show>
 
               {/* A service that never successfully applied (no StateVersion)
@@ -792,7 +964,7 @@ function Inner() {
                       loading={stateVersions.loading}
                       error={
                         stateVersions.error
-                          ? (stateVersions.error as ControlApiError).message
+                          ? friendlyError(stateVersions.error, t).message
                           : undefined
                       }
                       history={stateVersionHistory()}
@@ -872,32 +1044,104 @@ function Inner() {
                     />
                   </Match>
                   <Match when={tab() === "danger"}>
-                    <Card>
-                      <CardHeader
-                        title={t("app.danger.destroyTitle")}
-                        subtitle={t("app.danger.destroyBody", {
-                          name: serviceLabel(),
-                        })}
-                      />
-                      <div class="wa-form-actions">
-                        <Button
-                          variant="danger"
-                          type="button"
-                          disabled={destroyPlan.busy()}
-                          busy={destroyPlan.busy()}
-                          onClick={() => void confirmDestroy()}
-                        >
-                          {t("app.danger.destroyCta")}
-                        </Button>
-                      </div>
-                      <Show when={destroyPlan.error()}>
-                        {(m) => (
-                          <p class="wa-error" role="alert">
-                            {m()}
-                          </p>
-                        )}
-                      </Show>
-                    </Card>
+                    <Show
+                      when={inst().status === "uninstalled"}
+                      fallback={
+                        <Card>
+                          <CardHeader
+                            title={t("app.danger.destroyTitle")}
+                            subtitle={
+                              destroyIsImmediate()
+                                ? t("app.danger.destroyBody", {
+                                    name: serviceLabel(),
+                                  })
+                                : t("app.danger.uninstallBody", {
+                                    name: serviceLabel(),
+                                  })
+                            }
+                          />
+                          <div class="wa-form-actions">
+                            <Button
+                              variant="danger"
+                              type="button"
+                              disabled={
+                                scheduleUninstall.busy() || destroyPlan.busy()
+                              }
+                              busy={scheduleUninstall.busy()}
+                              onClick={() => void confirmScheduledUninstall()}
+                            >
+                              {destroyIsImmediate()
+                                ? t("app.danger.destroyCta")
+                                : t("app.danger.uninstallCta")}
+                            </Button>
+                            {/* The immediate path keeps the plan-first review;
+                                it exists for operators who explicitly want to
+                                skip the grace period. */}
+                            <Show when={!destroyIsImmediate()}>
+                              <Button
+                                variant="ghost"
+                                type="button"
+                                disabled={
+                                  scheduleUninstall.busy() || destroyPlan.busy()
+                                }
+                                busy={destroyPlan.busy()}
+                                onClick={() => void confirmDestroy()}
+                              >
+                                {t("app.danger.destroyNowCta")}
+                              </Button>
+                            </Show>
+                          </div>
+                          <Show
+                            when={
+                              destroyPlan.error() ?? scheduleUninstall.error()
+                            }
+                          >
+                            {(m) => (
+                              <p class="wa-error" role="alert">
+                                {m()}
+                              </p>
+                            )}
+                          </Show>
+                        </Card>
+                      }
+                    >
+                      <Card>
+                        <CardHeader
+                          title={t("app.danger.uninstalledTitle")}
+                          subtitle={t("app.danger.uninstalledBody", {
+                            name: serviceLabel(),
+                            date: formatDate(inst().scheduledDestroyAt ?? ""),
+                          })}
+                        />
+                        <div class="wa-form-actions">
+                          <Button
+                            variant="secondary"
+                            type="button"
+                            busy={restore.busy()}
+                            disabled={restore.busy() || destroyPlan.busy()}
+                            onClick={() => void restore.run()}
+                          >
+                            {t("app.uninstalled.restore")}
+                          </Button>
+                          <Button
+                            variant="danger"
+                            type="button"
+                            disabled={restore.busy() || destroyPlan.busy()}
+                            busy={destroyPlan.busy()}
+                            onClick={() => void confirmDestroy()}
+                          >
+                            {t("app.uninstalled.deleteNow")}
+                          </Button>
+                        </div>
+                        <Show when={destroyPlan.error() ?? restore.error()}>
+                          {(m) => (
+                            <p class="wa-error" role="alert">
+                              {m()}
+                            </p>
+                          )}
+                        </Show>
+                      </Card>
+                    </Show>
                   </Match>
                 </Switch>
               </div>
@@ -1394,7 +1638,9 @@ function DeploysTab(props: {
                         </Show>
                         <Show when={!isCurrent()}>
                           <Badge tone="neutral">
-                            {`Generation ${stateVersion.generation}`}
+                            {t("app.deploys.generationBadge", {
+                              n: stateVersion.generation,
+                            })}
                           </Badge>
                         </Show>
                         <Show when={!isCurrent()}>

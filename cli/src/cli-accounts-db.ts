@@ -124,6 +124,36 @@ export async function createAccountsStoreResource(
         client.release();
       }
     },
+    async transaction<T>(
+      run: (transaction: PostgresQueryClient) => Promise<T>,
+    ): Promise<T> {
+      const client = await pool.connect();
+      const transactionClient: PostgresQueryClient = {
+        async queryObject<Row>(
+          sql: string,
+          args: readonly unknown[] = [],
+        ): Promise<{ rows: Row[] }> {
+          const result = await client.query<Row>(sql, [...args]);
+          return { rows: result.rows };
+        },
+        transaction: async (nested) => await nested(transactionClient),
+      };
+      try {
+        await client.query("BEGIN");
+        const result = await run(transactionClient);
+        await client.query("COMMIT");
+        return result;
+      } catch (error) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          // Preserve the lifecycle failure and release the broken connection.
+        }
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
   };
   return {
     store: new PostgresAccountsStore(queryClient),
@@ -309,6 +339,15 @@ const D1_ACCOUNTS_MIGRATIONS: readonly D1AccountsMigration[] = [
       "CREATE INDEX IF NOT EXISTS takosumi_accounts_revoked_refresh_roots_retention ON takosumi_accounts_documents(CAST(json_extract(document, '$.revokedAt') AS INTEGER), key) WHERE bucket = 'revoked_refresh_roots';",
       "CREATE INDEX IF NOT EXISTS takosumi_accounts_consumed_authorization_codes_retention ON takosumi_accounts_documents(CAST(json_extract(document, '$.consumedAt') AS INTEGER), key) WHERE bucket = 'consumed_authorization_codes';",
       "CREATE INDEX IF NOT EXISTS takosumi_accounts_auth_code_token_links_retention ON takosumi_accounts_documents(CAST(json_extract(document, '$.createdAt') AS INTEGER), key) WHERE bucket = 'auth_code_token_links';",
+    ].join("\n"),
+  },
+  {
+    version: 4,
+    name: "authorization_code_redemptions",
+    sql: [
+      "INSERT OR IGNORE INTO takosumi_accounts_documents (bucket, key, document, updated_at) SELECT 'authorization_code_redemptions', key, json_object('state', 'active', 'recordVersion', 'legacy-active:' || substr(key, 8, 32), 'record', json(document), 'createdAt', updated_at, 'updatedAt', updated_at), updated_at FROM takosumi_accounts_documents WHERE bucket = 'authorization_codes';",
+      "INSERT INTO takosumi_accounts_documents (bucket, key, document, updated_at) SELECT 'authorization_code_redemptions', consumed.key, json_object('state', 'issued', 'recordVersion', 'legacy-issued:' || substr(consumed.key, 8, 32), 'claimId', 'legacy-claim:' || substr(consumed.key, 8, 32), 'createdAt', CAST(json_extract(consumed.document, '$.consumedAt') AS INTEGER), 'updatedAt', CAST(json_extract(consumed.document, '$.consumedAt') AS INTEGER), 'issuedAt', (CAST(strftime('%s', 'now') AS INTEGER) * 1000), 'accessTokenHash', (SELECT NULLIF(json_extract(link.document, '$.accessTokenHash'), '') FROM takosumi_accounts_documents AS link WHERE link.bucket = 'auth_code_token_links' AND json_extract(link.document, '$.codeHash') = consumed.key ORDER BY link.key LIMIT 1), 'refreshTokenHash', (SELECT NULLIF(json_extract(link.document, '$.refreshRootHash'), '') FROM takosumi_accounts_documents AS link WHERE link.bucket = 'auth_code_token_links' AND json_extract(link.document, '$.codeHash') = consumed.key ORDER BY link.key LIMIT 1)), CAST(json_extract(consumed.document, '$.consumedAt') AS INTEGER) FROM takosumi_accounts_documents AS consumed WHERE consumed.bucket = 'consumed_authorization_codes' AND 1 ON CONFLICT(bucket, key) DO UPDATE SET document = json_set(takosumi_accounts_documents.document, '$.state', 'issued', '$.recordVersion', json_extract(excluded.document, '$.recordVersion'), '$.claimId', json_extract(excluded.document, '$.claimId'), '$.updatedAt', json_extract(excluded.document, '$.updatedAt'), '$.issuedAt', COALESCE(json_extract(takosumi_accounts_documents.document, '$.issuedAt'), json_extract(excluded.document, '$.issuedAt')), '$.replayedAt', json(NULL), '$.accessTokenHash', json_extract(excluded.document, '$.accessTokenHash'), '$.refreshTokenHash', json_extract(excluded.document, '$.refreshTokenHash')), updated_at = excluded.updated_at;",
+      "CREATE INDEX IF NOT EXISTS takosumi_accounts_authorization_code_redemptions_terminal_retention ON takosumi_accounts_documents(CAST(COALESCE(json_extract(document, '$.replayedAt'), json_extract(document, '$.issuedAt')) AS INTEGER), key) WHERE bucket = 'authorization_code_redemptions' AND json_extract(document, '$.state') IN ('issued', 'replayed');",
     ].join("\n"),
   },
 ];
@@ -648,7 +687,9 @@ export async function applyD1AccountsMigrations(input: {
         `Accounts D1 migration ledger must be the contiguous prefix 0..n; expected version ${index}, received ${value}`,
       );
     }
-    if (!D1_ACCOUNTS_MIGRATIONS.some((migration) => migration.version === value)) {
+    if (
+      !D1_ACCOUNTS_MIGRATIONS.some((migration) => migration.version === value)
+    ) {
       throw new Error(
         `Accounts D1 migration ledger contains unknown version ${value}`,
       );

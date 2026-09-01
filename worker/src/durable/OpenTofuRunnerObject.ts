@@ -350,6 +350,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   #stateCryptoInstance: StateArtifactCrypto | undefined;
   #lastStartupSeconds: number | undefined;
+  /**
+   * Run dispatches currently executing in this object's container. A progress
+   * read is only meaningful (and only safe to proxy) while one is in flight;
+   * outside that window the container may be asleep and must not be started
+   * for a status poll.
+   */
+  #activeRunDispatches = 0;
   readonly #activeMutationPreparations = new Set<string>();
   readonly #localRunnerProxyUrl: URL | undefined;
   readonly #artifactLimits: RunnerArtifactLimits;
@@ -431,6 +438,25 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         { status: 501 },
       );
     }
+    // Live apply progress is a read on a container that is ALREADY executing
+    // this run's apply. It must never start (or wake) a container: a cold
+    // runner has no progress to report, and paying a container start for a
+    // status poll would cost real capacity for nothing.
+    const progressUrl = new URL(request.url);
+    if (
+      request.method === "GET" &&
+      /^\/runs\/[^/]+\/progress$/.test(progressUrl.pathname)
+    ) {
+      if (this.#activeRunDispatches === 0) {
+        return Response.json({ progress: undefined }, { status: 200 });
+      }
+      try {
+        return await this.#containerFetch(request);
+      } catch {
+        // A progress read must never surface as a run failure.
+        return Response.json({ progress: undefined }, { status: 200 });
+      }
+    }
     const runDispatch = isRunDispatchRequest(request);
     const runAction = runDispatch
       ? await readRunDispatchAction(request.clone())
@@ -440,6 +466,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       runnerShouldShutdownAfterRun(runAction, runnerKeepaliveSeconds(this.env));
     let runSucceeded = false;
     let mutationIndeterminate = false;
+    if (runDispatch) this.#activeRunDispatches += 1;
     try {
       this.#lastStartupSeconds = undefined;
       const response = await this.#fetchWithDurablePlanArtifacts(request);
@@ -500,6 +527,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         { status: 500 },
       );
     } finally {
+      if (runDispatch) {
+        this.#activeRunDispatches = Math.max(
+          0,
+          this.#activeRunDispatches - 1,
+        );
+      }
       if (
         runDispatch &&
         !mutationIndeterminate &&

@@ -90,11 +90,18 @@ import type {
   OpenTofuControlStore,
   PlanRunInputs,
   PublicHostReservation,
+  ClaimWorkItemsInput,
+  ControlWorkItem,
+  EnqueueWorkItemInput,
+  FailWorkItemOptions,
   RecoverableOpenTofuRunListOptions,
+  RecoverableOpenTofuRunPage,
   RecoverableResourceOperationRunListOptions,
   ResourceOperationRun,
   ReservePublicHostInput,
   ReservePublicHostResult,
+  RunBacklogStats,
+  RunBacklogStatsInput,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
@@ -116,14 +123,20 @@ import {
   compareStoredRunRecordsAsc,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
+  decodeRecoverableRunCursor,
+  encodeRecoverableRunCursor,
   isApplyRunRecord,
   isPlanRunRecord,
   isRecoverableOpenTofuRunRecord,
+  runRowBillingCapturePending,
+  WORK_ITEM_DEFAULT_MAX_ATTEMPTS,
   resourceOperationRunTransitionAllowed,
   resourceOperationRunNeedsRecovery,
   sameResourceOperationIdentity,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
+  type WorkspaceRunPage,
+  type CapsuleUsageTotals,
 } from "./store.ts";
 import {
   artifactRecordFromRow,
@@ -424,24 +437,51 @@ function pgRunMutationDispatched(): SQL {
   `;
 }
 
-/** Mirrors applyRunBillingCapturePending in the shared store model. */
-function pgRunBillingCapturePending(): SQL {
-  return sql`
-    EXISTS (
-      SELECT 1
-      FROM jsonb_array_elements(
-        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
-      ) AS audit_event
-      WHERE audit_event ->> 'type' = 'billing.capture.pending'
-    )
-    AND NOT EXISTS (
-      SELECT 1
-      FROM jsonb_array_elements(
-        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
-      ) AS audit_event
-      WHERE audit_event ->> 'type' = 'billing.capture.completed'
-    )
-  `;
+/**
+ * The billing-capture-pending predicate is served by the write-time
+ * `runs.billing_capture_pending` column (see `runRowBillingCapturePending`);
+ * migration 109 backfilled existing rows from the audit events.
+ */
+function pgWorkItemFromRow(row: {
+  readonly id: string;
+  readonly kind: string;
+  readonly dedupeKey: string | null;
+  readonly workspaceId: string | null;
+  readonly capsuleId: string | null;
+  readonly runId: string | null;
+  readonly dueAt: string;
+  readonly priority: number;
+  readonly attempts: number;
+  readonly maxAttempts: number;
+  readonly status: string;
+  readonly lockedUntil: string | null;
+  readonly lockedBy: string | null;
+  readonly payloadJson: unknown;
+  readonly lastError: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}): ControlWorkItem {
+  return {
+    id: row.id,
+    kind: row.kind,
+    ...(row.dedupeKey === null ? {} : { dedupeKey: row.dedupeKey }),
+    ...(row.workspaceId === null ? {} : { workspaceId: row.workspaceId }),
+    ...(row.capsuleId === null ? {} : { capsuleId: row.capsuleId }),
+    ...(row.runId === null ? {} : { runId: row.runId }),
+    dueAt: row.dueAt,
+    priority: row.priority,
+    attempts: row.attempts,
+    maxAttempts: row.maxAttempts,
+    status: row.status as ControlWorkItem["status"],
+    ...(row.lockedUntil === null ? {} : { lockedUntil: row.lockedUntil }),
+    ...(row.lockedBy === null ? {} : { lockedBy: row.lockedBy }),
+    ...(row.payloadJson === null || row.payloadJson === undefined
+      ? {}
+      : { payload: row.payloadJson }),
+    ...(row.lastError === null ? {} : { lastError: row.lastError }),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
 }
 
 /** An expired apply/destroy is uncertain only after it started. */
@@ -605,6 +645,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         status: run.status,
         leaseToken: null,
         heartbeatAt: run.heartbeatAt ?? null,
+        billingCapturePending: runRowBillingCapturePending(run),
         createdAt: String(run.createdAt),
         runJson: run,
       })
@@ -660,6 +701,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       .set({
         status: persisted.status,
         runJson: persisted,
+        ...(input.kind === "apply"
+          ? { billingCapturePending: runRowBillingCapturePending(persisted) }
+          : {}),
         ...(input.clearHeartbeat
           ? { heartbeatAt: null }
           : heartbeatAt === undefined
@@ -899,6 +943,51 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async listRunsByWorkspacePage(
+    workspaceId: string,
+    options: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<WorkspaceRunPage> {
+    const limit = clampRunListLimit(options.limit);
+    const cursor = decodeRecoverableRunCursor(options.cursor);
+    const createdAtMillis = pgRunCreatedAtMillisOrder();
+    const rows = await this.#pgManyJson<StoredRunRecord>(
+      pgSchema.runs,
+      pgSchema.runs.runJson,
+      {
+        where: cursor
+          ? and(
+              eq(pgSchema.runs.workspaceId, workspaceId),
+              sql`(${createdAtMillis} < ${cursor.createdAtMillis}
+                OR (${createdAtMillis} = ${cursor.createdAtMillis}
+                  AND ${pgSchema.runs.id} < ${cursor.id}))`,
+            )
+          : eq(pgSchema.runs.workspaceId, workspaceId),
+        orderBy: [desc(createdAtMillis), desc(pgSchema.runs.id)],
+        limit: limit + 1,
+      },
+    );
+    const page = rows.slice(0, limit);
+    const nextCursor =
+      rows.length > limit && page.length > 0
+        ? encodeRecoverableRunCursor(page[page.length - 1]!)
+        : undefined;
+    return {
+      runs: page,
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+    };
+  }
+
+  async getPlanRunsByIds(ids: readonly string[]): Promise<readonly PlanRun[]> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return [];
+    const rows = await this.#pgManyJson<StoredRunRecord>(
+      pgSchema.runs,
+      pgSchema.runs.runJson,
+      { where: inArray(pgSchema.runs.id, unique) },
+    );
+    return rows.filter(isPlanRunRecord);
+  }
+
   async getCapsuleRuntimeSafety(
     capsuleId: string,
   ): Promise<CapsuleRuntimeSafety | undefined> {
@@ -921,36 +1010,356 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
 
   async listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
-  ): Promise<readonly StoredRunRecord[]> {
+  ): Promise<RecoverableOpenTofuRunPage> {
+    const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
+    const cursor = decodeRecoverableRunCursor(options.cursor);
+    const millis = pgRunCreatedAtMillisOrder();
+    const dispatchable = [
+      ...RUN_KINDS_PLAN,
+      "drift_check",
+      ...RUN_KINDS_APPLY,
+      RUN_KIND_SOURCE_SYNC,
+      RUN_KIND_RESTORE,
+    ];
+    // Index-backed candidate predicate; mirrors the D1 store. SQL bounds the
+    // scan (superset of the exact predicate), the JS filter refines, and the
+    // billing branch reads the write-time flag column instead of jsonb scans.
+    const candidate = or(
+      and(
+        eq(pgSchema.runs.status, "queued"),
+        inArray(pgSchema.runs.kind, dispatchable),
+        sql`${millis} <= ${options.staleQueuedBeforeMs}`,
+      ),
+      and(
+        eq(pgSchema.runs.status, "running"),
+        inArray(pgSchema.runs.kind, dispatchable),
+        or(
+          lt(pgSchema.runs.heartbeatAt, options.staleRunningBeforeMs + 1),
+          and(
+            isNull(pgSchema.runs.heartbeatAt),
+            sql`${millis} <= ${options.staleRunningBeforeMs}`,
+          ),
+        ),
+      ),
+      and(
+        inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+        inArray(pgSchema.runs.status, ["succeeded", "failed"]),
+        eq(pgSchema.runs.billingCapturePending, 1),
+      ),
+    );
+    const keyset =
+      cursor === undefined
+        ? undefined
+        : or(
+            sql`${millis} > ${cursor.createdAtMillis}`,
+            and(
+              sql`${millis} = ${cursor.createdAtMillis}`,
+              gt(pgSchema.runs.id, cursor.id),
+            ),
+          );
     const rows = await this.#db
       .select({ json: pgSchema.runs.runJson })
       .from(pgSchema.runs)
+      .where(keyset === undefined ? candidate : and(candidate, keyset))
+      .orderBy(sql`${millis} asc`, asc(pgSchema.runs.id))
+      .limit(limit + 1);
+    const parsed = rows
+      .map((row) => parseRow(row) as StoredRunRecord)
+      .filter((row): row is StoredRunRecord => Boolean(row));
+    // The cursor advances over SCANNED candidates so rows the exact predicate
+    // rejects can never stall the sweep rotation.
+    const page = parsed.slice(0, limit);
+    const nextCursor =
+      parsed.length > limit && page.length > 0
+        ? encodeRecoverableRunCursor(page[page.length - 1]!)
+        : undefined;
+    return {
+      runs: page.filter((row) => isRecoverableOpenTofuRunRecord(row, options)),
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+    };
+  }
+
+  async getRunBacklogStats(
+    input: RunBacklogStatsInput,
+  ): Promise<RunBacklogStats> {
+    const millis = pgRunCreatedAtMillisOrder();
+    const dispatchable = [
+      ...RUN_KINDS_PLAN,
+      "drift_check",
+      ...RUN_KINDS_APPLY,
+      RUN_KIND_SOURCE_SYNC,
+      RUN_KIND_RESTORE,
+    ];
+    const grouped = await this.#db
+      .select({
+        status: pgSchema.runs.status,
+        kind: pgSchema.runs.kind,
+        count: sql<number>`count(*)`.as("count"),
+      })
+      .from(pgSchema.runs)
       .where(
-        or(
-          and(
-            inArray(pgSchema.runs.status, ["queued", "running"]),
-            inArray(pgSchema.runs.kind, [
-              ...RUN_KINDS_PLAN,
-              "drift_check",
-              ...RUN_KINDS_APPLY,
-              RUN_KIND_SOURCE_SYNC,
-              RUN_KIND_RESTORE,
-            ]),
-          ),
-          and(
-            inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
-            inArray(pgSchema.runs.status, ["succeeded", "failed"]),
-            pgRunBillingCapturePending(),
+        and(
+          inArray(pgSchema.runs.status, ["queued", "running"]),
+          inArray(pgSchema.runs.kind, dispatchable),
+        ),
+      )
+      .groupBy(pgSchema.runs.status, pgSchema.runs.kind);
+    const queuedByType: Record<string, number> = {};
+    const runningByType: Record<string, number> = {};
+    for (const row of grouped) {
+      const target = row.status === "queued" ? queuedByType : runningByType;
+      target[row.kind] = Number(row.count);
+    }
+    // Oldest queued row via ORDER BY + LIMIT 1 selecting the plain column:
+    // the millis CASE contains `EXTRACT(EPOCH FROM …)`, which must stay out
+    // of the SELECT list (the proxy driver's column mapper splits on " from ").
+    const oldestQueued = await this.#db
+      .select({ createdAt: pgSchema.runs.createdAt })
+      .from(pgSchema.runs)
+      .where(
+        and(
+          eq(pgSchema.runs.status, "queued"),
+          inArray(pgSchema.runs.kind, dispatchable),
+        ),
+      )
+      .orderBy(sql`${millis} asc`)
+      .limit(1);
+    const stale = await this.#db
+      .select({ count: sql<number>`count(*)`.as("count") })
+      .from(pgSchema.runs)
+      .where(
+        and(
+          eq(pgSchema.runs.status, "running"),
+          inArray(pgSchema.runs.kind, dispatchable),
+          or(
+            lt(pgSchema.runs.heartbeatAt, input.staleRunningBeforeMs + 1),
+            and(
+              isNull(pgSchema.runs.heartbeatAt),
+              sql`${millis} <= ${input.staleRunningBeforeMs}`,
+            ),
           ),
         ),
       );
-    const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
-    return rows
-      .map((row) => parseRow(row) as StoredRunRecord)
-      .filter((row): row is StoredRunRecord => Boolean(row))
-      .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
-      .sort(compareStoredRunRecordsAsc)
-      .slice(0, limit);
+    const billing = await this.#db
+      .select({ count: sql<number>`count(*)`.as("count") })
+      .from(pgSchema.runs)
+      .where(
+        and(
+          eq(pgSchema.runs.billingCapturePending, 1),
+          inArray(pgSchema.runs.status, ["succeeded", "failed"]),
+        ),
+      );
+    // created_at is TEXT holding either the internal epoch number or an ISO
+    // string; coerce the same way the shared record timestamp helper does.
+    const oldestQueuedAtRaw = oldestQueued[0]?.createdAt;
+    const oldestQueuedAtNumeric =
+      oldestQueuedAtRaw === undefined ? Number.NaN : Number(oldestQueuedAtRaw);
+    const oldestQueuedAt = Number.isFinite(oldestQueuedAtNumeric)
+      ? oldestQueuedAtNumeric
+      : oldestQueuedAtRaw !== undefined
+        ? Date.parse(oldestQueuedAtRaw)
+        : undefined;
+    return {
+      queuedByType,
+      runningByType,
+      ...(oldestQueuedAt !== undefined &&
+      Number.isFinite(oldestQueuedAt) &&
+      oldestQueuedAt > 0
+        ? { oldestQueuedAgeMs: Math.max(0, input.now - oldestQueuedAt) }
+        : {}),
+      staleHeartbeatRunning: Number(stale[0]?.count ?? 0),
+      billingCapturePending: Number(billing[0]?.count ?? 0),
+    };
+  }
+
+  // -- Scheduled-intent work items + sweep cursors -----------------------------
+
+  async enqueueWorkItem(input: EnqueueWorkItemInput): Promise<ControlWorkItem> {
+    await this.#db
+      .insert(pgSchema.controlWorkItems)
+      .values({
+        id: input.id,
+        kind: input.kind,
+        dedupeKey: input.dedupeKey ?? null,
+        workspaceId: input.workspaceId ?? null,
+        capsuleId: input.capsuleId ?? null,
+        runId: input.runId ?? null,
+        dueAt: input.dueAt,
+        priority: input.priority ?? 0,
+        attempts: 0,
+        maxAttempts: input.maxAttempts ?? WORK_ITEM_DEFAULT_MAX_ATTEMPTS,
+        status: "pending",
+        payloadJson: input.payload === undefined ? null : input.payload,
+        createdAt: input.now,
+        updatedAt: input.now,
+      })
+      .onConflictDoNothing();
+    if (input.dedupeKey !== undefined) {
+      const live = await this.#db
+        .select()
+        .from(pgSchema.controlWorkItems)
+        .where(
+          and(
+            eq(pgSchema.controlWorkItems.kind, input.kind),
+            eq(pgSchema.controlWorkItems.dedupeKey, input.dedupeKey),
+            inArray(pgSchema.controlWorkItems.status, ["pending", "leased"]),
+          ),
+        )
+        .limit(1);
+      if (live[0]) return pgWorkItemFromRow(live[0]);
+    }
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.controlWorkItems)
+      .where(eq(pgSchema.controlWorkItems.id, input.id))
+      .limit(1);
+    if (!rows[0]) throw new Error("work item enqueue lost its row");
+    return pgWorkItemFromRow(rows[0]);
+  }
+
+  async claimDueWorkItems(
+    input: ClaimWorkItemsInput,
+  ): Promise<readonly ControlWorkItem[]> {
+    const table = pgSchema.controlWorkItems;
+    const claimable = or(
+      and(
+        eq(table.status, "pending"),
+        sql`${table.dueAt} <= ${input.now}`,
+      ),
+      // An expired lease is reclaimable: the crashed claimer never released.
+      and(eq(table.status, "leased"), lt(table.lockedUntil, input.now)),
+    );
+    const candidates = await this.#db
+      .select({
+        id: table.id,
+        attempts: table.attempts,
+        maxAttempts: table.maxAttempts,
+      })
+      .from(table)
+      .where(
+        input.kinds === undefined
+          ? claimable
+          : and(claimable, inArray(table.kind, [...input.kinds])),
+      )
+      .orderBy(desc(table.priority), asc(table.dueAt), asc(table.id))
+      .limit(Math.max(0, input.limit));
+    const lockedUntil = new Date(
+      Date.parse(input.now) + input.leaseMs,
+    ).toISOString();
+    const claimed: ControlWorkItem[] = [];
+    for (const candidate of candidates) {
+      // Attempts exhausted: park the row dead instead of leasing it again.
+      if (candidate.attempts + 1 > candidate.maxAttempts) {
+        await this.#db
+          .update(table)
+          .set({
+            status: "dead",
+            attempts: candidate.attempts + 1,
+            updatedAt: input.now,
+          })
+          .where(and(eq(table.id, candidate.id), claimable));
+        continue;
+      }
+      // Re-assert claimability so a concurrent claimer loses the CAS.
+      const won = await this.#db
+        .update(table)
+        .set({
+          status: "leased",
+          attempts: candidate.attempts + 1,
+          lockedUntil,
+          lockedBy: input.lockedBy,
+          updatedAt: input.now,
+        })
+        .where(and(eq(table.id, candidate.id), claimable))
+        .returning();
+      if (won[0]) claimed.push(pgWorkItemFromRow(won[0]));
+    }
+    return claimed;
+  }
+
+  async completeWorkItem(
+    id: string,
+    options: { readonly lockedBy: string; readonly now: string },
+  ): Promise<void> {
+    await this.#db
+      .update(pgSchema.controlWorkItems)
+      .set({ status: "done", updatedAt: options.now })
+      .where(
+        and(
+          eq(pgSchema.controlWorkItems.id, id),
+          eq(pgSchema.controlWorkItems.status, "leased"),
+          eq(pgSchema.controlWorkItems.lockedBy, options.lockedBy),
+        ),
+      );
+  }
+
+  async failWorkItem(id: string, options: FailWorkItemOptions): Promise<void> {
+    const retryDueAt = new Date(
+      Date.parse(options.now) + options.retryDelayMs,
+    ).toISOString();
+    const table = pgSchema.controlWorkItems;
+    // Attempts were counted at claim time; fail only decides retry vs dead.
+    await this.#db
+      .update(table)
+      .set({
+        status: sql`case when ${table.attempts} >= ${table.maxAttempts}
+          then 'dead' else 'pending' end`,
+        dueAt: sql`case when ${table.attempts} >= ${table.maxAttempts}
+          then ${table.dueAt} else ${retryDueAt} end`,
+        lastError: options.error,
+        updatedAt: options.now,
+      })
+      .where(
+        and(
+          eq(table.id, id),
+          eq(table.status, "leased"),
+          eq(table.lockedBy, options.lockedBy),
+        ),
+      );
+  }
+
+  async countWorkItemBacklog(
+    now: string,
+  ): Promise<Readonly<Record<string, number>>> {
+    const rows = await this.#db
+      .select({
+        kind: pgSchema.controlWorkItems.kind,
+        count: sql<number>`count(*)`.as("count"),
+      })
+      .from(pgSchema.controlWorkItems)
+      .where(
+        and(
+          eq(pgSchema.controlWorkItems.status, "pending"),
+          sql`${pgSchema.controlWorkItems.dueAt} <= ${now}`,
+        ),
+      )
+      .groupBy(pgSchema.controlWorkItems.kind);
+    const backlog: Record<string, number> = {};
+    for (const row of rows) backlog[row.kind] = Number(row.count);
+    return backlog;
+  }
+
+  async getSweepCursor(name: string): Promise<string | undefined> {
+    const rows = await this.#db
+      .select({ cursor: pgSchema.controlSweepCursors.cursor })
+      .from(pgSchema.controlSweepCursors)
+      .where(eq(pgSchema.controlSweepCursors.sweepName, name))
+      .limit(1);
+    return rows[0]?.cursor ?? undefined;
+  }
+
+  async putSweepCursor(
+    name: string,
+    cursor: string | undefined,
+  ): Promise<void> {
+    const updatedAt = new Date().toISOString();
+    await this.#db
+      .insert(pgSchema.controlSweepCursors)
+      .values({ sweepName: name, cursor: cursor ?? null, updatedAt })
+      .onConflictDoUpdate({
+        target: pgSchema.controlSweepCursors.sweepName,
+        set: { cursor: cursor ?? null, updatedAt },
+      });
   }
 
   async listSourceSyncRuns(
@@ -1023,6 +1432,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       status: run.status ?? "queued",
       leaseToken: run.leaseToken ?? null,
       heartbeatAt: run.heartbeatAt ?? null,
+      billingCapturePending: runRowBillingCapturePending(
+        fields.json as StoredRunRecord,
+      ),
       // created_at is TEXT so it can hold both the internal epoch-number runs
       // and the ISO-string SourceSyncRun without a per-kind column.
       createdAt: String(fields.createdAt),
@@ -1041,6 +1453,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           status: values.status,
           leaseToken: values.leaseToken,
           heartbeatAt: values.heartbeatAt,
+          billingCapturePending: values.billingCapturePending,
           createdAt: values.createdAt,
           runJson: values.runJson,
         },
@@ -3482,6 +3895,22 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return usageEventFromRow(row);
   }
 
+  async getCapsuleUsageTotals(
+    capsuleId: string,
+  ): Promise<CapsuleUsageTotals> {
+    const rows = await this.#db
+      .select({
+        ratingStatus: pgSchema.usageEvents.ratingStatus,
+        count: sql<number>`count(*)`.as("count"),
+        usdMicros: sql<number>`coalesce(sum(${pgSchema.usageEvents.usdMicros}), 0)`
+          .as("usd_micros"),
+      })
+      .from(pgSchema.usageEvents)
+      .where(eq(pgSchema.usageEvents.capsuleId, capsuleId))
+      .groupBy(pgSchema.usageEvents.ratingStatus);
+    return capsuleUsageTotalsFromGroups(rows);
+  }
+
   async listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]> {
     const rows = await this.#db
       .select()
@@ -3723,6 +4152,9 @@ async function pgUpsertRun(
     status: run.status,
     leaseToken: null as string | null,
     heartbeatAt: run.heartbeatAt ?? null,
+    // The commit tail is exactly where the pending billing marker lands, so
+    // the indexed backlog flag must ride the same atomic write.
+    billingCapturePending: runRowBillingCapturePending(run),
     createdAt: String(run.createdAt),
     runJson: run,
   };
@@ -3739,6 +4171,7 @@ async function pgUpsertRun(
         status: values.status,
         leaseToken: values.leaseToken,
         heartbeatAt: values.heartbeatAt,
+        billingCapturePending: values.billingCapturePending,
         createdAt: values.createdAt,
         runJson: values.runJson,
       },
@@ -3760,6 +4193,7 @@ async function pgUpdateTerminalRunWithLease(
     status: run.status,
     leaseToken: null as string | null,
     heartbeatAt: run.heartbeatAt ?? null,
+    billingCapturePending: runRowBillingCapturePending(run as StoredRunRecord),
     createdAt: String(run.createdAt),
     runJson: run,
   };
@@ -3870,4 +4304,31 @@ function publicHostReservationFromRow(
     updatedAt: String(row.updated_at),
     ...(row.released_at ? { releasedAt: String(row.released_at) } : {}),
   };
+}
+
+/**
+ * Folds the `(ratingStatus, count, sum)` aggregate rows into the summary.
+ * Only RATED events contribute money; unrated events are proven zero by the
+ * contract's `usageEventUsdMicros` invariant, so summing all rows and
+ * reporting the rated count separately stays consistent.
+ */
+function capsuleUsageTotalsFromGroups(
+  rows: readonly {
+    readonly ratingStatus: string;
+    readonly count: number | string;
+    readonly usdMicros: number | string;
+  }[],
+): CapsuleUsageTotals {
+  let usdMicros = 0;
+  let eventCount = 0;
+  let ratedEventCount = 0;
+  for (const row of rows) {
+    const count = Number(row.count) || 0;
+    eventCount += count;
+    if (row.ratingStatus === "rated") {
+      ratedEventCount += count;
+      usdMicros += Number(row.usdMicros) || 0;
+    }
+  }
+  return { usdMicros, eventCount, ratedEventCount };
 }

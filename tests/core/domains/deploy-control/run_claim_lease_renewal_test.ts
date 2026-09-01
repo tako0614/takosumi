@@ -253,14 +253,14 @@ test("cancel that wins forces a later consumer claim to lose (no dispatch, no re
   expect((await store.getApplyRun("apply_cf"))?.status).toBe("cancelled");
 });
 
-test("a consumer claim that wins forces a concurrent cancel to be rejected (never clobbers the running apply)", async () => {
+test("cancelling a claimed (running) apply wins the row and the late completion never resurrects it", async () => {
   const store = new InMemoryOpenTofuControlStore();
   await seedApply(store, {
     capsuleId: "cap_claim_first",
     planRunId: "plan_clf",
     applyRunId: "apply_clf",
   });
-  // Gate the runner so the apply stays 'running' while we attempt the cancel.
+  // Gate the runner so the apply stays 'running' while we cancel it.
   let releaseApply!: () => void;
   const applyHolds = new Promise<void>((resolve) => {
     releaseApply = resolve;
@@ -278,15 +278,15 @@ test("a consumer claim that wins forces a concurrent cancel to be rejected (neve
   await new Promise((r) => setTimeout(r, 5));
   expect((await store.getApplyRun("apply_clf"))?.status).toBe("running");
 
-  // The cancel CAS (expectFrom 'queued') now loses: a running apply is not
-  // cancellable, and the cancel must not clobber it.
-  await expect(controller.cancelRun("apply_clf")).rejects.toThrow(
-    /only queued runs can be cancelled/,
-  );
+  // Cancel v1: the fenced running→cancelled CAS wins the row.
+  const cancelled = await controller.cancelRun("apply_clf");
+  expect(cancelled.status).toBe("cancelled");
 
+  // The gated runner now finishes, but the executor's terminal commit must
+  // LOSE against the cancelled row — a cancelled run is never resurrected.
   releaseApply();
-  const response = await claimPromise;
-  expect(response.applyRun.status).toBe("succeeded");
+  await claimPromise.catch(() => undefined);
+  expect((await store.getApplyRun("apply_clf"))?.status).toBe("cancelled");
 });
 
 test("a requeued destroy after successful pre_destroy cannot be cancelled or clear runtime safety", async () => {

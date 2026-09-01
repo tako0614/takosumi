@@ -41,7 +41,8 @@ blockerとして扱います。無関係なroutine artifact releaseは一律に�
   必要に応じて追加し、Project / Capsule graph、ProviderConnection、Secret、StateVersion、
   Output、AuditEvent の isolation scope とする。
 - **Quota/showback ledger**: Takosumi platform worker が持つ operator-selected disabled/showback records。
-  official billing / payment processor records are Takosumi Cloud-only commercial records.
+  Takosumi Hosted の retail/payment record と Takoserver の managed-supply settlement record は
+  それぞれの product が復旧し、OSS ledger に取り込みません。
 - **Cloud account**: provider account used by a Workspace-owned ProviderConnection.
   AWS/GitHub/Kubernetes/custom provider access is restored through
   ProviderConnections / Secret / provider policy state, not by taking over a
@@ -81,60 +82,60 @@ incident channel に 記録できます。
 
 failover 前:
 
-1. production deploy と background mutation job を freeze する。
-2. 利用可能な最新 backup / replica の timestamp を確認する。
+1. production deploy と background mutation job を freeze します。
+2. 利用可能な最新 backup / replica の timestamp を確認します。
 3. RPO 推定がそのenvironmentの宣言target内、または user/tenant impact
-   を明示的に受け入れることを確認する。
-4. 以下へのアクセスを検証する:
+   を明示的に受け入れることを確認します。
+4. 以下へのアクセスを検証します:
    - recovery target / failure domain
    - encrypted secret partition key
    - DNS / routing 制御
    - image / artifact registry
    - recovery target の observability dashboard
-5. owner を任命する:
+5. owner を任命します:
    - restore owner
    - routing owner
    - verification owner
    - affected-user communications owner
-6. go / no-go の判断を incident timeline に記録する。
+6. go / no-go の判断を incident timeline に記録します。
 
 ## Recovery-target Failover Procedure
 
-1. recovery target を準備または選択する。
-   - operator-selected deploy adapter のreview済みrealized configurationを使う。
-   - selected persistence/runner adapters が recovery target で利用可能なことを確認する。
-   - restore 進行中に live primary storage を変更しない。
-2. control-plane data を restore する。
+1. recovery target を準備または選択します。
+   - operator-selected deploy adapter のreview済みrealized configurationを使います。
+   - selected persistence/runner adapters が recovery target で利用可能なことを確認します。
+   - restore 進行中に live primary storage を変更しません。
+2. control-plane data を restore します。
    - selected ledger / object-store adapter の verified backup、manifest、
-     state/artifact inventory に従う。
+     state/artifact inventory に従います。
    - OSS `BackupRecord` export、`state.tar.zst.enc`、または
-     `artifacts.manifest.json` だけを復元可能性の証拠にしない。
-   - write を有効化する前に audit chain を verify する。
-   - secret 値を露出させずに secret partition の availability を確認する。
-3. Capsule service-data を reattach / restore する。
-   - critical Workspace の Project / Capsule graph を確認する。
-   - 必要な Capsule だけ service-data backup を restore する。
-   - generated root / StateVersion / Output の整合性を確認する。
+     `artifacts.manifest.json` だけを復元可能性の証拠にしません。
+   - write を有効化する前に audit chain を verify します。
+   - secret 値を露出させずに secret partition の availability を確認します。
+3. Capsule service-data を reattach / restore します。
+   - critical Workspace の Project / Capsule graph を確認します。
+   - 必要な Capsule だけ service-data backup を restore します。
+   - generated root / StateVersion / Output の整合性を確認します。
    - CredentialRecipe resolution、ProviderConnection status、
-     ProviderBinding status、egress/operator-defined executor policy の整合性を確認する。
-4. runtime service を reattach する。
+     ProviderBinding status、egress/operator-defined executor policy の整合性を確認します。
+4. runtime service を reattach します。
    - platform service composition、queue、Run lease/ownership coordinator、
-     selected Runner adapter / runner pool を起動する。
-   - health endpoint が green であることを確認する。
-   - runner pool が recovery target で plan を受けられることを確認する。
-5. user/tenant-facing の critical path を検証する。
+     selected Runner adapter / runner pool を起動します。
+   - health endpoint が green であることを確認します。
+   - runner pool が recovery target で plan を受けられることを確認します。
+5. user/tenant-facing の critical path を検証します。
    - login / session validation
    - Source git read
    - Capsule compatibility check / plan resolve
    - 既知の Capsule public route または Resolved Interface 1 件
    - Workspace quota/showback read path
-6. routing を shift する。
-   - selected DNS/routing adapter の承認済み手順を使う。
-   - affected-user hostname を recovery target に向ける。
-   - 5xx / latency / auth error rate を監視する。
-7. monitoring state に入る。
-   - 2 つの observation window が green になるまで deploy freeze を維持する。
-   - recovered service と既知の residual risk を affected-user update で通知する。
+6. routing を shift します。
+   - selected DNS/routing adapter の承認済み手順を使います。
+   - affected-user hostname を recovery target に向けます。
+   - 5xx / latency / auth error rate を監視します。
+7. monitoring state に入ります。
+   - 2 つの observation window が green になるまで deploy freeze を維持します。
+   - recovered service と既知の residual risk を affected-user update で通知します。
 
 ## Return to Primary
 
@@ -166,9 +167,9 @@ cutback は別の change window として扱います。recovery target に writ
 ## Simulation Cadence
 
 operator policy が定める cadence で、live traffic shift を伴わない production DR
-simulation と tabletop を実施する。cadence と参加 role は launch brief / on-call
+simulation と tabletop を実施します。cadence と参加 role は launch brief / on-call
 policy に明記し、incident commander、on-call、routing owner、storage owner、
-affected-user communications owner の必要範囲を選ぶ。
+affected-user communications owner の必要範囲を選びます。
 
 simulation evidence の取り扱いは
 [Backup and Restore Drills](./backup-restore-drills.md) と同じ private evidence

@@ -10,6 +10,7 @@
  */
 
 import { expect, test } from "bun:test";
+import type { JsonValue } from "takosumi-contract";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
@@ -33,13 +34,13 @@ function deterministicIds(): (prefix: string) => string {
 }
 
 function sensitiveResolver(
-  values: Record<string, unknown> = { admin_token: "super-secret-token" },
+  values: Record<string, JsonValue> = { admin_token: "super-secret-token" },
 ): SensitiveOutputResolver {
   return {
     resolve: (input) => {
       const value = values[input.outputName];
       if (value === undefined) return Promise.resolve(undefined);
-      return Promise.resolve({ value: value as never, sensitive: true });
+      return Promise.resolve({ value, sensitive: true });
     },
   };
 }

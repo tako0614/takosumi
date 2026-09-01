@@ -110,6 +110,7 @@ import {
   publicCapsule,
   publicPlanActionResponse,
   publicRun,
+  requireResourceWorkspaceAccess,
   requireWorkspaceAccess,
   resolveProviderBindings,
 } from "./shared.ts";
@@ -165,7 +166,7 @@ async function deleteDependency(
 ): Promise<Response> {
   const existing = await operations.dependencies.getDependency(dependencyId);
   if (!existing) return errorJson("not_found", "not found", 404);
-  const auth = await requireWorkspaceAccess({
+  const auth = await requireResourceWorkspaceAccess({
     operations,
     store,
     workspaceId: existing.workspaceId,

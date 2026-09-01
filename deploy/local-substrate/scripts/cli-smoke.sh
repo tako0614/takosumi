@@ -24,19 +24,48 @@ SOURCE_GIT="${TAKOSUMI_DEPLOY_CONTROL_SOURCE_GIT:-https://github.com/tako0614/ta
 SOURCE_REF="${TAKOSUMI_DEPLOY_CONTROL_SOURCE_REF:-main}"
 SOURCE_MODULE_PATH="${TAKOSUMI_DEPLOY_CONTROL_SOURCE_PATH:-opentofu-modules/core/module}"
 INSTALL_CONFIG_ID="${TAKOSUMI_DEPLOY_CONTROL_INSTALL_CONFIG_ID:-cfg-default-opentofu-capsule}"
+CAPSULE_VARS_JSON="${TAKOSUMI_DEPLOY_CONTROL_VARS_JSON:-}"
+EXPECTED_OUTPUTS_JSON="${TAKOSUMI_DEPLOY_CONTROL_EXPECTED_OUTPUTS_JSON:-}"
+DESTROY_AFTER_APPLY="${TAKOSUMI_DEPLOY_CONTROL_DESTROY_AFTER_APPLY:-0}"
 source "$SCRIPT_DIR/compose-helpers.sh"
+INGRESS_IP="$(local_substrate_ingress_ip)"
 PROFILE="$(local_substrate_profile)"
 case "$PROFILE" in
 	workers) DEFAULT_SERVICE_URL="https://service.takosumi.test" ;;
-	postgres) DEFAULT_SERVICE_URL="https://app.takosumi.test" ;;
+	# app.takosumi.test intentionally hides /internal/*. The postgres profile
+	# keeps the composed Worker mirror on this local-only probe host so the
+	# internal run-ledger smoke never widens the public Accounts ingress.
+	postgres) DEFAULT_SERVICE_URL="https://service-worker.takosumi.test" ;;
 esac
 SERVICE_URL="${TAKOSUMI_SERVICE_URL:-$DEFAULT_SERVICE_URL}"
 CURL_RESOLVE=()
 if [[ "$SERVICE_URL" =~ ^https://([a-z0-9.-]+\.takosumi\.test)(/|$) ]]; then
-	CURL_RESOLVE=(--resolve "${BASH_REMATCH[1]}:443:127.0.0.1")
+	CURL_RESOLVE=(--resolve "${BASH_REMATCH[1]}:443:${INGRESS_IP}")
 fi
 RUN_SUFFIX="$(date +%s%N)"
 APP_NAME="cli-smoke-$RUN_SUFFIX"
+
+if [[ -z "$CAPSULE_VARS_JSON" ]]; then
+	CAPSULE_VARS_JSON=$(APP_NAME="$APP_NAME" python3 -c '
+import json, os
+print(json.dumps({
+  "base_domain": f"{os.environ["APP_NAME"]}.takosumi.test",
+  "display_name": "CLI smoke",
+}))
+')
+fi
+[[ -n "$EXPECTED_OUTPUTS_JSON" ]] || EXPECTED_OUTPUTS_JSON='{}'
+python3 -c '
+import json, sys
+for label, raw in (("vars", sys.argv[1]), ("expected outputs", sys.argv[2])):
+  parsed = json.loads(raw)
+  if not isinstance(parsed, dict):
+    raise SystemExit(f"{label} JSON must be an object")
+' "$CAPSULE_VARS_JSON" "$EXPECTED_OUTPUTS_JSON"
+if [[ "$DESTROY_AFTER_APPLY" != "0" && "$DESTROY_AFTER_APPLY" != "1" ]]; then
+	echo "TAKOSUMI_DEPLOY_CONTROL_DESTROY_AFTER_APPLY must be 0 or 1" >&2
+	exit 1
+fi
 
 if [[ ! -f "$CA" ]]; then
 	echo "Pebble CA not found at $CA — run scripts/up.sh first" >&2
@@ -164,20 +193,19 @@ SNAPSHOT_COUNT="$(response_body "$SNAPSHOTS_RESPONSE" | json_field "len(data.get
 	exit 1
 }
 
-CAPSULE_REQUEST=$(cat <<EOF
-{
-  "name": "$APP_NAME",
+CAPSULE_REQUEST=$(WORKSPACE_ID="$WORKSPACE_ID" APP_NAME="$APP_NAME" \
+	SOURCE_ID="$SOURCE_ID" INSTALL_CONFIG_ID="$INSTALL_CONFIG_ID" \
+	CAPSULE_VARS_JSON="$CAPSULE_VARS_JSON" python3 -c '
+import json, os
+print(json.dumps({
+  "name": os.environ["APP_NAME"],
   "environment": "preview",
-  "sourceId": "$SOURCE_ID",
-  "installConfigId": "$INSTALL_CONFIG_ID",
+  "sourceId": os.environ["SOURCE_ID"],
+  "installConfigId": os.environ["INSTALL_CONFIG_ID"],
   "runnerId": "opentofu-default",
-  "vars": {
-    "base_domain": "$APP_NAME.takosumi.test",
-    "display_name": "CLI smoke"
-  }
-}
-EOF
-)
+  "vars": json.loads(os.environ["CAPSULE_VARS_JSON"]),
+}))
+')
 CAPSULE_RESPONSE="$(post_json "/internal/v1/workspaces/$WORKSPACE_ID/capsules" "$CAPSULE_REQUEST")"
 require_code "capsule create" "$CAPSULE_RESPONSE" "201"
 CAPSULE_ID="$(response_body "$CAPSULE_RESPONSE" | json_field "data['capsule']['id']")"
@@ -254,4 +282,79 @@ STATE_VERSION_COUNT="$(response_body "$LIST_STATE_VERSIONS_RESPONSE" | json_fiel
 	exit 1
 }
 
-echo "OK git capsule run workspace=$WORKSPACE_ID source=$SOURCE_ID sync=$SYNC_ID capsule=$CAPSULE_ID plan=$PLAN_ID apply=$APPLY_ID stateVersions=$STATE_VERSION_COUNT snapshots=$SNAPSHOT_COUNT profiles=$PROFILE_IDS"
+OUTPUT_RESPONSE="$(get_json "/internal/v1/capsules/$CAPSULE_ID/outputs")"
+require_code "get capsule outputs" "$OUTPUT_RESPONSE" "200"
+OUTPUT_BODY="$(response_body "$OUTPUT_RESPONSE")"
+OUTPUT_SUMMARY="$(printf '%s' "$OUTPUT_BODY" | EXPECTED_OUTPUTS_JSON="$EXPECTED_OUTPUTS_JSON" python3 -c '
+import json, os, sys
+body = json.load(sys.stdin)["output"]
+actual = {}
+actual.update(body.get("publicOutputs") or {})
+actual.update(body.get("workspaceOutputs") or {})
+expected = json.loads(os.environ["EXPECTED_OUTPUTS_JSON"])
+missing = {
+  key: {"expected": value, "actual": actual.get(key)}
+  for key, value in expected.items()
+  if actual.get(key) != value
+}
+if missing:
+  raise SystemExit(f"capsule output mismatch: {json.dumps(missing, sort_keys=True)}")
+print(json.dumps(actual, sort_keys=True, separators=(",", ":")))
+')"
+
+DESTROY_ID="none"
+if [[ "$DESTROY_AFTER_APPLY" == "1" ]]; then
+	DESTROY_PLAN_RESPONSE="$(post_json "/internal/v1/capsules/$CAPSULE_ID/destroy-plan" '{}')"
+	require_code "destroy plan create" "$DESTROY_PLAN_RESPONSE" "201"
+	DESTROY_PLAN_BODY="$(response_body "$DESTROY_PLAN_RESPONSE")"
+	DESTROY_PLAN_ID="$(printf '%s' "$DESTROY_PLAN_BODY" | json_field "data['run']['id']")"
+	DESTROY_PLAN_STATUS="$(printf '%s' "$DESTROY_PLAN_BODY" | json_field "data['run']['status']")"
+	if [[ "$DESTROY_PLAN_STATUS" == "queued" || "$DESTROY_PLAN_STATUS" == "running" ]]; then
+		DESTROY_PLAN_BODY="$(wait_for_run "$DESTROY_PLAN_ID" "destroy plan")"
+		DESTROY_PLAN_STATUS="$(printf '%s' "$DESTROY_PLAN_BODY" | json_field "data['run']['status']")"
+	fi
+	if [[ "$DESTROY_PLAN_STATUS" != "waiting_approval" ]]; then
+		echo "FAIL: destroy plan status=$DESTROY_PLAN_STATUS (expected waiting_approval)" >&2
+		echo "      response: $DESTROY_PLAN_BODY" >&2
+		exit 1
+	fi
+	DESTROY_APPROVE_RESPONSE="$(post_json "/internal/v1/runs/$DESTROY_PLAN_ID/approve" '{"reason":"local-substrate lifecycle smoke"}')"
+	require_code "approve destroy plan" "$DESTROY_APPROVE_RESPONSE" "200"
+	DESTROY_PLAN_RESPONSE="$(get_json "/internal/v1/runs/$DESTROY_PLAN_ID")"
+	require_code "read approved destroy plan" "$DESTROY_PLAN_RESPONSE" "200"
+	DESTROY_APPLY_REQUEST="$(response_body "$DESTROY_PLAN_RESPONSE" | python3 -c '
+import json, sys
+run = json.load(sys.stdin)["run"]
+expected = dict(run.get("applyExpected") or {})
+plan_run_id = expected.pop("planId", None)
+runner_profile_id = expected.pop("runnerId", None)
+if plan_run_id != run["id"] or not runner_profile_id:
+  raise SystemExit("destroy PlanRun did not expose a valid applyExpected guard")
+expected["planRunId"] = plan_run_id
+expected["runnerProfileId"] = runner_profile_id
+print(json.dumps({"planRunId": run["id"], "expected": expected}))
+')"
+	DESTROY_APPLY_RESPONSE="$(post_json "/internal/v1/apply-runs" "$DESTROY_APPLY_REQUEST")"
+	require_code "destroy apply create" "$DESTROY_APPLY_RESPONSE" "201"
+	DESTROY_APPLY_BODY="$(response_body "$DESTROY_APPLY_RESPONSE")"
+	DESTROY_ID="$(printf '%s' "$DESTROY_APPLY_BODY" | json_field "data['applyRun']['id']")"
+	DESTROY_STATUS="$(printf '%s' "$DESTROY_APPLY_BODY" | json_field "data['applyRun']['status']")"
+	if [[ "$DESTROY_STATUS" == "queued" || "$DESTROY_STATUS" == "running" ]]; then
+		DESTROY_APPLY_BODY="$(wait_for_run "$DESTROY_ID" "destroy apply")"
+		DESTROY_STATUS="$(printf '%s' "$DESTROY_APPLY_BODY" | json_field "data['run']['status']")"
+	fi
+	if [[ "$DESTROY_STATUS" != "succeeded" ]]; then
+		echo "FAIL: destroy apply status=$DESTROY_STATUS (expected succeeded)" >&2
+		echo "      response: $DESTROY_APPLY_BODY" >&2
+		exit 1
+	fi
+	DESTROYED_CAPSULE_RESPONSE="$(get_json "/internal/v1/capsules/$CAPSULE_ID")"
+	require_code "get destroyed capsule" "$DESTROYED_CAPSULE_RESPONSE" "200"
+	DESTROYED_CAPSULE_STATUS="$(response_body "$DESTROYED_CAPSULE_RESPONSE" | json_field "data['capsule']['status']")"
+	if [[ "$DESTROYED_CAPSULE_STATUS" != "destroyed" ]]; then
+		echo "FAIL: capsule status=$DESTROYED_CAPSULE_STATUS after destroy apply" >&2
+		exit 1
+	fi
+fi
+
+echo "OK git capsule run workspace=$WORKSPACE_ID source=$SOURCE_ID sync=$SYNC_ID capsule=$CAPSULE_ID plan=$PLAN_ID apply=$APPLY_ID destroy=$DESTROY_ID stateVersions=$STATE_VERSION_COUNT snapshots=$SNAPSHOT_COUNT profiles=$PROFILE_IDS outputs=$OUTPUT_SUMMARY"

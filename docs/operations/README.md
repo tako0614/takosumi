@@ -5,8 +5,10 @@
 扱います。これらは not published product docs であり、not customer-facing です。
 公開 website には含めません。
 
-公式の Takosumi Cloud だけに関係する Stripe、Cloud capacity、本番環境の手順は
-Cloud 側のリポジトリで管理します。
+Takosumi Cloud は退役した historical identity です。Stripe、retail、managed capacity、
+Takoserver provider credential、本番環境の hosted service 手順はこの OSS runbook の責任
+ではありません。Takosumi Hosted は retail/commerce/client composition、Takoserver は
+managed supply、capacity、Offering、provider execution の runbook をそれぞれ所有します。
 
 ## 最初に確認すること
 
@@ -21,6 +23,11 @@ Cloud 側のリポジトリで管理します。
 リポジトリの総合検査は `bun run check`、deploy contract の確認は
 `bun run deploy -- --contract` です。実際の deploy は、その出力と各 runbook を読んで
 から行います。
+
+編集中の内周ループには `bun run check:fast` があります。これは `bun run check` から
+dashboard bundle build と 2 つの browser suite だけを外した同じ phase 列で、他は
+一切省きません。handoff の gate は `bun run check` のままで、`check:fast` は
+その代わりにはなりません。
 
 ## 目的から選ぶ
 
@@ -58,10 +65,15 @@ Cloud 側のリポジトリで管理します。
 - [cost monitoring](./cost-monitoring.md)
 - [ローカルネットワークでの開発](./lan-dev-setup.md)
 
-### Resource と Form package
+### Retired Resource と Form migration
 
-- [Form package の導入](./form-package-installation.md)
-- [Form Host Support と activation](./form-host-support.md)
+- [Form package の導入](./form-package-installation.md) (migration only)
+- [Form Host Support と activation](./form-host-support.md) (migration only)
+
+Resource Shape、Form Registry、FormActivation、TargetPool、SpacePolicy と Generic
+Offering の route/store は supported authoring ではありません。ここにある手順は既存
+データの migration/delete custody のためだけです。managed Offering と Host は Takoserver
+の authority です。
 
 ## 公開仕様との関係
 

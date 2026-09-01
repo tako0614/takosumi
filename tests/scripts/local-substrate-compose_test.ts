@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const composePath = resolve(
@@ -55,11 +55,22 @@ const tenantIsolationPath = resolve(
   "../../deploy/local-substrate/scripts/tenant-isolation.sh",
 );
 const tenantIsolation = readFileSync(tenantIsolationPath, "utf8");
+const passkeyE2e = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../deploy/local-substrate/scripts/passkey-e2e.py",
+  ),
+  "utf8",
+);
 const coreMigratePath = resolve(
   import.meta.dir,
   "../../core/scripts/db-migrate.ts",
 );
 const coreMigrate = readFileSync(coreMigratePath, "utf8");
+const corePgClient = readFileSync(
+  resolve(import.meta.dir, "../../core/scripts/pg_sql_client.ts"),
+  "utf8",
+);
 const nodePostgresServerPath = resolve(
   import.meta.dir,
   "../../deploy/node-postgres/src/server.ts",
@@ -146,6 +157,10 @@ const appArmorComposePath = resolve(
   "../../deploy/local-substrate/compose.substrate.apparmor-unconfined.yml",
 );
 const appArmorCompose = readFileSync(appArmorComposePath, "utf8");
+const localSubstrateScriptDir = resolve(
+  import.meta.dir,
+  "../../deploy/local-substrate/scripts",
+);
 
 test("local-substrate builds the single composed platform worker", () => {
   const workerBuilds = compose.matchAll(
@@ -254,6 +269,9 @@ test("local-substrate smoke defaults to the canonical workers profile", () => {
   expect(smoke).toContain(
     'TAKOSUMI_SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://service.takosumi.test}"',
   );
+  expect(smoke).toContain(
+    'TAKOSUMI_SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://service-worker.takosumi.test}"',
+  );
   expect(smoke).toContain("export TAKOSUMI_SERVICE_URL");
   expect(migrationIdempotency).toContain(
     'PROFILE="$(local_substrate_profile)"',
@@ -268,7 +286,12 @@ test("workers smoke uses the private probe host without opening the public app s
   expect(cliSmoke).toContain(
     'workers) DEFAULT_SERVICE_URL="https://service.takosumi.test"',
   );
-  expect(cliSmoke).toContain('--resolve "${BASH_REMATCH[1]}:443:127.0.0.1"');
+  expect(cliSmoke).toContain(
+    'postgres) DEFAULT_SERVICE_URL="https://service-worker.takosumi.test"',
+  );
+  expect(cliSmoke).toContain(
+    '--resolve "${BASH_REMATCH[1]}:443:${INGRESS_IP}"',
+  );
   expect(workersCliSmoke).toContain(
     '"https://${SERVICE_HOST}/internal/v1/runner-profiles"',
   );
@@ -278,9 +301,10 @@ test("workers smoke uses the private probe host without opening the public app s
   expect(k6Baseline).toContain(
     '__ENV.TAKOSUMI_SERVICE_URL || "https://service.takosumi.test"',
   );
-  expect(k6BaselineWrapper).toContain(
-    "--add-host service.takosumi.test:host-gateway",
-  );
+  expect(k6BaselineWrapper).not.toContain("--add-host");
+  expect(ingressCompose).toContain("- app.takosumi.test");
+  expect(ingressCompose).toContain("- service.takosumi.test");
+  expect(ingressCompose).toContain("- service-worker.takosumi.test");
 });
 
 test("workers k6 baseline stays below local Miniflare saturation", () => {
@@ -288,6 +312,10 @@ test("workers k6 baseline stays below local Miniflare saturation", () => {
   expect(k6BaselineWrapper).toContain(
     'K6_REQUEST_RATE="${TAKOSUMI_K6_REQUEST_RATE:-1}"',
   );
+  expect(k6BaselineWrapper.match(/TAKOSUMI_K6_REQUEST_RATE:-1/g)).toHaveLength(
+    2,
+  );
+  expect(smoke.match(/DEFAULT_K6_RATE=1/g)).toHaveLength(2);
   expect(k6BaselineWrapper).toContain(
     '-e TAKOSUMI_K6_REQUEST_RATE="$K6_REQUEST_RATE"',
   );
@@ -332,12 +360,22 @@ test("workers smoke starts every profile-specific production mirror dependency",
 });
 
 test("host-side observability probes resolve the local ingress explicitly", () => {
-  expect(
-    otelSmoke.match(/--resolve "jaeger\.takosumi\.test:443:127\.0\.0\.1"/g),
-  ).toHaveLength(2);
-  expect(
-    mailpitSmoke.match(/--resolve "mailpit\.takosumi\.test:443:127\.0\.0\.1"/g),
-  ).toHaveLength(3);
+  expect(composeHelpers).toContain("local_substrate_ingress_ip()");
+  expect(otelSmoke).toContain(
+    '--resolve "jaeger.takosumi.test:443:${INGRESS_IP}"',
+  );
+  expect(mailpitSmoke).toContain(
+    '--resolve "mailpit.takosumi.test:443:${INGRESS_IP}"',
+  );
+
+  const hardcodedIngressScripts = readdirSync(localSubstrateScriptDir)
+    .filter((name) => name.endsWith(".sh"))
+    .filter((name) =>
+      readFileSync(resolve(localSubstrateScriptDir, name), "utf8").includes(
+        ":443:127.0.0.1",
+      ),
+    );
+  expect(hardcodedIngressScripts).toEqual([]);
 });
 
 test("local-substrate waits for regular completed containers fail-closed", () => {
@@ -358,6 +396,25 @@ test("local-substrate waits for regular completed containers fail-closed", () =>
   );
   expect(waitFunction).toContain("while (( SECONDS < deadline )); do");
   expect(waitFunction).not.toContain("seq 1 120");
+});
+
+test("local-substrate readiness rejects HTTP errors and times out fail-closed", () => {
+  const waitFunction = upScript.match(
+    /wait_for_substrate_ready\(\) \{[\s\S]*?\n\}/,
+  )?.[0];
+  expect(waitFunction).toBeDefined();
+  expect(waitFunction).toContain("--fail");
+  expect(waitFunction).toContain("--cacert");
+  expect(waitFunction).not.toContain("curl -sk");
+  expect(waitFunction).toContain(
+    "deadline=$((SECONDS + LOCAL_WAIT_TIMEOUT_SECONDS))",
+  );
+  expect(waitFunction).toContain(
+    "substrate did not become ready within ${LOCAL_WAIT_TIMEOUT_SECONDS}s",
+  );
+  expect(waitFunction).toContain('logs --tail 120 cloud');
+  expect(waitFunction).toContain('logs --tail 120 takosumi-service-worker');
+  expect(upScript).toContain("wait_for_substrate_ready");
 });
 
 test("local-substrate cloud migration prepares core and accounts tables", () => {
@@ -386,9 +443,12 @@ test("node-postgres dashboard handler receives real control-plane operations", (
 });
 
 test("local-substrate core migration can use installed pg dependency", () => {
-  expect(coreMigrate).toContain('await import("npm:pg@^8.11.0")');
-  expect(coreMigrate).toContain('await import("pg")');
-  expect(coreMigrate).toContain("pgModule.default?.Pool ?? pgModule.Pool");
+  // The lazy driver load lives in the shared Postgres client the migration
+  // and fixture-reset CLIs both route through.
+  expect(coreMigrate).toContain("createPostgresSqlClient");
+  expect(corePgClient).toContain('await import("npm:pg@^8.11.0")');
+  expect(corePgClient).toContain('await import("pg")');
+  expect(corePgClient).toContain("pgModule.default?.Pool ?? pgModule.Pool");
 });
 
 test("local-substrate AppArmor path runs migrations outside compose networking", () => {
@@ -442,8 +502,11 @@ test("local-substrate up rebuilds runtime images before starting", () => {
   expect(upScript).toContain(
     'compose_substrate --profile "$PROFILE" up -d --force-recreate',
   );
+  expect(upScript).toContain(
+    'compose_substrate --profile "$PROFILE" rm -f -s',
+  );
   expect(upScript).toContain("substrate_up_args=(up -d --build)");
-  expect(upScript).toContain("substrate_up_args+=(--force-recreate)");
+  expect(upScript).not.toContain("substrate_up_args+=(--force-recreate)");
   expect(upScript).toContain(
     'compose_substrate --profile "$PROFILE" "${substrate_up_args[@]}"',
   );
@@ -522,11 +585,30 @@ test("local-substrate cli smoke exercises Git Source Capsule plan/apply", () => 
   expect(cliSmoke).toContain('expected["runnerProfileId"] = runner_profile_id');
 });
 
+test("local-substrate cli smoke can prove product vars, outputs, and destroy", () => {
+  expect(cliSmoke).toContain("TAKOSUMI_DEPLOY_CONTROL_VARS_JSON");
+  expect(cliSmoke).toContain("TAKOSUMI_DEPLOY_CONTROL_EXPECTED_OUTPUTS_JSON");
+  expect(cliSmoke).toContain("TAKOSUMI_DEPLOY_CONTROL_DESTROY_AFTER_APPLY");
+  expect(cliSmoke).toContain('get_json "/internal/v1/capsules/$CAPSULE_ID/outputs"');
+  expect(cliSmoke).toContain(
+    'post_json "/internal/v1/capsules/$CAPSULE_ID/destroy-plan"',
+  );
+  expect(cliSmoke).toContain(
+    'post_json "/internal/v1/apply-runs" "$DESTROY_APPLY_REQUEST"',
+  );
+  expect(cliSmoke).toContain(
+    'if [[ "$DESTROYED_CAPSULE_STATUS" != "destroyed" ]]',
+  );
+});
+
 test("local-substrate tenant isolation follows the final Workspace response", () => {
   expect(tenantIsolation).toContain(
     "print((d.get('workspace') or {}).get('id', ''))",
   );
   expect(tenantIsolation).not.toContain("d.get('space')");
+  expect(tenantIsolation.match(/-H "Origin: \$BASE"/g)).toHaveLength(4);
+  expect(passkeyE2e).toContain('req.add_header("Origin", ORIGIN)');
+  expect(smoke).toContain('-H "Origin: https://${host}"');
 });
 
 test("local-substrate internal bridge explicitly allows container communication", () => {

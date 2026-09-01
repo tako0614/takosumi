@@ -34,6 +34,12 @@ export interface RepoOwnedStoreHydrationInput {
   readonly sourceSnapshot: SourceSnapshot | undefined;
   readonly storeMetadata: InstallConfig["store"] | undefined;
   readonly modulePath: string | undefined;
+  /**
+   * Presentation base for an install that came from a bare Git URL rather
+   * than a Store listing. The repository's own declared name/description/icon
+   * is merged onto it, so a correct app presents identically either way.
+   */
+  readonly presentationFallback?: InstallConfig["store"];
 }
 
 export interface RepoOwnedStoreHydrationResult {
@@ -111,6 +117,33 @@ export type RepoOwnedInstallConfigAdoptionResult =
  * coordinates, domain defaults, and OIDC wiring stay in the Source and
  * Takosumi-owned InstallConfig.
  */
+/**
+ * Neutral presentation base for a Git-URL install. Every field the store
+ * projection requires is filled with a truthful placeholder; the repository's
+ * own `.well-known` metadata overwrites name / description / badge / icon on
+ * top of it. Without this, an app installed by URL lost its declared identity
+ * purely because no catalog row happened to exist.
+ */
+export function neutralInstallPresentation(input: {
+  readonly gitUrl: string;
+  readonly capsuleName: string;
+}): NonNullable<InstallConfig["store"]> {
+  const suggestedName = input.capsuleName.slice(0, 96) || "service";
+  const fallbackText = { ja: suggestedName, en: suggestedName };
+  return {
+    source: { url: input.gitUrl },
+    // Ordering is a catalog concern; a URL install has no shelf position.
+    order: 1_000,
+    surface: "service",
+    kind: "worker",
+    provider: "catalog",
+    suggestedName,
+    badge: { ja: "追加候補", en: "Installable" },
+    name: fallbackText,
+    description: fallbackText,
+  } as NonNullable<InstallConfig["store"]>;
+}
+
 export async function hydrateRepoOwnedStoreConfig(
   input: RepoOwnedStoreHydrationInput,
 ): Promise<RepoOwnedStoreHydrationResult> {
@@ -133,6 +166,9 @@ export async function hydrateRepoOwnedStoreConfig(
   const mergedStore = repoPresentationStoreMetadata({
     metadata,
     listing: input.storeMetadata,
+    ...(input.presentationFallback
+      ? { fallbackBase: input.presentationFallback }
+      : {}),
   });
   return {
     storeMetadata: mergedStore ?? input.storeMetadata,
@@ -798,10 +834,18 @@ function mergeRecords(
 function repoPresentationStoreMetadata(input: {
   readonly metadata: Record<string, unknown>;
   readonly listing: InstallConfig["store"] | undefined;
+  /**
+   * Neutral presentation base used when no Store listing selected this
+   * install. A repository that declares its own name/description/icon must
+   * render the same from a bare Git URL as it does from a catalog — the
+   * listing is discovery, never the source of an app's identity.
+   */
+  readonly fallbackBase?: InstallConfig["store"];
 }): InstallConfig["store"] | undefined {
-  if (!input.listing) return undefined;
+  const base = input.listing ?? input.fallbackBase;
+  if (!base) return undefined;
   return installConfigStoreValue({
-    ...input.listing,
+    ...base,
     ...(input.metadata.name !== undefined ? { name: input.metadata.name } : {}),
     ...(input.metadata.description !== undefined
       ? { description: input.metadata.description }

@@ -1,5 +1,12 @@
 # Data endpoints
 
+> **Historical archive — not current authority.** This page records the retired
+> Takosumi Cloud plan/implementation. It is not current availability, pricing,
+> SLA, support, or production authority. Takosumi Hosted owns new
+> retail/commerce/client-composition documentation; Takoserver owns managed
+> supply, capacity, provider credentials, and Offerings. Preserve the body as
+> historical evidence and do not use it as current service authority.
+
 Takosumi Cloud can expose standard-protocol data endpoints for existing service
 instances. An endpoint is not an object lifecycle API. Create, update, and
 delete through the OpenTofu provider graph in the Git repository.

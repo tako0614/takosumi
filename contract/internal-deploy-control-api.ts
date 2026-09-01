@@ -223,6 +223,27 @@ export interface DeployControlAuditEvent {
   readonly data?: Readonly<Record<string, JsonValue>>;
 }
 
+export type PlanRunSystemDestroyReason =
+  | "scheduled_uninstall"
+  | "failed_first_install_cleanup";
+
+/**
+ * Why the system created this destroy plan and the exact evidence the
+ * auto-continue re-verifies before a system approval (see
+ * {@link PlanRun.systemDestroy}).
+ */
+export interface PlanRunSystemDestroy {
+  readonly reason: PlanRunSystemDestroyReason;
+  readonly evidence?: {
+    /** The Capsule's scheduledDestroyAt this destroy was created for. */
+    readonly scheduledDestroyAt?: string;
+    /** The failed first-install ApplyRun a cleanup destroy targets. */
+    readonly failedApplyRunId?: string;
+    /** Backup record of the pre-destroy data export, when one completed. */
+    readonly preDestroyExportBackupId?: string;
+  };
+}
+
 export interface PlanRun {
   readonly id: string;
   readonly workspaceId: string;
@@ -259,6 +280,15 @@ export interface PlanRun {
    * drift-check runs.
    */
   readonly autoApplyRequested?: boolean;
+  /**
+   * Internal marker for a SYSTEM-initiated destroy plan (two-phase uninstall
+   * finalization, or the failed-first-install cleanup). It never weakens the
+   * destroy semantics — the plan still parks `waiting_approval` — but it
+   * authorizes the dedicated auto-continue to re-verify the recorded evidence
+   * and system-approve the plan when it still holds. Set only on
+   * `operation: "destroy"` plans; never projected publicly.
+   */
+  readonly systemDestroy?: PlanRunSystemDestroy;
   /**
    * Internal refresh-only execution evidence. The Run remains an ordinary
    * plan/apply pair; the runner adds `tofu plan -refresh-only`, so applying the
@@ -434,6 +464,18 @@ export interface RunDiagnostic {
   readonly detail?: string;
 }
 
+/** Resource-level progress of an executing apply/destroy. */
+export interface RunApplyProgress {
+  /** Resources whose create/update/destroy finished. */
+  readonly completed: number;
+  /** Resources started but not finished. */
+  readonly inFlight: number;
+  /** Most recent resource address the runner reported work on. */
+  readonly currentResource?: string;
+  /** Wall-clock ms when this snapshot was stamped. */
+  readonly observedAt: number;
+}
+
 export interface ApplyRun {
   readonly id: string;
   readonly planRunId: string;
@@ -458,6 +500,12 @@ export interface ApplyRun {
   readonly runEnvironmentEvidenceDigest?: string;
   readonly redactionProfileId?: string;
   readonly diagnostics?: readonly RunDiagnostic[];
+  /**
+   * Live resource progress stamped while this apply executes (from the run
+   * heartbeat tick, read off the runner). Present only during execution and
+   * only when the runner reports it; never authoritative for correctness.
+   */
+  readonly applyProgress?: RunApplyProgress;
   readonly auditEvents: readonly DeployControlAuditEvent[];
   readonly createdAt: number;
   readonly updatedAt: number;

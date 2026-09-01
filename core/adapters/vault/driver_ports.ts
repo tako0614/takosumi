@@ -18,7 +18,6 @@ import type {
   CredentialDriverFetch,
   CredentialRecipeDriverRunContext,
   CredentialRecipeIssuedRunCredential,
-  CredentialRecipeRunCredentialRequest,
 } from "takosumi-contract/credential-recipe-host";
 export {
   credentialRecipeDriverKey,
@@ -54,8 +53,7 @@ export interface SourceCredentialRegistrationInput {
 }
 
 export type SourceCredentialRegistrationResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly detail: string };
+  { readonly ok: true } | { readonly ok: false; readonly detail: string };
 
 export interface SourceCredentialDriverInput {
   readonly connection: ProviderConnection;

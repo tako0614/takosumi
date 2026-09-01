@@ -19,7 +19,6 @@ import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { listCapsulesCached } from "../../lib/capsule-list.ts";
 import {
-  type ControlApiError,
   listRuns,
   listSources,
   type Capsule,
@@ -318,14 +317,4 @@ function titleForRow(row: RunHistoryRow): string {
   if (row.operation === "apply") return t("runList.applied");
   if (row.operation === "destroy_apply") return t("runList.destroyed");
   return operationLabel(row.operation);
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  if (error && typeof error === "object" && "message" in error) {
-    const message = (error as ControlApiError).message;
-    if (typeof message === "string") return message;
-  }
-  return t("common.unknown");
 }

@@ -1,14 +1,13 @@
 # Takosumi platform worker deployment
 
-This runbook covers the OSS Takosumi platform worker. Official Takosumi Cloud
-adds closed handlers and commercial ports in its own wrapper and maintains its
-deployment procedure in `takosumi-cloud/docs/operations/platform-worker.md`.
+This runbook covers only the OSS Takosumi platform Worker. It documents the
+commands that deploy the platform component from this repository. A self-hoster
+applying them to infrastructure they own is exercising that operator's
+authority; no hosted-service or commercial deploy is implied.
 
-This page documents the commands the platform worker deploy actually runs.
-A self-hoster applying them against infrastructure they own is exercising their
-own authority; deploying the hosted Takosumi Cloud service is a separate one,
-and its wrapper procedure lives in
-`takosumi-cloud/docs/operations/platform-worker.md`.
+Takosumi Cloud is a retired historical identity. Takosumi Hosted retail/client
+composition and Takoserver managed supply each have separate owners and
+runbooks outside this repository.
 
 The shared deploy rules — clean worktree, owner gate first, build from that
 worktree, prove it on production's own inputs before the irreversible step,
@@ -30,8 +29,19 @@ origins, IDs, and secrets belong to operator state outside the repository.
 Operators may wrap this composition through the documented generic extension
 and port seams; the OSS config must not name a closed handler as a dependency.
 The worker does not install or host a Form Registry, FormActivation, or hosted
-Form. Any such closed Cloud Host is deployed and operated by its owning
-repository; the old package procedure is a superseded migration note.
+Form. An external Takoserver Takoform Host owns managed supply, capacity,
+provider installation/credentials, backend, WfP namespace/dispatcher, and native
+identity.
+
+## Deployment boundary
+
+This runbook deploys the Takosumi platform Worker and its operator-owned
+bindings only. It does not deploy tenant customer module code: customer Git
+modules execute as Run-scoped OpenTofu work inside the runner after the platform
+is deployed. It also does not deploy or provision a managed customer
+ModuleWorker, Workers for Platforms (WfP) namespace/dispatcher, or Takoserver
+Host. Those are Takoserver-owned surfaces and must be operated through
+Takoserver's own authority and runbook.
 
 ## Self-host build and deployment
 
@@ -46,9 +56,8 @@ bun run docs:build
 
 The dashboard build resolves the Store tab's default store from
 `VITE_TAKOSUMI_TCS_STORE_URL`. Unset or empty means no default store for OSS
-and self-hosted builds. An operator may set its own TCS server explicitly; the
-official Takosumi Cloud build is likewise responsible for explicitly injecting
-`https://store.takosumi.com`. Users can still add store servers themselves.
+and self-hosted builds. An operator may set its own TCS server explicitly. Users
+can still add store servers themselves.
 
 Before deploying code that requires a newer control-ledger D1 shape, run the
 [Control D1 schema predeploy](control-d1-schema-predeploy.md) gate against the
@@ -66,9 +75,11 @@ bun run wrangler -- deploy --latest=false \
   --config "$TAKOSUMI_WRANGLER_CONFIG"
 ```
 
-Do not use this block to deploy the official hosted service. Its credentials,
-target binding, lease, idempotency, and authoritative readback belong to whoever runs the deploy, on the machine that
-holds the credential.
+This block deploys only the operator-owned platform Worker. Do not use it to
+deploy tenant customer code, a Takoserver ModuleWorker/WfP surface, or an
+external Takoform Host. Credentials, target binding, lease, idempotency, and
+authoritative readback belong to the owner of whichever surface is being
+deployed, on the machine that holds that credential.
 
 Container image reuse, capacity, keepalive, cache, egress, and timeout settings
 are explicit operator policy. A class or binding rename requires a durable
@@ -216,9 +227,10 @@ adapter without displaying them, verify remote secret names only, and never
 delete unknown remote secrets automatically. Rotation follows
 [Secret Rotation](secret-rotation.md).
 
-Payment-provider secrets, enforced billing, official PriceCatalogs, Cloud
-capacity credentials, and Cloud-specific smoke commands are not OSS deployment
-inputs. A commercial host supplies them through its extension ports.
+Payment-provider secrets, enforced billing, retail PriceCatalogs, Takoserver
+managed capacity/provider credentials, and host-specific smoke commands are not
+OSS platform deployment inputs. Takosumi Hosted or Takoserver supplies them
+through its own authority and runbook.
 
 ## Verification
 
@@ -259,5 +271,6 @@ bind the lifecycle to one immutable serving release supplies the generic paired
 The v3 smoke checks that header before the first lifecycle mutation and after
 cleanup, records only its SHA-256 digest, and writes `--out-file` once to a new
 owner-private path outside the source checkout. Session-token files follow the
-same owner-private boundary. Cloud extension, payment, and Cloud-capacity
-evidence belongs to the hosting layer, not this OSS runbook.
+same owner-private boundary. Takosumi Hosted retail/payment evidence and
+Takoserver managed-supply/capacity evidence belong to those owning layers, not
+this OSS runbook.

@@ -104,8 +104,15 @@ import type {
   OpenTofuControlStore,
   PlanRunInputs,
   PublicHostReservation,
+  ClaimWorkItemsInput,
+  ControlWorkItem,
+  EnqueueWorkItemInput,
+  FailWorkItemOptions,
   RecoverableOpenTofuRunListOptions,
+  RecoverableOpenTofuRunPage,
   RecoverableResourceOperationRunListOptions,
+  RunBacklogStats,
+  RunBacklogStatsInput,
   ResourceOperationRun,
   ReservePublicHostInput,
   ReservePublicHostResult,
@@ -130,9 +137,15 @@ import {
   compareStoredRunRecordsAsc,
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
+  decodeRecoverableRunCursor,
+  encodeRecoverableRunCursor,
+  type CapsuleUsageTotals,
+  type WorkspaceRunPage,
   isApplyRunRecord,
   isPlanRunRecord,
   isRecoverableOpenTofuRunRecord,
+  runRowBillingCapturePending,
+  WORK_ITEM_DEFAULT_MAX_ATTEMPTS,
   resourceOperationRunTransitionAllowed,
   resourceOperationRunNeedsRecovery,
   sameResourceOperationIdentity,
@@ -508,20 +521,51 @@ function d1RunMutationDispatched(): SQL {
   `;
 }
 
-/** Mirrors applyRunBillingCapturePending in the shared store model. */
-function d1RunBillingCapturePending(): SQL {
-  return sql`
-    EXISTS (
-      SELECT 1
-      FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
-      WHERE json_extract(audit_event.value, '$.type') = 'billing.capture.pending'
-    )
-    AND NOT EXISTS (
-      SELECT 1
-      FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
-      WHERE json_extract(audit_event.value, '$.type') = 'billing.capture.completed'
-    )
-  `;
+/**
+ * The billing-capture-pending predicate is served by the write-time
+ * `runs.billing_capture_pending` column (see `runRowBillingCapturePending`);
+ * migration 65 backfilled existing rows from the audit events.
+ */
+function d1WorkItemFromRow(row: {
+  readonly id: string;
+  readonly kind: string;
+  readonly dedupeKey: string | null;
+  readonly workspaceId: string | null;
+  readonly capsuleId: string | null;
+  readonly runId: string | null;
+  readonly dueAt: string;
+  readonly priority: number;
+  readonly attempts: number;
+  readonly maxAttempts: number;
+  readonly status: string;
+  readonly lockedUntil: string | null;
+  readonly lockedBy: string | null;
+  readonly payloadJson: unknown;
+  readonly lastError: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}): ControlWorkItem {
+  return {
+    id: row.id,
+    kind: row.kind,
+    ...(row.dedupeKey === null ? {} : { dedupeKey: row.dedupeKey }),
+    ...(row.workspaceId === null ? {} : { workspaceId: row.workspaceId }),
+    ...(row.capsuleId === null ? {} : { capsuleId: row.capsuleId }),
+    ...(row.runId === null ? {} : { runId: row.runId }),
+    dueAt: row.dueAt,
+    priority: row.priority,
+    attempts: row.attempts,
+    maxAttempts: row.maxAttempts,
+    status: row.status as ControlWorkItem["status"],
+    ...(row.lockedUntil === null ? {} : { lockedUntil: row.lockedUntil }),
+    ...(row.lockedBy === null ? {} : { lockedBy: row.lockedBy }),
+    ...(row.payloadJson === null || row.payloadJson === undefined
+      ? {}
+      : { payload: row.payloadJson }),
+    ...(row.lastError === null ? {} : { lastError: row.lastError }),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
 }
 
 /** An expired apply/destroy is uncertain only after it started. */
@@ -814,6 +858,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         status: run.status,
         leaseToken: null,
         heartbeatAt: run.heartbeatAt ?? null,
+        billingCapturePending: runRowBillingCapturePending(run),
         runJson: run as unknown,
         createdAt: String(run.createdAt),
       })
@@ -875,6 +920,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .set({
         status: persisted.status,
         runJson: persisted as unknown,
+        ...(input.kind === "apply"
+          ? { billingCapturePending: runRowBillingCapturePending(persisted) }
+          : {}),
         ...(input.clearHeartbeat
           ? { heartbeatAt: null }
           : heartbeatAt === undefined
@@ -1133,6 +1181,59 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async listRunsByWorkspacePage(
+    workspaceId: string,
+    options: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<WorkspaceRunPage> {
+    const limit = clampRunListLimit(options.limit);
+    const cursor = decodeRecoverableRunCursor(options.cursor);
+    const createdAtMillis = d1RunCreatedAtMillisOrder();
+    const rows = await this.#drizzleManyJson<StoredRunRecord>(
+      schema.runs,
+      schema.runs.runJson,
+      {
+        where: cursor
+          ? and(
+              eq(schema.runs.workspaceId, workspaceId),
+              sql`(${createdAtMillis} < ${cursor.createdAtMillis}
+                OR (${createdAtMillis} = ${cursor.createdAtMillis}
+                  AND ${schema.runs.id} < ${cursor.id}))`,
+            )
+          : eq(schema.runs.workspaceId, workspaceId),
+        orderBy: [desc(createdAtMillis), desc(schema.runs.id)],
+        limit: limit + 1,
+      },
+    );
+    const page = rows.slice(0, limit);
+    const nextCursor =
+      rows.length > limit && page.length > 0
+        ? encodeRecoverableRunCursor(page[page.length - 1]!)
+        : undefined;
+    return {
+      runs: page,
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+    };
+  }
+
+  async getPlanRunsByIds(ids: readonly string[]): Promise<readonly PlanRun[]> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return [];
+    const plans: PlanRun[] = [];
+    // D1 binds at most 100 parameters per statement; chunk the id set.
+    for (let index = 0; index < unique.length; index += 90) {
+      const chunk = unique.slice(index, index + 90);
+      const rows = await this.#drizzleManyJson<StoredRunRecord>(
+        schema.runs,
+        schema.runs.runJson,
+        { where: inArray(schema.runs.id, chunk) },
+      );
+      for (const row of rows) {
+        if (isPlanRunRecord(row)) plans.push(row);
+      }
+    }
+    return plans;
+  }
+
   async getCapsuleRuntimeSafety(
     capsuleId: string,
   ): Promise<CapsuleRuntimeSafety | undefined> {
@@ -1155,37 +1256,402 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
   async listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
-  ): Promise<readonly StoredRunRecord[]> {
+  ): Promise<RecoverableOpenTofuRunPage> {
+    const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
+    const cursor = decodeRecoverableRunCursor(options.cursor);
+    const millis = d1RunCreatedAtMillisOrder();
+    // Index-backed candidate predicate: SQL bounds the scan with the same time
+    // thresholds the exact JS predicate uses (as a superset — running rows fall
+    // back to created_at where the JS predicate would use startedAt), and the
+    // billing branch reads the write-time flag column instead of json_each.
+    const dispatchable = [
+      RUN_KIND_PLAN,
+      "destroy_plan",
+      "drift_check",
+      RUN_KIND_APPLY,
+      "destroy_apply",
+      RUN_KIND_SOURCE_SYNC,
+      RUN_KIND_RESTORE,
+    ];
+    const candidate = or(
+      and(
+        eq(schema.runs.status, "queued"),
+        inArray(schema.runs.type, dispatchable),
+        sql`${millis} <= ${options.staleQueuedBeforeMs}`,
+      ),
+      and(
+        eq(schema.runs.status, "running"),
+        inArray(schema.runs.type, dispatchable),
+        or(
+          lt(schema.runs.heartbeatAt, options.staleRunningBeforeMs + 1),
+          and(
+            isNull(schema.runs.heartbeatAt),
+            sql`${millis} <= ${options.staleRunningBeforeMs}`,
+          ),
+        ),
+      ),
+      and(
+        inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+        inArray(schema.runs.status, ["succeeded", "failed"]),
+        eq(schema.runs.billingCapturePending, 1),
+      ),
+    );
+    const keyset =
+      cursor === undefined
+        ? undefined
+        : or(
+            sql`${millis} > ${cursor.createdAtMillis}`,
+            and(
+              sql`${millis} = ${cursor.createdAtMillis}`,
+              gt(schema.runs.id, cursor.id),
+            ),
+          );
     const rows = await this.#drizzleManyJson<StoredRunRecord>(
       schema.runs,
       schema.runs.runJson,
       {
-        where: or(
-          and(
-            inArray(schema.runs.status, ["queued", "running"]),
-            inArray(schema.runs.type, [
-              RUN_KIND_PLAN,
-              "destroy_plan",
-              "drift_check",
-              RUN_KIND_APPLY,
-              "destroy_apply",
-              RUN_KIND_SOURCE_SYNC,
-              RUN_KIND_RESTORE,
-            ]),
-          ),
-          and(
-            inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
-            inArray(schema.runs.status, ["succeeded", "failed"]),
-            d1RunBillingCapturePending(),
-          ),
-        ),
+        where: keyset === undefined ? candidate : and(candidate, keyset),
+        orderBy: [asc(millis), asc(schema.runs.id)],
+        limit: limit + 1,
       },
     );
-    const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
-    return [...rows]
-      .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
-      .sort(compareStoredRunRecordsAsc)
-      .slice(0, limit);
+    // The cursor advances over SCANNED candidates so rows the exact predicate
+    // rejects can never stall the sweep rotation.
+    const page = rows.slice(0, limit);
+    const nextCursor =
+      rows.length > limit && page.length > 0
+        ? encodeRecoverableRunCursor(page[page.length - 1]!)
+        : undefined;
+    return {
+      runs: page.filter((row) => isRecoverableOpenTofuRunRecord(row, options)),
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+    };
+  }
+
+  async getRunBacklogStats(
+    input: RunBacklogStatsInput,
+  ): Promise<RunBacklogStats> {
+    await this.#ensureSchema();
+    const millis = d1RunCreatedAtMillisOrder();
+    const dispatchable = [
+      RUN_KIND_PLAN,
+      "destroy_plan",
+      "drift_check",
+      RUN_KIND_APPLY,
+      "destroy_apply",
+      RUN_KIND_SOURCE_SYNC,
+      RUN_KIND_RESTORE,
+    ];
+    const grouped = await this.#orm
+      .select({
+        status: schema.runs.status,
+        type: schema.runs.type,
+        count: sql<number>`count(*)`.as("count"),
+      })
+      .from(schema.runs)
+      .where(
+        and(
+          inArray(schema.runs.status, ["queued", "running"]),
+          inArray(schema.runs.type, dispatchable),
+        ),
+      )
+      .groupBy(schema.runs.status, schema.runs.type)
+      .all();
+    const queuedByType: Record<string, number> = {};
+    const runningByType: Record<string, number> = {};
+    for (const row of grouped) {
+      const target = row.status === "queued" ? queuedByType : runningByType;
+      target[row.type] = Number(row.count);
+    }
+    // Mirror the SQL store: oldest queued row via ORDER BY + LIMIT 1 on the
+    // plain created_at column, coerced in JS.
+    const oldestQueued = await this.#orm
+      .select({ createdAt: schema.runs.createdAt })
+      .from(schema.runs)
+      .where(
+        and(
+          eq(schema.runs.status, "queued"),
+          inArray(schema.runs.type, dispatchable),
+        ),
+      )
+      .orderBy(asc(millis))
+      .limit(1)
+      .get();
+    const stale = await this.#orm
+      .select({ count: sql<number>`count(*)`.as("count") })
+      .from(schema.runs)
+      .where(
+        and(
+          eq(schema.runs.status, "running"),
+          inArray(schema.runs.type, dispatchable),
+          or(
+            lt(schema.runs.heartbeatAt, input.staleRunningBeforeMs + 1),
+            and(
+              isNull(schema.runs.heartbeatAt),
+              sql`${millis} <= ${input.staleRunningBeforeMs}`,
+            ),
+          ),
+        ),
+      )
+      .get();
+    const billing = await this.#orm
+      .select({ count: sql<number>`count(*)`.as("count") })
+      .from(schema.runs)
+      .where(
+        and(
+          eq(schema.runs.billingCapturePending, 1),
+          inArray(schema.runs.status, ["succeeded", "failed"]),
+        ),
+      )
+      .get();
+    // created_at is TEXT holding either the internal epoch number or an ISO
+    // string; coerce the same way the shared record timestamp helper does.
+    const oldestQueuedAtRaw = oldestQueued?.createdAt;
+    const oldestQueuedAtNumeric =
+      oldestQueuedAtRaw === undefined ? Number.NaN : Number(oldestQueuedAtRaw);
+    const oldestQueuedAt = Number.isFinite(oldestQueuedAtNumeric)
+      ? oldestQueuedAtNumeric
+      : oldestQueuedAtRaw !== undefined
+        ? Date.parse(oldestQueuedAtRaw)
+        : undefined;
+    return {
+      queuedByType,
+      runningByType,
+      ...(oldestQueuedAt !== undefined &&
+      Number.isFinite(oldestQueuedAt) &&
+      oldestQueuedAt > 0
+        ? { oldestQueuedAgeMs: Math.max(0, input.now - oldestQueuedAt) }
+        : {}),
+      staleHeartbeatRunning: Number(stale?.count ?? 0),
+      billingCapturePending: Number(billing?.count ?? 0),
+    };
+  }
+
+  // -- Scheduled-intent work items + sweep cursors -----------------------------
+
+  async enqueueWorkItem(input: EnqueueWorkItemInput): Promise<ControlWorkItem> {
+    await this.#ensureSchema();
+    await this.#orm
+      .insert(schema.controlWorkItems)
+      .values({
+        id: input.id,
+        kind: input.kind,
+        dedupeKey: input.dedupeKey ?? null,
+        workspaceId: input.workspaceId ?? null,
+        capsuleId: input.capsuleId ?? null,
+        runId: input.runId ?? null,
+        dueAt: input.dueAt,
+        priority: input.priority ?? 0,
+        attempts: 0,
+        maxAttempts: input.maxAttempts ?? WORK_ITEM_DEFAULT_MAX_ATTEMPTS,
+        status: "pending",
+        payloadJson: input.payload === undefined ? null : input.payload,
+        createdAt: input.now,
+        updatedAt: input.now,
+      })
+      // Conflicts are either the live (kind, dedupe_key) unique or an id
+      // replay; both mean "the intent already exists" and return that row.
+      .onConflictDoNothing()
+      .run();
+    if (input.dedupeKey !== undefined) {
+      const live = await this.#orm
+        .select()
+        .from(schema.controlWorkItems)
+        .where(
+          and(
+            eq(schema.controlWorkItems.kind, input.kind),
+            eq(schema.controlWorkItems.dedupeKey, input.dedupeKey),
+            inArray(schema.controlWorkItems.status, ["pending", "leased"]),
+          ),
+        )
+        .limit(1)
+        .all();
+      if (live[0]) return d1WorkItemFromRow(live[0]);
+    }
+    const row = await this.#orm
+      .select()
+      .from(schema.controlWorkItems)
+      .where(eq(schema.controlWorkItems.id, input.id))
+      .get();
+    if (!row) throw new Error("work item enqueue lost its row");
+    return d1WorkItemFromRow(row);
+  }
+
+  async claimDueWorkItems(
+    input: ClaimWorkItemsInput,
+  ): Promise<readonly ControlWorkItem[]> {
+    await this.#ensureSchema();
+    const claimable = or(
+      and(
+        eq(schema.controlWorkItems.status, "pending"),
+        sql`${schema.controlWorkItems.dueAt} <= ${input.now}`,
+      ),
+      // An expired lease is reclaimable: the crashed claimer never released.
+      and(
+        eq(schema.controlWorkItems.status, "leased"),
+        lt(schema.controlWorkItems.lockedUntil, input.now),
+      ),
+    );
+    const candidates = await this.#orm
+      .select({
+        id: schema.controlWorkItems.id,
+        attempts: schema.controlWorkItems.attempts,
+        maxAttempts: schema.controlWorkItems.maxAttempts,
+      })
+      .from(schema.controlWorkItems)
+      .where(
+        input.kinds === undefined
+          ? claimable
+          : and(claimable, inArray(schema.controlWorkItems.kind, [
+              ...input.kinds,
+            ])),
+      )
+      .orderBy(
+        desc(schema.controlWorkItems.priority),
+        asc(schema.controlWorkItems.dueAt),
+        asc(schema.controlWorkItems.id),
+      )
+      .limit(Math.max(0, input.limit))
+      .all();
+    const lockedUntil = new Date(
+      Date.parse(input.now) + input.leaseMs,
+    ).toISOString();
+    const claimed: ControlWorkItem[] = [];
+    for (const candidate of candidates) {
+      // Attempts exhausted: park the row dead instead of leasing it again.
+      if (candidate.attempts + 1 > candidate.maxAttempts) {
+        await this.#orm
+          .update(schema.controlWorkItems)
+          .set({
+            status: "dead",
+            attempts: candidate.attempts + 1,
+            updatedAt: input.now,
+          })
+          .where(
+            and(
+              eq(schema.controlWorkItems.id, candidate.id),
+              claimable,
+            ),
+          )
+          .run();
+        continue;
+      }
+      const won = await this.#orm
+        .update(schema.controlWorkItems)
+        .set({
+          status: "leased",
+          attempts: candidate.attempts + 1,
+          lockedUntil,
+          lockedBy: input.lockedBy,
+          updatedAt: input.now,
+        })
+        .where(
+          and(
+            eq(schema.controlWorkItems.id, candidate.id),
+            // Re-assert claimability so a concurrent claimer loses the CAS.
+            claimable,
+          ),
+        )
+        .run();
+      if (changes(won as D1Result) === 0) continue;
+      const row = await this.#orm
+        .select()
+        .from(schema.controlWorkItems)
+        .where(eq(schema.controlWorkItems.id, candidate.id))
+        .get();
+      if (row) claimed.push(d1WorkItemFromRow(row));
+    }
+    return claimed;
+  }
+
+  async completeWorkItem(
+    id: string,
+    options: { readonly lockedBy: string; readonly now: string },
+  ): Promise<void> {
+    await this.#ensureSchema();
+    await this.#orm
+      .update(schema.controlWorkItems)
+      .set({ status: "done", updatedAt: options.now })
+      .where(
+        and(
+          eq(schema.controlWorkItems.id, id),
+          eq(schema.controlWorkItems.status, "leased"),
+          eq(schema.controlWorkItems.lockedBy, options.lockedBy),
+        ),
+      )
+      .run();
+  }
+
+  async failWorkItem(id: string, options: FailWorkItemOptions): Promise<void> {
+    await this.#ensureSchema();
+    const retryDueAt = new Date(
+      Date.parse(options.now) + options.retryDelayMs,
+    ).toISOString();
+    // Attempts were counted at claim time; fail only decides retry vs dead.
+    await this.#orm
+      .update(schema.controlWorkItems)
+      .set({
+        status: sql`case
+          when ${schema.controlWorkItems.attempts} >= ${schema.controlWorkItems.maxAttempts}
+            then 'dead' else 'pending' end`,
+        dueAt: sql`case
+          when ${schema.controlWorkItems.attempts} >= ${schema.controlWorkItems.maxAttempts}
+            then ${schema.controlWorkItems.dueAt} else ${retryDueAt} end`,
+        lastError: options.error,
+        updatedAt: options.now,
+      })
+      .where(
+        and(
+          eq(schema.controlWorkItems.id, id),
+          eq(schema.controlWorkItems.status, "leased"),
+          eq(schema.controlWorkItems.lockedBy, options.lockedBy),
+        ),
+      )
+      .run();
+  }
+
+  async countWorkItemBacklog(
+    now: string,
+  ): Promise<Readonly<Record<string, number>>> {
+    await this.#ensureSchema();
+    const rows = await this.#orm
+      .select({
+        kind: schema.controlWorkItems.kind,
+        count: sql<number>`count(*)`.as("count"),
+      })
+      .from(schema.controlWorkItems)
+      .where(
+        and(
+          eq(schema.controlWorkItems.status, "pending"),
+          sql`${schema.controlWorkItems.dueAt} <= ${now}`,
+        ),
+      )
+      .groupBy(schema.controlWorkItems.kind)
+      .all();
+    const backlog: Record<string, number> = {};
+    for (const row of rows) backlog[row.kind] = Number(row.count);
+    return backlog;
+  }
+
+  async getSweepCursor(name: string): Promise<string | undefined> {
+    await this.#ensureSchema();
+    const row = await this.#orm
+      .select({ cursor: schema.controlSweepCursors.cursor })
+      .from(schema.controlSweepCursors)
+      .where(eq(schema.controlSweepCursors.sweepName, name))
+      .get();
+    return row?.cursor ?? undefined;
+  }
+
+  async putSweepCursor(name: string, cursor: string | undefined): Promise<void> {
+    await this.#ensureSchema();
+    const updatedAt = new Date().toISOString();
+    await this.#drizzleUpsert(
+      schema.controlSweepCursors,
+      { sweepName: name, cursor: cursor ?? null, updatedAt },
+      { cursor: cursor ?? null, updatedAt },
+      schema.controlSweepCursors.sweepName,
+    );
   }
 
   async listSourceSyncRuns(
@@ -3799,6 +4265,23 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return event;
   }
 
+  async getCapsuleUsageTotals(
+    capsuleId: string,
+  ): Promise<CapsuleUsageTotals> {
+    await this.#ensureSchema();
+    const rows = await this.#orm
+      .select({
+        ratingStatus: schema.usageEvents.ratingStatus,
+        count: sql<number>`count(*)`.as("count"),
+        usdMicros: sql<number>`coalesce(sum(${schema.usageEvents.usdMicros}), 0)`
+          .as("usd_micros"),
+      })
+      .from(schema.usageEvents)
+      .where(eq(schema.usageEvents.capsuleId, capsuleId))
+      .groupBy(schema.usageEvents.ratingStatus);
+    return capsuleUsageTotalsFromGroups(rows);
+  }
+
   async listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]> {
     await this.#ensureSchema();
     const rows = await this.#orm
@@ -3941,6 +4424,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       status: row.status,
       leaseToken: parsed.leaseToken ?? null,
       heartbeatAt: parsed.heartbeatAt ?? null,
+      billingCapturePending: runRowBillingCapturePending(
+        parsed as StoredRunRecord,
+      ),
       runJson: parsed as unknown,
       createdAt: String(createdAt),
     });
@@ -4122,6 +4608,9 @@ function d1UpsertRunStmt(
     status: run.status,
     leaseToken: null,
     heartbeatAt: run.heartbeatAt ?? null,
+    // The commit tail is exactly where the pending billing marker lands, so
+    // the indexed backlog flag must ride the same atomic write.
+    billingCapturePending: runRowBillingCapturePending(run as StoredRunRecord),
     runJson: run as unknown,
     createdAt: String(run.createdAt),
   };
@@ -4167,6 +4656,9 @@ function d1RunLeaseGuardStmt(
         heartbeatAt: sql<number | null>`null`.as("heartbeatAt"),
         runJson: sql<Run>`null`.as("runJson"),
         createdAt: sql<string>`null`.as("createdAt"),
+        billingCapturePending: sql<number | null>`null`.as(
+          "billingCapturePending",
+        ),
       })
       .from(sql`(select 1) as guard_source`)
       .where(notExists(expectedLease)),
@@ -5087,7 +5579,8 @@ export async function ensureD1OpenTofuLedgerSchema(
       lease_token text,
       heartbeat_at integer,
       run_json text not null,
-      created_at text not null default ""
+      created_at text not null default "",
+      billing_capture_pending integer
     )`,
     `create index if not exists runs_space_idx
       on runs (space_id)`,
@@ -5101,9 +5594,46 @@ export async function ensureD1OpenTofuLedgerSchema(
       on runs (type)`,
     `create index if not exists runs_created_at_idx
       on runs (created_at)`,
+    `create index if not exists runs_status_type_created_idx
+      on runs (status, type, created_at)`,
+    // runs_billing_capture_pending_idx is created ONLY by migration 65: the
+    // bootstrap DDL also runs against pre-65 databases whose existing runs
+    // table does not have the column yet (create table if not exists no-ops),
+    // so a bootstrap-time partial index over it would fail there.
     `create table if not exists runs_inputs (
       plan_run_id text primary key,
       inputs_json text not null
+    )`,
+    `create table if not exists control_work_items (
+      id text primary key,
+      kind text not null,
+      dedupe_key text,
+      workspace_id text,
+      capsule_id text,
+      run_id text,
+      due_at text not null,
+      priority integer not null default 0,
+      attempts integer not null default 0,
+      max_attempts integer not null default 5,
+      status text not null default 'pending',
+      locked_until text,
+      locked_by text,
+      payload_json text,
+      last_error text,
+      created_at text not null,
+      updated_at text not null
+    )`,
+    `create index if not exists control_work_items_due_idx
+      on control_work_items (status, due_at)`,
+    `create index if not exists control_work_items_kind_idx
+      on control_work_items (kind)`,
+    `create unique index if not exists control_work_items_dedupe_unique
+      on control_work_items (kind, dedupe_key)
+      where dedupe_key is not null and status in ('pending', 'leased')`,
+    `create table if not exists control_sweep_cursors (
+      sweep_name text primary key,
+      cursor text,
+      updated_at text not null
     )`,
     `create table if not exists state_versions (
       id text primary key,
@@ -7637,7 +8167,148 @@ Workspace visibility and membership changes never advance Capsule execution auth
       );
     },
   },
+  {
+    version: 65,
+    name: "d1_recovery_lane_backlog_columns",
+    checksumSource: `
+runs.billing_capture_pending is a write-time projection of the billing finalization marker
+one-time backfill derives it from run_json audit events for existing terminal apply rows
+partial backlog index over the flag and a (status, type, created_at) sweep index
+control_work_items is the durable scheduled-intent queue with a live dedupe unique index
+control_sweep_cursors keeps the sweeps' rotation cursors
+`,
+    async atomicStatements(db) {
+      return await d1RecoveryLaneBacklogStatements(db);
+    },
+    async apply(db) {
+      await runD1AtomicSql(db, await d1RecoveryLaneBacklogStatements(db));
+    },
+  },
+  {
+    version: 66,
+    name: "d1_observability_metric_aggregates",
+    checksumSource: `
+durable monotonic counter/histogram aggregate rows keyed (name, labels_key, le)
+raw metric events stay retention-pruned; aggregates are never deleted so Prometheus rate()/increase() hold
+audit-chain verification checkpoint anchor (singleton sequence + hash) for bounded forward verify
+`,
+    async atomicStatements() {
+      return D1_OBSERVABILITY_AGGREGATE_STATEMENTS;
+    },
+    async apply(db) {
+      await runD1AtomicSql(db, D1_OBSERVABILITY_AGGREGATE_STATEMENTS);
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
+
+// Migration-only by design (mirrors the observability tables in v57): the
+// aggregate rows must exist before the first post-deploy recordMetric batch.
+const D1_OBSERVABILITY_AGGREGATE_STATEMENTS = [
+  `create table if not exists takosumi_observability_metric_aggregates (
+    name text not null,
+    labels_key text not null,
+    le text not null default '',
+    kind text not null,
+    labels_json text not null,
+    value real not null default 0,
+    updated_at text not null,
+    primary key (name, labels_key, le)
+  )`,
+  `create table if not exists takosumi_observability_audit_verify_checkpoint (
+    singleton integer primary key check (singleton = 1),
+    sequence integer not null,
+    hash text not null,
+    verified_at text not null
+  )`,
+] as const;
+
+async function d1RecoveryLaneBacklogStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  const statements: string[] = [];
+  const runsColumns = await d1ColumnNames(db, "runs");
+  if (!runsColumns.has("billing_capture_pending")) {
+    statements.push(
+      `alter table runs add column billing_capture_pending integer`,
+    );
+  }
+  statements.push(
+    `update runs set billing_capture_pending = 1
+      where type in ('apply', 'destroy_apply')
+        and status in ('succeeded', 'failed')
+        and exists (
+          select 1 from json_each(runs.run_json, '$.auditEvents') as e
+          where json_extract(e.value, '$.type') = 'billing.capture.pending'
+        )
+        and not exists (
+          select 1 from json_each(runs.run_json, '$.auditEvents') as e
+          where json_extract(e.value, '$.type') = 'billing.capture.completed'
+        )`,
+    `create index if not exists runs_status_type_created_idx
+      on runs (status, type, created_at)`,
+    `create index if not exists runs_billing_capture_pending_idx
+      on runs (billing_capture_pending)
+      where billing_capture_pending = 1`,
+    `create table if not exists control_work_items (
+      id text primary key,
+      kind text not null,
+      dedupe_key text,
+      workspace_id text,
+      capsule_id text,
+      run_id text,
+      due_at text not null,
+      priority integer not null default 0,
+      attempts integer not null default 0,
+      max_attempts integer not null default 5,
+      status text not null default 'pending',
+      locked_until text,
+      locked_by text,
+      payload_json text,
+      last_error text,
+      created_at text not null,
+      updated_at text not null
+    )`,
+    `create index if not exists control_work_items_due_idx
+      on control_work_items (status, due_at)`,
+    `create index if not exists control_work_items_kind_idx
+      on control_work_items (kind)`,
+    `create unique index if not exists control_work_items_dedupe_unique
+      on control_work_items (kind, dedupe_key)
+      where dedupe_key is not null and status in ('pending', 'leased')`,
+    `create table if not exists control_sweep_cursors (
+      sweep_name text primary key,
+      cursor text,
+      updated_at text not null
+    )`,
+  );
+  return statements;
+}
+
+export interface D1OpenTofuSchemaMigrationDescriptor {
+  readonly version: number;
+  readonly name: string;
+}
+
+/**
+ * Version and name of every OSS control-D1 migration, in chain order.
+ *
+ * Exported so readiness gates and tests derive "what the chain currently is"
+ * instead of restating it as literals that have to be hand-bumped in several
+ * places every time a migration lands.
+ */
+export const d1OpenTofuSchemaMigrationDescriptors: readonly D1OpenTofuSchemaMigrationDescriptor[] =
+  Object.freeze(
+    D1_OPEN_TOFU_SCHEMA_MIGRATIONS.map((migration) =>
+      Object.freeze({ version: migration.version, name: migration.name })
+    ),
+  );
+
+/** Head of the chain: what a fully migrated control D1 must report. */
+export const latestD1OpenTofuSchemaMigration:
+  D1OpenTofuSchemaMigrationDescriptor =
+    d1OpenTofuSchemaMigrationDescriptors[
+      d1OpenTofuSchemaMigrationDescriptors.length - 1
+    ]!;
 
 /**
  * v45 is replayed during destructive convergence. Once v54 has installed the
@@ -9967,4 +10638,31 @@ function publicHostReservationFromD1Row(
     updatedAt: String(row.updated_at),
     ...(row.released_at ? { releasedAt: String(row.released_at) } : {}),
   };
+}
+
+/**
+ * Folds the `(ratingStatus, count, sum)` aggregate rows into the summary.
+ * Only RATED events contribute money; unrated events are proven zero by the
+ * contract's `usageEventUsdMicros` invariant, so summing all rows and
+ * reporting the rated count separately stays consistent.
+ */
+function capsuleUsageTotalsFromGroups(
+  rows: readonly {
+    readonly ratingStatus: string;
+    readonly count: number | string;
+    readonly usdMicros: number | string;
+  }[],
+): CapsuleUsageTotals {
+  let usdMicros = 0;
+  let eventCount = 0;
+  let ratedEventCount = 0;
+  for (const row of rows) {
+    const count = Number(row.count) || 0;
+    eventCount += count;
+    if (row.ratingStatus === "rated") {
+      ratedEventCount += count;
+      usdMicros += Number(row.usdMicros) || 0;
+    }
+  }
+  return { usdMicros, eventCount, ratedEventCount };
 }

@@ -1,97 +1,91 @@
-# Takosumi and Takosumi Cloud
+# Takosumi, BYOC, and external managed Hosts
 
-These docs use two names so the software and the official service are not
-confused.
+Takosumi OSS is the control plane for customer BYOC (bring your own cloud).
+The Workspace/customer owns the vendor account and credentials. Takosumi Cloud
+is a retired historical identity; `app.takosumi.com` availability, pricing, SLA,
+and support pages are not current authority.
 
-| Name               | Meaning                                            |
-| ------------------ | -------------------------------------------------- |
-| **Takosumi**       | the AGPL-3.0 software published in this repository |
-| **Takosumi Cloud** | the official hosted service at `app.takosumi.com`  |
+| Name | Authority / role |
+| --- | --- |
+| **Takosumi** | The AGPL-3.0 OSS control plane in this repository. It owns the Git/OpenTofu Stack, Runs, state, Outputs, audit, and credential delivery. |
+| **Takosumi Hosted** | A separate hosted product that may own retail, commerce, and client composition. It is not the authority for managed supply or provider execution. |
+| **Takoserver** | The external Takoform Host for optional managed supply. It owns managed-service Offerings, capacity, provider installation/credentials, backend, execution, WfP namespace/dispatcher, and native identity. |
+| **Takosumi Cloud** | A retired historical identity. It is not current authority for availability, pricing, SLA, support, or managed supply. |
 
-## What the software provides
+## What Takosumi OSS provides
 
-Takosumi OSS includes:
+The supported OSS user path is one Stack flow that runs a Git-hosted OpenTofu or
+Terraform module. It provides:
 
-- plan, apply, state, outputs, and audit records for Git modules
-- secure storage and runner delivery for provider connections
-- a dashboard, API, CLI, and sign-in
-- records for endpoints and permissions between deployments through
-  Interface / InterfaceBinding
-- ProviderConnection / ProviderBinding for arbitrary OpenTofu and Terraform
-  providers
+- plan, review, apply, state, Outputs, and audit for Git modules;
+- Workspace / Project / Capsule / Run lifecycle;
+- ProviderConnection, CredentialRecipe, ProviderBinding, and a run-scoped runner; and
+- the dashboard, API, CLI, OIDC discovery, and Interface / InterfaceBinding.
 
-The module, provider, or operator configuration decides which cloud is used.
-Takosumi OSS does not require one cloud account or provider. Takoform runs from
-the OpenTofu runner as an ordinary provider. Takosumi does not mirror
-provider-side objects into a second resource ledger or create a second
-lifecycle for them.
+Takosumi has no Takosumi-specific `.tf` syntax and ships no first-party provider.
+Cloudflare, AWS, Kubernetes, and Takoform are ordinary OpenTofu providers. Takosumi
+does not mirror provider-side objects into a second Resource ledger or create a
+second lifecycle for them.
 
-Older descriptions that made Takosumi OSS a Resource Shape or Form Host are
-retired. Form definitions, providers, packages, and hosted Form instances are
-owned by Takoform or an external Host such as Takosumi Cloud. Retained Resource
-APIs, schemas, and persistence exist only as temporary migration internals;
-they are not a supported OSS authoring surface.
+## Customer BYOC execution path
 
-## What the operator decides
+In the ordinary BYOC path, the Workspace/customer owns the vendor account,
+credential, and resulting resource. Takosumi only mediates the following path:
 
-Two installations of the same software can differ in:
-
-- provider configuration and execution environment
-- the external Host or Takosumi Cloud that supplies hosted Form instances
-- storage capacity, usage limits, and backup retention
-- whether usage is only recorded or also billed
-- updates, incident response, support, and SLA
-
-Check an endpoint instead of guessing from an edition name.
-
-```bash
-curl https://takosumi.example.com/.well-known/takosumi
+```text
+ProviderConnection
+  → CredentialRecipe
+  → ProviderBinding
+  → run-scoped runner materialization
+  → standard OpenTofu provider
+  → customer-owned resource
 ```
 
-An authenticated client can also read `/v1/capabilities`.
+Credential values are materialized only inside the runner while the Run is active;
+they do not enter Takosumi Outputs, state, logs, or audit. The module and the
+customer/operator choose the provider, account, region, backend, and capacity.
+Takosumi does not create, own, or infer a vendor account.
 
-## What Takosumi Cloud adds
+## Optional managed supply: the Takoserver Takoform Host
 
-Takosumi Cloud is an official operation of the OSS software. It adds hosted
-Form instances and their implementations, official capacity, pricing and
-payment, support, SLA, and abuse controls.
+When a module selects the Takoform provider and the customer chooses managed
+supply, Takoform remains an ordinary provider. Takosumi may register a
+Host-scoped credential for an external Takoserver Takoform Host as an ordinary
+ProviderConnection and pass it to the Run through a ProviderBinding.
 
-Those are not general OSS contracts. Use the
-[Takosumi Cloud documentation](https://app.takosumi.com/docs/en/) for prices
-and limits.
+Takosumi never receives or selects Takoserver's parent provider credential,
+provider installation, backend, capacity, Workers for Platforms (WfP) namespace,
+dispatcher, or native identity. Takoserver owns those authorities and the
+managed-service Offering. Takosumi handles only the Host endpoint and Run result
+at the ordinary provider/Interface boundary.
 
-Cloud code consumes OSS contracts. The OSS software does not depend on private
-Cloud code or Stripe.
+## Retired Resource / Form surfaces
 
-## Where Takoform and external Hosts fit
+Resource Shape, Form Registry, FormActivation, TargetPool, SpacePolicy, Resolver,
+Adapter, and the old `/v1/resources` lifecycle are not supported authoring. Any
+remaining routes, schemas, stores, or migrations are compatibility and
+migration/delete custody for existing data. New integrations use a Git module and
+an ordinary provider; these names are not Takosumi Core authoring authority.
 
-Takoform is an independent specification, provider, and package project. From
-Takosumi's perspective it is an ordinary OpenTofu provider. A Form Host or
-hosted instance is owned by Takoform's host implementation, Takosumi Cloud, or
-another external operator—not by the OSS control plane.
+The Generic Offering API/route/store is also not a supported Takosumi Core
+authority. Existing endpoints are a legacy/operator-only implementation
+conformance gap, unsupported for new integrations, and a removal-target migration
+surface. Managed Offerings belong to Takoserver.
 
-Cloudflare, AWS, and other Terraform or OpenTofu providers remain ordinary
-providers from the runner's perspective. The authority after provider
-execution is not identical, however.
+## Operator and hosted products
 
-- A module that uses Cloudflare, AWS, or another provider directly shares the
-  Run, state, output, and audit records. Provider-side objects do not
-  necessarily enter Takosumi's Resource ledger.
-- A hosted Form instance is resolved and operated by its external Host. It is
-  not an implicit Takosumi Resource or TargetPool selection.
-- The runner does not silently select a Cloud-specific provider.
+An operator who runs Takosumi chooses the database, runner, backups, provider
+connections, support, SLA, and usage treatment. If Takosumi Hosted provides
+retail, commerce, or client composition, it does not absorb Takoserver's managed
+supply authority or the customer's BYOC credential ownership.
 
-Takos is a separate product. Its self-hosted product worker does not embed
-Accounts, deploy-control, the Dashboard, or the runner; it connects to a
-Takosumi endpoint as an external client.
+Until Takosumi Hosted publishes current retail documentation, do not infer
+availability, pricing, SLA, or support from this OSS repository or the old
+`app.takosumi.com` Cloud pages.
 
-## When you self-host
+## Related
 
-When you operate Takosumi yourself, you become the operator described above.
-You manage software updates, secrets, databases, runners, backups, and
-provider configuration. If you use a hosted Form instance, the external Host
-has its own contract and operational boundary.
-
-Read [Self-hosting](./self-host.md) for topology choices and published setup
-procedures. Repository-local operator runbooks are not customer-facing product
-documentation.
+- [How Takosumi works](./index.md)
+- [Credentials](./credentials.md)
+- [Resource migration internals](./resources.md)
+- [API](../reference/api.md)

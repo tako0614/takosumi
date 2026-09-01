@@ -1,7 +1,7 @@
 # App Handoff Protocol
 
 Takosumi App Handoff は、任意のクライアントから、その Takosumi installation が管理する
-service を作成するための小さな URL プロトコルです。対象は mobile app に限らず、
+Stack/Capsule を作成するための小さな URL プロトコルです。対象は mobile app に限らず、
 web app、desktop app、ブラウザリンク、CLI 出力も含みます。
 
 Takosumi は plain OpenTofu/Terraform source を受け取って Capsule を作成し、通常の
@@ -27,8 +27,10 @@ Takosumi フローを実行します。connection payload をクライアント�
 https://<takosumi-origin>/install
 ```
 
-公式 Takosumi Cloud の origin は `app.takosumi.com` です。self-host や Operator が
-明示した origin でも、protocol は同じように動きます。
+固定の公式 Cloud origin はありません。Takosumi Cloud は退役した historical identity
+で、`app.takosumi.com` を current endpoint として案内しません。self-host や Operator が
+明示した Takosumi origin で protocol を使います。Takosumi Hosted の retail/client
+composition は、その product が公開する endpoint と client contract を所有します。
 
 dashboard 内では `/new` に正規化されることがありますが、外部クライアントは
 `/install` へリンクします。
@@ -50,7 +52,7 @@ dashboard 内では `/new` に正規化されることがありますが、外�
 release ref を決める権限は持ちません。`product` と `return_uri` は、完了後に
 クライアントへ戻すためだけに使う組です。
 
-`return_uri` がなければ、この URL は通常の hosted service 作成リンクとして働きます。
+`return_uri` がなければ、この URL は operator が提供する通常の Stack 作成リンクとして働きます。
 このときは `product` も付けません。`return_uri` があるときは、Takosumi が `product`
 と `return_uri` を保持します。sign-in、ProviderConnection の設定、plan、apply と
 画面が変わっても引き継ぎます。

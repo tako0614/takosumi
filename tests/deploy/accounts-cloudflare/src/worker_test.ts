@@ -36,7 +36,7 @@ async function versionedAccountsDb(): Promise<SqliteFakeD1> {
     .prepare(
       "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
     )
-    .bind(3, "current", Date.now())
+    .bind(4, "current", Date.now())
     .run();
   return db;
 }
@@ -643,7 +643,7 @@ test("Cloudflare identity handler lazily revalidates Interface OAuth against Cor
     .prepare(
       "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
     )
-    .bind(3, "current", Date.now())
+    .bind(4, "current", Date.now())
     .run();
   const issued = await issueInterfaceOAuthAccessToken({
     store,
@@ -716,7 +716,7 @@ test("Cloudflare OIDC signing rotation publishes bounded overlap then removes th
     .prepare(
       "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
     )
-    .bind(3, "current", Date.now())
+    .bind(4, "current", Date.now())
     .run();
   const oldKeyPair = await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
@@ -810,7 +810,7 @@ test("predeployed accounts routes perform multiple document operations with zero
     .prepare(
       "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
     )
-    .bind(3, "current", Date.now())
+    .bind(4, "current", Date.now())
     .run();
   const sessionSalt = "predeployed-accounts-test-session-salt";
   const sessionId = "sess_predeployed_route";

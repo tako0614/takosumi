@@ -229,6 +229,68 @@ export async function withWorkspaceLease<T>(
   return await withScopedLease(coordination, scope, input.holderId, input.ttlMs, work);
 }
 
+/** The lease key for one workspace run slot (fairness semaphore member). */
+export function workspaceRunSlotScope(
+  workspaceId: string,
+  slot: number,
+): string {
+  return `workspace-run-slot:${workspaceId}:${slot}`;
+}
+
+/**
+ * Acquires ONE of the workspace's `slots` run-slot leases (a counting
+ * semaphore composed from single-holder leases), runs `work`, and releases in
+ * `finally`. All slots busy throws {@link CapsuleLeaseBusyError} so the run
+ * owner re-arms and the run stays `queued` — the fairness fence never fails a
+ * run and never burns a plan. The slot lease is deliberately NOT renewed by a
+ * long apply: expiry lets the fleet overshoot briefly instead of wedging a
+ * workspace whose holder died.
+ */
+export async function withWorkspaceRunSlotLease<T>(
+  coordination: CapsuleCoordination,
+  input: {
+    readonly workspaceId: string;
+    readonly holderId: string;
+    readonly slots: number;
+    readonly ttlMs?: number;
+  },
+  work: (handle: LeaseHandle) => Promise<T>,
+): Promise<T> {
+  const slots = Math.max(1, Math.floor(input.slots));
+  const leaseTtl = input.ttlMs ?? DEFAULT_CAPSULE_LEASE_TTL_MS;
+  for (let slot = 0; slot < slots; slot += 1) {
+    const scope = workspaceRunSlotScope(input.workspaceId, slot);
+    const lease = await coordination.acquireLease({
+      scope,
+      holderId: input.holderId,
+      ttlMs: leaseTtl,
+    });
+    if (!lease.acquired) continue;
+    const handle: LeaseHandle = {
+      scope,
+      holderId: input.holderId,
+      token: lease.token,
+      renew: (renewTtlMs) =>
+        coordination.renewLease({
+          scope,
+          holderId: input.holderId,
+          token: lease.token,
+          ttlMs: renewTtlMs ?? leaseTtl,
+        }),
+    };
+    try {
+      return await work(handle);
+    } finally {
+      await coordination.releaseLease({
+        scope,
+        holderId: input.holderId,
+        token: lease.token,
+      });
+    }
+  }
+  throw new CapsuleLeaseBusyError(`workspace-run-slot:${input.workspaceId}`);
+}
+
 /**
  * Shared acquire → run(handle) → release-in-finally body for the three scoped
  * lease helpers. Acquires the `scope` lease, builds the {@link LeaseHandle}

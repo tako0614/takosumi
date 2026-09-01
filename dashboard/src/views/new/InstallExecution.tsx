@@ -19,6 +19,8 @@ import {
 import { t } from "../../i18n/index.ts";
 import { Badge, Button, Checkbox, Spinner } from "../../components/ui/index.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
+import { runFailureHint } from "../../lib/run-errors.ts";
+import { runStatusLabel } from "../../lib/labels.ts";
 import {
   stateVersionReadinessAfterApply,
   type StateVersionReadiness,
@@ -166,6 +168,8 @@ export default function InstallExecution(props: Props) {
     (key) => readInstallReadiness(key),
   );
 
+  const [readinessPolls, setReadinessPolls] = createSignal(0);
+
   const readinessFailure = createMemo(() => {
     const cause = readiness.error;
     return cause ? friendlyError(cause, t) : undefined;
@@ -186,12 +190,55 @@ export default function InstallExecution(props: Props) {
       setError(t("installStore.activationFailed"));
       return;
     }
-    const timer = globalThis.setTimeout(() => void refetchReadiness(), 3_000);
+    const timer = globalThis.setTimeout(() => {
+      setReadinessPolls((count) => count + 1);
+      void refetchReadiness();
+    }, 3_000);
     onCleanup(() => globalThis.clearTimeout(timer));
   });
 
+  /**
+   * Publishing normally settles in seconds. Past this the screen keeps
+   * polling, but it stops pretending nothing is unusual and offers the run
+   * details instead of an unexplained spinner with no controls.
+   */
+  const readinessLooksSlow = () => readinessPolls() >= 20;
+
   const summary = () => run.latest?.summary;
   const countsKnown = () => Boolean(summary());
+  // The apply Run replaces the plan Run in this resource, taking the plan's
+  // change counts with it — so remember the reviewed total while it is still
+  // on screen. It is the denominator for live apply progress.
+  const [plannedTotal, setPlannedTotal] = createSignal<number | undefined>(
+    undefined,
+  );
+  createEffect(() => {
+    const latest = run.latest;
+    if (latest?.type !== "plan") return;
+    const counts = latest.summary;
+    if (!counts) return;
+    const total =
+      (counts.add ?? 0) + (counts.change ?? 0) + (counts.destroy ?? 0);
+    if (total > 0) setPlannedTotal(total);
+  });
+  /** Live "N of M resources" text while the apply executes. */
+  const progressLabel = () => {
+    const latest = run.latest;
+    if (latest?.type !== "apply" || latest.status !== "running") return null;
+    const progress = latest.applyProgress;
+    if (!progress) return null;
+    const total = plannedTotal();
+    // A completed count past the reviewed total would be a lie; fall back to
+    // the count-only phrasing rather than rendering "8 of 7".
+    return total !== undefined && progress.completed <= total
+      ? t("installStore.progressCount", {
+          completed: progress.completed,
+          total,
+        })
+      : t("installStore.progressCountUnknownTotal", {
+          completed: progress.completed,
+        });
+  };
   const destructive = () => {
     const latest = run.latest;
     return (
@@ -272,7 +319,7 @@ export default function InstallExecution(props: Props) {
                 </h2>
                 <p>
                   {current().type === "apply"
-                    ? t("installStore.installingHint")
+                    ? (progressLabel() ?? t("installStore.installingHint"))
                     : t("installStore.reviewHint")}
                 </p>
               </div>
@@ -285,7 +332,7 @@ export default function InstallExecution(props: Props) {
                       : "info"
                 }
               >
-                {current().status}
+                {runStatusLabel(current().status)}
               </Badge>
             </div>
 
@@ -397,7 +444,20 @@ export default function InstallExecution(props: Props) {
                 <Spinner size={18} />
                 <div>
                   <strong>{t("installStore.installing")}</strong>
-                  <span>{t("installStore.installingHint")}</span>
+                  <span>
+                    {readinessLooksSlow()
+                      ? t("installStore.settlingSlow")
+                      : t("installStore.installingHint")}
+                  </span>
+                  <Show when={readinessLooksSlow()}>
+                    <Button
+                      href={`/runs/${encodeURIComponent(current().id)}`}
+                      variant="secondary"
+                      icon={<ExternalLink size={16} />}
+                    >
+                      {t("installStore.runDetails")}
+                    </Button>
+                  </Show>
                 </div>
               </div>
             </Show>
@@ -449,13 +509,26 @@ export default function InstallExecution(props: Props) {
             <Show when={failed()}>
               <div class="iv-error" role="alert">
                 <strong>{t("installStore.runFailed")}</strong>
-                <p>{current().errorCode ?? t("installStore.runFailedHint")}</p>
+                {/* Friendly classified sentence — never the raw snake_case
+                    token (that stays in the run screen's expert details). */}
+                {/* The default hint points at diagnostics and logs, which
+                    this screen does not render — name the control that is
+                    actually here. */}
+                <p>
+                  {runFailureHint(
+                    current().errorCode,
+                    "installStore.runFailedHint",
+                  )}
+                </p>
                 <Button
                   href={`/runs/${encodeURIComponent(current().id)}`}
                   variant="secondary"
                   icon={<ExternalLink size={16} />}
                 >
                   {t("installStore.runDetails")}
+                </Button>
+                <Button href="/new" variant="secondary">
+                  {t("installStore.startOver")}
                 </Button>
               </div>
             </Show>

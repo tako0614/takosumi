@@ -72,7 +72,9 @@ export async function requiredProvidersForGeneratedRoot(
  * declared in any of the other three spellings reach `tofu init` unseen by the
  * runner provider policy.
  */
-function terraformConfigFileKind(name: string): "hcl" | "json" | undefined {
+export function terraformConfigFileKind(
+  name: string,
+): "hcl" | "json" | undefined {
   if (name.endsWith(".tf.json") || name.endsWith(".tofu.json")) return "json";
   if (name.endsWith(".tf") || name.endsWith(".tofu")) return "hcl";
   return undefined;

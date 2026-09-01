@@ -10,6 +10,7 @@ import type {
   OfferingCatalogStore,
   StoredOfferingCatalog,
 } from "./catalog_store.ts";
+import { offeringCatalogKey as catalogKey } from "./catalog_store.ts";
 
 export class InMemoryOfferingCatalogReader implements OfferingCatalogStore {
   readonly persistence = "ephemeral" as const;
@@ -47,7 +48,9 @@ export class InMemoryOfferingCatalogReader implements OfferingCatalogStore {
     catalogId: string,
     catalogVersion: string,
   ): Promise<OfferingCatalog | undefined> {
-    const record = this.#catalogs.get(`${catalogId}@${catalogVersion}`);
+    const record = this.#catalogs.get(
+      catalogKey({ id: catalogId, version: catalogVersion }),
+    );
     return record === undefined ? undefined : structuredClone(record.catalog);
   }
 
@@ -88,8 +91,4 @@ export class InMemoryOfferingCatalogReader implements OfferingCatalogStore {
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
     };
   }
-}
-
-function catalogKey(catalog: OfferingCatalog): string {
-  return `${catalog.id}@${catalog.version}`;
 }

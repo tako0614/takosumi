@@ -1,5 +1,12 @@
 # Resources and providers
 
+> **Historical archive — not current authority.** This page records the retired
+> Takosumi Cloud plan/implementation. It is not current availability, pricing,
+> SLA, support, or production authority. Takosumi Hosted owns new
+> retail/commerce/client-composition documentation; Takoserver owns managed
+> supply, capacity, provider credentials, and Offerings. Preserve the body as
+> historical evidence and do not use it as current service authority.
+
 A Git repository's OpenTofu module declares the cloud resources used with
 Takosumi Cloud. The selected provider creates them. Takosumi supplies the Run
 and state boundary; it does not replace the provider.

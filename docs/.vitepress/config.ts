@@ -4,7 +4,10 @@ const jaNav: DefaultTheme.NavItem[] = [
   { text: "はじめに", link: "/getting-started/quickstart" },
   { text: "解説", link: "/concepts/" },
   { text: "リファレンス", link: "/reference/api" },
-  { text: "Takosumi Cloud", link: "https://app.takosumi.com/docs/" },
+  {
+    text: "旧 Cloud 文書",
+    link: "https://app.takosumi.com/docs/",
+  },
 ];
 
 const enNav: DefaultTheme.NavItem[] = [
@@ -12,7 +15,10 @@ const enNav: DefaultTheme.NavItem[] = [
   { text: "Quickstart", link: "/en/getting-started/quickstart" },
   { text: "Concepts", link: "/en/concepts/" },
   { text: "Reference", link: "/en/reference/api" },
-  { text: "Hosted Cloud", link: "https://app.takosumi.com/docs/en/" },
+  {
+    text: "Cloud docs archive",
+    link: "https://app.takosumi.com/docs/en/",
+  },
 ];
 
 const jaSidebar: DefaultTheme.SidebarMulti = {
@@ -36,6 +42,18 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "利用量と課金", link: "/concepts/usage-and-billing" },
         { text: "自分で動かす", link: "/concepts/self-host" },
         { text: "製品の境界", link: "/concepts/boundaries" },
+      ],
+    },
+    {
+      text: "自分で運用する",
+      items: [
+        { text: "運用ガイド", link: "/self-host/" },
+        { text: "更新する", link: "/self-host/upgrade" },
+        { text: "バックアップと復旧", link: "/self-host/backup-restore" },
+        {
+          text: "トラブルシューティング",
+          link: "/self-host/troubleshooting",
+        },
       ],
     },
     {
@@ -98,6 +116,18 @@ const enSidebar: DefaultTheme.SidebarMulti = {
         { text: "Usage and billing", link: "/en/concepts/usage-and-billing" },
         { text: "Running it yourself", link: "/en/concepts/self-host" },
         { text: "Product boundaries", link: "/en/concepts/boundaries" },
+      ],
+    },
+    {
+      text: "Operate it yourself",
+      items: [
+        { text: "Operations guide", link: "/en/self-host/" },
+        { text: "Upgrading", link: "/en/self-host/upgrade" },
+        { text: "Backup and restore", link: "/en/self-host/backup-restore" },
+        {
+          text: "Troubleshooting",
+          link: "/en/self-host/troubleshooting",
+        },
       ],
     },
     {

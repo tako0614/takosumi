@@ -6,6 +6,7 @@ export const REFRESH_CHAIN_RETENTION_PHASES = [
   "revoked_roots",
   "consumed_codes",
   "auth_code_token_links",
+  "authorization_code_redemptions",
 ] as const;
 
 export type RefreshChainRetentionPhase =
@@ -74,6 +75,7 @@ const ZERO_COUNTS: RefreshChainPruneResult = {
   revokedRoots: 0,
   consumedCodes: 0,
   authCodeTokenLinks: 0,
+  authorizationCodeRedemptions: 0,
 };
 
 /**
@@ -199,7 +201,8 @@ function countDeleted(result: RefreshChainPruneResult): number {
     result.chainAccessTokens +
     result.revokedRoots +
     result.consumedCodes +
-    result.authCodeTokenLinks
+    result.authCodeTokenLinks +
+    result.authorizationCodeRedemptions
   );
 }
 
@@ -210,6 +213,7 @@ function addCounts(
     revokedRoots: number;
     consumedCodes: number;
     authCodeTokenLinks: number;
+    authorizationCodeRedemptions: number;
   },
   source: RefreshChainPruneResult,
 ): void {
@@ -218,6 +222,8 @@ function addCounts(
   target.revokedRoots += source.revokedRoots;
   target.consumedCodes += source.consumedCodes;
   target.authCodeTokenLinks += source.authCodeTokenLinks;
+  target.authorizationCodeRedemptions +=
+    source.authorizationCodeRedemptions;
 }
 
 function positiveInteger(

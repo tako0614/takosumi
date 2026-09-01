@@ -76,6 +76,25 @@ export function isVisibleServiceCapsule(inst: {
   return inst.status !== "destroyed";
 }
 
+/** True while the two-phase uninstall grace period is running. */
+export function isUninstalledCapsule(inst: {
+  readonly status: string;
+}): boolean {
+  return inst.status === "uninstalled";
+}
+
+/**
+ * True when the Capsule belongs on the home launcher. An uninstalled Capsule
+ * is hidden there (its resources still exist, but the user asked for it to be
+ * gone); it stays reachable from the service list for restore until the
+ * scheduled destroy runs.
+ */
+export function isLaunchableCapsule(inst: {
+  readonly status: string;
+}): boolean {
+  return isVisibleServiceCapsule(inst) && !isUninstalledCapsule(inst);
+}
+
 /** True for a string value that looks like an http(s) address worth linking. */
 export function isUrlString(value: unknown): value is string {
   return typeof value === "string" && /^https?:\/\//i.test(value.trim());
@@ -504,27 +523,4 @@ function parseConfigVariableValue(
     }
   }
   return { value: row.value };
-}
-
-/** Human-readable stale reason recorded on an `capsule.stale` event. */
-export function staleReasonFromActivity(
-  event: ActivityEvent,
-): string | undefined {
-  const reasons = event.metadata.reasons;
-  if (Array.isArray(reasons)) {
-    const text = reasons
-      .filter((entry): entry is string => typeof entry === "string")
-      .join(", ");
-    if (text) return text;
-  }
-  const changed = event.metadata.changedOutputs;
-  const producer = event.metadata.producerCapsuleName;
-  if (Array.isArray(changed) && typeof producer === "string") {
-    const text = changed
-      .filter((entry): entry is string => typeof entry === "string")
-      .map((name) => `${producer}.${name} changed`)
-      .join(", ");
-    if (text) return text;
-  }
-  return undefined;
 }

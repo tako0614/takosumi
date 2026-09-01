@@ -327,11 +327,6 @@ function optional(
   return value && value.length > 0 ? value : undefined;
 }
 
-function bool(env: Record<string, string | undefined>, name: string): boolean {
-  const value = optional(env, name)?.toLowerCase();
-  return value === "1" || value === "true" || value === "yes";
-}
-
 function parseIntOr(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number(value);

@@ -34,6 +34,7 @@ const CAPSULE: Record<string, MessageKey> = {
   stale: "status.capsule.stale",
   error: "status.capsule.error",
   disabled: "status.capsule.disabled",
+  uninstalled: "status.capsule.uninstalled",
   destroyed: "status.capsule.destroyed",
 };
 export const capsuleStatusLabel = (status?: string) => label(CAPSULE, status);
@@ -72,17 +73,6 @@ const DIAGNOSTIC_SEVERITY: Record<string, MessageKey> = {
 };
 export const diagnosticSeverityLabel = (severity?: string) =>
   label(DIAGNOSTIC_SEVERITY, severity);
-
-/** Connection status. */
-const CONNECTION: Record<string, MessageKey> = {
-  pending: "status.connection.pending",
-  verified: "status.connection.verified",
-  revoked: "status.connection.revoked",
-  expired: "status.connection.expired",
-  error: "status.connection.error",
-};
-export const connectionStatusLabel = (status?: string) =>
-  label(CONNECTION, status);
 
 /** ProviderConnection readiness status. */
 const PROVIDER_CONNECTION: Record<string, MessageKey> = {
@@ -136,6 +126,7 @@ export function capsuleTone(status: string | undefined): Tone {
     case "error":
       return "danger";
     case "disabled":
+    case "uninstalled":
     case "destroyed":
       return "muted";
     default:
@@ -170,22 +161,6 @@ export function policyTone(status: string | undefined): Tone {
       return "warn";
     case "deny":
       return "danger";
-    default:
-      return "neutral";
-  }
-}
-
-export function connectionTone(status: string | undefined): Tone {
-  switch (status) {
-    case "verified":
-      return "ok";
-    case "pending":
-      return "warn";
-    case "error":
-      return "danger";
-    case "revoked":
-    case "expired":
-      return "muted";
     default:
       return "neutral";
   }

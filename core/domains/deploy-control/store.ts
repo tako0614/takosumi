@@ -360,6 +360,12 @@ export type CapsulePatch = Partial<
     | "status"
     | "autoUpdate"
     | "autoUpdateAttemptSourceSnapshotId"
+    | "uninstalledAt"
+    | "scheduledDestroyAt"
+    | "preDestroyExport"
+    | "uninstallRequestedBy"
+    | "installCleanupAttemptApplyRunId"
+    | "autoReplanAttempt"
     | "updatedAt"
   >
 >;
@@ -632,7 +638,106 @@ export interface RecoverableOpenTofuRunListOptions {
   readonly staleQueuedBeforeMs: number;
   readonly staleRunningBeforeMs: number;
   readonly limit?: number;
+  /** Opaque resume position from a prior page's `nextCursor`. */
+  readonly cursor?: string;
 }
+
+export interface RecoverableOpenTofuRunPage {
+  readonly runs: readonly StoredRunRecord[];
+  /**
+   * Present when the scan stopped at `limit` before exhausting the ledger.
+   * Feeding it back as `cursor` resumes strictly after the last SCANNED row
+   * (which may have been filtered out), so a backlog larger than one page
+   * drains across sweep ticks instead of re-reading the oldest rows forever.
+   * Absent means the scan reached the end and the next sweep restarts on top.
+   */
+  readonly nextCursor?: string;
+}
+
+export interface RunBacklogStatsInput {
+  readonly now: number;
+  /** Same threshold the repair sweep uses for stale running heartbeats. */
+  readonly staleRunningBeforeMs: number;
+}
+
+/**
+ * Bounded, index-derived counts over the run ledger for repair/backlog
+ * telemetry. Implementations never load `run_json` for these.
+ */
+export interface RunBacklogStats {
+  readonly queuedByType: Readonly<Record<string, number>>;
+  readonly runningByType: Readonly<Record<string, number>>;
+  /** Age of the oldest queued dispatchable row; absent when none is queued. */
+  readonly oldestQueuedAgeMs?: number;
+  /** Running rows whose heartbeat (or start) is older than the threshold. */
+  readonly staleHeartbeatRunning: number;
+  /** Terminal apply rows whose billing finalization marker is still pending. */
+  readonly billingCapturePending: number;
+}
+
+export type ControlWorkItemStatus = "pending" | "leased" | "done" | "dead";
+
+/**
+ * Durable scheduled-intent row (`control_work_items`). Run repair stays
+ * ledger-derived; work items carry intent that is NOT derivable from the run
+ * ledger — deferred Capsule destroys, bounded auto-replans, and future
+ * scheduled per-Capsule work. The cron drain claims due rows and dispatches
+ * them to registered per-kind handlers; the store owns durability and claims.
+ */
+export interface ControlWorkItem {
+  readonly id: string;
+  readonly kind: string;
+  readonly dedupeKey?: string;
+  readonly workspaceId?: string;
+  readonly capsuleId?: string;
+  readonly runId?: string;
+  /** ISO timestamp at which the item becomes due. */
+  readonly dueAt: string;
+  readonly priority: number;
+  /** Claim attempts so far; incremented when a claim wins the row. */
+  readonly attempts: number;
+  readonly maxAttempts: number;
+  readonly status: ControlWorkItemStatus;
+  readonly lockedUntil?: string;
+  readonly lockedBy?: string;
+  readonly payload?: unknown;
+  readonly lastError?: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface EnqueueWorkItemInput {
+  readonly id: string;
+  readonly kind: string;
+  /** A live (pending|leased) `(kind, dedupeKey)` returns the existing row. */
+  readonly dedupeKey?: string;
+  readonly workspaceId?: string;
+  readonly capsuleId?: string;
+  readonly runId?: string;
+  readonly dueAt: string;
+  readonly priority?: number;
+  readonly maxAttempts?: number;
+  readonly payload?: unknown;
+  /** Caller-supplied clock (ISO) so stores stay deterministic under test. */
+  readonly now: string;
+}
+
+export interface ClaimWorkItemsInput {
+  readonly now: string;
+  readonly limit: number;
+  readonly kinds?: readonly string[];
+  readonly lockedBy: string;
+  readonly leaseMs: number;
+}
+
+export interface FailWorkItemOptions {
+  readonly lockedBy: string;
+  readonly error: string;
+  readonly now: string;
+  readonly retryDelayMs: number;
+}
+
+export const WORK_ITEM_DEFAULT_MAX_ATTEMPTS = 5;
 
 /**
  * Durable runtime-safety projection derived from the single Run ledger.
@@ -680,6 +785,17 @@ export function applyRunBillingCapturePending(run: ApplyRun): boolean {
     if (type === APPLY_BILLING_CAPTURE_COMPLETED_EVENT) latestCompleted = index;
   }
   return latestPending > latestCompleted;
+}
+
+/**
+ * Write-time projection of {@link applyRunBillingCapturePending} for the
+ * indexed `runs.billing_capture_pending` column, maintained in the same row
+ * write as the audit events it derives from. Only apply-family rows can carry
+ * the marker; every other run kind projects to 0 so the partial index stays
+ * a bounded backlog index instead of a table scan.
+ */
+export function runRowBillingCapturePending(row: StoredRunRecord): 0 | 1 {
+  return isApplyRunRecord(row) && applyRunBillingCapturePending(row) ? 1 : 0;
 }
 
 export interface OpenTofuControlStore {
@@ -748,6 +864,22 @@ export interface OpenTofuControlStore {
     workspaceId: string,
     options?: { readonly limit?: number },
   ): Promise<readonly StoredRunRecord[]>;
+  /**
+   * Newest-first keyset page over a Workspace's run ledger. `cursor` names the
+   * last row of the previous page (same opaque `(createdAtMillis, id)` codec
+   * as the recoverable-run scan); a page smaller than `limit` has no
+   * `nextCursor`.
+   */
+  listRunsByWorkspacePage(
+    workspaceId: string,
+    options?: { readonly limit?: number; readonly cursor?: string },
+  ): Promise<WorkspaceRunPage>;
+  /**
+   * Bulk PlanRun read for run-list projection: ApplyRun rows recover Capsule
+   * context from their PlanRun, and reading them one-by-one made every list
+   * page an N+1. Unknown ids are skipped; order is unspecified.
+   */
+  getPlanRunsByIds(ids: readonly string[]): Promise<readonly PlanRun[]>;
   /** Latest decisive mutation for runtime Interface safety, if one exists. */
   getCapsuleRuntimeSafety(
     capsuleId: string,
@@ -761,7 +893,26 @@ export interface OpenTofuControlStore {
    */
   listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
-  ): Promise<readonly StoredRunRecord[]>;
+  ): Promise<RecoverableOpenTofuRunPage>;
+
+  /** Index-derived repair/backlog counts; never loads run JSON. */
+  getRunBacklogStats(input: RunBacklogStatsInput): Promise<RunBacklogStats>;
+
+  // Durable scheduled-intent queue (`control_work_items`) + sweep rotation
+  // cursors (`control_sweep_cursors`). See {@link ControlWorkItem}.
+  enqueueWorkItem(input: EnqueueWorkItemInput): Promise<ControlWorkItem>;
+  claimDueWorkItems(
+    input: ClaimWorkItemsInput,
+  ): Promise<readonly ControlWorkItem[]>;
+  completeWorkItem(
+    id: string,
+    options: { readonly lockedBy: string; readonly now: string },
+  ): Promise<void>;
+  failWorkItem(id: string, options: FailWorkItemOptions): Promise<void>;
+  /** Due pending items per kind (the backlog a healthy drain keeps near 0). */
+  countWorkItemBacklog(now: string): Promise<Readonly<Record<string, number>>>;
+  getSweepCursor(name: string): Promise<string | undefined>;
+  putSweepCursor(name: string, cursor: string | undefined): Promise<void>;
 
   // Artifact ledger rows (spec §30 artifacts). Artifact bytes live in object
   // storage; these rows keep non-secret run-scoped pointers for audit and
@@ -1155,6 +1306,14 @@ export interface OpenTofuControlStore {
   // the host extension and never enter this store.
   putUsageEvent(event: UsageEvent): Promise<UsageEvent>;
   listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]>;
+  /**
+   * DB-side usage totals for one Capsule. The summary used to load the
+   * Workspace's WHOLE usage ledger and filter in memory, which grew without
+   * bound as a Workspace accumulated events.
+   */
+  getCapsuleUsageTotals(
+    capsuleId: string,
+  ): Promise<CapsuleUsageTotals>;
   /** Keyset-paged usage-event listing for a Workspace (spec §30 pagination). */
   listUsageEventsPage(
     workspaceId: string,
@@ -1283,6 +1442,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   readonly #usageEvents = new Map<string, UsageEvent>();
   readonly #backupRecords = new Map<string, BackupRecord>();
   readonly #artifactRecords = new Map<string, ArtifactRecord>();
+  readonly #workItems = new Map<string, ControlWorkItem>();
+  readonly #sweepCursors = new Map<string, string>();
 
   constructor() {
     maybeWarnInMemoryStore("InMemoryOpenTofuControlStore");
@@ -1565,6 +1726,44 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  listRunsByWorkspacePage(
+    workspaceId: string,
+    options: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<WorkspaceRunPage> {
+    const limit = clampRunListLimit(options.limit);
+    const cursor = decodeRecoverableRunCursor(options.cursor);
+    const rows = Array.from(this.#runs.values())
+      .filter(
+        (row) =>
+          row.workspaceId === workspaceId &&
+          storedRunRecordBeforeCursor(row, cursor),
+      )
+      .sort(compareStoredRunRecordsDesc);
+    const page = rows.slice(0, limit);
+    const nextCursor =
+      rows.length > limit && page.length > 0
+        ? encodeRecoverableRunCursor(page[page.length - 1]!)
+        : undefined;
+    return Promise.resolve({
+      runs: page,
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+    });
+  }
+
+  getPlanRunsByIds(ids: readonly string[]): Promise<readonly PlanRun[]> {
+    const seen = new Set<string>();
+    const plans: PlanRun[] = [];
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const run = this.#runs.get(id);
+      if (!run || !isPlanRunRecord(run)) continue;
+      const coerced = coerceRunRowStatus(run);
+      if (coerced) plans.push(coerced);
+    }
+    return Promise.resolve(plans);
+  }
+
   #capsuleRuntimeSafety(capsuleId: string): CapsuleRuntimeSafety | undefined {
     const rows = Array.from(this.#runs.values()).filter(
       (run): run is ApplyRun | Run =>
@@ -1583,15 +1782,224 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
-  ): Promise<readonly StoredRunRecord[]> {
+  ): Promise<RecoverableOpenTofuRunPage> {
     const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
-    const rows = Array.from(this.#runs.values());
-    return Promise.resolve(
-      rows
-        .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
-        .sort(compareStoredRunRecordsAsc)
-        .slice(0, limit),
-    );
+    const cursor = decodeRecoverableRunCursor(options.cursor);
+    // Page over CANDIDATES, the way the SQL stores do. Paging over the whole
+    // ledger made this implementation emit long runs of empty pages that the
+    // durable stores never produce, so tests against it did not reflect how
+    // the repair lane actually rotates. The candidate set is deliberately a
+    // superset of the exact predicate (no time bounds here), matching the
+    // SQL shape; the exact predicate is still applied to the page below.
+    const scanned = Array.from(this.#runs.values())
+      .filter(
+        (row) =>
+          storedRunRecordAfterCursor(row, cursor) &&
+          (isDispatchableOpenTofuRunRecord(row) ||
+            (isApplyRunRecord(row) &&
+              (row.status === "succeeded" || row.status === "failed") &&
+              applyRunBillingCapturePending(row))),
+      )
+      .sort(compareStoredRunRecordsAsc);
+    // The cursor advances over SCANNED rows so filtered-out rows never stall
+    // the rotation.
+    const page = scanned.slice(0, limit);
+    const nextCursor =
+      scanned.length > limit && page.length > 0
+        ? encodeRecoverableRunCursor(page[page.length - 1]!)
+        : undefined;
+    return Promise.resolve({
+      runs: page.filter((row) => isRecoverableOpenTofuRunRecord(row, options)),
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+    });
+  }
+
+  getRunBacklogStats(input: RunBacklogStatsInput): Promise<RunBacklogStats> {
+    const queuedByType: Record<string, number> = {};
+    const runningByType: Record<string, number> = {};
+    let oldestQueuedAt: number | undefined;
+    let staleHeartbeatRunning = 0;
+    let billingCapturePending = 0;
+    for (const row of this.#runs.values()) {
+      if (
+        isApplyRunRecord(row) &&
+        (row.status === "succeeded" || row.status === "failed") &&
+        applyRunBillingCapturePending(row)
+      ) {
+        billingCapturePending += 1;
+      }
+      if (!isDispatchableOpenTofuRunRecord(row)) continue;
+      const runType = storedRunRecordRunType(row);
+      if (row.status === "queued") {
+        queuedByType[runType] = (queuedByType[runType] ?? 0) + 1;
+        const at = storedRunRecordTimestamp(row);
+        if (at > 0 && (oldestQueuedAt === undefined || at < oldestQueuedAt)) {
+          oldestQueuedAt = at;
+        }
+      } else if (row.status === "running") {
+        runningByType[runType] = (runningByType[runType] ?? 0) + 1;
+        const reference =
+          typeof row.heartbeatAt === "number" &&
+          Number.isFinite(row.heartbeatAt)
+            ? row.heartbeatAt
+            : storedRunRecordTimestamp(row);
+        if (reference <= input.staleRunningBeforeMs) staleHeartbeatRunning += 1;
+      }
+    }
+    return Promise.resolve({
+      queuedByType,
+      runningByType,
+      ...(oldestQueuedAt === undefined
+        ? {}
+        : { oldestQueuedAgeMs: Math.max(0, input.now - oldestQueuedAt) }),
+      staleHeartbeatRunning,
+      billingCapturePending,
+    });
+  }
+
+  enqueueWorkItem(input: EnqueueWorkItemInput): Promise<ControlWorkItem> {
+    if (input.dedupeKey !== undefined) {
+      for (const item of this.#workItems.values()) {
+        if (
+          item.kind === input.kind &&
+          item.dedupeKey === input.dedupeKey &&
+          (item.status === "pending" || item.status === "leased")
+        ) {
+          return Promise.resolve(item);
+        }
+      }
+    }
+    const existing = this.#workItems.get(input.id);
+    if (existing) return Promise.resolve(existing);
+    const item: ControlWorkItem = {
+      id: input.id,
+      kind: input.kind,
+      ...(input.dedupeKey === undefined ? {} : { dedupeKey: input.dedupeKey }),
+      ...(input.workspaceId === undefined
+        ? {}
+        : { workspaceId: input.workspaceId }),
+      ...(input.capsuleId === undefined ? {} : { capsuleId: input.capsuleId }),
+      ...(input.runId === undefined ? {} : { runId: input.runId }),
+      dueAt: input.dueAt,
+      priority: input.priority ?? 0,
+      attempts: 0,
+      maxAttempts: input.maxAttempts ?? WORK_ITEM_DEFAULT_MAX_ATTEMPTS,
+      status: "pending",
+      ...(input.payload === undefined ? {} : { payload: input.payload }),
+      createdAt: input.now,
+      updatedAt: input.now,
+    };
+    this.#workItems.set(item.id, item);
+    return Promise.resolve(item);
+  }
+
+  claimDueWorkItems(
+    input: ClaimWorkItemsInput,
+  ): Promise<readonly ControlWorkItem[]> {
+    const due = Array.from(this.#workItems.values())
+      .filter((item) => {
+        if (input.kinds && !input.kinds.includes(item.kind)) return false;
+        if (item.status === "pending") return item.dueAt <= input.now;
+        // An expired lease is reclaimable: the crashed claimer never released.
+        return (
+          item.status === "leased" &&
+          item.lockedUntil !== undefined &&
+          item.lockedUntil < input.now
+        );
+      })
+      .sort(
+        (a, b) =>
+          b.priority - a.priority ||
+          a.dueAt.localeCompare(b.dueAt) ||
+          a.id.localeCompare(b.id),
+      )
+      .slice(0, Math.max(0, input.limit));
+    const lockedUntil = new Date(
+      Date.parse(input.now) + input.leaseMs,
+    ).toISOString();
+    const claimed: ControlWorkItem[] = [];
+    for (const item of due) {
+      const attempts = item.attempts + 1;
+      if (attempts > item.maxAttempts) {
+        this.#workItems.set(item.id, {
+          ...item,
+          attempts,
+          status: "dead",
+          updatedAt: input.now,
+        });
+        continue;
+      }
+      const leased: ControlWorkItem = {
+        ...item,
+        attempts,
+        status: "leased",
+        lockedUntil,
+        lockedBy: input.lockedBy,
+        updatedAt: input.now,
+      };
+      this.#workItems.set(item.id, leased);
+      claimed.push(leased);
+    }
+    return Promise.resolve(claimed);
+  }
+
+  completeWorkItem(
+    id: string,
+    options: { readonly lockedBy: string; readonly now: string },
+  ): Promise<void> {
+    const item = this.#workItems.get(id);
+    if (!item || item.status !== "leased" || item.lockedBy !== options.lockedBy) {
+      return Promise.resolve();
+    }
+    this.#workItems.set(id, {
+      ...item,
+      status: "done",
+      updatedAt: options.now,
+    });
+    return Promise.resolve();
+  }
+
+  failWorkItem(id: string, options: FailWorkItemOptions): Promise<void> {
+    const item = this.#workItems.get(id);
+    if (!item || item.status !== "leased" || item.lockedBy !== options.lockedBy) {
+      return Promise.resolve();
+    }
+    const dead = item.attempts >= item.maxAttempts;
+    this.#workItems.set(id, {
+      ...item,
+      status: dead ? "dead" : "pending",
+      ...(dead
+        ? {}
+        : {
+            dueAt: new Date(
+              Date.parse(options.now) + options.retryDelayMs,
+            ).toISOString(),
+          }),
+      lastError: options.error,
+      updatedAt: options.now,
+    });
+    return Promise.resolve();
+  }
+
+  countWorkItemBacklog(
+    now: string,
+  ): Promise<Readonly<Record<string, number>>> {
+    const backlog: Record<string, number> = {};
+    for (const item of this.#workItems.values()) {
+      if (item.status !== "pending" || item.dueAt > now) continue;
+      backlog[item.kind] = (backlog[item.kind] ?? 0) + 1;
+    }
+    return Promise.resolve(backlog);
+  }
+
+  getSweepCursor(name: string): Promise<string | undefined> {
+    return Promise.resolve(this.#sweepCursors.get(name));
+  }
+
+  putSweepCursor(name: string, cursor: string | undefined): Promise<void> {
+    if (cursor === undefined) this.#sweepCursors.delete(name);
+    else this.#sweepCursors.set(name, cursor);
+    return Promise.resolve();
   }
 
   putArtifactRecord(record: ArtifactRecord): Promise<ArtifactRecord> {
@@ -2883,6 +3291,21 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(normalized);
   }
 
+  getCapsuleUsageTotals(capsuleId: string): Promise<CapsuleUsageTotals> {
+    let usdMicros = 0;
+    let eventCount = 0;
+    let ratedEventCount = 0;
+    for (const event of this.#usageEvents.values()) {
+      if (event.capsuleId !== capsuleId) continue;
+      eventCount += 1;
+      if (event.ratingStatus === "rated") {
+        ratedEventCount += 1;
+        usdMicros += event.usdMicros;
+      }
+    }
+    return Promise.resolve({ usdMicros, eventCount, ratedEventCount });
+  }
+
   listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]> {
     return Promise.resolve(
       Array.from(this.#usageEvents.values())
@@ -3446,6 +3869,72 @@ export function compareStoredRunRecordsAsc(
   );
 }
 
+/**
+ * Opaque `(createdAtMillis, id)` resume cursor for the recoverable-run scan.
+ * The cursor names the last SCANNED position (kept or filtered), so resuming
+ * never re-reads rows the previous page already considered.
+ */
+export function encodeRecoverableRunCursor(row: StoredRunRecord): string {
+  return `${storedRunRecordTimestamp(row)}~${encodeURIComponent(row.id)}`;
+}
+
+export function decodeRecoverableRunCursor(
+  cursor: string | undefined,
+): { readonly createdAtMillis: number; readonly id: string } | undefined {
+  if (cursor === undefined || cursor === "") return undefined;
+  const separator = cursor.indexOf("~");
+  if (separator <= 0) return undefined;
+  const createdAtMillis = Number(cursor.slice(0, separator));
+  if (!Number.isFinite(createdAtMillis)) return undefined;
+  let id: string;
+  try {
+    id = decodeURIComponent(cursor.slice(separator + 1));
+  } catch {
+    // A malformed percent-escape is a bad cursor like any other: restart the
+    // walk instead of throwing URIError up as an opaque 500.
+    return undefined;
+  }
+  return id.length > 0 ? { createdAtMillis, id } : undefined;
+}
+
+/** DB-side usage aggregate for one Capsule. */
+export interface CapsuleUsageTotals {
+  readonly usdMicros: number;
+  readonly eventCount: number;
+  /** Rated events; `eventCount - ratedEventCount` are unrated. */
+  readonly ratedEventCount: number;
+}
+
+export interface WorkspaceRunPage {
+  readonly runs: readonly StoredRunRecord[];
+  readonly nextCursor?: string;
+}
+
+/** Newest-first keyset predicate: strictly BEFORE the cursor position. */
+export function storedRunRecordBeforeCursor(
+  row: StoredRunRecord,
+  cursor: { readonly createdAtMillis: number; readonly id: string } | undefined,
+): boolean {
+  if (!cursor) return true;
+  const at = storedRunRecordTimestamp(row);
+  return (
+    at < cursor.createdAtMillis ||
+    (at === cursor.createdAtMillis && row.id < cursor.id)
+  );
+}
+
+export function storedRunRecordAfterCursor(
+  row: StoredRunRecord,
+  cursor: { readonly createdAtMillis: number; readonly id: string } | undefined,
+): boolean {
+  if (!cursor) return true;
+  const at = storedRunRecordTimestamp(row);
+  return (
+    at > cursor.createdAtMillis ||
+    (at === cursor.createdAtMillis && row.id > cursor.id)
+  );
+}
+
 export function isRecoverableOpenTofuRunRecord(
   row: StoredRunRecord,
   options: RecoverableOpenTofuRunListOptions,
@@ -3499,6 +3988,19 @@ function isDispatchableOpenTofuRunRecord(row: StoredRunRecord): boolean {
   if (isApplyRunRecord(row)) return true;
   if (isSourceSyncRunRecord(row)) return true;
   return isRestoreRunRecord(row);
+}
+
+/** The §27 `runs.type` discriminator a stored record persists under. */
+export function storedRunRecordRunType(row: StoredRunRecord): string {
+  if (isPlanRunRecord(row)) {
+    if (row.driftCheck === true) return "drift_check";
+    return row.operation === "destroy" ? "destroy_plan" : "plan";
+  }
+  if (isApplyRunRecord(row)) {
+    return row.operation === "destroy" ? "destroy_apply" : "apply";
+  }
+  if (isSourceSyncRunRecord(row)) return "source_sync";
+  return (row as Run).type;
 }
 
 export function isPlanRunRecord(row: StoredRunRecord): row is PlanRun {

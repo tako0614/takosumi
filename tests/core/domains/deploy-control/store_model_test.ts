@@ -1387,7 +1387,7 @@ test("terminal billing-finalization markers are recoverable on every store backe
           staleQueuedBeforeMs: 200,
           staleRunningBeforeMs: 200,
         })
-      ).map((run) => run.id),
+      ).runs.map((run) => run.id),
       label,
     ).toContain(pending.id);
 
@@ -1408,7 +1408,7 @@ test("terminal billing-finalization markers are recoverable on every store backe
           staleQueuedBeforeMs: 200,
           staleRunningBeforeMs: 200,
         })
-      ).map((run) => run.id),
+      ).runs.map((run) => run.id),
       label,
     ).not.toContain(pending.id);
   }

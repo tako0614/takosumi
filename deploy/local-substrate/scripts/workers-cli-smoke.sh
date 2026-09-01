@@ -19,6 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 source "$SCRIPT_DIR/compose-helpers.sh"
+INGRESS_IP="$(local_substrate_ingress_ip)"
 
 resolve_service_worker_host() {
 	local candidates=()
@@ -32,7 +33,7 @@ resolve_service_worker_host() {
 
 	local host body
 	for host in "${candidates[@]}"; do
-		body=$(curl -sk --cacert "$CA" --resolve "${host}:443:127.0.0.1" \
+		body=$(curl -sk --cacert "$CA" --resolve "${host}:443:${INGRESS_IP}" \
 			"https://${host}/healthz" || true)
 		if echo "$body" | python3 -c "
 import json, sys
@@ -65,7 +66,7 @@ SERVICE_HOST="$(resolve_service_worker_host)"
 #    composed Bun+Postgres app; in the workers profile it is the Accounts
 #    Worker. Accept both explicitly so this smoke verifies the active profile
 #    instead of failing on a stale primary-host assumption.
-HEALTH=$(curl -sk --cacert "$CA" --resolve "app.takosumi.test:443:127.0.0.1" https://app.takosumi.test/healthz)
+HEALTH=$(curl -sk --cacert "$CA" --resolve "app.takosumi.test:443:${INGRESS_IP}" https://app.takosumi.test/healthz)
 APP_HEALTH_KIND=$(echo "$HEALTH" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
@@ -83,7 +84,7 @@ else:
 
 # 2. Service Worker sentinel. Edge-only `/storage/healthz` was retired; the
 #    Worker intentionally keeps it outside the service app and returns 404.
-SERVICE_HEALTH=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" "https://${SERVICE_HOST}/healthz")
+SERVICE_HEALTH=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:${INGRESS_IP}" "https://${SERVICE_HOST}/healthz")
 echo "$SERVICE_HEALTH" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
@@ -100,7 +101,7 @@ raise AssertionError(f'expected a workerd-local health payload, got {d!r}')
 
 DEPLOY_CONTROL_TOKEN="${TAKOSUMI_DEPLOY_CONTROL_TOKEN:-local-substrate-deploy-control-token}"
 
-SERVICE_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" \
+SERVICE_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:${INGRESS_IP}" \
 	-H "Authorization: Bearer $DEPLOY_CONTROL_TOKEN" \
 	-o /dev/null -w "%{http_code}" "https://${SERVICE_HOST}/v1/capabilities")
 [[ "$SERVICE_API_STATUS" == "200" ]] || {
@@ -112,7 +113,7 @@ SERVICE_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.
 #    edge-closed. local-substrate opts it in only on the local/private Worker
 #    probe host; app.takosumi.test remains protected by Caddy's 404 guard.
 RUNNER_PROFILES=$(curl -sk --cacert "$CA" \
-	--resolve "${SERVICE_HOST}:443:127.0.0.1" \
+	--resolve "${SERVICE_HOST}:443:${INGRESS_IP}" \
 	-H "Authorization: Bearer $DEPLOY_CONTROL_TOKEN" \
 	-H "Content-Type: application/json" \
 	"https://${SERVICE_HOST}/internal/v1/runner-profiles")
@@ -120,7 +121,7 @@ PROFILE_COUNT=$(echo "$RUNNER_PROFILES" | python3 -c "import json,sys;print(len(
 [[ "$PROFILE_COUNT" -gt 0 ]] || { echo "FAIL: /internal/v1/runner-profiles returned no profiles: $RUNNER_PROFILES" >&2; exit 1; }
 
 # 4. OIDC discovery shape
-DISC=$(curl -sk --cacert "$CA" --resolve "app.takosumi.test:443:127.0.0.1" https://app.takosumi.test/.well-known/openid-configuration)
+DISC=$(curl -sk --cacert "$CA" --resolve "app.takosumi.test:443:${INGRESS_IP}" https://app.takosumi.test/.well-known/openid-configuration)
 ISSUER=$(echo "$DISC" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('issuer',''))")
 [[ -n "$ISSUER" ]] || { echo "FAIL: /.well-known/openid-configuration missing issuer" >&2; exit 1; }
 

@@ -12,6 +12,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/compose-helpers.sh"
+INGRESS_IP="$(local_substrate_ingress_ip)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 PROVIDER="${1:-local-oidc}"
 APP_HOST="${TAKOSUMI_LOCAL_APP_HOST:-app.takosumi.test}"
@@ -20,7 +22,7 @@ BASE="https://${APP_HOST}"
 STATE="oauth_e2e_$(date +%s%N)_$$"
 COOKIE_JAR="$(mktemp)"
 trap 'rm -f "$COOKIE_JAR"' EXIT
-CURL_TLS=(--cacert "$CA" --resolve "${APP_HOST}:443:127.0.0.1" --resolve "${OAUTH_HOST}:443:127.0.0.1")
+CURL_TLS=(--cacert "$CA" --resolve "${APP_HOST}:443:${INGRESS_IP}" --resolve "${OAUTH_HOST}:443:${INGRESS_IP}")
 
 if [[ ! -f "$CA" ]]; then
 	echo "Pebble CA not found at $CA — run scripts/up.sh first" >&2

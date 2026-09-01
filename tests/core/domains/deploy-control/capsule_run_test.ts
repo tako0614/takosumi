@@ -78,6 +78,8 @@ import type {
   ShowbackRater,
 } from "takosumi-contract/billing";
 import type { CapsuleOwnedResourceFence } from "../../../../core/domains/capsules/mod.ts";
+import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
+import { finalizeScheduledCapsuleUninstall } from "../../../../core/domains/capsules/uninstall_finalize.ts";
 import {
   FIXTURE_ARCHIVE_DIGEST,
   seedCapsuleModel,
@@ -6896,6 +6898,10 @@ test("first-apply cleanup not_applicable marker survives an ambiguous destroy fa
         return Promise.resolve({ status: "succeeded" as const });
       },
     },
+    // This test drives the compensating destroy MANUALLY to observe the
+    // not_applicable marker; the automatic failed-first-install cleanup would
+    // otherwise race it with its own system destroy plan.
+    failedInstallAutoCleanup: false,
   });
 
   const createQueued = await controller.createCapsulePlan("cap_fixture1");
@@ -7093,20 +7099,18 @@ test("capsule plan and apply record deploy operation metrics", async () => {
   const operationMetrics = await observability.listMetrics({
     name: "takosumi_deploy_operation_count",
   });
+  // Bounded label vocabulary only (metric_layout.ts): tenant identifiers
+  // never become Prometheus series.
   expect(operationMetrics.map((metric) => metric.tags)).toContainEqual({
-    capsule_id: "cap_fixture1",
     environment: "test",
     operation_kind: "plan",
     runner_profile_id: "runner_test",
-    workspace_id: "ws_test001",
     status: "succeeded",
   });
   expect(operationMetrics.map((metric) => metric.tags)).toContainEqual({
-    capsule_id: "cap_fixture1",
     environment: "test",
     operation_kind: "apply",
     runner_profile_id: "runner_test",
-    workspace_id: "ws_test001",
     status: "succeeded",
   });
 
@@ -7116,9 +7120,7 @@ test("capsule plan and apply record deploy operation metrics", async () => {
   expect(applyDurations).toHaveLength(1);
   expect(applyDurations[0]?.kind).toBe("histogram");
   expect(applyDurations[0]?.tags).toMatchObject({
-    capsule_id: "cap_fixture1",
     operation_kind: "apply",
-    workspace_id: "ws_test001",
     status: "succeeded",
   });
 });
@@ -7822,4 +7824,282 @@ test("OpenTofuControllerError is surfaced for an unknown capsule", async () => {
   await expect(
     controller.createCapsulePlan("cap_missing"),
   ).rejects.toBeInstanceOf(OpenTofuControllerError);
+});
+
+// ---------------------------------------------------------------------------
+// Two-phase uninstall + system destroy lane (§23; deferred destroy)
+// ---------------------------------------------------------------------------
+
+/** Installs cap_fixture1 to `active` generation 1 through the real engine. */
+async function installFixtureCapsule(
+  controller: OpenTofuController,
+  store: OpenTofuControlStore,
+  queued: Array<{
+    readonly action: "plan" | "apply" | "source_sync" | "restore";
+    readonly runId: string;
+    readonly workspaceId: string;
+  }>,
+): Promise<void> {
+  const created = await controller.createCapsulePlan("cap_fixture1");
+  await controller.dispatchQueuedRun(queued.shift()!);
+  const plan = (await store.getPlanRun(created.planRun.id))!;
+  await controller.createApplyRun({
+    planRunId: plan.id,
+    expected: applyExpectedGuardFromPlanRun(plan),
+  });
+  await controller.dispatchQueuedRun(queued.shift()!);
+  expect((await store.getCapsule("cap_fixture1"))?.status).toBe("active");
+}
+
+/** Later plans report a delete-only summary (the destroy-plan shape). */
+function makePlansDeleteOnly(runner: RecordingRunner): void {
+  const basePlan = runner.plan.bind(runner);
+  runner.plan = (job) =>
+    basePlan(job).then((result) => ({
+      ...result,
+      summary: { add: 0, change: 0, destroy: 1 },
+    }));
+}
+
+test("two-phase uninstall: schedule, finalize, system-approve, destroy", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const queued: Array<{
+    readonly action: "plan" | "apply" | "source_sync" | "restore";
+    readonly runId: string;
+    readonly workspaceId: string;
+  }> = [];
+  const controller = controllerWith(store, runner, {
+    now: sequenceNow(Date.parse("2026-08-23T00:00:00.000Z")),
+    enqueueRun: (dispatch) => {
+      queued.push(dispatch);
+      return Promise.resolve();
+    },
+  });
+  await seedRunnableCapsuleModel(store);
+  await installFixtureCapsule(controller, store, queued);
+
+  // Operator-configured zero grace: due immediately.
+  const capsules = new CapsulesService({
+    store,
+    uninstallGraceMs: 0,
+    now: () => new Date("2026-08-22T00:00:00.000Z"),
+  });
+  const uninstalled = await capsules.scheduleCapsuleUninstall("cap_fixture1", {
+    requestedBy: "user_test",
+  });
+  expect(uninstalled.status).toBe("uninstalled");
+  expect(uninstalled.uninstalledAt).toBe("2026-08-22T00:00:00.000Z");
+  expect(uninstalled.scheduledDestroyAt).toBe("2026-08-22T00:00:00.000Z");
+  // A second schedule is idempotent (no duplicate intent).
+  await capsules.scheduleCapsuleUninstall("cap_fixture1");
+  expect(
+    await store.countWorkItemBacklog("2026-08-22T00:00:01.000Z"),
+  ).toEqual({ "capsule.deferred_destroy": 1 });
+
+  // Uninstalled Capsules refuse ordinary (non-destroy) plans.
+  await expect(controller.createCapsulePlan("cap_fixture1")).rejects.toThrow(
+    /uninstalled/,
+  );
+
+  const [item] = await store.claimDueWorkItems({
+    now: "2026-08-22T00:00:01.000Z",
+    limit: 1,
+    lockedBy: "cron:test",
+    leaseMs: 60_000,
+  });
+  makePlansDeleteOnly(runner);
+  const outcome = await finalizeScheduledCapsuleUninstall(
+    { capsules, controller },
+    item!,
+    { now: () => new Date("2026-08-23T00:00:00.000Z") },
+  );
+  expect(outcome).toBe("destroy_planned");
+  // No composed backups service: honest `skipped` evidence, destroy proceeds.
+  expect(
+    (await store.getCapsule("cap_fixture1"))?.preDestroyExport,
+  ).toMatchObject({ status: "skipped", reason: "backups_not_composed" });
+
+  // Plan dispatch parks waiting_approval; the dedicated auto-continue then
+  // re-verifies the evidence, system-approves, and creates the destroy apply.
+  await controller.dispatchQueuedRun(queued.shift()!);
+  expect(queued).toHaveLength(1);
+  await controller.dispatchQueuedRun(queued.shift()!);
+  const done = await store.getCapsule("cap_fixture1");
+  expect(done?.status).toBe("destroyed");
+  expect(queued).toHaveLength(0);
+});
+
+test("restore during the grace period makes the deferred destroy a no-op", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const queued: Array<{
+    readonly action: "plan" | "apply" | "source_sync" | "restore";
+    readonly runId: string;
+    readonly workspaceId: string;
+  }> = [];
+  const controller = controllerWith(store, runner, {
+    now: sequenceNow(Date.parse("2026-08-23T00:00:00.000Z")),
+    enqueueRun: (dispatch) => {
+      queued.push(dispatch);
+      return Promise.resolve();
+    },
+  });
+  await seedRunnableCapsuleModel(store);
+  await installFixtureCapsule(controller, store, queued);
+
+  const capsules = new CapsulesService({
+    store,
+    uninstallGraceMs: 0,
+    now: () => new Date("2026-08-22T00:00:00.000Z"),
+  });
+  await capsules.scheduleCapsuleUninstall("cap_fixture1");
+  const [item] = await store.claimDueWorkItems({
+    now: "2026-08-22T00:00:01.000Z",
+    limit: 1,
+    lockedBy: "cron:test",
+    leaseMs: 60_000,
+  });
+
+  const restored = await capsules.restoreUninstalledCapsule("cap_fixture1");
+  expect(restored.status).toBe("active");
+  expect(restored.uninstalledAt).toBeUndefined();
+  expect(restored.scheduledDestroyAt).toBeUndefined();
+
+  // The already-claimed intent re-verifies against the Capsule row and no-ops.
+  expect(
+    await finalizeScheduledCapsuleUninstall({ capsules, controller }, item!, {
+      now: () => new Date("2026-08-23T00:00:00.000Z"),
+    }),
+  ).toBe("superseded");
+  expect(queued).toHaveLength(0);
+  // The restored Capsule plans normally again.
+  await controller.createCapsulePlan("cap_fixture1");
+  expect(queued).toHaveLength(1);
+});
+
+test("a failed first install cleans itself up back to nothing", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  runner.apply = (job) => {
+    runner.applyJobs.push(job);
+    return Promise.resolve({
+      providerExecutionFailure: {
+        kind: "provider_execution_failed" as const,
+        statePersistence: "persisted" as const,
+        errorCode: "apply_failed",
+      },
+      stateDigest: STATE_DIGEST,
+      providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      rawOutputRef: job.rawOutputRef,
+    });
+  };
+  const queued: Array<{
+    readonly action: "plan" | "apply" | "source_sync" | "restore";
+    readonly runId: string;
+    readonly workspaceId: string;
+  }> = [];
+  const controller = controllerWith(store, runner, {
+    now: sequenceNow(Date.parse("2026-08-23T00:00:00.000Z")),
+    enqueueRun: (dispatch) => {
+      queued.push(dispatch);
+      return Promise.resolve();
+    },
+  });
+  await seedRunnableCapsuleModel(store);
+
+  const created = await controller.createCapsulePlan("cap_fixture1");
+  await controller.dispatchQueuedRun(queued.shift()!);
+  const plan = (await store.getPlanRun(created.planRun.id))!;
+  const failed = await controller.createApplyRun({
+    planRunId: plan.id,
+    expected: applyExpectedGuardFromPlanRun(plan),
+  });
+  await controller.dispatchQueuedRun(queued.shift()!);
+  expect((await store.getApplyRun(failed.applyRun.id))?.status).toBe("failed");
+
+  // The one-shot cleanup marker burned and the system destroy plan queued.
+  const errored = await store.getCapsule("cap_fixture1");
+  expect(errored?.status).toBe("error");
+  expect(errored?.installCleanupAttemptApplyRunId).toBe(failed.applyRun.id);
+  expect(queued).toHaveLength(1);
+
+  makePlansDeleteOnly(runner);
+  await controller.dispatchQueuedRun(queued.shift()!);
+  // Auto-continue system-approved the delete-only plan and queued the apply.
+  expect(queued).toHaveLength(1);
+  await controller.dispatchQueuedRun(queued.shift()!);
+  const done = await store.getCapsule("cap_fixture1");
+  expect(done?.status).toBe("destroyed");
+});
+
+test("a failed update apply schedules at most two bounded auto re-plans", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const queued: Array<{
+    readonly action: "plan" | "apply" | "source_sync" | "restore";
+    readonly runId: string;
+    readonly workspaceId: string;
+  }> = [];
+  const controller = controllerWith(store, runner, {
+    now: sequenceNow(Date.parse("2026-08-23T00:00:00.000Z")),
+    enqueueRun: (dispatch) => {
+      queued.push(dispatch);
+      return Promise.resolve();
+    },
+  });
+  await seedRunnableCapsuleModel(store);
+  await installFixtureCapsule(controller, store, queued);
+
+  // Updates now fail after committing partial state.
+  runner.apply = (job) => {
+    runner.applyJobs.push(job);
+    return Promise.resolve({
+      providerExecutionFailure: {
+        kind: "provider_execution_failed" as const,
+        statePersistence: "persisted" as const,
+        errorCode: "apply_failed",
+      },
+      stateDigest: STATE_DIGEST,
+      providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      rawOutputRef: job.rawOutputRef,
+    });
+  };
+
+  const failOneUpdate = async (planRunId: string): Promise<void> => {
+    const plan = (await store.getPlanRun(planRunId))!;
+    await controller.createApplyRun({
+      planRunId: plan.id,
+      expected: applyExpectedGuardFromPlanRun(plan),
+    });
+    await controller.dispatchQueuedRun(queued.shift()!);
+  };
+
+  const update = await controller.createCapsulePlan("cap_fixture1");
+  await controller.dispatchQueuedRun(queued.shift()!);
+  await failOneUpdate(update.planRun.id);
+
+  // First failure: one automatic re-plan against the same snapshot.
+  let capsule = await store.getCapsule("cap_fixture1");
+  expect(capsule?.status).toBe("error");
+  expect(capsule?.autoReplanAttempt?.count).toBe(1);
+  expect(queued).toHaveLength(1);
+  const replan1 = queued[0]!.runId;
+  await controller.dispatchQueuedRun(queued.shift()!);
+  // Manual update: the clean re-plan parks for review, never auto-applies.
+  expect(queued).toHaveLength(0);
+
+  // Second failure through the re-plan: one more attempt, then the cap.
+  await failOneUpdate(replan1);
+  capsule = await store.getCapsule("cap_fixture1");
+  expect(capsule?.autoReplanAttempt?.count).toBe(2);
+  expect(queued).toHaveLength(1);
+  const replan2 = queued[0]!.runId;
+  await controller.dispatchQueuedRun(queued.shift()!);
+  await failOneUpdate(replan2);
+
+  // Third failure on the same snapshot: the bound holds, no more re-plans.
+  capsule = await store.getCapsule("cap_fixture1");
+  expect(capsule?.autoReplanAttempt?.count).toBe(2);
+  expect(queued).toHaveLength(0);
 });

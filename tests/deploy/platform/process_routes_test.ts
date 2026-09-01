@@ -172,7 +172,7 @@ test("platform delegates the canonical Accounts API v1 surface", async () => {
     .prepare(
       "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
     )
-    .bind(3, "current", Date.now())
+    .bind(4, "current", Date.now())
     .run();
   const env = {
     ...baseEnv,

@@ -16,8 +16,13 @@ import type {
   AccountSessionRecord,
   AccountsBearerCredentialCandidates,
   AccountsStore,
+  AuthorizationCodeRedemptionCandidate,
   AuthorizationCodeRecord,
+  ClaimValidatedAuthorizationCodeResult,
+  FinalizeAuthorizationCodeRedemptionInput,
+  FinalizeAuthorizationCodeRedemptionResult,
   OidcClientRecord,
+  OpenAuthorizationCodeRedemptionResult,
   PasskeyCredentialRecord,
   PersonalAccessTokenInventoryPage,
   PersonalAccessTokenInventoryPageInput,
@@ -472,11 +477,6 @@ interface RevokedRefreshRootDocument {
   readonly revokedAt: number;
 }
 
-interface ConsumedAuthCodeDocument {
-  readonly codeHash: string;
-  readonly consumedAt: number;
-}
-
 interface AuthCodeTokenLinkDocument {
   readonly codeHash: string;
   // '' is the absent-value sentinel, matching the Postgres empty-string
@@ -484,6 +484,20 @@ interface AuthCodeTokenLinkDocument {
   readonly accessTokenHash: string;
   readonly refreshRootHash: string;
   readonly createdAt: number;
+}
+
+interface AuthorizationCodeRedemptionDocument {
+  readonly state: "active" | "issuing" | "issued" | "replayed";
+  readonly recordVersion: string;
+  readonly record?: AuthorizationCodeRecord;
+  readonly claimId?: string;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly claimedAt?: number;
+  readonly issuedAt?: number;
+  readonly replayedAt?: number;
+  readonly accessTokenHash?: string;
+  readonly refreshTokenHash?: string;
 }
 
 interface RefreshChainAccessTokenDocument {
@@ -495,6 +509,7 @@ interface RefreshChainAccessTokenDocument {
 interface RefreshChainRetentionCandidateRow {
   readonly key: string;
   readonly retention_at: number;
+  readonly record_version: string | null;
 }
 
 const D1_REFRESH_CHAIN_RETENTION_PHASES: Record<
@@ -502,44 +517,78 @@ const D1_REFRESH_CHAIN_RETENTION_PHASES: Record<
   {
     readonly bucket: string;
     readonly indexName: string;
-    readonly timestampField: "createdAt" | "revokedAt" | "consumedAt";
+    readonly timestampExpression: string;
+    readonly predicate?: string;
+    readonly recordVersionExpression?: string;
     readonly count:
       | "chainLinks"
       | "chainAccessTokens"
       | "revokedRoots"
       | "consumedCodes"
-      | "authCodeTokenLinks";
+      | "authCodeTokenLinks"
+      | "authorizationCodeRedemptions";
   }
 > = {
   chain_links: {
     bucket: "refresh_chain_links",
     indexName: "takosumi_accounts_refresh_chain_links_retention",
-    timestampField: "createdAt",
+    timestampExpression:
+      "CAST(json_extract(document, '$.createdAt') AS INTEGER)",
     count: "chainLinks",
   },
   chain_access_tokens: {
     bucket: "refresh_chain_access_tokens",
     indexName: "takosumi_accounts_refresh_chain_access_tokens_retention",
-    timestampField: "createdAt",
+    timestampExpression:
+      "CAST(json_extract(document, '$.createdAt') AS INTEGER)",
     count: "chainAccessTokens",
   },
   revoked_roots: {
     bucket: "revoked_refresh_roots",
     indexName: "takosumi_accounts_revoked_refresh_roots_retention",
-    timestampField: "revokedAt",
+    timestampExpression:
+      "CAST(json_extract(document, '$.revokedAt') AS INTEGER)",
     count: "revokedRoots",
   },
   consumed_codes: {
     bucket: "consumed_authorization_codes",
     indexName: "takosumi_accounts_consumed_authorization_codes_retention",
-    timestampField: "consumedAt",
+    timestampExpression:
+      "CAST(json_extract(document, '$.consumedAt') AS INTEGER)",
+    predicate: `AND NOT EXISTS (
+      SELECT 1
+        FROM takosumi_accounts_documents AS redemption
+       WHERE redemption.bucket = 'authorization_code_redemptions'
+         AND redemption.key = takosumi_accounts_documents.key
+    )`,
     count: "consumedCodes",
   },
   auth_code_token_links: {
     bucket: "auth_code_token_links",
     indexName: "takosumi_accounts_auth_code_token_links_retention",
-    timestampField: "createdAt",
+    timestampExpression:
+      "CAST(json_extract(document, '$.createdAt') AS INTEGER)",
+    predicate: `AND NOT EXISTS (
+      SELECT 1
+        FROM takosumi_accounts_documents AS redemption
+       WHERE redemption.bucket = 'authorization_code_redemptions'
+         AND redemption.key = json_extract(
+               takosumi_accounts_documents.document,
+               '$.codeHash'
+             )
+    )`,
     count: "authCodeTokenLinks",
+  },
+  authorization_code_redemptions: {
+    bucket: "authorization_code_redemptions",
+    indexName:
+      "takosumi_accounts_authorization_code_redemptions_terminal_retention",
+    timestampExpression:
+      "CAST(COALESCE(json_extract(document, '$.replayedAt'), json_extract(document, '$.issuedAt')) AS INTEGER)",
+    predicate:
+      "AND json_extract(document, '$.state') IN ('issued', 'replayed')",
+    recordVersionExpression: "json_extract(document, '$.recordVersion')",
+    count: "authorizationCodeRedemptions",
   },
 };
 
@@ -795,19 +844,306 @@ export class D1AccountsStore implements AccountsStore {
     );
   }
 
-  saveAuthorizationCode(
+  async saveAuthorizationCode(
     code: string,
     record: AuthorizationCodeRecord,
   ): Promise<void> {
-    return hashSecret(code).then((hash) =>
-      this.#put("authorization_codes", hash, record),
-    );
+    await this.initialize();
+    const codeHash = await hashSecret(code);
+    const now = Date.now();
+    const redemption: AuthorizationCodeRedemptionDocument = {
+      state: "active",
+      recordVersion: crypto.randomUUID(),
+      record,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.#runLifecycleBatch([
+      ...this.#authorizationCodeReplayStatements(codeHash, now, true),
+      this.#db
+        .prepare(
+          "INSERT OR REPLACE INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES ('authorization_codes', ?, ?, ?)",
+        )
+        .bind(codeHash, JSON.stringify(record), now),
+      this.#db
+        .prepare(
+          "INSERT OR REPLACE INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES ('authorization_code_redemptions', ?, ?, ?)",
+        )
+        .bind(codeHash, JSON.stringify(redemption), now),
+    ]);
   }
 
-  async consumeAuthorizationCode(
+  async openAuthorizationCodeRedemption(
     code: string,
-  ): Promise<AuthorizationCodeRecord | undefined> {
-    return await this.#take("authorization_codes", await hashSecret(code));
+  ): Promise<OpenAuthorizationCodeRedemptionResult> {
+    await this.initialize();
+    const codeHash = await hashSecret(code);
+    const now = Date.now();
+    const results = await this.#runLifecycleBatch([
+      ...this.#authorizationCodeReplayStatements(codeHash, now, true),
+      this.#db
+        .prepare(
+          "SELECT document FROM takosumi_accounts_documents WHERE bucket = 'authorization_code_redemptions' AND key = ? LIMIT 1",
+        )
+        .bind(codeHash),
+    ]);
+    const document = d1LifecycleDocumentFromResult(results.at(-1));
+    if (!document) return { status: "unknown" };
+    if (document.state !== "active") return { status: "replayed" };
+    if (!document.record) {
+      throw new Error("D1 active authorization-code redemption is malformed");
+    }
+    return {
+      status: "active",
+      candidate: {
+        redemptionId: codeHash,
+        recordVersion: document.recordVersion,
+        record: document.record,
+      },
+    };
+  }
+
+  async claimValidatedAuthorizationCode(
+    candidate: AuthorizationCodeRedemptionCandidate,
+  ): Promise<ClaimValidatedAuthorizationCodeResult> {
+    await this.initialize();
+    const claimId = crypto.randomUUID();
+    const now = Date.now();
+    const results = await this.#runLifecycleBatch([
+      this.#db
+        .prepare(
+          `UPDATE takosumi_accounts_documents
+              SET document = json_set(
+                    document,
+                    '$.state', 'issuing',
+                    '$.claimId', ?,
+                    '$.claimedAt', ?,
+                    '$.updatedAt', ?
+                  ),
+                  updated_at = ?
+            WHERE bucket = 'authorization_code_redemptions'
+              AND key = ?
+              AND json_extract(document, '$.state') = 'active'
+              AND json_extract(document, '$.recordVersion') = ?`,
+        )
+        .bind(
+          claimId,
+          now,
+          now,
+          now,
+          candidate.redemptionId,
+          candidate.recordVersion,
+        ),
+      this.#db
+        .prepare(
+          `DELETE FROM takosumi_accounts_documents
+            WHERE bucket = 'authorization_codes'
+              AND key = ?
+              AND EXISTS (
+                SELECT 1 FROM takosumi_accounts_documents
+                 WHERE bucket = 'authorization_code_redemptions'
+                   AND key = ?
+                   AND json_extract(document, '$.state') = 'issuing'
+                   AND json_extract(document, '$.claimId') = ?
+              )`,
+        )
+        .bind(candidate.redemptionId, candidate.redemptionId, claimId),
+      this.#db
+        .prepare(
+          `UPDATE takosumi_accounts_documents
+              SET document = json_set(
+                    document,
+                    '$.state', 'replayed',
+                    '$.replayedAt', COALESCE(
+                      json_extract(document, '$.replayedAt'),
+                      ?
+                    ),
+                    '$.updatedAt', ?
+                  ),
+                  updated_at = ?
+            WHERE bucket = 'authorization_code_redemptions'
+              AND key = ?
+              AND json_extract(document, '$.recordVersion') = ?
+              AND json_extract(document, '$.state') IN ('issuing', 'issued')
+              AND COALESCE(json_extract(document, '$.claimId'), '') <> ?`,
+        )
+        .bind(
+          now,
+          now,
+          now,
+          candidate.redemptionId,
+          candidate.recordVersion,
+          claimId,
+        ),
+      ...this.#authorizationCodeReplayStatements(
+        candidate.redemptionId,
+        now,
+        false,
+      ),
+      this.#db
+        .prepare(
+          "SELECT document FROM takosumi_accounts_documents WHERE bucket = 'authorization_code_redemptions' AND key = ? LIMIT 1",
+        )
+        .bind(candidate.redemptionId),
+    ]);
+    const document = d1LifecycleDocumentFromResult(results.at(-1));
+    if (!document) return { status: "lost" };
+    if (document.recordVersion !== candidate.recordVersion) {
+      return { status: "stale" };
+    }
+    if (document.state === "replayed") return { status: "replayed" };
+    if (document.state === "issuing" && document.claimId === claimId) {
+      return { status: "claimed", claimId };
+    }
+    return { status: "lost" };
+  }
+
+  async finalizeAuthorizationCodeRedemption(
+    input: FinalizeAuthorizationCodeRedemptionInput,
+  ): Promise<FinalizeAuthorizationCodeRedemptionResult> {
+    if (
+      (input.refreshToken === undefined) !==
+      (input.refreshRecord === undefined)
+    ) {
+      throw new TypeError(
+        "authorization-code refresh token and record must be provided together",
+      );
+    }
+    await this.initialize();
+    const [codeHash, accessTokenHash, refreshTokenHash] = await Promise.all([
+      hashSecret(input.code),
+      hashSecret(input.accessToken),
+      input.refreshToken ? hashSecret(input.refreshToken) : undefined,
+    ]);
+    const now = Date.now();
+    const accessDocument = JSON.stringify(input.accessRecord);
+    const refreshDocument = input.refreshRecord
+      ? JSON.stringify(input.refreshRecord)
+      : undefined;
+    const linkKey = `${codeHash}\n${accessTokenHash}\n${refreshTokenHash ?? ""}`;
+    const chainAccessKey = refreshTokenHash
+      ? `${refreshTokenHash}\n${accessTokenHash}`
+      : undefined;
+    const statements: D1PreparedStatement[] = [
+      this.#conditionalAuthorizationCodeInsert(
+        "access_tokens",
+        accessTokenHash,
+        accessDocument,
+        now,
+        codeHash,
+        input.claimId,
+      ),
+    ];
+    if (refreshTokenHash && refreshDocument) {
+      statements.push(
+        this.#conditionalAuthorizationCodeInsert(
+          "refresh_tokens",
+          refreshTokenHash,
+          refreshDocument,
+          now,
+          codeHash,
+          input.claimId,
+        ),
+        this.#conditionalAuthorizationCodeInsert(
+          "refresh_chain_access_tokens",
+          chainAccessKey!,
+          JSON.stringify({
+            rootHash: refreshTokenHash,
+            accessTokenHash,
+            createdAt: now,
+          } satisfies RefreshChainAccessTokenDocument),
+          now,
+          codeHash,
+          input.claimId,
+        ),
+        this.#conditionalAuthorizationCodeIndexInsert(
+          "refresh_chain_access_tokens_by_root",
+          refreshTokenHash,
+          "refresh_chain_access_tokens",
+          chainAccessKey!,
+          now,
+          codeHash,
+          input.claimId,
+        ),
+      );
+    }
+    statements.push(
+      this.#conditionalAuthorizationCodeInsert(
+        "consumed_authorization_codes",
+        codeHash,
+        JSON.stringify({ codeHash, consumedAt: now }),
+        now,
+        codeHash,
+        input.claimId,
+        true,
+      ),
+      this.#conditionalAuthorizationCodeInsert(
+        "auth_code_token_links",
+        linkKey,
+        JSON.stringify({
+          codeHash,
+          accessTokenHash,
+          refreshRootHash: refreshTokenHash ?? "",
+          createdAt: now,
+        } satisfies AuthCodeTokenLinkDocument),
+        now,
+        codeHash,
+        input.claimId,
+        true,
+      ),
+      this.#conditionalAuthorizationCodeIndexInsert(
+        "auth_code_token_links_by_code",
+        codeHash,
+        "auth_code_token_links",
+        linkKey,
+        now,
+        codeHash,
+        input.claimId,
+      ),
+      this.#db
+        .prepare(
+          `UPDATE takosumi_accounts_documents
+              SET document = json_set(
+                    document,
+                    '$.state', 'issued',
+                    '$.accessTokenHash', ?,
+                    '$.refreshTokenHash', json(?),
+                    '$.issuedAt', ?,
+                    '$.updatedAt', ?
+                  ),
+                  updated_at = ?
+            WHERE bucket = 'authorization_code_redemptions'
+              AND key = ?
+              AND json_extract(document, '$.state') = 'issuing'
+              AND json_extract(document, '$.claimId') = ?`,
+        )
+        .bind(
+          accessTokenHash,
+          JSON.stringify(refreshTokenHash ?? null),
+          now,
+          now,
+          now,
+          codeHash,
+          input.claimId,
+        ),
+      this.#db
+        .prepare(
+          "SELECT document FROM takosumi_accounts_documents WHERE bucket = 'authorization_code_redemptions' AND key = ? LIMIT 1",
+        )
+        .bind(codeHash),
+    );
+    const results = await this.#runLifecycleBatch(statements);
+    const document = d1LifecycleDocumentFromResult(results.at(-1));
+    if (!document) return { status: "lost" };
+    if (document.state === "replayed") return { status: "replayed" };
+    if (
+      document.state === "issued" &&
+      document.claimId === input.claimId &&
+      document.accessTokenHash === accessTokenHash
+    ) {
+      return { status: "issued" };
+    }
+    return { status: "lost" };
   }
 
   async saveAccessToken(token: string, record: TokenRecord): Promise<void> {
@@ -1107,90 +1443,6 @@ export class D1AccountsStore implements AccountsStore {
     }
   }
 
-  async markAuthorizationCodeConsumed(code: string): Promise<void> {
-    const codeHash = await hashSecret(code);
-    await this.#put<ConsumedAuthCodeDocument>(
-      "consumed_authorization_codes",
-      codeHash,
-      { codeHash, consumedAt: Date.now() },
-    );
-  }
-
-  async isAuthorizationCodeConsumed(code: string): Promise<boolean> {
-    const codeHash = await hashSecret(code);
-    const row = await this.#get<ConsumedAuthCodeDocument>(
-      "consumed_authorization_codes",
-      codeHash,
-    );
-    return row !== undefined;
-  }
-
-  async linkAccessTokenToAuthCode(
-    code: string,
-    accessToken: string,
-    refreshTokenRoot?: string,
-  ): Promise<void> {
-    const codeHash = await hashSecret(code);
-    const accessHash = await hashSecret(accessToken);
-    // Absent refresh root is stored as the empty-string sentinel '', matching
-    // the Postgres path (migration 021). Keeping ONE sentinel scheme across
-    // both reference distributions is what makes the no-offline_access case
-    // representable on Postgres (NULL is forbidden in its PRIMARY KEY); the
-    // two stores must not diverge on this.
-    const refreshRootHash =
-      refreshTokenRoot === undefined ? "" : await hashSecret(refreshTokenRoot);
-    // Composite key: code|access|refreshRoot so multiple links can
-    // coexist for one code (one auth code may produce one access +
-    // refresh pair, but the table is keyed on the tuple for symmetry
-    // with the postgres PRIMARY KEY).
-    const linkKey = `${codeHash}\n${accessHash}\n${refreshRootHash}`;
-    await this.#put<AuthCodeTokenLinkDocument>(
-      "auth_code_token_links",
-      linkKey,
-      {
-        codeHash,
-        accessTokenHash: accessHash,
-        refreshRootHash,
-        createdAt: Date.now(),
-      },
-      [{ name: "auth_code_token_links_by_code", key: codeHash }],
-    );
-  }
-
-  async revokeTokensIssuedFromCode(
-    code: string,
-  ): Promise<{ access: readonly string[]; refresh: readonly string[] }> {
-    const codeHash = await hashSecret(code);
-    const links = await this.#listByIndex<AuthCodeTokenLinkDocument>(
-      "auth_code_token_links_by_code",
-      codeHash,
-    );
-    const accessHashes = new Set<string>();
-    const refreshRootHashes = new Set<string>();
-    for (const link of links) {
-      // '' is the absent-value sentinel (symmetric with Postgres migration
-      // 021); a real hash is any non-empty value.
-      if (link.accessTokenHash !== "") accessHashes.add(link.accessTokenHash);
-      if (link.refreshRootHash !== "") {
-        refreshRootHashes.add(link.refreshRootHash);
-      }
-    }
-    // Cascade-delete access tokens directly by hash.
-    for (const hash of accessHashes) {
-      await this.#delete("access_tokens", hash);
-    }
-    // For each refresh root recorded against this code, cascade-revoke
-    // the entire chain. Since the link stores the hash, we use the
-    // hash-keyed internal variant of the chain revoke.
-    for (const rootHash of refreshRootHashes) {
-      await this.#revokeRefreshChainByRootHash(rootHash);
-    }
-    return {
-      access: [...accessHashes],
-      refresh: [...refreshRootHashes],
-    };
-  }
-
   async #resolveRefreshChainRootHash(presentedHash: string): Promise<string> {
     const direct = await this.#get<RefreshChainLinkDocument>(
       "refresh_chain_links",
@@ -1228,19 +1480,6 @@ export class D1AccountsStore implements AccountsStore {
     return [...hashes];
   }
 
-  async #revokeRefreshChainByRootHash(rootHash: string): Promise<void> {
-    await this.#put<RevokedRefreshRootDocument>(
-      "revoked_refresh_roots",
-      rootHash,
-      { rootHash, revokedAt: Date.now() },
-    );
-    const hashes = await this.#chainRefreshHashes(rootHash);
-    for (const hash of hashes) {
-      await this.#delete("refresh_tokens", hash);
-    }
-    await this.#cascadeRevokeChainAccessTokens(rootHash);
-  }
-
   async isRefreshRootRevoked(token: string): Promise<boolean> {
     const presentedHash = await hashSecret(token);
     const rootHash = await this.#resolveRefreshChainRootHash(presentedHash);
@@ -1266,22 +1505,56 @@ export class D1AccountsStore implements AccountsStore {
     }
     const config = D1_REFRESH_CHAIN_RETENTION_PHASES[phase];
     const cutoff =
-      phase === "consumed_codes" || phase === "auth_code_token_links"
-        ? input.consumedCodeBefore
-        : input.chainBefore;
+      phase === "consumed_codes" ? input.consumedCodeBefore : input.chainBefore;
     const after = decodeD1RefreshChainRetentionCursor(input.cursor?.after);
-    const timestampExpression = `CAST(json_extract(document, '$.${config.timestampField}') AS INTEGER)`;
+    const timestampExpression = config.timestampExpression;
+    const refreshActivityPredicate =
+      phase === "authorization_code_redemptions"
+        ? `AND NOT EXISTS (
+             SELECT 1
+               FROM takosumi_accounts_documents AS chain
+              WHERE chain.bucket = 'refresh_chain_links'
+                AND CAST(json_extract(chain.document, '$.createdAt') AS INTEGER) > ?
+                AND json_extract(chain.document, '$.rootHash') IN (
+                  SELECT NULLIF(
+                           json_extract(
+                             takosumi_accounts_documents.document,
+                             '$.refreshTokenHash'
+                           ),
+                           ''
+                         )
+                  UNION
+                  SELECT NULLIF(
+                           json_extract(auth_link.document, '$.refreshRootHash'),
+                           ''
+                         )
+                    FROM takosumi_accounts_documents AS auth_link
+                   WHERE auth_link.bucket = 'auth_code_token_links'
+                     AND json_extract(auth_link.document, '$.codeHash') =
+                         takosumi_accounts_documents.key
+                )
+           )`
+        : "";
     const result = await this.#db
       .prepare(
-        `SELECT key, ${timestampExpression} AS retention_at
+        `SELECT key, ${timestampExpression} AS retention_at,
+                ${config.recordVersionExpression ?? "NULL"} AS record_version
            FROM takosumi_accounts_documents INDEXED BY ${config.indexName}
           WHERE bucket = '${config.bucket}'
+            ${config.predicate ?? ""}
             AND ${timestampExpression} <= ?
+            ${refreshActivityPredicate}
             AND (${timestampExpression}, key) > (?, ?)
           ORDER BY ${timestampExpression}, key
           LIMIT ?`,
       )
-      .bind(cutoff, after.at, after.key, input.limit)
+      .bind(
+        cutoff,
+        ...(phase === "authorization_code_redemptions" ? [cutoff] : []),
+        after.at,
+        after.key,
+        input.limit,
+      )
       .all<RefreshChainRetentionCandidateRow>();
     if (!result.success || !result.results) {
       throw new Error(
@@ -1289,11 +1562,148 @@ export class D1AccountsStore implements AccountsStore {
       );
     }
 
+    let deleted = 0;
     for (const row of result.results) {
-      await this.#delete(config.bucket, row.key);
+      if (phase === "authorization_code_redemptions") {
+        if (!row.record_version) {
+          throw new Error(
+            "D1 authorization-code retention candidate is malformed",
+          );
+        }
+        const deletion = await this.#db
+          .prepare(
+            `DELETE FROM takosumi_accounts_documents AS redemption
+              WHERE redemption.bucket = 'authorization_code_redemptions'
+                AND redemption.key = ?
+                AND json_extract(redemption.document, '$.recordVersion') = ?
+                AND json_extract(redemption.document, '$.state') IN ('issued', 'replayed')
+                AND CAST(COALESCE(
+                      json_extract(redemption.document, '$.replayedAt'),
+                      json_extract(redemption.document, '$.issuedAt')
+                    ) AS INTEGER) = ?
+                AND NOT EXISTS (
+                  SELECT 1
+                    FROM takosumi_accounts_documents AS chain
+                   WHERE chain.bucket = 'refresh_chain_links'
+                     AND CAST(
+                           json_extract(chain.document, '$.createdAt') AS INTEGER
+                         ) > ?
+                     AND json_extract(chain.document, '$.rootHash') IN (
+                       SELECT NULLIF(
+                                json_extract(
+                                  redemption.document,
+                                  '$.refreshTokenHash'
+                                ),
+                                ''
+                              )
+                       UNION
+                       SELECT NULLIF(
+                                json_extract(
+                                  auth_link.document,
+                                  '$.refreshRootHash'
+                                ),
+                                ''
+                              )
+                         FROM takosumi_accounts_documents AS auth_link
+                        WHERE auth_link.bucket = 'auth_code_token_links'
+                          AND json_extract(
+                                auth_link.document,
+                                '$.codeHash'
+                              ) = redemption.key
+                     )
+                )`,
+          )
+          .bind(row.key, row.record_version, Number(row.retention_at), cutoff)
+          .run();
+        const changes = d1ChangeCount(deletion);
+        if (!deletion.success || changes === undefined || changes > 1) {
+          throw new Error(
+            "D1 authorization-code retention delete result is malformed",
+          );
+        }
+        deleted += changes;
+      } else if (phase === "revoked_roots") {
+        const deletion = await this.#db
+          .prepare(
+            `DELETE FROM takosumi_accounts_documents
+              WHERE bucket = 'revoked_refresh_roots'
+                AND key = ?
+                AND CAST(json_extract(document, '$.revokedAt') AS INTEGER) = ?`,
+          )
+          .bind(row.key, Number(row.retention_at))
+          .run();
+        const changes = d1ChangeCount(deletion);
+        if (!deletion.success || changes === undefined || changes > 1) {
+          throw new Error(
+            "D1 revoked refresh-root retention delete result is malformed",
+          );
+        }
+        deleted += changes;
+      } else if (phase === "consumed_codes") {
+        const deletion = await this.#db
+          .prepare(
+            `DELETE FROM takosumi_accounts_documents AS consumed
+              WHERE consumed.bucket = 'consumed_authorization_codes'
+                AND consumed.key = ?
+                AND CAST(
+                      json_extract(consumed.document, '$.consumedAt') AS INTEGER
+                    ) = ?
+                AND NOT EXISTS (
+                  SELECT 1
+                    FROM takosumi_accounts_documents AS redemption
+                   WHERE redemption.bucket = 'authorization_code_redemptions'
+                     AND redemption.key = consumed.key
+                )`,
+          )
+          .bind(row.key, Number(row.retention_at))
+          .run();
+        const changes = d1ChangeCount(deletion);
+        if (!deletion.success || changes === undefined || changes > 1) {
+          throw new Error(
+            "D1 consumed authorization-code retention delete result is malformed",
+          );
+        }
+        deleted += changes;
+      } else if (phase === "auth_code_token_links") {
+        const deletion = await this.#db
+          .prepare(
+            `DELETE FROM takosumi_accounts_documents AS link
+              WHERE link.bucket = 'auth_code_token_links'
+                AND link.key = ?
+                AND NOT EXISTS (
+                  SELECT 1
+                    FROM takosumi_accounts_documents AS redemption
+                   WHERE redemption.bucket = 'authorization_code_redemptions'
+                     AND redemption.key =
+                         json_extract(link.document, '$.codeHash')
+                )`,
+          )
+          .bind(row.key)
+          .run();
+        const changes = d1ChangeCount(deletion);
+        if (!deletion.success || changes === undefined || changes > 1) {
+          throw new Error(
+            "D1 authorization-code link retention delete result is malformed",
+          );
+        }
+        if (changes === 1) {
+          await this.#db
+            .prepare(
+              `DELETE FROM takosumi_accounts_indexes
+                WHERE bucket = 'auth_code_token_links'
+                  AND document_key = ?`,
+            )
+            .bind(row.key)
+            .run();
+        }
+        deleted += changes;
+      } else {
+        await this.#delete(config.bucket, row.key);
+        deleted += 1;
+      }
     }
     const counts = emptyRefreshChainPruneResult();
-    counts[config.count] = result.results.length;
+    counts[config.count] = deleted;
     const last = result.results.at(-1);
     if (result.results.length === input.limit && last) {
       return {
@@ -1344,6 +1754,259 @@ export class D1AccountsStore implements AccountsStore {
     if (taken === undefined) return undefined;
     if (taken.expiresAt <= now) return undefined;
     return taken.challenge;
+  }
+
+  #authorizationCodeReplayStatements(
+    codeHash: string,
+    replayedAt: number,
+    transition: boolean,
+  ): D1PreparedStatement[] {
+    // The lifecycle row keeps one representative token pair, while the
+    // expand-window link bucket can contain several historical pairs for the
+    // same code. Derive roots from both under one replayed-state guard so a
+    // migrated multi-link code cannot leave older descendants alive.
+    const replayLineageCtes = `WITH replayed(code_hash) AS (
+      SELECT key
+        FROM takosumi_accounts_documents
+       WHERE bucket = 'authorization_code_redemptions'
+         AND key = ?
+         AND json_extract(document, '$.state') = 'replayed'
+    ),
+    refresh_roots(root_hash) AS (
+      SELECT NULLIF(
+               json_extract(redemption.document, '$.refreshTokenHash'),
+               ''
+             )
+        FROM takosumi_accounts_documents AS redemption
+        JOIN replayed ON replayed.code_hash = redemption.key
+       WHERE redemption.bucket = 'authorization_code_redemptions'
+      UNION
+      SELECT NULLIF(json_extract(link.document, '$.refreshRootHash'), '')
+        FROM takosumi_accounts_documents AS link
+        JOIN replayed
+          ON json_extract(link.document, '$.codeHash') = replayed.code_hash
+       WHERE link.bucket = 'auth_code_token_links'
+    )`;
+    const statements: D1PreparedStatement[] = [];
+    if (transition) {
+      statements.push(
+        this.#db
+          .prepare(
+            `UPDATE takosumi_accounts_documents
+                SET document = json_set(
+                      document,
+                      '$.state', 'replayed',
+                      '$.replayedAt', COALESCE(
+                        json_extract(document, '$.replayedAt'),
+                        ?
+                      ),
+                      '$.updatedAt', ?
+                    ),
+                    updated_at = ?
+              WHERE bucket = 'authorization_code_redemptions'
+                AND key = ?
+                AND json_extract(document, '$.state') IN ('issuing', 'issued')`,
+          )
+          .bind(replayedAt, replayedAt, replayedAt, codeHash),
+      );
+    }
+    statements.push(
+      this.#db
+        .prepare(
+          `INSERT OR IGNORE INTO takosumi_accounts_documents (
+             bucket, key, document, updated_at
+           )
+           SELECT 'consumed_authorization_codes', ?,
+                  json_object('codeHash', ?, 'consumedAt', ?), ?
+             FROM takosumi_accounts_documents
+            WHERE bucket = 'authorization_code_redemptions'
+              AND key = ?
+              AND json_extract(document, '$.state') = 'replayed'`,
+        )
+        .bind(codeHash, codeHash, replayedAt, replayedAt, codeHash),
+      this.#db
+        .prepare(
+          `${replayLineageCtes}
+           INSERT INTO takosumi_accounts_documents (
+             bucket, key, document, updated_at
+           )
+           SELECT 'revoked_refresh_roots', root_hash,
+                  json_object(
+                    'rootHash', root_hash,
+                    'revokedAt', ?
+                  ),
+                  ?
+             FROM refresh_roots
+            WHERE root_hash IS NOT NULL
+           ON CONFLICT(bucket, key) DO UPDATE SET
+             document = excluded.document,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(codeHash, replayedAt, replayedAt),
+      this.#db
+        .prepare(
+          `${replayLineageCtes}
+           DELETE FROM takosumi_accounts_documents
+            WHERE bucket = 'access_tokens'
+              AND EXISTS (SELECT 1 FROM replayed)
+              AND (
+                key IN (
+                  SELECT NULLIF(
+                           json_extract(
+                             redemption.document,
+                             '$.accessTokenHash'
+                           ),
+                           ''
+                         )
+                    FROM takosumi_accounts_documents AS redemption
+                    JOIN replayed ON replayed.code_hash = redemption.key
+                   WHERE redemption.bucket = 'authorization_code_redemptions'
+                  UNION
+                  SELECT NULLIF(
+                           json_extract(link.document, '$.accessTokenHash'),
+                           ''
+                         )
+                    FROM takosumi_accounts_documents AS link
+                    JOIN replayed
+                      ON json_extract(link.document, '$.codeHash') =
+                         replayed.code_hash
+                   WHERE link.bucket = 'auth_code_token_links'
+                )
+                OR key IN (
+                  SELECT json_extract(chain.document, '$.accessTokenHash')
+                    FROM takosumi_accounts_documents AS chain
+                   WHERE chain.bucket = 'refresh_chain_access_tokens'
+                     AND json_extract(chain.document, '$.rootHash') IN (
+                       SELECT root_hash
+                         FROM refresh_roots
+                        WHERE root_hash IS NOT NULL
+                     )
+                )
+              )`,
+        )
+        .bind(codeHash),
+      this.#db
+        .prepare(
+          `${replayLineageCtes}
+           DELETE FROM takosumi_accounts_documents
+            WHERE bucket = 'refresh_tokens'
+              AND EXISTS (SELECT 1 FROM replayed)
+              AND (
+                key IN (
+                  SELECT root_hash
+                    FROM refresh_roots
+                   WHERE root_hash IS NOT NULL
+                )
+                OR key IN (
+                  SELECT json_extract(link.document, '$.parentHash')
+                    FROM takosumi_accounts_documents AS link
+                   WHERE link.bucket = 'refresh_chain_links'
+                     AND json_extract(link.document, '$.rootHash') IN (
+                       SELECT root_hash
+                         FROM refresh_roots
+                        WHERE root_hash IS NOT NULL
+                     )
+                  UNION
+                  SELECT json_extract(link.document, '$.childHash')
+                    FROM takosumi_accounts_documents AS link
+                   WHERE link.bucket = 'refresh_chain_links'
+                     AND json_extract(link.document, '$.rootHash') IN (
+                       SELECT root_hash
+                         FROM refresh_roots
+                        WHERE root_hash IS NOT NULL
+                     )
+                )
+              )`,
+        )
+        .bind(codeHash),
+      this.#db
+        .prepare(
+          `DELETE FROM takosumi_accounts_documents
+            WHERE bucket = 'authorization_codes'
+              AND key = ?
+              AND EXISTS (
+                SELECT 1 FROM takosumi_accounts_documents
+                 WHERE bucket = 'authorization_code_redemptions'
+                   AND key = ?
+                   AND json_extract(document, '$.state') = 'replayed'
+              )`,
+        )
+        .bind(codeHash, codeHash),
+    );
+    return statements;
+  }
+
+  #conditionalAuthorizationCodeInsert(
+    bucket: string,
+    key: string,
+    document: string,
+    updatedAt: number,
+    codeHash: string,
+    claimId: string,
+    ignoreConflict = false,
+  ): D1PreparedStatement {
+    return this.#db
+      .prepare(
+        `INSERT ${ignoreConflict ? "OR IGNORE " : ""}INTO takosumi_accounts_documents (
+           bucket, key, document, updated_at
+         )
+         SELECT ?, ?, ?, ?
+          WHERE EXISTS (
+            SELECT 1 FROM takosumi_accounts_documents
+             WHERE bucket = 'authorization_code_redemptions'
+               AND key = ?
+               AND json_extract(document, '$.state') = 'issuing'
+               AND json_extract(document, '$.claimId') = ?
+          )`,
+      )
+      .bind(bucket, key, document, updatedAt, codeHash, claimId);
+  }
+
+  #conditionalAuthorizationCodeIndexInsert(
+    indexName: string,
+    indexKey: string,
+    bucket: string,
+    documentKey: string,
+    sortKey: number,
+    codeHash: string,
+    claimId: string,
+  ): D1PreparedStatement {
+    return this.#db
+      .prepare(
+        `INSERT OR REPLACE INTO takosumi_accounts_indexes (
+           index_name, index_key, bucket, document_key, sort_key
+         )
+         SELECT ?, ?, ?, ?, ?
+          WHERE EXISTS (
+            SELECT 1 FROM takosumi_accounts_documents
+             WHERE bucket = 'authorization_code_redemptions'
+               AND key = ?
+               AND json_extract(document, '$.state') = 'issuing'
+               AND json_extract(document, '$.claimId') = ?
+          )`,
+      )
+      .bind(
+        indexName,
+        indexKey,
+        bucket,
+        documentKey,
+        sortKey,
+        codeHash,
+        claimId,
+      );
+  }
+
+  async #runLifecycleBatch(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result[]> {
+    const results = await this.#db.batch(statements);
+    if (
+      results.length !== statements.length ||
+      results.some((result) => result.success !== true)
+    ) {
+      throw new Error("D1 authorization-code lifecycle batch failed");
+    }
+    return results;
   }
 
   async #put<T>(
@@ -1533,4 +2196,30 @@ function normalizeAccountEmail(email: string | undefined): string | undefined {
 function d1ChangeCount(result: D1Result): number | undefined {
   const changes = result.meta?.changes;
   return typeof changes === "number" ? changes : undefined;
+}
+
+function d1LifecycleDocumentFromResult(
+  result: D1Result | undefined,
+): AuthorizationCodeRedemptionDocument | undefined {
+  const row = result?.results?.[0] as D1DocumentRow | undefined;
+  if (!row) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.document);
+  } catch {
+    throw new Error("D1 authorization-code lifecycle document is malformed");
+  }
+  if (
+    !isUnknownRecord(parsed) ||
+    !["active", "issuing", "issued", "replayed"].includes(
+      String(parsed.state),
+    ) ||
+    typeof parsed.recordVersion !== "string" ||
+    parsed.recordVersion.length === 0 ||
+    !Number.isSafeInteger(parsed.createdAt) ||
+    !Number.isSafeInteger(parsed.updatedAt)
+  ) {
+    throw new Error("D1 authorization-code lifecycle document is malformed");
+  }
+  return parsed as unknown as AuthorizationCodeRedemptionDocument;
 }

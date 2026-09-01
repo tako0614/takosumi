@@ -6,6 +6,7 @@
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 import { isAbsolute, normalize } from "node:path";
 import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import {
   assertHostNotBlocked,
   BlockedHostError,
@@ -294,8 +295,8 @@ export async function assertResolvedHostNotBlocked(
 ): Promise<void> {
   const literal =
     host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
-  // IP literals are already fully covered by assertHostLiteralNotBlocked.
-  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(literal) || literal.includes(":")) {
+  assertHostNotBlocked(host, label);
+  if (isIP(literal) !== 0) {
     return;
   }
   const lower = literal.toLowerCase();
@@ -309,7 +310,10 @@ export async function assertResolvedHostNotBlocked(
     );
   }
   for (const addr of addresses) {
-    if (isBlockedIpv4Literal(addr) || isBlockedIpv6Literal(addr)) {
+    try {
+      assertHostNotBlocked(addr, label);
+    } catch (error) {
+      if (!(error instanceof BlockedHostError)) throw error;
       throw new Error(
         `${label} resolves to a blocked address (${addr}): ${host}`,
       );
@@ -342,48 +346,6 @@ export function assertSafeGitSelector(value: string, label: string): void {
       `${label} must not start with '-' or contain control characters`,
     );
   }
-}
-
-export function assertHostLiteralNotBlocked(host: string, label: string): void {
-  const literal =
-    host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
-  const lower = literal.toLowerCase();
-  if (lower === "localhost" || lower.endsWith(".localhost")) {
-    throw new Error(`${label} is not allowed: ${host}`);
-  }
-  if (isBlockedIpv4Literal(lower) || isBlockedIpv6Literal(lower)) {
-    throw new Error(`${label} is not allowed: ${host}`);
-  }
-}
-
-export function isBlockedIpv4Literal(value: string): boolean {
-  if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(value)) return false;
-  const parts = value.split(".").map((part) => Number.parseInt(part, 10));
-  if (
-    parts.length !== 4 ||
-    parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)
-  ) {
-    return true;
-  }
-  const [a, b, c, d] = parts;
-  if (a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31)) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 0 || a >= 224) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  return a === 255 && b === 255 && c === 255 && d === 255;
-}
-
-export function isBlockedIpv6Literal(value: string): boolean {
-  if (!value.includes(":")) return false;
-  if (value === "::" || value === "::1") return true;
-  if (value.startsWith("fc") || value.startsWith("fd")) return true;
-  if (/^fe[89ab]/.test(value)) return true;
-  if (value.startsWith("ff")) return true;
-  if (value.startsWith("::ffff:")) {
-    return isBlockedIpv4Literal(value.slice("::ffff:".length));
-  }
-  return false;
 }
 
 export function assertGeneratedRootFileName(name: string): void {

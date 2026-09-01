@@ -1,3 +1,4 @@
+import { redactRunnerOutput } from "../../runner/lib/redaction.ts";
 import type {
   ServiceDataArtifactPointer,
   ServiceDataBackupRunner,
@@ -6,6 +7,7 @@ import type {
 } from "../../core/domains/backups/mod.ts";
 import type {
   OpenTofuApplyJob,
+  OpenTofuApplyProgress,
   OpenTofuApplyResult,
   OpenTofuCapsuleSourceFile,
   OpenTofuCapsuleSourceFilesJob,
@@ -91,6 +93,7 @@ export class CloudflareContainerOpenTofuRunner
   ): Promise<OpenTofuPlanResult> {
     const result = await this.#runContainer("plan", job.planRun.id, job, {
       signal: control?.signal,
+      timeoutMs: control?.timeoutMs,
     });
     const planDigest =
       stringFromRecord(result, "planDigest") ??
@@ -138,7 +141,12 @@ export class CloudflareContainerOpenTofuRunner
         : {}),
       ...(planResourceChanges ? { planResourceChanges } : {}),
       ...(plannedOutputs ? { plannedOutputs } : {}),
-      diagnostics: diagnosticsFromContainerResult(result),
+      diagnostics: diagnosticsFromContainerResult(result, {
+        values: runSecretValues(job.credentials),
+        ...(job.runnerProfile?.secretExposurePolicy?.redactLogs
+          ? { withholdLogs: true }
+          : {}),
+      }),
     };
   }
 
@@ -150,7 +158,7 @@ export class CloudflareContainerOpenTofuRunner
       "apply",
       runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
       job,
-      { signal: control?.signal },
+      { signal: control?.signal, timeoutMs: control?.timeoutMs },
     );
     // The DO echoes the persisted state digest and opaque raw-output ref. Thread
     // both onto the result so the controller
@@ -175,7 +183,12 @@ export class CloudflareContainerOpenTofuRunner
                 providerInstallationFromContainerResult(result),
             }
           : {}),
-        diagnostics: diagnosticsFromContainerResult(result),
+        diagnostics: diagnosticsFromContainerResult(result, {
+          values: runSecretValues(job.credentials),
+          ...(job.runnerProfile?.secretExposurePolicy?.redactLogs
+            ? { withholdLogs: true }
+            : {}),
+        }),
       };
     }
     return {
@@ -199,7 +212,12 @@ export class CloudflareContainerOpenTofuRunner
               providerInstallationFromContainerResult(result),
           }
         : {}),
-      diagnostics: diagnosticsFromContainerResult(result),
+      diagnostics: diagnosticsFromContainerResult(result, {
+        values: runSecretValues(job.credentials),
+        ...(job.runnerProfile?.secretExposurePolicy?.redactLogs
+          ? { withholdLogs: true }
+          : {}),
+      }),
     };
   }
 
@@ -211,7 +229,7 @@ export class CloudflareContainerOpenTofuRunner
       "destroy",
       runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
       job,
-      { signal: control?.signal },
+      { signal: control?.signal, timeoutMs: control?.timeoutMs },
     );
     const state = recordFromRecord(result, "state");
     return {
@@ -224,8 +242,64 @@ export class CloudflareContainerOpenTofuRunner
               providerInstallationFromContainerResult(result),
           }
         : {}),
-      diagnostics: diagnosticsFromContainerResult(result),
+      diagnostics: diagnosticsFromContainerResult(result, {
+        values: runSecretValues(job.credentials),
+        ...(job.runnerProfile?.secretExposurePolicy?.redactLogs
+          ? { withholdLogs: true }
+          : {}),
+      }),
     };
+  }
+
+  /**
+   * Live apply progress for a run whose apply is still executing. Read-only
+   * and best-effort: any failure (asleep container, unsupported runner,
+   * transport hiccup) answers `undefined` so a status poll never turns into a
+   * run failure.
+   */
+  async applyProgress(input: {
+    readonly planRunId: string;
+    readonly planArtifact?: OpenTofuPlanResult["planArtifact"];
+  }): Promise<OpenTofuApplyProgress | undefined> {
+    if (!this.env.RUNNER) return undefined;
+    // Exactly the coordinate `apply` dispatches with, so the read reaches the
+    // runner that is actually executing rather than an empty one.
+    const runId =
+      (input.planArtifact
+        ? runnerRunIdFromPlanArtifact(input.planArtifact)
+        : undefined) ?? input.planRunId;
+    try {
+      const id = this.env.RUNNER.idFromName(runId);
+      const response = await this.env.RUNNER.get(id).fetch(
+        new Request(
+          `https://opentofu-runner.internal/runs/${encodeURIComponent(runId)}/progress`,
+        ),
+      );
+      if (!response.ok) return undefined;
+      const payload = (await response.json()) as {
+        readonly progress?: {
+          readonly completed?: unknown;
+          readonly inFlight?: unknown;
+          readonly currentResource?: unknown;
+        };
+      };
+      const progress = payload.progress;
+      if (!progress || typeof progress.completed !== "number") return undefined;
+      return {
+        completed: Math.max(0, Math.floor(progress.completed)),
+        inFlight:
+          typeof progress.inFlight === "number"
+            ? Math.max(0, Math.floor(progress.inFlight))
+            : 0,
+        ...(typeof progress.currentResource === "string" &&
+        progress.currentResource.length > 0 &&
+        progress.currentResource.length <= 256
+          ? { currentResource: progress.currentResource }
+          : {}),
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   async restore(job: OpenTofuRestoreJob): Promise<OpenTofuRestoreResult> {
@@ -601,6 +675,17 @@ export class CloudflareContainerOpenTofuRunner
           throw runnerErrorFromUnknown(error);
         }
       }
+      // The capacity ceiling is the platform's scaling wall — count every
+      // exhaustion so an operator can SEE saturation instead of inferring it
+      // from failed installs (rule TakosumiRunnerCapacity* built on this).
+      await recordWorkerMetric({
+        observability: this.options.observability,
+        env: this.env,
+        name: "takosumi_runner_capacity_exhausted_total",
+        kind: "counter",
+        value: 1,
+        tags: { action },
+      });
       throw new OpenTofuRunnerInfrastructureError(
         "runner capacity retries exhausted",
         { reason: "capacity_exhausted" },
@@ -952,24 +1037,78 @@ function repositoryInstallMetadataFromContainerResult(
   return undefined;
 }
 
+/**
+ * Upper bound on runner diagnostic text carried into the run ledger. A failing
+ * `tofu` run can emit megabytes; the tail is where the error is.
+ */
+const RUNNER_DIAGNOSTIC_DETAIL_MAX_CHARS = 4_000;
+
 function tailText(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   return `...${text.slice(text.length - maxLength)}`;
 }
 
+/**
+ * Exact secret values this run materialized, so the adapter can redact by
+ * VALUE and not only by pattern. Pattern redaction cannot know that
+ * `hunter2-abc` was a token; the mint result can.
+ */
+function runSecretValues(
+  credentials:
+    | {
+        readonly env?: Readonly<Record<string, string>>;
+        readonly files?: readonly { readonly content: string }[];
+      }
+    | undefined,
+): readonly string[] {
+  if (!credentials) return [];
+  const values: string[] = Object.values(credentials.env ?? {});
+  for (const file of credentials.files ?? []) values.push(file.content);
+  return values.filter((value) => typeof value === "string" && value.length > 0);
+}
+
 function diagnosticsFromContainerResult(
   result: Record<string, unknown>,
+  /**
+   * Redaction inputs for the run whose output this is. Absent for read-only
+   * actions that mint no credentials.
+   */
+  secrets: {
+    readonly values?: readonly string[];
+    /** Profile policy: when logs must stay redacted, carry no text at all. */
+    readonly withholdLogs?: boolean;
+  } = {},
 ): OpenTofuPlanResult["diagnostics"] {
   const diagnostics: Array<
     NonNullable<OpenTofuPlanResult["diagnostics"]>[number]
   > = [];
   const stderr = stringFromRecord(result, "stderr");
   if (stderr && stderr.trim().length > 0) {
-    diagnostics.push({
-      severity: "warning",
-      code: "runner_diagnostics_redacted",
-      message: "runner provider diagnostics omitted",
-    });
+    // Erasing this text entirely removed the only explanation a user could
+    // act on ("Missing required argument", a provider's rejection), which made
+    // a failed install impossible to self-diagnose. Redact instead of erase —
+    // and redact HERE rather than trusting that the container already did:
+    // this adapter is the boundary that publishes runner output into the run
+    // ledger, so it applies the same shared redaction the runner does. The
+    // tail is where the error is; the bound keeps a runaway log out of the
+    // ledger.
+    diagnostics.push(
+      secrets.withholdLogs
+        ? {
+            severity: "warning",
+            code: "runner_diagnostics_withheld",
+            message: "runner diagnostics withheld by the runner profile policy",
+          }
+        : {
+            severity: "warning",
+            code: "runner_diagnostics",
+            message: "runner reported diagnostics",
+            detail: tailText(
+              redactRunnerOutput(stderr, secrets.values ?? []).trim(),
+              RUNNER_DIAGNOSTIC_DETAIL_MAX_CHARS,
+            ),
+          },
+    );
   }
   const phaseTimingDetail = phaseTimingDetailFromContainerResult(result);
   if (phaseTimingDetail) {

@@ -14,6 +14,7 @@ import type {
   OfferingCatalogStore,
   StoredOfferingCatalog,
 } from "./catalog_store.ts";
+import { offeringCatalogKey as catalogKey } from "./catalog_store.ts";
 
 type CatalogRow = Record<string, unknown> & {
   readonly record_json: unknown;
@@ -100,7 +101,7 @@ export class SqlOfferingCatalogStore implements OfferingCatalogStore {
       `select record_json, created_at, created_by
        from ${names.offeringCatalogs}
        where catalog_key = $1 limit 1`,
-      [`${catalogId}@${catalogVersion}`],
+      [catalogKey({ id: catalogId, version: catalogVersion })],
     );
     return result.rows[0] === undefined
       ? undefined
@@ -131,8 +132,4 @@ function requiredString(value: unknown, field: string): string {
     throw new Error(`invalid Offering catalog ${field}`);
   }
   return value;
-}
-
-function catalogKey(catalog: OfferingCatalog): string {
-  return `${catalog.id}@${catalog.version}`;
 }

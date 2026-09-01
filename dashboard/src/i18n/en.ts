@@ -16,7 +16,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.back": "Choose again",
   "installStore.entryLoadTitle": "Review the available choices",
   "installStore.entryLoadHint":
-    "Load the chooser document from the specified Git repository. This action creates the read-only Source and sync Run used to fetch it.",
+    "Load the available choices from the specified Git repository (a read-only fetch; nothing is installed yet).",
   "installStore.entryLoad": "Load choices",
   "installStore.entryHint": "Choose one service to add.",
   "installStore.select": "Choose this",
@@ -33,6 +33,8 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.preparing": "Preparing your service",
   "installStore.preparingHint":
     "Checking the repository and gathering only the connections and changes it needs.",
+  "installStore.preparingFetching":
+    "Fetching the repository. The first time can take about a minute.",
   "installStore.compatibilityFailed":
     "This service cannot be added to the current environment.",
   "installStore.providerTitle": "A connection is needed",
@@ -50,10 +52,10 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.setupHint": "Enter only the values this service asks for.",
   "installStore.sourceBuildTitle": "Repository build steps",
   "installStore.sourceBuildHint":
-    "Review these credential-free commands and produced paths before starting the Plan.",
+    "Review these credential-free commands and produced paths before the changes are prepared.",
   "installStore.sourceBuildCommand": "Command {index}",
   "installStore.sourceBuildWorkingDirectory": "Working directory",
-  "installStore.sourceBuildSourceRoot": "Source root",
+  "installStore.sourceBuildSourceRoot": "Source starting point",
   "installStore.sourceBuildOutputs": "Produced paths",
   "installStore.setupInvalid": "The service setup definition is invalid.",
   "installStore.setupRequired": "Enter {label}.",
@@ -61,25 +63,49 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.secretHint":
     "Secrets are never sent as variables from this form.",
   "installStore.reviewing": "Reviewing changes",
-  "installStore.reviewingHint": "Checking the Plan before anything is applied.",
+  "installStore.reviewingHint": "Checking the changes before anything is applied.",
   "installStore.reviewTitle": "Review before install",
   "installStore.reviewHint": "These are the changes Takosumi will make.",
   "installStore.changes": "Changes",
   "installStore.createCount": "Create",
   "installStore.updateCount": "Change",
   "installStore.deleteCount": "Delete",
-  "installStore.approve": "Approve Plan",
+  "installStore.approve": "Approve changes",
   "installStore.confirmTitle": "These changes need confirmation",
   "installStore.confirmHint":
-    "The Plan includes deletion or another explicitly reviewed change.",
+    "The changes include a deletion or another explicitly reviewed change.",
   "installStore.confirm": "I reviewed these changes",
   "installStore.install": "Install",
   "installStore.runDetails": "Technical details",
   "installStore.installing": "Installing",
   "installStore.installingHint":
     "Keep this page open while installation finishes.",
-  "installStore.planBlocked": "This Plan cannot be applied",
-  "installStore.planBlockedHint": "Review the policy or Plan details.",
+  "installStore.progressCount": "Creating resources ({completed} of {total})",
+  "installStore.progressCountUnknownTotal":
+    "Creating resources ({completed} done)",
+  "installStore.planBlocked": "These changes cannot be applied",
+  "installStore.planBlockedHint": "Review the policy or the technical details.",
+  "installStore.runFailedHint":
+    "Open the technical details to see the cause. You can fix the setup and add it again.",
+  "installStore.startOver": "Start over",
+  "installStore.settlingSlow":
+    "Publishing is taking a while. You can keep waiting, or open the run details.",
+  "installStore.entryKindComposition": "Composition",
+  "installStore.entryKindSourceOptions": "Install options",
+  "installStore.refLatestStable": "latest stable release",
+  "installStore.evidenceTitle": "Immutable source evidence",
+  "installStore.evidenceOnlySelected":
+    "Only the explicitly selected source below will be added.",
+  "installStore.evidenceRetained": "Source evidence retained from the chooser",
+  "installStore.evidenceReview":
+    "Review this evidence before adding the selected service.",
+  "installStore.setupUnavailable": "Service setup is unavailable",
+  "installStore.accountSignIn": "Takosumi account sign-in",
+  "installStore.accountSignInHint":
+    "This service signs you in with your Takosumi account. No password is sent to the service as a setting.",
+  "installStore.secretSetupUnavailable": "Secret setup is unavailable",
+  "installStore.managedHostname": "Managed hostname",
+  "installStore.optionalFeatures": "Optional features",
   "installStore.readinessFailed":
     "The service readiness state could not be checked. Open the technical details for more information.",
   "installStore.activationFailed":
@@ -90,7 +116,6 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.launchNotReady":
     "The service was applied, but its launch link is not ready yet. Retry the check or open the service details.",
   "installStore.runFailed": "Service setup did not finish",
-  "installStore.runFailedHint": "Open the technical details and try again.",
   "installStore.doneTitle": "Service added",
   "installStore.doneHint": "Open the service and start using it.",
   "installStore.open": "Open service",
@@ -98,7 +123,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.invalidSource": "Enter a valid HTTPS Git URL.",
   "installStore.invalidName":
     "Use lowercase letters, numbers, and hyphens for the service name.",
-  "installStore.planMissing": "The Plan response could not be identified.",
+  "installStore.planMissing": "The review result could not be identified.",
   "installStore.listingUnavailable":
     "This service is no longer available from the Store.",
   // --- common -------------------------------------------------------------
@@ -270,6 +295,7 @@ export const en: Record<keyof typeof ja, string> = {
   "status.capsule.stale": "Update available",
   "status.capsule.error": "Error",
   "status.capsule.disabled": "Disabled",
+  "status.capsule.uninstalled": "Deletion scheduled",
   "status.capsule.destroyed": "Deleted",
   "status.run.queued": "Queued",
   "status.run.running": "Running",
@@ -286,7 +312,6 @@ export const en: Record<keyof typeof ja, string> = {
   "status.connection.pending": "Unverified",
   "status.connection.verified": "Verified",
   "status.connection.revoked": "Revoked",
-  "status.connection.expired": "Expired",
   "status.connection.error": "Error",
   "status.providerConnection.ready": "Ready",
   "status.providerConnection.needs_setup": "Not verified yet",
@@ -425,11 +450,12 @@ export const en: Record<keyof typeof ja, string> = {
     "The recorded resource inventory could not be loaded.",
   "app.deploys.inventoryLegacyUnavailable":
     "This older applied state has no resource inventory record.",
-  "app.deploys.inventoryGeneration": "State generation",
+  "app.deploys.inventoryGeneration": "Version number",
   "app.deploys.inventoryRecordedAt": "Recorded",
   "app.deploys.inventoryStateVersion": "State version",
-  "app.deploys.inventoryApplyRun": "Apply run",
-  "app.deploys.inventoryPlanRun": "Plan run",
+  "app.deploys.inventoryApplyRun": "Deploy record",
+  "app.deploys.generationBadge": "Version {n}",
+  "app.deploys.inventoryPlanRun": "Review record",
   "app.deploys.inventoryEmpty": "No deployed resources were recorded.",
   "app.recentActivity.title": "Recent updates",
   "app.recentActivity.open": "Details",
@@ -511,6 +537,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.config.savedNeedsDeploy": "Saved. Deploy to apply the change.",
   "app.config.deployChanges": "Deploy changes",
   "app.updateNow": "Update",
+  "app.updateNowTagged": "Update to {tag}",
   "app.autoUpdate.title": "Automatic updates",
   "app.autoUpdate.body":
     "Update automatically when a new version arrives. Changes that rebuild or remove resources always wait for your review.",
@@ -523,6 +550,22 @@ export const en: Record<keyof typeof ja, string> = {
   "app.danger.destroyConfirmMessage":
     "This deletes {name}. If it has never been deployed it is removed immediately and cannot be recovered.",
   "app.danger.destroyCta": "Review deletion",
+  "app.danger.uninstallBody":
+    "Deleting {name} hides it right away and schedules permanent deletion after a grace period. Until then its resources and data remain (and continue to bill), and you can restore it with one click. When the period ends, a data export is attempted and the service — including its data — is permanently deleted.",
+  "app.danger.dependentsWarning":
+    "{names} use this service's outputs. Removing it may break them.",
+  "app.danger.uninstallConfirmTitle": "Delete this service?",
+  "app.danger.uninstallConfirmMessage":
+    "This deletes {name}. During the grace period you can restore it; its resources and data remain and continue to bill until then. When the period ends, a data export is attempted and everything — including the data — is permanently deleted.",
+  "app.danger.uninstallCta": "Delete service",
+  "app.danger.destroyNowCta": "Delete immediately (no grace period)",
+  "app.danger.uninstalledTitle": "Deletion scheduled",
+  "app.danger.uninstalledBody":
+    "{name} is scheduled for permanent deletion on {date}. Its resources and data still exist (and continue to bill) until then. Restore it to keep using it, or delete it now.",
+  "app.uninstalled.banner":
+    "This service is scheduled for permanent deletion on {date}. Until then its resources and data remain (and continue to bill), and you can restore it.",
+  "app.uninstalled.restore": "Restore",
+  "app.uninstalled.deleteNow": "Delete now",
   "app.setupIncomplete.body":
     "Setup didn't finish. Retry from the update review, or delete this service and start over.",
   "app.setupIncomplete.review": "Open updates",
@@ -678,7 +721,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.resources.kicker": "Review",
   "run.resources.title": "Planned changes",
   "run.resources.count": "Changes: {n}",
-  "run.resources.more": "Additional changes: {n}",
+  "run.resources.showAll": "Show all remaining changes ({n})",
   "run.resources.actionCreate": "Create",
   "run.resources.actionUpdate": "Update",
   "run.resources.actionDelete": "Delete",
@@ -795,6 +838,8 @@ export const en: Record<keyof typeof ja, string> = {
     "Pinned connection target information is included. After private values are removed, the pinned targets will be reviewed during add.",
   "new.compat.issue.reviewRequired.message":
     "An item needs review before this can be added.",
+  "new.error.sourceRevisionMismatch":
+    "The selected version and the fetched source did not match. Please try again.",
   "new.error.sourceRefNotFound":
     "The selected version “{ref}” was not found. Check that the link offers this version.",
   "new.error.sourceFetchFailed":
@@ -812,8 +857,35 @@ export const en: Record<keyof typeof ja, string> = {
     "That public URL name is already in use. Choose another name and try again.",
   "new.error.managedHostnameSlotLimit":
     "No short URL slots are available. Use a standard URL or release an existing short URL.",
+  "new.error.alreadyExistsUseName":
+    "A service with this name already exists. You can add it as \u201c{name}\u201d.",
+  "new.error.useSuggestedName": "Use \u201c{name}\u201d",
+  "new.compat.retryTransient":
+    "The check itself did not finish. This may not be a problem with the service.",
   "new.error.alreadyExistsGeneric":
     "This service is already added. Open the existing service instead of creating another one.",
+  "notif.event.capsuleAbandoned": "Adding this service was abandoned",
+  "notif.event.capsuleAutoReplanStarted": "The update failed, so it is being retried automatically",
+  "notif.event.capsuleAutoReplanFailed": "The update could not be retried automatically",
+  "notif.event.capsuleAutoUpdateApplyFailed": "An automatic update failed to apply",
+  "notif.event.capsuleInstallCleanupStarted": "Cleaning up after a failed first install",
+  "notif.event.capsuleInstallCleanupFailed": "Could not clean up after a failed first install",
+  "notif.event.capsuleStale": "The source changed, so an update is available",
+  "notif.event.capsuleSystemDestroyBlocked": "A scheduled removal was held back",
+  "notif.event.capsuleSystemDestroyContinueFailed": "A scheduled removal could not continue",
+  "notif.event.capsuleUninstallScheduled": "Removal was scheduled",
+  "notif.event.capsuleUninstallRestored": "The scheduled removal was cancelled",
+  "notif.event.capsulePreDestroyExportCompleted": "Your data was exported before removal",
+  "notif.event.capsulePreDestroyExportFailed": "The export before removal did not succeed",
+  "notif.event.capsulePreDestroyExportSkipped": "This setup does not support exporting before removal",
+  "notif.event.restoreCreated": "A restore was accepted",
+  "notif.event.restoreSucceeded": "The restore finished",
+  "notif.event.runCancelled": "The run was cancelled",
+  "notif.event.runRetryScheduled": "A temporary problem: this will be retried",
+  "notif.event.runArtifactLedgerRetryScheduled": "The record could not be confirmed, so this will be retried",
+  "notif.event.runIdempotentReplay": "The same request was repeated, so the earlier result was returned",
+  "notif.event.resourceRunDestroyed": "A resource was removed",
+  "notif.event.releaseActivationNotApplicable": "No publishing step was needed",
   "workspaceSettings.title": "Settings",
   "workspaceSettings.tabsLabel": "Settings sections",
   "workspaceSettings.subtitle":
@@ -889,7 +961,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "Connect an external provider with your own credentials. Availability follows the operator provider policy, runner capability, and Run approval rules.",
+    "Connect an external provider with your own credentials. Availability follows the operator's policies, the runtime configuration, and the approval rules.",
   "conn.providerConnections.title": "Connected accounts",
   "conn.expiresAt": "Expires: {date}",
   "conn.oauth.connected": "Provider connection saved.",
@@ -922,10 +994,10 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.guided.instructions": "Show steps",
   "conn.byok.title": "Connect an external provider with your own key",
   "conn.byok.body":
-    "Enter the provider source and the environment variables it requires. The connection remains subject to provider policy, runner capability, and Run approval.",
+    "Enter the provider source and the environment variables it requires. The connection remains subject to the operator's policies and approval rules.",
   "conn.byok.noBillingNote":
     "Any Takosumi charge is shown during preview. Charges from the external provider are billed separately by that provider.",
-  "conn.byok.usePreset": "Use an installed recipe instead",
+  "conn.byok.usePreset": "Use a prepared setup instead",
   "conn.register": "Save connection",
   "conn.registering": "Saving…",
   "conn.genericEnv.providerName": "Provider source",
@@ -1042,6 +1114,8 @@ export const en: Record<keyof typeof ja, string> = {
     "A dependency changed — an update is available for this service",
   "notif.event.staleNamed":
     "A dependency changed — an update is available for “{name}”",
+  "notif.event.staleSource": "A new version of this service is available",
+  "notif.event.staleSourceNamed": "A new version of “{name}” is available",
   "notif.event.staleDetail": "Updated by: {producer}",
   "notif.event.connCreated": "Added connected account “{provider}”",
   "notif.event.connCreatedGeneric": "Added connected account",
@@ -1139,7 +1213,7 @@ export const en: Record<keyof typeof ja, string> = {
     "This browser doesn’t support this. Enter your instance URL on the store instead.",
   "account.apiKeys.title": "Cloud API keys",
   "account.apiKeys.subtitle":
-    "Create and revoke keys for the CLI and external tools that use Takosumi Cloud.",
+    "Create and revoke keys for the CLI and external tools that use your account's API.",
   "account.apiKeys.secretOnce": "Secret shown once",
   "account.apiKeys.name": "Key name",
   "account.apiKeys.namePlaceholder": "For example: Development CLI",

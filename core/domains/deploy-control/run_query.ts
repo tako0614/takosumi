@@ -116,17 +116,70 @@ export class RunQueryService {
   ): Promise<readonly Run[]> {
     requireNonEmptyString(workspaceId, "workspaceId");
     const rows = await this.#store.listRunsByWorkspace(workspaceId, options);
-    return await Promise.all(rows.map((row) => this.#projectStoredRun(row)));
+    return await this.#projectStoredRuns(rows);
+  }
+
+  /**
+   * Newest-first keyset page over a Workspace's runs. `cursor` resumes after
+   * the previous page's last row; the response's `nextCursor` is absent on the
+   * final page.
+   */
+  async listRunsPage(
+    workspaceId: string,
+    options: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }> {
+    requireNonEmptyString(workspaceId, "workspaceId");
+    const page = await this.#store.listRunsByWorkspacePage(
+      workspaceId,
+      options,
+    );
+    return {
+      runs: await this.#projectStoredRuns(page.runs),
+      ...(page.nextCursor === undefined
+        ? {}
+        : { nextCursor: page.nextCursor }),
+    };
   }
 
   async listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
-  ): Promise<readonly Run[]> {
-    const rows = await this.#store.listRecoverableOpenTofuRuns(options);
-    return await Promise.all(rows.map((row) => this.#projectStoredRun(row)));
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }> {
+    const page = await this.#store.listRecoverableOpenTofuRuns(options);
+    const runs = await this.#projectStoredRuns(page.runs);
+    return {
+      runs,
+      ...(page.nextCursor === undefined
+        ? {}
+        : { nextCursor: page.nextCursor }),
+    };
   }
 
-  async #projectStoredRun(row: StoredRunRecord): Promise<Run> {
+  /**
+   * Page projection with a BULK PlanRun prefetch: every ApplyRun row on the
+   * page recovers its Capsule context from one `getPlanRunsByIds` read instead
+   * of one `getPlanRun` per row (the run list's former N+1).
+   */
+  async #projectStoredRuns(
+    rows: readonly StoredRunRecord[],
+  ): Promise<readonly Run[]> {
+    const planRunIds = rows
+      .filter(isStoredApplyRun)
+      .map((row) => row.planRunId);
+    const plansById = new Map<string, PlanRun>();
+    if (planRunIds.length > 0) {
+      for (const plan of await this.#store.getPlanRunsByIds(planRunIds)) {
+        plansById.set(plan.id, plan);
+      }
+    }
+    return await Promise.all(
+      rows.map((row) => this.#projectStoredRun(row, plansById)),
+    );
+  }
+
+  async #projectStoredRun(
+    row: StoredRunRecord,
+    prefetchedPlans?: ReadonlyMap<string, PlanRun>,
+  ): Promise<Run> {
     if (isStoredPlanRun(row)) {
       return projectPlanRun(row, {
         awaitingApproval: await this.planAwaitsApproval(row),
@@ -134,7 +187,11 @@ export class RunQueryService {
       });
     }
     if (isStoredApplyRun(row)) {
-      const plan = await this.#store.getPlanRun(row.planRunId);
+      const plan =
+        prefetchedPlans?.get(row.planRunId) ??
+        (prefetchedPlans
+          ? undefined
+          : await this.#store.getPlanRun(row.planRunId));
       return projectApplyRun(row, plan ? this.capsuleProjection(plan) : {});
     }
     if (isStoredSourceSyncRun(row)) return projectSourceSyncRun(row);

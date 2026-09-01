@@ -53,6 +53,26 @@ import {
 } from "../activity/mod.ts";
 
 /**
+ * The dependency graph's complete persistence interface.
+ *
+ * The control store owns many unrelated lifecycle ledgers. Keeping this seam
+ * limited to graph endpoints, edges, and cross-Workspace OutputShare grants
+ * prevents dependency policy from learning the rest of that interface while
+ * still accepting every canonical store adapter.
+ */
+type DependencyGraphStore = Pick<
+  OpenTofuControlStore,
+  | "deleteDependency"
+  | "getCapsule"
+  | "getDependency"
+  | "listDependenciesByWorkspace"
+  | "listDependenciesForConsumer"
+  | "listDependenciesForProducer"
+  | "listOutputSharesToWorkspace"
+  | "putDependency"
+>;
+
+/**
  * Create-dependency request: the public {@link Dependency} minus the
  * service-assigned `id` / `createdAt`.
  */
@@ -74,7 +94,7 @@ export interface CapsuleDependencies {
 }
 
 export interface DependenciesServiceDependencies {
-  readonly store: OpenTofuControlStore;
+  readonly store: DependencyGraphStore;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => string;
   /** Workspace-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
@@ -92,7 +112,7 @@ export interface DependenciesServiceDependencies {
 }
 
 export class DependenciesService {
-  readonly #store: OpenTofuControlStore;
+  readonly #store: DependencyGraphStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => string;
   readonly #activity: ActivityRecorder;

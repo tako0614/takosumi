@@ -18,8 +18,20 @@ There is no Takosumi-specific `.tf` syntax or first-party provider. Cloudflare,
 AWS, Kubernetes, and other systems are still managed by their existing
 providers.
 
-[Software documentation](https://takosumi.com/docs/) ·
-[Takosumi Cloud documentation](https://app.takosumi.com/docs/en/)
+In ordinary BYOC, the Workspace/customer owns the vendor account, credential,
+and resulting resource. Takosumi mediates only
+`ProviderConnection → CredentialRecipe → ProviderBinding → run-scoped runner
+materialization → standard OpenTofu provider → customer-owned resource`.
+Managed Takoform supply is an external Takoserver Takoform Host concern;
+Takosumi treats its Host-scoped credential as an ordinary ProviderConnection. It
+never receives or selects Takoserver's parent provider credential, provider
+installation, backend, capacity, WfP namespace/dispatcher, native identity, or
+managed Offering.
+
+[Software documentation](https://takosumi.com/docs/)
+
+Takosumi Hosted is a separate hosted product; current retail and commerce docs
+are published by Takosumi Hosted.
 
 ## Check it locally in five minutes
 
@@ -88,15 +100,21 @@ the current OSS supported product surface. Retained compatibility APIs,
 schemas, and persistence are migration internals; they are not user setup
 instructions or dashboard navigation.
 
-## Takosumi and Takosumi Cloud
+## Takosumi, Takosumi Hosted, and Takoserver
 
-- **Takosumi** is the software in this repository. You can operate it in your
-  own environment.
-- **Takosumi Cloud** is the official hosted service at `app.takosumi.com`.
-  Hosted Forms/services, prices, capacity, and support are Cloud decisions.
+- **Takosumi** is the OSS control plane in this repository. You can operate it in
+  your own environment.
+- **Takosumi Hosted** is a separate hosted product that may own retail, commerce,
+  and client composition. It is not the authority for managed supply or provider
+  execution.
+- **Takoserver** is the external Takoform Host for optional managed supply. It
+  owns managed-service Offerings, capacity, provider installation/credentials,
+  backend, WfP namespace/dispatcher/native identity, and execution.
+- **Takosumi Cloud** is a retired historical identity. `app.takosumi.com`
+  availability, pricing, SLA, and support are not current authority.
 
-The OSS software runs without the hosted service. Cloud pricing, Stripe, and
-private deployment targets are not public contracts of this repository. See
+The OSS software runs without a hosted product. Retail, Stripe, managed capacity,
+and private deployment targets are not public contracts of this repository. See
 [Product boundaries](docs/en/concepts/boundaries.md).
 
 Takos is a separate product.
@@ -126,8 +144,8 @@ The main directories are `contract/` for public contracts, `core/` for the
 control plane, `dashboard/` for the UI, `runner/` for execution, `deploy/` for
 deployment compositions, and `docs/` for documentation.
 
-This standalone OSS clone does not proxy hosted Cloud GA or production billing
-operations.
+This standalone OSS clone does not proxy Takosumi Hosted retail, Takoserver
+managed supply, or production billing operations.
 
 Takosumi is licensed under [AGPL-3.0-only](LICENSE). See
 [SECURITY.md](SECURITY.md) to report a vulnerability.

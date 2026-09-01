@@ -10,7 +10,6 @@
  */
 import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
 import type { Capsule } from "takosumi-contract/capsules";
-import { randomUUID } from "node:crypto";
 import type {
   ProviderBinding,
   ProviderBindings,
@@ -194,17 +193,10 @@ export interface ConnectionsServiceDependencies {
 
 export class ConnectionsService {
   readonly #store: OpenTofuControlStore;
-  readonly #newId: (prefix: string) => string;
-  readonly #now: () => string;
   readonly #allowOperatorScopedProviderConnections: boolean;
 
   constructor(dependencies: ConnectionsServiceDependencies) {
     this.#store = dependencies.store;
-    this.#newId =
-      dependencies.newId ??
-      ((prefix) =>
-        `${prefix}_${randomUUID().replaceAll("-", "").slice(0, 24)}`);
-    this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#allowOperatorScopedProviderConnections =
       dependencies.allowOperatorScopedProviderConnections === true;
   }

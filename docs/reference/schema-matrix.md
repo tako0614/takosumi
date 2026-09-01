@@ -23,14 +23,17 @@ product version や破壊的変更の回数ではありません。
 | repository manifest | parser: `takosumi.com/v1`, `takosumi.com/v2`, `takosumi.com/v2.1`, `takosumi.com/v2.2`, `takosumi.com/v2.3`; checked-in schemas: `v2.1`–`v2.3` | `contract/repository-manifest.ts`; `docs/public/schemas/repository-manifest-v2.*.schema.json` | repository / same-commit manifest compiler | 各laneはclosed object。`v1`/`v2`はparser compatibilityのみ。`v2.2`はInterface consume、`v2.3`はcredential-free `sourceBuild`を追加 |
 | Capsule source options | `install.takosumi.com/v1alpha1` | `contract/capsules.ts` | repository/install source / Accounts・dashboard | closed envelope。互換でないfield/meaningは新identityとmigration noteを必要とする |
 | optional Form host boundary | `forms.takoform.com/v1alpha1`; `takoform.host-api@v1alpha1`; install envelope `takosumi.takoform-install-envelope-set@v3` | `contract/form-host-interoperability.ts`; `contract/service-forms.ts` | external Form/package flow / optional host adapter | portable Takoform authorityではない。Formの`definitionVersion`とTakosumi software versionを同期させない |
+| legacy Generic Offering surface | current `/v1/offering-*` routes and Offering store | `core/domains/offerings/`; route inventory | operator-only compatibility / migration-delete owner | Takosumi Core の supported authority ではない。新しい integration では使わず、managed Offering は Takoserver が所有する |
 | background/runtime ABI | background authority/result `v2`; host runtime materialization `v1`; managed runtime/relational batch `v1` | `contract/background-events.ts`; `contract/host-runtime-materialization.ts`; `contract/managed-runtime-connections.ts`; `contract/managed-relational-runtime.ts` | host/runner / exact ABI consumer | producerと全consumerが同時に読めるwindowを用意する。同一tokenの意味変更には旧reader regressionと互換性noteが必要 |
 | readiness/config evidence | platform readiness `v2`; platform hardening `v1`; provider configurations `@v1` | `contract/platform-readiness.ts`; `contract/platform-hardening.ts`; `contract/provider-configurations.ts` | operator tooling / validator | evidence formatのversion。service APIやDB schemaのversionではない |
 | runner durable receipts | mutation dispatch/semantics `v2`; credential authority `v1`; run owner `v1` | `worker/src/durable/OpenTofuRunnerObject.ts`; `worker/src/durable/OpenTofuRunOwnerObject.ts` | Durable Object / recovery・audit reader | acknowledgement-loss後のrecovery identity。旧receiptを上書きせず、新readerまたは明示migrationを追加する |
 | SourceSnapshot / StateVersion / Run | 独立したwire schema versionなし | `contract/sources.ts`; `contract/state-versions.ts`; `contract/runs.ts`; owning DB migrations | Takosumi control plane / dashboard、runner | TS shapeと永続化migrationがauthority。便宜的なglobal schema versionを追加しない |
 
-Takosumi Cloud は別のclosed deltaと独立したD1 component manifestを所有します。
-そのprivate component番号をOSS public contractへ複製しません。Cloud側は利用する
-OSS commitとschema evidenceをexact pinし、Cloud固有のmatrix/historyで管理します。
+Takosumi Cloud は退役した historical identity で、current availability/pricing/SLA/support
+authority ではありません。Takosumi Hosted が retail/commerce/client composition を
+所有する場合も、managed supply、capacity、provider credential、Offering は Takoserver が
+所有します。各外部 product は利用する OSS commit と schema evidence を exact pin し、
+自分の private matrix/history で管理します。
 
 ## Versionを変えるとき
 

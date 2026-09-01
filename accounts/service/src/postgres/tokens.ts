@@ -7,7 +7,12 @@ import { and, asc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { bigint, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type {
+  AuthorizationCodeRedemptionCandidate,
   AuthorizationCodeRecord,
+  ClaimValidatedAuthorizationCodeResult,
+  FinalizeAuthorizationCodeRedemptionInput,
+  FinalizeAuthorizationCodeRedemptionResult,
+  OpenAuthorizationCodeRedemptionResult,
   PersonalAccessTokenInventoryPage,
   PersonalAccessTokenInventoryPageInput,
   PersonalAccessTokenRecord,
@@ -18,6 +23,7 @@ import {
   authorizationCodeFromRow,
   type AuthorizationCodeRow,
   hashSecret,
+  optional,
   personalAccessTokenFromRow,
   type PersonalAccessTokenRow,
   type PostgresQueryClient,
@@ -140,23 +146,6 @@ async function runDrizzleFirst<T>(
   return (await runDrizzleRows<T>(client, query))[0];
 }
 
-function authorizationCodeSelection() {
-  return {
-    client_id: authorizationCodes.clientId,
-    redirect_uri: authorizationCodes.redirectUri,
-    scope: authorizationCodes.scope,
-    subject: authorizationCodes.subject,
-    takosumi_subject: authorizationCodes.takosumiSubject,
-    capsule_id: authorizationCodes.capsuleId,
-    workspace_id: authorizationCodes.workspaceId,
-    role: authorizationCodes.role,
-    nonce: authorizationCodes.nonce,
-    code_challenge: authorizationCodes.codeChallenge,
-    code_challenge_method: authorizationCodes.codeChallengeMethod,
-    expires_at: authorizationCodes.expiresAt,
-  };
-}
-
 function tokenSelection(table: ReturnType<typeof oauthTokenTable>) {
   return {
     client_id: table.clientId,
@@ -260,11 +249,54 @@ select 1 as row_kind,
   from page
 order by row_kind asc, created_at asc, token_id asc`;
 
-interface PersonalAccessTokenInventoryPostgresRow
-  extends PersonalAccessTokenRow {
+interface PersonalAccessTokenInventoryPostgresRow extends PersonalAccessTokenRow {
   readonly row_kind: number;
   readonly total: number | string | null;
   readonly anchor_count: number | string | null;
+}
+
+interface AuthorizationCodeRedemptionRow extends AuthorizationCodeRow {
+  readonly code_hash: string;
+  readonly record_version: string;
+  readonly state: "active" | "issuing" | "issued" | "replayed";
+  readonly claim_id: string | null;
+  readonly access_token_hash: string | null;
+  readonly refresh_token_hash: string | null;
+  readonly created_at: Date | string | number;
+  readonly updated_at: Date | string | number;
+  readonly claimed_at: Date | string | number | null;
+  readonly issued_at: Date | string | number | null;
+  readonly replayed_at: Date | string | number | null;
+}
+
+const AUTHORIZATION_CODE_REDEMPTION_SELECTION_SQL = `
+  code_hash, record_version, state, claim_id,
+  client_id, redirect_uri, scope, subject, takosumi_subject,
+  capsule_id, workspace_id, role, nonce, code_challenge,
+  code_challenge_method, expires_at, access_token_hash,
+  refresh_token_hash, created_at, updated_at, claimed_at, issued_at,
+  replayed_at`;
+
+function authorizationCodeCandidate(
+  row: AuthorizationCodeRedemptionRow,
+): AuthorizationCodeRedemptionCandidate {
+  return {
+    redemptionId: row.code_hash,
+    recordVersion: row.record_version,
+    record: authorizationCodeFromRow(row),
+  };
+}
+
+function requireAuthorizationCodeTransaction<T>(
+  client: PostgresQueryClient,
+  run: (transaction: PostgresQueryClient) => Promise<T>,
+): Promise<T> {
+  if (!client.transaction) {
+    throw new Error(
+      "Postgres authorization-code lifecycle requires a pinned transaction",
+    );
+  }
+  return client.transaction(run);
 }
 
 export async function saveAuthorizationCode(
@@ -272,59 +304,407 @@ export async function saveAuthorizationCode(
   code: string,
   record: AuthorizationCodeRecord,
 ): Promise<void> {
-  const values = {
-    codeHash: await hashSecret(code),
-    clientId: record.clientId,
-    redirectUri: record.redirectUri,
-    scope: record.scope,
-    subject: record.subject,
-    takosumiSubject: record.takosumiSubject ?? null,
-    capsuleId: record.capsuleId ?? null,
-    workspaceId: record.workspaceId ?? null,
-    role: record.role ?? null,
-    nonce: record.nonce ?? null,
-    codeChallenge: record.codeChallenge ?? null,
-    codeChallengeMethod: record.codeChallengeMethod ?? null,
-    createdAt: toDate(Date.now()),
-    expiresAt: toDate(record.expiresAt),
-  };
-  await runDrizzle(
+  const codeHash = await hashSecret(code);
+  const recordVersion = crypto.randomUUID();
+  const now = toDate(Date.now());
+  await requireAuthorizationCodeTransaction(client, async (transaction) => {
+    const existing = (
+      await runQuery<AuthorizationCodeRedemptionRow>(
+        transaction,
+        `SELECT ${AUTHORIZATION_CODE_REDEMPTION_SELECTION_SQL}
+           FROM accounts_v1.authorization_code_redemptions
+          WHERE code_hash = $1
+          FOR UPDATE`,
+        [codeHash],
+      )
+    ).rows[0];
+    if (existing && existing.state !== "active") {
+      await replayAuthorizationCodeLocked(transaction, existing, now);
+    }
+    const values = [
+      codeHash,
+      record.clientId,
+      record.redirectUri,
+      record.scope,
+      record.subject,
+      record.takosumiSubject ?? null,
+      record.capsuleId ?? null,
+      record.workspaceId ?? null,
+      record.role ?? null,
+      record.nonce ?? null,
+      record.codeChallenge ?? null,
+      record.codeChallengeMethod ?? null,
+      now,
+      toDate(record.expiresAt),
+    ] as const;
+    await runQuery(
+      transaction,
+      `INSERT INTO accounts_v1.authorization_codes (
+         code_hash, client_id, redirect_uri, scope, subject,
+         takosumi_subject, capsule_id, workspace_id, role, nonce,
+         code_challenge, code_challenge_method, created_at, expires_at
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+       ) ON CONFLICT (code_hash) DO UPDATE SET
+         client_id = EXCLUDED.client_id,
+         redirect_uri = EXCLUDED.redirect_uri,
+         scope = EXCLUDED.scope,
+         subject = EXCLUDED.subject,
+         takosumi_subject = EXCLUDED.takosumi_subject,
+         capsule_id = EXCLUDED.capsule_id,
+         workspace_id = EXCLUDED.workspace_id,
+         role = EXCLUDED.role,
+         nonce = EXCLUDED.nonce,
+         code_challenge = EXCLUDED.code_challenge,
+         code_challenge_method = EXCLUDED.code_challenge_method,
+         created_at = EXCLUDED.created_at,
+         expires_at = EXCLUDED.expires_at`,
+      values,
+    );
+    await runQuery(
+      transaction,
+      `INSERT INTO accounts_v1.authorization_code_redemptions (
+         code_hash, record_version, state, claim_id, client_id, redirect_uri,
+         scope, subject, takosumi_subject, capsule_id, workspace_id, role,
+         nonce, code_challenge, code_challenge_method, access_token_hash,
+         refresh_token_hash, created_at, updated_at, expires_at, claimed_at,
+         issued_at, replayed_at
+       ) VALUES (
+         $1, $15, 'active', NULL, $2, $3, $4, $5, $6, $7, $8, $9,
+         $10, $11, $12, NULL, NULL, $13, $13, $14, NULL, NULL, NULL
+       ) ON CONFLICT (code_hash) DO UPDATE SET
+         record_version = EXCLUDED.record_version,
+         state = 'active',
+         claim_id = NULL,
+         client_id = EXCLUDED.client_id,
+         redirect_uri = EXCLUDED.redirect_uri,
+         scope = EXCLUDED.scope,
+         subject = EXCLUDED.subject,
+         takosumi_subject = EXCLUDED.takosumi_subject,
+         capsule_id = EXCLUDED.capsule_id,
+         workspace_id = EXCLUDED.workspace_id,
+         role = EXCLUDED.role,
+         nonce = EXCLUDED.nonce,
+         code_challenge = EXCLUDED.code_challenge,
+         code_challenge_method = EXCLUDED.code_challenge_method,
+         access_token_hash = NULL,
+         refresh_token_hash = NULL,
+         created_at = EXCLUDED.created_at,
+         updated_at = EXCLUDED.updated_at,
+         expires_at = EXCLUDED.expires_at,
+         claimed_at = NULL,
+         issued_at = NULL,
+         replayed_at = NULL`,
+      [...values, recordVersion],
+    );
+  });
+}
+
+export async function openAuthorizationCodeRedemption(
+  client: PostgresQueryClient,
+  code: string,
+): Promise<OpenAuthorizationCodeRedemptionResult> {
+  const codeHash = await hashSecret(code);
+  return await requireAuthorizationCodeTransaction(
     client,
-    db
-      .insert(authorizationCodes)
-      .values(values)
-      .onConflictDoUpdate({
-        target: authorizationCodes.codeHash,
-        set: {
-          clientId: values.clientId,
-          redirectUri: values.redirectUri,
-          scope: values.scope,
-          subject: values.subject,
-          takosumiSubject: values.takosumiSubject,
-          capsuleId: values.capsuleId,
-          workspaceId: values.workspaceId,
-          role: values.role,
-          nonce: values.nonce,
-          codeChallenge: values.codeChallenge,
-          codeChallengeMethod: values.codeChallengeMethod,
-          expiresAt: values.expiresAt,
-        },
-      }),
+    async (transaction) => {
+      const row = (
+        await runQuery<AuthorizationCodeRedemptionRow>(
+          transaction,
+          `SELECT ${AUTHORIZATION_CODE_REDEMPTION_SELECTION_SQL}
+             FROM accounts_v1.authorization_code_redemptions
+            WHERE code_hash = $1
+            FOR UPDATE`,
+          [codeHash],
+        )
+      ).rows[0];
+      if (!row) return { status: "unknown" };
+      if (row.state === "active") {
+        return { status: "active", candidate: authorizationCodeCandidate(row) };
+      }
+      await replayAuthorizationCodeLocked(transaction, row, toDate(Date.now()));
+      return { status: "replayed" };
+    },
   );
 }
 
-export async function consumeAuthorizationCode(
+export async function claimValidatedAuthorizationCode(
   client: PostgresQueryClient,
-  code: string,
-): Promise<AuthorizationCodeRecord | undefined> {
-  const row = await runDrizzleFirst<AuthorizationCodeRow>(
+  candidate: AuthorizationCodeRedemptionCandidate,
+): Promise<ClaimValidatedAuthorizationCodeResult> {
+  const claimId = crypto.randomUUID();
+  return await requireAuthorizationCodeTransaction(
     client,
-    db
-      .delete(authorizationCodes)
-      .where(eq(authorizationCodes.codeHash, await hashSecret(code)))
-      .returning(authorizationCodeSelection()),
+    async (transaction) => {
+      const row = (
+        await runQuery<AuthorizationCodeRedemptionRow>(
+          transaction,
+          `SELECT ${AUTHORIZATION_CODE_REDEMPTION_SELECTION_SQL}
+             FROM accounts_v1.authorization_code_redemptions
+            WHERE code_hash = $1
+            FOR UPDATE`,
+          [candidate.redemptionId],
+        )
+      ).rows[0];
+      if (!row) return { status: "lost" };
+      if (row.record_version !== candidate.recordVersion) {
+        return { status: "stale" };
+      }
+      if (row.state !== "active") {
+        await replayAuthorizationCodeLocked(
+          transaction,
+          row,
+          toDate(Date.now()),
+        );
+        return { status: "replayed" };
+      }
+      const claimedAt = toDate(Date.now());
+      await runQuery(
+        transaction,
+        `UPDATE accounts_v1.authorization_code_redemptions
+            SET state = 'issuing', claim_id = $3, claimed_at = $4,
+                updated_at = $4
+          WHERE code_hash = $1 AND record_version = $2 AND state = 'active'`,
+        [candidate.redemptionId, candidate.recordVersion, claimId, claimedAt],
+      );
+      await runQuery(
+        transaction,
+        `DELETE FROM accounts_v1.authorization_codes WHERE code_hash = $1`,
+        [candidate.redemptionId],
+      );
+      return { status: "claimed", claimId };
+    },
   );
-  return row ? authorizationCodeFromRow(row) : undefined;
+}
+
+export async function finalizeAuthorizationCodeRedemption(
+  client: PostgresQueryClient,
+  input: FinalizeAuthorizationCodeRedemptionInput,
+): Promise<FinalizeAuthorizationCodeRedemptionResult> {
+  if (
+    (input.refreshToken === undefined) !==
+    (input.refreshRecord === undefined)
+  ) {
+    throw new TypeError(
+      "authorization-code refresh token and record must be provided together",
+    );
+  }
+  const [codeHash, accessTokenHash, refreshTokenHash] = await Promise.all([
+    hashSecret(input.code),
+    hashSecret(input.accessToken),
+    input.refreshToken ? hashSecret(input.refreshToken) : undefined,
+  ]);
+  return await requireAuthorizationCodeTransaction(
+    client,
+    async (transaction) => {
+      const row = (
+        await runQuery<AuthorizationCodeRedemptionRow>(
+          transaction,
+          `SELECT ${AUTHORIZATION_CODE_REDEMPTION_SELECTION_SQL}
+             FROM accounts_v1.authorization_code_redemptions
+            WHERE code_hash = $1
+            FOR UPDATE`,
+          [codeHash],
+        )
+      ).rows[0];
+      if (!row) return { status: "lost" };
+      if (row.state === "replayed") return { status: "replayed" };
+      if (row.state !== "issuing" || row.claim_id !== input.claimId) {
+        return { status: "lost" };
+      }
+      const now = toDate(Date.now());
+      await insertOAuthTokenHash(
+        transaction,
+        "oauth_access_tokens",
+        accessTokenHash,
+        input.accessRecord,
+        now,
+      );
+      if (refreshTokenHash && input.refreshRecord) {
+        await insertOAuthTokenHash(
+          transaction,
+          "oauth_refresh_tokens",
+          refreshTokenHash,
+          input.refreshRecord,
+          now,
+        );
+        await runQuery(
+          transaction,
+          `INSERT INTO accounts_v1.refresh_chain_access_tokens (
+             root_token_hash, access_token_hash, created_at
+           ) VALUES ($1, $2, $3)
+           ON CONFLICT (root_token_hash, access_token_hash) DO NOTHING`,
+          [refreshTokenHash, accessTokenHash, now],
+        );
+      }
+      await runQuery(
+        transaction,
+        `INSERT INTO accounts_v1.consumed_authorization_codes (
+           code_hash, consumed_at
+         ) VALUES ($1, $2)
+         ON CONFLICT (code_hash) DO NOTHING`,
+        [codeHash, now],
+      );
+      await runQuery(
+        transaction,
+        `INSERT INTO accounts_v1.auth_code_token_links (
+           code_hash, access_token_hash, refresh_root_hash, created_at
+         ) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (code_hash, access_token_hash, refresh_root_hash)
+         DO NOTHING`,
+        [codeHash, accessTokenHash, refreshTokenHash ?? "", now],
+      );
+      await runQuery(
+        transaction,
+        `UPDATE accounts_v1.authorization_code_redemptions
+            SET state = 'issued', access_token_hash = $3,
+                refresh_token_hash = $4, issued_at = $5, updated_at = $5
+          WHERE code_hash = $1 AND state = 'issuing' AND claim_id = $2`,
+        [
+          codeHash,
+          input.claimId,
+          accessTokenHash,
+          refreshTokenHash ?? null,
+          now,
+        ],
+      );
+      return { status: "issued" };
+    },
+  );
+}
+
+async function insertOAuthTokenHash(
+  client: PostgresQueryClient,
+  table: OAuthTokenTable,
+  tokenHash: string,
+  record: TokenRecord,
+  createdAt: Date,
+): Promise<void> {
+  await runQuery(
+    client,
+    `INSERT INTO accounts_v1.${table} (
+       token_hash, client_id, audience, scope, subject, takosumi_subject,
+       capsule_id, workspace_id, role, interface_id, interface_binding_id,
+       interface_resolved_revision, created_at, expires_at
+     ) VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+     )`,
+    [
+      tokenHash,
+      record.clientId,
+      record.audience ?? null,
+      record.scope,
+      record.subject,
+      record.takosumiSubject ?? null,
+      record.capsuleId ?? null,
+      record.workspaceId ?? null,
+      record.role ?? null,
+      record.interfaceId ?? null,
+      record.interfaceBindingId ?? null,
+      record.interfaceResolvedRevision ?? null,
+      createdAt,
+      toDate(record.expiresAt),
+    ],
+  );
+}
+
+async function replayAuthorizationCodeLocked(
+  client: PostgresQueryClient,
+  row: AuthorizationCodeRedemptionRow,
+  replayedAt: Date,
+): Promise<void> {
+  const refreshRootHash = optional(row.refresh_token_hash);
+  await runQuery(
+    client,
+    `WITH refresh_roots(root_token_hash) AS (
+       SELECT $2::text WHERE $2::text IS NOT NULL
+       UNION
+       SELECT NULLIF(refresh_root_hash, '')
+         FROM accounts_v1.auth_code_token_links
+        WHERE code_hash = $1
+     )
+     INSERT INTO accounts_v1.revoked_refresh_roots (
+       root_token_hash, revoked_at
+     )
+     SELECT root_token_hash, $3
+       FROM refresh_roots
+      WHERE root_token_hash IS NOT NULL
+     ON CONFLICT (root_token_hash) DO UPDATE SET
+       revoked_at = GREATEST(
+         accounts_v1.revoked_refresh_roots.revoked_at,
+         EXCLUDED.revoked_at
+       )`,
+    [row.code_hash, refreshRootHash ?? null, replayedAt],
+  );
+  await runQuery(
+    client,
+    `WITH refresh_roots(root_token_hash) AS (
+       SELECT $3::text WHERE $3::text IS NOT NULL
+       UNION
+       SELECT NULLIF(refresh_root_hash, '')
+         FROM accounts_v1.auth_code_token_links
+        WHERE code_hash = $1
+     )
+     DELETE FROM accounts_v1.oauth_access_tokens
+      WHERE token_hash = $2
+         OR token_hash IN (
+           SELECT NULLIF(access_token_hash, '')
+             FROM accounts_v1.auth_code_token_links
+            WHERE code_hash = $1
+         )
+         OR token_hash IN (
+           SELECT access_token_hash
+             FROM accounts_v1.refresh_chain_access_tokens
+            WHERE root_token_hash IN (
+              SELECT root_token_hash FROM refresh_roots
+            )
+         )`,
+    [row.code_hash, row.access_token_hash, refreshRootHash ?? null],
+  );
+  await runQuery(
+    client,
+    `WITH refresh_roots(root_token_hash) AS (
+       SELECT $2::text WHERE $2::text IS NOT NULL
+       UNION
+       SELECT NULLIF(refresh_root_hash, '')
+         FROM accounts_v1.auth_code_token_links
+        WHERE code_hash = $1
+     )
+     DELETE FROM accounts_v1.oauth_refresh_tokens
+      WHERE token_hash IN (
+            SELECT root_token_hash FROM refresh_roots
+         )
+         OR token_hash IN (
+           SELECT parent_token_hash
+             FROM accounts_v1.refresh_chain_links
+            WHERE root_token_hash IN (
+              SELECT root_token_hash FROM refresh_roots
+            )
+           UNION
+           SELECT child_token_hash
+             FROM accounts_v1.refresh_chain_links
+            WHERE root_token_hash IN (
+              SELECT root_token_hash FROM refresh_roots
+            )
+         )`,
+    [row.code_hash, refreshRootHash ?? null],
+  );
+  await runQuery(
+    client,
+    `INSERT INTO accounts_v1.consumed_authorization_codes (
+       code_hash, consumed_at
+     ) VALUES ($1, $2)
+     ON CONFLICT (code_hash) DO NOTHING`,
+    [row.code_hash, replayedAt],
+  );
+  await runQuery(
+    client,
+    `UPDATE accounts_v1.authorization_code_redemptions
+        SET state = 'replayed', replayed_at = COALESCE(replayed_at, $2),
+            updated_at = $2
+      WHERE code_hash = $1`,
+    [row.code_hash, replayedAt],
+  );
 }
 
 export async function saveOAuthToken(

@@ -64,7 +64,6 @@ const DEFAULT_STORE_BADGE = {
 } satisfies StoreMetadata["badge"];
 
 const CAPSULE_NAME_PATTERN = /^[a-z0-9-]+$/u;
-const CAPSULE_DONE: StepState = "done";
 
 type StoreEntry = NonNullable<InstallConfig["store"]> & {
   readonly id: string;
@@ -363,6 +362,28 @@ function addFlowErrorMessage(apiError: ControlApiError | undefined): string {
   return message
     ? t("new.error.genericWithDetails", { message })
     : t("new.error.generic");
+}
+
+/**
+ * Single entry point the install view uses for every thrown failure.
+ *
+ * Routes a source-fetch failure to the copy that names the likely causes —
+ * including a private repository needing a Git connection — and everything
+ * else to the classified add-flow copy. Without this the view fell back to
+ * `friendlyError`, which passes a 4xx server sentence through verbatim, so a
+ * Japanese UI showed raw English (and raw `git ls-remote` stderr).
+ */
+function installFlowErrorMessage(cause: unknown): string {
+  const apiError = cause instanceof ControlApiError ? cause : undefined;
+  if (!apiError) {
+    return cause instanceof Error && cause.message
+      ? cause.message
+      : t("new.error.generic");
+  }
+  if (apiError.code === "source_sync_failed" || apiError.isSourceSyncRequired) {
+    return sourceFetchErrorMessage(apiError);
+  }
+  return addFlowErrorMessage(apiError);
 }
 
 function shouldShowCompatibilityPanel(
@@ -1006,6 +1027,53 @@ function storeEntryIdFromStoreListing(listing: TcsListing): string {
   return `store:${safeStoreToken(listing.id) ?? slugInputValue(listing.suggestedName)}`;
 }
 
+/**
+ * Build the install-setup entry from a COMPILED repository InstallConfig with
+ * no catalog listing behind it. Everything functional (the input fields, the
+ * install experience) already lives on the InstallConfig; the listing only
+ * ever supplied presentation. So a repository that declares its own inputs
+ * gets the same setup form from a pasted Git URL as it does from a catalog.
+ */
+function storeEntryFromRepositoryConfig(
+  installConfig: InstallConfig,
+  fallback: { readonly gitUrl: string; readonly name: string },
+): StoreEntry | undefined {
+  const normalizedInputs = normalizedStoreInputs(
+    installConfig.variablePresentation,
+  );
+  const declared = installConfig.store;
+  // Nothing to present AND nothing to ask: keep today's plain path rather
+  // than rendering an empty setup step.
+  if (!declared && normalizedInputs.inputs.length === 0) return undefined;
+  const suggestedName =
+    safeText(declared?.suggestedName) || safeText(fallback.name) || "service";
+  const fallbackText = { ja: suggestedName, en: suggestedName };
+  const sourceUrl =
+    (typeof declared?.source?.url === "string" && declared.source.url.trim()) ||
+    fallback.gitUrl;
+  return {
+    id: `repo:${sourceUrl}`,
+    installConfigId: installConfig.id,
+    createdAt: installConfig.createdAt,
+    updatedAt: installConfig.updatedAt,
+    source: { url: sourceUrl } as StoreEntry["source"],
+    order: declared?.order ?? 1_000,
+    surface: declared?.surface ?? "service",
+    kind: declared?.kind ?? "worker",
+    provider: safeText(declared?.provider) || "provider",
+    suggestedName,
+    badge: nonEmptyStoreText(declared?.badge) ?? DEFAULT_STORE_BADGE,
+    name: nonEmptyStoreText(declared?.name) ?? fallbackText,
+    description: nonEmptyStoreText(declared?.description) ?? fallbackText,
+    ...(declared?.iconUrl ? { iconUrl: declared.iconUrl } : {}),
+    inputs: normalizedInputs.inputs,
+    ...(installConfig.installExperience
+      ? { installExperience: installConfig.installExperience }
+      : {}),
+    ...(normalizedInputs.invalid ? { setupProjectionInvalid: true } : {}),
+  } as StoreEntry;
+}
+
 function storeEntryFromStoreListing(
   listing: TcsListing,
   installConfig: InstallConfig,
@@ -1100,14 +1168,6 @@ function parseInitialTcsHandoff(
   }
 }
 
-function initialAddTab(search: string): "store" | "git" {
-  // Start on the service browser. Install links and pasted source links enter
-  // the same flow after a source is selected.
-  return parseInitialTcsHandoff(search) || !hasInstallPrefillParams(search)
-    ? "store"
-    : "git";
-}
-
 export type {
   StepState,
   FlowRun,
@@ -1124,7 +1184,6 @@ export type {
 export {
   DEFAULT_STORE_BADGE,
   CAPSULE_NAME_PATTERN,
-  CAPSULE_DONE,
   compatibilityTone,
   compatibilityLabel,
   providerNameFromDiagnostic,
@@ -1196,6 +1255,8 @@ export {
   uniqueStoreInstallConfigForSource,
   storeMetadataFromStoreListing,
   storeEntryIdFromStoreListing,
+  installFlowErrorMessage,
+  storeEntryFromRepositoryConfig,
   storeEntryFromStoreListing,
   sourceIdFromControlError,
   isDuplicateServiceError,
@@ -1203,5 +1264,4 @@ export {
   isAbortError,
   defaultWorkspaceHandle,
   parseInitialTcsHandoff,
-  initialAddTab,
 };

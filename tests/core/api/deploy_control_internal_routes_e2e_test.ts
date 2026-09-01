@@ -1111,12 +1111,48 @@ test("Capsule DELETE creates a destroy-plan run instead of deleting state (§30 
   });
   expect(applyRes.status).toEqual(201);
 
+  // Safe default: DELETE schedules the two-phase uninstall (nothing destroyed).
   const del = await app.request(`/internal/v1/capsules/${capsuleId}`, {
     method: "DELETE",
     headers: headers(),
   });
   expect(del.status).toEqual(202);
-  const payload = ((await del.json()) as { run: Run }).run;
+  const scheduled = (await del.json()) as {
+    capsule: { id: string; status: string; scheduledDestroyAt?: string };
+    uninstall?: { scheduledDestroyAt?: string };
+  };
+  expect(scheduled.capsule.id).toEqual(capsuleId);
+  expect(scheduled.capsule.status).toEqual("uninstalled");
+  expect(scheduled.uninstall?.scheduledDestroyAt).toEqual(
+    scheduled.capsule.scheduledDestroyAt,
+  );
+
+  // An uninstalled Capsule refuses ordinary update plans.
+  const blockedPlan = await app.request(
+    `/internal/v1/capsules/${capsuleId}/plan`,
+    { method: "POST", headers: headers() },
+  );
+  expect(blockedPlan.status).toEqual(409);
+
+  // Restore during the grace period is a pure ledger transition.
+  const restore = await app.request(
+    `/internal/v1/capsules/${capsuleId}/restore`,
+    { method: "POST", headers: headers() },
+  );
+  expect(restore.status).toEqual(200);
+  const restored = (await restore.json()) as {
+    capsule: { status: string; scheduledDestroyAt?: string };
+  };
+  expect(restored.capsule.status).toEqual("active");
+  expect(restored.capsule.scheduledDestroyAt).toBeUndefined();
+
+  // `?mode=immediate` keeps the direct destroy-plan flow.
+  const immediate = await app.request(
+    `/internal/v1/capsules/${capsuleId}?mode=immediate`,
+    { method: "DELETE", headers: headers() },
+  );
+  expect(immediate.status).toEqual(202);
+  const payload = ((await immediate.json()) as { run: Run }).run;
   expect(payload.capsuleId).toEqual(capsuleId);
   expect(payload.type).toEqual("destroy_plan");
   expect(payload.status).toEqual("waiting_approval");

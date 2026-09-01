@@ -798,6 +798,29 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly allowOperatorScopedProviderConnections?: boolean;
   /**
+   * Two-phase uninstall grace period in milliseconds
+   * (`TAKOSUMI_UNINSTALL_GRACE_DAYS` at the host layer). Absent uses the OSS
+   * default of 7 days; hosted offerings choose their own value by policy.
+   */
+  readonly uninstallGraceMs?: number;
+  /**
+   * Kill switch for the failed-first-install auto cleanup
+   * (`TAKOSUMI_FAILED_INSTALL_AUTO_CLEANUP=0` at the host layer). Default ON.
+   */
+  readonly failedInstallAutoCleanup?: boolean;
+  /**
+   * Queue-age budget in ms for `capacity_exhausted` runner refusals
+   * (`TAKOSUMI_RUNNER_CAPACITY_QUEUE_BUDGET_MINUTES` at the host layer).
+   * Default 45 minutes.
+   */
+  readonly runnerCapacityQueueBudgetMs?: number;
+  /**
+   * Per-workspace concurrent run-slot ceiling
+   * (`TAKOSUMI_WORKSPACE_RUN_CONCURRENCY` at the host layer). Default 2;
+   * `0` disables the fairness fence.
+   */
+  readonly workspaceRunConcurrency?: number;
+  /**
    * At-rest secret crypto for the built-in {@link StaticSecretConnectionVault}.
    * When `opentofuConnectionVault` is not supplied but this IS, the bootstrap
    * constructs the default vault over the shared OpenTofu store with this crypto
@@ -1546,6 +1569,9 @@ export async function createTakosumiService(
     store: sharedOpenTofuStore,
     activity: activityService,
     projects: projectsService,
+    ...(options.uninstallGraceMs !== undefined
+      ? { uninstallGraceMs: options.uninstallGraceMs }
+      : {}),
   });
   const dependenciesService = new DependenciesService({
     store: sharedOpenTofuStore,
@@ -1567,6 +1593,15 @@ export async function createTakosumiService(
   opentofuController = new OpenTofuController({
     store: sharedOpenTofuStore,
     activity: activityService,
+    ...(options.failedInstallAutoCleanup !== undefined
+      ? { failedInstallAutoCleanup: options.failedInstallAutoCleanup }
+      : {}),
+    ...(options.runnerCapacityQueueBudgetMs !== undefined
+      ? { runnerCapacityQueueBudgetMs: options.runnerCapacityQueueBudgetMs }
+      : {}),
+    ...(options.workspaceRunConcurrency !== undefined
+      ? { workspaceRunConcurrency: options.workspaceRunConcurrency }
+      : {}),
     ...(options.opentofuRunner ? { runner: options.opentofuRunner } : {}),
     ...(options.opentofuRunnerExecutors
       ? { runnerExecutors: options.opentofuRunnerExecutors }

@@ -3,6 +3,26 @@
 Takosumi は認証情報を、**書き込み専用で保存し、Run の実行中だけ渡し、記録には名前しか
 残しません**。この 3 つがすべての土台になっています。
 
+## BYOC と external managed Host
+
+通常の BYOC では Workspace/customer が vendor account と credential、作成される
+resource の authority を持ちます。Takosumi が扱う実行経路は次のとおりです。
+
+```text
+ProviderConnection
+  → CredentialRecipe
+  → ProviderBinding
+  → run-scoped runner materialization
+  → standard OpenTofu provider
+  → customer-owned resource
+```
+
+Takoform を使う場合も通常の provider と同じです。managed supply を選ぶときは、外部の
+Takoserver Takoform Host に対する Host-scoped credential を通常の ProviderConnection として
+登録できます。Takosumi は Takoserver の親 provider credential、provider installation、
+backend、capacity、Workers for Platforms (WfP) namespace、dispatcher、native identity、
+managed Offering を受け取ったり選択したりしません。これらは Takoserver の authority です。
+
 ## Connection
 
 認証情報は Connection に保存します。`.env` や manifest には書きません。保存された値は
@@ -100,8 +120,9 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example" \
 
 ## Credential Recipe は設定補助です
 
-operator は Credential Recipe を用意できます。これは環境変数名の指定を省くための
-**設定補助**です。
+operator が用意する Credential Recipe は、Workspace/customer が自分の provider
+credential を登録するときの**設定補助**です。環境変数名や file 名を記述しますが、
+credential の値や vendor account の authority を持ちません。
 
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/credential-recipes" \

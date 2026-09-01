@@ -79,6 +79,11 @@ export const PORTABLE_GATE_PHASES: readonly PortableGatePhase[] = [
     "run",
     "check:test-source-boundary",
   ]),
+  phase("unreferenced-exports", [
+    "bun",
+    "run",
+    "check:unreferenced-exports",
+  ]),
   phase("generalization-boundaries", [
     "bun",
     "run",
@@ -96,6 +101,24 @@ export const PORTABLE_GATE_PHASES: readonly PortableGatePhase[] = [
     "check:cloudflare-worker-build",
   ]),
 ];
+
+/**
+ * Phases the inner-loop `--fast` run leaves out: the dashboard bundle build
+ * and the two browser suites. They are the slow, host-dependent part of the
+ * gate, so skipping them keeps an edit-check cycle usable — but a run that
+ * skips them is NOT the handoff gate. Handoff still requires `bun run check`.
+ */
+export const FAST_GATE_SKIPPED_PHASES: ReadonlySet<string> = new Set([
+  "dashboard",
+  "dashboard-browser",
+  "docs-browser",
+]);
+
+export function fastGatePhases(
+  phases: readonly PortableGatePhase[] = PORTABLE_GATE_PHASES,
+): readonly PortableGatePhase[] {
+  return phases.filter((phase) => !FAST_GATE_SKIPPED_PHASES.has(phase.name));
+}
 
 export function validatePortableGatePhases(
   phases: readonly PortableGatePhase[],
@@ -222,8 +245,16 @@ async function runCommand(
 }
 
 if (import.meta.main) {
+  const fast = process.argv.slice(2).includes("--fast");
+  if (fast) {
+    console.error(
+      `[portable-check] --fast skips ${
+        [...FAST_GATE_SKIPPED_PHASES].join(", ")
+      }; handoff still requires the complete \`bun run check\``,
+    );
+  }
   try {
-    await runPortableGate();
+    await runPortableGate({}, fast ? fastGatePhases() : PORTABLE_GATE_PHASES);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[portable-check] failed: ${message}`);

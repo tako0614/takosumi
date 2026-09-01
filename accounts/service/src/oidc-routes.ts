@@ -132,15 +132,10 @@ function generateRefreshToken(): string {
   return `takrt_${base64UrlEncodeBytes(bytes)}`;
 }
 
-// F30 fix: refresh-token rotation chains and authorization-code reuse
-// cascades are now persisted in the `AccountsStore` (see migration
-// 019_refresh_chain.sql). Each operator replica therefore observes the
-// same chain state, and the state survives restarts. The previous
-// in-process Maps/Sets lived in this file as a best-effort approximation;
-// they have been replaced by store calls. Reuse detection is fully
-// store-backed: `isAuthorizationCodeConsumed` + `consumeAuthorizationCode`
-// (single-shot delete) cover replay across replicas, so there is no
-// remaining in-process reuse state to keep here.
+// Refresh-token rotation and authorization-code redemption are durable store
+// lifecycles. The token route validates a non-mutating code snapshot, claims
+// that exact record version, signs outside a database transaction, and only
+// returns credentials after one atomic finalize persists tokens plus lineage.
 
 type ResolvedOidcClient = {
   clientId: string;
@@ -206,12 +201,13 @@ type OidcTokenDenialStage =
   | "client_authentication_failed"
   | "redirect_uri_mismatch"
   | "pkce_verification_failed"
+  | "token_signing_failed"
   | `live_grant_${OidcLiveGrantFailureReason}`;
 
 function oidcTokenDenial(
   stage: OidcTokenDenialStage,
-  error: "invalid_client" | "invalid_grant",
-  status: 400 | 401 = 400,
+  error: "invalid_client" | "invalid_grant" | "server_error",
+  status: 400 | 401 | 500 = 400,
 ): Response {
   // OAuth responses deliberately stay coarse so callers cannot probe code or
   // client validity. The server log contains only a closed reason label: no
@@ -698,17 +694,18 @@ async function handleTokenUncached(input: {
   if (!code)
     return oidcTokenDenial("authorization_code_missing", "invalid_grant");
 
-  // Detect authorization-code reuse before consuming. consumeAuthorizationCode
-  // is single-shot, but a second attempt may legitimately race or maliciously
-  // replay the code. If the code was already consumed once, cascade-revoke any
-  // tokens that were issued from the original exchange and permanently fail
-  // subsequent retries.
-  if (await input.store.isAuthorizationCodeConsumed(code)) {
-    await cascadeRevokeAuthorizationCode(code, input.store);
-    return oidcTokenDenial("authorization_code_reused", "invalid_grant");
+  const opened = await input.store.openAuthorizationCodeRedemption(code);
+  if (opened.status !== "active") {
+    return oidcTokenDenial(
+      opened.status === "replayed"
+        ? "authorization_code_reused"
+        : "authorization_code_unknown_or_expired",
+      "invalid_grant",
+    );
   }
-  const record = await input.store.consumeAuthorizationCode(code);
-  if (!record || record.expiresAt < Date.now()) {
+  const { candidate } = opened;
+  const { record } = candidate;
+  if (record.expiresAt < Date.now()) {
     return oidcTokenDenial(
       "authorization_code_unknown_or_expired",
       "invalid_grant",
@@ -759,33 +756,15 @@ async function handleTokenUncached(input: {
     return oidcTokenDenial(`live_grant_${liveGrant.reason}`, "invalid_grant");
   }
 
-  // Mark this code as consumed and start tracking the tokens issued through
-  // it so a reuse attempt can cascade-revoke the descendants.
-  await input.store.markAuthorizationCodeConsumed(code);
-
+  const claim = await input.store.claimValidatedAuthorizationCode(candidate);
+  if (claim.status !== "claimed") {
+    return oidcTokenDenial("authorization_code_reused", "invalid_grant");
+  }
   const refreshToken = includesScope(record.scope, "offline_access")
     ? generateRefreshToken()
     : undefined;
-  if (refreshToken) {
-    await input.store.saveRefreshToken(refreshToken, {
-      clientId: record.clientId,
-      scope: record.scope,
-      subject: record.subject,
-      takosumiSubject: record.takosumiSubject,
-      capsuleId: liveGrant.capsuleId,
-      workspaceId: liveGrant.workspaceId,
-      role: liveGrant.role,
-      expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
-    });
-    // The refresh token at chain creation is by definition its own
-    // root; no parent link is recorded yet. `addRefreshChainLink` is
-    // called on subsequent rotations.
-  }
-
-  return await issueTokenResponse({
-    issuer: input.issuer,
-    store: input.store,
-    flow: input.flow,
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const accessRecord: TokenRecord = {
     clientId: record.clientId,
     scope: record.scope,
     subject: record.subject,
@@ -793,11 +772,55 @@ async function handleTokenUncached(input: {
     capsuleId: liveGrant.capsuleId,
     workspaceId: liveGrant.workspaceId,
     role: liveGrant.role,
-    nonce: record.nonce,
-    refreshToken,
-    chainRefreshToken: refreshToken,
-    authorizationCode: code,
+    expiresAt: (issuedAt + ACCESS_TOKEN_TTL_SECONDS) * 1000,
+  };
+  const refreshRecord: TokenRecord | undefined = refreshToken
+    ? {
+        clientId: record.clientId,
+        scope: record.scope,
+        subject: record.subject,
+        takosumiSubject: record.takosumiSubject,
+        capsuleId: liveGrant.capsuleId,
+        workspaceId: liveGrant.workspaceId,
+        role: liveGrant.role,
+        expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
+      }
+    : undefined;
+  let prepared: PreparedTokenResponse;
+  try {
+    prepared = await prepareTokenResponse({
+      issuer: input.issuer,
+      store: input.store,
+      flow: input.flow,
+      clientId: record.clientId,
+      scope: record.scope,
+      subject: record.subject,
+      takosumiSubject: record.takosumiSubject,
+      capsuleId: liveGrant.capsuleId,
+      workspaceId: liveGrant.workspaceId,
+      role: liveGrant.role,
+      nonce: record.nonce,
+      refreshToken,
+      issuedAt,
+    });
+  } catch {
+    // A claimant that cannot sign never leaves the code active and never
+    // persists credentials. Re-opening an issuing row is the durable replay /
+    // burn transition shared by every adapter.
+    await input.store.openAuthorizationCodeRedemption(code);
+    return oidcTokenDenial("token_signing_failed", "server_error", 500);
+  }
+  const finalized = await input.store.finalizeAuthorizationCodeRedemption({
+    code,
+    claimId: claim.claimId,
+    accessToken: prepared.accessToken,
+    accessRecord,
+    ...(refreshToken && refreshRecord ? { refreshToken, refreshRecord } : {}),
   });
+  if (finalized.status !== "issued") {
+    return oidcTokenDenial("authorization_code_reused", "invalid_grant");
+  }
+  return json(prepared.body);
 }
 
 async function handleRefreshToken(input: {
@@ -942,12 +965,17 @@ async function handleRefreshToken(input: {
       capsuleId: liveGrant.capsuleId,
       workspaceId: liveGrant.workspaceId,
       role: liveGrant.role,
-      expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
+      // Rotation replaces a credential inside one refresh family; it does not
+      // extend the family's authority forever. Keeping the root's absolute
+      // expiry makes terminal authorization-code lineage safely retainable for
+      // one refresh-token lifetime and bounds every descendant by that same
+      // cutoff.
+      expiresAt: record.expiresAt,
     });
     await input.store.deleteToken(refreshToken);
   });
 
-  return await observeSlowOidcRefreshStage("token_issue", () =>
+  const response = await observeSlowOidcRefreshStage("token_issue", () =>
     issueTokenResponse({
       issuer: input.issuer,
       store: input.store,
@@ -963,17 +991,21 @@ async function handleRefreshToken(input: {
       chainRefreshToken: newRefreshToken,
     }),
   );
-}
-
-async function cascadeRevokeAuthorizationCode(
-  code: string,
-  store: AccountsStore,
-): Promise<void> {
-  // The store-side cascade deletes every access token issued from this
-  // code AND every refresh chain rooted by it (including all rotations
-  // and the access tokens those rotations minted). No further work is
-  // required on the route layer.
-  await store.revokeTokensIssuedFromCode(code);
+  // Authorization-code replay and refresh rotation share the revoked-root
+  // marker as their final linearization fence. A replay may commit after the
+  // early revocation check but while this request is signing/persisting its
+  // child credentials. Re-check only after the child refresh and access token
+  // plus their root link are durable; if replay won, synchronously erase the
+  // late writes and never return them.
+  if (
+    await observeSlowOidcRefreshStage("post_issue_revocation_fence", () =>
+      input.store.isRefreshRootRevoked(newRefreshToken),
+    )
+  ) {
+    await input.store.revokeRefreshChain(newRefreshToken);
+    return json({ error: "invalid_grant" }, 400);
+  }
+  return response;
 }
 
 async function issueTokenResponse(input: {
@@ -991,10 +1023,52 @@ async function issueTokenResponse(input: {
   refreshToken?: string;
   /** New or rotated refresh token whose chain root tracks issued access tokens. */
   chainRefreshToken?: string;
-  /** Authorization code that produced this access token, for reuse cascade. */
-  authorizationCode?: string;
 }): Promise<Response> {
   const issuedAt = Math.floor(Date.now() / 1000);
+  const accessRecord: TokenRecord = {
+    clientId: input.clientId,
+    scope: input.scope,
+    subject: input.subject,
+    takosumiSubject: input.takosumiSubject,
+    capsuleId: input.capsuleId,
+    workspaceId: input.workspaceId,
+    role: input.role,
+    expiresAt: (issuedAt + ACCESS_TOKEN_TTL_SECONDS) * 1000,
+  };
+  const prepared = await prepareTokenResponse({
+    ...input,
+    issuedAt,
+  });
+  await input.store.saveAccessToken(prepared.accessToken, accessRecord);
+  if (input.chainRefreshToken) {
+    await input.store.linkAccessTokenToRefreshChain(
+      input.chainRefreshToken,
+      prepared.accessToken,
+    );
+  }
+  return json(prepared.body);
+}
+
+interface PreparedTokenResponse {
+  readonly accessToken: string;
+  readonly body: Record<string, unknown>;
+}
+
+async function prepareTokenResponse(input: {
+  issuer: string;
+  store: AccountsStore;
+  flow: OidcAuthorizationCodeFlow;
+  clientId: string;
+  scope: string;
+  subject: string;
+  takosumiSubject?: TakosumiSubject;
+  capsuleId?: string;
+  workspaceId?: string;
+  role?: string;
+  nonce?: string;
+  refreshToken?: string;
+  issuedAt: number;
+}): Promise<PreparedTokenResponse> {
   const expiresIn = ACCESS_TOKEN_TTL_SECONDS;
   const account = input.takosumiSubject
     ? await input.store.findAccount(input.takosumiSubject)
@@ -1029,33 +1103,10 @@ async function issueTokenResponse(input: {
       : {}),
     ...(takosumiClaims ? { takosumi: takosumiClaims } : {}),
     ...(input.nonce ? { nonce: input.nonce } : {}),
-    iat: issuedAt,
-    exp: issuedAt + expiresIn,
+    iat: input.issuedAt,
+    exp: input.issuedAt + expiresIn,
   });
   const accessToken = generateAccessToken();
-  await input.store.saveAccessToken(accessToken, {
-    clientId: input.clientId,
-    scope: input.scope,
-    subject: input.subject,
-    takosumiSubject: input.takosumiSubject,
-    capsuleId: input.capsuleId,
-    workspaceId: input.workspaceId,
-    role: input.role,
-    expiresAt: (issuedAt + expiresIn) * 1000,
-  });
-  if (input.chainRefreshToken) {
-    await input.store.linkAccessTokenToRefreshChain(
-      input.chainRefreshToken,
-      accessToken,
-    );
-  }
-  if (input.authorizationCode) {
-    await input.store.linkAccessTokenToAuthCode(
-      input.authorizationCode,
-      accessToken,
-      input.refreshToken,
-    );
-  }
   const body: Record<string, unknown> = {
     access_token: accessToken,
     token_type: "Bearer",
@@ -1067,7 +1118,7 @@ async function issueTokenResponse(input: {
     body.refresh_token = input.refreshToken;
   }
 
-  return json(body);
+  return { accessToken, body };
 }
 
 function readAccountEmailVerified(

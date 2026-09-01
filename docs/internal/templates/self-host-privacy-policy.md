@@ -15,6 +15,7 @@ allowlisted.
 
 Hosted operators are responsible for their own subprocessors, retention policy,
 incident response, legal notices, and any commercial billing they choose to run
-outside OSS Takosumi. Takosumi Cloud official billing and managed resources are
-Cloud-only closed services. Self-hosted operators control their own data plane
-and may replace this page with their organization-specific privacy policy.
+outside OSS Takosumi. Takosumi Hosted retail/payment data and Takoserver
+managed-supply data belong to those separate products and are not OSS records.
+Self-hosted operators control their own data plane and may replace this page
+with their organization-specific privacy policy.

@@ -12,6 +12,7 @@ import type {
   ReleaseActivator,
 } from "../../core/domains/deploy-control/mod.ts";
 import type { OpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
+import { uninstallGraceMsFromDays } from "../../core/domains/capsules/mod.ts";
 import type { EnqueueSourceSync } from "../../core/domains/sources/mod.ts";
 import type { CapsuleCoordination } from "../../core/domains/deploy-control/capsule_lease.ts";
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
@@ -435,6 +436,23 @@ export async function createWorkerServiceApp(
       ? { opentofuRunnerExecutors: options.runnerExecutors }
       : {}),
     allowOperatorScopedProviderConnections,
+    ...(uninstallGraceMsFromDays(env.TAKOSUMI_UNINSTALL_GRACE_DAYS) !==
+        undefined
+      ? {
+          uninstallGraceMs: uninstallGraceMsFromDays(
+            env.TAKOSUMI_UNINSTALL_GRACE_DAYS,
+          ),
+        }
+      : {}),
+    ...(env.TAKOSUMI_FAILED_INSTALL_AUTO_CLEANUP === "0"
+      ? { failedInstallAutoCleanup: false }
+      : {}),
+    ...(runnerCapacityQueueBudgetMsFromEnv(
+      env.TAKOSUMI_RUNNER_CAPACITY_QUEUE_BUDGET_MINUTES,
+    )),
+    ...(workspaceRunConcurrencyFromEnv(
+      env.TAKOSUMI_WORKSPACE_RUN_CONCURRENCY,
+    )),
     secretCrypto,
     ...(billingExtensionFactory ? { billingExtensionFactory } : {}),
     ...(resourceDeploymentAdmission ? { resourceDeploymentAdmission } : {}),
@@ -589,6 +607,36 @@ function resolveFormPackageHostComposition(
  * as namespace authority, and omission deliberately preserves Core's
  * fail-closed behavior.
  */
+/**
+ * Idempotency-Key coordinator for the session-control capsule write lane,
+ * over the same Control D1 ledger the Resource/Form lanes use. Built per env
+ * (isolate) and cached, so the ledger table check happens once.
+ */
+const controlIdempotencyByEnv = new WeakMap<
+  object,
+  PortableHostIdempotencyCoordinator
+>();
+
+export function controlIdempotencyFromEnv(
+  env: CloudflareWorkerEnv,
+): PortableHostIdempotencyCoordinator | undefined {
+  if (!env.TAKOSUMI_CONTROL_DB) return undefined;
+  const cached = controlIdempotencyByEnv.get(env);
+  if (cached) return cached;
+  const coordinator = new PortableHostIdempotencyCoordinator(
+    new D1PortableHostIdempotencyLedger(env.TAKOSUMI_CONTROL_DB, {
+      // The service boot already validated this value; an unexpected string
+      // here falls back to bootstrap rather than throwing on a read path.
+      schemaMode:
+        env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE === "predeployed"
+          ? "predeployed"
+          : "bootstrap",
+    }),
+  );
+  controlIdempotencyByEnv.set(env, coordinator);
+  return coordinator;
+}
+
 export function resourceInterfaceWorkspaceResolverFromEnv(
   env: CloudflareWorkerEnv,
 ): CreateTakosumiServiceOptions["resolveResourceInterfaceWorkspace"] {
@@ -1010,12 +1058,25 @@ export function durableObjectCapsuleCoordination(
 ): CapsuleCoordination | undefined {
   const namespace = env.COORDINATION;
   if (!namespace) return undefined;
-  const stub = () =>
-    namespace.get(namespace.idFromName("takosumi-control-plane"));
-  const post = async (path: string, body: unknown): Promise<unknown> => {
+  // TAKOSUMI_COORDINATION_SHARDING="1" routes each lease scope to its own DO
+  // instance instead of funneling every lease through the control-plane
+  // singleton. A scope is the unit of mutual exclusion, so per-scope routing
+  // preserves correctness; cut over at a quiet moment because leases held in
+  // the old instance are invisible to the new routing.
+  const sharded = env.TAKOSUMI_COORDINATION_SHARDING === "1";
+  const stub = (scope: string) =>
+    namespace.get(
+      namespace.idFromName(
+        sharded ? `scope:${scope}` : "takosumi-control-plane",
+      ),
+    );
+  const post = async (
+    path: string,
+    body: { readonly scope: string } & Record<string, unknown>,
+  ): Promise<unknown> => {
     let response: Response;
     try {
-      response = await stub().fetch(
+      response = await stub(body.scope).fetch(
         new Request(`https://takos-coordination.internal/${path}`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1185,4 +1246,33 @@ function cloudflareRuntimeEnv(
     }
   }
   return runtimeEnv;
+}
+
+/**
+ * Parses TAKOSUMI_RUNNER_CAPACITY_QUEUE_BUDGET_MINUTES into the bootstrap
+ * option; malformed or negative values keep the built-in 45-minute default.
+ * `0` disables the budget (wait for capacity indefinitely), matching what
+ * `0` means for TAKOSUMI_WORKSPACE_RUN_CONCURRENCY.
+ */
+function runnerCapacityQueueBudgetMsFromEnv(
+  raw: string | undefined,
+): { readonly runnerCapacityQueueBudgetMs?: number } {
+  if (raw === undefined || raw.trim() === "") return {};
+  const minutes = Number(raw);
+  if (!Number.isFinite(minutes) || minutes < 0) return {};
+  return { runnerCapacityQueueBudgetMs: minutes * 60_000 };
+}
+
+/**
+ * Parses TAKOSUMI_WORKSPACE_RUN_CONCURRENCY into the bootstrap option;
+ * malformed or negative values keep the built-in default (2). "0" disables
+ * the fairness fence.
+ */
+function workspaceRunConcurrencyFromEnv(
+  raw: string | undefined,
+): { readonly workspaceRunConcurrency?: number } {
+  if (raw === undefined || raw.trim() === "") return {};
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) return {};
+  return { workspaceRunConcurrency: parsed };
 }
