@@ -1,6 +1,13 @@
 import type {
   CredentialRecipeDriverContext,
+  CredentialRecipeDriverPublicInputContext,
+  CredentialRecipeDriverPublicInputReleaseResult,
   CredentialRecipeHostComposition,
+} from "takosumi-contract/credential-recipe-host";
+import {
+  assertCredentialRecipeDriverPublicInputReleaseResult,
+  assertCredentialRecipeDriverPublicInputs,
+  CREDENTIAL_RECIPE_HTTP_ENDPOINT_PUBLIC_INPUT_CAPABILITY,
 } from "takosumi-contract/credential-recipe-host";
 import {
   platformExtensionRoutes,
@@ -77,6 +84,35 @@ export function platformExtensionProviderCredentialComposition(env: {
           issuance.requiredScopes,
           handler,
         ),
+      ...(broker.publicInputCapabilities
+        ? {
+            publicInputCapabilities: Object.freeze([
+              CREDENTIAL_RECIPE_HTTP_ENDPOINT_PUBLIC_INPUT_CAPABILITY,
+            ]),
+            resolvePublicInputs: async (
+              context: CredentialRecipeDriverPublicInputContext,
+            ) =>
+              await resolvePlatformExtensionPublicInputs(
+                context,
+                origin,
+                route.basePath,
+                broker.publicInputPath!,
+                broker.providerSource,
+                handler,
+              ),
+            releasePublicInputs: async (
+              context: CredentialRecipeDriverPublicInputContext,
+            ) =>
+              await releasePlatformExtensionPublicInputs(
+                context,
+                origin,
+                route.basePath,
+                broker.publicInputPath!,
+                broker.providerSource,
+                handler,
+              ),
+          }
+        : {}),
     };
   }
   return Object.freeze({
@@ -296,6 +332,146 @@ async function mintPlatformExtensionProviderCredential(
   };
 }
 
+async function resolvePlatformExtensionPublicInputs(
+  context: CredentialRecipeDriverPublicInputContext,
+  origin: string,
+  basePath: string,
+  publicInputPath: string,
+  providerSource: string,
+  handler: PlatformExtensionCredentialHandler | undefined,
+) {
+  const value = await exchangePlatformExtensionPublicInput({
+    origin,
+    basePath,
+    publicInputPath,
+    providerSource,
+    workspaceId: context.workspaceId,
+    handler,
+    request: Object.freeze({
+      kind: "takosumi.provider-public-input-reservation-request@v1" as const,
+      providerSource,
+      settings: context.runCredentialSettings ?? Object.freeze({}),
+      publicInputs: context.publicInputRequest,
+    }),
+  });
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["kind", "publicInputs"]) ||
+    value.kind !== "takosumi.provider-public-input-reservation@v1"
+  ) {
+    throw new Error("provider public input response is malformed");
+  }
+  try {
+    return assertCredentialRecipeDriverPublicInputs(value.publicInputs);
+  } catch {
+    throw new Error("provider public input response is malformed");
+  }
+}
+
+async function releasePlatformExtensionPublicInputs(
+  context: CredentialRecipeDriverPublicInputContext,
+  origin: string,
+  basePath: string,
+  publicInputPath: string,
+  providerSource: string,
+  handler: PlatformExtensionCredentialHandler | undefined,
+): Promise<CredentialRecipeDriverPublicInputReleaseResult> {
+  const reservationRef = context.publicInputRequest.httpEndpointUrl
+    .reservationRef;
+  if (!reservationRef) {
+    throw new Error("provider public input release requires reservationRef");
+  }
+  const value = await exchangePlatformExtensionPublicInput({
+    origin,
+    basePath,
+    publicInputPath,
+    providerSource,
+    workspaceId: context.workspaceId,
+    handler,
+    request: Object.freeze({
+      kind: "takosumi.provider-public-input-reservation-release@v1" as const,
+      providerSource,
+      settings: context.runCredentialSettings ?? Object.freeze({}),
+      publicInputs: context.publicInputRequest,
+    }),
+  });
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["kind", "reservationRef", "status"]) ||
+    value.kind !== "takosumi.provider-public-input-release@v1"
+  ) {
+    throw new Error("provider public input release response is malformed");
+  }
+  try {
+    return assertCredentialRecipeDriverPublicInputReleaseResult(
+      { status: value.status, reservationRef: value.reservationRef },
+      reservationRef,
+    );
+  } catch {
+    throw new Error("provider public input release response is malformed");
+  }
+}
+
+async function exchangePlatformExtensionPublicInput(input: {
+  readonly origin: string;
+  readonly basePath: string;
+  readonly publicInputPath: string;
+  readonly providerSource: string;
+  readonly workspaceId: string;
+  readonly handler: PlatformExtensionCredentialHandler | undefined;
+  readonly request: Readonly<Record<string, unknown>>;
+}): Promise<unknown> {
+  const exchange = input.handler?.exchangeProviderPublicInput;
+  if (!exchange) {
+    logCredentialExchangeFailure("public_input_handler_unavailable");
+    throw new Error("provider public input exchange requires a bound handler");
+  }
+  const url = new URL(
+    `${input.basePath}${input.publicInputPath}`,
+    input.origin,
+  ).href;
+  let response: { readonly status: number; readonly body: string };
+  try {
+    response = await exchange({
+      url,
+      request: input.request,
+      context: Object.freeze({
+        authKind: "provider-public-input" as const,
+        providerSource: input.providerSource,
+        workspaceId: input.workspaceId,
+      }),
+    });
+  } catch {
+    logCredentialExchangeFailure("public_input_handler_rpc_failed");
+    throw new Error("provider public input exchange failed");
+  }
+  if (
+    !isRecord(response) ||
+    !exactKeys(response, ["body", "status"]) ||
+    !Number.isSafeInteger(response.status) ||
+    response.status < 200 ||
+    response.status > 299 ||
+    typeof response.body !== "string"
+  ) {
+    logCredentialExchangeFailure(
+      "public_input_handler_response_failed",
+      Number.isSafeInteger(response?.status) ? response.status : undefined,
+    );
+    throw new Error("provider public input exchange failed");
+  }
+  const bytes = new TextEncoder().encode(response.body);
+  if (bytes.byteLength > MAX_RESPONSE_BYTES) {
+    throw new Error("provider public input response is too large");
+  }
+  try {
+    return JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    ) as unknown;
+  } catch {
+    throw new Error("provider public input response is malformed");
+  }
+}
+
 function logCredentialExchangeFailure(stage: string, status?: number): void {
   console.warn(
     JSON.stringify({
@@ -306,37 +482,37 @@ function logCredentialExchangeFailure(stage: string, status?: number): void {
   );
 }
 
+interface PlatformExtensionCredentialContext {
+  readonly authKind: "run-credential";
+  readonly subject: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly runId: string;
+  readonly installingPrincipalId: string;
+  readonly audience: string;
+  readonly scopes: readonly string[];
+  readonly phase: "plan" | "apply" | "destroy";
+  readonly lifecycleIntent: "provision" | "destroy";
+}
+
 interface PlatformExtensionCredentialHandler {
-  exchangeProviderCredential?(input: {
+  exchangeProviderPublicInput?(input: {
     readonly url: string;
     readonly request: Readonly<Record<string, unknown>>;
     readonly context: {
-      readonly authKind: "run-credential";
-      readonly subject: string;
+      readonly authKind: "provider-public-input";
+      readonly providerSource: string;
       readonly workspaceId: string;
-      readonly capsuleId: string;
-      readonly runId: string;
-      readonly installingPrincipalId: string;
-      readonly audience: string;
-      readonly scopes: readonly string[];
-      readonly phase: "plan" | "apply" | "destroy";
-      readonly lifecycleIntent: "provision" | "destroy";
     };
+  }): Promise<{ readonly status: number; readonly body: string }>;
+  exchangeProviderCredential?(input: {
+    readonly url: string;
+    readonly request: Readonly<Record<string, unknown>>;
+    readonly context: PlatformExtensionCredentialContext;
   }): Promise<{ readonly status: number; readonly body: string }>;
   fetchAuthenticated?(
     request: Request,
-    context: {
-      readonly authKind: "run-credential";
-      readonly subject: string;
-      readonly workspaceId: string;
-      readonly capsuleId: string;
-      readonly runId: string;
-      readonly installingPrincipalId: string;
-      readonly audience: string;
-      readonly scopes: readonly string[];
-      readonly phase: "plan" | "apply" | "destroy";
-      readonly lifecycleIntent: "provision" | "destroy";
-    },
+    context: PlatformExtensionCredentialContext,
   ): Promise<Response>;
 }
 
@@ -350,6 +526,8 @@ function platformExtensionCredentialHandler(
     !Array.isArray(value) &&
     (typeof (value as { exchangeProviderCredential?: unknown })
       .exchangeProviderCredential === "function" ||
+      typeof (value as { exchangeProviderPublicInput?: unknown })
+          .exchangeProviderPublicInput === "function" ||
       typeof (value as { fetchAuthenticated?: unknown }).fetchAuthenticated ===
         "function")
     ? (value as PlatformExtensionCredentialHandler)

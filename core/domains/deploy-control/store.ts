@@ -85,6 +85,16 @@ import type {
   SecurityFinding,
 } from "takosumi-contract/security";
 import type { JsonValue } from "takosumi-contract";
+import {
+  assertPublicInputReservationLifecycleDigest,
+  claimPublicInputReservationLegacyCandidateForCleanup,
+  decodePublicInputReservationLifecycle,
+  isPublicInputReservationLegacyCandidateClaim,
+  publicInputReservationCleanupProjection,
+  type PublicInputReservationLifecycle,
+  type PublicInputReservationLifecycleTransition,
+  type PublicInputReservationPlanDecision,
+} from "./public_input_reservation.ts";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 import { log } from "../../shared/log.ts";
 import {
@@ -290,6 +300,11 @@ export interface PlanRunInputs {
    * Apply re-runs the materializer with this exact digest before dispatch.
    */
   readonly moduleVariableMaterializationDigest?: string;
+  /**
+   * Exact non-secret endpoint reservation reviewed by this Plan. Apply must
+   * re-read the trusted driver and match this pin before runner dispatch.
+   */
+  readonly publicInputReservationDecision?: PublicInputReservationPlanDecision;
   /** Optional child-module wrapper generated from DB/provider configuration. */
   readonly generatedRoot?: DispatchGeneratedRoot;
   /** Operator module wrapper; never sourced from Capsule input. */
@@ -664,6 +679,49 @@ export type CapsuleInstallConfigRebindResult =
     }
   | { readonly status: "not_found" };
 
+export interface AdoptCapsulePublicInputReservationRecordInput {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly installConfigId: string;
+  readonly capsuleExecutionAuthorityEpoch: number;
+  readonly record: PublicInputReservationLifecycle;
+}
+
+export interface ReplaceCapsulePublicInputReservationRecordInput
+  extends AdoptCapsulePublicInputReservationRecordInput {
+  readonly expectedRecordDigest: string;
+}
+
+/**
+ * Exact current-Capsule-authority CAS that binds one unowned v1 intent to a
+ * Plan. Unlike normal replacement, the legacy intent may carry an older
+ * InstallConfig/epoch and is usable only for positive-readback repair.
+ */
+export interface ClaimCapsulePublicInputReservationLegacyCandidateInput
+  extends ReplaceCapsulePublicInputReservationRecordInput {}
+
+export type CapsulePublicInputReservationRecordWriteResult =
+  | {
+      readonly status: "stored" | "existing";
+      readonly record: PublicInputReservationLifecycle;
+    }
+  | { readonly status: "authority_changed" }
+  | {
+      readonly status: "record_changed";
+      readonly record?: PublicInputReservationLifecycle;
+    };
+
+export interface DeleteCapsulePublicInputReservationRecordInput {
+  readonly capsuleId: string;
+  readonly expectedRecordDigest: string;
+}
+
+export interface SettleCapsulePublicInputReservationLifecycleInput {
+  readonly capsuleId: string;
+  readonly expectedRecordDigest: string;
+  readonly record: PublicInputReservationLifecycle;
+}
+
 /**
  * Atomic provider-applied ledger commit: Run + StateVersion + Output. The
  * terminal Run may be failed and Capsule `error` when a pinned post-apply
@@ -696,6 +754,9 @@ export interface CommitRunStateInput {
   readonly planRunApplied?: PlanRun;
   /** Created only by a successful, non-destroy Apply with pinned blueprints. */
   readonly interfaceMaterializationIntent?: CapsuleInterfaceMaterializationIntent;
+  /** Exact private reservation lifecycle CAS folded into this ledger commit. */
+  readonly publicInputReservationLifecycle?:
+    PublicInputReservationLifecycleTransition;
 }
 
 export interface ClaimCapsuleInterfaceMaterializationIntentInput {
@@ -1216,7 +1277,7 @@ export interface RecoverableOpenTofuRunListOptions {
   readonly limit?: number;
 }
 
-export interface RuntimeSecretRetirementDispatchClaimInput {
+export interface DestroyTailDispatchClaimInput {
   readonly runId: string;
   /** The row must still be pending and no newer than this retry fence. */
   readonly staleBeforeMs: number;
@@ -1266,6 +1327,8 @@ export const APPLY_RUNTIME_SECRET_RETIREMENT_COMPLETED_EVENT =
   "runtime_secret.retirement.completed" as const;
 export const APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT =
   "runtime_secret.retirement.deferred" as const;
+export const APPLY_DESTROY_TAIL_DEFERRED_EVENT =
+  "destroy_tail.dispatch.deferred" as const;
 
 export function applyRunBillingCapturePending(run: ApplyRun): boolean {
   let latestPending = -1;
@@ -1292,6 +1355,10 @@ export function applyRunRuntimeSecretRetirementPending(run: ApplyRun): boolean {
     }
   }
   return latestPending > latestCompleted;
+}
+
+export function applyRunDestroyTailPending(run: ApplyRun): boolean {
+  return applyRunRuntimeSecretRetirementPending(run);
 }
 
 export interface OpenTofuControlStore {
@@ -1362,23 +1429,23 @@ export interface OpenTofuControlStore {
     options: RecoverableOpenTofuRunListOptions,
   ): Promise<readonly StoredRunRecord[]>;
   /**
-   * Fair oldest-attempt-first retirement outbox scan. Kept separate from
-   * ordinary queued execution so archived or late-listed Workspaces cannot
-   * strand a terminal destroy cleanup intent.
+   * Fair oldest-attempt-first lifecycle outbox scan. It includes both
+   * terminal destroy tails and unreachable staged-Plan endpoint candidates,
+   * independently of active Workspace catalog membership.
    */
-  listPendingRuntimeSecretRetirementRuns(
+  listPendingDestroyTailRuns(
     options: {
       readonly staleBeforeMs: number;
       readonly limit?: number;
     },
-  ): Promise<readonly ApplyRun[]>;
+  ): Promise<readonly StoredRunRecord[]>;
   /**
-   * Whole-Run CAS claim for one pending retirement dispatch. A winner appends
-   * value-free attempt evidence and rotates retry ordering before the external
-   * scheduler is called; stale, completed, missing, and raced rows return false.
+   * Exact durable-cursor CAS for one pending lifecycle dispatch. Runtime-secret
+   * tails rotate value-free Run evidence; endpoint lifecycle work rotates its
+   * private Capsule cleanup projection. Stale/completed/raced rows lose.
    */
-  claimPendingRuntimeSecretRetirementDispatch(
-    input: RuntimeSecretRetirementDispatchClaimInput,
+  claimPendingDestroyTailDispatch(
+    input: DestroyTailDispatchClaimInput,
   ): Promise<boolean>;
 
   // Artifact ledger rows (spec §30 artifacts). Artifact bytes live in object
@@ -1529,6 +1596,30 @@ export interface OpenTofuControlStore {
   getCapsuleExecutionAuthorityEpoch(
     capsuleId: string,
   ): Promise<number | undefined>;
+  /** Private lifecycle read; never projected through Capsule/API JSON. */
+  getCapsulePublicInputReservationRecord(
+    capsuleId: string,
+  ): Promise<PublicInputReservationLifecycle | undefined>;
+  /** Null-only exact lifecycle CAS; persists intent before provider effect. */
+  adoptCapsulePublicInputReservationRecord(
+    input: AdoptCapsulePublicInputReservationRecordInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult>;
+  /** Exact record/lifecycle CAS for intent promotion and safe re-adoption. */
+  replaceCapsulePublicInputReservationRecord(
+    input: ReplaceCapsulePublicInputReservationRecordInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult>;
+  /** Binds only an unowned legacy intent; no provider effect occurs here. */
+  claimCapsulePublicInputReservationLegacyCandidate(
+    input: ClaimCapsulePublicInputReservationLegacyCandidateInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult>;
+  /** Exact-envelope deletion only after every typed release succeeded. */
+  deleteCapsulePublicInputReservationRecord(
+    input: DeleteCapsulePublicInputReservationRecordInput,
+  ): Promise<boolean>;
+  /** Exact lifecycle CAS used after a typed external release succeeds. */
+  settleCapsulePublicInputReservationLifecycle(
+    input: SettleCapsulePublicInputReservationLifecycleInput,
+  ): Promise<boolean>;
   /** Exact execution-authority CAS for immutable InstallConfig replacement. */
   rebindCapsuleInstallConfig(
     input: CapsuleInstallConfigRebindInput,
@@ -1922,6 +2013,14 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   readonly #installConfigs = new Map<string, InstallConfig>();
   readonly #capsules = new Map<string, Capsule>();
   readonly #capsuleExecutionAuthorityEpochs = new Map<string, number>();
+  readonly #capsulePublicInputReservationRecords = new Map<
+    string,
+    PublicInputReservationLifecycle
+  >();
+  readonly #capsulePublicInputReservationCleanupAttempts = new Map<
+    string,
+    number
+  >();
   readonly #publicHostReservations = new Map<string, PublicHostReservation>();
   readonly #connections = new Map<string, ProviderConnection>();
   readonly #secretBlobs = new Map<string, StoredSecretBlob>();
@@ -2253,27 +2352,163 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
-  listPendingRuntimeSecretRetirementRuns(options: {
+  listPendingDestroyTailRuns(options: {
     readonly staleBeforeMs: number;
     readonly limit?: number;
-  }): Promise<readonly ApplyRun[]> {
+  }): Promise<readonly StoredRunRecord[]> {
     const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
+    const candidates = new Map<
+      string,
+      { readonly run: StoredRunRecord; readonly at: number }
+    >();
+    for (const row of this.#runs.values()) {
+      if (isPendingDestroyTailRun(row, options.staleBeforeMs)) {
+        candidates.set(row.id, {
+          run: row,
+          at: pendingDestroyTailRunTimestamp(row),
+        });
+      }
+    }
+    for (const [capsuleId, lifecycle] of
+      this.#capsulePublicInputReservationRecords) {
+      const projection = publicInputReservationCleanupProjection(lifecycle);
+      if (!projection) {
+        const candidate = lifecycle.candidate;
+        if (
+          !candidate ||
+          candidate.planRunId ||
+          candidate.reservation?.kind !==
+            "takosumi.public-input-reservation-intent@v1"
+        ) continue;
+        if (this.#hasOtherApplyablePublicInputPlan(
+          capsuleId,
+          candidate.requirement.workspaceId,
+        )) continue;
+        const carrier = [...this.#runs.values()]
+          .filter((run): run is PlanRun =>
+            isPlanRunRecord(run) &&
+            run.capsuleId === capsuleId &&
+            run.workspaceId === candidate.requirement.workspaceId &&
+            publicInputReservationCleanupRunReady(run) &&
+            (runTimestampValue(run.updatedAt) ??
+                runTimestampValue(run.finishedAt) ??
+                storedRunRecordTimestamp(run)) <= options.staleBeforeMs
+          )
+          .sort(compareStoredRunRecordsAsc)[0];
+        if (carrier) {
+          candidates.set(carrier.id, {
+            run: carrier,
+            at: candidate.stagedAt,
+          });
+        }
+        continue;
+      }
+      const run = this.#runs.get(projection.runId);
+      const at = this.#capsulePublicInputReservationCleanupAttempts.get(
+        capsuleId,
+      ) ?? projection.enqueuedAt;
+      if (
+        !run ||
+        !publicInputReservationCleanupRunReady(run) ||
+        at > options.staleBeforeMs
+      ) continue;
+      const current = candidates.get(run.id);
+      if (!current || at < current.at) candidates.set(run.id, { run, at });
+    }
     return Promise.resolve(
-      Array.from(this.#runs.values())
-        .filter((row): row is ApplyRun =>
-          isPendingRuntimeSecretRetirementRun(row, options.staleBeforeMs)
+      [...candidates.values()]
+        .sort((left, right) =>
+          left.at - right.at || left.run.id.localeCompare(right.run.id)
         )
-        .sort(comparePendingRuntimeSecretRetirementRunsAsc)
+        .map(({ run }) => run)
         .slice(0, limit),
     );
   }
 
-  claimPendingRuntimeSecretRetirementDispatch(
-    input: RuntimeSecretRetirementDispatchClaimInput,
+  claimPendingDestroyTailDispatch(
+    input: DestroyTailDispatchClaimInput,
   ): Promise<boolean> {
     const current = this.#runs.get(input.runId);
+    if (
+      current &&
+      publicInputReservationCleanupRunReady(current) &&
+      Number.isFinite(input.attemptedAt) &&
+      input.attemptedAt > 0
+    ) {
+      for (const [capsuleId, lifecycle] of
+        this.#capsulePublicInputReservationRecords) {
+        const projection = publicInputReservationCleanupProjection(lifecycle);
+        const at = this.#capsulePublicInputReservationCleanupAttempts.get(
+          capsuleId,
+        ) ?? projection?.enqueuedAt;
+        if (
+          projection?.runId === input.runId &&
+          at !== undefined &&
+          at <= input.staleBeforeMs
+        ) {
+          this.#capsulePublicInputReservationCleanupAttempts.set(
+            capsuleId,
+            Math.max(Math.floor(input.attemptedAt), Math.floor(at) + 1),
+          );
+          return Promise.resolve(true);
+        }
+      }
+    }
+    if (
+      current &&
+      isPlanRunRecord(current) &&
+      publicInputReservationCleanupRunReady(current) &&
+      Number.isFinite(input.attemptedAt) &&
+      input.attemptedAt > 0 &&
+      (runTimestampValue(current.updatedAt) ??
+          runTimestampValue(current.finishedAt) ??
+          storedRunRecordTimestamp(current)) <= input.staleBeforeMs &&
+      current.capsuleId
+    ) {
+      const lifecycle = this.#capsulePublicInputReservationRecords.get(
+        current.capsuleId,
+      );
+      const capsule = this.#capsules.get(current.capsuleId);
+      if (
+        lifecycle?.candidate &&
+        !lifecycle.candidate.planRunId &&
+        lifecycle.candidate.stagedAt <= input.staleBeforeMs &&
+        capsule?.workspaceId === current.workspaceId &&
+        !this.#hasOtherApplyablePublicInputPlan(
+          current.capsuleId,
+          current.workspaceId,
+        )
+      ) {
+        return claimPublicInputReservationLegacyCandidateForCleanup(
+          lifecycle,
+          current,
+          input.attemptedAt,
+        ).then((claimed) => {
+          if (
+            !claimed ||
+            this.#runs.get(input.runId) !== current ||
+            this.#capsules.get(current.capsuleId!) !== capsule ||
+            this.#hasOtherApplyablePublicInputPlan(
+              current.capsuleId!,
+              current.workspaceId,
+            ) ||
+            this.#capsulePublicInputReservationRecords.get(
+                current.capsuleId!,
+              ) !== lifecycle
+          ) return false;
+          this.#capsulePublicInputReservationRecords.set(
+            current.capsuleId!,
+            claimed,
+          );
+          this.#capsulePublicInputReservationCleanupAttempts.delete(
+            current.capsuleId!,
+          );
+          return true;
+        });
+      }
+    }
     const claimed = current
-      ? runtimeSecretRetirementDispatchAttempt(current, input)
+      ? destroyTailDispatchAttempt(current, input)
       : undefined;
     if (!claimed) return Promise.resolve(false);
     // No await occurs between the read and write, so this is the in-memory
@@ -2832,6 +3067,210 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async getCapsulePublicInputReservationRecord(
+    capsuleId: string,
+  ): Promise<PublicInputReservationLifecycle | undefined> {
+    const record = this.#capsulePublicInputReservationRecords.get(capsuleId);
+    return record
+      ? await decodePublicInputReservationLifecycle(record)
+      : undefined;
+  }
+
+  async adoptCapsulePublicInputReservationRecord(
+    input: AdoptCapsulePublicInputReservationRecordInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult> {
+    const record = await assertPublicInputReservationLifecycleDigest(
+      input.record,
+    );
+    if (!this.#publicInputRecordAuthorityMatches(input, record)) {
+      return { status: "authority_changed" };
+    }
+    const current = this.#capsulePublicInputReservationRecords.get(
+      input.capsuleId,
+    );
+    if (current) {
+      return {
+        status: "existing",
+        record: await decodePublicInputReservationLifecycle(current),
+      };
+    }
+    this.#capsulePublicInputReservationRecords.set(input.capsuleId, record);
+    this.#capsulePublicInputReservationCleanupAttempts.delete(input.capsuleId);
+    return { status: "stored", record };
+  }
+
+  async replaceCapsulePublicInputReservationRecord(
+    input: ReplaceCapsulePublicInputReservationRecordInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult> {
+    const record = await assertPublicInputReservationLifecycleDigest(
+      input.record,
+    );
+    if (!this.#publicInputRecordAuthorityMatches(input, record)) {
+      return { status: "authority_changed" };
+    }
+    const current = this.#capsulePublicInputReservationRecords.get(
+      input.capsuleId,
+    );
+    if (!current || current.digest !== input.expectedRecordDigest) {
+      return {
+        status: "record_changed",
+        ...(current
+          ? { record: await decodePublicInputReservationLifecycle(current) }
+          : {}),
+      };
+    }
+    this.#capsulePublicInputReservationRecords.set(input.capsuleId, record);
+    this.#capsulePublicInputReservationCleanupAttempts.delete(input.capsuleId);
+    return { status: "stored", record };
+  }
+
+  async claimCapsulePublicInputReservationLegacyCandidate(
+    input: ClaimCapsulePublicInputReservationLegacyCandidateInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult> {
+    const record = await assertPublicInputReservationLifecycleDigest(
+      input.record,
+    );
+    if (!this.#capsulePublicInputCurrentAuthorityMatches(input)) {
+      return { status: "authority_changed" };
+    }
+    const currentRecord = this.#capsulePublicInputReservationRecords.get(
+      input.capsuleId,
+    );
+    if (!currentRecord) return { status: "record_changed" };
+    const current = await decodePublicInputReservationLifecycle(currentRecord);
+    if (
+      current.digest !== input.expectedRecordDigest ||
+      current.candidate?.requirement.workspaceId !== input.workspaceId ||
+      current.candidate.requirement.capsuleId !== input.capsuleId ||
+      !isPublicInputReservationLegacyCandidateClaim(current, record)
+    ) {
+      return { status: "record_changed", record: current };
+    }
+    const claimedPlanRunId = record.candidate!.planRunId!;
+    if (this.#hasOtherApplyablePublicInputPlan(
+      input.capsuleId,
+      input.workspaceId,
+      claimedPlanRunId,
+    )) {
+      return { status: "record_changed", record: current };
+    }
+    if (
+      !this.#capsulePublicInputCurrentAuthorityMatches(input) ||
+      this.#hasOtherApplyablePublicInputPlan(
+        input.capsuleId,
+        input.workspaceId,
+        claimedPlanRunId,
+      ) ||
+      this.#capsulePublicInputReservationRecords.get(input.capsuleId) !==
+        currentRecord
+    ) {
+      if (!this.#capsulePublicInputCurrentAuthorityMatches(input)) {
+        return { status: "authority_changed" };
+      }
+      const winner = this.#capsulePublicInputReservationRecords.get(
+        input.capsuleId,
+      );
+      return {
+        status: "record_changed",
+        ...(winner
+          ? { record: await decodePublicInputReservationLifecycle(winner) }
+          : {}),
+      };
+    }
+    this.#capsulePublicInputReservationRecords.set(input.capsuleId, record);
+    this.#capsulePublicInputReservationCleanupAttempts.delete(input.capsuleId);
+    return { status: "stored", record };
+  }
+
+  #hasOtherApplyablePublicInputPlan(
+    capsuleId: string,
+    workspaceId: string,
+    exceptRunId?: string,
+  ): boolean {
+    return [...this.#runs.values()].some((run) =>
+      isPlanRunRecord(run) &&
+      run.id !== exceptRunId &&
+      run.capsuleId === capsuleId &&
+      run.workspaceId === workspaceId &&
+      !publicInputReservationCleanupRunReady(run)
+    );
+  }
+
+  deleteCapsulePublicInputReservationRecord(
+    input: DeleteCapsulePublicInputReservationRecordInput,
+  ): Promise<boolean> {
+    const current = this.#capsulePublicInputReservationRecords.get(
+      input.capsuleId,
+    );
+    if (!current || current.digest !== input.expectedRecordDigest) {
+      return Promise.resolve(false);
+    }
+    this.#capsulePublicInputReservationRecords.delete(input.capsuleId);
+    this.#capsulePublicInputReservationCleanupAttempts.delete(input.capsuleId);
+    return Promise.resolve(true);
+  }
+
+  async settleCapsulePublicInputReservationLifecycle(
+    input: SettleCapsulePublicInputReservationLifecycleInput,
+  ): Promise<boolean> {
+    const record = await assertPublicInputReservationLifecycleDigest(
+      input.record,
+    );
+    const currentRecord = this.#capsulePublicInputReservationRecords.get(
+      input.capsuleId,
+    );
+    if (
+      !currentRecord ||
+      currentRecord.digest !== input.expectedRecordDigest
+    ) {
+      return false;
+    }
+    this.#capsulePublicInputReservationRecords.set(input.capsuleId, record);
+    this.#capsulePublicInputReservationCleanupAttempts.delete(input.capsuleId);
+    return true;
+  }
+
+  #publicInputRecordAuthorityMatches(
+    input: AdoptCapsulePublicInputReservationRecordInput,
+    record: PublicInputReservationLifecycle,
+  ): boolean {
+    const capsule = this.#capsules.get(input.capsuleId);
+    const authority = record.candidate?.requirement ??
+      (record.applied
+        ? {
+            workspaceId: record.applied.workspaceId,
+            capsuleId: record.applied.capsuleId,
+            installConfigId: record.applied.installConfigId,
+            capsuleExecutionAuthorityEpoch:
+              record.applied.capsuleExecutionAuthorityEpoch,
+          }
+        : undefined);
+    return Boolean(
+      this.#capsulePublicInputCurrentAuthorityMatches(input) &&
+        capsule &&
+        authority &&
+        authority.workspaceId === input.workspaceId &&
+        authority.capsuleId === input.capsuleId &&
+        authority.installConfigId === input.installConfigId &&
+        authority.capsuleExecutionAuthorityEpoch ===
+          input.capsuleExecutionAuthorityEpoch,
+    );
+  }
+
+  #capsulePublicInputCurrentAuthorityMatches(
+    input: AdoptCapsulePublicInputReservationRecordInput,
+  ): boolean {
+    const capsule = this.#capsules.get(input.capsuleId);
+    return Boolean(
+      capsule &&
+        capsule.status !== "destroyed" &&
+        capsule.workspaceId === input.workspaceId &&
+        capsule.installConfigId === input.installConfigId &&
+        (this.#capsuleExecutionAuthorityEpochs.get(input.capsuleId) ?? 1) ===
+          input.capsuleExecutionAuthorityEpoch,
+    );
+  }
+
   async rebindCapsuleInstallConfig(
     input: CapsuleInstallConfigRebindInput,
   ): Promise<CapsuleInstallConfigRebindResult> {
@@ -2999,6 +3438,29 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     input: CommitRunStateInput,
   ): Promise<CommitRunStateResult> {
     await validateCommitRunStateInterfaceMaterializationIntent(input);
+    const lifecycleTransition = input.publicInputReservationLifecycle;
+    const lifecycleNext = lifecycleTransition?.lifecycle
+      ? await assertPublicInputReservationLifecycleDigest(
+          lifecycleTransition.lifecycle,
+        )
+      : undefined;
+    const observedLifecycle = lifecycleTransition
+      ? this.#capsulePublicInputReservationRecords.get(
+          lifecycleTransition.capsuleId,
+        )
+      : undefined;
+    const decodedLifecycle = observedLifecycle
+      ? await decodePublicInputReservationLifecycle(observedLifecycle)
+      : undefined;
+    if (
+      lifecycleTransition &&
+      (lifecycleTransition.capsuleId !== input.capsulePatch.id ||
+        !decodedLifecycle ||
+        decodedLifecycle.digest !==
+          lifecycleTransition.expectedLifecycleDigest)
+    ) {
+      throw new Error("public input reservation lifecycle guard conflict");
+    }
     const { capsulePatch } = input;
     if (
       input.applyRunTerminal &&
@@ -3053,6 +3515,14 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         );
       }
     }
+    if (
+      lifecycleTransition &&
+      this.#capsulePublicInputReservationRecords.get(
+          lifecycleTransition.capsuleId,
+        ) !== observedLifecycle
+    ) {
+      throw new Error("public input reservation lifecycle guard conflict");
+    }
     if (input.stateVersion) {
       this.#stateVersions.set(input.stateVersion.id, input.stateVersion);
     }
@@ -3073,6 +3543,24 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     if (intent && !this.#capsuleInterfaceMaterializationIntents.has(intent.id)) {
       this.#capsuleInterfaceMaterializationIntents.set(intent.id, intent);
+    }
+    if (lifecycleTransition) {
+      if (lifecycleNext) {
+        this.#capsulePublicInputReservationRecords.set(
+          lifecycleTransition.capsuleId,
+          lifecycleNext,
+        );
+        this.#capsulePublicInputReservationCleanupAttempts.delete(
+          lifecycleTransition.capsuleId,
+        );
+      } else {
+        this.#capsulePublicInputReservationRecords.delete(
+          lifecycleTransition.capsuleId,
+        );
+        this.#capsulePublicInputReservationCleanupAttempts.delete(
+          lifecycleTransition.capsuleId,
+        );
+      }
     }
     const updated = normalizeCapsule({
       ...existing,
@@ -4427,14 +4915,14 @@ export function isRecoverableOpenTofuRunRecord(
   return reference <= options.staleRunningBeforeMs;
 }
 
-export function isPendingRuntimeSecretRetirementRun(
+export function isPendingDestroyTailRun(
   row: StoredRunRecord,
   staleBeforeMs: number,
 ): row is ApplyRun {
   if (
     !isApplyRunRecord(row) ||
     (row.status !== "succeeded" && row.status !== "failed") ||
-    !applyRunRuntimeSecretRetirementPending(row)
+    !applyRunDestroyTailPending(row)
   ) {
     return false;
   }
@@ -4449,7 +4937,7 @@ export function isPendingRuntimeSecretRetirementRun(
   );
 }
 
-export function comparePendingRuntimeSecretRetirementRunsAsc(
+export function comparePendingDestroyTailRunsAsc(
   left: ApplyRun,
   right: ApplyRun,
 ): number {
@@ -4460,14 +4948,38 @@ export function comparePendingRuntimeSecretRetirementRunsAsc(
   return attempt(left) - attempt(right) || left.id.localeCompare(right.id);
 }
 
-/** Builds the value-free CAS replacement shared by every store adapter. */
-export function runtimeSecretRetirementDispatchAttempt(
+function pendingDestroyTailRunTimestamp(row: ApplyRun): number {
+  return runTimestampValue(row.updatedAt) ??
+    runTimestampValue(row.finishedAt) ??
+    storedRunRecordTimestamp(row);
+}
+
+export function publicInputReservationCleanupRunReady(
   row: StoredRunRecord,
-  input: RuntimeSecretRetirementDispatchClaimInput,
+): boolean {
+  if (isPlanRunRecord(row)) {
+    return Boolean(
+      row.appliedApplyRunId ||
+        row.status === "failed" ||
+        row.status === "cancelled" ||
+        row.status === "expired",
+    );
+  }
+  return isApplyRunRecord(row) &&
+    (row.status === "succeeded" ||
+      row.status === "failed" ||
+      row.status === "cancelled" ||
+      row.status === "expired");
+}
+
+/** Builds the value-free CAS replacement shared by every store adapter. */
+export function destroyTailDispatchAttempt(
+  row: StoredRunRecord,
+  input: DestroyTailDispatchClaimInput,
 ): ApplyRun | undefined {
   if (
     row.id !== input.runId ||
-    !isPendingRuntimeSecretRetirementRun(row, input.staleBeforeMs) ||
+    !isPendingDestroyTailRun(row, input.staleBeforeMs) ||
     !Number.isFinite(input.attemptedAt) ||
     input.attemptedAt <= 0
   ) {
@@ -4483,8 +4995,8 @@ export function runtimeSecretRetirementDispatchAttempt(
     auditEvents: [
       ...row.auditEvents,
       {
-        id: `audit_runtime_secret_retirement_deferred_${row.id}_${attemptedAt}_${row.auditEvents.length}`,
-        type: APPLY_RUNTIME_SECRET_RETIREMENT_DEFERRED_EVENT,
+        id: `audit_destroy_tail_deferred_${row.id}_${attemptedAt}_${row.auditEvents.length}`,
+        type: APPLY_DESTROY_TAIL_DEFERRED_EVENT,
         at: attemptedAt,
       },
     ],

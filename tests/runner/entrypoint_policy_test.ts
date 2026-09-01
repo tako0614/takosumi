@@ -164,6 +164,41 @@ test("pre-init policy accepts declared-env provider credentials under real env n
   ).not.toThrow();
 });
 
+test("pre-init policy compares custom three-segment provider sources canonically", () => {
+  const canonicalProvider = "registry.terraform.io/tako0614/takoform";
+  expect(() =>
+    assertRunnerPolicyForRequest(
+      {
+        planRun: {
+          ...REQUEST.planRun,
+          requiredProviders: [" REGISTRY.TERRAFORM.IO/TAKO0614/TAKOFORM "],
+        },
+        credentials: {
+          env: { TAKOFORM_TOKEN: "run-scoped-secret" },
+          manifest: {
+            bindings: [
+              {
+                providerSource: canonicalProvider,
+                connectionId: "conn_takoform",
+                recipeId: "generic-env",
+                authMode: "env",
+                envNames: ["TAKOFORM_TOKEN"],
+                fileEnvNames: [],
+                requiredEnvGroups: [["TAKOFORM_TOKEN"]],
+              },
+            ],
+          },
+        },
+      },
+      {
+        id: "opentofu-default",
+        allowedProviders: [canonicalProvider],
+        requireProviderBindings: true,
+      },
+    ),
+  ).not.toThrow();
+});
+
 test("required provider extraction reads only required_providers sources", () => {
   expect(
     requiredProviderSourcesFromTerraformText(`

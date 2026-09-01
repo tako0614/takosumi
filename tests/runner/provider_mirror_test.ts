@@ -1,11 +1,22 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "bun:test";
+import { strictProviderMirrorCliConfig } from "../../runner/lib/providers.ts";
 
 const ROOT = new URL("../../", import.meta.url);
 const MIRROR_PROVIDERS = new URL("runner/mirror-providers.tf", ROOT);
+const MIRROR_PROVIDER_LOCK = new URL(
+  "runner/mirror-providers.lock.hcl",
+  ROOT,
+);
 const TOFU_RC = new URL("runner/tofu.rc", ROOT);
 const RUNNER_DOCKERFILE = new URL("runner/Dockerfile", ROOT);
 const PROVIDERS_TS = new URL("runner/lib/providers.ts", ROOT);
+
+const TAKOFORM_PROVIDER_SOURCE =
+  "registry.terraform.io/tako0614/takoform";
+const TAKOFORM_PROVIDER_VERSION = "3.0.0";
+const TAKOFORM_LINUX_AMD64_SHA256 =
+  "f632146757f688dc4e48f65636fefe70fcbe2cb597d0e5e2f77cc1788a7f6585";
 
 function providerSourcesFromMirrorConfig(config: string): readonly string[] {
   return Array.from(
@@ -34,6 +45,58 @@ test("runner provider mirror uses exact versions for offline-only providers", as
   expect(config).not.toContain("hashicorp/aws");
 });
 
+test("runner provider mirror pins the exact Provider 3 release and signed linux archive", async () => {
+  const config = await readFile(MIRROR_PROVIDERS, "utf8");
+  const lock = await readFile(MIRROR_PROVIDER_LOCK, "utf8");
+  const dockerfile = await readFile(RUNNER_DOCKERFILE, "utf8");
+
+  assertTakoformProviderMirrorInputs(config, lock);
+  expect(dockerfile).toContain(
+    "COPY runner/mirror-providers.lock.hcl /opt/opentofu/mirror-build/reviewed.lock.hcl",
+  );
+  expect(dockerfile).toContain("providers lock -platform=linux_amd64");
+  expect(dockerfile).toContain("cmp reviewed.lock.hcl .terraform.lock.hcl");
+  expect(dockerfile).toContain("providers mirror -platform=linux_amd64");
+  expect(dockerfile).toContain(
+    `TAKOFORM_PROVIDER_LINUX_AMD64_SHA256=${TAKOFORM_LINUX_AMD64_SHA256}`,
+  );
+  expect(dockerfile).toContain("sha256sum -c /tmp/takoform_SHA256SUM");
+});
+
+test("Provider 3 mirror inputs fail closed on absent, wrong-version, or wrong-digest lock evidence", async () => {
+  const config = await readFile(MIRROR_PROVIDERS, "utf8");
+  const lock = await readFile(MIRROR_PROVIDER_LOCK, "utf8");
+
+  expect(() => assertTakoformProviderMirrorInputs(config, lock)).not.toThrow();
+  expect(() => assertTakoformProviderMirrorInputs(config, "")).toThrow(
+    "Provider 3 lock entry is missing",
+  );
+  expect(() =>
+    assertTakoformProviderMirrorInputs(
+      config,
+      lock.replace('version     = "3.0.0"', 'version     = "3.0.1"'),
+    ),
+  ).toThrow("Provider 3 lock version is not exact");
+  expect(() =>
+    assertTakoformProviderMirrorInputs(
+      config,
+      lock.replace(TAKOFORM_LINUX_AMD64_SHA256, "0".repeat(64)),
+    ),
+  ).toThrow("Provider 3 linux_amd64 digest is missing");
+});
+
+test("strict runner policy admits Provider 3 only through the filesystem mirror", () => {
+  const config = strictProviderMirrorCliConfig(
+    [TAKOFORM_PROVIDER_SOURCE],
+    "/opt/opentofu/provider-mirror",
+  );
+
+  expect(config).toContain(`"${TAKOFORM_PROVIDER_SOURCE}"`);
+  expect(config).toContain('exclude = ["*/*"]');
+  expect(config).not.toContain("direct {}");
+  expect(config).not.toContain("plugin_cache_dir");
+});
+
 test("runner image may curate a cache without making its providers runtime defaults", async () => {
   const mirror = await readFile(MIRROR_PROVIDERS, "utf8");
   const tofuRc = await readFile(TOFU_RC, "utf8");
@@ -45,6 +108,7 @@ test("runner image may curate a cache without making its providers runtime defau
     "registry.opentofu.org/hashicorp/http",
     "registry.opentofu.org/hashicorp/random",
     "registry.opentofu.org/hashicorp/tls",
+    "registry.terraform.io/tako0614/takoform",
   ]);
   for (const provider of providers) {
     expect(tofuRc).not.toContain(JSON.stringify(provider));
@@ -110,3 +174,33 @@ test("runner image copies the lifecycle provider-configuration contract closure"
     expect(dockerfile).toContain(`COPY contract/${path} ./contract/${path}`);
   }
 });
+
+function assertTakoformProviderMirrorInputs(
+  config: string,
+  lock: string,
+): void {
+  const configBlock = /takoform\s*=\s*\{(?<body>[\s\S]*?)^\s*\}/gmu.exec(
+    config,
+  )?.groups?.body;
+  if (
+    !configBlock?.includes(`source  = "${TAKOFORM_PROVIDER_SOURCE}"`) ||
+    !configBlock.includes(`version = "= ${TAKOFORM_PROVIDER_VERSION}"`)
+  ) {
+    throw new Error("Provider 3 mirror requirement is not exact");
+  }
+  const escapedSource = TAKOFORM_PROVIDER_SOURCE.replaceAll(".", "\\.");
+  const lockBlock = new RegExp(
+    `provider "${escapedSource}" \\{(?<body>[\\s\\S]*?)^\\}`,
+    "mu",
+  ).exec(lock)?.groups?.body;
+  if (!lockBlock) throw new Error("Provider 3 lock entry is missing");
+  if (
+    !lockBlock.includes(`version     = "${TAKOFORM_PROVIDER_VERSION}"`) ||
+    !lockBlock.includes(`constraints = "${TAKOFORM_PROVIDER_VERSION}"`)
+  ) {
+    throw new Error("Provider 3 lock version is not exact");
+  }
+  if (!lockBlock.includes(`"zh:${TAKOFORM_LINUX_AMD64_SHA256}"`)) {
+    throw new Error("Provider 3 linux_amd64 digest is missing");
+  }
+}

@@ -97,10 +97,14 @@ import type {
   CommitRestoredStateInput,
   CommitRestoredStateResult,
   BeginApplyRunResult,
+  AdoptCapsulePublicInputReservationRecordInput,
+  ClaimCapsulePublicInputReservationLegacyCandidateInput,
+  CapsulePublicInputReservationRecordWriteResult,
   CapsuleExecutionAuthority,
   CapsuleExecutionAuthorityInput,
   CapsuleInstallConfigRebindInput,
   CapsuleInstallConfigRebindResult,
+  ReplaceCapsulePublicInputReservationRecordInput,
   ClaimCapsuleInterfaceMaterializationIntentInput,
   MarkCapsuleStaleCommand,
   MarkCapsuleStaleResult,
@@ -117,7 +121,8 @@ import type {
   RenewCapsuleInterfaceMaterializationIntentLeaseResult,
   RetryCapsuleInterfaceMaterializationIntentInput,
   RetryCapsuleInterfaceMaterializationIntentResult,
-  RuntimeSecretRetirementDispatchClaimInput,
+  DestroyTailDispatchClaimInput,
+  SettleCapsulePublicInputReservationLifecycleInput,
   SettleCapsuleInterfaceMaterializationIntentInput,
   SettleCapsuleInterfaceMaterializationIntentResult,
   StoredRunRecord,
@@ -127,6 +132,15 @@ import type {
   TransitionRunInput,
   TransitionRunResult,
 } from "../../core/domains/deploy-control/store.ts";
+import {
+  assertPublicInputReservationLifecycleDigest,
+  claimPublicInputReservationLegacyCandidateForCleanup,
+  decodePublicInputReservationLifecycle,
+  isPublicInputReservationLegacyCandidateClaim,
+  PUBLIC_INPUT_RESERVATION_LEGACY_INTENT_KIND,
+  publicInputReservationCleanupProjection,
+  type PublicInputReservationLifecycle,
+} from "../../core/domains/deploy-control/public_input_reservation.ts";
 import {
   assertSourceSyncSuccessCommit,
   assertCapsuleInterfaceMaterializationIntentClaimInput,
@@ -150,7 +164,8 @@ import {
   normalizeStoredCapsuleCompatibilityReport,
   parseStoredCapsuleCompatibilityProviderGraph,
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
-  runtimeSecretRetirementDispatchAttempt,
+  publicInputReservationCleanupRunReady,
+  destroyTailDispatchAttempt,
   sourceSnapshotsExactlyMatch,
   storedCapsuleCompatibilityProviderGraph,
   SourceSnapshotConflictError,
@@ -780,18 +795,20 @@ function d1RunBillingCapturePending(): SQL {
   `;
 }
 
-/** Mirrors applyRunRuntimeSecretRetirementPending in the shared store model. */
-function d1RunRuntimeSecretRetirementPending(): SQL {
+/** Mirrors applyRunDestroyTailPending in the shared store model. */
+function d1RunDestroyTailPending(): SQL {
   return sql`
-    EXISTS (
-      SELECT 1
-      FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
-      WHERE json_extract(audit_event.value, '$.type') = 'runtime_secret.retirement.pending'
-    )
-    AND NOT EXISTS (
-      SELECT 1
-      FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
-      WHERE json_extract(audit_event.value, '$.type') = 'runtime_secret.retirement.completed'
+    (
+      EXISTS (
+        SELECT 1
+        FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
+        WHERE json_extract(audit_event.value, '$.type') = 'runtime_secret.retirement.pending'
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
+        WHERE json_extract(audit_event.value, '$.type') = 'runtime_secret.retirement.completed'
+      )
     )
   `;
 }
@@ -1446,38 +1463,342 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return rows.filter((row) => isRecoverableOpenTofuRunRecord(row, options));
   }
 
-  async listPendingRuntimeSecretRetirementRuns(options: {
+  async listPendingDestroyTailRuns(options: {
     readonly staleBeforeMs: number;
     readonly limit?: number;
-  }): Promise<readonly ApplyRun[]> {
+  }): Promise<readonly StoredRunRecord[]> {
     const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
     const lastAttempt = sql`COALESCE(
       CAST(json_extract(${schema.runs.runJson}, '$.updatedAt') AS INTEGER),
       CAST(json_extract(${schema.runs.runJson}, '$.finishedAt') AS INTEGER),
       ${d1RunCreatedAtMillisOrder()}
     )`;
-    return await this.#drizzleManyJson<ApplyRun>(
+    const publicCleanupAt = sql`(
+      select min(c.public_input_reservation_cleanup_at)
+      from capsules c
+      where c.public_input_reservation_cleanup_run_id = ${schema.runs.id}
+    )`;
+    const projected = await this.#drizzleManyJson<StoredRunRecord>(
       schema.runs,
       schema.runs.runJson,
       {
-        where: and(
-          inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
-          inArray(schema.runs.status, ["succeeded", "failed"]),
-          d1RunRuntimeSecretRetirementPending(),
-          sql`${lastAttempt} <= ${options.staleBeforeMs}`,
+        where: or(
+          and(
+            inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+            inArray(schema.runs.status, ["succeeded", "failed"]),
+            d1RunDestroyTailPending(),
+            sql`${lastAttempt} <= ${options.staleBeforeMs}`,
+          ),
+          and(
+            sql`${publicCleanupAt} is not null`,
+            sql`${publicCleanupAt} <= ${options.staleBeforeMs}`,
+            or(
+              and(
+                inArray(schema.runs.type, [
+                  RUN_KIND_PLAN,
+                  "destroy_plan",
+                  "drift_check",
+                ]),
+                or(
+                  inArray(schema.runs.status, [
+                    "failed",
+                    "cancelled",
+                    "expired",
+                  ]),
+                  sql`json_extract(${schema.runs.runJson}, '$.appliedApplyRunId') is not null`,
+                ),
+              ),
+              and(
+                inArray(schema.runs.type, [RUN_KIND_APPLY, "destroy_apply"]),
+                inArray(schema.runs.status, [
+                  "succeeded",
+                  "failed",
+                  "cancelled",
+                  "expired",
+                ]),
+              ),
+            ),
+          ),
         ),
-        orderBy: [asc(lastAttempt), asc(schema.runs.id)],
+        orderBy: [
+          asc(sql`coalesce(${publicCleanupAt}, ${lastAttempt})`),
+          asc(schema.runs.id),
+        ],
         limit,
       },
     );
+    const legacyHasNoApplyablePlan = notExists(
+      this.#orm
+        .select({ id: schema.runs.id })
+        .from(schema.runs)
+        .where(
+          and(
+            eq(schema.runs.capsuleId, schema.capsules.id),
+            eq(schema.runs.workspaceId, schema.capsules.workspaceId),
+            inArray(schema.runs.type, [
+              RUN_KIND_PLAN,
+              "destroy_plan",
+              "drift_check",
+            ]),
+            sql`not (
+              ${schema.runs.status} in ('failed', 'cancelled', 'expired')
+              or json_extract(${schema.runs.runJson}, '$.appliedApplyRunId') is not null
+            )`,
+          ),
+        ),
+    );
+    const legacyHasStaleTerminalCarrier = exists(
+      this.#orm
+        .select({ id: schema.runs.id })
+        .from(schema.runs)
+        .where(
+          and(
+            eq(schema.runs.capsuleId, schema.capsules.id),
+            eq(schema.runs.workspaceId, schema.capsules.workspaceId),
+            inArray(schema.runs.type, [
+              RUN_KIND_PLAN,
+              "destroy_plan",
+              "drift_check",
+            ]),
+            or(
+              inArray(schema.runs.status, [
+                "failed",
+                "cancelled",
+                "expired",
+              ]),
+              sql`json_extract(${schema.runs.runJson}, '$.appliedApplyRunId') is not null`,
+            ),
+            sql`${lastAttempt} <= ${options.staleBeforeMs}`,
+          ),
+        ),
+    );
+    const legacyRows = await this.#orm
+      .select({
+        capsuleId: schema.capsules.id,
+        workspaceId: schema.capsules.workspaceId,
+        record: schema.capsules.publicInputReservationJson,
+      })
+      .from(schema.capsules)
+      .where(
+        and(
+          isNull(schema.capsules.publicInputReservationCleanupRunId),
+          legacyHasNoApplyablePlan,
+          legacyHasStaleTerminalCarrier,
+          or(
+            sql`json_extract(${schema.capsules.publicInputReservationJson}, '$.kind') = ${PUBLIC_INPUT_RESERVATION_LEGACY_INTENT_KIND}`,
+            and(
+              sql`json_extract(${schema.capsules.publicInputReservationJson}, '$.kind') = 'takosumi.public-input-reservation-lifecycle@v2'`,
+              sql`json_type(${schema.capsules.publicInputReservationJson}, '$.candidate') is not null`,
+              sql`json_extract(${schema.capsules.publicInputReservationJson}, '$.candidate.planRunId') is null`,
+              sql`json_extract(${schema.capsules.publicInputReservationJson}, '$.candidate.reservation.kind') = ${PUBLIC_INPUT_RESERVATION_LEGACY_INTENT_KIND}`,
+            ),
+          ),
+        ),
+      )
+      .orderBy(asc(schema.capsules.createdAt), asc(schema.capsules.id))
+      .limit(limit);
+    const legacyCarriers: StoredRunRecord[] = [];
+    for (const legacyRow of legacyRows) {
+      if (legacyRow.record === null || legacyRow.record === undefined) continue;
+      let lifecycle: PublicInputReservationLifecycle;
+      try {
+        lifecycle = await decodePublicInputReservationLifecycle(
+          legacyRow.record,
+        );
+      } catch {
+        continue;
+      }
+      const candidate = lifecycle.candidate;
+      if (
+        !candidate ||
+        candidate.planRunId ||
+        candidate.requirement.capsuleId !== legacyRow.capsuleId ||
+        candidate.requirement.workspaceId !== legacyRow.workspaceId
+      ) continue;
+      const applyableRows = await this.#orm
+        .select({ id: schema.runs.id })
+        .from(schema.runs)
+        .where(
+          and(
+            eq(schema.runs.capsuleId, legacyRow.capsuleId),
+            eq(schema.runs.workspaceId, legacyRow.workspaceId),
+            inArray(schema.runs.type, [
+              RUN_KIND_PLAN,
+              "destroy_plan",
+              "drift_check",
+            ]),
+            sql`not (
+              ${schema.runs.status} in ('failed', 'cancelled', 'expired')
+              or json_extract(${schema.runs.runJson}, '$.appliedApplyRunId') is not null
+            )`,
+          ),
+        )
+        .limit(1);
+      if (applyableRows.length > 0) continue;
+      const carrierRows = await this.#orm
+        .select({ json: schema.runs.runJson })
+        .from(schema.runs)
+        .where(
+          and(
+            eq(schema.runs.capsuleId, legacyRow.capsuleId),
+            eq(schema.runs.workspaceId, legacyRow.workspaceId),
+            inArray(schema.runs.type, [
+              RUN_KIND_PLAN,
+              "destroy_plan",
+              "drift_check",
+            ]),
+            or(
+              inArray(schema.runs.status, [
+                "failed",
+                "cancelled",
+                "expired",
+              ]),
+              sql`json_extract(${schema.runs.runJson}, '$.appliedApplyRunId') is not null`,
+            ),
+            sql`${lastAttempt} <= ${options.staleBeforeMs}`,
+          ),
+        )
+        .orderBy(asc(lastAttempt), asc(schema.runs.id))
+        .limit(1);
+      const carrier = carrierRows[0]?.json as StoredRunRecord | undefined;
+      if (
+        carrier &&
+        isPlanRunRecord(carrier) &&
+        carrier.capsuleId === legacyRow.capsuleId &&
+        carrier.workspaceId === legacyRow.workspaceId &&
+        publicInputReservationCleanupRunReady(carrier)
+      ) legacyCarriers.push(carrier);
+    }
+    const deduped = new Map<string, StoredRunRecord>();
+    for (const row of [...legacyCarriers, ...projected]) {
+      if (!deduped.has(row.id)) deduped.set(row.id, row);
+    }
+    return [...deduped.values()].slice(0, limit);
   }
 
-  async claimPendingRuntimeSecretRetirementDispatch(
-    input: RuntimeSecretRetirementDispatchClaimInput,
+  async claimPendingDestroyTailDispatch(
+    input: DestroyTailDispatchClaimInput,
   ): Promise<boolean> {
-    const observed = await this.getApplyRun(input.runId);
+    const observed = await this.getPlanRun(input.runId) ??
+      await this.getApplyRun(input.runId);
+    if (
+      observed &&
+      publicInputReservationCleanupRunReady(observed) &&
+      Number.isFinite(input.attemptedAt) &&
+      input.attemptedAt > 0
+    ) {
+      const cleanupClaim = await this.#orm
+        .update(schema.capsules)
+        .set({
+          publicInputReservationCleanupAt: Math.floor(input.attemptedAt),
+        })
+        .where(
+          and(
+            eq(
+              schema.capsules.publicInputReservationCleanupRunId,
+              input.runId,
+            ),
+            sql`${schema.capsules.publicInputReservationCleanupAt} <= ${input.staleBeforeMs}`,
+          ),
+        )
+        .run();
+      if (changes(cleanupClaim as D1Result) === 1) return true;
+    }
+    if (
+      observed &&
+      isPlanRunRecord(observed) &&
+      observed.capsuleId &&
+      publicInputReservationCleanupRunReady(observed) &&
+      Number.isFinite(input.attemptedAt) &&
+      input.attemptedAt > 0 &&
+      observed.updatedAt <= input.staleBeforeMs
+    ) {
+      const legacy = await this.#orm
+        .select({ record: schema.capsules.publicInputReservationJson })
+        .from(schema.capsules)
+        .where(
+          and(
+            eq(schema.capsules.id, observed.capsuleId),
+            eq(schema.capsules.workspaceId, observed.workspaceId),
+            isNull(schema.capsules.publicInputReservationCleanupRunId),
+          ),
+        )
+        .limit(1)
+        .get();
+      const raw = legacy?.record;
+      if (raw !== null && raw !== undefined) {
+        const lifecycle = await tryDecodePublicInputReservationLifecycle(raw);
+        if (lifecycle) {
+          const claimed =
+            await claimPublicInputReservationLegacyCandidateForCleanup(
+              lifecycle,
+              observed,
+              input.attemptedAt,
+            );
+          if (
+            claimed &&
+            lifecycle.candidate!.stagedAt <= input.staleBeforeMs
+          ) {
+            const cleanup = publicInputReservationCleanupProjection(claimed)!;
+            const noApplyablePlan = notExists(
+              this.#orm
+                .select({ id: schema.runs.id })
+                .from(schema.runs)
+                .where(
+                  and(
+                    eq(schema.runs.capsuleId, observed.capsuleId),
+                    eq(schema.runs.workspaceId, observed.workspaceId),
+                    inArray(schema.runs.type, [
+                      RUN_KIND_PLAN,
+                      "destroy_plan",
+                      "drift_check",
+                    ]),
+                    sql`not (
+                      ${schema.runs.status} in ('failed', 'cancelled', 'expired')
+                      or json_extract(${schema.runs.runJson}, '$.appliedApplyRunId') is not null
+                    )`,
+                  ),
+                ),
+            );
+            const carrierStillExact = this.#orm
+              .select({ id: schema.runs.id })
+              .from(schema.runs)
+              .where(
+                and(
+                  eq(schema.runs.id, observed.id),
+                  eq(schema.runs.capsuleId, observed.capsuleId),
+                  eq(schema.runs.workspaceId, observed.workspaceId),
+                  eq(schema.runs.runJson, observed as unknown),
+                ),
+              );
+            const result = await this.#orm
+              .update(schema.capsules)
+              .set({
+                publicInputReservationJson: claimed,
+                publicInputReservationCleanupRunId: cleanup.runId,
+                publicInputReservationCleanupAt: cleanup.enqueuedAt,
+              })
+              .where(
+                and(
+                  eq(schema.capsules.id, observed.capsuleId),
+                  eq(schema.capsules.workspaceId, observed.workspaceId),
+                  isNull(
+                    schema.capsules.publicInputReservationCleanupRunId,
+                  ),
+                  eq(schema.capsules.publicInputReservationJson, raw),
+                  exists(carrierStillExact),
+                  noApplyablePlan,
+                ),
+              )
+              .run();
+            if (changes(result as D1Result) === 1) return true;
+          }
+        }
+      }
+    }
+    if (!observed || !isApplyRunRecord(observed)) return false;
     const claimed = observed
-      ? runtimeSecretRetirementDispatchAttempt(observed, input)
+      ? destroyTailDispatchAttempt(observed, input)
       : undefined;
     if (!claimed) return false;
     const result = await this.#orm
@@ -1491,7 +1812,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           // D1's serialized whole-row fence gives the same one-winner claim as
           // Postgres JSON equality and the synchronous memory adapter.
           eq(schema.runs.runJson, observed as unknown),
-          d1RunRuntimeSecretRetirementPending(),
+          d1RunDestroyTailPending(),
         ),
       )
       .run();
@@ -2467,6 +2788,333 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return row?.epoch;
   }
 
+  async getCapsulePublicInputReservationRecord(
+    capsuleId: string,
+  ): Promise<PublicInputReservationLifecycle | undefined> {
+    await this.#ensureSchema();
+    const row = await this.#orm
+      .select({ record: schema.capsules.publicInputReservationJson })
+      .from(schema.capsules)
+      .where(eq(schema.capsules.id, capsuleId))
+      .limit(1)
+      .get();
+    return row?.record === null || row?.record === undefined
+      ? undefined
+      : await decodePublicInputReservationLifecycle(row.record);
+  }
+
+  async adoptCapsulePublicInputReservationRecord(
+    input: AdoptCapsulePublicInputReservationRecordInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult> {
+    await this.#ensureSchema();
+    const record = await assertPublicInputReservationLifecycleDigest(
+      input.record,
+    );
+    const cleanup = publicInputReservationCleanupProjection(record);
+    const row = await this.#orm
+      .update(schema.capsules)
+      .set({
+        publicInputReservationJson: record,
+        publicInputReservationCleanupRunId: cleanup?.runId ?? null,
+        publicInputReservationCleanupAt: cleanup?.enqueuedAt ?? null,
+      })
+      .where(
+        and(
+          eq(schema.capsules.id, input.capsuleId),
+          eq(schema.capsules.workspaceId, input.workspaceId),
+          eq(schema.capsules.installConfigId, input.installConfigId),
+          eq(
+            schema.capsules.executionAuthorityEpoch,
+            input.capsuleExecutionAuthorityEpoch,
+          ),
+          ne(schema.capsules.status, "destroyed"),
+          isNull(schema.capsules.publicInputReservationJson),
+        ),
+      )
+      .returning({ record: schema.capsules.publicInputReservationJson })
+      .get();
+    if (row?.record !== null && row?.record !== undefined) {
+      return {
+        status: "stored",
+        record: await decodePublicInputReservationLifecycle(row.record),
+      };
+    }
+    return await this.#publicInputReservationRecordCasMiss(input);
+  }
+
+  async replaceCapsulePublicInputReservationRecord(
+    input: ReplaceCapsulePublicInputReservationRecordInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult> {
+    await this.#ensureSchema();
+    const record = await assertPublicInputReservationLifecycleDigest(
+      input.record,
+    );
+    const cleanup = publicInputReservationCleanupProjection(record);
+    const observed = await this.#orm
+      .select({
+        workspaceId: schema.capsules.workspaceId,
+        installConfigId: schema.capsules.installConfigId,
+        epoch: schema.capsules.executionAuthorityEpoch,
+        status: schema.capsules.status,
+        record: schema.capsules.publicInputReservationJson,
+      })
+      .from(schema.capsules)
+      .where(eq(schema.capsules.id, input.capsuleId))
+      .limit(1)
+      .get();
+    if (
+      !observed ||
+      observed.workspaceId !== input.workspaceId ||
+      observed.installConfigId !== input.installConfigId ||
+      observed.epoch !== input.capsuleExecutionAuthorityEpoch ||
+      observed.status === "destroyed"
+    ) {
+      return { status: "authority_changed" };
+    }
+    if (observed.record === null || observed.record === undefined) {
+      return { status: "record_changed" };
+    }
+    const current = await decodePublicInputReservationLifecycle(
+      observed.record,
+    );
+    if (current.digest !== input.expectedRecordDigest) {
+      return { status: "record_changed", record: current };
+    }
+    const row = await this.#orm
+      .update(schema.capsules)
+      .set({
+        publicInputReservationJson: record,
+        publicInputReservationCleanupRunId: cleanup?.runId ?? null,
+        publicInputReservationCleanupAt: cleanup?.enqueuedAt ?? null,
+      })
+      .where(
+        and(
+          eq(schema.capsules.id, input.capsuleId),
+          eq(schema.capsules.workspaceId, input.workspaceId),
+          eq(schema.capsules.installConfigId, input.installConfigId),
+          eq(
+            schema.capsules.executionAuthorityEpoch,
+            input.capsuleExecutionAuthorityEpoch,
+          ),
+          ne(schema.capsules.status, "destroyed"),
+          eq(
+            schema.capsules.publicInputReservationJson,
+            observed.record,
+          ),
+        ),
+      )
+      .returning({ record: schema.capsules.publicInputReservationJson })
+      .get();
+    if (row?.record !== null && row?.record !== undefined) {
+      return {
+        status: "stored",
+        record: await decodePublicInputReservationLifecycle(row.record),
+      };
+    }
+    return await this.#publicInputReservationRecordCasMiss(input);
+  }
+
+  async claimCapsulePublicInputReservationLegacyCandidate(
+    input: ClaimCapsulePublicInputReservationLegacyCandidateInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult> {
+    await this.#ensureSchema();
+    const record = await assertPublicInputReservationLifecycleDigest(
+      input.record,
+    );
+    const cleanup = publicInputReservationCleanupProjection(record);
+    const observed = await this.#orm
+      .select({
+        workspaceId: schema.capsules.workspaceId,
+        installConfigId: schema.capsules.installConfigId,
+        epoch: schema.capsules.executionAuthorityEpoch,
+        status: schema.capsules.status,
+        record: schema.capsules.publicInputReservationJson,
+      })
+      .from(schema.capsules)
+      .where(eq(schema.capsules.id, input.capsuleId))
+      .limit(1)
+      .get();
+    if (
+      !observed ||
+      observed.workspaceId !== input.workspaceId ||
+      observed.installConfigId !== input.installConfigId ||
+      observed.epoch !== input.capsuleExecutionAuthorityEpoch ||
+      observed.status === "destroyed"
+    ) {
+      return { status: "authority_changed" };
+    }
+    if (observed.record === null || observed.record === undefined) {
+      return { status: "record_changed" };
+    }
+    const current = await decodePublicInputReservationLifecycle(
+      observed.record,
+    );
+    if (
+      current.digest !== input.expectedRecordDigest ||
+      current.candidate?.requirement.workspaceId !== input.workspaceId ||
+      current.candidate.requirement.capsuleId !== input.capsuleId ||
+      !isPublicInputReservationLegacyCandidateClaim(current, record)
+    ) {
+      return { status: "record_changed", record: current };
+    }
+    const claimedPlanRunId = record.candidate!.planRunId!;
+    const noOtherApplyablePlan = notExists(
+      this.#orm
+        .select({ id: schema.runs.id })
+        .from(schema.runs)
+        .where(
+          and(
+            eq(schema.runs.capsuleId, input.capsuleId),
+            eq(schema.runs.workspaceId, input.workspaceId),
+            ne(schema.runs.id, claimedPlanRunId),
+            inArray(schema.runs.type, [
+              RUN_KIND_PLAN,
+              "destroy_plan",
+              "drift_check",
+            ]),
+            sql`not (
+              ${schema.runs.status} in ('failed', 'cancelled', 'expired')
+              or json_extract(${schema.runs.runJson}, '$.appliedApplyRunId') is not null
+            )`,
+          ),
+        ),
+    );
+    const row = await this.#orm
+      .update(schema.capsules)
+      .set({
+        publicInputReservationJson: record,
+        publicInputReservationCleanupRunId: cleanup?.runId ?? null,
+        publicInputReservationCleanupAt: cleanup?.enqueuedAt ?? null,
+      })
+      .where(
+        and(
+          eq(schema.capsules.id, input.capsuleId),
+          eq(schema.capsules.workspaceId, input.workspaceId),
+          eq(schema.capsules.installConfigId, input.installConfigId),
+          eq(
+            schema.capsules.executionAuthorityEpoch,
+            input.capsuleExecutionAuthorityEpoch,
+          ),
+          ne(schema.capsules.status, "destroyed"),
+          noOtherApplyablePlan,
+          eq(
+            schema.capsules.publicInputReservationJson,
+            observed.record,
+          ),
+        ),
+      )
+      .returning({ record: schema.capsules.publicInputReservationJson })
+      .get();
+    if (row?.record !== null && row?.record !== undefined) {
+      return {
+        status: "stored",
+        record: await decodePublicInputReservationLifecycle(row.record),
+      };
+    }
+    return await this.#publicInputReservationRecordCasMiss(input);
+  }
+
+  async deleteCapsulePublicInputReservationRecord(input: {
+    readonly capsuleId: string;
+    readonly expectedRecordDigest: string;
+  }): Promise<boolean> {
+    await this.#ensureSchema();
+    const observed = await this.#orm
+      .select({ record: schema.capsules.publicInputReservationJson })
+      .from(schema.capsules)
+      .where(eq(schema.capsules.id, input.capsuleId))
+      .limit(1)
+      .get();
+    const raw = observed?.record;
+    if (raw === null || raw === undefined) return false;
+    const current = await decodePublicInputReservationLifecycle(raw);
+    if (current.digest !== input.expectedRecordDigest) return false;
+    const row = await this.#orm
+      .update(schema.capsules)
+      .set({
+        publicInputReservationJson: null,
+        publicInputReservationCleanupRunId: null,
+        publicInputReservationCleanupAt: null,
+      })
+      .where(
+        and(
+          eq(schema.capsules.id, input.capsuleId),
+          eq(schema.capsules.publicInputReservationJson, raw),
+        ),
+      )
+      .returning({ id: schema.capsules.id })
+      .get();
+    return row !== undefined;
+  }
+
+  async settleCapsulePublicInputReservationLifecycle(
+    input: SettleCapsulePublicInputReservationLifecycleInput,
+  ): Promise<boolean> {
+    await this.#ensureSchema();
+    const record = await assertPublicInputReservationLifecycleDigest(
+      input.record,
+    );
+    const cleanup = publicInputReservationCleanupProjection(record);
+    const observed = await this.#orm
+      .select({ raw: schema.capsules.publicInputReservationJson })
+      .from(schema.capsules)
+      .where(eq(schema.capsules.id, input.capsuleId))
+      .limit(1)
+      .get();
+    const raw = observed?.raw;
+    if (raw === null || raw === undefined) return false;
+    const current = await decodePublicInputReservationLifecycle(raw);
+    if (current.digest !== input.expectedRecordDigest) return false;
+    const result = await this.#orm
+      .update(schema.capsules)
+      .set({
+        publicInputReservationJson: record,
+        publicInputReservationCleanupRunId: cleanup?.runId ?? null,
+        publicInputReservationCleanupAt: cleanup?.enqueuedAt ?? null,
+      })
+      .where(
+        and(
+          eq(schema.capsules.id, input.capsuleId),
+          eq(schema.capsules.publicInputReservationJson, raw),
+        ),
+      )
+      .run();
+    return changes(result as D1Result) === 1;
+  }
+
+  async #publicInputReservationRecordCasMiss(
+    input: AdoptCapsulePublicInputReservationRecordInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult> {
+    const row = await this.#orm
+      .select({
+        workspaceId: schema.capsules.workspaceId,
+        installConfigId: schema.capsules.installConfigId,
+        epoch: schema.capsules.executionAuthorityEpoch,
+        status: schema.capsules.status,
+        record: schema.capsules.publicInputReservationJson,
+      })
+      .from(schema.capsules)
+      .where(eq(schema.capsules.id, input.capsuleId))
+      .limit(1)
+      .get();
+    if (
+      !row ||
+      row.workspaceId !== input.workspaceId ||
+      row.installConfigId !== input.installConfigId ||
+      row.epoch !== input.capsuleExecutionAuthorityEpoch ||
+      row.status === "destroyed"
+    ) {
+      return { status: "authority_changed" };
+    }
+    if (row.record === null || row.record === undefined) {
+      return { status: "record_changed" };
+    }
+    const record = await decodePublicInputReservationLifecycle(row.record);
+    return "expectedRecordDigest" in input
+      ? { status: "record_changed", record }
+      : { status: "existing", record };
+  }
+
   async rebindCapsuleInstallConfig(
     input: CapsuleInstallConfigRebindInput,
   ): Promise<CapsuleInstallConfigRebindResult> {
@@ -3085,6 +3733,36 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     await validateCommitRunStateInterfaceMaterializationIntent(input);
     await this.#ensureSchema();
     const { capsulePatch } = input;
+    const lifecycleTransition = input.publicInputReservationLifecycle;
+    const lifecycleNext = lifecycleTransition?.lifecycle
+      ? await assertPublicInputReservationLifecycleDigest(
+          lifecycleTransition.lifecycle,
+        )
+      : undefined;
+    const lifecycleCleanup = lifecycleNext
+      ? publicInputReservationCleanupProjection(lifecycleNext)
+      : undefined;
+    const lifecycleRow = lifecycleTransition
+      ? await this.#orm
+          .select({ raw: schema.capsules.publicInputReservationJson })
+          .from(schema.capsules)
+          .where(eq(schema.capsules.id, lifecycleTransition.capsuleId))
+          .limit(1)
+          .get()
+      : undefined;
+    const lifecycleRaw = lifecycleRow?.raw;
+    const lifecycleCurrent = lifecycleRaw === null || lifecycleRaw === undefined
+      ? undefined
+      : await decodePublicInputReservationLifecycle(lifecycleRaw);
+    if (
+      lifecycleTransition &&
+      (lifecycleTransition.capsuleId !== capsulePatch.id ||
+        !lifecycleCurrent ||
+        lifecycleCurrent.digest !==
+          lifecycleTransition.expectedLifecycleDigest)
+    ) {
+      throw new Error("public input reservation lifecycle guard conflict");
+    }
     if (input.applyRunTerminal && input.applyRunLeaseToken !== undefined) {
       const row = await this.#orm
         .select({ leaseToken: schema.runs.leaseToken })
@@ -3133,6 +3811,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         guard.currentStateVersionId,
         guard.status,
       ),
+      ...(lifecycleTransition
+        ? [
+            d1PublicInputReservationLifecycleGuardStmt(
+              this.#orm,
+              lifecycleTransition.capsuleId,
+              lifecycleRaw!,
+            ),
+          ]
+        : []),
       ...(input.stateVersion
         ? [d1UpsertStateVersionStmt(this.#orm, input.stateVersion)]
         : []),
@@ -3177,6 +3864,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           status: updated.status,
           recordJson: updated,
           updatedAt: updated.updatedAt,
+          ...(lifecycleTransition
+            ? {
+                publicInputReservationJson: lifecycleNext ?? null,
+                publicInputReservationCleanupRunId:
+                  lifecycleCleanup?.runId ?? null,
+                publicInputReservationCleanupAt:
+                  lifecycleCleanup?.enqueuedAt ?? null,
+              }
+            : {}),
         })
         .where(eq(schema.capsules.id, updated.id)),
     ];
@@ -5319,6 +6015,31 @@ function d1CapsuleStateVersionGuardStmt(
   );
 }
 
+function d1PublicInputReservationLifecycleGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  capsuleId: string,
+  expectedLifecycle: unknown,
+) {
+  const expected = orm
+    .select({ one: sql`1` })
+    .from(schema.capsules)
+    .where(
+      and(
+        eq(schema.capsules.id, capsuleId),
+        eq(
+          schema.capsules.publicInputReservationJson,
+          expectedLifecycle,
+        ),
+      ),
+    );
+  return orm.insert(schema.capsules).select(
+    orm
+      .select(d1InvalidCapsuleGuardRow(capsuleId))
+      .from(sql`(select 1) as guard_source`)
+      .where(notExists(expected)),
+  );
+}
+
 /**
  * Deliberately invalid Capsule row selected only when a batch guard loses.
  * Using a constant one-row source makes concurrent deletion fail closed too:
@@ -5343,6 +6064,13 @@ function d1InvalidCapsuleGuardRow(capsuleId: string) {
     createdAt: sql<string>`null`.as("createdAt"),
     updatedAt: sql<string>`null`.as("updatedAt"),
     executionAuthorityEpoch: sql<number>`1`.as("executionAuthorityEpoch"),
+    publicInputReservationJson:
+      sql<PublicInputReservationLifecycle | null>`null`
+      .as("publicInputReservationJson"),
+    publicInputReservationCleanupRunId: sql<string | null>`null`
+      .as("publicInputReservationCleanupRunId"),
+    publicInputReservationCleanupAt: sql<number | null>`null`
+      .as("publicInputReservationCleanupAt"),
   };
 }
 
@@ -5682,6 +6410,17 @@ function stateVersionFromDrizzleRow(row: {
     createdByRunId: row.createdByRunId,
     createdAt: row.createdAt,
   };
+}
+
+async function tryDecodePublicInputReservationLifecycle(
+  value: unknown,
+): Promise<PublicInputReservationLifecycle | undefined> {
+  try {
+    return await decodePublicInputReservationLifecycle(value);
+  } catch {
+    // Invalid legacy evidence is never rewritten or released.
+    return undefined;
+  }
 }
 
 function changes(result: D1Result): number {
@@ -9331,7 +10070,55 @@ ${D1_CAPSULE_INTERFACE_MATERIALIZATION_INTENT_STATEMENTS.join("\n---\n")}
       );
     },
   },
+  {
+    version: 68,
+    name: "d1_capsule_public_input_reservation_lifecycle",
+    checksumSource: () => `
+Capsules retain one nullable private non-secret provider reservation lifecycle envelope
+value-free cleanup run and retry time columns drive global repair across archived Workspaces
+all columns are additive and preserve every existing Capsule row without backfill
+`,
+    async atomicStatements(db) {
+      return await d1PublicInputReservationLifecycleStatements(db);
+    },
+    async apply(db) {
+      await runD1AtomicSql(
+        db,
+        await d1PublicInputReservationLifecycleStatements(db),
+      );
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
+
+async function d1PublicInputReservationLifecycleStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  return [
+    ...await d1EnsureColumnStatements(
+      db,
+      "capsules",
+      "public_input_reservation_json",
+      "text",
+    ),
+    ...await d1EnsureColumnStatements(
+      db,
+      "capsules",
+      "public_input_reservation_cleanup_run_id",
+      "text",
+    ),
+    ...await d1EnsureColumnStatements(
+      db,
+      "capsules",
+      "public_input_reservation_cleanup_at",
+      "integer",
+    ),
+    `create index if not exists capsules_public_input_cleanup_idx
+       on capsules (
+         public_input_reservation_cleanup_at,
+         public_input_reservation_cleanup_run_id
+       )`,
+  ];
+}
 
 /**
  * v45 is replayed during destructive convergence. Once v54 has installed the

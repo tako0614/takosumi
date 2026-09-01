@@ -349,6 +349,35 @@ providers. A guided recipe catalog is descriptive metadata, not an execution
 allowlist. Core does not branch on a provider name and does not silently inject
 provider credentials.
 
+A reviewed `http.endpoint` delivery is the only exception that may add a
+Plan-known host input after ordinary user-input compilation. The trusted Recipe
+driver returns exactly a canonical `publicInputs.httpEndpointUrl` and its opaque
+provider-owned `reservationRef`; it cannot return variable or environment maps.
+Core selects one capability-declaring owner, durably records an intent, and
+sends only a nonce-derived client idempotency key plus the exact Plan-known
+`deliver.variables.subdomain` value. The private lifecycle nonce never leaves
+the private lifecycle/Plan sidecar. Core maps the URL only through the immutable compiled
+repository `public_endpoint.variables.url` target and pins the source snapshot,
+repository digest, owner, targets, request, reference, URL, and receipt digest.
+The Capsule-private lifecycle envelope holds `applied`, one Plan-owned
+`candidate`, and bounded `retiring` receipts. A replacement Plan never releases
+`applied`; Plan rejection releases only an unreachable candidate, and guarded
+Apply atomically promotes the candidate with Run/State/Output/Capsule state while
+enqueueing the old applied receipt. A backward-decoded unowned v1 intent is
+claimed by an exact current-Capsule-authority CAS: an exact request retry reuses
+its key, while ambiguous work is bound to a failed Plan cleanup projection and
+must prove that no other Plan for the Capsule remains applyable, then obtain
+positive provider readback before typed release. The bounded
+retirement queue is fenced before runner/provider mutation; at capacity global
+repair drains existing retirement work before retrying a candidate. Apply and
+Destroy re-read the exact owner/ref and fail before runner dispatch on missing,
+expired, changed, or capacity-blocked authority.
+Destroy uses the durable applied receipt after current endpoint UX removal and
+atomically moves it to `retiring`; only typed `released` or `already_absent`
+permits exact-CAS settlement, and terminal redelivery retries failures. The
+allocator remains the provider; Takosumi stores no provider credential in the
+Plan or Run ledger.
+
 Secrets are write-only at the control-object boundary. Secret values never
 enter Resource specs, Interface documents, Outputs, state, Run logs, audit
 payloads, or public discovery. Sensitive OpenTofu values remain in encrypted

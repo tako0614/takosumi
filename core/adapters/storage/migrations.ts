@@ -4884,4 +4884,22 @@ create index if not exists takosumi_interface_intents_dead_letter_idx
     workspace_id, status, dead_lettered_at desc, id desc
   );`,
     },
+    {
+      id: "deploy.capsule_public_input_reservation_lifecycle.add",
+      version: 112,
+      domain: "deploy",
+      description:
+        "Add the private Capsule reservation lifecycle envelope and value-free global cleanup projection.",
+      sql: `alter table takosumi_capsules
+  add column if not exists public_input_reservation_json jsonb;
+alter table takosumi_capsules
+  add column if not exists public_input_reservation_cleanup_run_id text;
+alter table takosumi_capsules
+  add column if not exists public_input_reservation_cleanup_at bigint;
+create index if not exists takosumi_capsules_public_input_cleanup_idx
+  on takosumi_capsules (
+    public_input_reservation_cleanup_at,
+    public_input_reservation_cleanup_run_id
+  );`,
+    },
   ]);

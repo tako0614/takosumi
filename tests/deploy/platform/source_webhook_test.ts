@@ -634,7 +634,7 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
             }),
           ]);
         },
-        listPendingRuntimeSecretRetirementRuns: (options) => {
+        listPendingDestroyTailRuns: (options) => {
           retirementQueries.push(options);
           return Promise.resolve([
             runRecord({
@@ -661,9 +661,17 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
               createdAt: new Date(now - 20_000).toISOString(),
               finishedAt: new Date(now - 10_000).toISOString(),
             }),
+            runRecord({
+              id: "plan_candidate_failed_archived",
+              workspaceId: "space_archived",
+              type: "plan",
+              status: "failed",
+              createdAt: new Date(now - 20_000).toISOString(),
+              finishedAt: new Date(now - 10_000).toISOString(),
+            }),
           ]);
         },
-        claimPendingRuntimeSecretRetirementDispatch: () =>
+        claimPendingDestroyTailDispatch: () =>
           Promise.resolve(true),
       },
     },
@@ -722,11 +730,16 @@ test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", a
       runId: "destroy_retirement_after_prefix",
       workspaceId: "space_after_active_prefix",
     },
+    {
+      action: "plan",
+      runId: "plan_candidate_failed_archived",
+      workspaceId: "space_archived",
+    },
   ]);
   expect(result).toEqual({
     workspacesScanned: 1,
-    runsScanned: 12,
-    rescheduled: 6,
+    runsScanned: 13,
+    rescheduled: 7,
     ordinaryFailures: 0,
     retirementFailures: 0,
   });
@@ -765,8 +778,8 @@ test("scheduled run repair resolves only recoverable Run Workspaces beyond the c
             createdAt: new Date(now - 10_000).toISOString(),
           }),
         ]),
-      listPendingRuntimeSecretRetirementRuns: () => Promise.resolve([]),
-      claimPendingRuntimeSecretRetirementDispatch: () =>
+      listPendingDestroyTailRuns: () => Promise.resolve([]),
+      claimPendingDestroyTailDispatch: () =>
         Promise.resolve(true),
     },
   };
@@ -853,8 +866,8 @@ test("scheduled run repair chunks keyed Workspace lookup and skips missing or ar
               }),
             ),
           ),
-        listPendingRuntimeSecretRetirementRuns: () => Promise.resolve([]),
-        claimPendingRuntimeSecretRetirementDispatch: () =>
+        listPendingDestroyTailRuns: () => Promise.resolve([]),
+        claimPendingDestroyTailDispatch: () =>
           Promise.resolve(true),
       },
     },
@@ -910,7 +923,7 @@ test("runtime secret retirement repair survives a keyed Workspace lookup failure
               createdAt: new Date(now - 10_000).toISOString(),
             }),
           ]),
-        listPendingRuntimeSecretRetirementRuns: () =>
+        listPendingDestroyTailRuns: () =>
           Promise.resolve([
             runRecord({
               id: "destroy_retirement_catalog_failure",
@@ -921,7 +934,7 @@ test("runtime secret retirement repair survives a keyed Workspace lookup failure
               finishedAt: new Date(now - 10_000).toISOString(),
             }),
           ]),
-        claimPendingRuntimeSecretRetirementDispatch: () =>
+        claimPendingDestroyTailDispatch: () =>
           Promise.resolve(true),
       },
     },
@@ -989,7 +1002,7 @@ test("runtime secret retirement repair survives ordinary query and dispatch fail
                     createdAt: new Date(now - 10_000).toISOString(),
                   }),
                 ]),
-          listPendingRuntimeSecretRetirementRuns: () =>
+          listPendingDestroyTailRuns: () =>
             Promise.resolve([
               runRecord({
                 id: `destroy_retirement_after_${failure}`,
@@ -1000,7 +1013,7 @@ test("runtime secret retirement repair survives ordinary query and dispatch fail
                 finishedAt: new Date(now - 10_000).toISOString(),
               }),
             ]),
-          claimPendingRuntimeSecretRetirementDispatch: () =>
+          claimPendingDestroyTailDispatch: () =>
             Promise.resolve(true),
         },
       },
@@ -1091,11 +1104,11 @@ test("runtime secret retirement repair rotates a poisoned real-size prefix befor
     },
     controller: {
       listRecoverableOpenTofuRuns: () => Promise.resolve([]),
-      listPendingRuntimeSecretRetirementRuns: async (options: {
+      listPendingDestroyTailRuns: async (options: {
         readonly staleBeforeMs: number;
         readonly limit?: number;
       }) =>
-        (await store.listPendingRuntimeSecretRetirementRuns(options)).map(
+        (await store.listPendingDestroyTailRuns(options)).map(
           (run) =>
             runRecord({
               id: run.id,
@@ -1108,11 +1121,11 @@ test("runtime secret retirement repair rotates a poisoned real-size prefix befor
                 : new Date(run.finishedAt).toISOString(),
             }),
         ),
-      claimPendingRuntimeSecretRetirementDispatch: (input: {
+      claimPendingDestroyTailDispatch: (input: {
         readonly runId: string;
         readonly staleBeforeMs: number;
         readonly attemptedAt: number;
-      }) => store.claimPendingRuntimeSecretRetirementDispatch(input),
+      }) => store.claimPendingDestroyTailDispatch(input),
     },
   };
   const scheduler = {

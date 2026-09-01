@@ -39,6 +39,123 @@ export interface CredentialRecipeIssuedRunCredential {
   readonly ttlSeconds: number;
 }
 
+/**
+ * Closed, non-secret semantic output from trusted host code.
+ *
+ * This is deliberately not an arbitrary variable or environment map. Core may
+ * consume the URL only through an accepted InstallConfig
+ * `public_endpoint.variables.url` projection.
+ */
+export interface CredentialRecipeDriverPublicInputs {
+  readonly httpEndpointUrl: string;
+  /** Opaque provider-owned reservation identity; Core never interprets it. */
+  readonly reservationRef: string;
+}
+
+/** Exact semantic request Core may present to a trusted recipe driver. */
+export interface CredentialRecipeDriverPublicInputRequest {
+  readonly httpEndpointUrl: {
+    /**
+     * Non-secret idempotency identity derived from immutable Capsule lifecycle
+     * coordinates. It contains no Workspace, account, session, or Run identity.
+     */
+    readonly clientIdempotencyKey: string;
+    /**
+     * Exact Plan-known semantic compiled from
+     * `http.endpoint deliver.variables.subdomain`. Provider drivers may use
+     * it as the requested public label, but Core never supplies provider
+     * resource names such as Worker or endpoint identifiers.
+     */
+    readonly requestedSubdomain: string;
+    /** Present on re-read/release; allocated and owned only by the provider. */
+    readonly reservationRef?: string;
+  };
+}
+
+export const CREDENTIAL_RECIPE_HTTP_ENDPOINT_PUBLIC_INPUT_CAPABILITY =
+  "http_endpoint_url" as const;
+
+export type CredentialRecipeDriverPublicInputCapability =
+  typeof CREDENTIAL_RECIPE_HTTP_ENDPOINT_PUBLIC_INPUT_CAPABILITY;
+
+/** Exact trusted owner pinned privately with the provider reservation. */
+export interface CredentialRecipeDriverPublicInputOwner {
+  readonly providerSource: string;
+  readonly connectionId: string;
+  readonly recipeId: string;
+  readonly authMode: string;
+  /** Bounded non-secret binding settings required to replay the same driver. */
+  readonly runCredentialSettings?: ProviderBinding["runCredentialSettings"];
+}
+
+export interface CredentialRecipeDriverPublicInputReleaseResult {
+  readonly status: "released" | "already_absent";
+  readonly reservationRef: string;
+}
+
+/** Runtime validator for the one closed reservation request shape. */
+export function assertCredentialRecipeDriverPublicInputRequest(
+  value: unknown,
+  options: { readonly requireReservationRef?: boolean } = {},
+): CredentialRecipeDriverPublicInputRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Credential Recipe public input request must be an object");
+  }
+  exactKeys(value, ["httpEndpointUrl"], "Credential Recipe public input request");
+  const endpoint = (value as { readonly httpEndpointUrl?: unknown })
+    .httpEndpointUrl;
+  if (!endpoint || typeof endpoint !== "object" || Array.isArray(endpoint)) {
+    throw new TypeError(
+      "Credential Recipe public input request.httpEndpointUrl must be an object",
+    );
+  }
+  exactKeys(
+    endpoint,
+    ["clientIdempotencyKey", "requestedSubdomain", "reservationRef"],
+    "Credential Recipe public input request.httpEndpointUrl",
+  );
+  const request = endpoint as {
+    readonly clientIdempotencyKey?: unknown;
+    readonly requestedSubdomain?: unknown;
+    readonly reservationRef?: unknown;
+  };
+  if (
+    typeof request.clientIdempotencyKey !== "string" ||
+    !/^endpoint_request_[a-f0-9]{64}$/u.test(request.clientIdempotencyKey)
+  ) {
+    throw new TypeError(
+      "Credential Recipe public input clientIdempotencyKey is invalid",
+    );
+  }
+  if (!isBoundedRequestedSubdomain(request.requestedSubdomain)) {
+    throw new TypeError(
+      "Credential Recipe public input requestedSubdomain is invalid",
+    );
+  }
+  if (
+    request.reservationRef !== undefined &&
+    !isBoundedOpaqueReservationRef(request.reservationRef)
+  ) {
+    throw new TypeError(
+      "Credential Recipe public input reservationRef is invalid",
+    );
+  }
+  if (options.requireReservationRef && request.reservationRef === undefined) {
+    throw new TypeError(
+      "Credential Recipe public input reservationRef is required",
+    );
+  }
+  return Object.freeze({
+    httpEndpointUrl: Object.freeze({
+      clientIdempotencyKey: request.clientIdempotencyKey,
+      requestedSubdomain: request.requestedSubdomain,
+      ...(request.reservationRef !== undefined
+        ? { reservationRef: request.reservationRef }
+        : {}),
+    }),
+  });
+}
+
 export type CredentialRecipeIssueRunCredential = (
   request: CredentialRecipeRunCredentialRequest,
 ) => Promise<CredentialRecipeIssuedRunCredential>;
@@ -52,6 +169,25 @@ interface CredentialRecipeDriverBaseContext {
   readonly fetch: CredentialDriverFetch;
   readonly now: () => Date;
   readonly staticEvidence: () => ProviderCredentialMintEvidence;
+}
+
+/**
+ * Separate non-secret reservation lane. It intentionally has no canonical Run
+ * identity or credential issuer and therefore cannot receive account/session
+ * identity or mint runner credentials.
+ */
+export interface CredentialRecipeDriverPublicInputContext
+{
+  /** Trusted host scope only; the driver must not forward it to provider RPC. */
+  readonly workspaceId: string;
+  readonly connection: ProviderConnection;
+  /** Canonical bounded non-secret parameters from this exact binding. */
+  readonly runCredentialSettings?: ProviderBinding["runCredentialSettings"];
+  readonly values: Readonly<Record<string, string>>;
+  readonly files: readonly MintedFile[];
+  readonly fetch: CredentialDriverFetch;
+  readonly now: () => Date;
+  readonly publicInputRequest: CredentialRecipeDriverPublicInputRequest;
 }
 
 /**
@@ -72,6 +208,106 @@ export interface CredentialRecipeDriverMintResult {
   readonly env: Readonly<Record<string, string>>;
   readonly files?: readonly MintedFile[];
   readonly evidence: ProviderCredentialMintEvidence;
+}
+
+/** Runtime validator for the closed trusted-driver semantic output. */
+export function assertCredentialRecipeDriverPublicInputs(
+  value: unknown,
+): CredentialRecipeDriverPublicInputs {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Credential Recipe publicInputs must be an object");
+  }
+  exactKeys(
+    value,
+    ["httpEndpointUrl", "reservationRef"],
+    "Credential Recipe publicInputs",
+  );
+  const httpEndpointUrl = (
+    value as { readonly httpEndpointUrl?: unknown }
+  ).httpEndpointUrl;
+  const reservationRef = (
+    value as { readonly reservationRef?: unknown }
+  ).reservationRef;
+  if (typeof httpEndpointUrl !== "string") {
+    throw new TypeError(
+      "Credential Recipe publicInputs.httpEndpointUrl must be an exact HTTPS origin",
+    );
+  }
+  let url: URL;
+  try {
+    url = new URL(httpEndpointUrl);
+  } catch {
+    throw new TypeError(
+      "Credential Recipe publicInputs.httpEndpointUrl must be an exact HTTPS origin",
+    );
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.origin !== httpEndpointUrl ||
+    url.pathname !== "/" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new TypeError(
+      "Credential Recipe publicInputs.httpEndpointUrl must be an exact HTTPS origin",
+    );
+  }
+  if (!isBoundedOpaqueReservationRef(reservationRef)) {
+    throw new TypeError(
+      "Credential Recipe publicInputs.reservationRef must be a bounded opaque reference",
+    );
+  }
+  return Object.freeze({ httpEndpointUrl, reservationRef });
+}
+
+function isBoundedOpaqueReservationRef(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    new TextEncoder().encode(value).byteLength <= 1_024 &&
+    value.trim() === value &&
+    !/[\u0000-\u001f\u007f]/u.test(value)
+  );
+}
+
+function isBoundedRequestedSubdomain(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= 63 &&
+    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(value)
+  );
+}
+
+export function assertCredentialRecipeDriverPublicInputReleaseResult(
+  value: unknown,
+  expectedReservationRef: string,
+): CredentialRecipeDriverPublicInputReleaseResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Credential Recipe public input release must be an object");
+  }
+  exactKeys(
+    value,
+    ["reservationRef", "status"],
+    "Credential Recipe public input release",
+  );
+  const result = value as {
+    readonly status?: unknown;
+    readonly reservationRef?: unknown;
+  };
+  if (
+    (result.status !== "released" && result.status !== "already_absent") ||
+    result.reservationRef !== expectedReservationRef
+  ) {
+    throw new TypeError(
+      "Credential Recipe public input release must confirm the exact reservation",
+    );
+  }
+  return Object.freeze({
+    status: result.status,
+    reservationRef: expectedReservationRef,
+  });
 }
 
 /**
@@ -113,6 +349,14 @@ export interface CredentialRecipeRuntimeDriver {
   readonly verificationCapabilities?: readonly string[];
   /** Closed key ownership for verifier-produced non-secret scope hints. */
   readonly verifiedScopeHintKeys?: CredentialRecipeVerifiedScopeHintKeys;
+  /** Explicit opt-in; owner selection ignores every driver without it. */
+  readonly publicInputCapabilities?: readonly CredentialRecipeDriverPublicInputCapability[];
+  resolvePublicInputs?(
+    input: CredentialRecipeDriverPublicInputContext,
+  ): Promise<CredentialRecipeDriverPublicInputs>;
+  releasePublicInputs?(
+    input: CredentialRecipeDriverPublicInputContext,
+  ): Promise<CredentialRecipeDriverPublicInputReleaseResult>;
   verify?(
     input: CredentialRecipeDriverContext,
   ): Promise<CredentialRecipeDriverVerifyResult>;
@@ -254,6 +498,11 @@ export function resolveCredentialRecipeHostComposition(
     if (!hasValidCredentialVerificationDescriptor(driver)) {
       throw new TypeError(
         `Credential Recipe driver ${key} has an invalid credential verification descriptor`,
+      );
+    }
+    if (!hasValidPublicInputDescriptor(driver)) {
+      throw new TypeError(
+        `Credential Recipe driver ${key} has an invalid public input descriptor`,
       );
     }
   }
@@ -501,7 +750,32 @@ function isCredentialRecipeDriverRegistry(
         typeof (driver as { readonly verify?: unknown }).verify ===
           "function") &&
       ((driver as { readonly mint?: unknown }).mint === undefined ||
-        typeof (driver as { readonly mint?: unknown }).mint === "function"),
+        typeof (driver as { readonly mint?: unknown }).mint === "function") &&
+      ((driver as { readonly resolvePublicInputs?: unknown })
+          .resolvePublicInputs === undefined ||
+        typeof (driver as { readonly resolvePublicInputs?: unknown })
+            .resolvePublicInputs === "function") &&
+      ((driver as { readonly releasePublicInputs?: unknown })
+          .releasePublicInputs === undefined ||
+        typeof (driver as { readonly releasePublicInputs?: unknown })
+            .releasePublicInputs === "function"),
+  );
+}
+
+function hasValidPublicInputDescriptor(
+  driver: CredentialRecipeRuntimeDriver,
+): boolean {
+  const capabilities = driver.publicInputCapabilities;
+  const hasResolve = typeof driver.resolvePublicInputs === "function";
+  const hasRelease = typeof driver.releasePublicInputs === "function";
+  if (capabilities === undefined) return !hasResolve && !hasRelease;
+  return (
+    Array.isArray(capabilities) &&
+    capabilities.length === 1 &&
+    capabilities[0] ===
+      CREDENTIAL_RECIPE_HTTP_ENDPOINT_PUBLIC_INPUT_CAPABILITY &&
+    hasResolve &&
+    hasRelease
   );
 }
 

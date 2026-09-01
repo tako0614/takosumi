@@ -319,7 +319,18 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("created_at"),
     nn("updated_at"),
     defaulted("execution_authority_epoch"),
+    nullable("public_input_reservation_json"),
+    nullable("public_input_reservation_cleanup_run_id"),
+    nullable("public_input_reservation_cleanup_at"),
   ]);
+  expect(sqliteUniqueIndexesOf(d1Schema.capsules)).toContainEqual({
+    name: "capsules_public_input_cleanup_idx",
+    columns: [
+      "public_input_reservation_cleanup_at",
+      "public_input_reservation_cleanup_run_id",
+    ],
+    unique: false,
+  });
 
   expect(getTableName(d1Schema.projects)).toBe("projects");
   expect(columnsOf(d1Schema.projects)).toEqual([
@@ -578,7 +589,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24,
     25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
     44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-    61, 62, 63, 64, 65, 66, 67,
+    61, 62, 63, 64, 65, 66, 67, 68,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -645,6 +656,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_git_install_plans",
     "d1_retired_host_schema_drop_empty",
     "d1_capsule_interface_materialization_intents",
+    "d1_capsule_public_input_reservation_lifecycle",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -1440,7 +1452,18 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("created_at"),
     nn("updated_at"),
     defaulted("execution_authority_epoch"),
+    nullable("public_input_reservation_json"),
+    nullable("public_input_reservation_cleanup_run_id"),
+    nullable("public_input_reservation_cleanup_at"),
   ]);
+  expect(pgUniqueIndexesOf(postgresSchema.capsules)).toContainEqual({
+    name: "takosumi_capsules_public_input_cleanup_idx",
+    columns: [
+      "public_input_reservation_cleanup_at",
+      "public_input_reservation_cleanup_run_id",
+    ],
+    unique: false,
+  });
 
   expect(getTableName(postgresSchema.projects)).toBe("takosumi_projects");
   expect(columnsOf(postgresSchema.projects)).toEqual([

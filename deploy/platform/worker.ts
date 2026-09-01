@@ -3803,11 +3803,11 @@ export interface OpenTofuRunRepairOperations {
       readonly staleRunningBeforeMs: number;
       readonly limit?: number;
     }): Promise<readonly Run[]>;
-    listPendingRuntimeSecretRetirementRuns(options: {
+    listPendingDestroyTailRuns(options: {
       readonly staleBeforeMs: number;
       readonly limit?: number;
     }): Promise<readonly Run[]>;
-    claimPendingRuntimeSecretRetirementDispatch(input: {
+    claimPendingDestroyTailDispatch(input: {
       readonly runId: string;
       readonly staleBeforeMs: number;
       readonly attemptedAt: number;
@@ -4099,9 +4099,9 @@ async function runScheduledOpenTofuRunRepair(
 /**
  * Scheduled run repair safety net. Creation already schedules the per-run owner
  * directly for speed; this bounded sweep re-pokes old non-terminal rows whose
- * owner alarm/record was lost and terminal provider-applied rows with a durable
- * pending billing-finalization marker. The controller consumers stay
- * idempotent and own all state changes.
+ * owner alarm/record was lost, terminal provider-applied rows with a durable
+ * pending finalizer, and terminal Plans owning endpoint candidate cleanup. The
+ * controller consumers stay idempotent and own all state changes.
  */
 export async function repairStaleOpenTofuRuns(
   operations: OpenTofuRunRepairOperations,
@@ -4196,7 +4196,7 @@ export async function repairStaleOpenTofuRuns(
     // timestamp, making this bounded oldest-attempt-first scan fair over time.
     const retirementStaleBeforeMs = now - queuedStaleMs;
     const retirementRuns =
-      await operations.controller.listPendingRuntimeSecretRetirementRuns({
+      await operations.controller.listPendingDestroyTailRuns({
         staleBeforeMs: retirementStaleBeforeMs,
         limit: Math.max(1, Math.floor(runsPerWorkspace)),
       });
@@ -4209,12 +4209,14 @@ export async function repairStaleOpenTofuRuns(
         queuedStaleMs,
         runningStaleMs,
         fallbackWorkspaceId: workspaceId,
+        allowTerminalPlan: true,
       });
-      if (!dispatch || dispatch.action !== "apply") continue;
+      if (!dispatch ||
+        (dispatch.action !== "apply" && dispatch.action !== "plan")) continue;
       try {
         const claimed =
           await operations.controller
-            .claimPendingRuntimeSecretRetirementDispatch({
+            .claimPendingDestroyTailDispatch({
               runId: run.id,
               staleBeforeMs: retirementStaleBeforeMs,
               attemptedAt: now,
@@ -4256,6 +4258,8 @@ function recoverableRunDispatch(
     readonly queuedStaleMs: number;
     readonly runningStaleMs: number;
     readonly fallbackWorkspaceId: string;
+    /** Terminal Plans are cleanup outbox rows only, never ordinary recovery. */
+    readonly allowTerminalPlan?: boolean;
   },
 ):
   | {
@@ -4266,10 +4270,19 @@ function recoverableRunDispatch(
   | undefined {
   const action = repairActionForRunType(run.type);
   if (!action) return undefined;
-  const billingFinalizationRepair =
-    action === "apply" &&
+  const terminalFinalizationRepair =
+    (action === "apply" ||
+      (action === "plan" && options.allowTerminalPlan === true)) &&
     (run.status === "succeeded" || run.status === "failed");
-  if (!isRecoverableRunStatus(run.status) && !billingFinalizationRepair) {
+  const terminalCleanupRepair =
+    (action === "apply" ||
+      (action === "plan" && options.allowTerminalPlan === true)) &&
+    (run.status === "cancelled" || run.status === "expired");
+  if (
+    !isRecoverableRunStatus(run.status) &&
+    !terminalFinalizationRepair &&
+    !terminalCleanupRepair
+  ) {
     return undefined;
   }
   const ageMs =

@@ -355,10 +355,30 @@ provider credential is passed to the build phase. When `sourceBuild` is not
 set, the OpenTofu module resolves its artifact as usual from a release
 artifact URL/digest, a provider, or a data source.
 
-Public hostnames, DNS, and application endpoints belong to the ordinary
-OpenTofu module and provider in the Git checkout. Takosumi neither synthesizes
-nor reserves Capsule hostnames; `public_endpoint` metadata only projects an
-applied Output into the UI.
+The ordinary OpenTofu module and provider in the Git checkout own allocation
+of public hostnames, DNS, and application endpoints. Only when a v2.4 manifest
+declares `http.endpoint` through `public_endpoint.variables.url` may a trusted
+Credential Recipe driver return a canonical HTTPS origin as the closed,
+non-secret `publicInputs` semantic together with a provider-owned opaque
+reservation reference. Takosumi maps it to that one declared variable, pins it
+with the exact repository target and owner in private Plan inputs, re-reads it
+before Apply, and keeps a private Capsule lifecycle envelope. A replacement
+Plan stages a `candidate` while the old `applied` receipt remains live; only the
+guarded Apply commit promotes it and moves the old receipt to `retiring`. A
+failed, cancelled, or expired Plan retires only its unreachable candidate.
+Destroy uses the durable applied receipt even if current install UX no longer
+declares the endpoint, and typed release is retried from the durable retirement
+outbox. Backward-decoded unowned intents are either adopted by an exact request
+retry or, only when no other Capsule Plan remains applyable, routed through
+positive-readback repair; retirement capacity is checked
+before runner mutation and full queues drain through the same outbox. Each new
+candidate intent gets a private random lifecycle nonce;
+retries and same-target re-adoption reuse the live nonce/key, while a later
+intent after terminal release and exact-CAS removal necessarily gets a new one.
+Arbitrary variable maps, `TF_VAR_*`, and account/session identity are outside
+this lane.
+Existing `public_endpoint`/Output behavior is unchanged for manifests without
+`http.endpoint`.
 
 A Run stores:
 

@@ -84,10 +84,14 @@ import type {
   CommitRestoredStateInput,
   CommitRestoredStateResult,
   BeginApplyRunResult,
+  AdoptCapsulePublicInputReservationRecordInput,
+  ClaimCapsulePublicInputReservationLegacyCandidateInput,
+  CapsulePublicInputReservationRecordWriteResult,
   CapsuleExecutionAuthority,
   CapsuleExecutionAuthorityInput,
   CapsuleInstallConfigRebindInput,
   CapsuleInstallConfigRebindResult,
+  ReplaceCapsulePublicInputReservationRecordInput,
   ClaimCapsuleInterfaceMaterializationIntentInput,
   MarkCapsuleStaleCommand,
   MarkCapsuleStaleResult,
@@ -104,7 +108,8 @@ import type {
   RenewCapsuleInterfaceMaterializationIntentLeaseResult,
   RetryCapsuleInterfaceMaterializationIntentInput,
   RetryCapsuleInterfaceMaterializationIntentResult,
-  RuntimeSecretRetirementDispatchClaimInput,
+  DestroyTailDispatchClaimInput,
+  SettleCapsulePublicInputReservationLifecycleInput,
   SettleCapsuleInterfaceMaterializationIntentInput,
   SettleCapsuleInterfaceMaterializationIntentResult,
   StoredRunRecord,
@@ -114,6 +119,15 @@ import type {
   TransitionRunInput,
   TransitionRunResult,
 } from "./store.ts";
+import {
+  assertPublicInputReservationLifecycleDigest,
+  claimPublicInputReservationLegacyCandidateForCleanup,
+  decodePublicInputReservationLifecycle,
+  isPublicInputReservationLegacyCandidateClaim,
+  PUBLIC_INPUT_RESERVATION_LEGACY_INTENT_KIND,
+  publicInputReservationCleanupProjection,
+  type PublicInputReservationLifecycle,
+} from "./public_input_reservation.ts";
 import {
   assertSourceSyncSuccessCommit,
   assertCapsuleInterfaceMaterializationIntentClaimInput,
@@ -137,7 +151,8 @@ import {
   normalizeStoredCapsuleCompatibilityReport,
   parseStoredCapsuleCompatibilityProviderGraph,
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
-  runtimeSecretRetirementDispatchAttempt,
+  publicInputReservationCleanupRunReady,
+  destroyTailDispatchAttempt,
   sourceSnapshotsExactlyMatch,
   storedCapsuleCompatibilityProviderGraph,
   SourceSnapshotConflictError,
@@ -649,22 +664,24 @@ function pgRunBillingCapturePending(): SQL {
   `;
 }
 
-/** Mirrors applyRunRuntimeSecretRetirementPending in the shared store model. */
-function pgRunRuntimeSecretRetirementPending(): SQL {
+/** Mirrors applyRunDestroyTailPending in the shared store model. */
+function pgRunDestroyTailPending(): SQL {
   return sql`
-    EXISTS (
-      SELECT 1
-      FROM jsonb_array_elements(
-        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
-      ) AS audit_event
-      WHERE audit_event ->> 'type' = 'runtime_secret.retirement.pending'
-    )
-    AND NOT EXISTS (
-      SELECT 1
-      FROM jsonb_array_elements(
-        COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
-      ) AS audit_event
-      WHERE audit_event ->> 'type' = 'runtime_secret.retirement.completed'
+    (
+      EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(
+          COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
+        ) AS audit_event
+        WHERE audit_event ->> 'type' = 'runtime_secret.retirement.pending'
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(
+          COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
+        ) AS audit_event
+        WHERE audit_event ->> 'type' = 'runtime_secret.retirement.completed'
+      )
     )
   `;
 }
@@ -1145,38 +1162,349 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       .filter((row) => isRecoverableOpenTofuRunRecord(row, options));
   }
 
-  async listPendingRuntimeSecretRetirementRuns(options: {
+  async listPendingDestroyTailRuns(options: {
     readonly staleBeforeMs: number;
     readonly limit?: number;
-  }): Promise<readonly ApplyRun[]> {
+  }): Promise<readonly StoredRunRecord[]> {
     const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
     const lastAttempt = sql`COALESCE(
       NULLIF(${pgSchema.runs.runJson} ->> 'updatedAt', '')::double precision,
       NULLIF(${pgSchema.runs.runJson} ->> 'finishedAt', '')::double precision,
       ${pgRunCreatedAtMillisOrder()}
     )`;
+    const publicCleanupAt = sql`(
+      select min(c.public_input_reservation_cleanup_at)
+      from takosumi_capsules c
+      where c.public_input_reservation_cleanup_run_id = ${pgSchema.runs.id}
+    )`;
     const rows = await this.#db
       .select({ json: pgSchema.runs.runJson })
       .from(pgSchema.runs)
       .where(
-        and(
-          inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
-          inArray(pgSchema.runs.status, ["succeeded", "failed"]),
-          pgRunRuntimeSecretRetirementPending(),
-          sql`${lastAttempt} <= ${options.staleBeforeMs}`,
+        or(
+          and(
+            inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+            inArray(pgSchema.runs.status, ["succeeded", "failed"]),
+            pgRunDestroyTailPending(),
+            sql`${lastAttempt} <= ${options.staleBeforeMs}`,
+          ),
+          and(
+            sql`${publicCleanupAt} is not null`,
+            sql`${publicCleanupAt} <= ${options.staleBeforeMs}`,
+            or(
+              and(
+                inArray(pgSchema.runs.kind, [
+                  "plan",
+                  "destroy_plan",
+                  "drift_check",
+                ]),
+                or(
+                  inArray(pgSchema.runs.status, [
+                    "failed",
+                    "cancelled",
+                    "expired",
+                  ]),
+                  sql`${pgSchema.runs.runJson}->>'appliedApplyRunId' is not null`,
+                ),
+              ),
+              and(
+                inArray(pgSchema.runs.kind, [...RUN_KINDS_APPLY]),
+                inArray(pgSchema.runs.status, [
+                  "succeeded",
+                  "failed",
+                  "cancelled",
+                  "expired",
+                ]),
+              ),
+            ),
+          ),
         ),
       )
-      .orderBy(asc(lastAttempt), asc(pgSchema.runs.id))
+      .orderBy(
+        asc(sql`COALESCE(${publicCleanupAt}, ${lastAttempt})`),
+        asc(pgSchema.runs.id),
+      )
       .limit(limit);
-    return rows.map((row) => parseRow(row) as ApplyRun);
+    const projected = rows.map((row) => parseRow(row) as StoredRunRecord);
+
+    // Bare v1 intents predate the cleanup projection. Discover them without a
+    // read-time rewrite, and pair each with one exact terminal Plan from the
+    // same Capsule/Workspace. The subsequent dispatch claim performs the
+    // whole-row JSON CAS that durably binds this carrier before provider
+    // readback; no allocation or blind release occurs in this scan.
+    const legacyHasNoApplyablePlan = notExists(
+      this.#db
+        .select({ id: pgSchema.runs.id })
+        .from(pgSchema.runs)
+        .where(
+          and(
+            eq(pgSchema.runs.capsuleId, pgSchema.capsules.id),
+            eq(pgSchema.runs.workspaceId, pgSchema.capsules.workspaceId),
+            inArray(pgSchema.runs.kind, [
+              "plan",
+              "destroy_plan",
+              "drift_check",
+            ]),
+            sql`not (
+              ${pgSchema.runs.status} in ('failed', 'cancelled', 'expired')
+              or ${pgSchema.runs.runJson}->>'appliedApplyRunId' is not null
+            )`,
+          ),
+        ),
+    );
+    const legacyHasStaleTerminalCarrier = exists(
+      this.#db
+        .select({ id: pgSchema.runs.id })
+        .from(pgSchema.runs)
+        .where(
+          and(
+            eq(pgSchema.runs.capsuleId, pgSchema.capsules.id),
+            eq(pgSchema.runs.workspaceId, pgSchema.capsules.workspaceId),
+            inArray(pgSchema.runs.kind, [
+              "plan",
+              "destroy_plan",
+              "drift_check",
+            ]),
+            or(
+              inArray(pgSchema.runs.status, [
+                "failed",
+                "cancelled",
+                "expired",
+              ]),
+              sql`${pgSchema.runs.runJson}->>'appliedApplyRunId' is not null`,
+            ),
+            sql`${lastAttempt} <= ${options.staleBeforeMs}`,
+          ),
+        ),
+    );
+    const legacyRows = await this.#db
+      .select({
+        capsuleId: pgSchema.capsules.id,
+        workspaceId: pgSchema.capsules.workspaceId,
+        record: pgSchema.capsules.publicInputReservationJson,
+      })
+      .from(pgSchema.capsules)
+      .where(
+        and(
+          isNull(pgSchema.capsules.publicInputReservationCleanupRunId),
+          legacyHasNoApplyablePlan,
+          legacyHasStaleTerminalCarrier,
+          or(
+            sql`${pgSchema.capsules.publicInputReservationJson}->>'kind' = ${PUBLIC_INPUT_RESERVATION_LEGACY_INTENT_KIND}`,
+            and(
+              sql`${pgSchema.capsules.publicInputReservationJson}->>'kind' = 'takosumi.public-input-reservation-lifecycle@v2'`,
+              sql`${pgSchema.capsules.publicInputReservationJson}->'candidate' is not null`,
+              sql`${pgSchema.capsules.publicInputReservationJson}->'candidate'->>'planRunId' is null`,
+              sql`${pgSchema.capsules.publicInputReservationJson}->'candidate'->'reservation'->>'kind' = ${PUBLIC_INPUT_RESERVATION_LEGACY_INTENT_KIND}`,
+            ),
+          ),
+        ),
+      )
+      .orderBy(asc(pgSchema.capsules.createdAt), asc(pgSchema.capsules.id))
+      .limit(limit);
+    const legacyCarriers: StoredRunRecord[] = [];
+    for (const legacyRow of legacyRows) {
+      if (legacyRow.record === null || legacyRow.record === undefined) continue;
+      let lifecycle: PublicInputReservationLifecycle;
+      try {
+        lifecycle = await decodePublicInputReservationLifecycle(
+          parseJson(legacyRow.record),
+        );
+      } catch {
+        continue;
+      }
+      if (
+        lifecycle.candidate?.planRunId ||
+        lifecycle.candidate?.requirement.capsuleId !== legacyRow.capsuleId ||
+        lifecycle.candidate.requirement.workspaceId !== legacyRow.workspaceId
+      ) continue;
+      const applyableRows = await this.#db
+        .select({ id: pgSchema.runs.id })
+        .from(pgSchema.runs)
+        .where(
+          and(
+            eq(pgSchema.runs.capsuleId, legacyRow.capsuleId),
+            eq(pgSchema.runs.workspaceId, legacyRow.workspaceId),
+            inArray(pgSchema.runs.kind, [
+              "plan",
+              "destroy_plan",
+              "drift_check",
+            ]),
+            sql`not (
+              ${pgSchema.runs.status} in ('failed', 'cancelled', 'expired')
+              or ${pgSchema.runs.runJson}->>'appliedApplyRunId' is not null
+            )`,
+          ),
+        )
+        .limit(1);
+      if (applyableRows.length > 0) continue;
+      const carrierRows = await this.#db
+        .select({ json: pgSchema.runs.runJson })
+        .from(pgSchema.runs)
+        .where(
+          and(
+            eq(pgSchema.runs.capsuleId, legacyRow.capsuleId),
+            eq(pgSchema.runs.workspaceId, legacyRow.workspaceId),
+            inArray(pgSchema.runs.kind, [
+              "plan",
+              "destroy_plan",
+              "drift_check",
+            ]),
+            or(
+              inArray(pgSchema.runs.status, [
+                "failed",
+                "cancelled",
+                "expired",
+              ]),
+              sql`${pgSchema.runs.runJson}->>'appliedApplyRunId' is not null`,
+            ),
+            sql`${lastAttempt} <= ${options.staleBeforeMs}`,
+          ),
+        )
+        .orderBy(asc(lastAttempt), asc(pgSchema.runs.id))
+        .limit(1);
+      const carrier = parseRow(carrierRows[0]) as StoredRunRecord | undefined;
+      if (
+        carrier &&
+        isPlanRunRecord(carrier) &&
+        carrier.capsuleId === legacyRow.capsuleId &&
+        carrier.workspaceId === legacyRow.workspaceId &&
+        publicInputReservationCleanupRunReady(carrier)
+      ) legacyCarriers.push(carrier);
+    }
+    const deduped = new Map<string, StoredRunRecord>();
+    for (const row of [...legacyCarriers, ...projected]) {
+      if (!deduped.has(row.id)) deduped.set(row.id, row);
+    }
+    return [...deduped.values()].slice(0, limit);
   }
 
-  async claimPendingRuntimeSecretRetirementDispatch(
-    input: RuntimeSecretRetirementDispatchClaimInput,
+  async claimPendingDestroyTailDispatch(
+    input: DestroyTailDispatchClaimInput,
   ): Promise<boolean> {
-    const observed = await this.getApplyRun(input.runId);
+    const observed = await this.getPlanRun(input.runId) ??
+      await this.getApplyRun(input.runId);
+    if (
+      observed &&
+      publicInputReservationCleanupRunReady(observed) &&
+      Number.isFinite(input.attemptedAt) &&
+      input.attemptedAt > 0
+    ) {
+      const claimedCleanup = await this.#db
+        .update(pgSchema.capsules)
+        .set({
+          publicInputReservationCleanupAt: Math.floor(input.attemptedAt),
+        })
+        .where(
+          and(
+            eq(
+              pgSchema.capsules.publicInputReservationCleanupRunId,
+              input.runId,
+            ),
+            sql`${pgSchema.capsules.publicInputReservationCleanupAt} <= ${input.staleBeforeMs}`,
+          ),
+        )
+        .returning({ id: pgSchema.capsules.id });
+      if (claimedCleanup.length === 1) return true;
+    }
+    if (
+      observed &&
+      isPlanRunRecord(observed) &&
+      observed.capsuleId &&
+      publicInputReservationCleanupRunReady(observed) &&
+      Number.isFinite(input.attemptedAt) &&
+      input.attemptedAt > 0 &&
+      observed.updatedAt <= input.staleBeforeMs
+    ) {
+      const legacyRows = await this.#db
+        .select({
+          record: pgSchema.capsules.publicInputReservationJson,
+        })
+        .from(pgSchema.capsules)
+        .where(
+          and(
+            eq(pgSchema.capsules.id, observed.capsuleId),
+            eq(pgSchema.capsules.workspaceId, observed.workspaceId),
+            isNull(pgSchema.capsules.publicInputReservationCleanupRunId),
+          ),
+        )
+        .limit(1);
+      const raw = legacyRows[0]?.record;
+      if (raw !== null && raw !== undefined) {
+        const lifecycle = await tryDecodePublicInputReservationLifecycle(
+          parseJson(raw),
+        );
+        if (lifecycle) {
+          const claimed =
+            await claimPublicInputReservationLegacyCandidateForCleanup(
+              lifecycle,
+              observed,
+              input.attemptedAt,
+            );
+          if (
+            claimed &&
+            lifecycle.candidate!.stagedAt <= input.staleBeforeMs
+          ) {
+            const cleanup = publicInputReservationCleanupProjection(claimed)!;
+            const noApplyablePlan = notExists(
+              this.#db
+                .select({ id: pgSchema.runs.id })
+                .from(pgSchema.runs)
+                .where(
+                  and(
+                    eq(pgSchema.runs.capsuleId, observed.capsuleId),
+                    eq(pgSchema.runs.workspaceId, observed.workspaceId),
+                    inArray(pgSchema.runs.kind, [
+                      "plan",
+                      "destroy_plan",
+                      "drift_check",
+                    ]),
+                    sql`not (
+                      ${pgSchema.runs.status} in ('failed', 'cancelled', 'expired')
+                      or ${pgSchema.runs.runJson}->>'appliedApplyRunId' is not null
+                    )`,
+                  ),
+                ),
+            );
+            const carrierStillExact = this.#db
+              .select({ id: pgSchema.runs.id })
+              .from(pgSchema.runs)
+              .where(
+                and(
+                  eq(pgSchema.runs.id, observed.id),
+                  eq(pgSchema.runs.capsuleId, observed.capsuleId),
+                  eq(pgSchema.runs.workspaceId, observed.workspaceId),
+                  eq(pgSchema.runs.runJson, observed),
+                ),
+              );
+            const claimedRows = await this.#db
+              .update(pgSchema.capsules)
+              .set({
+                publicInputReservationJson: claimed,
+                publicInputReservationCleanupRunId: cleanup.runId,
+                publicInputReservationCleanupAt: cleanup.enqueuedAt,
+              })
+              .where(
+                and(
+                  eq(pgSchema.capsules.id, observed.capsuleId),
+                  eq(pgSchema.capsules.workspaceId, observed.workspaceId),
+                  isNull(
+                    pgSchema.capsules.publicInputReservationCleanupRunId,
+                  ),
+                  eq(pgSchema.capsules.publicInputReservationJson, raw),
+                  exists(carrierStillExact),
+                  noApplyablePlan,
+                ),
+              )
+              .returning({ id: pgSchema.capsules.id });
+            if (claimedRows.length === 1) return true;
+          }
+        }
+      }
+    }
+    if (!observed || !isApplyRunRecord(observed)) return false;
     const claimed = observed
-      ? runtimeSecretRetirementDispatchAttempt(observed, input)
+      ? destroyTailDispatchAttempt(observed, input)
       : undefined;
     if (!claimed) return false;
     const rows = await this.#db
@@ -1190,7 +1518,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           // This exact JSON fence is the attempt claim. A concurrent sweep or
           // completed retirement changes the row and makes this update lose.
           eq(pgSchema.runs.runJson, observed),
-          pgRunRuntimeSecretRetirementPending(),
+          pgRunDestroyTailPending(),
         ),
       )
       .returning({ id: pgSchema.runs.id });
@@ -1976,6 +2304,329 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       .where(eq(pgSchema.capsules.id, capsuleId))
       .limit(1);
     return rows[0]?.epoch;
+  }
+
+  async getCapsulePublicInputReservationRecord(
+    capsuleId: string,
+  ): Promise<PublicInputReservationLifecycle | undefined> {
+    const rows = await this.#db
+      .select({ record: pgSchema.capsules.publicInputReservationJson })
+      .from(pgSchema.capsules)
+      .where(eq(pgSchema.capsules.id, capsuleId))
+      .limit(1);
+    const value = rows[0]?.record;
+    return value === null || value === undefined
+      ? undefined
+      : await decodePublicInputReservationLifecycle(parseJson(value));
+  }
+
+  async adoptCapsulePublicInputReservationRecord(
+    input: AdoptCapsulePublicInputReservationRecordInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult> {
+    const record = await assertPublicInputReservationLifecycleDigest(
+      input.record,
+    );
+    const cleanup = publicInputReservationCleanupProjection(record);
+    const rows = await this.#db
+      .update(pgSchema.capsules)
+      .set({
+        publicInputReservationJson: record,
+        publicInputReservationCleanupRunId: cleanup?.runId ?? null,
+        publicInputReservationCleanupAt: cleanup?.enqueuedAt ?? null,
+      })
+      .where(
+        and(
+          eq(pgSchema.capsules.id, input.capsuleId),
+          eq(pgSchema.capsules.workspaceId, input.workspaceId),
+          eq(pgSchema.capsules.installConfigId, input.installConfigId),
+          eq(
+            pgSchema.capsules.executionAuthorityEpoch,
+            input.capsuleExecutionAuthorityEpoch,
+          ),
+          ne(pgSchema.capsules.status, "destroyed"),
+          isNull(pgSchema.capsules.publicInputReservationJson),
+        ),
+      )
+      .returning({ record: pgSchema.capsules.publicInputReservationJson });
+    if (rows[0]?.record !== null && rows[0]?.record !== undefined) {
+      return {
+        status: "stored",
+        record: await decodePublicInputReservationLifecycle(
+          parseJson(rows[0].record),
+        ),
+      };
+    }
+    return await this.#publicInputReservationRecordCasMiss(input);
+  }
+
+  async replaceCapsulePublicInputReservationRecord(
+    input: ReplaceCapsulePublicInputReservationRecordInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult> {
+    const record = await assertPublicInputReservationLifecycleDigest(
+      input.record,
+    );
+    const cleanup = publicInputReservationCleanupProjection(record);
+    const observed = await this.#db
+      .select({
+        workspaceId: pgSchema.capsules.workspaceId,
+        installConfigId: pgSchema.capsules.installConfigId,
+        epoch: pgSchema.capsules.executionAuthorityEpoch,
+        status: pgSchema.capsules.status,
+        record: pgSchema.capsules.publicInputReservationJson,
+      })
+      .from(pgSchema.capsules)
+      .where(eq(pgSchema.capsules.id, input.capsuleId))
+      .limit(1);
+    const observedRow = observed[0];
+    if (
+      !observedRow ||
+      observedRow.workspaceId !== input.workspaceId ||
+      observedRow.installConfigId !== input.installConfigId ||
+      observedRow.epoch !== input.capsuleExecutionAuthorityEpoch ||
+      observedRow.status === "destroyed"
+    ) {
+      return { status: "authority_changed" };
+    }
+    if (observedRow.record === null || observedRow.record === undefined) {
+      return { status: "record_changed" };
+    }
+    const current = await decodePublicInputReservationLifecycle(
+      parseJson(observedRow.record),
+    );
+    if (current.digest !== input.expectedRecordDigest) {
+      return { status: "record_changed", record: current };
+    }
+    const rows = await this.#db
+      .update(pgSchema.capsules)
+      .set({
+        publicInputReservationJson: record,
+        publicInputReservationCleanupRunId: cleanup?.runId ?? null,
+        publicInputReservationCleanupAt: cleanup?.enqueuedAt ?? null,
+      })
+      .where(
+        and(
+          eq(pgSchema.capsules.id, input.capsuleId),
+          eq(pgSchema.capsules.workspaceId, input.workspaceId),
+          eq(pgSchema.capsules.installConfigId, input.installConfigId),
+          eq(
+            pgSchema.capsules.executionAuthorityEpoch,
+            input.capsuleExecutionAuthorityEpoch,
+          ),
+          ne(pgSchema.capsules.status, "destroyed"),
+          eq(
+            pgSchema.capsules.publicInputReservationJson,
+            observedRow.record,
+          ),
+        ),
+      )
+      .returning({ record: pgSchema.capsules.publicInputReservationJson });
+    if (rows[0]?.record !== null && rows[0]?.record !== undefined) {
+      return {
+        status: "stored",
+        record: await decodePublicInputReservationLifecycle(
+          parseJson(rows[0].record),
+        ),
+      };
+    }
+    return await this.#publicInputReservationRecordCasMiss(input);
+  }
+
+  async claimCapsulePublicInputReservationLegacyCandidate(
+    input: ClaimCapsulePublicInputReservationLegacyCandidateInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult> {
+    const record = await assertPublicInputReservationLifecycleDigest(
+      input.record,
+    );
+    const cleanup = publicInputReservationCleanupProjection(record);
+    const observed = await this.#db
+      .select({
+        workspaceId: pgSchema.capsules.workspaceId,
+        installConfigId: pgSchema.capsules.installConfigId,
+        epoch: pgSchema.capsules.executionAuthorityEpoch,
+        status: pgSchema.capsules.status,
+        record: pgSchema.capsules.publicInputReservationJson,
+      })
+      .from(pgSchema.capsules)
+      .where(eq(pgSchema.capsules.id, input.capsuleId))
+      .limit(1);
+    const observedRow = observed[0];
+    if (
+      !observedRow ||
+      observedRow.workspaceId !== input.workspaceId ||
+      observedRow.installConfigId !== input.installConfigId ||
+      observedRow.epoch !== input.capsuleExecutionAuthorityEpoch ||
+      observedRow.status === "destroyed"
+    ) {
+      return { status: "authority_changed" };
+    }
+    if (observedRow.record === null || observedRow.record === undefined) {
+      return { status: "record_changed" };
+    }
+    const current = await decodePublicInputReservationLifecycle(
+      parseJson(observedRow.record),
+    );
+    if (
+      current.digest !== input.expectedRecordDigest ||
+      current.candidate?.requirement.workspaceId !== input.workspaceId ||
+      current.candidate.requirement.capsuleId !== input.capsuleId ||
+      !isPublicInputReservationLegacyCandidateClaim(current, record)
+    ) {
+      return { status: "record_changed", record: current };
+    }
+    const claimedPlanRunId = record.candidate!.planRunId!;
+    const noOtherApplyablePlan = notExists(
+      this.#db
+        .select({ id: pgSchema.runs.id })
+        .from(pgSchema.runs)
+        .where(
+          and(
+            eq(pgSchema.runs.capsuleId, input.capsuleId),
+            eq(pgSchema.runs.workspaceId, input.workspaceId),
+            ne(pgSchema.runs.id, claimedPlanRunId),
+            inArray(pgSchema.runs.kind, [
+              "plan",
+              "destroy_plan",
+              "drift_check",
+            ]),
+            sql`not (
+              ${pgSchema.runs.status} in ('failed', 'cancelled', 'expired')
+              or ${pgSchema.runs.runJson}->>'appliedApplyRunId' is not null
+            )`,
+          ),
+        ),
+    );
+    const rows = await this.#db
+      .update(pgSchema.capsules)
+      .set({
+        publicInputReservationJson: record,
+        publicInputReservationCleanupRunId: cleanup?.runId ?? null,
+        publicInputReservationCleanupAt: cleanup?.enqueuedAt ?? null,
+      })
+      .where(
+        and(
+          eq(pgSchema.capsules.id, input.capsuleId),
+          eq(pgSchema.capsules.workspaceId, input.workspaceId),
+          eq(pgSchema.capsules.installConfigId, input.installConfigId),
+          eq(
+            pgSchema.capsules.executionAuthorityEpoch,
+            input.capsuleExecutionAuthorityEpoch,
+          ),
+          ne(pgSchema.capsules.status, "destroyed"),
+          noOtherApplyablePlan,
+          eq(
+            pgSchema.capsules.publicInputReservationJson,
+            observedRow.record,
+          ),
+        ),
+      )
+      .returning({ record: pgSchema.capsules.publicInputReservationJson });
+    if (rows[0]?.record !== null && rows[0]?.record !== undefined) {
+      return {
+        status: "stored",
+        record: await decodePublicInputReservationLifecycle(
+          parseJson(rows[0].record),
+        ),
+      };
+    }
+    return await this.#publicInputReservationRecordCasMiss(input);
+  }
+
+  async deleteCapsulePublicInputReservationRecord(input: {
+    readonly capsuleId: string;
+    readonly expectedRecordDigest: string;
+  }): Promise<boolean> {
+    const observed = await this.#db
+      .select({ record: pgSchema.capsules.publicInputReservationJson })
+      .from(pgSchema.capsules)
+      .where(eq(pgSchema.capsules.id, input.capsuleId))
+      .limit(1);
+    const raw = observed[0]?.record;
+    if (raw === null || raw === undefined) return false;
+    const current = await decodePublicInputReservationLifecycle(parseJson(raw));
+    if (current.digest !== input.expectedRecordDigest) return false;
+    const rows = await this.#db
+      .update(pgSchema.capsules)
+      .set({
+        publicInputReservationJson: null,
+        publicInputReservationCleanupRunId: null,
+        publicInputReservationCleanupAt: null,
+      })
+      .where(
+        and(
+          eq(pgSchema.capsules.id, input.capsuleId),
+          eq(pgSchema.capsules.publicInputReservationJson, raw),
+        ),
+      )
+      .returning({ id: pgSchema.capsules.id });
+    return rows.length === 1;
+  }
+
+  async settleCapsulePublicInputReservationLifecycle(
+    input: SettleCapsulePublicInputReservationLifecycleInput,
+  ): Promise<boolean> {
+    const record = await assertPublicInputReservationLifecycleDigest(
+      input.record,
+    );
+    const cleanup = publicInputReservationCleanupProjection(record);
+    const observed = await this.#db
+      .select({ raw: pgSchema.capsules.publicInputReservationJson })
+      .from(pgSchema.capsules)
+      .where(eq(pgSchema.capsules.id, input.capsuleId))
+      .limit(1);
+    const raw = observed[0]?.raw;
+    if (raw === null || raw === undefined) return false;
+    const current = await decodePublicInputReservationLifecycle(parseJson(raw));
+    if (current.digest !== input.expectedRecordDigest) return false;
+    const rows = await this.#db
+      .update(pgSchema.capsules)
+      .set({
+        publicInputReservationJson: record,
+        publicInputReservationCleanupRunId: cleanup?.runId ?? null,
+        publicInputReservationCleanupAt: cleanup?.enqueuedAt ?? null,
+      })
+      .where(
+        and(
+          eq(pgSchema.capsules.id, input.capsuleId),
+          eq(pgSchema.capsules.publicInputReservationJson, raw),
+        ),
+      )
+      .returning({ id: pgSchema.capsules.id });
+    return rows.length === 1;
+  }
+
+  async #publicInputReservationRecordCasMiss(
+    input: AdoptCapsulePublicInputReservationRecordInput,
+  ): Promise<CapsulePublicInputReservationRecordWriteResult> {
+    const rows = await this.#db
+      .select({
+        workspaceId: pgSchema.capsules.workspaceId,
+        installConfigId: pgSchema.capsules.installConfigId,
+        epoch: pgSchema.capsules.executionAuthorityEpoch,
+        status: pgSchema.capsules.status,
+        record: pgSchema.capsules.publicInputReservationJson,
+      })
+      .from(pgSchema.capsules)
+      .where(eq(pgSchema.capsules.id, input.capsuleId))
+      .limit(1);
+    const row = rows[0];
+    if (
+      !row ||
+      row.workspaceId !== input.workspaceId ||
+      row.installConfigId !== input.installConfigId ||
+      row.epoch !== input.capsuleExecutionAuthorityEpoch ||
+      row.status === "destroyed"
+    ) {
+      return { status: "authority_changed" };
+    }
+    if (row.record === null || row.record === undefined) {
+      return { status: "record_changed" };
+    }
+    const record = await decodePublicInputReservationLifecycle(
+      parseJson(row.record),
+    );
+    return "expectedRecordDigest" in input
+      ? { status: "record_changed", record }
+      : { status: "existing", record };
   }
 
   async rebindCapsuleInstallConfig(
@@ -2804,6 +3455,35 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     input: CommitRunStateInput,
   ): Promise<CommitRunStateResult> {
     const { capsulePatch } = input;
+    const lifecycleTransition = input.publicInputReservationLifecycle;
+    const lifecycleNext = lifecycleTransition?.lifecycle
+      ? await assertPublicInputReservationLifecycleDigest(
+          lifecycleTransition.lifecycle,
+        )
+      : undefined;
+    const lifecycleCleanup = lifecycleNext
+      ? publicInputReservationCleanupProjection(lifecycleNext)
+      : undefined;
+    const lifecycleRows = lifecycleTransition
+      ? await db
+          .select({ raw: pgSchema.capsules.publicInputReservationJson })
+          .from(pgSchema.capsules)
+          .where(eq(pgSchema.capsules.id, lifecycleTransition.capsuleId))
+          .limit(1)
+      : [];
+    const lifecycleRaw = lifecycleRows[0]?.raw;
+    const lifecycleCurrent = lifecycleRaw === null || lifecycleRaw === undefined
+      ? undefined
+      : await decodePublicInputReservationLifecycle(parseJson(lifecycleRaw));
+    if (
+      lifecycleTransition &&
+      (lifecycleTransition.capsuleId !== capsulePatch.id ||
+        !lifecycleCurrent ||
+        lifecycleCurrent.digest !==
+          lifecycleTransition.expectedLifecycleDigest)
+    ) {
+      throw new Error("public input reservation lifecycle guard conflict");
+    }
     let applyRunCommitted = false;
     if (input.applyRunTerminal && input.applyRunLeaseToken !== undefined) {
       applyRunCommitted = await pgUpdateTerminalRunWithLease(
@@ -2892,6 +3572,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         status: values.status,
         capsuleJson: values.capsuleJson,
         updatedAt: values.updatedAt,
+        ...(lifecycleTransition
+          ? {
+              publicInputReservationJson: lifecycleNext ?? null,
+              publicInputReservationCleanupRunId:
+                lifecycleCleanup?.runId ?? null,
+              publicInputReservationCleanupAt:
+                lifecycleCleanup?.enqueuedAt ?? null,
+            }
+          : {}),
       })
       .where(
         and(
@@ -2900,6 +3589,12 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           guard.status === undefined
             ? sql`true`
             : eq(pgSchema.capsules.status, guard.status),
+          lifecycleTransition
+            ? eq(
+                pgSchema.capsules.publicInputReservationJson,
+                lifecycleRaw!,
+              )
+            : sql`true`,
         ),
       )
       .returning({ json: pgSchema.capsules.capsuleJson });
@@ -4566,6 +5261,17 @@ function parseJson(value: unknown): unknown {
     return JSON.parse(value);
   }
   return value;
+}
+
+async function tryDecodePublicInputReservationLifecycle(
+  value: unknown,
+): Promise<PublicInputReservationLifecycle | undefined> {
+  try {
+    return await decodePublicInputReservationLifecycle(value);
+  } catch {
+    // Invalid legacy evidence is never rewritten or released.
+    return undefined;
+  }
 }
 
 function capsuleValues(capsule: Capsule) {

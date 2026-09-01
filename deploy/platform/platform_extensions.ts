@@ -88,9 +88,16 @@ export interface PlatformExtensionProviderCredentialBroker {
   readonly displayName: string;
   /** Relative path appended to this route's basePath. */
   readonly exchangePath: `/${string}`;
+  /**
+   * Distinct provider-owned public-input RPC path. Required with
+   * `http_endpoint_url`; credential exchange paths may never be reused.
+   */
+  readonly publicInputPath?: `/${string}`;
   readonly envNames: readonly string[];
   /** Bounded non-secret policy passed to this broker on every Run. */
   readonly runCredentialSettings?: Readonly<Record<string, JsonValue>>;
+  /** Closed non-secret reservation capability owned by this exact broker. */
+  readonly publicInputCapabilities?: readonly ["http_endpoint_url"];
 }
 
 /** Provider-neutral authenticated identity delivered across the platform seam. */
@@ -362,7 +369,14 @@ function optionalProviderCredentialBroker(
   const actualKeys = Object.keys(record).sort();
   if (
     requiredKeys.some((key) => !actualKeys.includes(key)) ||
-    actualKeys.some((key) => ![...requiredKeys, "runCredentialSettings"].includes(key))
+    actualKeys.some((key) =>
+      ![
+        ...requiredKeys,
+        "publicInputCapabilities",
+        "publicInputPath",
+        "runCredentialSettings",
+      ].includes(key)
+    )
   ) {
     throw new TypeError(`${label}.providerCredentialBroker has unknown or missing fields`);
   }
@@ -371,6 +385,7 @@ function optionalProviderCredentialBroker(
   const providerSource = nonEmptyString(record.providerSource);
   const displayName = nonEmptyString(record.displayName);
   const exchangePath = record.exchangePath;
+  const publicInputPath = record.publicInputPath;
   if (!connectionId || !/^conn_[0-9A-Za-z]{8,64}$/u.test(connectionId)) {
     throw new TypeError(`${label}.providerCredentialBroker.connectionId is invalid`);
   }
@@ -425,14 +440,52 @@ function optionalProviderCredentialBroker(
       `${label}.providerCredentialBroker.runCredentialSettings is invalid`,
     );
   }
+  const publicInputCapabilities = record.publicInputCapabilities === undefined
+    ? undefined
+    : optionalStringArray(
+        record.publicInputCapabilities,
+        `${label}.providerCredentialBroker`,
+        "publicInputCapabilities",
+      );
+  if (
+    publicInputCapabilities !== undefined &&
+    (publicInputCapabilities.length !== 1 ||
+      publicInputCapabilities[0] !== "http_endpoint_url")
+  ) {
+    throw new TypeError(
+      `${label}.providerCredentialBroker.publicInputCapabilities must be exactly [http_endpoint_url]`,
+    );
+  }
+  if (
+    publicInputCapabilities !== undefined &&
+    (typeof publicInputPath !== "string" ||
+      publicInputPath === "/" ||
+      publicInputPath === exchangePath ||
+      !canonicalPlatformExtensionPath(publicInputPath))
+  ) {
+    throw new TypeError(
+      `${label}.providerCredentialBroker.publicInputPath must be a distinct canonical path`,
+    );
+  }
+  if (publicInputCapabilities === undefined && publicInputPath !== undefined) {
+    throw new TypeError(
+      `${label}.providerCredentialBroker.publicInputPath requires publicInputCapabilities`,
+    );
+  }
   return Object.freeze({
     connectionId,
     recipeId,
     providerSource,
     displayName,
     exchangePath: exchangePath as `/${string}`,
+    ...(publicInputPath
+      ? { publicInputPath: publicInputPath as `/${string}` }
+      : {}),
     envNames: Object.freeze([...envNames]),
     ...(runCredentialSettings ? { runCredentialSettings } : {}),
+    ...(publicInputCapabilities
+      ? { publicInputCapabilities: Object.freeze(["http_endpoint_url"] as const) }
+      : {}),
   });
 }
 
@@ -644,7 +697,12 @@ function sameProviderCredentialBroker(
     left?.providerSource === right?.providerSource &&
     left?.displayName === right?.displayName &&
     left?.exchangePath === right?.exchangePath &&
-    sameStrings(left?.envNames, right?.envNames)
+    left?.publicInputPath === right?.publicInputPath &&
+    sameStrings(left?.envNames, right?.envNames) &&
+    sameStrings(
+      left?.publicInputCapabilities,
+      right?.publicInputCapabilities,
+    )
   );
 }
 

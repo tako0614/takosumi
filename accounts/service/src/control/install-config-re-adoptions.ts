@@ -489,6 +489,20 @@ function derivedTarget(input: {
       reason: "per_install_overrides",
       sourceSnapshotId: input.adoption.sourceSnapshotId,
       repositoryInstallUxDigest: input.adoption.digest,
+      repositoryManifestApiVersion:
+        input.adoption.repositoryManifestApiVersion,
+      ...(input.adoption.repositoryHttpEndpointUrlVariable
+        ? {
+            repositoryHttpEndpointUrlVariable:
+              input.adoption.repositoryHttpEndpointUrlVariable,
+          }
+        : {}),
+      ...(input.adoption.repositoryHttpEndpointSubdomainVariable
+        ? {
+            repositoryHttpEndpointSubdomainVariable:
+              input.adoption.repositoryHttpEndpointSubdomainVariable,
+          }
+        : {}),
       reAdoption: input.receipt,
     },
     variablePresentation: input.adoption.variablePresentation,

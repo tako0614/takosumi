@@ -307,6 +307,77 @@ test("repository adoption carries an explicitly allowed generic OIDC capability"
   ]);
 });
 
+test("repository adoption keeps the default-free host endpoint target outside every install UI input", async () => {
+  const endpointDocument = {
+    apiVersion: "takosumi.com/v2.4",
+    kind: "Repository",
+    install: {
+      modules: {
+        ".": {
+          inputs: [
+            {
+              name: "project_name",
+              source: { kind: "capsule_name" as const },
+              type: "string" as const,
+              label: { ja: "プロジェクト名", en: "Project name" },
+            },
+            {
+              name: "display_name",
+              source: { kind: "user" as const },
+              type: "string" as const,
+              required: true,
+              label: { ja: "表示名", en: "Display name" },
+            },
+          ],
+          requires: [{
+            kind: "http.endpoint" as const,
+            deliver: {
+              variables: { url: "app_url", subdomain: "project_name" },
+            },
+          }],
+        },
+      },
+    },
+  } satisfies RepositoryManifestDocument;
+  const result = await adopt(baseConfig(), {
+    sourceSnapshot: snapshotWithManifest({
+      status: "present",
+      digest: MANIFEST_DIGEST,
+      document: endpointDocument,
+    }),
+    compatibilityReport: {
+      ...compatibilityReport,
+      rootModuleVariables: ["app_url", "display_name", "project_name"],
+      rootModuleVariableDeclarations: [
+        { name: "app_url", type: "string", hasDefault: false },
+        { name: "display_name", type: "string", hasDefault: false },
+        { name: "project_name", type: "string", hasDefault: false },
+      ],
+      rootModuleOutputs: [],
+    },
+    reviewedVariables: { display_name: "Echo" },
+  });
+
+  expect(result.status).toBe("accepted");
+  if (result.status !== "accepted") return;
+  expect(result.variablePresentation?.map((input) => input.name)).toEqual([
+    "display_name",
+  ]);
+  expect(result.variableMapping).toEqual({
+    display_name: "Echo",
+    project_name: "repo-interface",
+  });
+  expect(result.installExperience?.projections).toEqual([
+    {
+      kind: "public_endpoint",
+      variables: { url: "app_url", subdomain: "project_name" },
+    },
+  ]);
+  expect(result.repositoryManifestApiVersion).toBe("takosumi.com/v2.4");
+  expect(result.repositoryHttpEndpointUrlVariable).toBe("app_url");
+  expect(result.repositoryHttpEndpointSubdomainVariable).toBe("project_name");
+});
+
 test("repository OIDC rejects a base public endpoint collision instead of splitting manifest provenance", async () => {
   const variableNames = [
     "public_url",

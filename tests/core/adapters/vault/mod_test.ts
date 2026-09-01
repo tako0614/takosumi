@@ -19,6 +19,11 @@ import {
 import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
+import type { CredentialRecipe } from "takosumi-contract/credential-recipes";
+import {
+  CREDENTIAL_RECIPE_HTTP_ENDPOINT_PUBLIC_INPUT_CAPABILITY,
+  type CredentialRecipeRuntimeDriver,
+} from "takosumi-contract/credential-recipe-host";
 
 const CLOUDFLARE_ACCOUNT_TEST_ID = "0123456789abcdef0123456789abcdef";
 const CLOUDFLARE_ACCOUNT_OAUTH_ID = "fedcba9876543210fedcba9876543210";
@@ -1505,4 +1510,131 @@ test("revoke deletes both the connection and the sealed blob", async () => {
   expect(await store.getConnection(connection.id)).toBeUndefined();
   expect(await store.getSecretBlob(connection.id)).toBeUndefined();
   expect(await vault.revoke(connection.id)).toBe(false);
+});
+
+test("public-input owner selection rejects ambiguity before effect and replays only the exact owner", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const recipes = ["endpoint-owner-a", "endpoint-owner-b"].map((id) => ({
+    id,
+    displayName: id,
+    terraformSource: "*",
+    envNames: ["ENDPOINT_OWNER_TOKEN"],
+    authModes: {
+      broker: {
+        preRun: { type: "issue_run_credential" as const },
+        runIssuance: {
+          context: "capsule-run.v1" as const,
+          operatorConnection: "workspace-bindable" as const,
+          storedMaterial: "none" as const,
+          audience: `${id}.v1`,
+          scopes: ["endpoint.reserve"],
+        },
+      },
+    },
+  })) satisfies readonly CredentialRecipe[];
+  const effects: string[] = [];
+  const driver = (id: string): CredentialRecipeRuntimeDriver => ({
+    evidenceIssuer: id,
+    publicInputCapabilities: [
+      CREDENTIAL_RECIPE_HTTP_ENDPOINT_PUBLIC_INPUT_CAPABILITY,
+    ],
+    verify: async () => ({ ok: true }),
+    mint: async (context) => ({
+      env: {},
+      evidence: {
+        connectionId: context.connection.id,
+        provider: context.connection.providerSource,
+        temporary: true,
+        ttlEnforced: true,
+        issuer: id,
+        secretValueStored: false,
+      },
+    }),
+    resolvePublicInputs: async (context) => {
+      effects.push(`resolve:${id}:${context.workspaceId}`);
+      return {
+        httpEndpointUrl: `https://${id}.example.test`,
+        reservationRef: `reservation/${id}`,
+      };
+    },
+    releasePublicInputs: async (context) => {
+      effects.push(`release:${id}:${context.workspaceId}`);
+      return {
+        status: "released",
+        reservationRef:
+          context.publicInputRequest.httpEndpointUrl.reservationRef!,
+      };
+    },
+  });
+  let id = 0;
+  const vault = new StaticSecretConnectionVault({
+    store,
+    crypto: makeCrypto(),
+    newId: () => `conn_endpoint_owner_${++id}`,
+    credentialRecipeResolver: (recipeId) =>
+      recipes.find((recipe) => recipe.id === recipeId),
+    credentialDrivers: Object.fromEntries(
+      recipes.map((recipe) => [
+        credentialRecipeDriverKey({ id: recipe.id, authMode: "broker" }),
+        driver(recipe.id),
+      ]),
+    ),
+  });
+  const connections = [];
+  for (const [index, recipe] of recipes.entries()) {
+    const connection = await vault.register({
+      provider: `registry.opentofu.org/example/endpoint${index}`,
+      scope: "operator",
+      credentialRecipe: { id: recipe.id, authMode: "broker" },
+      values: {},
+    });
+    await expect(vault.test(connection.id)).resolves.toEqual({
+      status: "verified",
+    });
+    connections.push(connection);
+  }
+  const entries = connections.map((connection) => ({
+    provider: connection.providerSource,
+    connectionId: connection.id,
+  }));
+  await expect(
+    vault.selectPublicInputReservationOwner("workspace_public_inputs", entries),
+  ).rejects.toThrow("more than one trusted provider recipe");
+  expect(effects).toEqual([]);
+
+  const owner = await vault.selectPublicInputReservationOwner(
+    "workspace_public_inputs",
+    [entries[0]!],
+  );
+  expect(owner).toMatchObject({
+    providerSource: connections[0]!.providerSource,
+    connectionId: connections[0]!.id,
+    recipeId: recipes[0]!.id,
+    authMode: "broker",
+  });
+  const request = {
+    httpEndpointUrl: {
+      clientIdempotencyKey: `endpoint_request_${"a".repeat(64)}`,
+      requestedSubdomain: "young-tree",
+    },
+  };
+  const resolved = await vault.resolvePublicInputReservation(
+    "workspace_public_inputs",
+    owner,
+    request,
+  );
+  await vault.releasePublicInputReservation(
+    "workspace_public_inputs",
+    owner,
+    {
+      httpEndpointUrl: {
+        ...request.httpEndpointUrl,
+        reservationRef: resolved.reservationRef,
+      },
+    },
+  );
+  expect(effects).toEqual([
+    "resolve:endpoint-owner-a:workspace_public_inputs",
+    "release:endpoint-owner-a:workspace_public_inputs",
+  ]);
 });

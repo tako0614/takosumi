@@ -463,9 +463,27 @@ Git checkout 内の相対 path に限り、provider credential は build phase �
 指定しない場合は通常どおり、OpenTofu module が成果物を解決します。参照元は
 release artifact の URL / digest、provider、data source などです。
 
-公開 hostname、DNS、application endpoint は Git checkout 内の通常の OpenTofu
-module と provider が所有します。Takosumi は Capsule 用 hostname を合成または予約せず、
-`public_endpoint` は apply 済み Output を UI に投影するための metadata として扱います。
+公開 hostname、DNS、application endpoint の allocator は Git checkout 内の通常の
+OpenTofu module と provider が所有します。manifest v2.4 の `http.endpoint` が
+`public_endpoint.variables.url` を宣言した場合だけ、trusted Credential Recipe driver は
+Plan 前に canonical HTTPS origin を閉じた non-secret `publicInputs` として返せます。
+同時に allocator が所有する opaque reservation ref も返します。Takosumi はその値を
+宣言済みの一変数だけへ写し、repository target と exact owner とともに private Plan
+input へ固定し、Apply で再読して一致を要求します。replacement Plan は旧 `applied`
+receipt を保持したまま `candidate` を stage し、guarded Apply commit だけが candidate を
+promote して旧 receipt を `retiring` へ移します。failed / cancelled / expired Plan は
+applyable でなくなった自分の candidate だけを retire します。Destroy は current install
+UX から endpoint が消えていても durable applied receipt を使い、typed release を durable
+retirement outbox から再試行します。backward-decode した owner 未確定 intent は exact
+request retry だけが引き継ぎ、それ以外は同じ Capsule に applyable Plan が残っていない
+ことを証明してから provider の positive readback 後に repair します。retirement
+capacity は runner mutation 前に検査し、満杯なら同じ outbox を
+先に drain します。新しい candidate intent ごとに private random
+lifecycle nonce を生成し、retry と同じ target の re-adoption は live nonce / key を再利用
+します。terminal release と exact-CAS removal 後の次 lifecycle は必ず新しい nonce を
+使います。
+任意の変数 map、`TF_VAR_*`、account/session identity はこの経路に入りません。
+`http.endpoint` のない既存 manifest の `public_endpoint` / Output 挙動は変わりません。
 
 Run には次を保存します。
 

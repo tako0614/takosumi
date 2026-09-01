@@ -116,6 +116,82 @@ function compile(
 }
 
 describe("repository install UX compiler", () => {
+  test("keeps a v2.4 host-supplied endpoint target out of every install input path", () => {
+    const endpointDocument = {
+      apiVersion: "takosumi.com/v2.4",
+      kind: "Repository",
+      install: {
+        modules: {
+          ".": {
+            inputs: [
+              {
+                name: "project_name",
+                role: "service_name" as const,
+                source: { kind: "capsule_name" as const },
+                type: "string" as const,
+                label: { ja: "プロジェクト名", en: "Project name" },
+              },
+              {
+                name: "display_name",
+                source: { kind: "user" as const },
+                type: "string" as const,
+                required: true,
+                label: { ja: "表示名", en: "Display name" },
+              },
+            ],
+            requires: [{
+              kind: "http.endpoint" as const,
+              deliver: {
+                variables: {
+                  url: "app_url",
+                  subdomain: "project_name",
+                },
+              },
+            }],
+          },
+        },
+      },
+    } satisfies RepositoryManifestDocument;
+    const result = compile({
+      document: endpointDocument,
+      reviewedVariables: { display_name: "Echo" },
+      compatibilityReport: report({
+        rootModuleVariables: ["app_url", "display_name", "project_name"],
+        rootModuleVariableDeclarations: [
+          // Real Yuru shape: app_url is a required/default-free HCL input but
+          // is intentionally absent from manifest inputs. Only the trusted
+          // http.endpoint delivery can populate it before Plan execution.
+          { name: "app_url", type: "string", hasDefault: false },
+          { name: "display_name", type: "string", hasDefault: false },
+          { name: "project_name", type: "string", hasDefault: false },
+        ],
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.compiled.userVariableNames).toEqual(["display_name"]);
+    expect(result.compiled.variablePresentation.map(({ name }) => name)).toEqual([
+      "project_name",
+      "display_name",
+    ]);
+    expect(result.compiled.variableMapping).toEqual({
+      display_name: "Echo",
+      project_name: "yuru-commu",
+    });
+    expect(result.compiled.variableMapping).not.toHaveProperty("app_url");
+    expect(result.compiled.installExperience.projections).toEqual([
+      {
+        kind: "service_name",
+        variable: "project_name",
+      },
+      {
+        kind: "public_endpoint",
+        variables: { url: "app_url", subdomain: "project_name" },
+      },
+    ]);
+  });
+
   test("compiles reviewed generic Accounts OIDC delivery into existing InstallConfig projections", () => {
     const oidcDocument = {
       apiVersion: "takosumi.com/v2.2",

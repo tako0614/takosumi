@@ -33,5 +33,9 @@ terraform {
       source  = "registry.opentofu.org/hashicorp/http"
       version = "= 3.6.0"
     }
+    takoform = {
+      source  = "registry.terraform.io/tako0614/takoform"
+      version = "= 3.0.0"
+    }
   }
 }

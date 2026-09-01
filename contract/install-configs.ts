@@ -16,6 +16,7 @@ import type {
 } from "./interfaces.ts";
 import type { ScopeBoundaryPolicy } from "./plan-scope.ts";
 import type {
+  RepositoryManifestDocument,
   RepositoryManifestInterfaceApiVersion,
   RepositoryRuntimeRequirement,
 } from "./repository-manifest.ts";
@@ -760,6 +761,17 @@ export interface InstallConfig {
     /** Immutable proposal provenance; never selectable through public APIs. */
     readonly sourceSnapshotId?: string;
     readonly repositoryInstallUxDigest?: string;
+    /** Exact accepted repository contract version; private Plan authority. */
+    readonly repositoryManifestApiVersion?:
+      RepositoryManifestDocument["apiVersion"];
+    /**
+     * Exact `http.endpoint deliver.variables.url` target compiled from the
+     * accepted repository manifest before any operator/base projection merge.
+     * It is private execution provenance, never a mutable Install UI choice.
+     */
+    readonly repositoryHttpEndpointUrlVariable?: string;
+    /** Exact companion `subdomain` target required by the reservation lane. */
+    readonly repositoryHttpEndpointSubdomainVariable?: string;
     /** Value-free authority/audit receipt for an explicit Capsule re-adoption. */
     readonly reAdoption?: {
       readonly capsuleId: string;

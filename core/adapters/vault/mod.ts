@@ -48,7 +48,15 @@ import type {
 } from "takosumi-contract";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import {
+  assertCredentialRecipeDriverPublicInputReleaseResult,
+  assertCredentialRecipeDriverPublicInputRequest,
+  assertCredentialRecipeDriverPublicInputs,
+  CREDENTIAL_RECIPE_HTTP_ENDPOINT_PUBLIC_INPUT_CAPABILITY,
   credentialRecipeDriverKey,
+  type CredentialRecipeDriverPublicInputOwner,
+  type CredentialRecipeDriverPublicInputRequest,
+  type CredentialRecipeDriverPublicInputReleaseResult,
+  type CredentialRecipeDriverPublicInputs,
   type CredentialRecipeDriverRegistry,
   type CredentialRecipeRuntimeDriver,
   type CredentialRecipeDriverRunContext,
@@ -235,7 +243,28 @@ export interface CapsuleProviderBindingMintOptions {
   readonly runId?: string;
 }
 
-export interface ConnectionVault {
+/**
+ * Dedicated provider-adapter port for the one closed non-secret reservation
+ * capability. It is intentionally separate from credential mint bundles.
+ */
+export interface PublicInputReservationDriverPort {
+  selectPublicInputReservationOwner(
+    workspaceId: string,
+    entries: readonly CapsuleProviderBindingMintEntry[],
+  ): Promise<CredentialRecipeDriverPublicInputOwner>;
+  resolvePublicInputReservation(
+    workspaceId: string,
+    owner: CredentialRecipeDriverPublicInputOwner,
+    request: CredentialRecipeDriverPublicInputRequest,
+  ): Promise<CredentialRecipeDriverPublicInputs>;
+  releasePublicInputReservation(
+    workspaceId: string,
+    owner: CredentialRecipeDriverPublicInputOwner,
+    request: CredentialRecipeDriverPublicInputRequest,
+  ): Promise<CredentialRecipeDriverPublicInputReleaseResult>;
+}
+
+export interface ConnectionVault extends PublicInputReservationDriverPort {
   register(input: RegisterConnectionInput): Promise<ProviderConnection>;
   test(connectionId: string): Promise<TestConnectionResult>;
   revoke(id: string): Promise<boolean>;
@@ -1184,6 +1213,266 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       [],
       evidence,
     );
+  }
+
+  async selectPublicInputReservationOwner(
+    workspaceId: string,
+    entries: readonly CapsuleProviderBindingMintEntry[],
+  ): Promise<CredentialRecipeDriverPublicInputOwner> {
+    requireNonEmpty(workspaceId, "workspaceId");
+    const candidates = new Map<
+      string,
+      CredentialRecipeDriverPublicInputOwner
+    >();
+    for (const entry of entries) {
+      const binding = await this.#publicInputBinding(
+        workspaceId,
+        entry.connectionId,
+        entry.provider,
+        entry.runCredentialSettings,
+        true,
+      );
+      if (!binding) continue;
+      if (
+        !binding.driver.publicInputCapabilities?.includes(
+          CREDENTIAL_RECIPE_HTTP_ENDPOINT_PUBLIC_INPUT_CAPABILITY,
+        )
+      ) {
+        continue;
+      }
+      if (
+        typeof binding.driver.resolvePublicInputs !== "function" ||
+        typeof binding.driver.releasePublicInputs !== "function"
+      ) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `credential recipe ${binding.recipe.id}/${binding.recipe.authMode} declares an incomplete public input capability`,
+          undefined,
+          "credential_service_unavailable",
+        );
+      }
+      const owner = Object.freeze({
+        providerSource: binding.connection.providerSource,
+        connectionId: binding.connection.id,
+        recipeId: binding.recipe.id,
+        authMode: binding.recipe.authMode,
+        ...(binding.runCredentialSettings
+          ? { runCredentialSettings: binding.runCredentialSettings }
+          : {}),
+      });
+      candidates.set(JSON.stringify(owner), owner);
+    }
+    if (candidates.size !== 1) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        candidates.size === 0
+          ? "no exact trusted provider recipe owns the HTTP endpoint reservation capability"
+          : "more than one trusted provider recipe owns the HTTP endpoint reservation capability",
+        undefined,
+        "credential_service_unavailable",
+      );
+    }
+    return candidates.values().next().value!;
+  }
+
+  async resolvePublicInputReservation(
+    workspaceId: string,
+    owner: CredentialRecipeDriverPublicInputOwner,
+    request: CredentialRecipeDriverPublicInputRequest,
+  ): Promise<CredentialRecipeDriverPublicInputs> {
+    const exactRequest = assertCredentialRecipeDriverPublicInputRequest(request);
+    const binding = await this.#publicInputBindingForOwner(workspaceId, owner);
+    try {
+      const result = assertCredentialRecipeDriverPublicInputs(
+        await binding.driver.resolvePublicInputs!({
+          workspaceId,
+          connection: binding.connection,
+          ...(binding.runCredentialSettings
+            ? { runCredentialSettings: binding.runCredentialSettings }
+            : {}),
+          values: binding.material.env,
+          files: binding.material.files,
+          fetch: this.#fetch,
+          now: this.#now,
+          publicInputRequest: exactRequest,
+        }),
+      );
+      const expectedRef = exactRequest.httpEndpointUrl.reservationRef;
+      if (expectedRef !== undefined && result.reservationRef !== expectedRef) {
+        throw new TypeError(
+          "Credential Recipe public input re-read changed reservationRef",
+        );
+      }
+      return result;
+    } catch (error) {
+      throw wrapDriverError(error);
+    }
+  }
+
+  async releasePublicInputReservation(
+    workspaceId: string,
+    owner: CredentialRecipeDriverPublicInputOwner,
+    request: CredentialRecipeDriverPublicInputRequest,
+  ): Promise<CredentialRecipeDriverPublicInputReleaseResult> {
+    const exactRequest = assertCredentialRecipeDriverPublicInputRequest(
+      request,
+      { requireReservationRef: true },
+    );
+    const reservationRef = exactRequest.httpEndpointUrl.reservationRef!;
+    const binding = await this.#publicInputBindingForOwner(workspaceId, owner);
+    try {
+      return assertCredentialRecipeDriverPublicInputReleaseResult(
+        await binding.driver.releasePublicInputs!({
+          workspaceId,
+          connection: binding.connection,
+          ...(binding.runCredentialSettings
+            ? { runCredentialSettings: binding.runCredentialSettings }
+            : {}),
+          values: binding.material.env,
+          files: binding.material.files,
+          fetch: this.#fetch,
+          now: this.#now,
+          publicInputRequest: exactRequest,
+        }),
+        reservationRef,
+      );
+    } catch (error) {
+      throw wrapDriverError(error);
+    }
+  }
+
+  async #publicInputBindingForOwner(
+    workspaceId: string,
+    owner: CredentialRecipeDriverPublicInputOwner,
+  ) {
+    if (
+      canonicalProviderSource(owner.providerSource) !== owner.providerSource ||
+      !owner.connectionId.trim() ||
+      !owner.recipeId.trim() ||
+      !owner.authMode.trim()
+    ) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        "public input reservation owner is invalid",
+        undefined,
+        "credential_service_unavailable",
+      );
+    }
+    const binding = await this.#publicInputBinding(
+      workspaceId,
+      owner.connectionId,
+      owner.providerSource,
+      owner.runCredentialSettings,
+    );
+    if (!binding) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        "public input reservation owner changed",
+        undefined,
+        "credential_service_unavailable",
+      );
+    }
+    if (
+      binding.recipe.id !== owner.recipeId ||
+      binding.recipe.authMode !== owner.authMode ||
+      !binding.driver.publicInputCapabilities?.includes(
+        CREDENTIAL_RECIPE_HTTP_ENDPOINT_PUBLIC_INPUT_CAPABILITY,
+      ) ||
+      typeof binding.driver.resolvePublicInputs !== "function" ||
+      typeof binding.driver.releasePublicInputs !== "function"
+    ) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        "public input reservation owner changed",
+        undefined,
+        "credential_service_unavailable",
+      );
+    }
+    return {
+      ...binding,
+      material: await this.#providerMaterialForConnection(binding.connection),
+    };
+  }
+
+  async #publicInputBinding(
+    workspaceId: string,
+    connectionId: string,
+    providerSource: string,
+    runCredentialSettings: CapsuleProviderBindingMintEntry["runCredentialSettings"],
+    skipMissingDriver = false,
+  ) {
+    requireNonEmpty(connectionId, "connectionId");
+    const connection = await this.#connectionById(connectionId);
+    if (!connection) {
+      throw new ConnectionVaultError(
+        "not_found",
+        `connection ${connectionId} not found`,
+        undefined,
+        "provider_connection_setup_required",
+      );
+    }
+    if (
+      (connection.scope === "workspace" &&
+        connection.workspaceId !== workspaceId) ||
+      (connection.scope === "operator" &&
+        !isWorkspaceBindableOperatorConnection(connection))
+    ) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${connectionId} cannot own this Workspace reservation`,
+        undefined,
+        "provider_connection_setup_required",
+      );
+    }
+    if (
+      isSourceGitKind(connection.kind) ||
+      !sameProviderSource(providerSource, connection.providerSource)
+    ) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${connectionId} does not match the public input provider`,
+        undefined,
+        "provider_connection_setup_required",
+      );
+    }
+    assertConnectionVerified(connection);
+    if (connectionIsExpired(connection, this.#now())) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${connection.id} expired at ${connection.expiresAt}`,
+        undefined,
+        "provider_connection_not_ready",
+      );
+    }
+    const recipe = connection.credentialRecipe;
+    const driver = this.#credentialDriver(connection);
+    if (!recipe || !driver) {
+      if (skipMissingDriver) return undefined;
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${connection.id} has no installed Credential Recipe driver`,
+        undefined,
+        "credential_service_unavailable",
+      );
+    }
+    let settings: CapsuleProviderBindingMintEntry["runCredentialSettings"];
+    try {
+      settings = canonicalRunCredentialSettings(
+        runCredentialSettings,
+        "public input reservation owner runCredentialSettings",
+      );
+    } catch (error) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        error instanceof Error ? error.message : "runCredentialSettings is invalid",
+      );
+    }
+    return {
+      connection,
+      recipe,
+      driver,
+      runCredentialSettings: settings,
+    };
   }
 
   async #canonicalRunIssuanceContext(

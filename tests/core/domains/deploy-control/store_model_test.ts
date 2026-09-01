@@ -3,6 +3,7 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import type {
   ApplyRun,
   InstallConfig,
+  PlanRun,
   ProviderConnection,
   StateVersion,
 } from "@takosumi/internal/deploy-control-api";
@@ -33,6 +34,14 @@ import {
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import {
+  createPublicInputReservationLifecycle,
+  decodePublicInputReservationLifecycle,
+  publicInputClientIdempotencyKey,
+  type PublicInputReservationIntent,
+  type PublicInputReservationReceipt,
+} from "../../../../core/domains/deploy-control/public_input_reservation.ts";
 
 setDefaultTimeout(20_000);
 
@@ -189,6 +198,8 @@ function output(capsuleId: string, overrides: Partial<Output> = {}): Output {
 
 function applyRunForSafety(input: {
   readonly id: string;
+  readonly planRunId?: string;
+  readonly workspaceId?: string;
   readonly capsuleId: string;
   readonly operation: "update" | "destroy";
   readonly status: "queued" | "succeeded" | "failed";
@@ -196,11 +207,11 @@ function applyRunForSafety(input: {
   readonly auditEvents?: ApplyRun["auditEvents"];
   readonly diagnostics?: ApplyRun["diagnostics"];
 }): ApplyRun {
-  const planRunId = `plan_${input.id}`;
+  const planRunId = input.planRunId ?? `plan_${input.id}`;
   return {
     id: input.id,
     planRunId,
-    workspaceId: "workspace_runtime_safety",
+    workspaceId: input.workspaceId ?? "workspace_runtime_safety",
     capsuleId: input.capsuleId,
     operation: input.operation,
     runnerProfileId: "opentofu-default",
@@ -224,6 +235,118 @@ function applyRunForSafety(input: {
     ...(input.status === "queued"
       ? { startedAt: input.effectAt - 5 }
       : { startedAt: input.effectAt - 5, finishedAt: input.effectAt }),
+  };
+}
+
+function planRunForCleanup(input: {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly status: PlanRun["status"];
+}): PlanRun {
+  return {
+    id: input.id,
+    workspaceId: input.workspaceId,
+    capsuleId: input.capsuleId,
+    capsuleExecutionAuthorityEpoch: 1,
+    source: {
+      kind: "git",
+      url: "https://example.test/app.git",
+      ref: "main",
+      modulePath: ".",
+    },
+    sourceSnapshotId: "snapshot_a",
+    sourceDigest: "sha256:source",
+    operation: "update",
+    runnerProfileId: "opentofu-default",
+    capsuleContext: {
+      workspaceId: input.workspaceId,
+      capsuleId: input.capsuleId,
+      environment: "production",
+    },
+    variablesDigest: "sha256:variables",
+    status: input.status,
+    policy: { status: "passed", reasons: [], checkedAt: 1 },
+    policyDecisionDigest: "sha256:policy",
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 100,
+    ...(input.status === "failed" ||
+        input.status === "cancelled" ||
+        input.status === "expired"
+      ? { finishedAt: 100 }
+      : {}),
+  };
+}
+
+async function legacyPublicInputReceipt(input: {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly installConfigId: string;
+  readonly sourceSnapshotId: string;
+  readonly suffix: string;
+}): Promise<PublicInputReservationReceipt> {
+  const nonce = "00000000-0000-4000-8000-000000000009";
+  const core = {
+    kind: "takosumi.public-input-reservation-receipt@v1" as const,
+    workspaceId: input.workspaceId,
+    capsuleId: input.capsuleId,
+    installConfigId: input.installConfigId,
+    capsuleExecutionAuthorityEpoch: 1,
+    sourceSnapshotId: input.sourceSnapshotId,
+    repositoryInstallUxDigest: `sha256:${"9".repeat(64)}`,
+    reservationLifecycleNonce: nonce,
+    clientIdempotencyKey: await publicInputClientIdempotencyKey({
+      capsuleId: input.capsuleId,
+      targetVariable: "app_url",
+      subdomainVariable: "project_name",
+      requestedSubdomain: "legacy-tree",
+      reservationLifecycleNonce: nonce,
+    }),
+    targetVariable: "app_url",
+    subdomainVariable: "project_name",
+    requestedSubdomain: "legacy-tree",
+    owner: {
+      providerSource: "registry.terraform.io/tako0614/takoform",
+      connectionId: "conn_legacyReceipt01",
+      recipeId: "takoserver-endpoint",
+      authMode: "broker",
+    },
+    reservationRef: `provider/legacy/${input.suffix}`,
+    httpEndpointUrl: `https://legacy-tree-${input.suffix}.example.test`,
+  };
+  return {
+    ...core,
+    digest: await stableJsonDigest(core),
+  };
+}
+
+async function legacyPublicInputIntent(input: {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly installConfigId: string;
+  readonly sourceSnapshotId: string;
+  readonly suffix: string;
+}): Promise<PublicInputReservationIntent> {
+  const receipt = await legacyPublicInputReceipt(input);
+  const {
+    digest: _digest,
+    httpEndpointUrl: _httpEndpointUrl,
+    kind: _kind,
+    reservationRef: _reservationRef,
+    ...authority
+  } = receipt;
+  void _digest;
+  void _httpEndpointUrl;
+  void _kind;
+  void _reservationRef;
+  const core = {
+    ...authority,
+    kind: "takosumi.public-input-reservation-intent@v1" as const,
+  };
+  return {
+    ...core,
+    digest: await stableJsonDigest(core),
   };
 }
 
@@ -1953,7 +2076,7 @@ test("recoverable running age reads JSON heartbeat beyond stale projections", as
   ).toEqual([d1Stale.id]);
 });
 
-test("runtime-secret retirement dispatch claims rotate the real bound without losing concurrent attempts", async () => {
+test("destroy-tail dispatch claims rotate the real bound without losing concurrent attempts", async () => {
   for (const [label, store] of await stores()) {
     const pending = Array.from({ length: 51 }, (_, index) =>
       applyRunForSafety({
@@ -1976,7 +2099,7 @@ test("runtime-secret retirement dispatch claims rotate the real bound without lo
       }),
     );
     for (const run of pending) await store.putApplyRun(run);
-    const first = await store.listPendingRuntimeSecretRetirementRuns({
+    const first = await store.listPendingDestroyTailRuns({
       staleBeforeMs: 300,
       limit: 50,
     });
@@ -1986,12 +2109,12 @@ test("runtime-secret retirement dispatch claims rotate the real bound without lo
     );
 
     const concurrent = await Promise.all([
-      store.claimPendingRuntimeSecretRetirementDispatch({
+      store.claimPendingDestroyTailDispatch({
         runId: first[0]!.id,
         staleBeforeMs: 300,
         attemptedAt: 1_000,
       }),
-      store.claimPendingRuntimeSecretRetirementDispatch({
+      store.claimPendingDestroyTailDispatch({
         runId: first[0]!.id,
         staleBeforeMs: 300,
         attemptedAt: 1_000,
@@ -2000,7 +2123,7 @@ test("runtime-secret retirement dispatch claims rotate the real bound without lo
     expect(concurrent.filter(Boolean), label).toHaveLength(1);
     for (const run of first.slice(1)) {
       expect(
-        await store.claimPendingRuntimeSecretRetirementDispatch({
+        await store.claimPendingDestroyTailDispatch({
           runId: run.id,
           staleBeforeMs: 300,
           attemptedAt: 1_000,
@@ -2009,7 +2132,7 @@ test("runtime-secret retirement dispatch claims rotate the real bound without lo
       ).toBe(true);
     }
 
-    const second = await store.listPendingRuntimeSecretRetirementRuns({
+    const second = await store.listPendingDestroyTailRuns({
       staleBeforeMs: 300,
       limit: 50,
     });
@@ -2019,7 +2142,7 @@ test("runtime-secret retirement dispatch claims rotate the real bound without lo
       const claimed = await store.getApplyRun(run.id);
       expect(claimed?.updatedAt, `${label}:${run.id}`).toBe(1_000);
       const deferred = claimed?.auditEvents.filter(
-        (event) => event.type === "runtime_secret.retirement.deferred",
+        (event) => event.type === "destroy_tail.dispatch.deferred",
       );
       expect(
         deferred,
@@ -2027,7 +2150,7 @@ test("runtime-secret retirement dispatch claims rotate the real bound without lo
       ).toHaveLength(1);
       expect(deferred?.[0], `${label}:${run.id}`).toEqual({
         id: expect.any(String),
-        type: "runtime_secret.retirement.deferred",
+        type: "destroy_tail.dispatch.deferred",
         at: 1_000,
       });
       expect(
@@ -2052,7 +2175,7 @@ test("runtime-secret retirement dispatch claims rotate the real bound without lo
       ],
     });
     expect(
-      await store.claimPendingRuntimeSecretRetirementDispatch({
+      await store.claimPendingDestroyTailDispatch({
         runId: completed.id,
         staleBeforeMs: 300,
         attemptedAt: 1_000,
@@ -2086,7 +2209,7 @@ test("terminal runtime-secret retirement markers are recoverable on every store 
 
     expect(
       (
-        await store.listPendingRuntimeSecretRetirementRuns({
+        await store.listPendingDestroyTailRuns({
           staleBeforeMs: 200,
         })
       ).map((run) => run.id),
@@ -2106,13 +2229,1019 @@ test("terminal runtime-secret retirement markers are recoverable on every store 
     });
     expect(
       (
-        await store.listPendingRuntimeSecretRetirementRuns({
+        await store.listPendingDestroyTailRuns({
           staleBeforeMs: 200,
         })
       ).map((run) => run.id),
       label,
     ).not.toContain(pending.id);
   }
+});
+
+test("public-input lifecycle promotion and retirement settlement use exact CAS on every backend", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_public_release_${label}`,
+      capsuleId: `capsule_public_release_${label}`,
+      installConfigId: `config_public_release_${label}`,
+    });
+    const receiptCore = {
+      kind: "takosumi.public-input-reservation-receipt@v1" as const,
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      capsuleExecutionAuthorityEpoch: 1,
+      sourceSnapshotId: seeded.snapshot.id,
+      repositoryInstallUxDigest: `sha256:${"a".repeat(64)}`,
+      reservationLifecycleNonce: "00000000-0000-4000-8000-000000000001",
+      clientIdempotencyKey: await publicInputClientIdempotencyKey({
+        capsuleId: seeded.capsule.id,
+        targetVariable: "app_url",
+        subdomainVariable: "project_name",
+        requestedSubdomain: "young-tree",
+        reservationLifecycleNonce:
+          "00000000-0000-4000-8000-000000000001",
+      }),
+      targetVariable: "app_url",
+      subdomainVariable: "project_name",
+      requestedSubdomain: "young-tree",
+      owner: {
+        providerSource: "registry.terraform.io/tako0614/takoform",
+        connectionId: "conn_publicRelease01",
+        recipeId: "takoserver-endpoint",
+        authMode: "broker",
+      },
+      reservationRef: `provider/reservation/a/${label}`,
+      httpEndpointUrl: `https://young-tree-${label}.example.test`,
+    };
+    const receipt: PublicInputReservationReceipt = {
+      ...receiptCore,
+      digest: await stableJsonDigest(receiptCore),
+    };
+    const replacementCore = {
+      ...receiptCore,
+      reservationLifecycleNonce: "00000000-0000-4000-8000-000000000002",
+      clientIdempotencyKey: await publicInputClientIdempotencyKey({
+        capsuleId: seeded.capsule.id,
+        targetVariable: "app_url",
+        subdomainVariable: "project_name",
+        requestedSubdomain: "new-tree",
+        reservationLifecycleNonce:
+          "00000000-0000-4000-8000-000000000002",
+      }),
+      requestedSubdomain: "new-tree",
+      reservationRef: `provider/reservation/b/${label}`,
+      httpEndpointUrl: `https://new-tree-${label}.example.test`,
+    };
+    const replacement: PublicInputReservationReceipt = {
+      ...replacementCore,
+      digest: await stableJsonDigest(replacementCore),
+    };
+    const staged = await createPublicInputReservationLifecycle({
+      applied: receipt,
+      candidate: {
+        planRunId: `plan_public_release_${label}`,
+        stagedAt: 90,
+        requirement: {
+          workspaceId: replacement.workspaceId,
+          capsuleId: replacement.capsuleId,
+          installConfigId: replacement.installConfigId,
+          capsuleExecutionAuthorityEpoch:
+            replacement.capsuleExecutionAuthorityEpoch,
+          sourceSnapshotId: replacement.sourceSnapshotId,
+          repositoryInstallUxDigest: replacement.repositoryInstallUxDigest,
+          targetVariable: replacement.targetVariable,
+          subdomainVariable: replacement.subdomainVariable,
+          requestedSubdomain: replacement.requestedSubdomain,
+          owner: replacement.owner,
+        },
+        reservation: replacement,
+      },
+      retiring: [],
+    });
+    expect(
+      await store.adoptCapsulePublicInputReservationRecord({
+        workspaceId: seeded.workspace.id,
+        capsuleId: seeded.capsule.id,
+        installConfigId: seeded.installConfig.id,
+        capsuleExecutionAuthorityEpoch: 1,
+        record: staged,
+      }),
+      label,
+    ).toMatchObject({ status: "stored" });
+    const applyablePlan = planRunForCleanup({
+      id: `plan_public_release_${label}`,
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      status: "succeeded",
+    });
+    await store.putPlanRun(applyablePlan);
+    expect(
+      (
+        await store.listPendingDestroyTailRuns({ staleBeforeMs: 200 })
+      ).map((run) => run.id),
+      `${label}:applyable-candidate-not-cleanable`,
+    ).not.toContain(applyablePlan.id);
+    const failedCandidatePlan: PlanRun = {
+      ...applyablePlan,
+      status: "failed",
+      finishedAt: 100,
+    };
+    await store.putPlanRun(failedCandidatePlan);
+    expect(
+      (
+        await store.listPendingDestroyTailRuns({ staleBeforeMs: 200 })
+      ).map((run) => run.id),
+      `${label}:failed-candidate-cleanable`,
+    ).toContain(failedCandidatePlan.id);
+    await store.putPlanRun(applyablePlan);
+    const terminal = applyRunForSafety({
+      id: `apply_public_release_${label}`,
+      planRunId: applyablePlan.id,
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      operation: "destroy",
+      status: "succeeded",
+      effectAt: 100,
+    });
+    const promoted = await createPublicInputReservationLifecycle({
+      applied: replacement,
+      retiring: [{
+        cleanupRunId: terminal.id,
+        enqueuedAt: 100,
+        receipt,
+      }],
+    });
+    const committedState = stateVersion(seeded.capsule.id, {
+      id: `state_public_release_${label}`,
+      workspaceId: seeded.workspace.id,
+      createdByRunId: `apply_public_release_${label}`,
+    });
+    const committedOutput = output(seeded.capsule.id, {
+      id: `output_public_release_${label}`,
+      workspaceId: seeded.workspace.id,
+    });
+    const appliedPlan: PlanRun = {
+      ...applyablePlan,
+      appliedApplyRunId: terminal.id,
+      updatedAt: 100,
+    };
+    await store.commitRunState({
+      stateVersion: committedState,
+      output: committedOutput,
+      applyRunTerminal: terminal,
+      planRunApplied: appliedPlan,
+      capsulePatch: {
+        id: seeded.capsule.id,
+        patch: {
+          currentStateVersionId: committedState.id,
+          currentStateGeneration: committedState.generation,
+          currentOutputId: committedOutput.id,
+          status: "active",
+          updatedAt: "2026-06-07T00:00:00.000Z",
+        },
+        guard: { currentStateVersionId: undefined, status: "pending" },
+      },
+      publicInputReservationLifecycle: {
+        capsuleId: seeded.capsule.id,
+        expectedLifecycleDigest: staged.digest,
+        lifecycle: promoted,
+      },
+    });
+    expect(
+      await store.getCapsulePublicInputReservationRecord(seeded.capsule.id),
+      `${label}:promoted`,
+    ).toEqual(promoted);
+    expect((await store.getStateVersion(committedState.id))?.id, label).toBe(
+      committedState.id,
+    );
+    expect((await store.getOutput(committedOutput.id))?.id, label).toBe(
+      committedOutput.id,
+    );
+    expect((await store.getApplyRun(terminal.id))?.status, label).toBe(
+      "succeeded",
+    );
+    expect(
+      (await store.getPlanRun(applyablePlan.id))?.appliedApplyRunId,
+      label,
+    ).toBe(terminal.id);
+    expect(
+      (
+        await store.listPendingDestroyTailRuns({ staleBeforeMs: 200 })
+      ).map((run) => run.id),
+      `${label}:pending-visible`,
+    ).toContain(terminal.id);
+    expect(
+      await store.claimPendingDestroyTailDispatch({
+        runId: terminal.id,
+        staleBeforeMs: 200,
+        attemptedAt: 210,
+      }),
+      `${label}:cleanup-claim`,
+    ).toBe(true);
+    expect(
+      (
+        await store.listPendingDestroyTailRuns({ staleBeforeMs: 209 })
+      ).map((run) => run.id),
+      `${label}:claim-rotates-retry`,
+    ).not.toContain(terminal.id);
+
+    const settled = await createPublicInputReservationLifecycle({
+      applied: replacement,
+      retiring: [],
+    });
+    expect(
+      await store.settleCapsulePublicInputReservationLifecycle({
+        capsuleId: seeded.capsule.id,
+        expectedRecordDigest: `sha256:${"0".repeat(64)}`,
+        record: settled,
+      }),
+      `${label}:wrong-digest`,
+    ).toBe(false);
+    expect(
+      await store.getCapsulePublicInputReservationRecord(seeded.capsule.id),
+      `${label}:retirement-retained`,
+    ).toEqual(promoted);
+
+    expect(
+      await store.settleCapsulePublicInputReservationLifecycle({
+        capsuleId: seeded.capsule.id,
+        expectedRecordDigest: promoted.digest,
+        record: settled,
+      }),
+      `${label}:complete`,
+    ).toBe(true);
+    expect(
+      await store.getCapsulePublicInputReservationRecord(seeded.capsule.id),
+      `${label}:applied-retained`,
+    ).toEqual(settled);
+    expect(
+      (
+        await store.listPendingDestroyTailRuns({ staleBeforeMs: 200 })
+      ).map((run) => run.id),
+      `${label}:completed-hidden`,
+    ).not.toContain(terminal.id);
+    expect(
+      await store.settleCapsulePublicInputReservationLifecycle({
+        capsuleId: seeded.capsule.id,
+        expectedRecordDigest: promoted.digest,
+        record: settled,
+      }),
+      `${label}:stale-replay`,
+    ).toBe(false);
+
+    const rejectedState = stateVersion(seeded.capsule.id, {
+      id: `state_public_release_rejected_${label}`,
+      generation: 2,
+      workspaceId: seeded.workspace.id,
+      createdByRunId: `apply_public_release_rejected_${label}`,
+    });
+    const rejectedOutput = output(seeded.capsule.id, {
+      id: `output_public_release_rejected_${label}`,
+      stateGeneration: 2,
+      workspaceId: seeded.workspace.id,
+    });
+    const rejectedTerminal = applyRunForSafety({
+      id: `apply_public_release_rejected_${label}`,
+      planRunId: applyablePlan.id,
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      operation: "update",
+      status: "succeeded",
+      effectAt: 120,
+    });
+    const rejectedAppliedPlan: PlanRun = {
+      ...applyablePlan,
+      appliedApplyRunId: rejectedTerminal.id,
+      updatedAt: 120,
+    };
+    await expect(
+      store.commitRunState({
+        stateVersion: rejectedState,
+        output: rejectedOutput,
+        applyRunTerminal: rejectedTerminal,
+        planRunApplied: rejectedAppliedPlan,
+        capsulePatch: {
+          id: seeded.capsule.id,
+          patch: {
+            currentStateVersionId: rejectedState.id,
+            currentStateGeneration: rejectedState.generation,
+            currentOutputId: rejectedOutput.id,
+            updatedAt: "2026-06-08T00:00:00.000Z",
+          },
+          guard: {
+            currentStateVersionId: committedState.id,
+            status: "active",
+          },
+        },
+        publicInputReservationLifecycle: {
+          capsuleId: seeded.capsule.id,
+          // The external release settlement won first; a stale Apply commit
+          // may not resurrect the retiring receipt or land any ledger writes.
+          expectedLifecycleDigest: promoted.digest,
+          lifecycle: promoted,
+        },
+      }),
+      `${label}:stale-lifecycle-commit`,
+    ).rejects.toThrow("lifecycle guard conflict");
+    expect(await store.getStateVersion(rejectedState.id), label).toBeUndefined();
+    expect(await store.getOutput(rejectedOutput.id), label).toBeUndefined();
+    expect(await store.getApplyRun(rejectedTerminal.id), label).toBeUndefined();
+    expect(
+      (await store.getPlanRun(applyablePlan.id))?.appliedApplyRunId,
+      label,
+    ).toBe(terminal.id);
+    expect(
+      (await store.getCapsule(seeded.capsule.id))?.currentStateVersionId,
+      label,
+    ).toBe(committedState.id);
+    expect(
+      await store.getCapsulePublicInputReservationRecord(seeded.capsule.id),
+      label,
+    ).toEqual(settled);
+  }
+});
+
+test("legacy v1 intent claims are authority-fenced CAS and remain globally repairable after Workspace archival", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_public_v1_intent_${label}`,
+      capsuleId: `capsule_public_v1_intent_${label}`,
+      installConfigId: `config_public_v1_intent_${label}`,
+    });
+    await store.putWorkspace({
+      ...seeded.workspace,
+      archivedAt: "2026-06-06T00:00:00.000Z",
+    });
+    const currentIntent = await legacyPublicInputIntent({
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      sourceSnapshotId: seeded.snapshot.id,
+      suffix: `${label}-current`,
+    });
+    const currentLifecycle = await decodePublicInputReservationLifecycle(
+      currentIntent,
+    );
+    expect(await store.adoptCapsulePublicInputReservationRecord({
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      capsuleExecutionAuthorityEpoch: 1,
+      record: currentLifecycle,
+    }), `${label}:seed-current`).toMatchObject({ status: "stored" });
+
+    // A protected pre-v2 row may carry adoption coordinates that no longer
+    // equal the Capsule. Repair binding fences the current Capsule separately
+    // and preserves the old provider request as evidence.
+    const legacyIntent = await legacyPublicInputIntent({
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: `config_retired_${label}`,
+      sourceSnapshotId: `snapshot_retired_${label}`,
+      suffix: `${label}-retired`,
+    });
+    const legacyLifecycle = await decodePublicInputReservationLifecycle(
+      legacyIntent,
+    );
+    expect(await store.settleCapsulePublicInputReservationLifecycle({
+      capsuleId: seeded.capsule.id,
+      expectedRecordDigest: currentLifecycle.digest,
+      record: legacyLifecycle,
+    }), `${label}:seed-bare-v1-shape`).toBe(true);
+
+    const repairPlans = ["a", "b"].map((suffix) =>
+      planRunForCleanup({
+        id: `plan_public_v1_repair_${label}_${suffix}`,
+        workspaceId: seeded.workspace.id,
+        capsuleId: seeded.capsule.id,
+        status: "failed",
+      })
+    );
+    await Promise.all(repairPlans.map((run) => store.putPlanRun(run)));
+    const claims = await Promise.all(
+      repairPlans.map(async (run) => {
+        const record = await createPublicInputReservationLifecycle({
+          candidate: {
+            planRunId: run.id,
+            purpose: "legacy_repair",
+            stagedAt: run.updatedAt,
+            requirement: legacyLifecycle.candidate!.requirement,
+            reservation: legacyIntent,
+          },
+          retiring: [],
+        });
+        return await store.claimCapsulePublicInputReservationLegacyCandidate({
+          workspaceId: seeded.workspace.id,
+          capsuleId: seeded.capsule.id,
+          installConfigId: seeded.installConfig.id,
+          capsuleExecutionAuthorityEpoch: 1,
+          expectedRecordDigest: legacyLifecycle.digest,
+          record,
+        });
+      }),
+    );
+    expect(claims.filter(({ status }) => status === "stored"), label)
+      .toHaveLength(1);
+    expect(claims.filter(({ status }) => status === "record_changed"), label)
+      .toHaveLength(1);
+    const winner = claims.find(({ status }) => status === "stored");
+    if (winner?.status !== "stored") throw new Error(`${label}: missing winner`);
+    expect(winner.record.candidate?.reservation, label).toEqual(legacyIntent);
+    expect(
+      (
+        await store.listPendingDestroyTailRuns({ staleBeforeMs: 200 })
+      ).map((run) => run.id),
+      `${label}:archived-global-repair`,
+    ).toContain(winner.record.candidate?.planRunId);
+  }
+});
+
+test("in-memory legacy claim loses when Capsule authority changes during decode", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "workspace_public_v1_authority_race",
+    capsuleId: "capsule_public_v1_authority_race",
+    installConfigId: "config_public_v1_authority_race",
+  });
+  const intent = await legacyPublicInputIntent({
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    installConfigId: seeded.installConfig.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    suffix: "authority-race",
+  });
+  const current = await decodePublicInputReservationLifecycle(intent);
+  expect(await store.adoptCapsulePublicInputReservationRecord({
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    installConfigId: seeded.installConfig.id,
+    capsuleExecutionAuthorityEpoch: 1,
+    record: current,
+  })).toMatchObject({ status: "stored" });
+  const plan = planRunForCleanup({
+    id: "plan_public_v1_authority_race",
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    status: "failed",
+  });
+  await store.putPlanRun(plan);
+  const claimed = await createPublicInputReservationLifecycle({
+    candidate: {
+      planRunId: plan.id,
+      purpose: "legacy_repair",
+      stagedAt: plan.updatedAt,
+      requirement: current.candidate!.requirement,
+      reservation: intent,
+    },
+    retiring: [],
+  });
+
+  const originalDigest = crypto.subtle.digest;
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let digestCalls = 0;
+  Object.defineProperty(crypto.subtle, "digest", {
+    configurable: true,
+    value: async (
+      algorithm: AlgorithmIdentifier,
+      data: BufferSource,
+    ): Promise<ArrayBuffer> => {
+      digestCalls += 1;
+      if (digestCalls === 3) {
+        entered.resolve();
+        await release.promise;
+      }
+      return await originalDigest.call(crypto.subtle, algorithm, data);
+    },
+  });
+  try {
+    const pending = store.claimCapsulePublicInputReservationLegacyCandidate({
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      capsuleExecutionAuthorityEpoch: 1,
+      expectedRecordDigest: current.digest,
+      record: claimed,
+    });
+    await entered.promise;
+    await store.putCapsule({ ...seeded.capsule, status: "destroyed" });
+    release.resolve();
+    expect(await pending).toEqual({ status: "authority_changed" });
+    expect(
+      (await store.getCapsulePublicInputReservationRecord(seeded.capsule.id))
+        ?.candidate?.planRunId,
+    ).toBeUndefined();
+  } finally {
+    release.resolve();
+    Object.defineProperty(crypto.subtle, "digest", {
+      configurable: true,
+      value: originalDigest,
+    });
+  }
+});
+
+test("legacy claims reject lifecycle evidence from another Capsule on every backend", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_public_v1_identity_${label}`,
+      capsuleId: `capsule_public_v1_identity_${label}`,
+      installConfigId: `config_public_v1_identity_${label}`,
+    });
+    const validIntent = await legacyPublicInputIntent({
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      sourceSnapshotId: seeded.snapshot.id,
+      suffix: `${label}-identity-valid`,
+    });
+    const valid = await decodePublicInputReservationLifecycle(validIntent);
+    expect(await store.adoptCapsulePublicInputReservationRecord({
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      capsuleExecutionAuthorityEpoch: 1,
+      record: valid,
+    }), `${label}:seed-valid`).toMatchObject({ status: "stored" });
+    const foreignIntent = await legacyPublicInputIntent({
+      workspaceId: seeded.workspace.id,
+      capsuleId: `capsule_public_v1_foreign_${label}`,
+      installConfigId: seeded.installConfig.id,
+      sourceSnapshotId: seeded.snapshot.id,
+      suffix: `${label}-identity-foreign`,
+    });
+    const foreign = await decodePublicInputReservationLifecycle(foreignIntent);
+    expect(await store.settleCapsulePublicInputReservationLifecycle({
+      capsuleId: seeded.capsule.id,
+      expectedRecordDigest: valid.digest,
+      record: foreign,
+    }), `${label}:seed-corrupt-cross-capsule`).toBe(true);
+    const claimed = await createPublicInputReservationLifecycle({
+      candidate: {
+        planRunId: `plan_public_v1_identity_${label}`,
+        purpose: "legacy_repair",
+        stagedAt: 100,
+        requirement: foreign.candidate!.requirement,
+        reservation: foreignIntent,
+      },
+      retiring: [],
+    });
+    expect(await store.claimCapsulePublicInputReservationLegacyCandidate({
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      capsuleExecutionAuthorityEpoch: 1,
+      expectedRecordDigest: foreign.digest,
+      record: claimed,
+    }), `${label}:foreign-claim`).toMatchObject({ status: "record_changed" });
+    expect(
+      (await store.getCapsulePublicInputReservationRecord(seeded.capsule.id))
+        ?.candidate?.planRunId,
+      `${label}:foreign-remains-unbound`,
+    ).toBeUndefined();
+  }
+});
+
+test("legacy claim CAS requires every other Plan for the Capsule to be non-applyable", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_public_v1_plan_fence_${label}`,
+      capsuleId: `capsule_public_v1_plan_fence_${label}`,
+      installConfigId: `config_public_v1_plan_fence_${label}`,
+    });
+    const intent = await legacyPublicInputIntent({
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      sourceSnapshotId: seeded.snapshot.id,
+      suffix: `${label}-plan-fence`,
+    });
+    const current = await decodePublicInputReservationLifecycle(intent);
+    expect(await store.adoptCapsulePublicInputReservationRecord({
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      capsuleExecutionAuthorityEpoch: 1,
+      record: current,
+    }), `${label}:seed-unbound`).toMatchObject({ status: "stored" });
+    const claimant = planRunForCleanup({
+      id: `plan_public_v1_plan_fence_claimant_${label}`,
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      status: "running",
+    });
+    const applyable = planRunForCleanup({
+      id: `plan_public_v1_plan_fence_applyable_${label}`,
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      status: "succeeded",
+    });
+    await store.putPlanRun(claimant);
+    await store.putPlanRun(applyable);
+    const claimed = await createPublicInputReservationLifecycle({
+      candidate: {
+        planRunId: claimant.id,
+        purpose: "legacy_repair",
+        stagedAt: claimant.updatedAt,
+        requirement: current.candidate!.requirement,
+        reservation: intent,
+      },
+      retiring: [],
+    });
+    const claimInput = {
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      capsuleExecutionAuthorityEpoch: 1,
+      expectedRecordDigest: current.digest,
+      record: claimed,
+    } as const;
+    expect(
+      await store.claimCapsulePublicInputReservationLegacyCandidate(claimInput),
+      `${label}:applyable-blocks`,
+    ).toMatchObject({ status: "record_changed" });
+    await store.putPlanRun({
+      ...applyable,
+      status: "failed",
+      updatedAt: 200,
+      finishedAt: 200,
+    });
+    expect(
+      await store.claimCapsulePublicInputReservationLegacyCandidate(claimInput),
+      `${label}:terminal-allows`,
+    ).toMatchObject({ status: "stored" });
+  }
+});
+
+test("global repair discovers and atomically projects untouched legacy intents in archived Workspaces", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_public_v1_global_${label}`,
+      capsuleId: `capsule_public_v1_global_${label}`,
+      installConfigId: `config_public_v1_global_${label}`,
+    });
+    await store.putWorkspace({
+      ...seeded.workspace,
+      archivedAt: "2026-06-06T00:00:00.000Z",
+    });
+    const intent = await legacyPublicInputIntent({
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      sourceSnapshotId: seeded.snapshot.id,
+      suffix: `${label}-global`,
+    });
+    const lifecycle = await decodePublicInputReservationLifecycle(intent);
+    expect(await store.adoptCapsulePublicInputReservationRecord({
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      capsuleExecutionAuthorityEpoch: 1,
+      record: lifecycle,
+    }), `${label}:seed-unprojected`).toMatchObject({ status: "stored" });
+    const carrier = planRunForCleanup({
+      id: `plan_public_v1_global_${label}`,
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      status: "failed",
+    });
+    await store.putPlanRun(carrier);
+    const applyable = planRunForCleanup({
+      id: `plan_public_v1_global_applyable_${label}`,
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      status: "succeeded",
+    });
+    await store.putPlanRun(applyable);
+
+    expect(
+      (
+        await store.listPendingDestroyTailRuns({ staleBeforeMs: 200 })
+      ).map((run) => run.id),
+      `${label}:applyable-reference-blocks-discovery`,
+    ).not.toContain(carrier.id);
+    expect(await store.claimPendingDestroyTailDispatch({
+      runId: carrier.id,
+      staleBeforeMs: 200,
+      attemptedAt: 205,
+    }), `${label}:applyable-reference-blocks-claim`).toBe(false);
+    await store.putPlanRun({
+      ...applyable,
+      status: "failed",
+      updatedAt: 300,
+      finishedAt: 300,
+    });
+
+    expect(
+      (
+        await store.listPendingDestroyTailRuns({ staleBeforeMs: 200 })
+      ).map((run) => run.id),
+      `${label}:unprojected-discovery`,
+    ).toContain(carrier.id);
+    const claims = await Promise.all([
+      store.claimPendingDestroyTailDispatch({
+        runId: carrier.id,
+        staleBeforeMs: 200,
+        attemptedAt: 210,
+      }),
+      store.claimPendingDestroyTailDispatch({
+        runId: carrier.id,
+        staleBeforeMs: 200,
+        attemptedAt: 211,
+      }),
+    ]);
+    expect(claims.filter(Boolean), `${label}:one-global-claim`).toHaveLength(1);
+    expect(
+      await store.getCapsulePublicInputReservationRecord(seeded.capsule.id),
+      `${label}:durable-repair-projection`,
+    ).toMatchObject({
+      candidate: {
+        planRunId: carrier.id,
+        purpose: "legacy_repair",
+        reservation: intent,
+      },
+    });
+    expect(
+      (
+        await store.listPendingDestroyTailRuns({ staleBeforeMs: 209 })
+      ).map((run) => run.id),
+      `${label}:retry-cursor-rotated`,
+    ).not.toContain(carrier.id);
+  }
+});
+
+test("global legacy repair applies its limit only after carrier and no-applyable eligibility", async () => {
+  for (const [label, store] of await stores()) {
+    const seedLegacy = async (rank: "a" | "b" | "c") => {
+      const workspaceId = `workspace_public_v1_limit_${rank}_${label}`;
+      const capsuleId = `capsule_public_v1_limit_${rank}_${label}`;
+      const seeded = await seedCapsuleModel(store, {
+        workspaceId,
+        capsuleId,
+        installConfigId: `config_public_v1_limit_${rank}_${label}`,
+        sourceId: `source_public_v1_limit_${rank}_${label}`,
+        snapshotId: `snapshot_public_v1_limit_${rank}_${label}`,
+      });
+      const intent = await legacyPublicInputIntent({
+        workspaceId,
+        capsuleId,
+        installConfigId: seeded.installConfig.id,
+        sourceSnapshotId: seeded.snapshot.id,
+        suffix: `${label}-limit-${rank}`,
+      });
+      const lifecycle = await decodePublicInputReservationLifecycle(intent);
+      expect(await store.adoptCapsulePublicInputReservationRecord({
+        workspaceId,
+        capsuleId,
+        installConfigId: seeded.installConfig.id,
+        capsuleExecutionAuthorityEpoch: 1,
+        record: lifecycle,
+      }), `${label}:${rank}:seed-unprojected`).toMatchObject({
+        status: "stored",
+      });
+      return seeded;
+    };
+
+    // These rows sort before the eligible Capsule. The first has no terminal
+    // carrier; the second still has an applyable Plan. Neither may consume the
+    // bounded discovery query before eligibility is proven.
+    await seedLegacy("a");
+    const blocked = await seedLegacy("b");
+    const blockedCarrier = planRunForCleanup({
+      id: `plan_public_v1_limit_b_carrier_${label}`,
+      workspaceId: blocked.workspace.id,
+      capsuleId: blocked.capsule.id,
+      status: "failed",
+    });
+    const blockedApplyable = planRunForCleanup({
+      id: `plan_public_v1_limit_b_applyable_${label}`,
+      workspaceId: blocked.workspace.id,
+      capsuleId: blocked.capsule.id,
+      status: "succeeded",
+    });
+    await store.putPlanRun(blockedCarrier);
+    await store.putPlanRun(blockedApplyable);
+
+    const eligible = await seedLegacy("c");
+    const eligibleCarrier = planRunForCleanup({
+      id: `plan_public_v1_limit_c_carrier_${label}`,
+      workspaceId: eligible.workspace.id,
+      capsuleId: eligible.capsule.id,
+      status: "failed",
+    });
+    await store.putPlanRun(eligibleCarrier);
+
+    expect(
+      (
+        await store.listPendingDestroyTailRuns({
+          staleBeforeMs: 200,
+          limit: 1,
+        })
+      ).map((run) => run.id),
+      `${label}:limit-after-eligibility`,
+    ).toEqual([eligibleCarrier.id]);
+  }
+});
+
+test("Postgres and D1 backward-decode a bare v1 receipt as applied lifecycle state", async () => {
+  const pgClient = await PGliteSqlClient.create();
+  pgClients.push(pgClient);
+  const pgStore = new SqlOpenTofuControlStore({ client: pgClient });
+  const pgSeeded = await seedCapsuleModel(pgStore, {
+    workspaceId: "workspace_public_v1_postgres",
+    capsuleId: "capsule_public_v1_postgres",
+    installConfigId: "config_public_v1_postgres",
+  });
+  const pgReceipt = await legacyPublicInputReceipt({
+    workspaceId: pgSeeded.workspace.id,
+    capsuleId: pgSeeded.capsule.id,
+    installConfigId: pgSeeded.installConfig.id,
+    sourceSnapshotId: pgSeeded.snapshot.id,
+    suffix: "postgres",
+  });
+  await pgClient.query(
+    `update takosumi_capsules
+       set public_input_reservation_json = $1::jsonb
+     where id = $2`,
+    [JSON.stringify(pgReceipt), pgSeeded.capsule.id],
+  );
+  const pgDecoded = await pgStore.getCapsulePublicInputReservationRecord(
+    pgSeeded.capsule.id,
+  );
+  expect(pgDecoded).toMatchObject({
+    kind: "takosumi.public-input-reservation-lifecycle@v2",
+    applied: pgReceipt,
+    retiring: [],
+  });
+  expect(await pgStore.replaceCapsulePublicInputReservationRecord({
+    workspaceId: pgSeeded.workspace.id,
+    capsuleId: pgSeeded.capsule.id,
+    installConfigId: pgSeeded.installConfig.id,
+    capsuleExecutionAuthorityEpoch: 1,
+    expectedRecordDigest: pgDecoded!.digest,
+    record: pgDecoded!,
+  })).toMatchObject({ status: "stored" });
+  const pgRaw = await pgClient.query<{ kind: string }>(
+    `select public_input_reservation_json->>'kind' as kind
+       from takosumi_capsules where id = $1`,
+    [pgSeeded.capsule.id],
+  );
+  expect(pgRaw.rows[0]?.kind).toBe(
+    "takosumi.public-input-reservation-lifecycle@v2",
+  );
+
+  const d1 = new SqliteFakeD1();
+  const d1Store = new CloudflareD1OpenTofuControlStore(d1);
+  const d1Seeded = await seedCapsuleModel(d1Store, {
+    workspaceId: "workspace_public_v1_d1",
+    capsuleId: "capsule_public_v1_d1",
+    installConfigId: "config_public_v1_d1",
+  });
+  const d1Receipt = await legacyPublicInputReceipt({
+    workspaceId: d1Seeded.workspace.id,
+    capsuleId: d1Seeded.capsule.id,
+    installConfigId: d1Seeded.installConfig.id,
+    sourceSnapshotId: d1Seeded.snapshot.id,
+    suffix: "d1",
+  });
+  await d1.prepare(
+    `update capsules
+        set public_input_reservation_json = ?
+      where id = ?`,
+  ).bind(JSON.stringify(d1Receipt), d1Seeded.capsule.id).run();
+  const d1Decoded = await d1Store.getCapsulePublicInputReservationRecord(
+    d1Seeded.capsule.id,
+  );
+  expect(d1Decoded).toMatchObject({
+    kind: "takosumi.public-input-reservation-lifecycle@v2",
+    applied: d1Receipt,
+    retiring: [],
+  });
+  expect(await d1Store.replaceCapsulePublicInputReservationRecord({
+    workspaceId: d1Seeded.workspace.id,
+    capsuleId: d1Seeded.capsule.id,
+    installConfigId: d1Seeded.installConfig.id,
+    capsuleExecutionAuthorityEpoch: 1,
+    expectedRecordDigest: d1Decoded!.digest,
+    record: d1Decoded!,
+  })).toMatchObject({ status: "stored" });
+  const d1Raw = await d1.prepare(
+    `select json_extract(public_input_reservation_json, '$.kind') as kind
+       from capsules where id = ?`,
+  ).bind(d1Seeded.capsule.id).first<{ kind: string }>();
+  expect(d1Raw?.kind).toBe("takosumi.public-input-reservation-lifecycle@v2");
+});
+
+test("Postgres and D1 backward-decode and authority-claim a bare v1 intent", async () => {
+  const pgClient = await PGliteSqlClient.create();
+  pgClients.push(pgClient);
+  const pgStore = new SqlOpenTofuControlStore({ client: pgClient });
+  const pgSeeded = await seedCapsuleModel(pgStore, {
+    workspaceId: "workspace_public_v1_intent_postgres",
+    capsuleId: "capsule_public_v1_intent_postgres",
+    installConfigId: "config_public_v1_intent_postgres",
+  });
+  const pgIntent = await legacyPublicInputIntent({
+    workspaceId: pgSeeded.workspace.id,
+    capsuleId: pgSeeded.capsule.id,
+    installConfigId: pgSeeded.installConfig.id,
+    sourceSnapshotId: pgSeeded.snapshot.id,
+    suffix: "postgres-raw",
+  });
+  await pgClient.query(
+    `update takosumi_capsules
+       set public_input_reservation_json = $1::jsonb
+     where id = $2`,
+    [JSON.stringify(pgIntent), pgSeeded.capsule.id],
+  );
+  const pgDecoded = await pgStore.getCapsulePublicInputReservationRecord(
+    pgSeeded.capsule.id,
+  );
+  expect(pgDecoded?.candidate).toMatchObject({
+    stagedAt: 0,
+    reservation: pgIntent,
+  });
+  expect(pgDecoded?.candidate?.planRunId).toBeUndefined();
+  const pgPlan = planRunForCleanup({
+    id: "plan_public_v1_intent_postgres_repair",
+    workspaceId: pgSeeded.workspace.id,
+    capsuleId: pgSeeded.capsule.id,
+    status: "failed",
+  });
+  await pgStore.putPlanRun(pgPlan);
+  expect(
+    (await pgStore.listPendingDestroyTailRuns({ staleBeforeMs: 200 })).map(
+      (run) => run.id,
+    ),
+  ).toContain(pgPlan.id);
+  expect(await pgStore.claimPendingDestroyTailDispatch({
+    runId: pgPlan.id,
+    staleBeforeMs: 200,
+    attemptedAt: 210,
+  })).toBe(true);
+  const pgProjection = await pgClient.query<{ run_id: string; kind: string }>(
+    `select public_input_reservation_cleanup_run_id as run_id,
+            public_input_reservation_json->>'kind' as kind
+       from takosumi_capsules where id = $1`,
+    [pgSeeded.capsule.id],
+  );
+  expect(pgProjection.rows[0]).toEqual({
+    run_id: pgPlan.id,
+    kind: "takosumi.public-input-reservation-lifecycle@v2",
+  });
+
+  const d1 = new SqliteFakeD1();
+  const d1Store = new CloudflareD1OpenTofuControlStore(d1);
+  const d1Seeded = await seedCapsuleModel(d1Store, {
+    workspaceId: "workspace_public_v1_intent_d1",
+    capsuleId: "capsule_public_v1_intent_d1",
+    installConfigId: "config_public_v1_intent_d1",
+  });
+  const d1Intent = await legacyPublicInputIntent({
+    workspaceId: d1Seeded.workspace.id,
+    capsuleId: d1Seeded.capsule.id,
+    installConfigId: d1Seeded.installConfig.id,
+    sourceSnapshotId: d1Seeded.snapshot.id,
+    suffix: "d1-raw",
+  });
+  await d1.prepare(
+    `update capsules
+        set public_input_reservation_json = ?
+      where id = ?`,
+  ).bind(JSON.stringify(d1Intent), d1Seeded.capsule.id).run();
+  const d1Decoded = await d1Store.getCapsulePublicInputReservationRecord(
+    d1Seeded.capsule.id,
+  );
+  expect(d1Decoded?.candidate).toMatchObject({
+    stagedAt: 0,
+    reservation: d1Intent,
+  });
+  expect(d1Decoded?.candidate?.planRunId).toBeUndefined();
+  const d1Plan = planRunForCleanup({
+    id: "plan_public_v1_intent_d1_repair",
+    workspaceId: d1Seeded.workspace.id,
+    capsuleId: d1Seeded.capsule.id,
+    status: "failed",
+  });
+  await d1Store.putPlanRun(d1Plan);
+  expect(
+    (await d1Store.listPendingDestroyTailRuns({ staleBeforeMs: 200 })).map(
+      (run) => run.id,
+    ),
+  ).toContain(d1Plan.id);
+  expect(await d1Store.claimPendingDestroyTailDispatch({
+    runId: d1Plan.id,
+    staleBeforeMs: 200,
+    attemptedAt: 210,
+  })).toBe(true);
+  expect(await d1.prepare(
+    `select public_input_reservation_cleanup_run_id as run_id,
+            json_extract(public_input_reservation_json, '$.kind') as kind
+       from capsules where id = ?`,
+  ).bind(d1Seeded.capsule.id).first()).toEqual({
+    run_id: d1Plan.id,
+    kind: "takosumi.public-input-reservation-lifecycle@v2",
+  });
 });
 
 test("sealed secret create-if-absent converges under concurrent writers on every store backend", async () => {

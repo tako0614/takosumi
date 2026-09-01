@@ -77,6 +77,58 @@ test("run credential route descriptors cannot grant admin", () => {
   ).toThrow("cannot grant admin");
 });
 
+test("public endpoint capability requires a distinct canonical provider RPC path", () => {
+  const base = {
+    basePath: "/extensions/example",
+    handlerKey: "EXAMPLE_EXTENSION",
+    authDelivery: "context",
+    runCredential: {
+      audience: "operator.example.provider.v1",
+      requiredScopes: ["example.invoke"],
+    },
+    providerCredentialBroker: {
+      connectionId: "conn_exampleProvider01",
+      recipeId: "example-provider-run",
+      providerSource: "registry.terraform.io/example/provider",
+      displayName: "Example Provider",
+      exchangePath: "/provider-credentials/example",
+      envNames: ["EXAMPLE_TOKEN"],
+      publicInputCapabilities: ["http_endpoint_url"],
+    },
+  };
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([base]),
+    })
+  ).toThrow("publicInputPath must be a distinct canonical path");
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([{
+        ...base,
+        providerCredentialBroker: {
+          ...base.providerCredentialBroker,
+          publicInputPath: base.providerCredentialBroker.exchangePath,
+        },
+      }]),
+    })
+  ).toThrow("publicInputPath must be a distinct canonical path");
+  expect(
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([{
+        ...base,
+        providerCredentialBroker: {
+          ...base.providerCredentialBroker,
+          publicInputPath: "/public-inputs/http-endpoint",
+        },
+      }]),
+    })[0]?.providerCredentialBroker,
+  ).toMatchObject({
+    exchangePath: "/provider-credentials/example",
+    publicInputPath: "/public-inputs/http-endpoint",
+    publicInputCapabilities: ["http_endpoint_url"],
+  });
+});
+
 test("extension descriptors parse exact request scope rules without changing the audience base", () => {
   const [route] = platformExtensionRoutes({
     TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([

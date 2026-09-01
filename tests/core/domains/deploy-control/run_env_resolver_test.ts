@@ -1,9 +1,6 @@
 import { expect, test } from "bun:test";
 
-import type {
-  ProviderConnection,
-  PlanRun,
-} from "@takosumi/internal/deploy-control-api";
+import type { ProviderConnection, PlanRun } from "@takosumi/internal/deploy-control-api";
 import {
   resolvedProviderBindingsDigest,
   type ResolvedCapsuleProviderBinding,

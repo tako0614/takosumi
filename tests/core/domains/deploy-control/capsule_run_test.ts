@@ -6151,7 +6151,7 @@ test("destroy commits a durable runtime-secret retirement intent and retries wit
   ).toBe(false);
   expect(
     (
-      await store.listPendingRuntimeSecretRetirementRuns({
+      await store.listPendingDestroyTailRuns({
         staleBeforeMs: Number.MAX_SAFE_INTEGER,
       })
     ).map((run) => run.id),

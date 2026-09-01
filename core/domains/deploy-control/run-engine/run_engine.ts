@@ -77,6 +77,7 @@ import {
 } from "takosumi-policy";
 import {
   generateOpenTofuChildModuleRoot,
+  overlayOpenTofuChildModuleRootInputs,
   type RootProviderBinding,
   type RootProviderRequirement,
 } from "takosumi-rootgen";
@@ -179,6 +180,11 @@ import type {
   ResolvedRunEnvironment,
   RunEnvResolver,
 } from "../run_env_resolver.ts";
+import {
+  publicEndpointPreflightTargetVariable,
+  type PublicInputReservationApplyGuard,
+  type PublicInputReservationService,
+} from "../public_input_reservation.ts";
 import type { ResolvedDependencies } from "../dependency_resolution.ts";
 import type { DependencyResolutionService } from "../dependency_resolution.ts";
 import type { RunVerificationService } from "../run_verification.ts";
@@ -264,6 +270,7 @@ function runtimeSecretRetirementIntentFromRun(
     profileDigest: data.profileDigest,
   };
 }
+
 import type { ArtifactReferenceAllocator } from "../../../adapters/storage/artifact-references.ts";
 import type {
   CreateCapsulePlanInternal,
@@ -321,6 +328,8 @@ type RunEnginePlanRunInternalContext = PlanRunInternalContext & {
   readonly legacySourcelessDestroyRecovery?: true;
   /** Authority used to derive the private Capsule Plan request/root. */
   readonly capsulePlanExecutionAuthority?: CapsulePlanExecutionAuthority;
+  /** Narrow v2.4 endpoint+OIDC ordering marker; never accepted from API input. */
+  readonly deferModuleVariableMaterialization?: true;
 };
 
 function assertCapsulePlanStateAuthority(
@@ -829,6 +838,19 @@ function providerRequirementsFromResolvedBindings(
   return validateRequiredProviderBindingIdentities(requirements);
 }
 
+function publicInputReservationBindings(
+  resolved: readonly ResolvedCapsuleProviderBinding[],
+) {
+  return resolved.map((entry) => ({
+    provider: entry.provider,
+    ...(entry.alias ? { alias: entry.alias } : {}),
+    connectionId: entry.connection.id,
+    ...(entry.runCredentialSettings
+      ? { runCredentialSettings: entry.runCredentialSettings }
+      : {}),
+  }));
+}
+
 function providerTypeLocalName(source: string): string {
   const canonical = canonicalProviderAddress(source);
   return canonical.split("/").at(-1) ?? canonical;
@@ -1216,6 +1238,7 @@ export interface RunEngineDependencies {
   readonly verification: RunVerificationService;
   readonly planResolution: PlanResolutionService;
   readonly moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
+  readonly publicInputReservations?: PublicInputReservationService;
   readonly runtimeSecretFileMaterializer?: RuntimeSecretFileMaterializer;
   readonly sourceLifecycle: SourceLifecycleService;
   readonly capsules: CapsuleQuery;
@@ -1251,6 +1274,7 @@ export class RunEngine {
   readonly #verification: RunVerificationService;
   readonly #planResolution: PlanResolutionService;
   readonly #moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
+  readonly #publicInputReservations?: PublicInputReservationService;
   readonly #runtimeSecretFileMaterializer?: RuntimeSecretFileMaterializer;
   readonly #sourceLifecycle: SourceLifecycleService;
   readonly #capsules: CapsuleQuery;
@@ -1301,6 +1325,7 @@ export class RunEngine {
     this.#verification = deps.verification;
     this.#planResolution = deps.planResolution;
     this.#moduleVariableMaterializer = deps.moduleVariableMaterializer;
+    this.#publicInputReservations = deps.publicInputReservations;
     this.#runtimeSecretFileMaterializer = deps.runtimeSecretFileMaterializer;
     this.#sourceLifecycle = deps.sourceLifecycle;
     this.#capsules = deps.capsules;
@@ -1675,12 +1700,27 @@ export class RunEngine {
       internal.genericRootDispatch?.moduleVariableMaterializationDigest;
     const currentMaterialization =
       hasModuleVariableMaterialization(currentInstallConfig);
-    if (Boolean(materializationDigest) !== currentMaterialization) {
+    const deferredMaterialization =
+      internal.deferModuleVariableMaterialization === true;
+    if (
+      deferredMaterialization &&
+      !shouldDeferPublicEndpointModuleVariableMaterialization(
+        currentInstallConfig,
+      )
+    ) {
+      throw moduleVariableMaterializationError(
+        "deferred materialization is not authorized by repository endpoint provenance",
+      );
+    }
+    if (
+      Boolean(materializationDigest) !== currentMaterialization &&
+      !(deferredMaterialization && currentMaterialization && !materializationDigest)
+    ) {
       throw moduleVariableMaterializationError(
         "declaration changed before the Plan variable digest",
       );
     }
-    if (currentMaterialization) {
+    if (currentMaterialization && !deferredMaterialization) {
       if (
         !materializationDigest ||
         !MODULE_VARIABLE_MATERIALIZATION_DIGEST.test(materializationDigest) ||
@@ -2313,6 +2353,7 @@ export class RunEngine {
       capsulePlan,
       genericRootPlan,
       capsulePlanExecutionAuthority,
+      deferModuleVariableMaterialization,
     } = await planCreationStage(
       "capsule_plan_request",
       this.#capsulePlanRequest({
@@ -2381,6 +2422,9 @@ export class RunEngine {
           : {}),
         ...(capsulePlan ? { capsulePlan } : {}),
         capsulePlanExecutionAuthority,
+        ...(deferModuleVariableMaterialization
+          ? { deferModuleVariableMaterialization: true as const }
+          : {}),
         ...(lifecycleActions ? { lifecycleActions } : {}),
         ...(finalizedGenericRoot
           ? { genericRootDispatch: finalizedGenericRoot }
@@ -3013,6 +3057,7 @@ export class RunEngine {
     readonly requiredProviderRequirements: readonly CapsuleProviderRequirement[];
     readonly genericRootPlan?: GenericRootPlanContext;
     readonly capsulePlanExecutionAuthority: CapsulePlanExecutionAuthority;
+    readonly deferModuleVariableMaterialization?: true;
   }> {
     const moduleSource = snapshotModuleSource(
       input.source,
@@ -3026,6 +3071,9 @@ export class RunEngine {
       requiredProviderRequirements: generic.requiredProviderRequirements,
       genericRootPlan: generic.genericRootPlan,
       capsulePlanExecutionAuthority: generic.capsulePlanExecutionAuthority,
+      ...(generic.deferModuleVariableMaterialization
+        ? { deferModuleVariableMaterialization: true as const }
+        : {}),
     };
   }
 
@@ -3055,6 +3103,7 @@ export class RunEngine {
     readonly requiredProviderRequirements: readonly CapsuleProviderRequirement[];
     readonly genericRootPlan: GenericRootPlanContext;
     readonly capsulePlanExecutionAuthority: CapsulePlanExecutionAuthority;
+    readonly deferModuleVariableMaterialization?: true;
   }> {
     const profile = await this.#requireRunnerProfile(
       input.runnerProfileId ?? this.#defaultRunnerProfileId,
@@ -3136,14 +3185,19 @@ export class RunEngine {
         "Capsule execution authority is unavailable for module-variable materialization",
       );
     }
-    const moduleVariableMaterialization =
-      await this.#materializeModuleVariablesForPlan({
-        capsule: input.capsule,
-        installConfig: input.installConfig,
-        capsuleExecutionAuthorityEpoch,
-        resolvedProviderBindings: capsulePlan.resolvedProviderBindings,
-        variables: baseVariables,
-      });
+    const deferModuleVariableMaterialization =
+      shouldDeferPublicEndpointModuleVariableMaterialization(
+        input.installConfig,
+      );
+    const moduleVariableMaterialization = deferModuleVariableMaterialization
+      ? undefined
+      : await this.#materializeModuleVariablesForPlan({
+          capsule: input.capsule,
+          installConfig: input.installConfig,
+          capsuleExecutionAuthorityEpoch,
+          resolvedProviderBindings: capsulePlan.resolvedProviderBindings,
+          variables: baseVariables,
+        });
     const variables = normalizeVariables({
       ...baseVariables,
       ...(moduleVariableMaterialization?.variables ?? {}),
@@ -3170,9 +3224,12 @@ export class RunEngine {
               // Apply race mint a destroy Plan from an obsolete Capsule.
               currentStateVersionId: input.capsule.currentStateVersionId ?? null,
               currentStateGeneration: input.capsule.currentStateGeneration,
-            }
+        }
           : {}),
       },
+      ...(deferModuleVariableMaterialization
+        ? { deferModuleVariableMaterialization: true as const }
+        : {}),
       request: {
         workspaceId: input.capsule.workspaceId,
         capsuleId: input.capsule.id,
@@ -3234,6 +3291,84 @@ export class RunEngine {
       input.installConfig,
       result,
     );
+  }
+
+  async #planRequiresPublicInputReservation(
+    planRun: PlanRun,
+  ): Promise<boolean> {
+    if (!planRun.capsuleId || !planRun.capsuleContext) return false;
+    const capsule = await this.#store.getCapsule(planRun.capsuleId);
+    if (!capsule || capsule.workspaceId !== planRun.workspaceId) return false;
+    const installConfig = await this.#store.getInstallConfig(
+      capsule.installConfigId,
+    );
+    return Boolean(
+      installConfig && publicEndpointPreflightTargetVariable(installConfig),
+    );
+  }
+
+  async #planMayNeedPublicInputReservation(
+    planRun: PlanRun,
+  ): Promise<boolean> {
+    if (await this.#planRequiresPublicInputReservation(planRun)) return true;
+    return Boolean(
+      planRun.capsuleId &&
+        await this.#store.getCapsulePublicInputReservationRecord(
+          planRun.capsuleId,
+        ),
+    );
+  }
+
+  async #revalidatePublicInputReservation(
+    planRun: PlanRun,
+    inputs: PlanRunInputs | undefined,
+  ): Promise<PublicInputReservationApplyGuard | undefined> {
+    const expected = inputs?.publicInputReservationDecision;
+    const required = await this.#planMayNeedPublicInputReservation(planRun);
+    if (!expected && !required) return undefined;
+    if (!inputs) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "public_input_reservation_failed: the Plan input sidecar is missing",
+        { reason: "public_input_reservation_failed" },
+      );
+    }
+    if (!this.#publicInputReservations) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "public_input_reservation_failed: trusted reservation driver is unavailable",
+        { reason: "public_input_reservation_failed" },
+      );
+    }
+    const resolvedProviderBindings =
+      (await this.#resolveRunProviderBindings(planRun)) ?? [];
+    const guard = await this.#publicInputReservations.revalidate({
+      planRun,
+      providerBindings: publicInputReservationBindings(
+        resolvedProviderBindings,
+      ),
+      variables: inputs.variables,
+      expected,
+    });
+    const receipt = guard?.decision.receipt;
+    if (receipt &&
+      (inputs.variables[receipt.targetVariable] !== receipt.httpEndpointUrl ||
+        inputs.variables[receipt.subdomainVariable] !==
+          receipt.requestedSubdomain)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "public_input_reservation_failed: Plan variables do not match the pinned endpoint",
+        { reason: "public_input_reservation_failed" },
+      );
+    }
+    if (!guard) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "public_input_reservation_failed: the Plan reservation guard is missing",
+        { reason: "public_input_reservation_failed" },
+      );
+    }
+    return guard;
   }
 
   async #revalidateModuleVariableMaterialization(
@@ -4595,6 +4730,12 @@ export class RunEngine {
         `plan run ${runId} not found`,
       );
     }
+    if (isTerminalStatus(planRun.status) && planRun.capsuleId) {
+      await this.#tryCleanupPublicInputReservation(
+        planRun.capsuleId,
+        planRun.id,
+      );
+    }
     if (!this.#shouldProcessRun(planRun.status, planRun.heartbeatAt)) {
       // Terminal, or a sibling consumer holds it with a fresh heartbeat: no-op.
       return planRun;
@@ -4612,9 +4753,11 @@ export class RunEngine {
     // The sidecar is sealed at rest when a sensitive dependency value was
     // injected; #getPlanRunInputs unseals it transparently here so the plan runs
     // against the same inputs / generated root it was created with.
-    const inputs = await this.#getPlanRunInputs(runId);
-    const variables = normalizeVariables(inputs?.variables);
-    const dispatch = moduleDispatchFromInputs(inputs);
+    const storedInputs = await this.#store.getPlanRunInputs(runId);
+    let inputs = await this.#getPlanRunInputs(runId);
+    let variables = normalizeVariables(inputs?.variables);
+    const initiallyPinnedVariables = variables;
+    let dispatch = moduleDispatchFromInputs(inputs);
     try {
       await this.#verification.assertCapsuleCompatibilityAllowsRun(planRun);
     } catch (error) {
@@ -4627,13 +4770,183 @@ export class RunEngine {
       // Do NOT dispatch the runner; return the row the winner persisted.
       return claim.run;
     }
-    const running = claim.run;
+    let running = claim.run;
     let result: PlanRun;
     try {
+      const resolvedProviderBindings =
+        (await this.#resolveRunProviderBindings(running)) ?? [];
+      const publicInputBindings = publicInputReservationBindings(
+        resolvedProviderBindings,
+      );
+      let publicInputReservationDecision =
+        inputs?.publicInputReservationDecision;
+      let sidecarChanged = false;
+      if (publicInputReservationDecision) {
+        if (!this.#publicInputReservations) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "public_input_reservation_failed: trusted reservation driver is unavailable",
+            { reason: "public_input_reservation_failed" },
+          );
+        }
+        const guard = await this.#publicInputReservations.revalidate({
+          planRun: running,
+          providerBindings: publicInputBindings,
+          variables,
+          expected: publicInputReservationDecision,
+        });
+        const receipt = guard?.decision.receipt;
+        if (
+          !guard ||
+          (receipt &&
+            (variables[receipt.targetVariable] !== receipt.httpEndpointUrl ||
+              variables[receipt.subdomainVariable] !==
+                receipt.requestedSubdomain))
+        ) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "public_input_reservation_failed: Plan variables do not match the pinned endpoint",
+            { reason: "public_input_reservation_failed" },
+          );
+        }
+      } else if (
+        await this.#planMayNeedPublicInputReservation(running)
+      ) {
+        if (!this.#publicInputReservations) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "public_input_reservation_failed: trusted reservation driver is unavailable",
+            { reason: "public_input_reservation_failed" },
+          );
+        }
+        const prepared = await this.#publicInputReservations.preparePlan({
+          planRun: running,
+          providerBindings: publicInputBindings,
+          variables,
+        });
+        if (!prepared.decision) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "public_input_reservation_failed: eligible Plan produced no lifecycle decision",
+            { reason: "public_input_reservation_failed" },
+          );
+        }
+        variables = normalizeVariables(prepared.variables);
+        publicInputReservationDecision = prepared.decision;
+        sidecarChanged = true;
+      }
+
+      let moduleVariableMaterializationDigest =
+        inputs?.moduleVariableMaterializationDigest;
+      if (
+        publicInputReservationDecision?.receipt &&
+        !moduleVariableMaterializationDigest
+      ) {
+        const capsule = await this.#requireCurrentPlannedCapsule(running);
+        const installConfig = await this.#store.getInstallConfig(
+          capsule.installConfigId,
+        );
+        if (!installConfig) {
+          throw moduleVariableMaterializationError(
+            `InstallConfig ${capsule.installConfigId} is missing`,
+          );
+        }
+        if (hasModuleVariableMaterialization(installConfig)) {
+          const materialized = await this.#materializeModuleVariablesForPlan({
+            capsule,
+            installConfig,
+            capsuleExecutionAuthorityEpoch:
+              running.capsuleExecutionAuthorityEpoch ?? 1,
+            resolvedProviderBindings,
+            variables,
+          });
+          if (!materialized) {
+            throw moduleVariableMaterializationError(
+              "deferred materializer returned no values",
+            );
+          }
+          variables = normalizeVariables({
+            ...variables,
+            ...materialized.variables,
+          });
+          moduleVariableMaterializationDigest = materialized.digest;
+          sidecarChanged = true;
+        }
+      }
+
+      const finalVariablesDigest = publicInputReservationDecision
+        ? await stableJsonDigest(variables)
+        : undefined;
+      if (
+        publicInputReservationDecision &&
+        running.variablesDigest !== finalVariablesDigest
+      ) {
+        sidecarChanged = true;
+      }
+      if (sidecarChanged && publicInputReservationDecision) {
+        const lateVariables = Object.freeze(
+          Object.fromEntries(
+            Object.entries(variables).filter(([name]) =>
+              !Object.prototype.hasOwnProperty.call(
+                initiallyPinnedVariables,
+                name,
+              )
+            ),
+          ),
+        );
+        const generatedRoot = dispatch.generatedRoot
+          ? Object.keys(lateVariables).length > 0
+            ? overlayOpenTofuChildModuleRootInputs(
+                dispatch.generatedRoot,
+                lateVariables,
+              )
+            : dispatch.generatedRoot
+          : undefined;
+        inputs = {
+          ...(inputs ?? { planRunId: runId, variables: {} }),
+          variables,
+          ...(generatedRoot ? { generatedRoot } : {}),
+          publicInputReservationDecision,
+          ...(moduleVariableMaterializationDigest
+            ? { moduleVariableMaterializationDigest }
+            : {}),
+        };
+        await this.#putPlanRunInputs(inputs, storedInputs?.sealed !== undefined);
+        dispatch = moduleDispatchFromInputs(inputs);
+        const pinnedAt = this.#now();
+        const pinnedRunning: PlanRun = {
+          ...running,
+          variablesDigest: finalVariablesDigest!,
+          auditEvents: [
+            ...running.auditEvents,
+            auditEvent(
+              running.id,
+              "public_input.reservation_pinned",
+              pinnedAt,
+            ),
+          ],
+          updatedAt: pinnedAt,
+        };
+        const persisted = await this.#store.transitionRun({
+          id: running.id,
+          kind: "plan",
+          expectFrom: ["running"],
+          expectLeaseToken: claim.leaseToken,
+          run: pinnedRunning,
+        });
+        if (!persisted.won) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "public_input_reservation_failed: Plan execution lease changed while pinning the receipt",
+            { reason: "public_input_reservation_failed" },
+          );
+        }
+        running = pinnedRunning;
+      }
       const runEnvironment = await this.#runEnv.resolveRunEnvironment({
-        planRun,
+        planRun: running,
         phase: "plan",
-        auditRunId: planRun.id,
+        auditRunId: running.id,
       });
       const runningWithEnv = withRunEnvironmentEvidence(
         running,
@@ -4649,9 +4962,14 @@ export class RunEngine {
       );
     } catch (error) {
       if (isRunnerInfrastructureRequeueError(error)) throw error;
-      await this.#store.deletePlanRunInputs(runId);
       const failedRun = runEnvironmentFailedRun(running, error);
-      return await this.#failPlanRun(failedRun, claim.leaseToken, error);
+      const failed = await this.#failPlanRun(
+        failedRun,
+        claim.leaseToken,
+        error,
+      );
+      await this.#store.deletePlanRunInputs(runId);
+      return failed;
     }
     // Retain the inputs sidecar for an applyable Capsule run: direct-root runs
     // also need the same variables, Output policy, source build, and lifecycle
@@ -4664,6 +4982,12 @@ export class RunEngine {
       (result.status === "succeeded" || result.status === "waiting_approval") &&
       inputs !== undefined;
     if (!retainForApply) {
+      if (result.capsuleId) {
+        await this.#tryCleanupPublicInputReservation(
+          result.capsuleId,
+          result.id,
+        );
+      }
       await this.#store.deletePlanRunInputs(runId);
     }
     return result;
@@ -4684,6 +5008,15 @@ export class RunEngine {
     }
     if (
       (applyRun.status === "succeeded" || applyRun.status === "failed") &&
+      applyRun.capsuleId
+    ) {
+      await this.#tryCleanupPublicInputReservation(
+        applyRun.capsuleId,
+        applyRun.id,
+      );
+    }
+    if (
+      (applyRun.status === "succeeded" || applyRun.status === "failed") &&
       (applyRunBillingCapturePending(applyRun) ||
         applyRunRuntimeSecretRetirementPending(applyRun))
     ) {
@@ -4693,6 +5026,9 @@ export class RunEngine {
         planRun,
         finalized,
       );
+      if (!applyRunRuntimeSecretRetirementPending(finalized)) {
+        await this.#store.deletePlanRunInputs(planRun.id);
+      }
       const capsule = finalized.capsuleId
         ? await this.#store.getCapsule(finalized.capsuleId)
         : undefined;
@@ -4906,6 +5242,12 @@ export class RunEngine {
               inputs.moduleVariableMaterializationDigest,
           }
         : {}),
+      ...(inputs.publicInputReservationDecision
+        ? {
+            publicInputReservationDecision:
+              inputs.publicInputReservationDecision as unknown as JsonValue,
+          }
+        : {}),
       ...(inputs.interfaceMaterialization
         ? {
             interfaceMaterialization:
@@ -4967,6 +5309,9 @@ export class RunEngine {
       PlanRunInputs["priorState"] | undefined;
     const moduleVariableMaterializationDigest =
       payload.moduleVariableMaterializationDigest as string | undefined;
+    const publicInputReservationDecision =
+      payload.publicInputReservationDecision as unknown as
+        PlanRunInputs["publicInputReservationDecision"] | undefined;
     const interfaceMaterialization = payload.interfaceMaterialization as unknown as
       PlanRunInputs["interfaceMaterialization"] | undefined;
     return {
@@ -4982,6 +5327,9 @@ export class RunEngine {
       ...(priorState ? { priorState } : {}),
       ...(moduleVariableMaterializationDigest
         ? { moduleVariableMaterializationDigest }
+        : {}),
+      ...(publicInputReservationDecision
+        ? { publicInputReservationDecision }
         : {}),
       ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
     };
@@ -5549,6 +5897,12 @@ export class RunEngine {
         );
       }
       await this.#store.deletePlanRunInputs(id);
+      if (cancelled.capsuleId) {
+        await this.#tryCleanupPublicInputReservation(
+          cancelled.capsuleId,
+          cancelled.id,
+        );
+      }
       await this.#notifyTerminal(cancelled);
       return projectPlanRun(cancelled, {
         awaitingApproval: false,
@@ -6204,6 +6558,9 @@ export class RunEngine {
       leaseToken,
     );
     if (!persisted.won) return persisted.run;
+    if (failed.capsuleId) {
+      await this.#tryCleanupPublicInputReservation(failed.capsuleId, failed.id);
+    }
     await this.#recordDeployOperationMetric({
       run: failed,
       operationKind: "plan",
@@ -7302,6 +7659,8 @@ export class RunEngine {
         planRun,
         dispatch,
       );
+      const publicInputReservationGuard =
+        await this.#revalidatePublicInputReservation(planRun, inputs);
       await this.#revalidateModuleVariableMaterialization(
         planRun,
         inputs,
@@ -7340,6 +7699,7 @@ export class RunEngine {
           runEnvironment.credentials,
           dispatch,
           inputs,
+          publicInputReservationGuard,
           leaseToken,
           lease,
         );
@@ -7389,6 +7749,7 @@ export class RunEngine {
             envDispatch,
             persistGeneration,
             providerInstallationPolicy,
+            publicInputReservationGuard,
             leaseToken,
             startedAt,
             now,
@@ -7504,6 +7865,7 @@ export class RunEngine {
         applyRunLeaseToken: leaseToken,
         capsuleStatus: completed.status === "succeeded" ? "active" : "error",
         inputs,
+        publicInputReservationGuard,
         now,
       });
       if (patched === "lease_lost") {
@@ -7525,6 +7887,10 @@ export class RunEngine {
         newOutput: projected.output,
         now,
       });
+      await this.#tryCleanupPublicInputReservation(
+        projected.capsule.id,
+        completed.id,
+      );
       return await this.#completeApplyRun({
         completed,
         planRun,
@@ -7545,10 +7911,20 @@ export class RunEngine {
         // downstream cleanup/observer failure through reservation release or
         // terminal failure rewriting; leave/retry the durable billing marker.
         const persisted = (await this.#store.getApplyRun(applyRun.id))!;
-        const finalized = await this.#tryFinalizeApplyBilling(
+        let finalized = await this.#tryFinalizeApplyBilling(
           planRun,
           persisted,
         );
+        finalized = await this.#tryFinalizeRuntimeSecretRetirement(
+          planRun,
+          finalized,
+        );
+        if (planRun.capsuleId) {
+          await this.#tryCleanupPublicInputReservation(
+            planRun.capsuleId,
+            persisted.id,
+          );
+        }
         log.warn("deploy_control.apply_post_commit_finalization_failed", {
           planRunId: planRun.id,
           applyRunId: applyRun.id,
@@ -7965,6 +8341,8 @@ export class RunEngine {
     readonly applyRunLeaseToken: string;
     readonly capsuleStatus: "active" | "error";
     readonly inputs: PlanRunInputs | undefined;
+    readonly publicInputReservationGuard:
+      PublicInputReservationApplyGuard | undefined;
     readonly now: number;
   }): Promise<Capsule | "lease_lost" | undefined> {
     const { planRun, capsule, stateVersion, output, now } = input;
@@ -7972,6 +8350,13 @@ export class RunEngine {
       ReturnType<OpenTofuControlStore["commitRunState"]>
     >;
     try {
+      const publicInputReservationLifecycle =
+        await this.#publicInputReservations?.transitionForApply({
+          guard: input.publicInputReservationGuard,
+          outcome: "applied",
+          cleanupRunId: input.applyRunTerminal.id,
+          now,
+        });
       committed = await this.#store.commitRunState({
         stateVersion,
         output,
@@ -7994,6 +8379,9 @@ export class RunEngine {
         applyRunTerminal: input.applyRunTerminal,
         planRunApplied: input.planRunApplied,
         applyRunLeaseToken: input.applyRunLeaseToken,
+        ...(publicInputReservationLifecycle
+          ? { publicInputReservationLifecycle }
+          : {}),
         ...(input.applyRunTerminal.status === "succeeded" &&
         input.inputs?.interfaceMaterialization
           ? {
@@ -8039,6 +8427,8 @@ export class RunEngine {
     readonly providerInstallationPolicy:
       | { readonly requireMirror: boolean }
       | undefined;
+    readonly publicInputReservationGuard:
+      PublicInputReservationApplyGuard | undefined;
     readonly leaseToken: string;
     readonly startedAt: number;
     readonly now: number;
@@ -8138,6 +8528,13 @@ export class RunEngine {
       ReturnType<OpenTofuControlStore["commitRunState"]>
     >;
     try {
+      const publicInputReservationLifecycle =
+        await this.#publicInputReservations?.transitionForApply({
+          guard: input.publicInputReservationGuard,
+          outcome: "provider_failed",
+          cleanupRunId: failed.id,
+          now: input.now,
+        });
       committed = await this.#store.commitRunState({
         ...(stateVersion ? { stateVersion } : {}),
         capsulePatch: {
@@ -8162,6 +8559,9 @@ export class RunEngine {
         applyRunTerminal: failed,
         planRunApplied: appliedPlan,
         applyRunLeaseToken: input.leaseToken,
+        ...(publicInputReservationLifecycle
+          ? { publicInputReservationLifecycle }
+          : {}),
       });
     } catch (error) {
       if (error instanceof CapsuleStateVersionGuardConflict) throw error;
@@ -8188,6 +8588,10 @@ export class RunEngine {
     readonly now: number;
   }): Promise<ApplyRunResponse> {
     try {
+      await this.#tryCleanupPublicInputReservation(
+        input.capsule.id,
+        input.failed.id,
+      );
       await this.#billing.releaseApplyBilling(input.planRun);
       await this.#recordRunnerMinuteUsage({
         workspaceId: input.failed.workspaceId,
@@ -9125,6 +9529,22 @@ export class RunEngine {
     }
   }
 
+  async #tryCleanupPublicInputReservation(
+    capsuleId: string,
+    runId: string,
+  ): Promise<void> {
+    if (!this.#publicInputReservations) return;
+    try {
+      await this.#publicInputReservations.cleanupForRun({ capsuleId, runId });
+    } catch {
+      log.warn("deploy_control.public_input_reservation_release_deferred", {
+        runId,
+        capsuleId,
+        reason: "durable_release_pending",
+      });
+    }
+  }
+
   /**
    * Finalizes a provider-applied Run AFTER the atomic commit-tail fold. Billing
    * and runner usage are captured even when a required post-apply action made
@@ -9212,6 +9632,8 @@ export class RunEngine {
     credentials: RunCredentials | undefined,
     dispatch: RunModuleDispatch,
     inputs: PlanRunInputs | undefined,
+    publicInputReservationGuard:
+      PublicInputReservationApplyGuard | undefined,
     leaseToken: string,
     lease?: LeaseHandle,
   ): Promise<ApplyRunResponse> {
@@ -9423,6 +9845,7 @@ export class RunEngine {
             envDispatch,
             persistGeneration,
             providerInstallationPolicy,
+            publicInputReservationGuard,
             leaseToken,
             startedAt,
             now,
@@ -9476,7 +9899,7 @@ export class RunEngine {
       // `running` destroy run over a finished teardown.
       const diagnostics = redactRunDiagnostics(result?.diagnostics);
       const completed = this.#withPendingRuntimeSecretRetirement(
-        this.#withPendingApplyBillingCapture({
+          this.#withPendingApplyBillingCapture({
           ...effectiveRunning,
           stateVersionId: stateVersion.id,
           status: "succeeded",
@@ -9506,9 +9929,9 @@ export class RunEngine {
           ],
           updatedAt: now,
           finishedAt: now,
-        }, now),
-        now,
-        runtimeSecretRetirementIntent,
+          }, now),
+          now,
+          runtimeSecretRetirementIntent,
       );
       const appliedPlan: PlanRun = {
         ...planRun,
@@ -9519,12 +9942,22 @@ export class RunEngine {
         ReturnType<OpenTofuControlStore["commitRunState"]>
       >;
       try {
+        const publicInputReservationLifecycle =
+          await this.#publicInputReservations?.transitionForApply({
+            guard: publicInputReservationGuard,
+            outcome: "applied",
+            cleanupRunId: completed.id,
+            now,
+          });
         committed = await this.#store.commitRunState({
           stateVersion,
           capsulePatch: destroyPatch,
           applyRunTerminal: completed,
           planRunApplied: appliedPlan,
           applyRunLeaseToken: leaseToken,
+          ...(publicInputReservationLifecycle
+            ? { publicInputReservationLifecycle }
+            : {}),
         });
       } catch (error) {
         if (error instanceof CapsuleStateVersionGuardConflict) throw error;
@@ -9546,6 +9979,7 @@ export class RunEngine {
         planRun,
         finalized,
       );
+      await this.#tryCleanupPublicInputReservation(capsule.id, completed.id);
       try {
         await this.#recordRunnerMinuteUsage({
           workspaceId: completed.workspaceId,
@@ -9562,7 +9996,9 @@ export class RunEngine {
           finishedAt: now,
           recordApplyDuration: true,
         });
-        await this.#store.deletePlanRunInputs(planRun.id);
+        if (!applyRunRuntimeSecretRetirementPending(finalized)) {
+          await this.#store.deletePlanRunInputs(planRun.id);
+        }
       } catch (error) {
         log.warn("deploy_control.destroy_post_commit_cleanup_failed", {
           planRunId: planRun.id,
@@ -9895,6 +10331,19 @@ function hasModuleVariableMaterialization(
 ): boolean {
   try {
     return accountsOidcModuleVariableProfile(installConfig) !== undefined;
+  } catch (error) {
+    throw moduleVariableMaterializationError(errorMessage(error));
+  }
+}
+
+function shouldDeferPublicEndpointModuleVariableMaterialization(
+  installConfig: InstallConfig,
+): boolean {
+  const endpointTarget = publicEndpointPreflightTargetVariable(installConfig);
+  if (!endpointTarget) return false;
+  try {
+    return accountsOidcModuleVariableProfile(installConfig)
+      ?.publicUrlVariable === endpointTarget;
   } catch (error) {
     throw moduleVariableMaterializationError(errorMessage(error));
   }

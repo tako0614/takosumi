@@ -143,6 +143,64 @@ export function generateOpenTofuChildModuleRoot(
   };
 }
 
+/**
+ * Adds trusted, Plan-time semantic inputs to an already generated child root.
+ *
+ * The generated root is the authority boundary here: callers cannot supply an
+ * arbitrary HCL fragment, and an existing assignment is never overwritten.
+ * This keeps late host preflight values on the same reviewed child-module seam
+ * as ordinary compiled inputs without converting them to process environment.
+ */
+export function overlayOpenTofuChildModuleRootInputs(
+  generatedRoot: DispatchGeneratedRoot,
+  inputs: Readonly<Record<string, JsonValue>>,
+): GeneratedRootModule {
+  if (Object.keys(inputs).length === 0) {
+    return { files: Object.freeze({ ...generatedRoot.files }) };
+  }
+  const mainTf = generatedRoot.files["main.tf"];
+  if (typeof mainTf !== "string") {
+    throw new RootgenValidationError(
+      "rootgen_unsupported_json_input",
+      "rootgen: generated root has no main.tf child-module wrapper",
+    );
+  }
+  const lines = mainTf.split("\n");
+  const moduleStart = lines.findIndex((line) => line === 'module "child" {');
+  const moduleEnd = lines.findIndex(
+    (line, index) => index > moduleStart && line === "}",
+  );
+  if (moduleStart < 0 || moduleEnd < 0) {
+    throw new RootgenValidationError(
+      "rootgen_unsupported_json_input",
+      "rootgen: generated root child-module wrapper is malformed",
+    );
+  }
+  const assignments: string[] = [];
+  for (const name of Object.keys(inputs).sort()) {
+    assertIdentifier(name, "rootgen: input name");
+    const assignment = new RegExp(`^  ${escapeRegExp(name)}\\s*=`);
+    if (
+      lines.slice(moduleStart + 1, moduleEnd).some((line) =>
+        assignment.test(line)
+      )
+    ) {
+      throw new RootgenValidationError(
+        "rootgen_unsupported_json_input",
+        `rootgen: child-module input ${name} is already assigned`,
+      );
+    }
+    assignments.push(`  ${name} = ${hclJsonLiteral(inputs[name]!)}`);
+  }
+  lines.splice(moduleEnd, 0, ...assignments);
+  return {
+    files: Object.freeze({
+      ...generatedRoot.files,
+      "main.tf": lines.join("\n"),
+    }),
+  };
+}
+
 function renderProviderVersionsTf(
   providers: readonly RootProviderRequirement[],
 ): string {
@@ -464,6 +522,10 @@ function hclJsonLiteral(value: JsonValue): string {
         "rootgen: unsupported JSON input literal",
       );
   }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

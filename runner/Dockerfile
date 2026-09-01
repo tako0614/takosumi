@@ -65,6 +65,8 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------
 ENV OPENTOFU_PROVIDER_MIRROR=/opt/opentofu/provider-mirror
 ENV TF_CLI_CONFIG_FILE=/opt/opentofu/tofu.rc
+ARG TAKOFORM_PROVIDER_VERSION=3.0.0
+ARG TAKOFORM_PROVIDER_LINUX_AMD64_SHA256=f632146757f688dc4e48f65636fefe70fcbe2cb597d0e5e2f77cc1788a7f6585
 
 # The baked provider-neutral CLI config. Per-run generated configs may add a
 # run-local or operator-configured provider plugin cache and strict policy.
@@ -73,14 +75,27 @@ COPY runner/tofu.rc ${TF_CLI_CONFIG_FILE}
 # Minimal build-time config that pins the provider set to mirror. Lives in its
 # own dir so `tofu providers mirror` resolves only this config.
 COPY runner/mirror-providers.tf /opt/opentofu/mirror-build/providers.tf
+COPY runner/mirror-providers.lock.hcl /opt/opentofu/mirror-build/reviewed.lock.hcl
 
 RUN set -eux; \
     mkdir -p "${OPENTOFU_PROVIDER_MIRROR}"; \
+    cd /opt/opentofu/mirror-build; \
+    # Regenerate the native lock with the pinned OpenTofu binary. This verifies
+    # the registries' signed checksum metadata and fails if the reviewed source,
+    # version, platform, or hash set drifts.
+    env -u TF_CLI_CONFIG_FILE tofu providers lock -platform=linux_amd64; \
+    cmp reviewed.lock.hcl .terraform.lock.hcl; \
     # `tofu providers mirror` must NOT use the baked filesystem-mirror config
     # (it is what populates that mirror); run it with an empty CLI config so it
     # talks to the registry directly.
-    env -u TF_CLI_CONFIG_FILE tofu -chdir=/opt/opentofu/mirror-build \
-        providers mirror "${OPENTOFU_PROVIDER_MIRROR}"; \
+    env -u TF_CLI_CONFIG_FILE tofu providers mirror -platform=linux_amd64 \
+        "${OPENTOFU_PROVIDER_MIRROR}"; \
+    takoform_archive="${OPENTOFU_PROVIDER_MIRROR}/registry.terraform.io/tako0614/takoform/terraform-provider-takoform_${TAKOFORM_PROVIDER_VERSION}_linux_amd64.zip"; \
+    test -f "${takoform_archive}"; \
+    printf '%s  %s\n' "${TAKOFORM_PROVIDER_LINUX_AMD64_SHA256}" \
+        "${takoform_archive}" > /tmp/takoform_SHA256SUM; \
+    sha256sum -c /tmp/takoform_SHA256SUM; \
+    rm /tmp/takoform_SHA256SUM; \
     rm -rf /opt/opentofu/mirror-build; \
     ls -R "${OPENTOFU_PROVIDER_MIRROR}" | head -40
 

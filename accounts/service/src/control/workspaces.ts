@@ -1602,6 +1602,20 @@ async function createCapsule(
               reason: "per_install_overrides",
               sourceSnapshotId: repoInstallUx.sourceSnapshotId,
               repositoryInstallUxDigest: repoInstallUx.digest,
+              repositoryManifestApiVersion:
+                repoInstallUx.repositoryManifestApiVersion,
+              ...(repoInstallUx.repositoryHttpEndpointUrlVariable
+                ? {
+                    repositoryHttpEndpointUrlVariable:
+                      repoInstallUx.repositoryHttpEndpointUrlVariable,
+                  }
+                : {}),
+              ...(repoInstallUx.repositoryHttpEndpointSubdomainVariable
+                ? {
+                    repositoryHttpEndpointSubdomainVariable:
+                      repoInstallUx.repositoryHttpEndpointSubdomainVariable,
+                  }
+                : {}),
             }
           : { reason: "per_install_overrides" },
       variableMapping:

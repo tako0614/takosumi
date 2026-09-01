@@ -11,6 +11,7 @@ import {
   type RepositoryManifestDocument,
 } from "takosumi-contract/repository-manifest";
 import type { JsonValue } from "takosumi-contract/types";
+import { installExperiencePublicEndpoint } from "takosumi-contract";
 import { resolveCapsuleInterfaceBlueprintInstallingPrincipal } from "takosumi-contract/interfaces";
 
 import type { ControlPlaneOperations } from "../control-operations.ts";
@@ -113,6 +114,9 @@ export type RepoOwnedInstallConfigAdoptionResult =
       readonly sourceSnapshotId: string;
       readonly digest: string;
       readonly repositoryManifestApiVersion: RepositoryManifestDocument["apiVersion"];
+      /** Immutable endpoint target from the repository compiler, pre-merge. */
+      readonly repositoryHttpEndpointUrlVariable?: string;
+      readonly repositoryHttpEndpointSubdomainVariable?: string;
     };
 
 /**
@@ -347,6 +351,12 @@ export async function adoptRepoOwnedInstallConfig(
   }
 
   const repositoryManifestApiVersion = observation.document.apiVersion;
+  const repositoryHttpEndpoint = installExperiencePublicEndpoint(
+    compiled.compiled.installExperience,
+  );
+  const repositoryHttpEndpointUrlVariable = repositoryHttpEndpoint?.urlVariable;
+  const repositoryHttpEndpointSubdomainVariable =
+    repositoryHttpEndpoint?.subdomainVariable;
   const proposedInterfaceBlueprints =
     resolveInterfaceInstallingPrincipalBlueprints(
       repositoryManifestApiVersion,
@@ -403,7 +413,9 @@ export async function adoptRepoOwnedInstallConfig(
   return {
     status: "accepted",
     variablePresentation: mergeVariablePresentation(
-      compiled.compiled.variablePresentation,
+      compiled.compiled.variablePresentation.filter((input) =>
+        compiled.compiled.userVariableNames.includes(input.name)
+      ),
       input.baseConfig.variablePresentation,
     ),
     installExperience: installExperience.value,
@@ -425,6 +437,12 @@ export async function adoptRepoOwnedInstallConfig(
     sourceSnapshotId: input.sourceSnapshot!.id,
     digest: observation.digest,
     repositoryManifestApiVersion,
+    ...(repositoryHttpEndpointUrlVariable
+      ? { repositoryHttpEndpointUrlVariable }
+      : {}),
+    ...(repositoryHttpEndpointSubdomainVariable
+      ? { repositoryHttpEndpointSubdomainVariable }
+      : {}),
     modulePath,
     rootProviderRequirements: selectedModule.rootProviderRequirements,
   };
@@ -490,6 +508,19 @@ export async function previewRepoOwnedInstallConfig(
       reason: "per_install_overrides",
       sourceSnapshotId: adoption.sourceSnapshotId,
       repositoryInstallUxDigest: adoption.digest,
+      repositoryManifestApiVersion: adoption.repositoryManifestApiVersion,
+      ...(adoption.repositoryHttpEndpointUrlVariable
+        ? {
+            repositoryHttpEndpointUrlVariable:
+              adoption.repositoryHttpEndpointUrlVariable,
+          }
+        : {}),
+      ...(adoption.repositoryHttpEndpointSubdomainVariable
+        ? {
+            repositoryHttpEndpointSubdomainVariable:
+              adoption.repositoryHttpEndpointSubdomainVariable,
+          }
+        : {}),
     },
     variablePresentation: adoption.variablePresentation,
     installExperience: adoption.installExperience,

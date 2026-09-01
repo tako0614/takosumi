@@ -9,6 +9,7 @@ import { join } from "node:path";
 import {
   isProviderEnvName,
   isReservedProviderEnvName,
+  sameProviderSource,
 } from "../../contract/provider-env-rules.ts";
 import type { RunCredentialRecipeManifest } from "../../contract/credential-recipes.ts";
 import type {
@@ -226,16 +227,6 @@ function safeManifestEnvNames(
   });
 }
 
-function sameExplicitProviderSource(left: string, right: string): boolean {
-  const normalize = (value: string): string => {
-    const trimmed = value.trim();
-    return /^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/u.test(trimmed)
-      ? `registry.opentofu.org/${trimmed}`
-      : trimmed;
-  };
-  return normalize(left) === normalize(right);
-}
-
 export function providerCredentialFilesFromRequest(
   request: unknown,
 ): readonly ProviderCredentialFile[] {
@@ -435,7 +426,7 @@ export function assertCredentialEnvAvailable(
     for (const provider of requiredProviders) {
       if (
         !(manifest?.bindings ?? []).some((binding) =>
-          sameExplicitProviderSource(provider, binding.providerSource),
+          sameProviderSource(provider, binding.providerSource),
         )
       ) {
         throw new Error(

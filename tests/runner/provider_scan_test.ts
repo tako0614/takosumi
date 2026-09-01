@@ -88,6 +88,10 @@ test("canonical provider scan follows only reachable local modules across every 
       [
         "terraform {",
         "  required_providers {",
+        "    takoform = {",
+        '      source = "registry.terraform.io/tako0614/takoform"',
+        '      version = "3.0.0"',
+        "    }",
         "    edge = {",
         '      source = "cloudflare/cloudflare"',
         '      version = "~> 5.0"',
@@ -132,6 +136,7 @@ test("canonical provider scan follows only reachable local modules across every 
       "registry.opentofu.org/cloudflare/cloudflare",
       "registry.opentofu.org/hashicorp/random",
       "registry.opentofu.org/hashicorp/time",
+      "registry.terraform.io/tako0614/takoform",
     ]);
     expect(scan.requirements).toEqual([
       {
@@ -143,6 +148,19 @@ test("canonical provider scan follows only reachable local modules across every 
         moduleLocalName: "edge",
         childAlias: "zone",
       },
+      {
+        source: "registry.terraform.io/tako0614/takoform",
+        moduleLocalName: "takoform",
+        version: "3.0.0",
+      },
+    ]);
+    expect(
+      scan.diagnostics
+        .filter((diagnostic) => diagnostic.code === "json_semantics_unsupported")
+        .map((diagnostic) => diagnostic.path),
+    ).toEqual([
+      "modules/child/providers.tf.json",
+      "modules/child/time.tofu.json",
     ]);
   });
 });
@@ -196,8 +214,8 @@ test("generated root exact provider versions survive runner requirement rescan",
   await withRoot(async (root) => {
     await mkdir(join(root, "module"), { recursive: true });
     const requirement = {
-      source: "registry.opentofu.org/hashicorp/aws",
-      moduleLocalName: "aws",
+      source: "registry.terraform.io/tako0614/takoform",
+      moduleLocalName: "takoform",
       version: "3.0.0",
     } as const;
     const generatedRoot = generateOpenTofuChildModuleRoot({

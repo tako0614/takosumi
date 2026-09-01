@@ -115,7 +115,7 @@ import {
   CapsuleStateGenerationGuardConflict,
   type OpenTofuControlStore,
   type PlanRunInputs,
-  type RuntimeSecretRetirementDispatchClaimInput,
+  type DestroyTailDispatchClaimInput,
 } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import {
@@ -253,6 +253,7 @@ import {
   RunEnvResolver,
   type ResolvedRunEnvironment,
 } from "./run_env_resolver.ts";
+import { PublicInputReservationService } from "./public_input_reservation.ts";
 import {
   DependencyResolutionService,
   type ResolvedDependencies,
@@ -1505,6 +1506,14 @@ export class OpenTofuController {
       dependencies: this.#dependencies,
       verification: this.#verification,
       planResolution: this.#planResolution,
+      ...(this.#vault
+        ? {
+            publicInputReservations: new PublicInputReservationService({
+              store: this.#store,
+              driver: this.#vault,
+            }),
+          }
+        : {}),
       ...(dependencies.moduleVariableMaterializer
         ? {
             moduleVariableMaterializer:
@@ -2158,17 +2167,17 @@ export class OpenTofuController {
     return await this.#runQuery.listRecoverableOpenTofuRuns(options);
   }
 
-  async listPendingRuntimeSecretRetirementRuns(options: {
+  async listPendingDestroyTailRuns(options: {
     readonly staleBeforeMs: number;
     readonly limit?: number;
   }): Promise<readonly Run[]> {
-    return await this.#runQuery.listPendingRuntimeSecretRetirementRuns(options);
+    return await this.#runQuery.listPendingDestroyTailRuns(options);
   }
 
-  async claimPendingRuntimeSecretRetirementDispatch(
-    input: RuntimeSecretRetirementDispatchClaimInput,
+  async claimPendingDestroyTailDispatch(
+    input: DestroyTailDispatchClaimInput,
   ): Promise<boolean> {
-    return await this.#store.claimPendingRuntimeSecretRetirementDispatch(input);
+    return await this.#store.claimPendingDestroyTailDispatch(input);
   }
 
   async getRunLogs(id: string): Promise<RunLogsResponse> {

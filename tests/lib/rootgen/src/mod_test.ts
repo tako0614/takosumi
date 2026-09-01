@@ -2,8 +2,39 @@ import { expect, test } from "bun:test";
 
 import {
   generateOpenTofuChildModuleRoot,
+  overlayOpenTofuChildModuleRootInputs,
   RootgenValidationError,
 } from "../../../../lib/rootgen/src/mod.ts";
+
+test("rootgen overlays one late trusted input into the child module only", () => {
+  const root = generateOpenTofuChildModuleRoot({
+    rootProviderRequirements: [],
+    inputs: { display_name: "Echo" },
+    outputAllowlist: {},
+  });
+  const overlaid = overlayOpenTofuChildModuleRootInputs(root, {
+    app_url: "https://echo-a1b2.takoserver.net",
+  });
+
+  expect(overlaid.files["main.tf"]).toContain(
+    '  app_url = "https://echo-a1b2.takoserver.net"\n}',
+  );
+  expect(overlaid.files["main.tf"]?.match(/app_url/g)).toHaveLength(1);
+  expect(overlaid.files["versions.tf"]).toBe(root.files["versions.tf"]);
+});
+
+test("rootgen refuses to overwrite an existing child-module input", () => {
+  const root = generateOpenTofuChildModuleRoot({
+    rootProviderRequirements: [],
+    inputs: { app_url: "" },
+    outputAllowlist: {},
+  });
+  expect(() =>
+    overlayOpenTofuChildModuleRootInputs(root, {
+      app_url: "https://echo-a1b2.takoserver.net",
+    })
+  ).toThrow("child-module input app_url is already assigned");
+});
 
 test("rootgen keys provider declarations and mappings only from selected-root tuples", () => {
   const { files } = generateOpenTofuChildModuleRoot({

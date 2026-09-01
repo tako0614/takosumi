@@ -241,6 +241,15 @@ export const capsules = pgTable(
     executionAuthorityEpoch: integer("execution_authority_epoch")
       .notNull()
       .default(1),
+    /** Private non-secret reservation lifecycle; never in Capsule JSON. */
+    publicInputReservationJson: json("public_input_reservation_json"),
+    publicInputReservationCleanupRunId: text(
+      "public_input_reservation_cleanup_run_id",
+    ),
+    publicInputReservationCleanupAt: bigint(
+      "public_input_reservation_cleanup_at",
+      { mode: "number" },
+    ),
   },
   (table) => [
     uniqueIndex("takosumi_capsules_project_name_environment_active_unique")
@@ -255,6 +264,10 @@ export const capsules = pgTable(
     index("takosumi_capsules_execution_authority_exact_idx").on(
       table.workspaceId,
       table.id,
+    ),
+    index("takosumi_capsules_public_input_cleanup_idx").on(
+      table.publicInputReservationCleanupAt,
+      table.publicInputReservationCleanupRunId,
     ),
   ],
 );
