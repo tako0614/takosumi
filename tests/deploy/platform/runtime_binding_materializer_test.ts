@@ -23,6 +23,7 @@ import {
   type AccountsOidcModuleVariableAccountsLedger,
   type AccountsOidcModuleVariableControlLedger,
 } from "../../../deploy/platform/accounts_oidc_module_variable_materializer.ts";
+import { createTakosumiRuntimeInputOidcClientSource } from "../../../deploy/platform/runtime_input_oidc_client_source.ts";
 
 const NOW = new Date("2026-08-25T12:00:00.000Z");
 const PAIRWISE_SECRET = "pairwise-secret-with-at-least-32-bytes";
@@ -258,6 +259,74 @@ describe("Takosumi runtime binding materializer", () => {
       ).toBeUndefined();
     });
   }
+
+  // The OIDC half of the same profile. Both lanes must hand the Worker the one
+  // Accounts client the Capsule has: a second client id, subject, or redirect
+  // URI would mean two identities under one Capsule, which the shared Accounts
+  // registration refuses outright.
+  test("the run-scoped provider input lane delivers the same OIDC client", async () => {
+    const config = runtimeBindingInstallConfig({}, PROFILE_V2);
+    const control = runtimeBindingControl(config);
+    const platform = createRuntimeBindingMaterializer({ control });
+    const fromPlatform = await platform.materializeRuntimeBindings(
+      runtimeBindingCall("apply"),
+    );
+
+    const store = new InMemoryOpenTofuControlStore();
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: "ws_1",
+      capsuleId: "cap_1",
+      installConfigId: config.id,
+      installConfig: {
+        runtimeBindingMaterialization: config.runtimeBindingMaterialization as never,
+        installExperience: config.installExperience as never,
+      },
+    });
+    const recorded = recordingAccountsStore();
+    const core = createRuntimeInputMaterializer({
+      store,
+      crypto: new PlaceholderSecretBoundaryCrypto(),
+      values: runtimeInputDerivedValueSource(DERIVATION_KEY),
+      oidcClient: createTakosumiRuntimeInputOidcClientSource({
+        control: {
+          getCapsule: (id) => control.getCapsule(id),
+          getInstallConfig: (id) => control.getInstallConfig(id),
+          getCapsuleExecutionAuthorityEpoch: (id) =>
+            control.getCapsuleExecutionAuthorityEpoch(id),
+        },
+        accounts: recorded.accounts,
+        issuer: "https://app.takosumi.com",
+        pairwiseSubjectSecret: PAIRWISE_SECRET,
+        derivationKey: DERIVATION_KEY,
+        // The origin the Worker is published under is host knowledge; the WfP
+        // lane receives it on the call, this lane is told it by the host.
+        capsulePublicOrigin: async () => "https://legacy-app.example.test",
+        clock: () => NOW,
+      }),
+      clock: () => NOW,
+    });
+    const fromCore = await core.materialize({
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      providerInstance: runtimeInputProviderInstance({
+        moduleLocalName: "takoform",
+      }),
+      phase: "apply",
+    });
+
+    const dispatch = fromCore.toRunnerDispatch();
+    expect([...dispatch.names]).toEqual([...RUNTIME_BINDINGS].sort());
+    expect(dispatch.values).toEqual({ ...fromPlatform.values });
+    expect(dispatch.values.TAKOSUMI_ACCOUNTS_REDIRECT_URI).toBe(
+      "https://legacy-app.example.test/auth/legacy/callback",
+    );
+    // Exactly one Accounts client, written once by the lane that applies.
+    expect(recorded.writes()).toBe(1);
+    expect(
+      (await recorded.store.findOidcClientForCapsule("cap_1"))?.clientId,
+    ).toBe(dispatch.values.TAKOSUMI_ACCOUNTS_CLIENT_ID);
+  });
 
   test("derives the exact DB-owned values read-only in every provider phase", async () => {
     const config = runtimeBindingInstallConfig();

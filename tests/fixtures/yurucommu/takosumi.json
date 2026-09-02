@@ -1,0 +1,300 @@
+{
+  "apiVersion": "takosumi.com/v2.4",
+  "kind": "Repository",
+  "install": {
+    "modules": {
+      ".": {
+        "inputs": [
+          {
+            "name": "project_name",
+            "source": {
+              "kind": "capsule_name"
+            },
+            "role": "service_name",
+            "type": "string",
+            "format": "subdomain",
+            "label": {
+              "ja": "サービス名",
+              "en": "Service name"
+            },
+            "helper": {
+              "ja": "ワークスペース内で使うYurucommuの名前です。",
+              "en": "The name of this Yurucommu service in the workspace."
+            },
+            "advanced": true
+          },
+          {
+            "name": "app_url",
+            "source": {
+              "kind": "module_default"
+            },
+            "type": "string",
+            "format": "url",
+            "label": {
+              "ja": "公開URL",
+              "en": "Public URL"
+            },
+            "advanced": true
+          },
+          {
+            "name": "takosumi_accounts_issuer_url",
+            "source": {
+              "kind": "module_default"
+            },
+            "type": "string",
+            "format": "url",
+            "label": {
+              "ja": "Takosumi Accounts発行者",
+              "en": "Takosumi Accounts issuer"
+            },
+            "advanced": true
+          },
+          {
+            "name": "takosumi_accounts_client_id",
+            "source": {
+              "kind": "module_default"
+            },
+            "type": "string",
+            "label": {
+              "ja": "Takosumi Accountsクライアント",
+              "en": "Takosumi Accounts client"
+            },
+            "advanced": true
+          },
+          {
+            "name": "notification_push_gateway_url",
+            "source": {
+              "kind": "user"
+            },
+            "type": "string",
+            "format": "url",
+            "required": false,
+            "label": {
+              "ja": "PushゲートウェイURL",
+              "en": "Push gateway URL"
+            },
+            "advanced": true
+          },
+          {
+            "name": "notification_push_web_push_public_key",
+            "source": {
+              "kind": "user"
+            },
+            "type": "string",
+            "required": false,
+            "label": {
+              "ja": "Web Push公開鍵",
+              "en": "Web Push public key"
+            },
+            "advanced": true
+          },
+          {
+            "name": "worker_name",
+            "source": {
+              "kind": "module_default"
+            },
+            "type": "string",
+            "label": {
+              "ja": "実行サービス名",
+              "en": "Runtime service name"
+            },
+            "advanced": true
+          },
+          {
+            "name": "worker_release_tag",
+            "source": {
+              "kind": "module_default"
+            },
+            "type": "string",
+            "label": {
+              "ja": "リリース",
+              "en": "Release"
+            },
+            "advanced": true
+          },
+          {
+            "name": "worker_bundle_url",
+            "source": {
+              "kind": "module_default"
+            },
+            "type": "string",
+            "format": "url",
+            "label": {
+              "ja": "リリースURL",
+              "en": "Release URL"
+            },
+            "advanced": true
+          },
+          {
+            "name": "worker_bundle_sha256",
+            "source": {
+              "kind": "module_default"
+            },
+            "type": "string",
+            "label": {
+              "ja": "リリースSHA-256",
+              "en": "Release SHA-256"
+            },
+            "advanced": true
+          }
+        ],
+        "features": [
+          {
+            "id": "notification-push",
+            "optional": true,
+            "label": {
+              "ja": "プッシュ通知",
+              "en": "Push notifications"
+            },
+            "inputs": [
+              "notification_push_gateway_url",
+              "notification_push_web_push_public_key"
+            ]
+          }
+        ],
+        "interfaces": [
+          {
+            "key": "launcher",
+            "name": "yurucommu.launcher",
+            "spec": {
+              "type": "interface.ui.surface",
+              "version": "1",
+              "document": {
+                "launcher": true,
+                "display": {
+                  "title": "Yurucommu",
+                  "icon": "/icons/yurucommu.svg"
+                }
+              },
+              "inputs": {
+                "url": {
+                  "source": "output",
+                  "outputName": "launch_url",
+                  "outputType": "url"
+                }
+              },
+              "access": {
+                "visibility": "workspace"
+              }
+            },
+            "bindingRequests": [
+              {
+                "key": "installer",
+                "subject": {
+                  "source": "installing_principal"
+                },
+                "permissions": ["ui.open"],
+                "delivery": {
+                  "type": "none"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "deploy/takoform": {
+        "inputs": [
+          {
+            "name": "project_name",
+            "source": {
+              "kind": "capsule_name"
+            },
+            "role": "service_name",
+            "type": "string",
+            "format": "subdomain",
+            "label": {
+              "ja": "サービス名",
+              "en": "Service name"
+            },
+            "helper": {
+              "ja": "ワークスペース内で使うYurucommuの名前です。",
+              "en": "The name of this Yurucommu service in the workspace."
+            },
+            "advanced": true
+          }
+        ],
+        "requires": [
+          {
+            "kind": "secret.generated",
+            "bytes": 32,
+            "encoding": "hex",
+            "deliver": {
+              "bindings": {
+                "value": "ENCRYPTION_KEY"
+              }
+            }
+          },
+          {
+            "kind": "identity.oidc",
+            "callbackPath": "/api/auth/callback/takos",
+            "scopes": ["openid", "profile", "email"],
+            "deliver": {
+              "bindings": {
+                "issuerUrl": "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+                "clientId": "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+                "ownerSubject": "TAKOSUMI_ACCOUNTS_OWNER_SUB",
+                "redirectUri": "TAKOSUMI_ACCOUNTS_REDIRECT_URI"
+              }
+            }
+          }
+        ],
+        "sourceBuild": {
+          "commands": [
+            {
+              "argv": ["bun", "install", "--frozen-lockfile"]
+            },
+            {
+              "argv": ["bun", "run", "build:worker"]
+            },
+            {
+              "argv": ["bun", "scripts/prepare-takoform-v1-source.ts"]
+            }
+          ],
+          "outputs": [
+            "deploy/takoform/.generated/yurucommu-worker.js",
+            "deploy/takoform/migrations/sql"
+          ]
+        },
+        "interfaces": [
+          {
+            "key": "launcher",
+            "name": "yurucommu.launcher",
+            "spec": {
+              "type": "interface.ui.surface",
+              "version": "1",
+              "document": {
+                "launcher": true,
+                "display": {
+                  "title": "Yurucommu",
+                  "icon": "/icons/yurucommu.svg"
+                }
+              },
+              "inputs": {
+                "url": {
+                  "source": "output",
+                  "outputName": "launch_url",
+                  "outputType": "url"
+                }
+              },
+              "access": {
+                "visibility": "workspace"
+              }
+            },
+            "bindingRequests": [
+              {
+                "key": "installer",
+                "subject": {
+                  "source": "installing_principal"
+                },
+                "permissions": ["ui.open"],
+                "delivery": {
+                  "type": "none"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

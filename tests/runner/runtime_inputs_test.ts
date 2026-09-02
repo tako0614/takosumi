@@ -7,6 +7,11 @@ import { inflateRawSync } from "node:zlib";
 import { generateOpenTofuChildModuleRoot } from "../../lib/rootgen/src/mod.ts";
 import { workspaceForRun, planJsonPath } from "../../runner/lib/artifacts.ts";
 import { runPlan, runReviewedPlanApply } from "../../runner/lib/plan_apply.ts";
+import {
+  runtimeInputRedactionValues,
+  runtimeInputVariableFileBody,
+  runtimeInputsFromRequest,
+} from "../../runner/lib/runtime_inputs.ts";
 
 /**
  * A long, distinctive value. Every negative assertion greps for exactly this
@@ -551,3 +556,67 @@ function unzipEntries(archive: Buffer): string[] {
   }
   return entries;
 }
+
+/**
+ * The five-name case is Yurucommu's: one generated secret plus the four OIDC
+ * bindings its Takoform WorkerVersion declares. The runner's exact-name check
+ * is what stops a partial map from ever reaching `tofu`, so it is pinned here
+ * against the full set rather than the single-name shape.
+ */
+const FIVE_NAMES = [
+  "ENCRYPTION_KEY",
+  "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+  "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+  "TAKOSUMI_ACCOUNTS_OWNER_SUB",
+  "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
+];
+
+const FIVE_VALUES: Readonly<Record<string, string>> = {
+  ENCRYPTION_KEY: SECRET,
+  TAKOSUMI_ACCOUNTS_CLIENT_ID: "tko_five_name_client_identifier_value",
+  TAKOSUMI_ACCOUNTS_ISSUER_URL: "https://accounts.takosumi.test",
+  TAKOSUMI_ACCOUNTS_OWNER_SUB: "tsub_five_name_owner_subject_value",
+  TAKOSUMI_ACCOUNTS_REDIRECT_URI:
+    "https://five.example.test/api/auth/callback/takos",
+};
+
+function fiveNameRequest(values: Readonly<Record<string, string>>) {
+  return {
+    credentials: {
+      manifest: { contract: "takosumi.run-credentials/v1" },
+      runtimeInputs: [{ variableName: VARIABLE, names: FIVE_NAMES, values }],
+    },
+  };
+}
+
+test("a five-name dispatch is admitted whole and refused when partial", () => {
+  const admitted = runtimeInputsFromRequest(fiveNameRequest(FIVE_VALUES));
+  expect(admitted).toEqual([
+    { variableName: VARIABLE, names: FIVE_NAMES, values: FIVE_VALUES },
+  ]);
+  // Plan and destroy deliver the same reviewed names with no values.
+  expect(runtimeInputsFromRequest(fiveNameRequest({}))[0]?.values).toEqual({});
+
+  // Every delivered value joins the redaction list, OIDC values included.
+  const redacted = runtimeInputRedactionValues(admitted);
+  for (const value of Object.values(FIVE_VALUES)) {
+    expect(redacted).toContain(value);
+  }
+
+  // The whole map is what the Host and the provider compare against the Worker
+  // Version's declaration, so a missing member is refused before `tofu` runs.
+  const { TAKOSUMI_ACCOUNTS_OWNER_SUB: _dropped, ...partial } = FIVE_VALUES;
+  expect(() => runtimeInputsFromRequest(fiveNameRequest(partial))).toThrow(
+    "run-scoped sensitive input values do not match their names",
+  );
+  expect(() =>
+    runtimeInputsFromRequest(
+      fiveNameRequest({ ...FIVE_VALUES, EXTRA_BINDING: SECRET }),
+    ),
+  ).toThrow("run-scoped sensitive input values do not match their names");
+
+  const body = new TextDecoder().decode(runtimeInputVariableFileBody(admitted));
+  for (const name of FIVE_NAMES) {
+    expect(body).toContain(`"${name}" = `);
+  }
+});

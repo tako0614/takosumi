@@ -20,7 +20,10 @@ import {
   InMemoryOpenTofuControlStore,
   type OpenTofuControlStore,
 } from "../../../../core/domains/deploy-control/store.ts";
-import { createRuntimeInputMaterializer } from "../../../../core/domains/deploy-control/runtime_input_materializer.ts";
+import {
+  createRuntimeInputMaterializer,
+  type RuntimeInputOidcClientSource,
+} from "../../../../core/domains/deploy-control/runtime_input_materializer.ts";
 import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
@@ -120,20 +123,27 @@ function planResult(): OpenTofuPlanResult {
 
 async function seedFenceModel(
   store: OpenTofuControlStore,
-  options: { readonly providerVersion: string; readonly capsuleId: string },
+  options: {
+    readonly providerVersion: string;
+    readonly capsuleId: string;
+    /** Profile override, for a Capsule that also delivers OIDC by bindings. */
+    readonly installConfig?: InstallConfig;
+    readonly oidcClient?: RuntimeInputOidcClientSource;
+  },
 ) {
+  const config = options.installConfig ?? installConfig;
   const seeded = await seedCapsuleModel(store, {
     workspaceId: WORKSPACE_ID,
-    installConfigId: installConfig.id,
+    installConfigId: config.id,
     capsuleId: options.capsuleId,
     name: "runtime-input-fence",
-    installConfig,
+    installConfig: config,
   });
   const compatibility = analyzeOpenTofuCapsuleFiles({
     sourceId: seeded.source.id,
     sourceSnapshot: seeded.snapshot,
     files: [moduleFile(options.providerVersion)],
-    policy: installConfig.policy,
+    policy: config.policy,
   });
   expect(compatibility.rootProviderRequirements).toEqual([
     {
@@ -226,6 +236,7 @@ async function seedFenceModel(
         globalPassphrase: "runtime-input-fence-material-0123456789",
       }),
       clock: () => new Date(NOW),
+      ...(options.oidcClient ? { oidcClient: options.oidcClient } : {}),
     }),
     runnerProfiles: [runnerProfile()],
     defaultRunnerProfileId: runnerProfile().id,
@@ -301,4 +312,98 @@ test("a provider below the floor stays inert and the plan says why", async () =>
   expect(
     await store.getSecretBlob(`runtime_input_${seeded.capsule.id}`),
   ).toBeUndefined();
+});
+
+/**
+ * Yurucommu's shape: one generated secret plus a binding-delivered OIDC grant.
+ * Its Takoform WorkerVersion declares all five names in
+ * `required_sensitive_vars`, and the Host refuses a map whose names differ, so
+ * the reviewed plan must carry the whole set — and still no value.
+ */
+const OIDC_SENSITIVE_VARS = [
+  "ENCRYPTION_KEY",
+  "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+  "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+  "TAKOSUMI_ACCOUNTS_OWNER_SUB",
+  "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
+];
+
+const oidcInstallConfig: InstallConfig = {
+  ...installConfig,
+  id: "cfg_runtime_input_fence_oidc",
+  runtimeBindingMaterialization: {
+    contract: "takosumi.runtime-binding-profile/v2",
+    generatedSecrets: [
+      { binding: "ENCRYPTION_KEY", bytes: 32, encoding: "hex" },
+    ],
+    oidcClient: {
+      issuerBinding: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+      clientIdBinding: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+      ownerSubjectBinding: "TAKOSUMI_ACCOUNTS_OWNER_SUB",
+      redirectUriBinding: "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
+      callbackPath: "/api/auth/callback/takos",
+      scopes: ["openid", "profile", "email"],
+    },
+  },
+};
+
+const fenceOidcClient: RuntimeInputOidcClientSource = {
+  async generation() {
+    return "sha256:fence-oidc-generation";
+  },
+  async materialize() {
+    return {
+      generation: "sha256:fence-oidc-generation",
+      values: {
+        TAKOSUMI_ACCOUNTS_ISSUER_URL: "https://accounts.takosumi.test",
+        TAKOSUMI_ACCOUNTS_CLIENT_ID: "tko_fence_client_identifier_value",
+        TAKOSUMI_ACCOUNTS_OWNER_SUB: "tsub_fence_owner_subject_value",
+        TAKOSUMI_ACCOUNTS_REDIRECT_URI:
+          "https://fence.example.test/api/auth/callback/takos",
+      },
+    };
+  },
+};
+
+test("a plan for an OIDC-delivering profile reviews all five names and no value", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { seeded, controller, observed, compatibilityReportId } =
+    await seedFenceModel(store, {
+      providerVersion: "4.0.0",
+      capsuleId: "cap_fence_oidc",
+      installConfig: oidcInstallConfig,
+      oidcClient: fenceOidcClient,
+    });
+
+  const planned = await controller.createCapsulePlan(
+    seeded.capsule.id,
+    {},
+    { compatibilityReportId },
+  );
+  expect(planned.planRun.status).toBe("succeeded");
+  expect(observed.plan?.credentials?.runtimeInputs).toEqual([
+    { variableName: VARIABLE, names: OIDC_SENSITIVE_VARS, values: {} },
+  ]);
+  // The reviewed plan is value-free in every artifact it carries, including
+  // the OIDC half the port supplies only at Apply.
+  const planned_json = JSON.stringify(observed.plan);
+  for (const fragment of [
+    "accounts.takosumi.test",
+    "tko_fence_client_identifier_value",
+    "tsub_fence_owner_subject_value",
+  ]) {
+    expect(planned_json).not.toContain(fragment);
+  }
+
+  // A destroy plan pins no descriptor at all: its provider teardown never reads
+  // the map, and minting for a teardown would widen exposure for no purpose.
+  observed.plan = undefined;
+  const destroyed = await controller.createCapsuleDestroyPlan(
+    seeded.capsule.id,
+    { compatibilityReportId },
+  );
+  // A destructive plan parks for approval; what matters here is that it was
+  // planned at all, and that it pinned nothing to mint.
+  expect(destroyed.planRun.status).toBe("waiting_approval");
+  expect(observed.plan?.credentials?.runtimeInputs).toBeUndefined();
 });
