@@ -53,6 +53,10 @@ import {
 } from "./exec.ts";
 import { assertSafeRelativePath } from "./policy.ts";
 import {
+  assertRuntimeInputVariablesDeclared,
+  runtimeInputVariableFileBody,
+} from "./runtime_inputs.ts";
+import {
   commandContextFromRequest,
   prepareProviderCredentialFiles,
   buildPhaseEnv,
@@ -136,6 +140,12 @@ export async function runGeneratedRootPlan(
     request,
     runnerProfile,
     signal,
+  );
+  // Fail before any `tofu` process exists when the reviewed root does not
+  // declare the exact ephemeral variables this dispatch targets.
+  assertRuntimeInputVariablesDeclared(
+    commandContext.runtimeInputs ?? [],
+    generatedRoot,
   );
 
   const workspace = await prepareGeneratedRootWorkspace(runId);
@@ -256,6 +266,14 @@ export async function runDirectRootPlan(
     runnerProfile,
     signal,
   );
+  // The direct-root lane executes the Capsule's own module as the OpenTofu
+  // root, so Takosumi owns no provider block and declares no ephemeral
+  // variable. A run-scoped sensitive input dispatch here is structurally
+  // undeliverable.
+  assertRuntimeInputVariablesDeclared(
+    commandContext.runtimeInputs ?? [],
+    undefined,
+  );
   const workspace = workspaceForRun(runId);
   await mkdir(workspace.root, { recursive: true });
   await ensureSourceAvailable(source, workspace.sourceRoot);
@@ -374,6 +392,12 @@ export async function initPlanAndBuildResponse(
     postInitProviderScan,
     await readDependencyLockIfPresent(moduleDir),
   );
+  // OpenTofu requires an ephemeral variable set at plan to be set again at
+  // apply, so plan supplies the same variables with an empty map. The body goes
+  // to standard input: never `-var` (argv) and never `TF_VAR_*` (env).
+  const runtimeInputVariableFile = runtimeInputVariableFileBody(
+    commandContext.runtimeInputs ?? [],
+  );
   const plan = await timer.measure("tofu_plan", () =>
     runCommand(
       [
@@ -384,6 +408,7 @@ export async function initPlanAndBuildResponse(
         ...(options.variableFilePath
           ? [`-var-file=${options.variableFilePath}`]
           : []),
+        ...(runtimeInputVariableFile ? ["-var-file=/dev/stdin"] : []),
         "-input=false",
         "-no-color",
         "-out",
@@ -393,6 +418,9 @@ export async function initPlanAndBuildResponse(
         cwd: moduleDir,
         context: commandContext,
         isolateProcessGroup: true,
+        ...(runtimeInputVariableFile
+          ? { stdin: runtimeInputVariableFile }
+          : {}),
       },
     ),
   );
@@ -518,6 +546,10 @@ export async function runReviewedPlanApply(
   if (!generatedRoot && operatorModule) {
     throw new Error("operatorModule requires a generated root");
   }
+  assertRuntimeInputVariablesDeclared(
+    commandContext.runtimeInputs ?? [],
+    generatedRoot,
+  );
   const moduleDir = generatedRoot
     ? await restoreGeneratedRootApplyWorkspace(
         runId,
@@ -591,13 +623,28 @@ export async function runReviewedPlanApply(
       parseRequiredProviders(request),
       strictMirrorInit?.attestation,
     );
+    // A saved plan carries no ephemeral variable value, so apply re-supplies the
+    // map here. The values reach `tofu` only through standard input.
+    const runtimeInputVariableFile = runtimeInputVariableFileBody(
+      applyContext.runtimeInputs ?? [],
+    );
     const result = await timer.measure("tofu_apply", () =>
       runCommand(
-        ["tofu", "apply", "-input=false", "-no-color", workspace.planPath],
+        [
+          "tofu",
+          "apply",
+          ...(runtimeInputVariableFile ? ["-var-file=/dev/stdin"] : []),
+          "-input=false",
+          "-no-color",
+          workspace.planPath,
+        ],
         {
           cwd: moduleDir,
           context: applyContext,
           isolateProcessGroup: true,
+          ...(runtimeInputVariableFile
+            ? { stdin: runtimeInputVariableFile }
+            : {}),
         },
       ),
     );

@@ -114,12 +114,32 @@ export interface ReleaseActivationSpec {
   readonly sourceCommit?: string;
 }
 
+/**
+ * One provider instance's run-scoped sensitive `map(string)`, bound to the exact
+ * generated-root ephemeral variable that carries it. Dispatch-only: it never
+ * reaches argv, env, a file, the plan, or state.
+ */
+export interface RuntimeInputsDispatch {
+  /** Exact generated-root ephemeral variable name. */
+  readonly variableName: string;
+  /** Exact deliverable binding names, sorted and unique. */
+  readonly names: readonly string[];
+  /** Empty at plan/destroy; exactly `names` at a create/update apply. */
+  readonly values: Readonly<Record<string, string>>;
+}
+
 export interface CommandContext {
   readonly env: Record<string, string>;
   /** Cooperative cancellation propagated from the control-plane run fence. */
   readonly signal?: AbortSignal;
   readonly credentialManifest?: import("../../contract/credential-recipes.ts").RunCredentialRecipeManifest;
   readonly credentialFiles?: readonly ProviderCredentialFile[];
+  /**
+   * Apply-only sensitive provider inputs supplied to `tofu` on standard input as
+   * an ephemeral variable file. Present for plan and apply alike so OpenTofu's
+   * plan/apply ephemeral-variable symmetry is satisfied.
+   */
+  readonly runtimeInputs?: readonly RuntimeInputsDispatch[];
   readonly redactionValues?: readonly string[];
   readonly timeoutMs?: number;
   readonly sourceArchiveMaxBytes?: number;

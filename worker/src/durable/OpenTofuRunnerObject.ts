@@ -5805,6 +5805,9 @@ async function runnerMutationCredentialSemantics(
       };
     },
   );
+  const runtimeInputs = runnerMutationRuntimeInputSemantics(
+    value.runtimeInputs,
+  );
   const secretEntries = [
     ...Object.entries(rawEnv).map(([name, entry]) => ({
       delivery: `env:${name}`,
@@ -5819,6 +5822,10 @@ async function runnerMutationCredentialSemantics(
             : [],
         )
       : []),
+    // Run-scoped sensitive provider inputs join the SAME one-way digest lane as
+    // env and file material: two dispatches that differ only in these values
+    // must not collapse onto one at-most-once mutation identity.
+    ...runtimeInputs.secretEntries,
   ];
   const signedTokenDeliveries = new Map<string, Set<string>>();
   for (const entry of secretEntries) {
@@ -5851,9 +5858,78 @@ async function runnerMutationCredentialSemantics(
     ),
     manifest: value.manifest ?? null,
     authorities,
+    // Value-free: only the variable and its declared binding names. The values
+    // themselves appear exclusively as one-way digests above.
+    ...(runtimeInputs.semantics.length > 0
+      ? { runtimeInputs: runtimeInputs.semantics }
+      : {}),
     staticMaterialDigests: staticMaterialDigests.sort((left, right) =>
       left.delivery.localeCompare(right.delivery),
     ),
+  };
+}
+
+/**
+ * Projects `credentials.runtimeInputs` into its value-free semantics plus the
+ * secret entries that feed the one-way digest lane. No raw value is ever copied
+ * into the returned semantics object.
+ */
+function runnerMutationRuntimeInputSemantics(value: unknown): {
+  readonly semantics: readonly {
+    readonly variableName: string;
+    readonly names: readonly string[];
+  }[];
+  readonly secretEntries: readonly {
+    readonly delivery: string;
+    readonly value: string;
+  }[];
+} {
+  if (value === undefined) return { semantics: [], secretEntries: [] };
+  if (!Array.isArray(value)) {
+    throw new Error("runner mutation credential runtimeInputs must be an array");
+  }
+  const semantics: {
+    readonly variableName: string;
+    readonly names: readonly string[];
+  }[] = [];
+  const secretEntries: { readonly delivery: string; readonly value: string }[] =
+    [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      throw new Error(
+        "runner mutation credential runtimeInputs entry must be an object",
+      );
+    }
+    const variableName = stringField(entry, "variableName");
+    const names = entry.names;
+    const values = entry.values;
+    if (
+      !variableName ||
+      !Array.isArray(names) ||
+      names.some((name) => typeof name !== "string") ||
+      !isRecord(values) ||
+      Object.values(values).some((item) => typeof item !== "string")
+    ) {
+      throw new Error(
+        "runner mutation credential runtimeInputs entry is malformed",
+      );
+    }
+    semantics.push({
+      variableName,
+      names: [...(names as string[])].sort(),
+    });
+    for (const [name, item] of Object.entries(values)) {
+      secretEntries.push({
+        delivery: `runtime-input:${variableName}:${name}`,
+        value: item as string,
+      });
+    }
+  }
+  return {
+    semantics: semantics.sort((left, right) =>
+      left.variableName.localeCompare(right.variableName),
+    ),
+    secretEntries,
   };
 }
 

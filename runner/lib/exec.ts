@@ -141,6 +141,12 @@ export async function runCommand(
      * phases or cleanup can proceed.
      */
     readonly isolateProcessGroup?: boolean;
+    /**
+     * Bytes written to the child's standard input. Used to hand OpenTofu a
+     * transient ephemeral-variable file through `-var-file=/dev/stdin` so its
+     * plaintext never reaches a file, an argv element, or an env variable.
+     */
+    readonly stdin?: Uint8Array;
   },
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const signal = options.context?.signal;
@@ -151,6 +157,7 @@ export async function runCommand(
   const subprocess = Bun.spawn([...command], {
     cwd: options.cwd,
     env: options.context?.env ?? baseCommandEnv(),
+    ...(options.stdin ? { stdin: options.stdin } : {}),
     stdout: "pipe",
     stderr: "pipe",
     ...(isolate ? { detached: true } : {}),
