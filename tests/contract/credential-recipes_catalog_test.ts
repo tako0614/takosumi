@@ -3,10 +3,13 @@ import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { parse } from "yaml";
 
+import { isProviderRuntimeInputs } from "../../contract/credential-recipes.ts";
 import {
+  isOpenTofuIdentifier,
   isProviderEnvName,
   isReservedProviderEnvName,
 } from "../../contract/provider-env-rules.ts";
+import { REFERENCE_CREDENTIAL_RECIPES } from "../../providers/credential-recipes.generated.ts";
 import { GUIDED_PROVIDER_SETUPS } from "../../providers/registry.ts";
 
 const RECIPE_DIR = join(import.meta.dir, "../../recipes/providers");
@@ -19,6 +22,7 @@ interface ParsedRecipe {
   readonly required_env_groups?: readonly (readonly string[])[];
   readonly declared_env?: boolean;
   readonly auth_modes?: Record<string, unknown>;
+  readonly runtime_inputs?: Record<string, unknown>;
   readonly constraints?: Record<string, unknown>;
 }
 
@@ -161,3 +165,57 @@ function sorted(values: readonly string[]): readonly string[] {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+
+test("only the Takoform recipe declares the run-scoped sensitive input protocol", () => {
+  const declaring: string[] = [];
+  for (const recipe of RECIPES) {
+    for (const [authMode, mode] of Object.entries(recipe.auth_modes ?? {})) {
+      if (!isRecord(mode)) continue;
+      const declaration = mode.runtime_inputs;
+      if (declaration === undefined) continue;
+      declaring.push(`${recipe.id}/${authMode}`);
+      expect(isRecord(declaration)).toBe(true);
+      const record = declaration as Record<string, unknown>;
+      expect(Object.keys(record).sort()).toEqual([
+        "contract",
+        "map_argument",
+        "nonce_argument",
+      ]);
+      expect(record.contract).toBe("takosumi.provider-runtime-inputs/v1");
+      for (const key of ["nonce_argument", "map_argument"] as const) {
+        const name = record[key];
+        expect(typeof name === "string" && isOpenTofuIdentifier(name)).toBe(
+          true,
+        );
+        expect(name).not.toBe("alias");
+      }
+      expect(record.nonce_argument).not.toBe(record.map_argument);
+    }
+  }
+  expect(declaring).toEqual(["takoform/token"]);
+});
+
+test("the generated recipe asset carries the protocol shape and no value source", () => {
+  const takoform = REFERENCE_CREDENTIAL_RECIPES.find(
+    (recipe) => recipe.id === "takoform",
+  );
+  expect(takoform?.terraformSource).toContain(
+    "registry.opentofu.org/tako0614/takoform",
+  );
+  const declaration = takoform?.authModes.token?.runtimeInputs;
+  expect(declaration).toEqual({
+    contract: "takosumi.provider-runtime-inputs/v1",
+    nonceArgument: "runtime_input_nonce",
+    mapArgument: "runtime_inputs",
+  });
+  expect(isProviderRuntimeInputs(declaration)).toBe(true);
+  // The descriptor names arguments only; it can never carry or select a value.
+  expect(JSON.stringify(declaration)).not.toContain("from");
+
+  for (const recipe of REFERENCE_CREDENTIAL_RECIPES) {
+    for (const [authMode, mode] of Object.entries(recipe.authModes)) {
+      if (recipe.id === "takoform" && authMode === "token") continue;
+      expect(mode.runtimeInputs).toBeUndefined();
+    }
+  }
+});

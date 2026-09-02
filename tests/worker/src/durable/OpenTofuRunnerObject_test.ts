@@ -1955,6 +1955,70 @@ test("OpenTofu runner rejects changed credential authority or immutable mutation
   assert.equal(providerCalls, 1);
 });
 
+test("run-scoped sensitive input values change mutation identity without ever being stored", async () => {
+  const planRunId = "plan_runtime_input_semantics";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, planRunId);
+  const storage = new FakeDoStorage();
+  storage.failPutAfterCommit(1);
+  let providerCalls = 0;
+  const container = mutationSuccessContainer(planRunId, () => {
+    providerCalls += 1;
+  });
+  const options = {
+    storage,
+    env: {
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: RUN_CREDENTIAL_SIGNING_SECRET,
+    },
+  };
+  const token = await signedMutationToken(planRunId, {
+    jti: "runtime-input-semantics",
+  });
+  const first = await runnerWithContainer(r2, container, options).fetch(
+    signedMutationRequest(planRunId, token, {
+      runtimeInputValue: "runtime-input-original-value",
+    }),
+  );
+  assert.equal(first.status, 500);
+  assert.equal(providerCalls, 0);
+
+  // The durable record carries a one-way digest only: no raw value, and no
+  // serialized copy of the delivered map.
+  const evidence = JSON.stringify(storage.entries());
+  assert.equal(evidence.includes("runtime-input-original-value"), false);
+  assert.match(evidence, /"semanticDigest":"sha256:[0-9a-f]{64}"/u);
+
+  // A different value is a different mutation, so redelivery under the same
+  // run must not silently reuse the earlier at-most-once identity.
+  const changed = await runnerWithContainer(r2, container, options).fetch(
+    signedMutationRequest(planRunId, token, {
+      runtimeInputValue: "runtime-input-changed-value",
+    }),
+  );
+  assert.equal(changed.status, 409);
+  assert.equal(providerCalls, 0);
+
+  // The value-free part participates too: the declared binding names are in
+  // the semantics, so widening them is also a different mutation.
+  const widened = await runnerWithContainer(r2, container, options).fetch(
+    signedMutationRequest(planRunId, token, {
+      runtimeInputValue: "runtime-input-original-value",
+      runtimeInputNames: ["SESSION_KEY", "SIGNING_KEY"],
+    }),
+  );
+  assert.equal(widened.status, 409);
+  assert.equal(providerCalls, 0);
+
+  // The identical dispatch resumes the same mutation.
+  const resumed = await runnerWithContainer(r2, container, options).fetch(
+    signedMutationRequest(planRunId, token, {
+      runtimeInputValue: "runtime-input-original-value",
+    }),
+  );
+  assert.equal(resumed.status, 200);
+  assert.equal(providerCalls, 1);
+});
+
 test("OpenTofu runner never dispatches when the durable dispatched transition loses its acknowledgement", async () => {
   const planRunId = "plan_dispatched_ack_lost";
   const r2 = new FakeR2Bucket();
@@ -4721,6 +4785,8 @@ function signedMutationRequest(
     readonly sourceRef?: string;
     readonly rawOutputRef?: string;
     readonly stateScope?: Readonly<Record<string, unknown>>;
+    readonly runtimeInputValue?: string;
+    readonly runtimeInputNames?: readonly string[];
   } = {},
 ): Request {
   const action = options.action ?? "apply";
@@ -4798,6 +4864,17 @@ function signedMutationRequest(
         ...(options.rawOutputRef ? { rawOutputRef: options.rawOutputRef } : {}),
         credentials: {
           env: { PROVIDER_RUN_TOKEN: token },
+          ...(options.runtimeInputValue
+            ? {
+                runtimeInputs: [
+                  {
+                    variableName: "takosumi_runtime_inputs__probe",
+                    names: options.runtimeInputNames ?? ["SIGNING_KEY"],
+                    values: { SIGNING_KEY: options.runtimeInputValue },
+                  },
+                ],
+              }
+            : {}),
           manifest: {
             bindings: [
               {

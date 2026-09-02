@@ -277,3 +277,130 @@ test("resolved-host policy rejects internal names before invoking a resolver", a
   ).rejects.toThrow("is an internal-only name");
   expect(called).toBe(false);
 });
+
+const RUNTIME_INPUT_VARIABLE = "takosumi_runtime_inputs__takoform";
+
+function runtimeInputRequest(runtimeInputs: unknown, withManifest = true) {
+  return {
+    ...REQUEST,
+    credentials: {
+      env: { CLOUDFLARE_API_TOKEN: "run-scoped-token" },
+      ...(withManifest ? { manifest: CLOUDFLARE_CREDENTIAL_MANIFEST } : {}),
+      runtimeInputs,
+    },
+  };
+}
+
+test("pre-init policy accepts a well-formed run-scoped sensitive input dispatch", () => {
+  expect(() =>
+    assertRunnerPolicyForRequest(
+      runtimeInputRequest([
+        {
+          variableName: RUNTIME_INPUT_VARIABLE,
+          names: ["ENCRYPTION_KEY", "SIGNING_KEY"],
+          values: { ENCRYPTION_KEY: "a".repeat(64), SIGNING_KEY: "b".repeat(64) },
+        },
+      ]),
+      DEFAULT_STYLE_CLOUDFLARE_PROFILE,
+    ),
+  ).not.toThrow();
+});
+
+test("run-scoped sensitive inputs require an explicit run credential manifest", () => {
+  expect(() =>
+    assertRunnerPolicyForRequest(
+      runtimeInputRequest(
+        [
+          {
+            variableName: RUNTIME_INPUT_VARIABLE,
+            names: ["SIGNING_KEY"],
+            values: {},
+          },
+        ],
+        false,
+      ),
+      DEFAULT_STYLE_CLOUDFLARE_PROFILE,
+    ),
+  ).toThrow("explicit run credential manifest");
+});
+
+test("pre-init policy mirrors the provider limits on run-scoped sensitive inputs", () => {
+  const cases: readonly [unknown, string][] = [
+    [
+      [
+        {
+          variableName: RUNTIME_INPUT_VARIABLE,
+          names: ["signing_key"],
+          values: {},
+        },
+      ],
+      "names are malformed",
+    ],
+    [
+      [
+        {
+          variableName: RUNTIME_INPUT_VARIABLE,
+          names: [`A${"B".repeat(64)}`],
+          values: {},
+        },
+      ],
+      "names are malformed",
+    ],
+    [
+      [
+        {
+          variableName: RUNTIME_INPUT_VARIABLE,
+          names: Array.from({ length: 65 }, (_unused, index) => `NAME_${index}`),
+          values: {},
+        },
+      ],
+      "names are malformed",
+    ],
+    [
+      [
+        {
+          variableName: RUNTIME_INPUT_VARIABLE,
+          names: ["SIGNING_KEY"],
+          values: { SIGNING_KEY: "x".repeat(32769) },
+        },
+      ],
+      "exceeds 32768 bytes",
+    ],
+    [
+      [
+        {
+          variableName: RUNTIME_INPUT_VARIABLE,
+          names: ["SIGNING_KEY"],
+          values: {},
+          extra: true,
+        },
+      ],
+      "entry is malformed",
+    ],
+    [{ variableName: RUNTIME_INPUT_VARIABLE }, "payload is malformed"],
+  ];
+  for (const [runtimeInputs, message] of cases) {
+    expect(() =>
+      assertRunnerPolicyForRequest(
+        runtimeInputRequest(runtimeInputs),
+        DEFAULT_STYLE_CLOUDFLARE_PROFILE,
+      ),
+    ).toThrow(message);
+  }
+});
+
+test("pre-init policy refuses a run-scoped sensitive input map larger than the provider accepts", () => {
+  const names = Array.from({ length: 40 }, (_unused, index) => `NAME_${index}`)
+    .sort();
+  const values = Object.fromEntries(
+    names.map((name) => [name, "x".repeat(32000)]),
+  );
+  expect(() =>
+    assertRunnerPolicyForRequest(
+      runtimeInputRequest([
+        { variableName: RUNTIME_INPUT_VARIABLE, names, values },
+      ]),
+      DEFAULT_STYLE_CLOUDFLARE_PROFILE,
+    ),
+  ).toThrow("exceed 1048576 bytes in total");
+});
