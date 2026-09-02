@@ -142,6 +142,32 @@ copy / drop / rename / index 再作成と migration-ledger insert を同じ D1 b
 transaction に含めます。失敗時は全体 rollback し、fence は active のまま残す
 ため、request write と部分 schema が混在する状態を許しません。
 
+## Bootstrap batching
+
+control D1 の schema bootstrap は statement ごとの round trip を発行しません。
+ensure-DDL と historical index pass は `db.batch()` の group として発行します。
+batch は D1 の 1 transaction なので、group の途中で失敗すれば group 全体が
+rollback します。
+
+group の切り方は D1 の documented limit に従います。1 statement は 100,000
+bytes 以内、bound parameter は 1 statement あたり 100 個以内、request / batch
+は 30 秒以内です。statement 数の上限は documented ではないため、bootstrap は
+1 group を 50 statement かつ 80,000 bytes 以内に抑えます。単独では正しくない
+statement 列 (`drop index` とそれを置き換える `create index`) は同じ group に
+入れ、group 境界で分割しません。migration が持つ atomic statement set は
+その migration 固有の 1 batch であり、この上限で分割しません。
+
+migration ledger の insert は、その migration の statement と同じ batch に
+入れます。部分失敗は batch ごと rollback されるため、適用しきっていない
+migration が ledger に記録されることはありません。imperative に apply する
+歴史的 migration は apply の後に ledger insert を単独で発行するので、失敗時は
+ledger row が残らず次の boot が replay します。
+
+bootstrap は `sqlite_master` と `schema_migrations` をそれぞれ 1 回だけ読み、
+現在の schema がすでに満たしている statement を発行しません。forward-only の
+順序は変わりません。収束済み database の再実行は statement を 1 本も発行せず、
+read だけで終わります。
+
 ## Failure and reversal procedure
 
 `expand` / `backfill`:

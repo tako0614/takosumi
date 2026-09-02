@@ -1,9 +1,16 @@
 import { expect, test } from "bun:test";
 import {
   cachedServiceAttempt,
+  createInProcessDeployControlSeam,
   deployControlServiceOptions,
 } from "../../../worker/src/deploy_control_seam.ts";
-import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
+import { createCloudflareWorker } from "../../../worker/src/handler.ts";
+import type {
+  CloudflareWorkerEnv,
+  D1Database,
+  D1PreparedStatement,
+  D1Result,
+} from "../../../worker/src/bindings.ts";
 import {
   createDefaultRunnerProfiles,
   type OpenTofuRunner,
@@ -148,4 +155,85 @@ test("Worker composition mounts ledger HTTP routes only for explicit private ing
       TAKOSUMI_EXPOSE_INTERNAL_EDGE: "1",
     } as unknown as CloudflareWorkerEnv).mountInternalLedgerRoutes,
   ).toBe(true);
+});
+
+/**
+ * The ledger bootstrap is expensive on a cold, freshly provisioned Worker even
+ * after batching, so it must never sit in front of a request that does not
+ * need the ledger. The seam is deliberately lazy: constructing it touches no
+ * binding, and the Worker's own dispatcher answers `/healthz` and unmatched
+ * paths before it ever resolves the service.
+ */
+class BlockedControlD1 implements D1Database {
+  uses = 0;
+
+  prepare(_query: string): D1PreparedStatement {
+    this.uses += 1;
+    const pending = <T>(): Promise<T> => new Promise<T>(() => {});
+    const statement: D1PreparedStatement = {
+      bind: () => statement,
+      first: pending,
+      all: pending,
+      raw: pending,
+      run: pending,
+    };
+    return statement;
+  }
+
+  batch<T = unknown>(): Promise<readonly D1Result<T>[]> {
+    this.uses += 1;
+    return new Promise<readonly D1Result<T>[]>(() => {});
+  }
+}
+
+test("constructing the deploy-control seam starts no schema bootstrap", () => {
+  const controlDb = new BlockedControlD1();
+  const env = {
+    TAKOSUMI_CONTROL_DB: controlDb,
+  } as unknown as CloudflareWorkerEnv;
+
+  const seam = createInProcessDeployControlSeam(env);
+
+  expect(typeof seam.fetch).toBe("function");
+  expect(typeof seam.operations).toBe("function");
+  expect(controlDb.uses).toBe(0);
+});
+
+test("requests that do not need the ledger never wait on the bootstrap", async () => {
+  const controlDb = new BlockedControlD1();
+  const env = {
+    TAKOSUMI_CONTROL_DB: controlDb,
+  } as unknown as CloudflareWorkerEnv;
+  const worker = createCloudflareWorker();
+
+  // A control-plane request legitimately waits for the bootstrap; hold one open
+  // so the seam's pending attempt is genuinely in flight.
+  const blocked = worker.fetch(
+    new Request("https://worker.example/capabilities"),
+    env,
+  );
+  let blockedSettled = false;
+  void blocked.then(
+    () => {
+      blockedSettled = true;
+    },
+    () => {
+      blockedSettled = true;
+    },
+  );
+  await Promise.resolve();
+
+  const health = await worker.fetch(
+    new Request("https://worker.example/healthz"),
+    env,
+  );
+  expect(health.status).toBe(200);
+
+  const unmatched = await worker.fetch(
+    new Request("https://worker.example/not-a-route"),
+    env,
+  );
+  expect(unmatched.status).toBe(404);
+
+  expect(blockedSettled).toBe(false);
 });
