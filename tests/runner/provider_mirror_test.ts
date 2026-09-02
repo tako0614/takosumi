@@ -34,6 +34,20 @@ test("runner provider mirror uses exact versions for offline-only providers", as
   expect(config).not.toContain("hashicorp/aws");
 });
 
+// Takoform publishes to registry.terraform.io. registry.opentofu.org carries
+// only the older releases it has discovered, so caching the pinned release from
+// the OpenTofu registry would silently bake a different provider than the one
+// Takoform-deploying Capsules pin.
+test("runner provider mirror caches the pinned Takoform provider from its publishing registry", async () => {
+  const config = await readFile(MIRROR_PROVIDERS, "utf8");
+
+  expect(config).toContain(
+    'source  = "registry.terraform.io/tako0614/takoform"',
+  );
+  expect(config).toContain('version = "= 4.0.0"');
+  expect(config).not.toContain("registry.opentofu.org/tako0614/takoform");
+});
+
 test("runner image may curate a cache without making its providers runtime defaults", async () => {
   const mirror = await readFile(MIRROR_PROVIDERS, "utf8");
   const tofuRc = await readFile(TOFU_RC, "utf8");
@@ -45,6 +59,7 @@ test("runner image may curate a cache without making its providers runtime defau
     "registry.opentofu.org/hashicorp/http",
     "registry.opentofu.org/hashicorp/random",
     "registry.opentofu.org/hashicorp/tls",
+    "registry.terraform.io/tako0614/takoform",
   ]);
   for (const provider of providers) {
     expect(tofuRc).not.toContain(JSON.stringify(provider));
