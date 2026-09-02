@@ -24,6 +24,8 @@ import {
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
+import { createTakosumiRuntimeInputOidcClientSource } from "../../../../deploy/platform/runtime_input_oidc_client_source.ts";
 
 /** The five names Yurucommu's Takoform WorkerVersion declares. */
 const YURUCOMMU_SENSITIVE_VARS = [
@@ -50,7 +52,7 @@ const OIDC_VALUES: Readonly<Record<string, string>> = {
  * The real Yurucommu manifest, compiled the way an install does, so the name
  * set under test is the one the repository actually publishes.
  */
-async function yurucommuTakoformProfile() {
+async function yurucommuCompiled() {
   const document = JSON.parse(
     await readFile(
       new URL("../../../fixtures/yurucommu/takosumi.json", import.meta.url),
@@ -101,7 +103,11 @@ async function yurucommuTakoformProfile() {
       `the Yurucommu manifest no longer compiles: ${result.diagnostic.code}`,
     );
   }
-  return result.compiled.runtimeBindingMaterialization;
+  return result.compiled;
+}
+
+async function yurucommuTakoformProfile() {
+  return (await yurucommuCompiled()).runtimeBindingMaterialization;
 }
 
 function recordingOidcSource(): RuntimeInputOidcClientSource & {
@@ -319,4 +325,184 @@ test("a profile without OIDC binding delivery keeps the generated-secret set", a
   // A configured port stays untouched by a profile that asks nothing of it, so
   // no Accounts read or registration happens for such a Capsule.
   expect(oidcClient.requests).toHaveLength(0);
+});
+
+/**
+ * The whole lane, end to end, with only the ONE thing Takosumi cannot know
+ * stubbed: the origin the host will publish the Worker under.
+ *
+ * Everything else here is real — the published Yurucommu manifest, the
+ * compiler, the Accounts registration, the derived client id and pairwise
+ * subject, and the run-scoped materializer. The point is that the five names
+ * the Worker Version declares are produced only when a host answers the origin
+ * question, and that the redirect URI Accounts registers is exactly that origin
+ * joined to the manifest's own callback path.
+ */
+test("a host-answered origin completes the five-name map and the exact redirect URI", async () => {
+  const compiled = await yurucommuCompiled();
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store, {
+    installConfig: {
+      runtimeBindingMaterialization:
+        compiled.runtimeBindingMaterialization as never,
+      installExperience: compiled.installExperience as never,
+      variableMapping: compiled.variableMapping as never,
+      workspaceId: "workspace_test",
+    },
+  });
+  // The Accounts client is owned by the Principal that installed the Capsule.
+  await store.putCapsule({
+    ...seeded.capsule,
+    installingPrincipalId: "tsub_yurucommu_installer",
+  });
+  const accounts = new InMemoryAccountsStore();
+  const asked: unknown[] = [];
+  const materializer = createRuntimeInputMaterializer({
+    store,
+    crypto: new PlaceholderSecretBoundaryCrypto(),
+    clock: () => new Date("2026-09-01T12:00:00.000Z"),
+    oidcClient: createTakosumiRuntimeInputOidcClientSource({
+      control: {
+        getCapsule: (id) => store.getCapsule(id),
+        getInstallConfig: (id) => store.getInstallConfig(id),
+        getCapsuleExecutionAuthorityEpoch: (id) =>
+          store.getCapsuleExecutionAuthorityEpoch(id),
+      },
+      accounts,
+      issuer: "https://app.takosumi.test",
+      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
+      derivationKey: "runtime-secret-with-at-least-32-bytes",
+      capsulePublicOrigin: async (input) => {
+        asked.push({
+          capsuleId: input.capsule.id,
+          installConfigId: input.installConfig.id,
+        });
+        return "https://yurucommu-abcdef.takoform.test";
+      },
+      clock: () => new Date("2026-09-01T12:00:00.000Z"),
+    }),
+  });
+  const request = {
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    installConfigId: seeded.installConfig.id,
+    providerInstance: PROVIDER_INSTANCE,
+  };
+
+  const dispatch = (
+    await materializer.materialize({ ...request, phase: "apply" })
+  ).toRunnerDispatch();
+  expect([...dispatch.names]).toEqual(YURUCOMMU_SENSITIVE_VARS);
+  expect(Object.keys(dispatch.values).sort()).toEqual(YURUCOMMU_SENSITIVE_VARS);
+  expect(dispatch.values.TAKOSUMI_ACCOUNTS_ISSUER_URL).toBe(
+    "https://app.takosumi.test",
+  );
+  // The Worker's redirect URI is the host's origin plus the callback path the
+  // repository declared; neither half is invented by this lane.
+  expect(dispatch.values.TAKOSUMI_ACCOUNTS_REDIRECT_URI).toBe(
+    "https://yurucommu-abcdef.takoform.test/api/auth/callback/takos",
+  );
+  expect(
+    (await accounts.findOidcClientForCapsule(seeded.capsule.id))?.redirectUris,
+  ).toEqual([dispatch.values.TAKOSUMI_ACCOUNTS_REDIRECT_URI!]);
+  // Plan and Apply each ask the host; both must be told the SAME origin, which
+  // is why the port has to be idempotent rather than allocate per call.
+  expect(asked.length).toBeGreaterThan(0);
+  expect(new Set(asked.map((entry) => JSON.stringify(entry))).size).toBe(1);
+});
+
+test("a host that cannot answer the origin question fails the lane closed", async () => {
+  const compiled = await yurucommuCompiled();
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store, {
+    installConfig: {
+      runtimeBindingMaterialization:
+        compiled.runtimeBindingMaterialization as never,
+      installExperience: compiled.installExperience as never,
+      variableMapping: compiled.variableMapping as never,
+      workspaceId: "workspace_test",
+    },
+  });
+  await store.putCapsule({
+    ...seeded.capsule,
+    installingPrincipalId: "tsub_yurucommu_installer",
+  });
+  const materializer = createRuntimeInputMaterializer({
+    store,
+    crypto: new PlaceholderSecretBoundaryCrypto(),
+    oidcClient: createTakosumiRuntimeInputOidcClientSource({
+      control: {
+        getCapsule: (id) => store.getCapsule(id),
+        getInstallConfig: (id) => store.getInstallConfig(id),
+        getCapsuleExecutionAuthorityEpoch: (id) =>
+          store.getCapsuleExecutionAuthorityEpoch(id),
+      },
+      accounts: new InMemoryAccountsStore(),
+      issuer: "https://app.takosumi.test",
+      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
+      derivationKey: "runtime-secret-with-at-least-32-bytes",
+      // A host with no answer must stop the plan rather than let a redirect URI
+      // be registered for an origin nobody will serve.
+      capsulePublicOrigin: async () => undefined,
+    }),
+  });
+  await expect(
+    materializer.nonce({
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      installConfigId: seeded.installConfig.id,
+      providerInstance: PROVIDER_INSTANCE,
+    }),
+  ).rejects.toThrow("runtime input OIDC HTTPS origin is invalid");
+});
+
+test("a destroyed Capsule releases whatever the host holds for its origin", async () => {
+  const compiled = await yurucommuCompiled();
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store, {
+    installConfig: {
+      runtimeBindingMaterialization:
+        compiled.runtimeBindingMaterialization as never,
+      installExperience: compiled.installExperience as never,
+      variableMapping: compiled.variableMapping as never,
+      workspaceId: "workspace_test",
+    },
+  });
+  await store.putCapsule({
+    ...seeded.capsule,
+    installingPrincipalId: "tsub_yurucommu_installer",
+    status: "destroyed",
+  });
+  const released: unknown[] = [];
+  const materializer = createRuntimeInputMaterializer({
+    store,
+    crypto: new PlaceholderSecretBoundaryCrypto(),
+    oidcClient: createTakosumiRuntimeInputOidcClientSource({
+      control: {
+        getCapsule: (id) => store.getCapsule(id),
+        getInstallConfig: (id) => store.getInstallConfig(id),
+        getCapsuleExecutionAuthorityEpoch: (id) =>
+          store.getCapsuleExecutionAuthorityEpoch(id),
+      },
+      accounts: new InMemoryAccountsStore(),
+      issuer: "https://app.takosumi.test",
+      pairwiseSubjectSecret: "pairwise-secret-with-at-least-32-bytes",
+      derivationKey: "runtime-secret-with-at-least-32-bytes",
+      capsulePublicOrigin: async () => "https://yurucommu-abcdef.takoform.test",
+      capsulePublicOriginRelease: async (input) => {
+        released.push(input);
+      },
+    }),
+  });
+  // A Capsule that never sealed material here can still hold a host
+  // reservation, so retirement must run for it too — otherwise the origin stays
+  // pinned with nothing left able to release it.
+  await materializer.retire({
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    installConfigId: seeded.installConfig.id,
+  });
+  expect(released).toEqual([
+    { workspaceId: seeded.workspace.id, capsuleId: seeded.capsule.id },
+  ]);
 });

@@ -95,8 +95,42 @@ export interface Capsule {
    * of public reads.
    */
   readonly autoUpdateAttemptSourceSnapshotId?: string;
+  /**
+   * Host-reserved public origin for this Capsule's Worker.
+   *
+   * A Capsule whose manifest delivers `identity.oidc` by bindings declares no
+   * repository endpoint: the origin is assigned by whichever host publishes the
+   * Worker, and Takosumi only ever RECEIVES it (see
+   * `deploy/platform/runtime_input_oidc_client_source.ts`). Plan asks the host
+   * to fix one origin before the reviewed plan exists; Apply must read back the
+   * SAME one rather than ask for another, so the opaque host reference has to
+   * outlive the Run that first obtained it.
+   *
+   * This is private host bookkeeping — never repository configuration, never a
+   * provider resource identity, and never part of a public Capsule projection.
+   * `reservationRef` is opaque to Takosumi: it carries no hostname scheme,
+   * tenant, space, or provider-native name.
+   */
+  readonly publicOriginReservation?: CapsulePublicOriginReservation;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+/**
+ * One host-owned public-origin reservation held for a Capsule.
+ *
+ * `origin` is pinned so a later Apply can detect that the host handed the
+ * origin to someone else (a lapsed reservation) and fail the pinned descriptor
+ * instead of quietly registering a redirect URI for an origin nobody serves.
+ */
+export interface CapsulePublicOriginReservation {
+  /** Opaque host reference. Takosumi re-sends it and never parses it. */
+  readonly reservationRef: string;
+  /** Exact HTTPS origin the host fixed for this Capsule. */
+  readonly origin: string;
+  /** Label Takosumi asked the host to reserve, for operator diagnosis. */
+  readonly requestedLabel: string;
+  readonly reservedAt: string;
 }
 
 /**
@@ -117,6 +151,7 @@ export type PublicCapsule = Omit<
   | "currentOutputId"
   | "autoUpdateAttemptSourceSnapshotId"
   | "installingPrincipalId"
+  | "publicOriginReservation"
 > & {
   /** Absent before the first successful Apply. Derived; never stored on Capsule. */
   readonly adoptedSourceRevision?: CapsuleAdoptedSourceRevision;

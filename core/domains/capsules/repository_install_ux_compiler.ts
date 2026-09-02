@@ -1445,7 +1445,12 @@ function canonicalModulePath(value: string): string | undefined {
     : trimmed;
 }
 
-function capsuleSlug(value: string): string {
+/**
+ * Shared slug semantics for a Capsule's reviewed service name. Exported so a
+ * host composition that must ask its host to reserve a label derives exactly
+ * the same base the installer reviewed, instead of inventing a second scheme.
+ */
+export function capsuleSlug(value: string): string {
   return (
     value
       .trim()
@@ -1456,7 +1461,8 @@ function capsuleSlug(value: string): string {
   );
 }
 
-function workspaceSlugSuffix(value: string): string {
+/** Shared Workspace-scoping suffix; see {@link capsuleSlug}. */
+export function workspaceSlugSuffix(value: string): string {
   return value
     .replace(/^workspace_/u, "")
     .replace(/[^a-z0-9-]+/giu, "-")

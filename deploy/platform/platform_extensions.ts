@@ -13,6 +13,10 @@ import {
   isReservedProviderEnvName,
 } from "takosumi-contract/provider-env-rules";
 import { canonicalRunCredentialSettings } from "takosumi-contract/connections";
+import {
+  isProviderRuntimeInputs,
+  type CredentialRecipeRuntimeInputs,
+} from "takosumi-contract/credential-recipes";
 import type { JsonValue } from "takosumi-contract";
 import {
   PLATFORM_EXTENSION_ALLOWLISTED_BASE_PATHS,
@@ -91,7 +95,41 @@ export interface PlatformExtensionProviderCredentialBroker {
   readonly envNames: readonly string[];
   /** Bounded non-secret policy passed to this broker on every Run. */
   readonly runCredentialSettings?: Readonly<Record<string, JsonValue>>;
+  /**
+   * Relative path appended to this route's basePath for the broker's
+   * NON-SECRET public-input exchange.
+   *
+   * Some Capsules need one fact before their plan can be reviewed that only the
+   * host publishing the Worker can answer — the public origin the Worker will
+   * be served under. Declaring this path says "this extension can answer such a
+   * question"; it never says which host, hostname, suffix, tenant, or scheme
+   * produces the answer. A route without it simply cannot answer, and Capsules
+   * that need an answer fail closed at plan.
+   */
+  readonly publicInputExchangePath?: `/${string}`;
+  /**
+   * Closed set of public-input questions this broker answers. Takosumi asks a
+   * question only when the extension declares that it is answerable.
+   */
+  readonly publicInputCapabilities?: readonly PlatformExtensionPublicInputCapability[];
+  /**
+   * Run-scoped sensitive input protocol this broker's provider understands.
+   *
+   * Value-free and provider-declared, exactly like the reference recipe
+   * catalog's own descriptor: it names only the two provider-block arguments
+   * and the exact version floor at which they exist. Without it a broker
+   * Connection cannot carry the Capsule's runtime binding profile at all.
+   */
+  readonly runtimeInputs?: CredentialRecipeRuntimeInputs;
 }
+
+/** The only public-input question v1 defines. */
+export const PLATFORM_EXTENSION_PUBLIC_INPUT_CAPABILITIES = [
+  "http_endpoint_url",
+] as const;
+
+export type PlatformExtensionPublicInputCapability =
+  (typeof PLATFORM_EXTENSION_PUBLIC_INPUT_CAPABILITIES)[number];
 
 /** Provider-neutral authenticated identity delivered across the platform seam. */
 export type PlatformExtensionAuthenticatedAuthKind =
@@ -359,10 +397,16 @@ function optionalProviderCredentialBroker(
     "providerSource",
     "recipeId",
   ];
+  const optionalKeys = [
+    "runCredentialSettings",
+    "publicInputExchangePath",
+    "publicInputCapabilities",
+    "runtimeInputs",
+  ];
   const actualKeys = Object.keys(record).sort();
   if (
     requiredKeys.some((key) => !actualKeys.includes(key)) ||
-    actualKeys.some((key) => ![...requiredKeys, "runCredentialSettings"].includes(key))
+    actualKeys.some((key) => ![...requiredKeys, ...optionalKeys].includes(key))
   ) {
     throw new TypeError(`${label}.providerCredentialBroker has unknown or missing fields`);
   }
@@ -414,6 +458,47 @@ function optionalProviderCredentialBroker(
   if (new Set(envNames).size !== envNames.length) {
     throw new TypeError(`${label}.providerCredentialBroker.envNames contains duplicates`);
   }
+  const publicInputExchangePath = record.publicInputExchangePath;
+  if (publicInputExchangePath !== undefined) {
+    if (
+      typeof publicInputExchangePath !== "string" ||
+      publicInputExchangePath === "/" ||
+      !canonicalPlatformExtensionPath(publicInputExchangePath) ||
+      publicInputExchangePath === exchangePath
+    ) {
+      throw new TypeError(
+        `${label}.providerCredentialBroker.publicInputExchangePath is invalid`,
+      );
+    }
+  }
+  const publicInputCapabilities = optionalStringArray(
+    record.publicInputCapabilities,
+    `${label}.providerCredentialBroker`,
+    "publicInputCapabilities",
+  );
+  if (publicInputCapabilities !== undefined) {
+    if (
+      publicInputExchangePath === undefined ||
+      publicInputCapabilities.length === 0 ||
+      new Set(publicInputCapabilities).size !== publicInputCapabilities.length ||
+      publicInputCapabilities.some(
+        (capability) =>
+          !(
+            PLATFORM_EXTENSION_PUBLIC_INPUT_CAPABILITIES as readonly string[]
+          ).includes(capability),
+      )
+    ) {
+      throw new TypeError(
+        `${label}.providerCredentialBroker.publicInputCapabilities is invalid`,
+      );
+    }
+  }
+  const runtimeInputs = record.runtimeInputs;
+  if (runtimeInputs !== undefined && !isProviderRuntimeInputs(runtimeInputs)) {
+    throw new TypeError(
+      `${label}.providerCredentialBroker.runtimeInputs is invalid`,
+    );
+  }
   let runCredentialSettings: Readonly<Record<string, JsonValue>> | undefined;
   try {
     runCredentialSettings = canonicalRunCredentialSettings(
@@ -433,6 +518,17 @@ function optionalProviderCredentialBroker(
     exchangePath: exchangePath as `/${string}`,
     envNames: Object.freeze([...envNames]),
     ...(runCredentialSettings ? { runCredentialSettings } : {}),
+    ...(publicInputExchangePath !== undefined
+      ? { publicInputExchangePath: publicInputExchangePath as `/${string}` }
+      : {}),
+    ...(publicInputCapabilities
+      ? {
+          publicInputCapabilities: Object.freeze([
+            ...publicInputCapabilities,
+          ]) as readonly PlatformExtensionPublicInputCapability[],
+        }
+      : {}),
+    ...(runtimeInputs ? { runtimeInputs: Object.freeze(runtimeInputs) } : {}),
   });
 }
 
