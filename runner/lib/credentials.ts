@@ -32,6 +32,10 @@ import {
 } from "./policy.ts";
 import { parseSourceCredentials } from "./source_sync.ts";
 import {
+  runtimeInputRedactionValues,
+  runtimeInputsFromRequest,
+} from "./runtime_inputs.ts";
+import {
   maxRunSecondsFromProfile,
   positiveIntegerLimitFromProfile,
 } from "./parsing.ts";
@@ -45,6 +49,7 @@ export function commandContextFromRequest(
   const credentialManifest = credentialManifestFromRequest(request);
   const payloadCredentials = credentialsFromRequest(request);
   const credentialFiles = providerCredentialFilesFromRequest(request);
+  const runtimeInputs = runtimeInputsFromRequest(request);
   const redactionValues = redactionValuesFromRequestCredentials(request);
   const maxRunSeconds = maxRunSecondsFromProfile(runnerProfile);
   const maxSourceArchiveBytes = positiveIntegerLimitFromProfile(
@@ -69,6 +74,7 @@ export function commandContextFromRequest(
     ...(signal ? { signal } : {}),
     ...(credentialManifest ? { credentialManifest } : {}),
     ...(credentialFiles.length > 0 ? { credentialFiles } : {}),
+    ...(runtimeInputs.length > 0 ? { runtimeInputs } : {}),
     ...(redactionValues.length > 0 ? { redactionValues } : {}),
     ...(maxRunSeconds ? { timeoutMs: maxRunSeconds * 1000 } : {}),
     ...(maxSourceArchiveBytes
@@ -309,6 +315,9 @@ export function redactionValuesFromRequestCredentials(
   return [
     ...Object.values(credentialsFromRequest(request)),
     ...providerCredentialFilesFromRequest(request).map((file) => file.content),
+    // A provider that echoes a run-scoped sensitive input back in a diagnostic
+    // must not leak it through runner stdout/stderr.
+    ...runtimeInputRedactionValues(runtimeInputsFromRequest(request)),
   ];
 }
 
