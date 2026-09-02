@@ -29,12 +29,14 @@ esac
 ARGS=(run --quiet /scripts/k6-baseline.js)
 [[ "${1:-}" == "--verbose" ]] && ARGS=(run /scripts/k6-baseline.js)
 
+# Both target hostnames resolve through Docker DNS: Caddy carries them as
+# network aliases on takos-local-internal. Do not add --add-host …:host-gateway
+# here — that aims at the published port, and the ingress publishes 443 on
+# loopback only, so every request would fail before it left the container.
 local_substrate_docker_run --rm \
 	--network local-substrate_takos-local-internal \
 	-v "$SCRIPT_DIR:/scripts:ro" \
 	-v "$SUBSTRATE_DIR/caddy/runtime:/ca:ro" \
-	--add-host app.takosumi.test:host-gateway \
-	--add-host service.takosumi.test:host-gateway \
 	-e SSL_CERT_FILE=/ca/pebble-issuance-root.pem \
 	-e K6_CA_CERT_FILE=/ca/pebble-issuance-root.pem \
 	-e TAKOSUMI_K6_REQUEST_RATE="$K6_REQUEST_RATE" \

@@ -315,9 +315,13 @@ test("workers smoke uses the private probe host without opening the public app s
   expect(k6Baseline).toContain(
     '__ENV.TAKOSUMI_SERVICE_URL || "https://service.takosumi.test"',
   );
+  // k6 reaches Caddy through its network aliases, not through the published
+  // port: the ingress publishes 443 on loopback only, so host-gateway resolves
+  // to an address with no listener and every request fails before it is sent.
   expect(k6BaselineWrapper).toContain(
-    "--add-host service.takosumi.test:host-gateway",
+    "--network local-substrate_takos-local-internal",
   );
+  expect(k6BaselineWrapper).not.toMatch(/^\t*--add-host /mu);
 });
 
 test("workers k6 baseline stays below local Miniflare saturation", () => {
