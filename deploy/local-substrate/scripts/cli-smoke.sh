@@ -262,6 +262,16 @@ else
 fi
 
 PLAN_BODY="$(response_body "$PLAN_RESPONSE")"
+
+# The apply guard compares the Capsule execution-authority epoch, but that field
+# is private to the PlanRun record and deliberately absent from the public
+# `applyExpected` projection. The internal PlanRun read is the surface that
+# carries it, so pin the reviewed value from there.
+PLAN_RUN_RESPONSE="$(get_json "/internal/v1/plan-runs/$PLAN_ID")"
+require_code "read plan-run record" "$PLAN_RUN_RESPONSE" "200"
+AUTHORITY_EPOCH="$(response_body "$PLAN_RUN_RESPONSE" |
+	json_field "json.dumps(data['planRun'].get('capsuleExecutionAuthorityEpoch'))")"
+
 APPLY_REQUEST="$(printf '%s' "$PLAN_BODY" | python3 -c '
 import json, sys
 run = json.load(sys.stdin)["run"]
@@ -277,8 +287,11 @@ if not runner_profile_id:
   raise SystemExit("plan Run applyExpected did not include runnerId")
 expected["planRunId"] = plan_run_id
 expected["runnerProfileId"] = runner_profile_id
+authority_epoch = json.loads(sys.argv[1])
+if authority_epoch is not None:
+  expected["capsuleExecutionAuthorityEpoch"] = authority_epoch
 print(json.dumps({"planRunId": run["id"], "expected": expected}))
-')"
+' "$AUTHORITY_EPOCH")"
 step "8. apply run"
 APPLY_RESPONSE="$(post_json "/internal/v1/apply-runs" "$APPLY_REQUEST")"
 require_code "apply run create" "$APPLY_RESPONSE" "201"

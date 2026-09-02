@@ -571,7 +571,15 @@ test("local-substrate cli smoke exercises Git Source Capsule plan/apply", () => 
     "/internal/v1/workspaces/$WORKSPACE_ID/uploads",
   );
   expect(cliSmoke).not.toContain('post_json "/internal/v1/deploy"');
-  expect(cliSmoke).not.toContain("/internal/v1/plan-runs");
+  // The retired plan-creation route stays retired: the lifecycle runs through
+  // /internal/v1/capsules/{id}/plan and the unified /internal/v1/runs. Reading
+  // the PlanRun record is a different thing — it is the only surface carrying
+  // the private Capsule execution-authority epoch, which the apply guard
+  // compares and the public applyExpected projection deliberately omits. The
+  // accounts plane rebuilds its guard from that same record.
+  expect(cliSmoke).not.toContain('post_json "/internal/v1/plan-runs"');
+  expect(cliSmoke).toContain('get_json "/internal/v1/plan-runs/$PLAN_ID"');
+  expect(cliSmoke).toContain("capsuleExecutionAuthorityEpoch");
   expect(cliSmoke).toContain('expected.pop("planId", None)');
   expect(cliSmoke).toContain('expected.pop("runnerId", None)');
   expect(cliSmoke).toContain('expected["planRunId"] = plan_run_id');
