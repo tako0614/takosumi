@@ -131,6 +131,13 @@ export interface CapsulePublicOriginReservation {
   /** Label Takosumi asked the host to reserve, for operator diagnosis. */
   readonly requestedLabel: string;
   readonly reservedAt: string;
+  /**
+   * Set once the host confirmed it stopped holding this origin. The record is
+   * retired rather than erased: a released reservation is the evidence that the
+   * teardown finished, and an absent field would be indistinguishable from a
+   * teardown that never ran.
+   */
+  readonly releasedAt?: string;
 }
 
 /**

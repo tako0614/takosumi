@@ -199,8 +199,8 @@ async function mintPlatformExtensionProviderCredential(
   let reservationRef: string | undefined;
   if (publicOriginReservations) {
     try {
-      reservationRef = (
-        await publicOriginReservations.read(context.run.capsuleId)
+      reservationRef = heldReservation(
+        await publicOriginReservations.read(context.run.capsuleId),
       )?.reservationRef;
     } catch {
       logCredentialExchangeFailure("public_origin_reservation_unavailable");
@@ -445,11 +445,27 @@ interface PlatformExtensionCredentialHandler {
  * Run, which is why this is a ledger and not Run state.
  */
 export interface PlatformExtensionCapsulePublicOriginLedger {
+  /** The Capsule's whole reservation record, released ones included. */
   read(capsuleId: string): Promise<CapsulePublicOriginReservation | undefined>;
   write(
     capsuleId: string,
-    reservation: CapsulePublicOriginReservation | undefined,
+    reservation: CapsulePublicOriginReservation,
   ): Promise<void>;
+}
+
+/**
+ * A reservation the host is still holding.
+ *
+ * A released record is kept rather than erased — it is the evidence that a
+ * teardown actually finished — so "held" is a question about the record's
+ * contents, never about its presence.
+ */
+function heldReservation(
+  reservation: CapsulePublicOriginReservation | undefined,
+): CapsulePublicOriginReservation | undefined {
+  return reservation && reservation.releasedAt === undefined
+    ? reservation
+    : undefined;
 }
 
 /** Host authority for a Capsule's public origin, plus its teardown half. */
@@ -585,12 +601,12 @@ export function capsulePublicOriginFromPlatformExtensions(
     }
   };
 
-  return Object.freeze({
+  const port: PlatformExtensionCapsulePublicOriginPort = {
     async resolve({ capsule, installConfig }) {
       const clientIdempotencyKey = await capsulePublicOriginIdempotencyKey(
         capsule,
       );
-      const held = await ledger.read(capsule.id);
+      const held = heldReservation(await ledger.read(capsule.id));
       const requestedLabel = held
         ? held.requestedLabel
         : capsulePublicOriginRequestedLabel({ capsule, installConfig });
@@ -632,7 +648,7 @@ export function capsulePublicOriginFromPlatformExtensions(
 
     async release({ workspaceId, capsuleId }) {
       try {
-        const held = await ledger.read(capsuleId);
+        const held = heldReservation(await ledger.read(capsuleId));
         if (!held) return;
         const released = publicOriginRelease(
           await exchange({
@@ -647,15 +663,21 @@ export function capsulePublicOriginFromPlatformExtensions(
           }),
           held.reservationRef,
         );
-        // Only a confirmed release clears the ledger: forgetting a reference
-        // the host still holds would leak the origin with nothing left to
-        // release it.
-        if (released) await ledger.write(capsuleId, undefined);
+        // Only a confirmed release retires the record: marking a reference the
+        // host still holds as released would leak the origin with nothing left
+        // able to release it.
+        if (released) {
+          await ledger.write(capsuleId, {
+            ...held,
+            releasedAt: clock().toISOString(),
+          });
+        }
       } catch {
         logPublicInputExchangeFailure("release_failed");
       }
     },
-  });
+  };
+  return Object.freeze(port);
 }
 
 function brokerAnswersPublicOrigin(

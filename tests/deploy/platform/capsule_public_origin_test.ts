@@ -113,6 +113,14 @@ function memoryLedger(
   };
 }
 
+/** What the port treats as still held: a released record no longer counts. */
+function heldBy(
+  ledger: { readonly current: () => CapsulePublicOriginReservation | undefined },
+): CapsulePublicOriginReservation | undefined {
+  const current = ledger.current();
+  return current && current.releasedAt === undefined ? current : undefined;
+}
+
 function reservationHandler(
   responses: readonly { readonly status: number; readonly body: unknown }[],
 ) {
@@ -392,7 +400,7 @@ test("two routes claiming the same question fail closed instead of picking one",
   ).toThrow("a Capsule has one public origin");
 });
 
-test("release sends the release kind and clears the ledger only when confirmed", async () => {
+test("release sends the release kind and retires the record only when confirmed", async () => {
   const held: CapsulePublicOriginReservation = {
     reservationRef: "tshpr_opaque_reference",
     origin: ORIGIN,
@@ -433,10 +441,16 @@ test("release sends the release kind and clears the ledger only when confirmed",
   expect(
     Object.keys(sent.request.publicInputs.httpEndpointUrl).sort(),
   ).toEqual(["clientIdempotencyKey", "requestedSubdomain", "reservationRef"]);
-  expect(ledger.current()).toBeUndefined();
+  // The record is retired, not erased: it is the evidence the teardown ran.
+  expect(heldBy(ledger)).toBeUndefined();
+  expect(ledger.current()).toMatchObject({
+    reservationRef: "tshpr_opaque_reference",
+    releasedAt: expect.any(String),
+  });
 
-  // An unconfirmed release keeps the reference: forgetting one the host still
-  // holds would leak the origin with nothing left able to release it.
+  // An unconfirmed release keeps the reference held: marking one the host still
+  // holds as released would leak the origin with nothing left able to release
+  // it.
   const failing = reservationHandler([{ status: 503, body: {} }]);
   const keptLedger = memoryLedger(held);
   const warn = spyOn(console, "warn").mockImplementation(() => {});
@@ -455,7 +469,7 @@ test("release sends the release kind and clears the ledger only when confirmed",
   } finally {
     warn.mockRestore();
   }
-  expect(keptLedger.current()).toEqual(held);
+  expect(heldBy(keptLedger)).toEqual(held);
 });
 
 test("the requested label is the reviewed service name, scoped to the Workspace", () => {
@@ -634,4 +648,117 @@ test("apply carries the plan-pinned reservation into the credential exchange", a
     requiredAvailableMinor: 2300,
     publicInputReservationRef: "tshpr_opaque_reference",
   });
+});
+
+test("a released record is never mistaken for a held reservation", async () => {
+  const released: CapsulePublicOriginReservation = {
+    reservationRef: "tshpr_opaque_reference",
+    origin: ORIGIN,
+    requestedLabel: "yurucommu-abcdef",
+    reservedAt: "2026-09-01T12:00:00.000Z",
+    releasedAt: "2026-09-02T12:00:00.000Z",
+  };
+
+  // A Capsule re-installed after a teardown must reserve afresh rather than
+  // re-present a reference the host has already let go of.
+  const { calls, handler } = reservationHandler([
+    { status: 200, body: RESERVED },
+  ]);
+  const port = capsulePublicOriginFromPlatformExtensions(
+    {
+      TAKOSUMI_PLATFORM_EXTENSIONS: routes(),
+      TAKOSUMI_ACCOUNTS_ISSUER: ISSUER,
+      HOSTED: handler,
+    },
+    memoryLedger(released),
+  );
+  await port!.resolve({ capsule: capsule(), installConfig: installConfig() });
+  const sent = calls[0] as {
+    request: { publicInputs: { httpEndpointUrl: object } };
+  };
+  expect(
+    Object.keys(sent.request.publicInputs.httpEndpointUrl).sort(),
+  ).toEqual(["clientIdempotencyKey", "requestedSubdomain"]);
+
+  // Nor may Apply present it to the host as this Run's reservation.
+  const exchanges: unknown[] = [];
+  const composition = platformExtensionProviderCredentialComposition(
+    {
+      TAKOSUMI_PLATFORM_EXTENSIONS: routes(),
+      TAKOSUMI_ACCOUNTS_ISSUER: ISSUER,
+      HOSTED: {
+        exchangeProviderCredential: async (input: unknown) => {
+          exchanges.push(input);
+          return {
+            status: 200,
+            body: JSON.stringify({
+              kind: "takosumi.provider-run-credential@v1",
+              env: {
+                TAKOFORM_ENDPOINT: "https://api.takoserver.test",
+                TAKOFORM_SPACE: "tenant:tsh_opaque",
+                TAKOFORM_TOKEN: "tfr_runner_only",
+              },
+              expiresAt: "2026-09-01T12:05:00.000Z",
+            }),
+          };
+        },
+      },
+    },
+    { capsulePublicOriginReservations: memoryLedger(released) },
+  );
+  await composition!.credentialRecipeDrivers[
+    "takosumi-hosted-takoform-run/broker"
+  ]!.mint!({
+    connection: {
+      id: "conn_takosumiHostedTakoform01",
+      workspaceId: "operator",
+      provider: PROVIDER_SOURCE,
+      providerSource: PROVIDER_SOURCE,
+      scope: { kind: "operator" },
+      materialization: "run-issued",
+      status: "verified",
+      envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+      requiredEnvGroups: [
+        ["TAKOFORM_ENDPOINT"],
+        ["TAKOFORM_SPACE"],
+        ["TAKOFORM_TOKEN"],
+      ],
+      credentialRecipe: {
+        id: "takosumi-hosted-takoform-run",
+        authMode: "broker",
+      },
+      createdAt: "2026-09-01T12:00:00.000Z",
+      updatedAt: "2026-09-01T12:00:00.000Z",
+    },
+    runCredentialSettings: { requiredAvailableMinor: 2300 },
+    values: {},
+    files: [],
+    run: {
+      workspaceId: "workspace_abcdef123456",
+      capsuleId: "cap_yurucommu",
+      runId: "run_2",
+      installingPrincipalId: "tsub_installer",
+      phase: "apply",
+      lifecycleIntent: "provision",
+    },
+    issueRunCredential: async () => ({
+      token: "platform_run_token",
+      expiresAt: "2026-09-01T12:10:00.000Z",
+      ttlSeconds: 600,
+    }),
+    fetch: async () => {
+      throw new Error("credential broker must not use an external self-fetch");
+    },
+    now: () => new Date("2026-09-01T12:00:00.000Z"),
+    staticEvidence: () => ({
+      connectionId: "conn_takosumiHostedTakoform01",
+      provider: PROVIDER_SOURCE,
+      temporary: false,
+      ttlEnforced: false,
+      secretValueStored: false,
+    }),
+  });
+  expect(
+    (exchanges[0] as { request: { settings: unknown } }).request.settings,
+  ).toEqual({ requiredAvailableMinor: 2300 });
 });

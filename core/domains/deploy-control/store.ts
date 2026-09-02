@@ -30,6 +30,7 @@ import { coerceRunStatus } from "@takosumi/internal/deploy-control-api";
 import type {
   CapsuleCompatibilityLevel,
   CapsuleCompatibilityReport,
+  CapsulePublicOriginReservation,
 } from "takosumi-contract/capsules";
 import type {
   Source,
@@ -537,6 +538,16 @@ export type CapsuleLifecycleMutation =
       readonly kind: "compatibility";
       readonly reportId: string;
       readonly status: CapsuleCompatibilityLevel;
+    }
+  | {
+      /**
+       * Private host bookkeeping for an origin a host fixed for this Capsule.
+       * It is lifecycle-owned like every other Capsule metadata write: a
+       * read-modify-write of the whole record would let a plan-time reservation
+       * clobber a concurrent Apply's state cursor.
+       */
+      readonly kind: "public-origin-reservation";
+      readonly reservation: CapsulePublicOriginReservation;
     };
 
 /** One typed mutation boundary for Capsule lifecycle-owned metadata. */
@@ -582,6 +593,7 @@ export function capsuleLifecycleMutationPatch(
     | "autoUpdateAttemptSourceSnapshotId"
     | "compatibilityReportId"
     | "compatibilityStatus"
+    | "publicOriginReservation"
     | "updatedAt"
   >
 > {
@@ -607,6 +619,8 @@ export function capsuleLifecycleMutationPatch(
         compatibilityStatus: mutation.status,
         updatedAt,
       };
+    case "public-origin-reservation":
+      return { publicOriginReservation: mutation.reservation, updatedAt };
   }
 }
 

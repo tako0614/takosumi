@@ -540,3 +540,84 @@ test("D1 lifecycle CAS uses one fixed bounded conditional update", async () => {
     expect(write!.sql, requiredFence).toContain(requiredFence);
   }
 });
+
+/**
+ * The host public-origin reservation is Capsule metadata like any other, so it
+ * has to survive the same three backends and the same CAS fence. It is written
+ * outside an Apply commit — a plan asks the host to fix an origin — which is
+ * exactly why it must not be a whole-record patch: the Capsule it lands on may
+ * have moved under a concurrent Apply.
+ */
+test("a public-origin reservation round-trips and is fenced across every store", async () => {
+  const reservation = {
+    reservationRef: "tshpr_opaque_reference",
+    origin: "https://yurucommu-abcdef.takoform.test",
+    requestedLabel: "yurucommu-abcdef",
+    reservedAt: "2026-08-29T01:00:00.000Z",
+  };
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: `workspace_public_origin_${label}`,
+      capsuleId: `capsule_public_origin_${label}`,
+    });
+    const epoch = await store.getCapsuleExecutionAuthorityEpoch(
+      seeded.capsule.id,
+    );
+    const expected = capsuleLifecycleExpected(seeded.capsule, epoch!);
+
+    const held = await store.updateCapsuleLifecycle({
+      capsuleId: seeded.capsule.id,
+      expected,
+      mutation: { kind: "public-origin-reservation", reservation },
+      updatedAt: LIFECYCLE_AT,
+    });
+    expect(held.kind, `${label}:held`).toBe("updated");
+    expect(
+      (await store.getCapsule(seeded.capsule.id))?.publicOriginReservation,
+      `${label}:stored`,
+    ).toEqual(reservation);
+
+    // Releasing retires the record in place; every backend must keep the added
+    // member rather than drop or flatten the object it merges.
+    const current = await store.getCapsule(seeded.capsule.id);
+    const releasedAt = "2026-08-29T02:00:00.000Z";
+    const released = await store.updateCapsuleLifecycle({
+      capsuleId: seeded.capsule.id,
+      expected: capsuleLifecycleExpected(current!, epoch!),
+      mutation: {
+        kind: "public-origin-reservation",
+        reservation: { ...reservation, releasedAt },
+      },
+      updatedAt: releasedAt,
+    });
+    expect(released.kind, `${label}:released`).toBe("updated");
+    expect(
+      (await store.getCapsule(seeded.capsule.id))?.publicOriginReservation,
+      `${label}:retired`,
+    ).toEqual({ ...reservation, releasedAt });
+
+    // The reservation is deliberately NOT part of the fenced revision: it is
+    // written outside an Apply and must not make every other lifecycle
+    // mutation conflict. What it must never do is win against a Capsule that
+    // moved, so a plan-time write against a pre-Apply revision loses.
+    const applied = await commitConcurrentApply(
+      store,
+      (await store.getCapsule(seeded.capsule.id))!,
+    );
+    const lost = await store.updateCapsuleLifecycle({
+      capsuleId: seeded.capsule.id,
+      expected,
+      mutation: { kind: "public-origin-reservation", reservation },
+      updatedAt: LIFECYCLE_AT,
+    });
+    expect(lost.kind, `${label}:stale`).toBe("conflict");
+    const survivor = await store.getCapsule(seeded.capsule.id);
+    expect(survivor?.publicOriginReservation?.releasedAt, `${label}:kept`).toBe(
+      releasedAt,
+    );
+    // The Apply's own cursor is intact: the losing write touched nothing.
+    expect(survivor?.currentStateVersionId, `${label}:cursor`).toBe(
+      applied.state.id,
+    );
+  }
+});
