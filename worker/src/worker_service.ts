@@ -72,6 +72,10 @@ import {
 } from "../../deploy/platform/platform_extension_provider_credentials.ts";
 import { applyCredentialRequiredProviderSources } from "../../deploy/platform/host_install_config_composition.ts";
 import { createTakosumiAccountsOidcModuleVariableMaterializer } from "../../deploy/platform/accounts_oidc_module_variable_materializer.ts";
+import {
+  createTakosumiRuntimeInputOidcClientSource,
+  type RuntimeInputCapsulePublicOrigin,
+} from "../../deploy/platform/runtime_input_oidc_client_source.ts";
 
 export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
@@ -101,6 +105,16 @@ export async function createWorkerServiceApp(
     readonly mountInternalLedgerRoutes?: boolean;
     /** Additional host proof for custom/external Interface OAuth resources. */
     readonly interfaceOAuth2ResourceAuthorizer?: CreateTakosumiServiceOptions["interfaceOAuth2ResourceAuthorizer"];
+    /**
+     * Host authority for the origin a Capsule's Worker is published under.
+     *
+     * Only a binding-delivered `identity.oidc` grant needs it, and only the
+     * host that publishes the Worker knows it: such a grant carries no
+     * repository-declared endpoint, because the origin is assigned after the
+     * upload. Without it those Capsules fail closed at plan rather than
+     * registering a redirect URI for an origin nobody serves.
+     */
+    readonly capsulePublicOrigin?: RuntimeInputCapsulePublicOrigin;
   } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
@@ -267,6 +281,34 @@ export async function createWorkerServiceApp(
     env.TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY.length > 0
       ? env.TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY
       : undefined;
+  // A Capsule whose profile delivers OIDC by bindings needs those four values
+  // inside the same run-scoped map as its generated secrets, and their one
+  // authority is the Accounts client the private runtime-binding lane already
+  // registers. Same store, same issuer, same pairwise secret, same derivation
+  // key: one Capsule keeps one client whichever lane hands it to the Worker.
+  const runtimeInputOidcClientSource =
+    accountsStore &&
+      typeof accountsIssuer === "string" &&
+      accountsIssuer.length > 0 &&
+      typeof pairwiseSubjectSecret === "string" &&
+      pairwiseSubjectSecret.length > 0 &&
+      runtimeBindingDerivationKey !== undefined &&
+      options.capsulePublicOrigin
+      ? createTakosumiRuntimeInputOidcClientSource({
+          control: {
+            getCapsule: (id) => opentofuControlStore.getCapsule(id),
+            getInstallConfig: (id) =>
+              opentofuControlStore.getInstallConfig(id),
+            getCapsuleExecutionAuthorityEpoch: (id) =>
+              opentofuControlStore.getCapsuleExecutionAuthorityEpoch(id),
+          },
+          accounts: accountsStore,
+          issuer: accountsIssuer,
+          pairwiseSubjectSecret,
+          derivationKey: runtimeBindingDerivationKey,
+          capsulePublicOrigin: options.capsulePublicOrigin,
+        })
+      : undefined;
   return await createTakosumiService({
     role,
     runtimeEnv,
@@ -293,6 +335,7 @@ export async function createWorkerServiceApp(
     opentofuControlStore,
     ...(moduleVariableMaterializer ? { moduleVariableMaterializer } : {}),
     ...(runtimeBindingDerivationKey ? { runtimeBindingDerivationKey } : {}),
+    ...(runtimeInputOidcClientSource ? { runtimeInputOidcClientSource } : {}),
     gitInstallPlanStore: new D1GitInstallPlanStore(
       env.TAKOSUMI_CONTROL_DB,
     ),
