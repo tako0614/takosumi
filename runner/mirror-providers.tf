@@ -33,5 +33,12 @@ terraform {
       source  = "registry.opentofu.org/hashicorp/http"
       version = "= 3.6.0"
     }
+    # Takoform is published to registry.terraform.io, not registry.opentofu.org.
+    # Capsules that deploy through the Takoform Host pin this exact release, so
+    # caching it here keeps their `tofu init` dependency-closed in the image.
+    takoform = {
+      source  = "registry.terraform.io/tako0614/takoform"
+      version = "= 4.0.0"
+    }
   }
 }
