@@ -80,20 +80,35 @@ test("the nonce is deterministic and changes only with the material generation",
   });
   expect(await materializer.nonce(request)).toBe(nonce);
 
-  // Only the material generation moves it: the profile digest and the material
-  // key version are both preimage parts.
+  // Neither may a repository re-sync that repoints the Capsule at a
+  // content-identical InstallConfig under a new id. Nothing about the sealed
+  // material changed, so the apply-idempotency identity must not move.
+  const resynced = {
+    ...seeded.installConfig,
+    id: "icfg_resynced_identical",
+  };
+  await store.putInstallConfig(resynced);
+  await store.putCapsule({
+    ...seeded.capsule,
+    installConfigId: resynced.id,
+  });
+  expect(
+    await materializer.nonce({ ...request, installConfigId: resynced.id }),
+  ).toBe(nonce);
+
+  // Only the material generation moves it: the profile digest and the sealed
+  // material generation are both preimage parts, and `installConfigId` is not.
   const parts = {
     workspaceId: request.workspaceId,
     capsuleId: request.capsuleId,
-    installConfigId: request.installConfigId,
     profileDigest: "sha256:profile",
-    materialKeyVersion: 1,
+    materialGeneration: "sha256:generation-a",
     providerInstance: DEFAULT_INSTANCE,
   };
   expect(await runtimeInputNonce(parts)).toBe(await runtimeInputNonce(parts));
-  expect(await runtimeInputNonce({ ...parts, materialKeyVersion: 2 })).not.toBe(
-    await runtimeInputNonce(parts),
-  );
+  expect(
+    await runtimeInputNonce({ ...parts, materialGeneration: "sha256:b" }),
+  ).not.toBe(await runtimeInputNonce(parts));
   expect(
     await runtimeInputNonce({ ...parts, profileDigest: "sha256:other" }),
   ).not.toBe(await runtimeInputNonce(parts));
@@ -102,15 +117,27 @@ test("the nonce is deterministic and changes only with the material generation",
   );
 });
 
-test("a drifted runtime binding profile fails closed instead of silently rotating", async () => {
+test("re-sealing the same Capsule rotates the nonce", async () => {
+  const { store, materializer, request } = await fixture();
+  const before = await materializer.nonce(request);
+  // A store restore or partial wipe that loses the sealed row must not leave
+  // fresh values live under a byte-identical nonce: the Host would keep the
+  // preparation it made from the retired ones.
+  await store.deleteSecretBlob(`runtime_input_${request.capsuleId}`);
+  expect(await materializer.nonce(request)).not.toBe(before);
+});
+
+test("a drifted runtime binding profile rotates the material instead of bricking the Capsule", async () => {
   const { store, seeded, materializer, request } = await fixture();
-  await materializer.materialize({ ...request, phase: "apply" });
+  const before = await materializer.materialize({ ...request, phase: "apply" });
   const sealedBeforeDrift = await store.getSecretBlob(
     `runtime_input_${request.capsuleId}`,
   );
 
-  // Adding a binding would leave the new name with no sealed value, so the
-  // owner/profile fence refuses rather than delivering a partial map.
+  // A Capsule upgrade that adds a `secret.generated` binding changes the
+  // deliverable name set. The old sealed generation cannot answer it, so it is
+  // retired and a new one is sealed — a hard fence here would leave the Capsule
+  // unable to plan OR destroy, with no recovery path at all.
   await store.putInstallConfig({
     ...seeded.installConfig,
     runtimeBindingMaterialization: {
@@ -122,16 +149,30 @@ test("a drifted runtime binding profile fails closed instead of silently rotatin
       ],
     },
   });
-  await expect(materializer.nonce(request)).rejects.toThrow("fence");
-  await expect(
-    materializer.materialize({ ...request, phase: "apply" }),
-  ).rejects.toThrow("fence");
+  const after = await materializer.materialize({ ...request, phase: "apply" });
+  expect(after.names).toEqual([
+    "ENCRYPTION_KEY",
+    "SESSION_KEY",
+    "SIGNING_KEY",
+  ]);
+  // Replacement semantics: new generation, new nonce.
+  expect(after.nonce).not.toBe(before.nonce);
+  expect(after.profileDigest).not.toBe(before.profileDigest);
+  const sealedAfterDrift = await store.getSecretBlob(
+    `runtime_input_${request.capsuleId}`,
+  );
+  expect(sealedAfterDrift?.ciphertext).not.toBe(sealedBeforeDrift?.ciphertext);
+  expect(sealedAfterDrift?.aad).not.toBe(sealedBeforeDrift?.aad);
+  // Stable once more under the new profile.
+  expect(
+    (await materializer.materialize({ ...request, phase: "apply" }))
+      .toRunnerDispatch(),
+  ).toEqual(after.toRunnerDispatch());
+
+  // The Capsule authority fence is untouched.
   await expect(
     materializer.nonce({ ...request, installConfigId: "wrong" }),
   ).rejects.toThrow("authority");
-  expect(
-    await store.getSecretBlob(`runtime_input_${request.capsuleId}`),
-  ).toEqual(sealedBeforeDrift);
 });
 
 test("materialized values are Capsule-stable, exact, and opaque to serialization", async () => {

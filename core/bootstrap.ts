@@ -181,6 +181,7 @@ import {
 } from "./domains/deploy-control/runtime_secret_file_materializer.ts";
 import {
   createRuntimeInputMaterializer,
+  runtimeInputDerivedValueSource,
   type RuntimeInputMaterializer,
 } from "./domains/deploy-control/runtime_input_materializer.ts";
 import { log } from "./shared/log.ts";
@@ -421,6 +422,17 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * that supply secretCrypto receive the generic sealed implementation.
    */
   readonly runtimeInputMaterializer?: RuntimeInputMaterializer;
+  /**
+   * Host key for the private runtime-binding derivation.
+   *
+   * A host that materializes `InstallConfig.runtimeBindingMaterialization`
+   * through its own runtime-binding lane derives every generated secret from
+   * this key. Supplying it here makes the run-scoped provider input lane derive
+   * the SAME bytes instead of minting independent randomness, so the deployed
+   * workload and the provider preparing for it never hold two different values
+   * for one binding. Omitted ⇒ values are random and sealed per Capsule.
+   */
+  readonly runtimeBindingDerivationKey?: string;
   /**
    * Host-owned allocator for opaque source/state/output/backup artifact refs.
    * Required by execution and backup paths; Core never derives storage layouts.
@@ -1055,6 +1067,13 @@ export async function createTakosumiService(
       ? createRuntimeInputMaterializer({
           store: sharedOpenTofuStore,
           crypto: options.secretCrypto,
+          ...(options.runtimeBindingDerivationKey
+            ? {
+                values: runtimeInputDerivedValueSource(
+                  options.runtimeBindingDerivationKey,
+                ),
+              }
+            : {}),
         })
       : undefined);
   // Activity domain (Core Specification §27 / §34): the Workspace-scoped audit

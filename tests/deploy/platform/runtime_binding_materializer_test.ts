@@ -10,6 +10,14 @@ import {
   type RuntimeBindingAccountsLedger,
   type RuntimeBindingControlLedger,
 } from "../../../deploy/platform/runtime_binding_materializer.ts";
+import { PlaceholderSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
+import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import {
+  createRuntimeInputMaterializer,
+  runtimeInputDerivedValueSource,
+  runtimeInputProviderInstance,
+} from "../../../core/domains/deploy-control/runtime_input_materializer.ts";
+import { seedCapsuleModel } from "../../helpers/deploy-control/model_fixture.ts";
 import {
   createTakosumiAccountsOidcModuleVariableMaterializer,
   type AccountsOidcModuleVariableAccountsLedger,
@@ -194,6 +202,63 @@ function createRuntimeBindingMaterializer(input: {
 }
 
 describe("Takosumi runtime binding materializer", () => {
+  // Both lanes materialize the SAME `InstallConfig.runtimeBindingMaterialization`
+  // profile: this one delivers it to the deployed workload's bindings, the
+  // run-scoped provider input lane delivers it to the provider that prepares
+  // for that workload. If they ever disagreed, the Capsule's own primary key
+  // would exist in two incompatible copies with no drift signal.
+  for (const profileContract of [PROFILE_V1, PROFILE_V2] as const) {
+    test(`the run-scoped provider input lane mints byte-identical generated secrets (${profileContract})`, async () => {
+      const config = runtimeBindingInstallConfig({}, profileContract);
+      const platform = createRuntimeBindingMaterializer({
+        control: runtimeBindingControl(config),
+      });
+      const fromPlatform = await platform.materializeRuntimeBindings(
+        runtimeBindingCall("apply"),
+      );
+
+      const store = new InMemoryOpenTofuControlStore();
+      const seeded = await seedCapsuleModel(store, {
+        workspaceId: "ws_1",
+        capsuleId: "cap_1",
+        installConfigId: config.id,
+        installConfig: {
+          runtimeBindingMaterialization: {
+            contract: profileContract,
+            generatedSecrets: [
+              { binding: "ENCRYPTION_KEY", bytes: 32, encoding: "hex" },
+            ],
+          } as never,
+        },
+      });
+      const core = createRuntimeInputMaterializer({
+        store,
+        crypto: new PlaceholderSecretBoundaryCrypto(),
+        values: runtimeInputDerivedValueSource(DERIVATION_KEY),
+        clock: () => NOW,
+      });
+      const fromCore = await core.materialize({
+        workspaceId: seeded.workspace.id,
+        capsuleId: seeded.capsule.id,
+        installConfigId: seeded.installConfig.id,
+        providerInstance: runtimeInputProviderInstance({
+          moduleLocalName: "takoform",
+        }),
+        phase: "apply",
+      });
+
+      expect(fromPlatform.values.ENCRYPTION_KEY).toMatch(/^[a-f0-9]{64}$/u);
+      expect(fromCore.toRunnerDispatch().values).toEqual({
+        ENCRYPTION_KEY: fromPlatform.values.ENCRYPTION_KEY!,
+      });
+      // The derived lane seals nothing: sealing would pin one generation and
+      // let the other lane drift away from it silently.
+      expect(
+        await store.getSecretBlob(`runtime_input_${seeded.capsule.id}`),
+      ).toBeUndefined();
+    });
+  }
+
   test("derives the exact DB-owned values read-only in every provider phase", async () => {
     const config = runtimeBindingInstallConfig();
     const original = structuredClone(config);
