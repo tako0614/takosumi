@@ -32,6 +32,7 @@ import type {
   PolicyConfig,
   PolicyDecision,
   ProviderConnection,
+  RunDiagnostic,
   RunStatus,
   RunnerProfile,
   RunnerSecretExposurePolicy,
@@ -44,6 +45,7 @@ import type {
 } from "takosumi-contract/capsules";
 import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
 import { usesDeclaredEnvCredentialRecipe } from "takosumi-contract/connections";
+import { providerVersionMeetsRuntimeInputFloor } from "takosumi-contract/credential-recipes";
 import { isOpenTofuBuiltinProviderSource } from "takosumi-contract/provider-env-rules";
 import type {
   Dependency,
@@ -111,7 +113,9 @@ import {
   PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
   RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
   RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON,
+  RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON,
   RUNTIME_INPUTS_PROFILE_MISSING_REASON,
+  RUNTIME_INPUTS_PROVIDER_VERSION_UNPROVEN_REASON,
   RUNTIME_INPUTS_REQUIRE_GENERATED_ROOT_REASON,
   requireNonEmptyString,
   runErrorCode,
@@ -1920,6 +1924,16 @@ export class RunEngine {
     const interfaceMaterialization =
       genericRootDispatch?.interfaceMaterialization;
     const runtimeInputs = genericRootDispatch?.runtimeInputs;
+    const dispatchDiagnostics = genericRootDispatch?.diagnostics ?? [];
+    if (dispatchDiagnostics.length > 0) {
+      // Value-free notices raised while compiling the generated root, recorded
+      // on the reviewed PlanRun so an inert capability is never silent.
+      planRun = {
+        ...planRun,
+        diagnostics: [...(planRun.diagnostics ?? []), ...dispatchDiagnostics],
+      };
+      await this.#store.putPlanRun(planRun);
+    }
     const lifecycleActions =
       internal.lifecycleActions ?? genericRootDispatch?.lifecycleActions;
     if (
@@ -3359,17 +3373,63 @@ export class RunEngine {
    * Value-free throughout: it derives the plan-stable nonce and pins the exact
    * deliverable name set, but never opens the sealed material. The values are
    * minted only at Apply, by the credential broker.
+   *
+   * Two situations leave the path inert rather than failing the Run:
+   *   - a destroy plan, whose provider teardown reads neither argument and for
+   *     which no value may be minted at all; and
+   *   - a Capsule whose pinned provider version does not PROVE the provider
+   *     accepts the arguments, which is reported as a value-free warning so a
+   *     Capsule that does not need run-scoped inputs still plans.
    */
-  async #runtimeInputsForPlan(context: GenericRootPlanContext): Promise<
+  async #runtimeInputsForPlan(
+    context: GenericRootPlanContext,
+    input: {
+      readonly destroy: boolean;
+      readonly rootProviderRequirements: readonly RootProviderRequirement[];
+    },
+  ): Promise<
     | {
-        readonly descriptor: DispatchRuntimeInputs;
-        readonly rootWiring: ResolvedRootRuntimeInputs;
+        readonly descriptor?: DispatchRuntimeInputs;
+        readonly rootWiring?: ResolvedRootRuntimeInputs;
+        readonly diagnostic?: RunDiagnostic;
       }
     | undefined
   > {
     const wiring = context.runtimeInputWiring;
     const authority = context.runtimeInputAuthority;
     if (!wiring || !authority) return undefined;
+    if (input.destroy) {
+      // A destroy plan's provider teardown never reads the map, and both
+      // arguments are optional on the provider block. Minting material for a
+      // teardown would widen exposure for no purpose, and pinning a descriptor
+      // would block the very teardown that is the recovery path for a Capsule
+      // whose profile has drifted.
+      return undefined;
+    }
+    const pinnedVersion = input.rootProviderRequirements.find(
+      (requirement) =>
+        requirement.moduleLocalName === wiring.moduleLocalName &&
+        requirement.childAlias === undefined,
+    )?.version;
+    if (
+      !providerVersionMeetsRuntimeInputFloor(
+        pinnedVersion,
+        wiring.minimumProviderVersion,
+      )
+    ) {
+      return {
+        diagnostic: {
+          severity: "warning",
+          code: RUNTIME_INPUTS_PROVIDER_VERSION_UNPROVEN_REASON,
+          message:
+            `run-scoped sensitive provider inputs stay inert: provider ` +
+            `${wiring.moduleLocalName} is not pinned to an exact version of at ` +
+            `least ${wiring.minimumProviderVersion}, which is the first release ` +
+            `that accepts them`,
+          ...(pinnedVersion ? { detail: `pinned version ${pinnedVersion}` } : {}),
+        },
+      };
+    }
     const materializer = this.#runtimeInputMaterializer;
     if (!materializer) {
       throw new OpenTofuControllerError(
@@ -3388,10 +3448,21 @@ export class RunEngine {
         { reason: RUNTIME_INPUTS_PROFILE_MISSING_REASON },
       );
     }
-    const nonce = await materializer.nonce({
-      ...authority,
-      providerInstance: wiring.providerInstance,
-    });
+    // Every materializer failure is a precondition on Capsule material, not an
+    // internal fault: a raw throw here would surface as an opaque 500.
+    let nonce: string;
+    try {
+      nonce = await materializer.nonce({
+        ...authority,
+        providerInstance: wiring.providerInstance,
+      });
+    } catch (error) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `run-scoped sensitive provider input material is not usable: ${errorMessage(error)}`,
+        { reason: RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON },
+      );
+    }
     return {
       descriptor: {
         contract: "takosumi.dispatch-runtime-inputs/v1",
@@ -3446,17 +3517,20 @@ export class RunEngine {
           interfaceSources,
         );
     const outputAllowlist = destroy ? {} : context.outputAllowlist;
-    const runtimeInputs = await this.#runtimeInputsForPlan(context);
-    const wrapperProviderBindings = runtimeInputs
+    const rootProviderRequirements =
+      rootProviderRequirementsForGeneratedRoot(
+        request.requiredProviderRequirements ?? [],
+      );
+    const runtimeInputs = await this.#runtimeInputsForPlan(context, {
+      destroy,
+      rootProviderRequirements,
+    });
+    const wrapperProviderBindings = runtimeInputs?.rootWiring
       ? providerBindingsFromResolved(
           context.resolvedProviderBindings ?? [],
           runtimeInputs.rootWiring,
         )
       : context.providerBindings;
-    const rootProviderRequirements =
-      rootProviderRequirementsForGeneratedRoot(
-        request.requiredProviderRequirements ?? [],
-      );
     let generatedRoot: DispatchGeneratedRoot | undefined;
     if (wrapperProviderBindings.length > 0) {
       try {
@@ -3470,7 +3544,7 @@ export class RunEngine {
         throw rootgenErrorForController(error);
       }
     }
-    if (runtimeInputs && !generatedRoot) {
+    if (runtimeInputs?.descriptor && !generatedRoot) {
       // Without a generated root Takosumi does not own any provider block, so
       // there is structurally nowhere to declare the ephemeral variable or the
       // two provider arguments. Fail closed instead of silently dropping them.
@@ -3482,7 +3556,12 @@ export class RunEngine {
     }
     return {
       ...(generatedRoot ? { generatedRoot } : {}),
-      ...(runtimeInputs ? { runtimeInputs: [runtimeInputs.descriptor] } : {}),
+      ...(runtimeInputs?.descriptor
+        ? { runtimeInputs: [runtimeInputs.descriptor] }
+        : {}),
+      ...(runtimeInputs?.diagnostic
+        ? { diagnostics: [runtimeInputs.diagnostic] }
+        : {}),
       workspaceOutputAllowlist,
       outputAllowlist,
       ...(context.sourceBuild ? { sourceBuild: context.sourceBuild } : {}),
@@ -9865,24 +9944,23 @@ export class RunEngine {
    * Best-effort retirement of a destroyed Capsule's run-scoped sensitive input
    * material. A failure only leaves a sealed orphan blob that a later destroy
    * can still remove, so it never fails the terminal destroy.
+   *
+   * It deliberately does NOT require the destroy plan to have pinned a
+   * descriptor: a destroy plan wires no run-scoped inputs at all, and the
+   * Capsule whose profile drifted into an unreadable shape is exactly the one
+   * whose material most needs clearing. The owner fence inside `retire` is what
+   * proves whose material this is, and a Capsule that never had any is a
+   * no-op.
    */
   async #retireRuntimeInputsAfterDestroy(input: {
     readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
     readonly inputs: PlanRunInputs | undefined;
   }): Promise<void> {
-    const descriptor = input.inputs?.runtimeInputs?.[0];
-    if (!descriptor) return;
     const materializer = this.#runtimeInputMaterializer;
-    if (!materializer) {
-      log.warn("deploy_control.runtime_input_retirement_deferred", {
-        planRunId: input.planRun.id,
-        applyRunId: input.applyRun.id,
-        capsuleId: input.planRun.capsuleId,
-        reason: "retirement_port_unavailable",
-      });
-      return;
-    }
+    // No materializer means no lane could ever have minted material for this
+    // Capsule, so there is nothing to retire and nothing to report.
+    if (!materializer) return;
     try {
       if (!input.planRun.capsuleId) {
         throw new TypeError("retirement authority is invalid");
@@ -9895,7 +9973,6 @@ export class RunEngine {
         workspaceId: capsule.workspaceId,
         capsuleId: capsule.id,
         installConfigId: capsule.installConfigId,
-        profileDigest: descriptor.profileDigest,
       });
     } catch (error) {
       log.warn("deploy_control.runtime_input_retirement_deferred", {

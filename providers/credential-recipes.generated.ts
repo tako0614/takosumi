@@ -1447,7 +1447,8 @@ export const REFERENCE_CREDENTIAL_RECIPES: readonly CredentialRecipe[] = [
         "runtimeInputs": {
           "contract": "takosumi.provider-runtime-inputs/v1",
           "nonceArgument": "runtime_input_nonce",
-          "mapArgument": "runtime_inputs"
+          "mapArgument": "runtime_inputs",
+          "minimumProviderVersion": "4.0.0"
         }
       }
     }

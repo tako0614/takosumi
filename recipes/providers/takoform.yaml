@@ -17,6 +17,10 @@ auth_modes:
       contract: takosumi.provider-runtime-inputs/v1
       nonce_argument: runtime_input_nonce
       map_argument: runtime_inputs
+      # The two arguments exist only from Takoform Provider 4.0.0. Below this
+      # floor a plan fails with `Unsupported argument`, so Core keeps the
+      # wiring inert instead of baking them into a reviewed root.
+      minimum_provider_version: 4.0.0
     env:
       TAKOFORM_TOKEN:
         from: secret

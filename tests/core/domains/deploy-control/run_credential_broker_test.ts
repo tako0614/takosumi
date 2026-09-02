@@ -525,6 +525,7 @@ function runtimeInputBinding(
           contract: "takosumi.provider-runtime-inputs/v1",
           nonceArgument: "runtime_input_nonce",
           mapArgument: "runtime_inputs",
+          minimumProviderVersion: "4.0.0",
         },
       },
     },
@@ -707,16 +708,82 @@ test("two declaring provider instances fail closed instead of sharing one value 
   });
 });
 
-test("a plan that never wired run-scoped sensitive inputs cannot apply them", async () => {
+test("a plan that never wired run-scoped sensitive inputs delivers none", async () => {
+  // A destroy plan, a provider version below the floor, and a Capsule whose
+  // Connection does not declare the protocol all pin no descriptor. The
+  // reviewed root then declares no ephemeral variable, so there is nothing to
+  // deliver and nothing to fail.
   const { broker, run } = await runtimeInputBrokerFor({
     resolved: [runtimeInputBinding()],
     descriptors: [],
+  });
+  for (const phase of ["plan", "apply", "destroy"] as const) {
+    const credentials = await broker.mintRunCredentials(run, phase, "run_1");
+    expect(credentials?.runtimeInputs).toBeUndefined();
+  }
+});
+
+test("an apply whose reviewed plan pinned wiring the resolution lost fails closed", async () => {
+  // The reviewed root declares a defaultless ephemeral variable, so silently
+  // delivering nothing would die inside `tofu` with an unattributable
+  // "No value for required variable".
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [
+      resolvedBinding(RUNTIME_INPUT_PROVIDER, "conn_plain", "TAKOFORM_TOKEN"),
+    ],
   });
   await expect(
     broker.mintRunCredentials(run, "apply", "run_1"),
   ).rejects.toMatchObject({
     code: "failed_precondition",
-    details: { reason: "runtime_inputs_require_generated_root" },
+    details: { reason: "runtime_inputs_wiring_missing" },
+  });
+});
+
+test("a moved generated-root variable is not reported as a rotated nonce", async () => {
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [runtimeInputBinding()],
+    descriptors: [
+      runtimeInputDescriptor({
+        variableName: "takosumi_runtime_inputs__takoform__edge",
+      }),
+    ],
+  });
+  await expect(
+    broker.mintRunCredentials(run, "apply", "run_1"),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "runtime_inputs_variable_changed" },
+  });
+});
+
+test("a lifecycle release command mints no run-scoped sensitive inputs", async () => {
+  // A release command dispatch has no generated root and no ephemeral
+  // variable, so nothing there could consume a map.
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [runtimeInputBinding()],
+  });
+  const credentials = await broker.mintReleaseCommandCredentials(
+    run,
+    "apply",
+    "run_1",
+  );
+  expect(credentials?.env).toBeDefined();
+  expect(credentials?.runtimeInputs).toBeUndefined();
+});
+
+test("a value below the runner redaction floor is refused at the Core boundary", async () => {
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [runtimeInputBinding()],
+    materializer: runtimeInputMaterializerStub({
+      values: { ENCRYPTION_KEY: "short", SIGNING_KEY: "b".repeat(64) },
+    }),
+  });
+  await expect(
+    broker.mintRunCredentials(run, "apply", "run_1"),
+  ).rejects.toMatchObject({
+    code: "invalid_argument",
+    details: { reason: "runtime_inputs_limit_exceeded" },
   });
 });
 
@@ -742,7 +809,25 @@ test("a Capsule with no declaring Provider Connection stays completely inert", a
     resolved: [
       resolvedBinding(RUNTIME_INPUT_PROVIDER, "conn_plain", "TAKOFORM_TOKEN"),
     ],
+    descriptors: [],
   });
   const credentials = await broker.mintRunCredentials(run, "apply", "run_1");
   expect(credentials?.runtimeInputs).toBeUndefined();
+});
+
+test("an over-wide name set is refused whatever the value lengths", async () => {
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [runtimeInputBinding()],
+    descriptors: [
+      runtimeInputDescriptor({
+        names: Array.from({ length: 17 }, (_unused, index) => `NAME_${index}`),
+      }),
+    ],
+  });
+  await expect(
+    broker.mintRunCredentials(run, "plan", "run_1"),
+  ).rejects.toMatchObject({
+    code: "invalid_argument",
+    details: { reason: "runtime_inputs_limit_exceeded" },
+  });
 });

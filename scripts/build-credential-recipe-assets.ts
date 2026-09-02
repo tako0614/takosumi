@@ -35,6 +35,7 @@ interface ParsedRuntimeInputs {
   readonly contract: string;
   readonly nonce_argument: string;
   readonly map_argument: string;
+  readonly minimum_provider_version: string;
 }
 
 type ParsedPresentationText = string | Readonly<Record<string, string>>;
@@ -137,6 +138,8 @@ for (const name of names) {
                   contract: mode.runtime_inputs.contract,
                   nonceArgument: mode.runtime_inputs.nonce_argument,
                   mapArgument: mode.runtime_inputs.map_argument,
+                  minimumProviderVersion:
+                    mode.runtime_inputs.minimum_provider_version,
                 },
               }
             : {}),

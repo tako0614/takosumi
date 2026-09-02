@@ -1137,6 +1137,13 @@ export interface GenericRootDispatchContext {
   readonly moduleVariableMaterializationDigest?: string;
   readonly interfaceMaterialization?: PlanPinnedCapsuleInterfaceMaterialization;
   readonly runtimeInputs?: readonly DispatchRuntimeInputs[];
+  /**
+   * Value-free notices raised while compiling the generated root. They are
+   * appended to the created PlanRun so an inert capability (a provider version
+   * that cannot accept run-scoped sensitive inputs yet) is visible instead of
+   * silent.
+   */
+  readonly diagnostics?: readonly RunDiagnostic[];
 }
 
 /**

@@ -30,6 +30,8 @@ export interface RuntimeInputProviderInstanceWiring {
   readonly variableName: string;
   readonly nonceArgument: string;
   readonly mapArgument: string;
+  /** Lowest exact provider version that accepts the two arguments. */
+  readonly minimumProviderVersion: string;
 }
 
 /**
@@ -69,6 +71,7 @@ export function runtimeInputWiringFromResolved(
       variableName: rootRuntimeInputsVariableName(binding),
       nonceArgument: declaration.nonceArgument,
       mapArgument: declaration.mapArgument,
+      minimumProviderVersion: declaration.minimumProviderVersion,
     });
   }
   if (byInstance.size === 0) return undefined;

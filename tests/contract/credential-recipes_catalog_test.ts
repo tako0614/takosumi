@@ -3,7 +3,10 @@ import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { parse } from "yaml";
 
-import { isProviderRuntimeInputs } from "../../contract/credential-recipes.ts";
+import {
+  isProviderRuntimeInputs,
+  providerVersionMeetsRuntimeInputFloor,
+} from "../../contract/credential-recipes.ts";
 import {
   isOpenTofuIdentifier,
   isProviderEnvName,
@@ -179,6 +182,7 @@ test("only the Takoform recipe declares the run-scoped sensitive input protocol"
       expect(Object.keys(record).sort()).toEqual([
         "contract",
         "map_argument",
+        "minimum_provider_version",
         "nonce_argument",
       ]);
       expect(record.contract).toBe("takosumi.provider-runtime-inputs/v1");
@@ -190,6 +194,17 @@ test("only the Takoform recipe declares the run-scoped sensitive input protocol"
         expect(name).not.toBe("alias");
       }
       expect(record.nonce_argument).not.toBe(record.map_argument);
+      // The arguments exist only from an exact provider release; a range or a
+      // missing floor would let Core bake them into a root the provider
+      // rejects with `Unsupported argument`.
+      expect(record.minimum_provider_version).toMatch(
+        /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u,
+      );
+      // A wildcard-source recipe matches ANY provider, so declaring the
+      // protocol there would hand a Capsule's generated secrets to whatever
+      // provider happens to be bound.
+      expect(recipe.terraform_source).not.toBe("*");
+      expect(Array.isArray(recipe.terraform_source)).toBe(true);
     }
   }
   expect(declaring).toEqual(["takoform/token"]);
@@ -207,8 +222,29 @@ test("the generated recipe asset carries the protocol shape and no value source"
     contract: "takosumi.provider-runtime-inputs/v1",
     nonceArgument: "runtime_input_nonce",
     mapArgument: "runtime_inputs",
+    minimumProviderVersion: "4.0.0",
   });
   expect(isProviderRuntimeInputs(declaration)).toBe(true);
+  // A descriptor without an exact version floor is not a descriptor.
+  expect(
+    isProviderRuntimeInputs({
+      contract: "takosumi.provider-runtime-inputs/v1",
+      nonceArgument: "runtime_input_nonce",
+      mapArgument: "runtime_inputs",
+    }),
+  ).toBe(false);
+  // Only an exact pin at or above the floor proves the arguments exist.
+  expect(providerVersionMeetsRuntimeInputFloor("4.0.0", "4.0.0")).toBe(true);
+  expect(providerVersionMeetsRuntimeInputFloor("4.1.2", "4.0.0")).toBe(true);
+  expect(providerVersionMeetsRuntimeInputFloor("10.0.0", "4.0.0")).toBe(true);
+  expect(providerVersionMeetsRuntimeInputFloor("3.0.0", "4.0.0")).toBe(false);
+  expect(providerVersionMeetsRuntimeInputFloor("4.0.0-rc.1", "4.0.0")).toBe(
+    false,
+  );
+  expect(providerVersionMeetsRuntimeInputFloor(undefined, "4.0.0")).toBe(false);
+  expect(providerVersionMeetsRuntimeInputFloor(">= 4.0.0", "4.0.0")).toBe(
+    false,
+  );
   // The descriptor names arguments only; it can never carry or select a value.
   expect(JSON.stringify(declaration)).not.toContain("from");
 
