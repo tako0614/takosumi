@@ -183,6 +183,7 @@ import {
   activeControlD1MaintenanceFence,
   assertControlD1MaintenanceInactive,
   assertControlD1MaintenanceResultInactive,
+  CONTROL_D1_MAINTENANCE_TABLE,
   repairControlD1MaintenanceGuards,
   wrapControlD1MaintenanceMigrationBatch,
 } from "./d1_schema_maintenance.ts";
@@ -6576,6 +6577,189 @@ async function d1CapsuleExecutionAuthorityEpochStatements(
 }
 
 /**
+ * D1 batch grouping limits for schema bootstrap.
+ *
+ * Cloudflare documents three limits that bind a `batch()`: every statement
+ * inside a batch is subject to the 100,000-byte SQL statement ceiling and the
+ * 100 bound-parameter ceiling, and a D1 request/batch must finish inside 30
+ * seconds. No maximum statement count per batch is documented, so the
+ * bootstrap keeps a group small enough to stay far inside the request window
+ * instead of assuming an undocumented ceiling. Splitting on both statement
+ * count and total bytes keeps a group's payload bounded even when a few
+ * generated statements are unusually large.
+ */
+const D1_MAX_STATEMENT_BYTES = 100_000;
+const D1_SCHEMA_BATCH_MAX_STATEMENTS = 50;
+const D1_SCHEMA_BATCH_MAX_BYTES = 80_000;
+
+/**
+ * A statement, or a run of statements that must stay inside one batch because
+ * they are only correct together (a `drop index` immediately followed by the
+ * `create index` that replaces it).
+ */
+type D1SchemaStatementUnit = string | readonly string[];
+
+function d1SchemaStatementUnitStatements(
+  unit: D1SchemaStatementUnit,
+): readonly string[] {
+  return typeof unit === "string" ? [unit] : unit;
+}
+
+/**
+ * Split schema statements into batch-sized groups without ever splitting a
+ * unit. Exported for the bootstrap batching test, which derives the expected
+ * batch count from the group count rather than pinning a magic number.
+ */
+export function groupD1SchemaStatements(
+  units: readonly D1SchemaStatementUnit[],
+): readonly (readonly string[])[] {
+  const encoder = new TextEncoder();
+  const groups: string[][] = [];
+  let group: string[] = [];
+  let bytes = 0;
+  for (const unit of units) {
+    const statements = d1SchemaStatementUnitStatements(unit);
+    if (statements.length === 0) continue;
+    let unitBytes = 0;
+    for (const statement of statements) {
+      const size = encoder.encode(statement).byteLength;
+      if (size > D1_MAX_STATEMENT_BYTES) {
+        throw new Error(
+          `D1 schema statement of ${size} bytes exceeds the D1 ceiling of ${D1_MAX_STATEMENT_BYTES} bytes`,
+        );
+      }
+      unitBytes += size;
+    }
+    if (
+      group.length > 0 &&
+      (group.length + statements.length > D1_SCHEMA_BATCH_MAX_STATEMENTS ||
+        bytes + unitBytes > D1_SCHEMA_BATCH_MAX_BYTES)
+    ) {
+      groups.push(group);
+      group = [];
+      bytes = 0;
+    }
+    group.push(...statements);
+    bytes += unitBytes;
+  }
+  if (group.length > 0) groups.push(group);
+  return groups;
+}
+
+/**
+ * Issue schema DDL as batch transactions instead of one round trip per
+ * statement. Each group is atomic: D1 runs a batch as a single transaction, so
+ * a failure anywhere in a group rolls the whole group back rather than leaving
+ * a half-applied group behind.
+ */
+async function runD1SchemaStatementGroups(
+  db: D1Database,
+  units: readonly D1SchemaStatementUnit[],
+): Promise<void> {
+  for (const group of groupD1SchemaStatements(units)) {
+    await runD1AtomicSql(db, group);
+  }
+}
+
+/**
+ * Every table / index / trigger / view name the database already holds, read
+ * once. The bootstrap used to probe `sqlite_master` (or rely on
+ * `IF NOT EXISTS`) once per statement; one inventory read answers the same
+ * questions for the whole pass and lets an already-converged database issue no
+ * DDL at all.
+ */
+class D1SchemaObjects {
+  readonly tables = new Set<string>();
+  readonly indexes = new Set<string>();
+  readonly triggers = new Set<string>();
+  readonly views = new Set<string>();
+  /** `sqlite_master.sql` per table, so a DDL-shape probe costs no extra read. */
+  readonly tableSql = new Map<string, string>();
+
+  names(kind: string): Set<string> | undefined {
+    if (kind === "table") return this.tables;
+    if (kind === "index") return this.indexes;
+    if (kind === "trigger") return this.triggers;
+    if (kind === "view") return this.views;
+    return undefined;
+  }
+
+  has(kind: string, name: string): boolean {
+    return this.names(kind)?.has(name) ?? false;
+  }
+
+  add(kind: string, name: string): void {
+    this.names(kind)?.add(name);
+  }
+
+  renameTable(from: string, to: string): void {
+    this.tables.delete(from);
+    this.tables.add(to);
+    const sql = this.tableSql.get(from);
+    this.tableSql.delete(from);
+    if (sql !== undefined) this.tableSql.set(to, sql);
+  }
+}
+
+async function readD1SchemaObjects(db: D1Database): Promise<D1SchemaObjects> {
+  const result = await db.prepare(`select type, name, sql from sqlite_master`)
+    .all<{
+      readonly type?: string;
+      readonly name?: string;
+      readonly sql?: string | null;
+    }>();
+  const objects = new D1SchemaObjects();
+  for (const row of result.results ?? []) {
+    if (typeof row.type !== "string" || typeof row.name !== "string") continue;
+    objects.add(row.type, row.name);
+    if (row.type === "table" && typeof row.sql === "string") {
+      objects.tableSql.set(row.name, row.sql);
+    }
+  }
+  return objects;
+}
+
+const D1_CREATE_IF_NOT_EXISTS =
+  /^create\s+(?:unique\s+)?(table|index|trigger|view)\s+if\s+not\s+exists\s+(?:"([a-z_][a-z0-9_]*)"|([a-z_][a-z0-9_]*))(?=[\s(]|$)/iu;
+const D1_DROP_INDEX_IF_EXISTS =
+  /^drop\s+index\s+if\s+exists\s+(?:"([a-z_][a-z0-9_]*)"|([a-z_][a-z0-9_]*))\s*;?\s*$/iu;
+
+/**
+ * True only when `sql` is provably a no-op against `objects`. The predicate is
+ * deliberately narrow: an `IF NOT EXISTS` create whose object already exists,
+ * or an `IF EXISTS` index drop whose index is already gone. Anything it cannot
+ * parse exactly stays pending, so skipping can never lose a statement.
+ */
+function isSettledD1SchemaStatement(
+  sql: string,
+  objects: D1SchemaObjects,
+): boolean {
+  const trimmed = sql.trim();
+  const created = D1_CREATE_IF_NOT_EXISTS.exec(trimmed);
+  if (created) {
+    const kind = created[1].toLowerCase();
+    const name = created[2] ?? created[3];
+    return name !== undefined && objects.has(kind, name);
+  }
+  const dropped = D1_DROP_INDEX_IF_EXISTS.exec(trimmed);
+  if (dropped) {
+    const name = dropped[1] ?? dropped[2];
+    return name !== undefined && !objects.indexes.has(name);
+  }
+  return false;
+}
+
+/** Drop the statements the current schema already satisfies. */
+function pendingD1SchemaStatements(
+  statements: readonly string[],
+  objects: D1SchemaObjects,
+): readonly string[] {
+  return statements.filter(
+    (sql) => !isSettledD1SchemaStatement(sql, objects),
+  );
+}
+
+/**
  * Bootstrap the §27 control-plane tables for the default self-host mode.
  * Idempotent (`IF NOT EXISTS`) and called once per store instance via the
  * memoized init promise. Hosts using `predeployed` mode call the strict
@@ -7061,27 +7245,49 @@ export async function ensureD1OpenTofuLedgerSchema(
   ];
   const tableStatements = statements.filter((sql) => !isD1IndexStatement(sql));
   const indexStatements = statements.filter((sql) => isD1IndexStatement(sql));
+  // One `sqlite_master` read answers every "does this object already exist?"
+  // question the pass would otherwise ask one no-op DDL round trip at a time,
+  // and one ledger read replaces the per-migration `where version = ?` probe.
+  // An already-converged database therefore issues no statement at all.
+  const objects = await readD1SchemaObjects(db);
+  const ledger = await readD1SchemaMigrationLedgerRows(db, objects);
+  await validateD1SchemaMigrationLedgerRows(ledger);
   // Guarded table renames run BEFORE the final-name `create table if not exists`
   // ensure-DDL so a rename (e.g. spaces -> workspaces) renames the existing
   // populated table instead of colliding with a freshly-created empty
   // final-name table. Each entry no-ops unless its source exists and its target
   // does not, so the pass converges identically on fresh, existing, and
   // already-renamed databases. (Empty until the 17-noun rename populates it.)
-  await applyD1PreCreateRenames(db);
-  for (const sql of tableStatements) {
-    await db.prepare(sql).run();
-  }
-  await migrateD1OpenTofuLedgerSchema(db, throughMigrationVersion);
-  const serviceFormIndexStatements = (await d1TableExists(
+  const renamed = await applyD1PreCreateRenames(db, objects);
+  const pendingTableStatements = pendingD1SchemaStatements(
+    tableStatements,
+    objects,
+  );
+  await runD1SchemaStatementGroups(db, pendingTableStatements);
+  const migrated = await migrateD1OpenTofuLedgerSchema(
     db,
+    throughMigrationVersion,
+    objects,
+    ledger,
+  );
+  // The migration chain creates, drops, and rebuilds objects, so the index tail
+  // re-reads the inventory — but only when this pass actually wrote something.
+  // A converged database keeps the snapshot it started with.
+  const indexObjects =
+    renamed || pendingTableStatements.length > 0 || migrated
+      ? await readD1SchemaObjects(db)
+      : objects;
+  const serviceFormIndexStatements = indexObjects.tables.has(
     "service_form_definitions",
-  ))
-    ? (await d1ServiceFormRegistryReplayStatements(db)).filter((sql) =>
-        isD1IndexStatement(sql),
+  )
+    ? (await d1ServiceFormRegistryReplayStatements(db, indexObjects)).filter(
+        (sql) => isD1IndexStatement(sql),
       )
     : [];
   const hasRestoreSafeServiceFormUnique =
-    await d1ServiceFormDefinitionHasInlineUnique(db);
+    d1ServiceFormDefinitionSqlHasInlineUnique(
+      indexObjects.tableSql.get("service_form_definitions"),
+    );
   const bootstrapIndexStatements = indexStatements.filter(
     (sql) =>
       !(
@@ -7091,12 +7297,13 @@ export async function ensureD1OpenTofuLedgerSchema(
         )
       ),
   );
-  for (const sql of [
-    ...bootstrapIndexStatements,
-    ...serviceFormIndexStatements,
-  ]) {
-    await db.prepare(sql).run();
-  }
+  await runD1SchemaStatementGroups(
+    db,
+    pendingD1SchemaStatements(
+      [...bootstrapIndexStatements, ...serviceFormIndexStatements],
+      indexObjects,
+    ),
+  );
 }
 
 /**
@@ -7120,8 +7327,15 @@ const D1_OPEN_TOFU_PRE_CREATE_RENAMES: readonly {
   { from: "output_snapshots", to: "outputs" },
 ];
 
-async function applyD1PreCreateRenames(db: D1Database): Promise<void> {
-  await applyD1GuardedTableRenames(db, D1_OPEN_TOFU_PRE_CREATE_RENAMES);
+async function applyD1PreCreateRenames(
+  db: D1Database,
+  objects: D1SchemaObjects,
+): Promise<boolean> {
+  return await applyD1GuardedTableRenames(
+    db,
+    D1_OPEN_TOFU_PRE_CREATE_RENAMES,
+    objects,
+  );
 }
 
 /**
@@ -7132,28 +7346,52 @@ async function applyD1PreCreateRenames(db: D1Database): Promise<void> {
 export async function applyD1GuardedTableRenames(
   db: D1Database,
   renames: readonly { readonly from: string; readonly to: string }[],
-): Promise<void> {
+  objects?: D1SchemaObjects,
+): Promise<boolean> {
+  const exists = (table: string): Promise<boolean> =>
+    objects
+      ? Promise.resolve(objects.tables.has(table))
+      : d1TableExists(db, table);
+  let renamed = false;
   for (const { from, to } of renames) {
-    if ((await d1TableExists(db, from)) && !(await d1TableExists(db, to))) {
+    if ((await exists(from)) && !(await exists(to))) {
       await db.prepare(`alter table ${from} rename to ${to}`).run();
+      objects?.renameTable(from, to);
+      renamed = true;
     }
   }
+  return renamed;
 }
 
+/** @returns whether the chain wrote anything, so the caller can reuse its inventory. */
 async function migrateD1OpenTofuLedgerSchema(
   db: D1Database,
   throughMigrationVersion: number,
-): Promise<void> {
-  await ensureD1SchemaMigrationLedger(db);
+  objects: D1SchemaObjects,
+  ledger: readonly D1SchemaMigrationRow[],
+): Promise<boolean> {
+  const createdLedger = !objects.tables.has("schema_migrations");
+  await ensureD1SchemaMigrationLedger(db, objects);
   // A legacy/empty database can acquire the fence before this ledger exists.
-  // Cover the newly created table before the migration chain yields.
-  await repairControlD1MaintenanceGuards(db);
-  await prepareRetiredD1HostMigrationReplaySchema(db);
-  await prepareRetiredD1WorkspaceOutputSyncMigration(db);
-  for (const migration of D1_OPEN_TOFU_SCHEMA_MIGRATIONS) {
-    if (migration.version > throughMigrationVersion) break;
+  // Cover the newly created table before the migration chain yields. An absent
+  // out-of-band fence table means no fence was ever acquired and there is
+  // nothing to repair, which the inventory already answers without a read.
+  const repairedGuards = objects.tables.has(CONTROL_D1_MAINTENANCE_TABLE);
+  if (repairedGuards) await repairControlD1MaintenanceGuards(db);
+  const applied = new Map(ledger.map((row) => [row.version, row] as const));
+  const pending = D1_OPEN_TOFU_SCHEMA_MIGRATIONS.filter(
+    (migration) =>
+      migration.version <= throughMigrationVersion &&
+      !applied.has(migration.version),
+  );
+  if (pending.length > 0) {
+    await prepareRetiredD1HostMigrationReplaySchema(db, applied);
+    await prepareRetiredD1WorkspaceOutputSyncMigration(db, applied);
+  }
+  for (const migration of pending) {
     await applyD1OpenTofuSchemaMigration(db, migration);
   }
+  return createdLedger || repairedGuards || pending.length > 0;
 }
 
 /**
@@ -7165,12 +7403,9 @@ async function migrateD1OpenTofuLedgerSchema(
  */
 async function prepareRetiredD1HostMigrationReplaySchema(
   db: D1Database,
+  applied: ReadonlyMap<number, D1SchemaMigrationRow>,
 ): Promise<void> {
-  const retired = await db
-    .prepare(`select version from schema_migrations where version = ?`)
-    .bind(66)
-    .first<{ readonly version: number }>();
-  if (retired) return;
+  if (applied.has(66)) return;
 
   const newlyCreatedTables = new Set<string>();
   const statements: string[] = [];
@@ -7203,12 +7438,9 @@ async function prepareRetiredD1HostMigrationReplaySchema(
  */
 async function prepareRetiredD1WorkspaceOutputSyncMigration(
   db: D1Database,
+  applied: ReadonlyMap<number, D1SchemaMigrationRow>,
 ): Promise<void> {
-  const applied = await db
-    .prepare(`select version from schema_migrations where version = ?`)
-    .bind(26)
-    .first<{ readonly version: number }>();
-  if (applied || (await d1TableExists(db, "workspace_output_sync"))) {
+  if (applied.has(26) || (await d1TableExists(db, "workspace_output_sync"))) {
     return;
   }
   const create = db.prepare(
@@ -7381,9 +7613,10 @@ ${D1_PROVIDER_MATERIALIZATION_CANONICALIZATION_STATEMENTS.join("\n---\n")}
           )`,
         )
         .run();
-      for (const statement of D1_PROVIDER_MATERIALIZATION_CANONICALIZATION_STATEMENTS) {
-        await db.prepare(statement).run();
-      }
+      await runD1SchemaStatementGroups(
+        db,
+        D1_PROVIDER_MATERIALIZATION_CANONICALIZATION_STATEMENTS,
+      );
     },
   },
   {
@@ -7409,9 +7642,10 @@ ${D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS.join("\n---\n")}
 ${D1_PROVIDER_MATERIALIZATION_CANONICALIZATION_STATEMENTS.join("\n---\n")}
 `,
     async apply(db) {
-      for (const statement of D1_PROVIDER_MATERIALIZATION_CANONICALIZATION_STATEMENTS) {
-        await db.prepare(statement).run();
-      }
+      await runD1SchemaStatementGroups(
+        db,
+        D1_PROVIDER_MATERIALIZATION_CANONICALIZATION_STATEMENTS,
+      );
       await rebuildD1ProviderCatalogWithConstraints(db);
       await rebuildD1ProviderEnvsWithConstraints(db);
       await ensureD1OpenTofuCanonicalIndexes(db);
@@ -7425,9 +7659,10 @@ provider_catalog rows copied from legacy provider_templates repair old ownership
 ${D1_PROVIDER_CATALOG_OWNERSHIP_REPAIR_STATEMENTS.join("\n---\n")}
 `,
     async apply(db) {
-      for (const statement of D1_PROVIDER_CATALOG_OWNERSHIP_REPAIR_STATEMENTS) {
-        await db.prepare(statement).run();
-      }
+      await runD1SchemaStatementGroups(
+        db,
+        D1_PROVIDER_CATALOG_OWNERSHIP_REPAIR_STATEMENTS,
+      );
     },
   },
   {
@@ -7731,17 +7966,18 @@ stale pre-rename named indexes dropped (the canonical new-name indexes are (re)c
 
       // 6. Drop stale pre-rename named indexes carried over by the table rename;
       //    the ensure-DDL index tail recreates the canonical new-name indexes.
-      for (const indexName of [
-        "spaces_handle_unique",
-        "installations_space_name_environment_unique",
-        "installations_space_idx",
-        "installations_current_deployment_idx",
-        "state_snapshots_installation_environment_generation_unique",
-        "state_snapshots_installation_idx",
-        "output_snapshots_installation_idx",
-      ]) {
-        await db.prepare(`drop index if exists ${indexName}`).run();
-      }
+      await runD1SchemaStatementGroups(
+        db,
+        [
+          "spaces_handle_unique",
+          "installations_space_name_environment_unique",
+          "installations_space_idx",
+          "installations_current_deployment_idx",
+          "state_snapshots_installation_environment_generation_unique",
+          "state_snapshots_installation_idx",
+          "output_snapshots_installation_idx",
+        ].map((indexName) => `drop index if exists ${indexName}`),
+      );
     },
   },
   {
@@ -8852,9 +9088,10 @@ ${D1_SERVICE_FORM_REGISTRY_STATEMENTS.join("\n---\n")}
       return await d1ServiceFormRegistryReplayStatements(db);
     },
     async apply(db) {
-      for (const statement of await d1ServiceFormRegistryReplayStatements(db)) {
-        await db.prepare(statement).run();
-      }
+      await runD1SchemaStatementGroups(
+        db,
+        await d1ServiceFormRegistryReplayStatements(db),
+      );
     },
   },
   {
@@ -9340,8 +9577,12 @@ ${D1_CAPSULE_INTERFACE_MATERIALIZATION_INTENT_STATEMENTS.join("\n---\n")}
  */
 async function d1ServiceFormRegistryReplayStatements(
   db: D1Database,
+  objects?: D1SchemaObjects,
 ): Promise<readonly string[]> {
-  if (await d1TableExists(db, "service_form_definitions")) {
+  const present = objects
+    ? objects.tables.has("service_form_definitions")
+    : await d1TableExists(db, "service_form_definitions");
+  if (present) {
     const columns = await d1ColumnNames(db, "service_form_definitions");
     if (!columns.has("kind")) return [];
   }
@@ -10177,7 +10418,16 @@ async function renameD1JsonKey(
     .run();
 }
 
-async function ensureD1SchemaMigrationLedger(db: D1Database): Promise<void> {
+/**
+ * Create the ledger table when it is missing. An existing ledger was already
+ * read and validated by {@link readD1SchemaMigrationLedgerRows}, so this issues
+ * no statement at all on an established database.
+ */
+async function ensureD1SchemaMigrationLedger(
+  db: D1Database,
+  objects: D1SchemaObjects,
+): Promise<void> {
+  if (objects.tables.has("schema_migrations")) return;
   await db
     .prepare(
       `create table if not exists schema_migrations (
@@ -10188,10 +10438,34 @@ async function ensureD1SchemaMigrationLedger(db: D1Database): Promise<void> {
     )`,
     )
     .run();
+  objects.add("table", "schema_migrations");
   assertD1SchemaMigrationLedgerShape(
     await d1ColumnInfo(db, "schema_migrations"),
   );
-  await validateD1SchemaMigrationLedgerRows(db);
+}
+
+/**
+ * Read the whole migration ledger in one statement. An absent table is the
+ * fresh-database case and yields an empty ledger rather than an error. Every
+ * decision the bootstrap makes about applied migrations comes from this one
+ * snapshot instead of a `select ... where version = ?` per catalog entry.
+ */
+async function readD1SchemaMigrationLedgerRows(
+  db: D1Database,
+  objects: D1SchemaObjects,
+): Promise<readonly D1SchemaMigrationRow[]> {
+  if (!objects.tables.has("schema_migrations")) return [];
+  assertD1SchemaMigrationLedgerShape(
+    await d1ColumnInfo(db, "schema_migrations"),
+  );
+  const rows = await db
+    .prepare(
+      `select version, name, checksum, applied_at
+      from schema_migrations
+      order by version`,
+    )
+    .all<D1SchemaMigrationRow>();
+  return rows.results ?? [];
 }
 
 function assertD1SchemaMigrationLedgerShape(
@@ -10324,65 +10598,58 @@ function parseD1JsonArray<T>(value: unknown, label: string): readonly T[] {
   return parsed as readonly T[];
 }
 
+/**
+ * Reject a ledger the current catalog cannot own. Name and checksum are checked
+ * here, once, for every recorded row — the bootstrap no longer re-reads and
+ * re-compares one row per catalog entry as it walks the chain.
+ */
 async function validateD1SchemaMigrationLedgerRows(
-  db: D1Database,
+  rows: readonly D1SchemaMigrationRow[],
 ): Promise<void> {
-  const rows = await db
-    .prepare(
-      `select version, name, checksum, applied_at
-      from schema_migrations
-      order by version`,
-    )
-    .all<D1SchemaMigrationRow>();
-  const knownMigrations: ReadonlyMap<number, D1OpenTofuSchemaMigration> =
-    new Map(
-      D1_OPEN_TOFU_SCHEMA_MIGRATIONS.map((migration) => [
-        migration.version,
-        migration,
-      ]),
-    );
-  for (const row of rows.results ?? []) {
-    const migration = knownMigrations.get(row.version);
-    if (!migration) {
+  if (rows.length === 0) return;
+  const checksums = await expectedD1OpenTofuSchemaMigrationChecksums();
+  const knownMigrations: ReadonlyMap<
+    number,
+    { readonly migration: D1OpenTofuSchemaMigration; readonly checksum: string }
+  > = new Map(
+    D1_OPEN_TOFU_SCHEMA_MIGRATIONS.map(
+      (migration, index) =>
+        [
+          migration.version as number,
+          { migration, checksum: checksums[index] },
+        ] as const,
+    ),
+  );
+  for (const row of rows) {
+    const known = knownMigrations.get(row.version);
+    if (!known) {
       throw new Error(
         `D1 OpenTofu schema migration ${row.version} is not present in the current migration catalog`,
       );
     }
-    if (row.name !== migration.name) {
+    if (row.name !== known.migration.name) {
       throw new Error(
-        `D1 OpenTofu schema migration ${row.version} name mismatch: ledger has ${row.name}, code has ${migration.name}`,
+        `D1 OpenTofu schema migration ${row.version} name mismatch: ledger has ${row.name}, code has ${known.migration.name}`,
+      );
+    }
+    if (row.checksum !== known.checksum) {
+      throw new Error(
+        `D1 OpenTofu schema migration ${row.version} checksum mismatch: ledger has ${row.checksum}, code has ${known.checksum}`,
       );
     }
   }
 }
 
+/**
+ * Apply one not-yet-recorded migration. The ledger snapshot already proved that
+ * every recorded row matches the catalog, so this only ever runs for a
+ * migration the ledger does not hold.
+ */
 async function applyD1OpenTofuSchemaMigration(
   db: D1Database,
   migration: D1OpenTofuSchemaMigration,
 ): Promise<void> {
   const checksum = await d1OpenTofuSchemaMigrationChecksum(migration);
-  const existing = await db
-    .prepare(
-      `select version, name, checksum, applied_at
-      from schema_migrations
-      where version = ?`,
-    )
-    .bind(migration.version)
-    .first<D1SchemaMigrationRow>();
-  if (existing) {
-    if (existing.name !== migration.name) {
-      throw new Error(
-        `D1 OpenTofu schema migration ${migration.version} name mismatch: ledger has ${existing.name}, code has ${migration.name}`,
-      );
-    }
-    if (existing.checksum !== checksum) {
-      throw new Error(
-        `D1 OpenTofu schema migration ${migration.version} checksum mismatch: ledger has ${existing.checksum}, code has ${checksum}`,
-      );
-    }
-    return;
-  }
-
   const ledgerInsert = db
     .prepare(
       `insert into schema_migrations (version, name, checksum, applied_at)
@@ -10627,6 +10894,11 @@ const D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS = [
 ] as const;
 
 async function ensureD1OpenTofuCanonicalIndexes(db: D1Database): Promise<void> {
+  // Column probes are memoized per table: the canonical list names ~30 distinct
+  // tables across ~60 statements, and the pass used to re-probe every one.
+  const objects = await readD1SchemaObjects(db);
+  const columnsByTable = new Map<string, Set<string>>();
+  const units: (readonly string[])[] = [];
   for (const statement of D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS) {
     // P4: this historical index-parity pass names the pre-rename tables
     // (spaces / installations / state_snapshots / output_snapshots). On a fresh
@@ -10636,14 +10908,24 @@ async function ensureD1OpenTofuCanonicalIndexes(db: D1Database): Promise<void> {
     // ensure-DDL index tail. (The statement strings — and thus this migration's
     // checksumSource — are unchanged, so already-migrated ledgers stay stable.)
     const tableName = parseD1CreateIndexTable(statement);
-    if (!(await d1TableExists(db, tableName))) continue;
-    const tableColumns = await d1ColumnNames(db, tableName);
+    let tableColumns = columnsByTable.get(tableName);
+    if (tableColumns === undefined) {
+      // A missing table yields an empty column set; every real table has at
+      // least one column, so the two cases never collide.
+      tableColumns = objects.tables.has(tableName)
+        ? await d1ColumnNames(db, tableName)
+        : new Set<string>();
+      columnsByTable.set(tableName, tableColumns);
+    }
+    if (tableColumns.size === 0) continue;
     const indexColumns = parseD1CreateIndexColumns(statement);
     if (indexColumns.some((column) => !tableColumns.has(column))) continue;
     const indexName = parseD1CreateIndexName(statement);
-    await db.prepare(`drop index if exists ${indexName}`).run();
-    await db.prepare(statement).run();
+    // The drop and the create replacing it stay in one batch, so no group
+    // boundary can leave the index dropped and not recreated.
+    units.push([`drop index if exists ${indexName}`, statement]);
   }
+  await runD1SchemaStatementGroups(db, units);
 }
 
 function parseD1CreateIndexName(statement: string): string {
@@ -10941,19 +11223,13 @@ async function d1TableExists(db: D1Database, table: string): Promise<boolean> {
   return result?.name === table;
 }
 
-async function d1ServiceFormDefinitionHasInlineUnique(
-  db: D1Database,
-): Promise<boolean> {
-  const result = await db
-    .prepare(
-      `select sql from sqlite_master
-       where type = 'table' and name = 'service_form_definitions'`,
-    )
-    .first<{ readonly sql?: string | null }>();
+function d1ServiceFormDefinitionSqlHasInlineUnique(
+  sql: string | undefined,
+): boolean {
   return (
-    typeof result?.sql === "string" &&
+    typeof sql === "string" &&
     /\bconstraint\s+service_form_definitions_ref_package_unique\s+unique\s*\(\s*form_ref_key\s*,\s*package_digest\s*\)/iu.test(
-      result.sql,
+      sql,
     )
   );
 }
