@@ -131,6 +131,11 @@ fi
 RUN_SUFFIX="$(date +%s%N)-$RANDOM"
 SOURCE_URL="https://github.com/tako0614/takosumi.git"
 SOURCE_REF="main"
+# The Source pins this subtree, so the snapshot's module index is scoped to it
+# and the only root inside it is ".". The Capsule therefore names no modulePath
+# and lets the single observed candidate be selected, exactly as cli-smoke.sh
+# does — naming the Source path here asks for a module the pinned tree does not
+# contain (repository_install_ux_module_missing).
 SOURCE_PATH="opentofu-modules/core/module"
 INSTALL_CONFIG_ID="${TAKOSUMI_DEPLOY_CONTROL_INSTALL_CONFIG_ID:-cfg-default-opentofu-capsule}"
 WORKSPACE_HANDLE="tenant-iso-${RUN_SUFFIX}"
@@ -259,7 +264,6 @@ CAPSULE_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
   "environment": "test",
   "sourceId": "$SOURCE_ID",
   "installConfigId": "$INSTALL_CONFIG_ID",
-  "modulePath": "$SOURCE_PATH",
   "runnerProfileId": "opentofu-default"
 }
 JSON
