@@ -197,6 +197,59 @@ if [[ -z "$SOURCE_ID" ]]; then
 	exit 1
 fi
 
+# A Capsule pins a SourceSnapshot, and the install path refuses a snapshot
+# whose OpenTofu module index was never observed
+# (repository_install_module_index_unavailable). autoSync stays off above, so
+# drive one sync explicitly and wait for it before creating the Capsule.
+SYNC_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
+	-b "$JAR_A" "${BROWSER_ORIGIN[@]}" \
+	-H "Content-Type: application/json" \
+	-d '{"intent":"manual_plan"}' \
+	-w "\n%{http_code}" \
+	"$BASE/api/v1/sources/$SOURCE_ID/sync")
+SYNC_STATUS=$(echo "$SYNC_RESP" | tail -n1)
+SYNC_BODY=$(echo "$SYNC_RESP" | head -n -1)
+SYNC_RUN_ID=$(echo "$SYNC_BODY" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print('')
+else:
+    print((d.get('run') or {}).get('id', ''))
+")
+if [[ -z "$SYNC_RUN_ID" ]]; then
+	echo "FAIL: subject A could not sync Source: status=$SYNC_STATUS body=$SYNC_BODY" >&2
+	exit 1
+fi
+
+SYNC_RUN_STATUS=""
+for _ in $(seq 1 120); do
+	SYNC_RUN_BODY=$(curl -sk "${CURL_TLS[@]}" -b "$JAR_A" \
+		"$BASE/api/v1/runs/$SYNC_RUN_ID")
+	SYNC_RUN_STATUS=$(echo "$SYNC_RUN_BODY" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print('')
+else:
+    print((d.get('run') or {}).get('status', ''))
+")
+	case "$SYNC_RUN_STATUS" in
+		succeeded) break ;;
+		failed | canceled)
+			echo "FAIL: Source sync Run ended with status=$SYNC_RUN_STATUS: $SYNC_RUN_BODY" >&2
+			exit 1
+			;;
+	esac
+	sleep 1
+done
+if [[ "$SYNC_RUN_STATUS" != "succeeded" ]]; then
+	echo "FAIL: Source sync Run $SYNC_RUN_ID never succeeded (last status=${SYNC_RUN_STATUS:-unknown})" >&2
+	exit 1
+fi
+
 CAPSULE_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
 	-b "$JAR_A" "${BROWSER_ORIGIN[@]}" \
 	-H "Content-Type: application/json" \
