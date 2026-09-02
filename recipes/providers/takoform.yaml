@@ -1,0 +1,29 @@
+id: takoform
+display_name: Takoform Service Form host
+secret_partition: provider-credentials
+terraform_source:
+  - tako0614/takoform
+  - registry.opentofu.org/tako0614/takoform
+  - registry.terraform.io/tako0614/takoform
+env_names:
+  - TAKOFORM_ENDPOINT
+  - TAKOFORM_SPACE
+  - TAKOFORM_TOKEN
+required_env_groups:
+  - [TAKOFORM_TOKEN]
+auth_modes:
+  token:
+    runtime_inputs:
+      contract: takosumi.provider-runtime-inputs/v1
+      nonce_argument: runtime_input_nonce
+      map_argument: runtime_inputs
+    env:
+      TAKOFORM_TOKEN:
+        from: secret
+        name: token
+      TAKOFORM_ENDPOINT:
+        from: value
+        name: endpoint
+      TAKOFORM_SPACE:
+        from: value
+        name: space

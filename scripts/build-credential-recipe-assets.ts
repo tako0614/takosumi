@@ -22,8 +22,19 @@ interface ParsedAuthMode {
   readonly env?: Readonly<Record<string, ParsedMaterial>>;
   readonly files?: Readonly<Record<string, ParsedFileMaterial>>;
   readonly pre_run?: ParsedPreRunAction;
+  readonly runtime_inputs?: ParsedRuntimeInputs;
   readonly input_hints?: Readonly<Record<string, ParsedInputHint>>;
   readonly presentation?: ParsedAuthModePresentation;
+}
+
+/**
+ * Value-free protocol shape: the two provider-block argument names a provider
+ * reads for run-scoped sensitive inputs. It never declares a value source.
+ */
+interface ParsedRuntimeInputs {
+  readonly contract: string;
+  readonly nonce_argument: string;
+  readonly map_argument: string;
 }
 
 type ParsedPresentationText = string | Readonly<Record<string, string>>;
@@ -117,6 +128,15 @@ for (const name of names) {
                   ...(mode.pre_run.inputs
                     ? { inputs: mode.pre_run.inputs }
                     : {}),
+                },
+              }
+            : {}),
+          ...(mode.runtime_inputs
+            ? {
+                runtimeInputs: {
+                  contract: mode.runtime_inputs.contract,
+                  nonceArgument: mode.runtime_inputs.nonce_argument,
+                  mapArgument: mode.runtime_inputs.map_argument,
                 },
               }
             : {}),

@@ -46,6 +46,10 @@ import type {
   CredentialRecipeMaterialSource,
   CredentialRecipeVerifiedScopeHintKeys,
 } from "takosumi-contract";
+import {
+  isProviderRuntimeInputs,
+  PROVIDER_RUNTIME_INPUTS_CONTRACT,
+} from "takosumi-contract/credential-recipes";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import {
   credentialRecipeDriverKey,
@@ -502,6 +506,19 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     const runIssuance = resolvedRunIssuance(recipeMode.runIssuance);
+    // Value-free protocol shape pinned from the installed mode. A caller can
+    // never introduce it: the provider-block argument names are recipe
+    // authority, exactly like runIssuance.
+    if (
+      (requestedRecipe as { readonly runtimeInputs?: unknown }).runtimeInputs !==
+        undefined
+    ) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        "credentialRecipe.runtimeInputs is resolved only from the installed recipe",
+      );
+    }
+    const runtimeInputs = resolvedRuntimeInputs(recipeMode.runtimeInputs);
     const connectionScope =
       input.scope ?? (workspaceId ? "workspace" : "operator");
     if (requestedRecipe.runIssuance !== undefined) {
@@ -636,6 +653,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       ...(recipeDefinition.declaredEnv === true ? { declaredEnv: true } : {}),
       ...(recipeMode.preRun ? { preRunAction: recipeMode.preRun.type } : {}),
       ...(runIssuance ? { runIssuance } : {}),
+      ...(runtimeInputs ? { runtimeInputs } : {}),
     };
 
     // Validate every non-secret field before sealing or persisting credential
@@ -2838,6 +2856,23 @@ function normalizeCredentialRecipe(
     requireNonEmpty(explicit.authMode, "credentialRecipe.authMode");
   }
   return explicit;
+}
+
+function resolvedRuntimeInputs(
+  value: unknown,
+): NonNullable<ProviderConnection["credentialRecipe"]>["runtimeInputs"] {
+  if (value === undefined) return undefined;
+  if (!isProviderRuntimeInputs(value)) {
+    throw new ConnectionVaultError(
+      "failed_precondition",
+      "installed Credential Recipe has an unsupported runtimeInputs descriptor",
+    );
+  }
+  return {
+    contract: PROVIDER_RUNTIME_INPUTS_CONTRACT,
+    nonceArgument: value.nonceArgument,
+    mapArgument: value.mapArgument,
+  };
 }
 
 function resolvedRunIssuance(

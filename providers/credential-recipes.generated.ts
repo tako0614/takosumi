@@ -1410,6 +1410,49 @@ export const REFERENCE_CREDENTIAL_RECIPES: readonly CredentialRecipe[] = [
     }
   },
   {
+    "id": "takoform",
+    "displayName": "Takoform Service Form host",
+    "secretPartition": "provider-credentials",
+    "terraformSource": [
+      "tako0614/takoform",
+      "registry.opentofu.org/tako0614/takoform",
+      "registry.terraform.io/tako0614/takoform"
+    ],
+    "envNames": [
+      "TAKOFORM_ENDPOINT",
+      "TAKOFORM_SPACE",
+      "TAKOFORM_TOKEN"
+    ],
+    "requiredEnvGroups": [
+      [
+        "TAKOFORM_TOKEN"
+      ]
+    ],
+    "authModes": {
+      "token": {
+        "env": {
+          "TAKOFORM_TOKEN": {
+            "from": "secret",
+            "name": "token"
+          },
+          "TAKOFORM_ENDPOINT": {
+            "from": "value",
+            "name": "endpoint"
+          },
+          "TAKOFORM_SPACE": {
+            "from": "value",
+            "name": "space"
+          }
+        },
+        "runtimeInputs": {
+          "contract": "takosumi.provider-runtime-inputs/v1",
+          "nonceArgument": "runtime_input_nonce",
+          "mapArgument": "runtime_inputs"
+        }
+      }
+    }
+  },
+  {
     "id": "vercel",
     "displayName": "Vercel",
     "secretPartition": "provider-credentials",
