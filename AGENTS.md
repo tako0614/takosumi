@@ -4,17 +4,17 @@
 
 ## Repository
 
-- Scope: Takosumi OSS Git and OpenTofu control plane, contracts, accounts plane, runner, and operator framework.
+- Scope: Takosumi OSS Git/OpenTofu BYOC control plane, Run authority, credential broker, artifact/state ledger, narrow executor, Accounts, and platform Worker.
 - Repository kind: `product`
-- Direct sibling dependencies: `takosumi-store`
+- Direct sibling dependencies: なし
 - Repository gate: `bun run check`
-- Canonical docs: [README.md](README.md), [docs/concepts/index.md](docs/concepts/index.md), [docs/internal/core-spec.md](docs/internal/core-spec.md), [docs/operations/README.md](docs/operations/README.md)
+- Canonical docs: [README.md](README.md), [CONTEXT.md](CONTEXT.md), [docs/concepts/index.md](docs/concepts/index.md), [docs/internal/core-spec.md](docs/internal/core-spec.md), [docs/operations/README.md](docs/operations/README.md)
 
 ## Ownership
 
-- Owns: OSS Git and OpenTofu control plane and canonical Run, state, output, and audit lifecycle / Accounts, runner, dashboard, CLI, and operator composition framework / Provider-neutral Connection, Binding, credential brokerage, and Interface authorization APIs
-- Does not own: Portable Takoform specification, provider, or packages / Takoform Host API, hosted Form instances, or provider backend lifecycle / Takos product UX or distribution Worker / Takoserver or Takosumi Hosted capacity, enforced billing, SLA, or support
-- Hazards: Do not introduce forge-specific IDs or required Takosumi manifests into core. / Never persist secret values in Output, Interface, logs, or audit.
+- Owns: OSS Git and OpenTofu BYOC Stack flow and canonical Run, state, output, and audit lifecycle / Workspace ProviderConnection, CredentialRecipe, ProviderBinding, and run-scoped credential brokerage / OSS platform Worker source, build, and deploy entrypoint / Runner source and immutable runner-image build/release authority / Accounts, dashboard, CLI, and operator composition framework / Optional Takosumi runtime Interface and InterfaceBinding APIs
+- Does not own: Portable Takoform Host API contract, provider, or packages / Takos product UX or distribution Worker / Takosumi Hosted retail Marketplace, prepaid/Stripe, or Takoserver reseller client / Takoserver Host-owned supply, Offering, Resource, execution, capacity, provider credentials, reseller contracts, or WfP routing / A generic Offering authority or an active Service Form/Resource Host lifecycle
+- Hazards: Do not introduce forge-specific IDs or required Takosumi manifests into core. / Do not branch the runner on Takoserver backends, provider installations, capacity, WfP namespaces, or native resource identities. / Resource Shape, Form Registry/FormActivation, TargetPool/SpacePolicy, and generic Offering code are migration/delete custody, not normal Core composition. / Never persist secret values in Output, Interface, logs, or audit.
 
 ## Required workflow
 
