@@ -482,6 +482,10 @@ export type CapsulePatch = Partial<
     | "status"
     | "autoUpdate"
     | "autoUpdateAttemptSourceSnapshotId"
+    // Private host bookkeeping for a host-assigned public origin. It is
+    // patchable because the host learns the reservation during a Run and must
+    // be able to release it after teardown; it is never public projection.
+    | "publicOriginReservation"
     | "updatedAt"
   >
 >;

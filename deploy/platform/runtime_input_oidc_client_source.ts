@@ -75,6 +75,19 @@ export type RuntimeInputCapsulePublicOrigin = (input: {
   readonly installConfig: InstallConfig;
 }) => Promise<string | undefined>;
 
+/**
+ * Teardown half of {@link RuntimeInputCapsulePublicOrigin}.
+ *
+ * A host that fixes an origin before Plan holds it for this Capsule until it is
+ * told to stop. Nothing else in Takosumi knows the host is holding anything, so
+ * an unreleased origin stays pinned forever. It runs only after the Capsule is
+ * destroyed and never throws.
+ */
+export type RuntimeInputCapsulePublicOriginRelease = (input: {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+}) => Promise<void>;
+
 export function createTakosumiRuntimeInputOidcClientSource(input: {
   readonly control: RuntimeInputOidcControlLedger;
   readonly accounts: CapsuleOidcAccountsLedger;
@@ -83,6 +96,11 @@ export function createTakosumiRuntimeInputOidcClientSource(input: {
   /** Same host key the private runtime-binding lane derives its client from. */
   readonly derivationKey: string;
   readonly capsulePublicOrigin: RuntimeInputCapsulePublicOrigin;
+  /**
+   * Optional teardown for whatever the host holds to keep that origin fixed.
+   * Absent it, a destroyed Capsule's origin stays reserved forever.
+   */
+  readonly capsulePublicOriginRelease?: RuntimeInputCapsulePublicOriginRelease;
   readonly clock?: () => Date;
 }): RuntimeInputOidcClientSource {
   const issuer = exactHttpsOrigin(input.issuer);
@@ -264,6 +282,19 @@ export function createTakosumiRuntimeInputOidcClientSource(input: {
         values,
       };
     },
+    ...(input.capsulePublicOriginRelease
+      ? {
+          async retire(authority) {
+            // Best-effort by contract: the destroy that reaches here has
+            // already succeeded, and a host that cannot be told to let go of an
+            // origin must not turn a finished teardown into a failed one.
+            await input.capsulePublicOriginRelease!({
+              workspaceId: authority.workspaceId,
+              capsuleId: authority.capsuleId,
+            });
+          },
+        }
+      : {}),
   };
 }
 

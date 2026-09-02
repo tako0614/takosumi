@@ -68,7 +68,9 @@ import {
   operatorControlMcpResourceAuthorized,
 } from "../../deploy/operator-control-mcp.ts";
 import {
+  capsulePublicOriginFromPlatformExtensions,
   platformExtensionProviderCredentialComposition,
+  type PlatformExtensionCapsulePublicOriginLedger,
 } from "../../deploy/platform/platform_extension_provider_credentials.ts";
 import { applyCredentialRequiredProviderSources } from "../../deploy/platform/host_install_config_composition.ts";
 import { createTakosumiAccountsOidcModuleVariableMaterializer } from "../../deploy/platform/accounts_oidc_module_variable_materializer.ts";
@@ -228,10 +230,40 @@ export async function createWorkerServiceApp(
       stateSecret: runtimeEnv.TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET,
       descriptors: connectionOAuthDescriptorsFromEnv(runtimeEnv),
     });
+  // One durable reservation ledger, read by the Apply-phase credential exchange
+  // and written by the plan-time public-origin port. It lives on the Capsule
+  // record because the reservation outlives every Run that observes it.
+  const capsulePublicOriginReservations: PlatformExtensionCapsulePublicOriginLedger =
+    {
+      read: async (capsuleId) =>
+        (await opentofuControlStore.getCapsule(capsuleId))
+          ?.publicOriginReservation,
+      write: async (capsuleId, reservation) => {
+        await opentofuControlStore.patchCapsule(capsuleId, {
+          publicOriginReservation: reservation,
+          updatedAt: new Date().toISOString(),
+        });
+      },
+    };
   const envCredentialRecipeHost = mergeCredentialRecipeHostContributions(
     env.TAKOSUMI_CREDENTIAL_RECIPE_HOST_COMPOSITION,
-    platformExtensionProviderCredentialComposition(env),
+    platformExtensionProviderCredentialComposition(env, {
+      capsulePublicOriginReservations,
+    }),
   );
+  // The shipped Worker composes the public-origin port from the SAME
+  // provider-neutral extension seam that brokers the provider's credentials, so
+  // a Capsule whose OIDC grant is binding-delivered can plan at all. Without a
+  // configured route it stays absent and those Capsules keep failing closed.
+  const capsulePublicOriginPort =
+    options.capsulePublicOrigin === undefined
+      ? capsulePublicOriginFromPlatformExtensions(
+          env,
+          capsulePublicOriginReservations,
+        )
+      : undefined;
+  const capsulePublicOrigin =
+    options.capsulePublicOrigin ?? capsulePublicOriginPort?.resolve;
   const credentialRecipeContribution =
     options.operatorProviderConnections === undefined
       ? envCredentialRecipeHost
@@ -293,7 +325,7 @@ export async function createWorkerServiceApp(
       typeof pairwiseSubjectSecret === "string" &&
       pairwiseSubjectSecret.length > 0 &&
       runtimeBindingDerivationKey !== undefined &&
-      options.capsulePublicOrigin
+      capsulePublicOrigin
       ? createTakosumiRuntimeInputOidcClientSource({
           control: {
             getCapsule: (id) => opentofuControlStore.getCapsule(id),
@@ -306,7 +338,13 @@ export async function createWorkerServiceApp(
           issuer: accountsIssuer,
           pairwiseSubjectSecret,
           derivationKey: runtimeBindingDerivationKey,
-          capsulePublicOrigin: options.capsulePublicOrigin,
+          capsulePublicOrigin,
+          ...(capsulePublicOriginPort
+            ? {
+                capsulePublicOriginRelease: (authority) =>
+                  capsulePublicOriginPort.release(authority),
+              }
+            : {}),
         })
       : undefined;
   return await createTakosumiService({

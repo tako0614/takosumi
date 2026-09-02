@@ -101,6 +101,7 @@ function publicCapsule(capsule: Capsule): PublicCapsule {
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttemptSourceSnapshotId,
     installingPrincipalId: _installingPrincipalId,
+    publicOriginReservation: _publicOriginReservation,
     ...publicRecord
   } = capsule;
   return publicRecord;

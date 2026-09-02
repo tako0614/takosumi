@@ -269,6 +269,15 @@ export interface RuntimeInputOidcClientSource {
     readonly generation: string;
     readonly values: Readonly<Record<string, string>>;
   }>;
+  /**
+   * Optional teardown of whatever host state this source holds for a destroyed
+   * Capsule. A host that fixes a public origin before Plan holds a reservation
+   * that nothing else will ever release; leaving it held pins that origin
+   * forever. It runs only after the Capsule is terminal and must not throw:
+   * a failed teardown leaves a host-side orphan a later destroy can still
+   * remove, and can never be a reason to fail a terminal destroy.
+   */
+  retire?(input: RuntimeInputAuthority): Promise<void>;
 }
 
 function generatedSecretDerivationParts(request: {
@@ -664,6 +673,15 @@ export function createRuntimeInputMaterializer(input: {
           invalid("runtime input retirement profile is stale");
         }
       }
+      // Host state the OIDC source holds is retired for EVERY destroyed
+      // Capsule, including one that never sealed material here: a Capsule can
+      // hold a host reservation without ever having reached a successful
+      // Apply.
+      await input.oidcClient?.retire?.({
+        workspaceId: request.workspaceId,
+        capsuleId: request.capsuleId,
+        installConfigId: request.installConfigId,
+      });
       const ownerRef = runtimeInputOwnerRef(request.capsuleId);
       const partition = runtimeInputPartition(request.capsuleId);
       const blob = await input.store.getSecretBlob(ownerRef);
