@@ -21,6 +21,7 @@ import type {
   CreateApplyRunRequest,
   CreatePlanRunRequest,
   DispatchGeneratedRoot,
+  DispatchRuntimeInputs,
   InstallConfig,
   Capsule,
   OpenTofuExecutionSource,
@@ -109,6 +110,9 @@ import {
   OpenTofuRunnerInfrastructureError,
   PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
   RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
+  RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON,
+  RUNTIME_INPUTS_PROFILE_MISSING_REASON,
+  RUNTIME_INPUTS_REQUIRE_GENERATED_ROOT_REASON,
   requireNonEmptyString,
   runErrorCode,
   sourceSyncRequiredError,
@@ -125,6 +129,7 @@ import {
 import {
   type CapsulePlanContext,
   type PlanResolutionService,
+  type ResolvedRootRuntimeInputs,
   providerBindingsFromResolved,
 } from "../plan_resolution.ts";
 import { evaluatePolicy } from "../policy.ts";
@@ -199,6 +204,8 @@ import type {
   RuntimeSecretFileBundle,
   RuntimeSecretFileMaterializer,
 } from "../runtime_secret_file_materializer.ts";
+import type { RuntimeInputMaterializer } from "../runtime_input_materializer.ts";
+import { runtimeInputWiringFromResolved } from "../runtime_input_wiring.ts";
 // Shared helpers, constants, and run-engine types stay in the controller module
 // (`../mod.ts`) so the domain's public entry point and external importers are
 // unchanged; this engine imports the ones its moved bodies reference. The
@@ -1217,6 +1224,7 @@ export interface RunEngineDependencies {
   readonly planResolution: PlanResolutionService;
   readonly moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
   readonly runtimeSecretFileMaterializer?: RuntimeSecretFileMaterializer;
+  readonly runtimeInputMaterializer?: RuntimeInputMaterializer;
   readonly sourceLifecycle: SourceLifecycleService;
   readonly capsules: CapsuleQuery;
   readonly runSerialized: RunSerialized;
@@ -1252,6 +1260,7 @@ export class RunEngine {
   readonly #planResolution: PlanResolutionService;
   readonly #moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
   readonly #runtimeSecretFileMaterializer?: RuntimeSecretFileMaterializer;
+  readonly #runtimeInputMaterializer?: RuntimeInputMaterializer;
   readonly #sourceLifecycle: SourceLifecycleService;
   readonly #capsules: CapsuleQuery;
   readonly #runSerialized: RunSerialized;
@@ -1302,6 +1311,7 @@ export class RunEngine {
     this.#planResolution = deps.planResolution;
     this.#moduleVariableMaterializer = deps.moduleVariableMaterializer;
     this.#runtimeSecretFileMaterializer = deps.runtimeSecretFileMaterializer;
+    this.#runtimeInputMaterializer = deps.runtimeInputMaterializer;
     this.#sourceLifecycle = deps.sourceLifecycle;
     this.#capsules = deps.capsules;
     this.#runSerialized = deps.runSerialized;
@@ -1472,6 +1482,18 @@ export class RunEngine {
     planRun: PlanRun,
   ): Promise<readonly ResolvedCapsuleProviderBinding[] | undefined> {
     return this.#resolveRunProviderBindings(planRun);
+  }
+
+  /**
+   * Value-free run-scoped sensitive input wiring the Plan pinned into the
+   * private run-inputs sidecar. The credential broker fences the Apply-time
+   * derivation against it; nothing here is or contains a value.
+   */
+  async runtimeInputsForPlanRun(
+    planRun: PlanRun,
+  ): Promise<readonly DispatchRuntimeInputs[] | undefined> {
+    const inputs = await this.#getPlanRunInputs(planRun.id);
+    return inputs?.runtimeInputs;
   }
 
   /** Secret exposure policy of the profile a run dispatches to (credential gate). */
@@ -1897,6 +1919,7 @@ export class RunEngine {
       genericRootDispatch?.moduleVariableMaterializationDigest;
     const interfaceMaterialization =
       genericRootDispatch?.interfaceMaterialization;
+    const runtimeInputs = genericRootDispatch?.runtimeInputs;
     const lifecycleActions =
       internal.lifecycleActions ?? genericRootDispatch?.lifecycleActions;
     if (
@@ -1910,6 +1933,7 @@ export class RunEngine {
       priorState !== undefined ||
       moduleVariableMaterializationDigest !== undefined ||
       interfaceMaterialization !== undefined ||
+      runtimeInputs !== undefined ||
       lifecycleActions !== undefined
     ) {
       // A sensitive dependency-injected value flows into `variables` and may
@@ -1934,6 +1958,7 @@ export class RunEngine {
             ? { moduleVariableMaterializationDigest }
             : {}),
           ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
+          ...(runtimeInputs ? { runtimeInputs } : {}),
           ...(lifecycleActions ? { lifecycleActions } : {}),
         },
         sealSidecar,
@@ -3154,6 +3179,9 @@ export class RunEngine {
           installConfigId: input.installConfig.id,
           blueprints: input.installConfig.interfaceBlueprints,
         });
+    const runtimeInputWiring = runtimeInputWiringFromResolved(
+      capsulePlan.resolvedProviderBindings,
+    );
     return {
       capsulePlan,
       requiredProviderRequirements,
@@ -3185,7 +3213,18 @@ export class RunEngine {
       },
       genericRootPlan: {
         providerBindings: capsulePlan.providerBindings,
+        resolvedProviderBindings: capsulePlan.resolvedProviderBindings,
         outputAllowlist: input.installConfig.outputAllowlist,
+        ...(runtimeInputWiring
+          ? {
+              runtimeInputWiring,
+              runtimeInputAuthority: {
+                workspaceId: input.capsule.workspaceId,
+                capsuleId: input.capsule.id,
+                installConfigId: input.installConfig.id,
+              },
+            }
+          : {}),
         ...(input.installConfig.sourceBuild
           ? { sourceBuild: input.installConfig.sourceBuild }
           : {}),
@@ -3314,6 +3353,64 @@ export class RunEngine {
     assertPinnedModuleVariableValues(inputs.variables, current);
   }
 
+  /**
+   * Resolves the Plan-time wiring for run-scoped sensitive provider inputs.
+   *
+   * Value-free throughout: it derives the plan-stable nonce and pins the exact
+   * deliverable name set, but never opens the sealed material. The values are
+   * minted only at Apply, by the credential broker.
+   */
+  async #runtimeInputsForPlan(context: GenericRootPlanContext): Promise<
+    | {
+        readonly descriptor: DispatchRuntimeInputs;
+        readonly rootWiring: ResolvedRootRuntimeInputs;
+      }
+    | undefined
+  > {
+    const wiring = context.runtimeInputWiring;
+    const authority = context.runtimeInputAuthority;
+    if (!wiring || !authority) return undefined;
+    const materializer = this.#runtimeInputMaterializer;
+    if (!materializer) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "run-scoped sensitive provider inputs are declared but no runtime input materializer is configured",
+        { reason: RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON },
+      );
+    }
+    let profile;
+    try {
+      profile = await materializer.profile(authority);
+    } catch (error) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `run-scoped sensitive provider inputs have no manifest-gated runtime binding profile: ${errorMessage(error)}`,
+        { reason: RUNTIME_INPUTS_PROFILE_MISSING_REASON },
+      );
+    }
+    const nonce = await materializer.nonce({
+      ...authority,
+      providerInstance: wiring.providerInstance,
+    });
+    return {
+      descriptor: {
+        contract: "takosumi.dispatch-runtime-inputs/v1",
+        variableName: wiring.variableName,
+        providerInstance: wiring.providerInstance,
+        nonce,
+        names: [...profile.names].sort(),
+        profileDigest: profile.profileDigest,
+      },
+      rootWiring: {
+        moduleLocalName: wiring.moduleLocalName,
+        ...(wiring.rootAlias ? { rootAlias: wiring.rootAlias } : {}),
+        nonce,
+        nonceArgument: wiring.nonceArgument,
+        mapArgument: wiring.mapArgument,
+      },
+    };
+  }
+
   async #genericRootDispatchForRequest(
     request: CreatePlanRunRequest,
     context: GenericRootPlanContext,
@@ -3349,7 +3446,13 @@ export class RunEngine {
           interfaceSources,
         );
     const outputAllowlist = destroy ? {} : context.outputAllowlist;
-    const wrapperProviderBindings = context.providerBindings;
+    const runtimeInputs = await this.#runtimeInputsForPlan(context);
+    const wrapperProviderBindings = runtimeInputs
+      ? providerBindingsFromResolved(
+          context.resolvedProviderBindings ?? [],
+          runtimeInputs.rootWiring,
+        )
+      : context.providerBindings;
     const rootProviderRequirements =
       rootProviderRequirementsForGeneratedRoot(
         request.requiredProviderRequirements ?? [],
@@ -3367,8 +3470,19 @@ export class RunEngine {
         throw rootgenErrorForController(error);
       }
     }
+    if (runtimeInputs && !generatedRoot) {
+      // Without a generated root Takosumi does not own any provider block, so
+      // there is structurally nowhere to declare the ephemeral variable or the
+      // two provider arguments. Fail closed instead of silently dropping them.
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "run-scoped sensitive provider inputs require a Takosumi-generated root",
+        { reason: RUNTIME_INPUTS_REQUIRE_GENERATED_ROOT_REASON },
+      );
+    }
     return {
       ...(generatedRoot ? { generatedRoot } : {}),
+      ...(runtimeInputs ? { runtimeInputs: [runtimeInputs.descriptor] } : {}),
       workspaceOutputAllowlist,
       outputAllowlist,
       ...(context.sourceBuild ? { sourceBuild: context.sourceBuild } : {}),
@@ -3429,11 +3543,23 @@ export class RunEngine {
         profile,
       ),
     );
+    const runtimeInputWiring = runtimeInputWiringFromResolved(resolved);
     return await this.#genericRootDispatchForRequest(
       { ...request, requiredProviders, requiredProviderRequirements },
       {
         providerBindings: providerBindingsFromResolved(resolved),
+        resolvedProviderBindings: resolved,
         outputAllowlist: installConfig.outputAllowlist,
+        ...(runtimeInputWiring
+          ? {
+              runtimeInputWiring,
+              runtimeInputAuthority: {
+                workspaceId: capsule.workspaceId,
+                capsuleId: capsule.id,
+                installConfigId: installConfig.id,
+              },
+            }
+          : {}),
         ...(installConfig.sourceBuild
           ? { sourceBuild: installConfig.sourceBuild }
           : {}),
@@ -4912,6 +5038,9 @@ export class RunEngine {
               inputs.interfaceMaterialization as unknown as JsonValue,
           }
         : {}),
+      ...(inputs.runtimeInputs
+        ? { runtimeInputs: inputs.runtimeInputs as unknown as JsonValue }
+        : {}),
     };
     const sealed = await this.#dependencyValueSealer.seal(payload);
     // Cleartext sealable fields are dropped; only `planRunId` + `sealed` persist.
@@ -4969,6 +5098,8 @@ export class RunEngine {
       payload.moduleVariableMaterializationDigest as string | undefined;
     const interfaceMaterialization = payload.interfaceMaterialization as unknown as
       PlanRunInputs["interfaceMaterialization"] | undefined;
+    const runtimeInputs = payload.runtimeInputs as unknown as
+      PlanRunInputs["runtimeInputs"] | undefined;
     return {
       planRunId,
       variables,
@@ -4984,6 +5115,7 @@ export class RunEngine {
         ? { moduleVariableMaterializationDigest }
         : {}),
       ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
+      ...(runtimeInputs ? { runtimeInputs } : {}),
     };
   }
 
@@ -9539,6 +9671,11 @@ export class RunEngine {
         applyRun: completed,
         inputs,
       });
+      await this.#retireRuntimeInputsAfterDestroy({
+        planRun,
+        applyRun: completed,
+        inputs,
+      });
       await this.#notifyTerminal(completed);
       const patched = committed.capsule;
       let finalized = await this.#tryFinalizeApplyBilling(planRun, completed);
@@ -9721,6 +9858,52 @@ export class RunEngine {
         applyRun: failed,
         capsule: publicCapsule(capsule),
       };
+    }
+  }
+
+  /**
+   * Best-effort retirement of a destroyed Capsule's run-scoped sensitive input
+   * material. A failure only leaves a sealed orphan blob that a later destroy
+   * can still remove, so it never fails the terminal destroy.
+   */
+  async #retireRuntimeInputsAfterDestroy(input: {
+    readonly planRun: PlanRun;
+    readonly applyRun: ApplyRun;
+    readonly inputs: PlanRunInputs | undefined;
+  }): Promise<void> {
+    const descriptor = input.inputs?.runtimeInputs?.[0];
+    if (!descriptor) return;
+    const materializer = this.#runtimeInputMaterializer;
+    if (!materializer) {
+      log.warn("deploy_control.runtime_input_retirement_deferred", {
+        planRunId: input.planRun.id,
+        applyRunId: input.applyRun.id,
+        capsuleId: input.planRun.capsuleId,
+        reason: "retirement_port_unavailable",
+      });
+      return;
+    }
+    try {
+      if (!input.planRun.capsuleId) {
+        throw new TypeError("retirement authority is invalid");
+      }
+      const capsule = await this.#requireCapsule(input.planRun.capsuleId);
+      if (capsule.status !== "destroyed") {
+        throw new TypeError("Capsule is not terminal");
+      }
+      await materializer.retire({
+        workspaceId: capsule.workspaceId,
+        capsuleId: capsule.id,
+        installConfigId: capsule.installConfigId,
+        profileDigest: descriptor.profileDigest,
+      });
+    } catch (error) {
+      log.warn("deploy_control.runtime_input_retirement_deferred", {
+        planRunId: input.planRun.id,
+        applyRunId: input.applyRun.id,
+        capsuleId: input.planRun.capsuleId,
+        message: errorMessage(error),
+      });
     }
   }
 

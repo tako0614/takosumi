@@ -33,6 +33,7 @@ import type {
   DispatchDepState,
   DispatchGeneratedRoot,
   DispatchPriorState,
+  DispatchRuntimeInputs,
   DispatchSourceArchive,
   DispatchStateAdoption,
   DispatchStateScope,
@@ -248,6 +249,11 @@ import {
 } from "./provider_policy.ts";
 import { DriftService } from "./drift_service.ts";
 import { RunCredentialBroker } from "./run_credential_broker.ts";
+import type {
+  RuntimeInputAuthority,
+  RuntimeInputMaterializer,
+} from "./runtime_input_materializer.ts";
+import type { RuntimeInputProviderInstanceWiring } from "./runtime_input_wiring.ts";
 import {
   RunEnvironmentResolutionError,
   RunEnvResolver,
@@ -319,7 +325,24 @@ export type RunCredentials = {
     readonly envName?: string;
   }[];
   readonly manifest: import("takosumi-contract/credential-recipes").RunCredentialRecipeManifest;
+  /**
+   * Run-scoped sensitive provider inputs for the declaring provider instance.
+   * Dispatch-only, exactly like `env` / `files`: never persisted, never logged.
+   * The runner binds each entry to the named generated-root ephemeral variable
+   * and supplies it to `tofu` out of band, so no value reaches the generated
+   * root, the plan file, `tfplan.json`, outputs, state, or the process argv.
+   */
+  readonly runtimeInputs?: readonly RunCredentialRuntimeInputs[];
 };
+
+export interface RunCredentialRuntimeInputs {
+  /** Exact generated-root ephemeral variable carrying this map. */
+  readonly variableName: string;
+  /** Exact binding names; equals the InstallConfig generatedSecrets bindings. */
+  readonly names: readonly string[];
+  /** `{}` at plan and destroy; exactly `names` at a create/update apply. */
+  readonly values: Readonly<Record<string, string>>;
+}
 
 export function withRunEnvironmentEvidence<R extends PlanRun | ApplyRun>(
   run: R,
@@ -372,6 +395,13 @@ export interface RunModuleDispatch {
   readonly stateAdoption?: DispatchStateAdoption;
   /** Canonical execution descriptor, retained in internal run inputs. */
   readonly priorState?: DispatchPriorState;
+  /**
+   * Value-free run-scoped sensitive input wiring pinned by the Plan. Apply
+   * re-derives the nonce and fails closed if it no longer matches this
+   * descriptor, so a rotated material generation forces a re-plan instead of
+   * applying a reviewed root against a different value set.
+   */
+  readonly runtimeInputs?: readonly DispatchRuntimeInputs[];
 }
 
 /**
@@ -989,6 +1019,11 @@ export interface OpenTofuControllerDependencies {
   readonly moduleVariableMaterializer?: CapsuleModuleVariableMaterializer;
   /** Private control-plane authority for Capsule-stable runner secret files. */
   readonly runtimeSecretFileMaterializer?: RuntimeSecretFileMaterializer;
+  /**
+   * Host materializer for run-scoped sensitive provider inputs. Omitted ⇒ a
+   * Capsule whose Provider Connection declares the protocol fails closed.
+   */
+  readonly runtimeInputMaterializer?: RuntimeInputMaterializer;
   /** Host authority for allocating opaque durable artifact references. */
   readonly artifactReferenceAllocator?: ArtifactReferenceAllocator;
   /**
@@ -1079,6 +1114,15 @@ export interface GenericRootPlanContext {
   readonly lifecycleActions?: InstallConfig["lifecycleActions"];
   readonly moduleVariableMaterialization?: CapsuleModuleVariableMaterialization;
   readonly interfaceMaterialization?: PlanPinnedCapsuleInterfaceMaterialization;
+  /** Capsule authority for run-scoped sensitive provider inputs. */
+  readonly runtimeInputAuthority?: RuntimeInputAuthority;
+  /** The single provider instance whose recipe declares the input protocol. */
+  readonly runtimeInputWiring?: RuntimeInputProviderInstanceWiring;
+  /**
+   * Resolved bindings the generated root was compiled from. Run-scoped
+   * sensitive input wiring is attached to exactly one of them.
+   */
+  readonly resolvedProviderBindings?: readonly ResolvedCapsuleProviderBinding[];
 }
 
 export interface GenericRootDispatchContext {
@@ -1092,6 +1136,7 @@ export interface GenericRootDispatchContext {
   readonly priorState?: DispatchPriorState;
   readonly moduleVariableMaterializationDigest?: string;
   readonly interfaceMaterialization?: PlanPinnedCapsuleInterfaceMaterialization;
+  readonly runtimeInputs?: readonly DispatchRuntimeInputs[];
 }
 
 /**
@@ -1428,6 +1473,11 @@ export class OpenTofuController {
       resolveRunProviderBindings: (planRun) =>
         this.#runEngine.resolveRunProviderBindings(planRun),
       policyForPlanRun: (planRun) => this.#runEngine.policyForPlanRun(planRun),
+      runtimeInputsForPlanRun: (planRun) =>
+        this.#runEngine.runtimeInputsForPlanRun(planRun),
+      ...(dependencies.runtimeInputMaterializer
+        ? { runtimeInputMaterializer: dependencies.runtimeInputMaterializer }
+        : {}),
     });
     this.#runEnv = new RunEnvResolver({
       credentials: this.#credentials,
@@ -1516,6 +1566,9 @@ export class OpenTofuController {
             runtimeSecretFileMaterializer:
               dependencies.runtimeSecretFileMaterializer,
           }
+        : {}),
+      ...(dependencies.runtimeInputMaterializer
+        ? { runtimeInputMaterializer: dependencies.runtimeInputMaterializer }
         : {}),
       sourceLifecycle: this.#sourceLifecycle,
       capsules: this.#capsules,
@@ -2552,6 +2605,7 @@ export function moduleDispatchFromInputs(
         readonly lifecycleActions?: InstallConfig["lifecycleActions"];
         readonly stateAdoption?: DispatchStateAdoption;
         readonly priorState?: DispatchPriorState;
+        readonly runtimeInputs?: readonly DispatchRuntimeInputs[];
       }
     | undefined,
 ): RunModuleDispatch {
@@ -2576,6 +2630,9 @@ export function moduleDispatchFromInputs(
       : {}),
     ...(inputs.stateAdoption ? { stateAdoption: inputs.stateAdoption } : {}),
     ...(inputs.priorState ? { priorState: inputs.priorState } : {}),
+    ...(inputs.runtimeInputs && inputs.runtimeInputs.length > 0
+      ? { runtimeInputs: inputs.runtimeInputs }
+      : {}),
   };
 }
 

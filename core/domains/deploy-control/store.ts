@@ -17,6 +17,7 @@ import type {
   ProviderConnection,
   DispatchStateAdoption,
   DispatchPriorState,
+  DispatchRuntimeInputs,
   DispatchGeneratedRoot,
   InstallConfig,
   Capsule,
@@ -313,6 +314,13 @@ export interface PlanRunInputs {
   readonly lifecycleActions?: readonly InstallConfigLifecycleAction[];
   /** Exact value-free Interface blueprint authority captured at Plan time. */
   readonly interfaceMaterialization?: PlanPinnedCapsuleInterfaceMaterialization;
+  /**
+   * Value-free run-scoped sensitive input wiring pinned at Plan: the exact
+   * generated-root ephemeral variable, the provider instance that reads it, the
+   * nonce baked into the reviewed root, and the deliverable binding names. The
+   * values themselves are minted at Apply and never persist here.
+   */
+  readonly runtimeInputs?: readonly DispatchRuntimeInputs[];
   /**
    * At-rest seal of the SENSITIVE-bearing sidecar payload (spec §11 / §18). A
    * sensitive `published_output` value injected into a plan flows into
