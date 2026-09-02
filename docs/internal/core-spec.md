@@ -270,24 +270,55 @@ protocol shape only. It never carries, names, or selects a value, and Core holds
 no provider identity of its own: the recipe is the sole place Takosumi learns
 that a provider understands the protocol.
 
-The deliverable name set is the Capsule's manifest-gated runtime binding
-profile, exactly its `generatedSecrets[].binding` entries. Values are sealed once
-per Capsule in the host secret boundary under an AAD that pins the owner and the
-value-free profile digest, and are reopened for every later Run. A changed
-profile is a fence, not an implicit rotation.
+The declaration also carries the lowest exact provider version that accepts the
+two arguments. Below that floor the arguments are not in the provider schema and
+a plan fails with `Unsupported argument`, so the wiring is attached only when the
+Capsule's resolved requirement for that provider instance pins an exact version
+at or above the floor. Anything weaker — a range, or no declared version — leaves
+the path inert and records a value-free plan warning naming the floor. It never
+fails a Capsule, because a Capsule that needs no run-scoped sensitive inputs must
+still plan.
 
-The nonce is deterministic per (Workspace, Capsule, InstallConfig, profile
-digest, material key version, provider instance). It is never random per Run: a
-provider derives its apply-idempotency identity from the nonce and that identity
-forces replacement, so a per-Run nonce would propose a replacement on every plan
-and could deadlock a rename-free resource. Rotating a value under the same nonce
-does not change the identity; rotating the material generation does.
+The deliverable name set is the Capsule's manifest-gated runtime binding
+profile, exactly its `generatedSecrets[].binding` entries. Which lane mints the
+values depends on the host. Without a host derivation they are fresh randomness
+sealed once per Capsule in the host secret boundary, under an AAD that pins the
+owner and the value-free profile digest, and reopened for every later Run. A host
+that ALSO materializes the same profile through its private runtime-binding lane
+injects that derivation instead; nothing is then sealed, because the values are a
+pure function of the host key and the profile and both lanes necessarily mint the
+same bytes. Sealing one lane's first generation would let the other drift away
+from it with no drift signal.
+
+A profile change — the Capsule's manifest adds or renames a generated secret —
+retires the previous sealed generation and seals a new one. Fencing it off
+instead would leave the Capsule unable to plan OR destroy, with no recovery path.
+Re-sealing rotates the nonce, which is exactly the replacement semantics a
+provider expects from rotated material.
+
+The nonce is deterministic per (Workspace, Capsule, profile digest, material
+generation, provider instance). It is never random per Run: a provider derives
+its apply-idempotency identity from the nonce and that identity forces
+replacement, so a per-Run nonce would propose a replacement on every plan and
+could deadlock a rename-free resource. `installConfigId` is deliberately not part
+of the preimage — a repository re-sync can repoint a Capsule at a
+content-identical InstallConfig under a new id, and rotating there would force a
+replacement of resources whose content never changed. The material generation is
+a digest of the sealed ciphertext (or, on the derived lane, of the derivation
+parts), so it moves when and only when the values move.
 
 Exactly one resolved Provider Connection may declare the protocol for a Capsule.
 Two declaring instances fail closed, because one manifest-gated value set has no
 rule for splitting itself. A Capsule without a generated root also fails closed:
 Takosumi owns no provider block there, so it can declare neither the ephemeral
 variable nor the two arguments.
+
+A destroy plan wires nothing at all. Both provider-block arguments are optional
+and a provider's teardown reads neither, so a destroy needs no nonce, no
+variable, and no minted material — and keeping the destroy lane free of the
+wiring is what makes teardown the recovery path for a Capsule whose profile has
+drifted. A lifecycle release command likewise mints none: its dispatch has no
+generated root and no ephemeral variable, so nothing there could consume a map.
 
 The generated root renders the nonce as a literal and the map as a bare
 reference to an ephemeral, sensitive, defaultless `map(string)` root variable in
@@ -299,20 +330,40 @@ declared binding names, and one-way value digests.
 
 Plan pins a value-free descriptor — variable, provider instance, nonce, names,
 profile digest — into the private run-inputs sidecar. Apply re-derives the nonce
-and the name set and fails closed with `runtime_inputs_nonce_changed` or
-`runtime_inputs_name_set_changed` when either moved, so a rotated generation
-forces a re-plan instead of applying a reviewed root against different material.
+and the name set and fails closed with `runtime_inputs_nonce_changed`,
+`runtime_inputs_name_set_changed`, `runtime_inputs_variable_changed`, or
+`runtime_inputs_wiring_missing`, so a rotated generation, a moved variable, or a
+resolution that no longer declares the protocol forces a re-plan instead of
+applying a reviewed root against different material. Every failure is a
+precondition on Capsule material and reports its own reason.
 
-The runner binds each map to its declared variable and supplies it to OpenTofu on
-standard input through `-var-file=/dev/stdin`, at plan (empty) and again at apply
-(exact). `-var` and `TF_VAR_*` are never used, so no value reaches the process
-argv or environment, and no plaintext reaches the filesystem. The variable has no
-default, so OpenTofu itself enforces that a map supplied at plan is supplied
-again at apply. Every value joins the runner's stdout/stderr redaction list.
+The runner binds each map to its declared variable and supplies it to OpenTofu
+through `-var-file=<pipe>`, at plan (empty) and again at apply (exact). The pipe
+is a 0600 FIFO inside a 0700 directory created beside the run workspace: the
+runner opens the write end only once OpenTofu holds the read end, writes the body
+once, closes, and removes the pipe and its directory immediately. Standard input
+is deliberately never used — OpenTofu launches every provider plugin with the
+runner's own fd 0, so a var-file body on standard input would be readable by
+every plugin in the root, including third-party providers that are not the
+declaring instance. `-var` and `TF_VAR_*` are never used either, so no value
+reaches the process argv or environment, and no plaintext is ever stored at rest.
+The variable has no default, so OpenTofu enforces that a map SET at plan is set
+again at apply; it does not enforce the contents, so the provider's own exact
+name-set check is the fence on the values themselves. Every value, and its
+escaped HCL form, joins the runner's stdout/stderr redaction list, and a value
+below that redaction floor is refused at the Core boundary.
 
 The path is completely inert for a Capsule whose resolved Provider Connections
 declare nothing: no variable file, no dispatch field, and a byte-identical
 generated root.
+
+Known gaps. Takosumi does not extract the module's own `required_sensitive_vars`
+from HCL — the compatibility scan reads root variables, outputs, and provider
+requirements only — so a Capsule can be wired with a name set the module does not
+declare, and the mismatch is caught by the provider at apply rather than at plan.
+Rollout is also opt-in per Connection: the protocol descriptor is resolved only
+when a Provider Connection is registered, so existing Connections stay completely
+inert until they are re-registered.
 
 ## Repository-manifest Accounts OIDC capability
 
