@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 
 import {
   generateOpenTofuChildModuleRoot,
+  ROOT_RUNTIME_INPUTS_VARIABLE_PREFIX,
+  rootRuntimeInputsVariableName,
   RootgenValidationError,
 } from "../../../../lib/rootgen/src/mod.ts";
 
@@ -464,6 +466,247 @@ test("rootgen validation reasons are stable and layer-neutral", () => {
     let thrown: unknown;
     try {
       generateOpenTofuChildModuleRoot(fixture.input);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(RootgenValidationError);
+    expect(thrown).toMatchObject({
+      code: "invalid_argument",
+      details: { reason: fixture.reason },
+    });
+  }
+});
+
+const TAKOFORM = "registry.opentofu.org/tako0614/takoform";
+const CLOUDFLARE = "registry.opentofu.org/cloudflare/cloudflare";
+const NONCE_A = "8Jd1nQ2vK7pR4sT6wX9zB0cE3fH5jL8mN1qS4uV7yA0";
+const NONCE_B = "Q2vK7pR4sT6wX9zB0cE3fH5jL8mN1qS4uV7yA8Jd1n0";
+
+function runtimeInputRootInput() {
+  return {
+    rootProviderRequirements: [
+      { source: TAKOFORM, moduleLocalName: "takoform" },
+      { source: TAKOFORM, moduleLocalName: "takoform", childAlias: "edge" },
+      { source: CLOUDFLARE, moduleLocalName: "cloudflare" },
+    ],
+    inputs: {},
+    outputAllowlist: {},
+    providerBindings: [
+      {
+        provider: TAKOFORM,
+        moduleLocalName: "takoform",
+        configuration: { endpoint: "https://forms.example.com" },
+        runtimeInputs: {
+          nonce: NONCE_A,
+          nonceArgument: "runtime_input_nonce",
+          mapArgument: "runtime_inputs",
+        },
+      },
+      {
+        provider: TAKOFORM,
+        moduleLocalName: "takoform",
+        childAlias: "edge",
+        rootAlias: "edge",
+        runtimeInputs: {
+          nonce: NONCE_B,
+          nonceArgument: "runtime_input_nonce",
+          mapArgument: "runtime_inputs",
+        },
+      },
+      {
+        provider: CLOUDFLARE,
+        moduleLocalName: "cloudflare",
+        configuration: { account_id: "abc123" },
+      },
+    ],
+  } as const;
+}
+
+test("rootgen declares one ephemeral sensitive map per declaring provider instance", () => {
+  const { files } = generateOpenTofuChildModuleRoot({
+    rootProviderRequirements: [
+      { source: TAKOFORM, moduleLocalName: "takoform" },
+    ],
+    inputs: {},
+    outputAllowlist: {},
+    providerBindings: [
+      {
+        provider: TAKOFORM,
+        moduleLocalName: "takoform",
+        runtimeInputs: {
+          nonce: NONCE_A,
+          nonceArgument: "runtime_input_nonce",
+          mapArgument: "runtime_inputs",
+        },
+      },
+    ],
+  });
+
+  expect(files["variables.tf"]).toContain(
+    'variable "takosumi_runtime_inputs__takoform" {',
+  );
+  expect(files["variables.tf"]).toContain("  type      = map(string)");
+  expect(files["variables.tf"]).toContain("  sensitive = true");
+  expect(files["variables.tf"]).toContain("  ephemeral = true");
+  // A default would let a dropped map silently become an empty one.
+  expect(files["variables.tf"]).not.toContain("default   =");
+  expect(files["main.tf"]).toContain(
+    [
+      'provider "takoform" {',
+      `  runtime_input_nonce = "${NONCE_A}"`,
+      "  runtime_inputs = var.takosumi_runtime_inputs__takoform",
+      "}",
+    ].join("\n"),
+  );
+});
+
+test("rootgen keeps run-scoped sensitive inputs on their exact provider instance", () => {
+  const { files } = generateOpenTofuChildModuleRoot(runtimeInputRootInput());
+
+  expect(files["variables.tf"]).toContain(
+    'variable "takosumi_runtime_inputs__takoform" {',
+  );
+  expect(files["variables.tf"]).toContain(
+    'variable "takosumi_runtime_inputs__takoform__edge" {',
+  );
+  expect(files["main.tf"]).toContain(
+    "  runtime_inputs = var.takosumi_runtime_inputs__takoform\n",
+  );
+  expect(files["main.tf"]).toContain(
+    "  runtime_inputs = var.takosumi_runtime_inputs__takoform__edge\n",
+  );
+
+  // The non-declaring provider block receives neither argument.
+  const cloudflareBlock = files["main.tf"]!.slice(
+    files["main.tf"]!.indexOf('provider "cloudflare"'),
+  );
+  expect(cloudflareBlock).not.toContain("runtime_input_nonce");
+  expect(cloudflareBlock).not.toContain("runtime_inputs");
+
+  // Generation is deterministic.
+  const again = generateOpenTofuChildModuleRoot(runtimeInputRootInput());
+  expect(again.files).toEqual(files);
+});
+
+test("rootgen emits no variables.tf when no provider instance declares inputs", () => {
+  const { files } = generateOpenTofuChildModuleRoot({
+    rootProviderRequirements: [
+      { source: CLOUDFLARE, moduleLocalName: "cloudflare" },
+    ],
+    inputs: { app_name: "demo" },
+    outputAllowlist: { message: { from: "message", type: "string" } },
+    providerBindings: [
+      {
+        provider: CLOUDFLARE,
+        moduleLocalName: "cloudflare",
+        configuration: { account_id: "abc123" },
+      },
+    ],
+  });
+
+  expect(Object.keys(files).sort()).toEqual([
+    "main.tf",
+    "outputs.tf",
+    "versions.tf",
+  ]);
+  expect(files["main.tf"]).not.toContain("takosumi_runtime_inputs__");
+});
+
+test("rootRuntimeInputsVariableName is the shared Core/runner derivation", () => {
+  expect(rootRuntimeInputsVariableName({ moduleLocalName: "takoform" })).toBe(
+    "takosumi_runtime_inputs__takoform",
+  );
+  expect(
+    rootRuntimeInputsVariableName({
+      moduleLocalName: "takoform",
+      rootAlias: "edge",
+    }),
+  ).toBe("takosumi_runtime_inputs__takoform__edge");
+  expect(
+    rootRuntimeInputsVariableName({ moduleLocalName: "takoform" }).startsWith(
+      ROOT_RUNTIME_INPUTS_VARIABLE_PREFIX,
+    ),
+  ).toBe(true);
+});
+
+test("rootgen rejects unusable run-scoped sensitive input wiring", () => {
+  const cases = [
+    {
+      runtimeInputs: {
+        nonce: "too-short",
+        nonceArgument: "runtime_input_nonce",
+        mapArgument: "runtime_inputs",
+      },
+      configuration: undefined,
+      reason: "rootgen_runtime_input_nonce_invalid",
+    },
+    {
+      runtimeInputs: {
+        nonce: `${NONCE_A}!`,
+        nonceArgument: "runtime_input_nonce",
+        mapArgument: "runtime_inputs",
+      },
+      configuration: undefined,
+      reason: "rootgen_runtime_input_nonce_invalid",
+    },
+    {
+      runtimeInputs: {
+        nonce: NONCE_A,
+        nonceArgument: "alias",
+        mapArgument: "runtime_inputs",
+      },
+      configuration: undefined,
+      reason: "rootgen_runtime_input_argument_invalid",
+    },
+    {
+      runtimeInputs: {
+        nonce: NONCE_A,
+        nonceArgument: "runtime_input_nonce",
+        mapArgument: "not an identifier",
+      },
+      configuration: undefined,
+      reason: "rootgen_runtime_input_argument_invalid",
+    },
+    {
+      runtimeInputs: {
+        nonce: NONCE_A,
+        nonceArgument: "runtime_inputs",
+        mapArgument: "runtime_inputs",
+      },
+      configuration: undefined,
+      reason: "rootgen_runtime_input_argument_conflict",
+    },
+    {
+      runtimeInputs: {
+        nonce: NONCE_A,
+        nonceArgument: "runtime_input_nonce",
+        mapArgument: "runtime_inputs",
+      },
+      configuration: { runtime_inputs: "smuggled" },
+      reason: "rootgen_runtime_input_argument_conflict",
+    },
+  ] as const;
+
+  for (const fixture of cases) {
+    let thrown: unknown;
+    try {
+      generateOpenTofuChildModuleRoot({
+        rootProviderRequirements: [
+          { source: TAKOFORM, moduleLocalName: "takoform" },
+        ],
+        inputs: {},
+        outputAllowlist: {},
+        providerBindings: [
+          {
+            provider: TAKOFORM,
+            moduleLocalName: "takoform",
+            ...(fixture.configuration
+              ? { configuration: fixture.configuration }
+              : {}),
+            runtimeInputs: fixture.runtimeInputs,
+          },
+        ],
+      });
     } catch (error) {
       thrown = error;
     }

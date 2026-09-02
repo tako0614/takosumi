@@ -11,6 +11,12 @@ import {
   type ConnectionVault,
 } from "../../../../core/adapters/vault/mod.ts";
 import { mergePolicyConfigs } from "../../../../core/domains/deploy-control/provider_policy.ts";
+import {
+  RuntimeInputBundle,
+  runtimeInputProviderInstance,
+  type RuntimeInputMaterializer,
+} from "../../../../core/domains/deploy-control/runtime_input_materializer.ts";
+import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 
 const NOW = "2026-06-06T00:00:00.000Z";
 
@@ -480,4 +486,263 @@ test("broker rejects secret-bearing evidence before mint-event persistence", asy
   expect(String(error)).not.toContain(rawToken);
   expect(await store.listCredentialMintEventsForRun("run_secret_evidence"))
     .toEqual([]);
+});
+
+const RUNTIME_INPUT_PROVIDER = "registry.opentofu.org/tako0614/takoform";
+const RUNTIME_INPUT_VARIABLE = "takosumi_runtime_inputs__takoform";
+const RUNTIME_INPUT_INSTANCE = runtimeInputProviderInstance({
+  moduleLocalName: "takoform",
+});
+const RUNTIME_INPUT_NONCE = "8Jd1nQ2vK7pR4sT6wX9zB0cE3fH5jL8mN1qS4uV7yA0";
+const RUNTIME_INPUT_PROFILE_DIGEST = `sha256:${"7".repeat(64)}`;
+const RUNTIME_INPUT_VALUES = {
+  ENCRYPTION_KEY: "a".repeat(64),
+  SIGNING_KEY: "b".repeat(64),
+} as const;
+
+function runtimeInputBinding(
+  overrides: {
+    readonly rootAlias?: string;
+    readonly moduleLocalName?: string;
+    readonly connectionId?: string;
+  } = {},
+): ResolvedCapsuleProviderBinding {
+  const base = resolvedBinding(
+    RUNTIME_INPUT_PROVIDER,
+    overrides.connectionId ?? "conn_takoform",
+    "TAKOFORM_TOKEN",
+  );
+  return {
+    ...base,
+    moduleLocalName: overrides.moduleLocalName ?? "takoform",
+    ...(overrides.rootAlias ? { rootAlias: overrides.rootAlias } : {}),
+    connection: {
+      ...base.connection,
+      credentialRecipe: {
+        id: "takoform",
+        authMode: "token",
+        runtimeInputs: {
+          contract: "takosumi.provider-runtime-inputs/v1",
+          nonceArgument: "runtime_input_nonce",
+          mapArgument: "runtime_inputs",
+        },
+      },
+    },
+  } as ResolvedCapsuleProviderBinding;
+}
+
+function runtimeInputDescriptor(
+  overrides: Partial<{
+    readonly nonce: string;
+    readonly names: readonly string[];
+    readonly profileDigest: string;
+    readonly variableName: string;
+  }> = {},
+) {
+  return {
+    contract: "takosumi.dispatch-runtime-inputs/v1" as const,
+    variableName: overrides.variableName ?? RUNTIME_INPUT_VARIABLE,
+    providerInstance: RUNTIME_INPUT_INSTANCE,
+    nonce: overrides.nonce ?? RUNTIME_INPUT_NONCE,
+    names: overrides.names ?? ["ENCRYPTION_KEY", "SIGNING_KEY"],
+    profileDigest: overrides.profileDigest ?? RUNTIME_INPUT_PROFILE_DIGEST,
+  };
+}
+
+function runtimeInputMaterializerStub(
+  overrides: Partial<{
+    readonly nonce: string;
+    readonly names: readonly string[];
+    readonly profileDigest: string;
+    readonly values: Readonly<Record<string, string>>;
+  }> = {},
+): RuntimeInputMaterializer {
+  const profileDigest = (overrides.profileDigest ??
+    RUNTIME_INPUT_PROFILE_DIGEST) as `sha256:${string}`;
+  const names = overrides.names ?? ["ENCRYPTION_KEY", "SIGNING_KEY"];
+  return {
+    profile: async () => ({ profileDigest, names }),
+    nonce: async () => overrides.nonce ?? RUNTIME_INPUT_NONCE,
+    materialize: async () =>
+      new RuntimeInputBundle({
+        contract: "takosumi.runner-runtime-inputs/v1",
+        profileDigest,
+        nonce: overrides.nonce ?? RUNTIME_INPUT_NONCE,
+        names,
+        values: overrides.values ?? RUNTIME_INPUT_VALUES,
+      }),
+    retire: async () => {},
+  } as unknown as RuntimeInputMaterializer;
+}
+
+async function runtimeInputBrokerFor(options: {
+  readonly resolved: readonly ResolvedCapsuleProviderBinding[];
+  readonly descriptors?: readonly unknown[];
+  readonly materializer?: RuntimeInputMaterializer;
+}) {
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store);
+  const vault = {
+    mintForCapsuleProviderBindings: (
+      _workspaceId: string,
+      entries: readonly CapsuleProviderBindingMintEntry[],
+    ) =>
+      Promise.resolve(
+        new PhaseMintBundle(
+          { env: { TAKOFORM_TOKEN: "minted" } },
+          [],
+          entries.map((entry) => ({
+            provider: entry.provider,
+            connectionId: entry.connectionId,
+            temporary: true,
+            ttlEnforced: true,
+          })),
+        ),
+      ),
+  } as unknown as ConnectionVault;
+  let counter = 0;
+  const broker = new RunCredentialBroker({
+    store,
+    newId: (prefix) => `${prefix}_${(counter += 1)}`,
+    now: () => Date.parse(NOW),
+    vault,
+    resolveRunProviderBindings: async () => options.resolved,
+    policyForPlanRun: async () => undefined,
+    runtimeInputsForPlanRun: async () =>
+      (options.descriptors ?? [runtimeInputDescriptor()]) as never,
+    ...(options.materializer
+      ? { runtimeInputMaterializer: options.materializer }
+      : { runtimeInputMaterializer: runtimeInputMaterializerStub() }),
+  });
+  const run = {
+    ...planRun([RUNTIME_INPUT_PROVIDER]),
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    capsuleContext: {
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      environment: seeded.capsule.environment,
+    },
+  } as PlanRun;
+  return { broker, run, seeded, store };
+}
+
+test("plan and destroy carry the reviewed name set with no values", async () => {
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [runtimeInputBinding()],
+  });
+  for (const phase of ["plan", "destroy"] as const) {
+    const credentials = await broker.mintRunCredentials(run, phase, "run_1");
+    expect(credentials?.runtimeInputs).toEqual([
+      {
+        variableName: RUNTIME_INPUT_VARIABLE,
+        names: ["ENCRYPTION_KEY", "SIGNING_KEY"],
+        values: {},
+      },
+    ]);
+  }
+});
+
+test("apply opens the sealed material for exactly the reviewed name set", async () => {
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [runtimeInputBinding()],
+  });
+  const credentials = await broker.mintRunCredentials(run, "apply", "run_1");
+  expect(credentials?.runtimeInputs).toHaveLength(1);
+  const entry = credentials!.runtimeInputs![0]!;
+  expect(entry.variableName).toBe(RUNTIME_INPUT_VARIABLE);
+  expect(Object.keys(entry.values).sort()).toEqual([...entry.names]);
+  expect(entry.values).toEqual(RUNTIME_INPUT_VALUES);
+});
+
+test("apply fails closed when the material generation moved since the plan", async () => {
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [runtimeInputBinding()],
+    materializer: runtimeInputMaterializerStub({
+      nonce: "Q2vK7pR4sT6wX9zB0cE3fH5jL8mN1qS4uV7yA8Jd1n0",
+    }),
+  });
+  await expect(
+    broker.mintRunCredentials(run, "apply", "run_1"),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "runtime_inputs_nonce_changed" },
+  });
+});
+
+test("apply fails closed when the deliverable name set moved since the plan", async () => {
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [runtimeInputBinding()],
+    materializer: runtimeInputMaterializerStub({
+      names: ["ENCRYPTION_KEY", "SESSION_KEY", "SIGNING_KEY"],
+      values: {
+        ENCRYPTION_KEY: "a".repeat(64),
+        SESSION_KEY: "c".repeat(64),
+        SIGNING_KEY: "b".repeat(64),
+      },
+    }),
+  });
+  await expect(
+    broker.mintRunCredentials(run, "apply", "run_1"),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "runtime_inputs_name_set_changed" },
+  });
+});
+
+test("two declaring provider instances fail closed instead of sharing one value set", async () => {
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [
+      runtimeInputBinding(),
+      runtimeInputBinding({
+        rootAlias: "edge",
+        connectionId: "conn_takoform_edge",
+      }),
+    ],
+  });
+  await expect(
+    broker.mintRunCredentials(run, "plan", "run_1"),
+  ).rejects.toMatchObject({
+    details: { reason: "runtime_inputs_ambiguous_provider_instance" },
+  });
+});
+
+test("a plan that never wired run-scoped sensitive inputs cannot apply them", async () => {
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [runtimeInputBinding()],
+    descriptors: [],
+  });
+  await expect(
+    broker.mintRunCredentials(run, "apply", "run_1"),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "runtime_inputs_require_generated_root" },
+  });
+});
+
+test("an over-wide reviewed name set is refused before the provider sees it", async () => {
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [runtimeInputBinding()],
+    descriptors: [
+      runtimeInputDescriptor({
+        names: Array.from({ length: 65 }, (_unused, index) => `NAME_${index}`),
+      }),
+    ],
+  });
+  await expect(
+    broker.mintRunCredentials(run, "plan", "run_1"),
+  ).rejects.toMatchObject({
+    code: "invalid_argument",
+    details: { reason: "runtime_inputs_limit_exceeded" },
+  });
+});
+
+test("a Capsule with no declaring Provider Connection stays completely inert", async () => {
+  const { broker, run } = await runtimeInputBrokerFor({
+    resolved: [
+      resolvedBinding(RUNTIME_INPUT_PROVIDER, "conn_plain", "TAKOFORM_TOKEN"),
+    ],
+  });
+  const credentials = await broker.mintRunCredentials(run, "apply", "run_1");
+  expect(credentials?.runtimeInputs).toBeUndefined();
 });
