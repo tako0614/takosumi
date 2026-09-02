@@ -259,6 +259,14 @@ export async function createWorkerServiceApp(
     credentialRecipeHost.credentialRequiredProviderSources,
   );
   const runCredentialIssuer = runCredentialIssuerFromEnv(env);
+  // Both lanes materialize the same `runtimeBindingMaterialization` profile, so
+  // a composition that configures one must configure the other from the same
+  // key or a Capsule's generated secrets would exist in two copies.
+  const runtimeBindingDerivationKey =
+    typeof env.TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY === "string" &&
+    env.TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY.length > 0
+      ? env.TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY
+      : undefined;
   return await createTakosumiService({
     role,
     runtimeEnv,
@@ -284,6 +292,7 @@ export async function createWorkerServiceApp(
     ...(connectionOAuthHelpers ? { connectionOAuthHelpers } : {}),
     opentofuControlStore,
     ...(moduleVariableMaterializer ? { moduleVariableMaterializer } : {}),
+    ...(runtimeBindingDerivationKey ? { runtimeBindingDerivationKey } : {}),
     gitInstallPlanStore: new D1GitInstallPlanStore(
       env.TAKOSUMI_CONTROL_DB,
     ),

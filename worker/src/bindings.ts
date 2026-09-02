@@ -25,6 +25,13 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE?: import("@takosjp/takosumi-accounts-service").D1AccountsSchemaMode;
   /** Bare operator origin used as the exact Interface OAuth resource base. */
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
+  /**
+   * Host key for the private runtime-binding derivation. When a composition
+   * materializes a Capsule's `runtimeBindingMaterialization` profile through
+   * its own runtime-binding lane, the run-scoped provider input lane derives
+   * the same bytes from this key so the two can never disagree.
+   */
+  readonly TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY?: string;
   readonly R2_ARTIFACTS: R2Bucket;
   /**
    * Source-archive bucket (`takosumi-source`). The OpenTofu runner DO persists
