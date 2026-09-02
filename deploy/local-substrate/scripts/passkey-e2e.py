@@ -104,6 +104,12 @@ def http_request(method: str, path: str, body: dict | None = None,
     req = urllib.request.Request(target, data=data, method=method)
     if data is not None:
         req.add_header("Content-Type", "application/json")
+    if method not in ("GET", "HEAD", "OPTIONS"):
+        # Cookie-authenticated mutations must be exact same-origin: the Accounts
+        # ingress rejects an unsafe method whose Origin is not the issuer. A
+        # browser sends this on every unsafe request; the virtual authenticator
+        # is standing in for one, so it sends it too.
+        req.add_header("Origin", BASE)
     opener = urllib.request.build_opener(
         urllib.request.HTTPSHandler(context=SSL_CTX),
         urllib.request.HTTPCookieProcessor(_COOKIE_JAR),

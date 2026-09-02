@@ -21,6 +21,11 @@ LOCAL_DEV_SESSION_ID="$(local_substrate_dev_session_id)"
 LOCAL_DEV_SUBJECT="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SUBJECT:-tsub_takosumi_accounts_local}"
 COOKIE_JARS=()
 CURL_TLS=(--cacert "$CA" --resolve "${APP_HOST}:443:127.0.0.1" --resolve "${OAUTH_HOST}:443:127.0.0.1")
+# Cookie-authenticated mutations must be exact same-origin: the Accounts
+# ingress rejects an unsafe method whose Origin is not the issuer, which is
+# what stops ambient cross-site authority. A browser sends this header on
+# every unsafe request; subject A is a browser here, so it sends it too.
+BROWSER_ORIGIN=(-H "Origin: $BASE")
 
 cleanup_jars() {
 	for jar in "${COOKIE_JARS[@]}"; do
@@ -109,6 +114,20 @@ if [[ "$SUB_A" == "$SUB_B" ]]; then
 	exit 1
 fi
 
+# The exact-Origin guard is what makes A's cookie useless to another site, and
+# every request below now carries the header that satisfies it. Prove the guard
+# still bites before depending on it: A's own cookie, a foreign Origin.
+CSRF_STATUS=$(curl -sk "${CURL_TLS[@]}" -X POST -o /dev/null -w "%{http_code}" \
+	-b "$JAR_A" \
+	-H "Origin: https://attacker.example" \
+	-H "Content-Type: application/json" \
+	-d '{"handle":"csrf-probe","displayName":"CSRF probe","type":"personal"}' \
+	"$BASE/api/v1/workspaces")
+if [[ "$CSRF_STATUS" =~ ^2 ]]; then
+	echo "FAIL: cross-origin POST carrying A's cookie returned $CSRF_STATUS (expected non-2xx)" >&2
+	exit 1
+fi
+
 RUN_SUFFIX="$(date +%s%N)-$RANDOM"
 SOURCE_URL="https://github.com/tako0614/takosumi.git"
 SOURCE_REF="main"
@@ -118,7 +137,7 @@ WORKSPACE_HANDLE="tenant-iso-${RUN_SUFFIX}"
 CAPSULE_NAME="tenant-capsule-${RUN_SUFFIX}"
 
 WORKSPACE_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
-	-b "$JAR_A" \
+	-b "$JAR_A" "${BROWSER_ORIGIN[@]}" \
 	-H "Content-Type: application/json" \
 	-d "$(cat <<JSON
 {
@@ -147,7 +166,7 @@ if [[ -z "$WORKSPACE_ID" ]]; then
 fi
 
 SOURCE_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
-	-b "$JAR_A" \
+	-b "$JAR_A" "${BROWSER_ORIGIN[@]}" \
 	-H "Content-Type: application/json" \
 	-d "$(cat <<JSON
 {
@@ -179,7 +198,7 @@ if [[ -z "$SOURCE_ID" ]]; then
 fi
 
 CAPSULE_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
-	-b "$JAR_A" \
+	-b "$JAR_A" "${BROWSER_ORIGIN[@]}" \
 	-H "Content-Type: application/json" \
 	-d "$(cat <<JSON
 {
@@ -212,7 +231,7 @@ fi
 
 cleanup() {
 	curl -sk "${CURL_TLS[@]}" -X DELETE \
-		-b "$JAR_A" \
+		-b "$JAR_A" "${BROWSER_ORIGIN[@]}" \
 		"$BASE/api/v1/capsules/$CAPSULE_ID" >/dev/null 2>&1 || true
 	cleanup_jars
 }
