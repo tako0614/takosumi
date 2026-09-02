@@ -47,8 +47,22 @@ import {
   OpenTofuControllerError,
   PROVIDER_CONNECTION_CHANGED_REASON,
   PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
+  RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON,
+  RUNTIME_INPUTS_LIMIT_EXCEEDED_REASON,
+  RUNTIME_INPUTS_NAME_SET_CHANGED_REASON,
+  RUNTIME_INPUTS_NONCE_CHANGED_REASON,
+  RUNTIME_INPUTS_REQUIRE_GENERATED_ROOT_REASON,
   structuredErrorReason,
 } from "./errors.ts";
+import {
+  RUNTIME_INPUT_MAX_NAMES,
+  RUNTIME_INPUT_MAX_TOTAL_BYTES,
+  RUNTIME_INPUT_MAX_VALUE_BYTES,
+  RUNTIME_INPUT_NAME_PATTERN,
+  type RuntimeInputMaterializer,
+} from "./runtime_input_materializer.ts";
+import { runtimeInputWiringFromResolved } from "./runtime_input_wiring.ts";
+import type { DispatchRuntimeInputs } from "@takosumi/internal/deploy-control-api";
 import {
   evaluateProviderConnectionCredentialPolicy,
   evaluateProviderCredentialMintPolicy,
@@ -58,7 +72,7 @@ import {
   resolvedProviderBindingsDigest,
   type ResolvedCapsuleProviderBinding,
 } from "../connections/mod.ts";
-import type { RunCredentials } from "./mod.ts";
+import type { RunCredentials, RunCredentialRuntimeInputs } from "./mod.ts";
 import type { RunCredentialRecipeManifest } from "takosumi-contract/credential-recipes";
 
 /**
@@ -81,6 +95,15 @@ export interface RunCredentialBrokerDependencies {
   readonly policyForPlanRun: (
     planRun: PlanRun,
   ) => Promise<PolicyConfig | undefined>;
+  /**
+   * Value-free run-scoped sensitive input wiring the Plan pinned into the
+   * private run-inputs sidecar. Apply compares the live derivation against it.
+   */
+  readonly runtimeInputsForPlanRun?: (
+    planRun: PlanRun,
+  ) => Promise<readonly DispatchRuntimeInputs[] | undefined>;
+  /** Host materializer for run-scoped sensitive provider inputs. */
+  readonly runtimeInputMaterializer?: RuntimeInputMaterializer;
 }
 
 /**
@@ -100,6 +123,10 @@ export class RunCredentialBroker {
   readonly #policyForPlanRun: (
     planRun: PlanRun,
   ) => Promise<PolicyConfig | undefined>;
+  readonly #runtimeInputsForPlanRun?: (
+    planRun: PlanRun,
+  ) => Promise<readonly DispatchRuntimeInputs[] | undefined>;
+  readonly #runtimeInputMaterializer?: RuntimeInputMaterializer;
 
   constructor(dependencies: RunCredentialBrokerDependencies) {
     this.#store = dependencies.store;
@@ -108,6 +135,8 @@ export class RunCredentialBroker {
     this.#vault = dependencies.vault;
     this.#resolveRunProviderBindings = dependencies.resolveRunProviderBindings;
     this.#policyForPlanRun = dependencies.policyForPlanRun;
+    this.#runtimeInputsForPlanRun = dependencies.runtimeInputsForPlanRun;
+    this.#runtimeInputMaterializer = dependencies.runtimeInputMaterializer;
   }
 
   async mintRunCredentials(
@@ -220,6 +249,14 @@ export class RunCredentialBroker {
           { reason: CREDENTIAL_SERVICE_UNAVAILABLE_REASON },
         );
       }
+      // Run-scoped sensitive provider inputs travel on this same dispatch-only
+      // bundle. They are minted here, and only here, because this is the one
+      // channel that is never persisted and never logged.
+      const runtimeInputs = await this.#mintRuntimeInputs(
+        planRun,
+        phase,
+        mintable,
+      );
       const bundle = new CredentialBundle({});
       if (providerEntries.length === 0) {
         await this.#recordProviderCredentialMintEvents(
@@ -240,6 +277,7 @@ export class RunCredentialBroker {
         return {
           env: { ...bundle.env },
           manifest: credentialManifest(mintable),
+          ...(runtimeInputs ? { runtimeInputs } : {}),
         };
       }
       const capsuleId = planRun.capsuleContext?.capsuleId ?? planRun.capsuleId;
@@ -288,9 +326,14 @@ export class RunCredentialBroker {
       );
       const env = { ...bundle.env, ...recipeResponse.env };
       const manifest = credentialManifest(mintable, recipeResponse.files);
-      return recipeResponse.files && recipeResponse.files.length > 0
-        ? { env, files: recipeResponse.files, manifest }
-        : { env, manifest };
+      return {
+        env,
+        ...(recipeResponse.files && recipeResponse.files.length > 0
+          ? { files: recipeResponse.files }
+          : {}),
+        manifest,
+        ...(runtimeInputs ? { runtimeInputs } : {}),
+      };
     } catch (error) {
       const mapped = mapVaultError(error);
       if (mapped instanceof OpenTofuControllerError) {
@@ -301,6 +344,114 @@ export class RunCredentialBroker {
       }
       throw mapped;
     }
+  }
+
+  /**
+   * Mints the Apply-only sensitive map for the single provider instance whose
+   * installed recipe declares the protocol.
+   *
+   * Every failure is fail-closed. In particular the nonce fence: the reviewed
+   * generated root baked one nonce, and a provider derives its apply-idempotency
+   * identity from it. If the live material generation now derives a different
+   * nonce, applying the reviewed plan would silently target a different identity,
+   * so the Run stops and asks for a re-plan.
+   */
+  async #mintRuntimeInputs(
+    planRun: PlanRun,
+    phase: "plan" | "apply" | "destroy",
+    mintable: readonly ResolvedCapsuleProviderBinding[],
+  ): Promise<readonly RunCredentialRuntimeInputs[] | undefined> {
+    const wiring = runtimeInputWiringFromResolved(mintable);
+    if (!wiring) return undefined;
+    const descriptors = await this.#runtimeInputsForPlanRun?.(planRun);
+    const descriptor = descriptors?.find(
+      (entry) => entry.providerInstance === wiring.providerInstance,
+    );
+    if (!descriptor) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `runtime_inputs_not_reviewed: plan run ${planRun.id} did not wire ` +
+          `run-scoped sensitive provider inputs into its generated root; ` +
+          `re-plan before apply`,
+        { reason: RUNTIME_INPUTS_REQUIRE_GENERATED_ROOT_REASON },
+      );
+    }
+    assertRuntimeInputNames(descriptor.names);
+    if (descriptor.variableName !== wiring.variableName) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `runtime_inputs_nonce_changed: plan run ${planRun.id} was reviewed ` +
+          `against a different generated-root variable; re-plan before apply`,
+        { reason: RUNTIME_INPUTS_NONCE_CHANGED_REASON },
+      );
+    }
+    // A destroy plan's provider teardown never reads the map, and a plan never
+    // reads it either. Both still declare the same ephemeral variable, so the
+    // runner supplies an empty map to keep plan/apply variable symmetry.
+    if (phase !== "apply") {
+      return [
+        {
+          variableName: descriptor.variableName,
+          names: [...descriptor.names],
+          values: {},
+        },
+      ];
+    }
+    const materializer = this.#runtimeInputMaterializer;
+    if (!materializer) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "credential_mint_failed: no runtime input materializer is configured for run-scoped sensitive provider inputs",
+        { reason: RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON },
+      );
+    }
+    const capsuleId = planRun.capsuleContext?.capsuleId ?? planRun.capsuleId;
+    const capsule = capsuleId
+      ? await this.#store.getCapsule(capsuleId)
+      : undefined;
+    if (!capsule || capsule.workspaceId !== planRun.workspaceId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "credential_mint_failed: run-scoped sensitive provider inputs require a current Capsule authority",
+        { reason: RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON },
+      );
+    }
+    const minted = await materializer.materialize({
+      workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
+      installConfigId: capsule.installConfigId,
+      providerInstance: wiring.providerInstance,
+      phase: "apply",
+    });
+    if (minted.nonce !== descriptor.nonce) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `runtime_inputs_nonce_changed: plan run ${planRun.id} was reviewed ` +
+          `against a different run-scoped sensitive input generation; ` +
+          `re-plan before apply`,
+        { reason: RUNTIME_INPUTS_NONCE_CHANGED_REASON },
+      );
+    }
+    const dispatch = minted.toRunnerDispatch();
+    if (
+      dispatch.profileDigest !== descriptor.profileDigest ||
+      !sameNameSet(dispatch.names, descriptor.names)
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `runtime_inputs_name_set_changed: the runtime binding profile changed ` +
+          `since plan run ${planRun.id} was reviewed; re-plan before apply`,
+        { reason: RUNTIME_INPUTS_NAME_SET_CHANGED_REASON },
+      );
+    }
+    assertRuntimeInputValues(dispatch.names, dispatch.values);
+    return [
+      {
+        variableName: descriptor.variableName,
+        names: [...descriptor.names],
+        values: dispatch.values,
+      },
+    ];
   }
 
   async #assertProviderCredentialPolicy(
@@ -530,4 +681,72 @@ function groupProviderCredentialEvidence(
     );
   }
   return byConnection;
+}
+
+/**
+ * Mirrors the provider's own name-set limits inside the control plane so an
+ * over-wide profile fails here instead of at the provider.
+ */
+function assertRuntimeInputNames(names: readonly string[]): void {
+  if (names.length === 0 || names.length > RUNTIME_INPUT_MAX_NAMES) {
+    throw runtimeInputLimitExceeded(
+      `run-scoped sensitive input name count must be 1..${RUNTIME_INPUT_MAX_NAMES}`,
+    );
+  }
+  if (new Set(names).size !== names.length) {
+    throw runtimeInputLimitExceeded(
+      "run-scoped sensitive input names must be unique",
+    );
+  }
+  for (const name of names) {
+    if (!RUNTIME_INPUT_NAME_PATTERN.test(name)) {
+      throw runtimeInputLimitExceeded(
+        "run-scoped sensitive input name is not an accepted binding name",
+      );
+    }
+  }
+}
+
+function assertRuntimeInputValues(
+  names: readonly string[],
+  values: Readonly<Record<string, string>>,
+): void {
+  let totalBytes = 0;
+  for (const name of names) {
+    const value = values[name];
+    if (typeof value !== "string" || value.length === 0) {
+      throw runtimeInputLimitExceeded(
+        "run-scoped sensitive input value is missing",
+      );
+    }
+    const bytes = new TextEncoder().encode(value).byteLength;
+    if (bytes > RUNTIME_INPUT_MAX_VALUE_BYTES) {
+      throw runtimeInputLimitExceeded(
+        `run-scoped sensitive input value exceeds ${RUNTIME_INPUT_MAX_VALUE_BYTES} bytes`,
+      );
+    }
+    totalBytes += bytes;
+  }
+  if (totalBytes > RUNTIME_INPUT_MAX_TOTAL_BYTES) {
+    throw runtimeInputLimitExceeded(
+      `run-scoped sensitive inputs exceed ${RUNTIME_INPUT_MAX_TOTAL_BYTES} bytes in total`,
+    );
+  }
+}
+
+function runtimeInputLimitExceeded(message: string): OpenTofuControllerError {
+  return new OpenTofuControllerError(
+    "invalid_argument",
+    `runtime_inputs_limit_exceeded: ${message}`,
+    { reason: RUNTIME_INPUTS_LIMIT_EXCEEDED_REASON },
+  );
+}
+
+function sameNameSet(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  const a = [...left].sort();
+  const b = [...right].sort();
+  return a.length === b.length && a.every((name, index) => name === b[index]);
 }

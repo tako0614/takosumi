@@ -33,6 +33,25 @@ export const CREDENTIAL_SERVICE_UNAVAILABLE_REASON =
 export const CREDENTIAL_MINT_FAILED_REASON = "credential_mint_failed";
 export const CREDENTIAL_POLICY_FAILED_REASON = "credential_policy_failed";
 
+/**
+ * Run-scoped sensitive provider input failures. Every one is fail-closed: the
+ * Run stops rather than delivering, omitting, or guessing a value set.
+ */
+export const RUNTIME_INPUTS_AMBIGUOUS_PROVIDER_INSTANCE_REASON =
+  "runtime_inputs_ambiguous_provider_instance";
+export const RUNTIME_INPUTS_PROFILE_MISSING_REASON =
+  "runtime_inputs_profile_missing";
+export const RUNTIME_INPUTS_REQUIRE_GENERATED_ROOT_REASON =
+  "runtime_inputs_require_generated_root";
+export const RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON =
+  "runtime_input_materializer_unavailable";
+export const RUNTIME_INPUTS_NONCE_CHANGED_REASON =
+  "runtime_inputs_nonce_changed";
+export const RUNTIME_INPUTS_NAME_SET_CHANGED_REASON =
+  "runtime_inputs_name_set_changed";
+export const RUNTIME_INPUTS_LIMIT_EXCEEDED_REASON =
+  "runtime_inputs_limit_exceeded";
+
 const STRUCTURED_ERROR_REASON_RE = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u;
 
 export class OpenTofuControllerError extends Error {

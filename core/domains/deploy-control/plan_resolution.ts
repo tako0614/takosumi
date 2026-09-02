@@ -23,7 +23,10 @@
 import type { JsonValue } from "takosumi-contract";
 import type { Capsule } from "@takosumi/internal/deploy-control-api";
 import type { CapsuleProviderRequirement } from "takosumi-contract/capsules";
-import type { RootProviderBinding } from "takosumi-rootgen";
+import type {
+  RootProviderBinding,
+  RootProviderRuntimeInputs,
+} from "takosumi-rootgen";
 import type { ResolvedCapsuleProviderBinding } from "../connections/mod.ts";
 import { OpenTofuControllerError } from "./errors.ts";
 
@@ -115,8 +118,18 @@ export class PlanResolutionService {
   }
 }
 
+/**
+ * Run-scoped sensitive input wiring for exactly one provider instance, keyed by
+ * the `(moduleLocalName, rootAlias)` tuple rootgen uses for provider identity.
+ */
+export interface ResolvedRootRuntimeInputs extends RootProviderRuntimeInputs {
+  readonly moduleLocalName: string;
+  readonly rootAlias?: string;
+}
+
 export function providerBindingsFromResolved(
   resolved: readonly ResolvedCapsuleProviderBinding[],
+  runtimeInputs?: ResolvedRootRuntimeInputs,
 ): readonly RootProviderBinding[] {
   const providers: RootProviderBinding[] = [];
   for (const entry of resolved) {
@@ -137,6 +150,19 @@ export function providerBindingsFromResolved(
       ...(entry.rootAlias ? { rootAlias: entry.rootAlias } : {}),
       ...(configuration && Object.keys(configuration).length > 0
         ? { configuration }
+        : {}),
+      // Only the exact declaring provider instance receives the two arguments.
+      // Every other provider block is left untouched.
+      ...(runtimeInputs &&
+      runtimeInputs.moduleLocalName === entry.moduleLocalName &&
+      runtimeInputs.rootAlias === entry.rootAlias
+        ? {
+            runtimeInputs: {
+              nonce: runtimeInputs.nonce,
+              nonceArgument: runtimeInputs.nonceArgument,
+              mapArgument: runtimeInputs.mapArgument,
+            },
+          }
         : {}),
     });
   }

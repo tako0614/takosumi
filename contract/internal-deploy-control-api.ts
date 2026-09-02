@@ -561,6 +561,29 @@ export interface DispatchGeneratedRoot {
   readonly files: Readonly<Record<string, string>>;
 }
 
+/**
+ * Value-free descriptor for one provider instance's run-scoped sensitive
+ * inputs, pinned at Plan and retained in the private run-inputs sidecar.
+ *
+ * It records WHICH generated-root ephemeral variable carries the map, WHICH
+ * provider instance reads it, WHICH nonce the reviewed root baked in, and WHICH
+ * exact binding names may be delivered. It never carries a value: the values are
+ * minted at Apply and travel only on the dispatch-only credential bundle.
+ */
+export interface DispatchRuntimeInputs {
+  readonly contract: "takosumi.dispatch-runtime-inputs/v1";
+  /** Exact generated-root ephemeral variable name. */
+  readonly variableName: string;
+  /** Opaque `(moduleLocalName, rootAlias)` provider-instance identity. */
+  readonly providerInstance: string;
+  /** Plan-stable nonce baked into the reviewed generated root. */
+  readonly nonce: string;
+  /** Exact deliverable binding names, sorted. Never a value. */
+  readonly names: readonly string[];
+  /** Digest of the value-free runtime binding profile these names came from. */
+  readonly profileDigest: string;
+}
+
 /** Exact canonical ledger descriptor for the state restored by a dispatch. */
 export interface DispatchPriorState {
   readonly generation: number;
