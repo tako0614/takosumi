@@ -43,6 +43,30 @@ test("official platform builds pin the matching Takosumi Store by environment", 
 });
 
 test("production config must bind the isolated production Hosted service", () => {
+  const broker = (overrides: Record<string, unknown> = {}) => {
+    const base: Record<string, unknown> = {
+      connectionId: "conn_takoserverTakoform01",
+      recipeId: "takoserver-takoform-run-v1",
+      providerSource: "registry.terraform.io/tako0614/takoform",
+      displayName: "Takoserver",
+      exchangePath: "/provider-credentials/takoform",
+      envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+      runCredentialSettings: { requiredAvailableMinor: 2300 },
+      publicInputExchangePath: "/public-inputs/http-endpoint",
+      publicInputCapabilities: ["http_endpoint_url"],
+      runtimeInputs: {
+        contract: "takosumi.provider-runtime-inputs/v1",
+        nonceArgument: "runtime_input_nonce",
+        mapArgument: "runtime_inputs",
+        minimumProviderVersion: "4.0.0",
+      },
+    };
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) delete base[key];
+      else base[key] = value;
+    }
+    return base;
+  };
   const source = (
     service: string,
     main = resolve(root, "deploy/platform/entry-worker.ts"),
@@ -50,6 +74,14 @@ test("production config must bind the isolated production Hosted service", () =>
     basePath = "/api/v1/account/subscription",
     includeVersionMetadata = true,
     includeRequestSignal = true,
+    brokerOverrides: Record<string, unknown> = {},
+    extras: {
+      readonly descriptors?: readonly unknown[];
+      readonly services?: readonly {
+        readonly binding: string;
+        readonly service: string;
+      }[];
+    } = {},
   ) => `
 name = "takosumi"
 main = "${main}"
@@ -60,6 +92,12 @@ ${includeVersionMetadata ? '[version_metadata]\nbinding = "TAKOSUMI_VERSION_META
 [[services]]
 binding = "HOSTED"
 service = "${service}"
+${(extras.services ?? [])
+  .map(
+    (entry) =>
+      `[[services]]\nbinding = "${entry.binding}"\nservice = "${entry.service}"`,
+  )
+  .join("\n")}
 [vars]
 TAKOSUMI_ENVIRONMENT = "production"
 TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
@@ -102,19 +140,7 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
               audience: "takosumi-hosted.takoform.v1",
               requiredScopes: ["takoform.run"],
             },
-            providerCredentialBroker: {
-              connectionId: "conn_takoserverTakoform01",
-              recipeId: "takoserver-takoform-run-v1",
-              providerSource: "registry.terraform.io/tako0614/takoform",
-              displayName: "Takoserver",
-              exchangePath: "/provider-credentials/takoform",
-              envNames: [
-                "TAKOFORM_ENDPOINT",
-                "TAKOFORM_SPACE",
-                "TAKOFORM_TOKEN",
-              ],
-              runCredentialSettings: { requiredAvailableMinor: 2300 },
-            },
+            providerCredentialBroker: broker(brokerOverrides),
           }
         : {}),
     },
@@ -140,6 +166,7 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
       ],
       capabilities: ["openai.models.v1", "openai.chat-completions.v1"],
     },
+    ...(extras.descriptors ?? []),
   ])}'
 `;
   expect(() =>
@@ -229,6 +256,129 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
         true,
         false,
       ),
+      "/private/wrangler.toml",
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
+
+  // The Capsule public-origin seam and the run-scoped sensitive-input lane are
+  // REQUIRED of the realized broker, not merely tolerated: a platform released
+  // without them serves Capsules that fail closed at plan.
+  const withBroker = (
+    overrides: Record<string, unknown>,
+    extras: {
+      readonly descriptors?: readonly unknown[];
+      readonly services?: readonly {
+        readonly binding: string;
+        readonly service: string;
+      }[];
+    } = {},
+  ) =>
+    source(
+      "takosumi-hosted",
+      resolve(root, "deploy/platform/entry-worker.ts"),
+      true,
+      "/api/v1/account/subscription",
+      true,
+      true,
+      overrides,
+      extras,
+    );
+  const runtimeInputs = {
+    contract: "takosumi.provider-runtime-inputs/v1",
+    nonceArgument: "runtime_input_nonce",
+    mapArgument: "runtime_inputs",
+    minimumProviderVersion: "4.0.0",
+  };
+  for (const overrides of [
+    { publicInputExchangePath: undefined },
+    { publicInputCapabilities: undefined },
+    { runtimeInputs: undefined },
+    { publicInputExchangePath: "/public-inputs/origin" },
+    { publicInputCapabilities: [] },
+    { publicInputCapabilities: ["http_endpoint_url", "http_endpoint_url"] },
+    { publicInputCapabilities: ["https_endpoint_url"] },
+    { publicInputCapabilities: "http_endpoint_url" },
+    { runtimeInputs: { ...runtimeInputs, nonceArgument: "nonce" } },
+    { runtimeInputs: { ...runtimeInputs, mapArgument: "inputs" } },
+    { runtimeInputs: { ...runtimeInputs, minimumProviderVersion: "3.0.0" } },
+    { runtimeInputs: { ...runtimeInputs, contract: "takosumi.v1" } },
+    {
+      runtimeInputs: {
+        contract: runtimeInputs.contract,
+        nonceArgument: runtimeInputs.nonceArgument,
+        mapArgument: runtimeInputs.mapArgument,
+      },
+    },
+    { runtimeInputs: { ...runtimeInputs, sealed: true } },
+    { publicInputReservationRef: "ref_1" },
+  ]) {
+    expect(() =>
+      assertConfigTargetsSource(
+        withBroker(overrides),
+        "/private/wrangler.toml",
+        "production",
+      ),
+    ).toThrow("platform_worker_release_config_source_invalid");
+  }
+
+  // A route that dispatches to a declared binding and answers no public-input
+  // question is composable alongside the pinned pair.
+  const secondaryBroker = (extra: Record<string, unknown>) => ({
+    id: "takosumi-secondary",
+    basePath: "/api/v1/secondary",
+    handlerKey: "SECONDARY",
+    authDelivery: "context",
+    ownsPathSubtree: true,
+    providerCredentialBroker: {
+      connectionId: "conn_secondaryTakoform01",
+      recipeId: "secondary-takoform-run-v1",
+      providerSource: "registry.terraform.io/tako0614/takoform",
+      displayName: "Secondary",
+      exchangePath: "/provider-credentials/takoform",
+      envNames: ["TAKOFORM_ENDPOINT"],
+      ...extra,
+    },
+  });
+  expect(() =>
+    assertConfigTargetsSource(
+      withBroker(
+        {},
+        {
+          descriptors: [secondaryBroker({})],
+          services: [{ binding: "SECONDARY", service: "takosumi-secondary" }],
+        },
+      ),
+      "/private/wrangler.toml",
+      "production",
+    ),
+  ).not.toThrow();
+  // A second route claiming the public-origin question makes
+  // `capsulePublicOriginFromPlatformExtensions` throw at runtime, so the
+  // release refuses the composition instead of shipping it.
+  expect(() =>
+    assertConfigTargetsSource(
+      withBroker(
+        {},
+        {
+          descriptors: [
+            secondaryBroker({
+              publicInputExchangePath: "/public-inputs/http-endpoint",
+              publicInputCapabilities: ["http_endpoint_url"],
+            }),
+          ],
+          services: [{ binding: "SECONDARY", service: "takosumi-secondary" }],
+        },
+      ),
+      "/private/wrangler.toml",
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  // An unbound handlerKey is an unroutable route that would only fail on the
+  // first real request after an irreversible upload.
+  expect(() =>
+    assertConfigTargetsSource(
+      withBroker({}, { descriptors: [secondaryBroker({})] }),
       "/private/wrangler.toml",
       "production",
     ),

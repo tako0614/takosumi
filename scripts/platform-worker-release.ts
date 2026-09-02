@@ -3569,6 +3569,8 @@ export function assertConfigTargetsSource(
   let hostedRouteValid = false;
   let versionMetadataValid = false;
   let requestSignalEnabled = false;
+  let publicOriginAnswerValid = false;
+  let handlerKeysBound = false;
   try {
     const parsed = Bun.TOML.parse(source) as Record<string, unknown>;
     const compatibilityFlags = parsed.compatibility_flags;
@@ -3595,9 +3597,29 @@ export function assertConfigTargetsSource(
         hosted.length === 2 &&
         hosted.some(matchesHostedSponsorshipRoute) &&
         hosted.some(matchesHostedAiRoute);
+      // `capsulePublicOriginFromPlatformExtensions` throws when more than one
+      // route answers the public-origin question, because a Capsule has one
+      // public origin and array order is not an authority for splitting it. A
+      // released Worker that throws there cannot plan any Capsule needing its
+      // own origin, so the release refuses the composition instead.
+      publicOriginAnswerValid =
+        descriptors.filter((entry) => declaresPublicInputExchange(entry))
+          .length === 1;
+      // Every descriptor dispatches through a bound service. A handlerKey with
+      // no `[[services]]` binding of that exact name is an unroutable route
+      // that only fails on the first real request after the upload.
+      const declaredBindings = new Set(services.map((entry) => entry[1]));
+      handlerKeysBound = descriptors.every(
+        (entry) =>
+          record(entry) &&
+          typeof entry.handlerKey === "string" &&
+          declaredBindings.has(entry.handlerKey),
+      );
     }
   } catch {
     hostedRouteValid = false;
+    publicOriginAnswerValid = false;
+    handlerKeysBound = false;
   }
   if (
     name !== target.workerName ||
@@ -3605,6 +3627,8 @@ export function assertConfigTargetsSource(
     hostedServices.length !== 1 ||
     hostedServices[0]?.[2] !== target.hostedService ||
     !hostedRouteValid ||
+    !publicOriginAnswerValid ||
+    !handlerKeysBound ||
     !versionMetadataValid ||
     !requestSignalEnabled ||
     !main ||
@@ -3615,6 +3639,18 @@ export function assertConfigTargetsSource(
   ) {
     throw new Error("platform_worker_release_config_source_invalid");
   }
+}
+
+/**
+ * Whether a realized descriptor claims it can answer the Capsule public-origin
+ * question. Mirrors `brokerAnswersPublicOrigin` in
+ * `deploy/platform/platform_extension_provider_credentials.ts`: the declaration
+ * is the presence of `publicInputExchangePath`, not the capability list.
+ */
+function declaresPublicInputExchange(value: unknown): boolean {
+  if (!record(value)) return false;
+  const broker = value.providerCredentialBroker;
+  return record(broker) && typeof broker.publicInputExchangePath === "string";
 }
 
 function matchesHostedSponsorshipRoute(value: unknown): boolean {
@@ -3766,6 +3802,18 @@ function matchesHostedRunCredential(value: unknown): boolean {
   );
 }
 
+/**
+ * The realized sponsorship broker, pinned byte-for-byte.
+ *
+ * The three public-input/runtime-input fields are REQUIRED, not merely allowed.
+ * `deploy/platform/platform_extension_provider_credentials.ts` learns a
+ * Capsule's public origin only from a broker that declares
+ * `publicInputExchangePath`, and `deploy/platform/platform_extensions.ts`
+ * records that a broker without `runtimeInputs` cannot carry the Capsule's
+ * runtime binding profile at all. A platform release without them ships a
+ * Worker whose Capsules fail closed at plan, so the gate refuses it here rather
+ * than after the irreversible upload.
+ */
 function matchesHostedProviderCredentialBroker(value: unknown): boolean {
   if (!record(value)) return false;
   return (
@@ -3777,10 +3825,18 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
           "envNames",
           "exchangePath",
           "providerSource",
+          "publicInputCapabilities",
+          "publicInputExchangePath",
           "recipeId",
           "runCredentialSettings",
+          "runtimeInputs",
         ].sort(),
       ) &&
+    value.publicInputExchangePath === "/public-inputs/http-endpoint" &&
+    Array.isArray(value.publicInputCapabilities) &&
+    JSON.stringify(value.publicInputCapabilities) ===
+      JSON.stringify(["http_endpoint_url"]) &&
+    matchesHostedRuntimeInputs(value.runtimeInputs) &&
     value.connectionId === "conn_takoserverTakoform01" &&
     value.recipeId === "takoserver-takoform-run-v1" &&
     value.providerSource === "registry.terraform.io/tako0614/takoform" &&
@@ -3796,6 +3852,34 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
         typeof name === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(name),
     ) &&
     new Set(value.envNames).size === value.envNames.length
+  );
+}
+
+/**
+ * The run-scoped sensitive-input protocol descriptor, pinned exactly.
+ *
+ * It is value-free by contract: it names only the two provider-block arguments
+ * and the exact provider version floor at which they exist. Pinning it here
+ * keeps the released platform's broker Connection and this repository's own
+ * reference recipe catalog on one protocol; a drifted argument name would make
+ * every runtime-input plan fail with `Unsupported argument` in production.
+ */
+function matchesHostedRuntimeInputs(value: unknown): boolean {
+  if (!record(value)) return false;
+  return (
+    JSON.stringify(Object.keys(value).sort()) ===
+      JSON.stringify(
+        [
+          "contract",
+          "mapArgument",
+          "minimumProviderVersion",
+          "nonceArgument",
+        ].sort(),
+      ) &&
+    value.contract === "takosumi.provider-runtime-inputs/v1" &&
+    value.nonceArgument === "runtime_input_nonce" &&
+    value.mapArgument === "runtime_inputs" &&
+    value.minimumProviderVersion === "4.0.0"
   );
 }
 
