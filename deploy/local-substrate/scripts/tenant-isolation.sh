@@ -12,6 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/compose-helpers.sh"
+source "$SCRIPT_DIR/pkce-helpers.sh"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 APP_HOST="${TAKOSUMI_LOCAL_APP_HOST:-app.takosumi.test}"
 OAUTH_HOST="${TAKOSUMI_LOCAL_OAUTH_MOCK_HOST:-oauth-mock.test}"
@@ -33,10 +34,13 @@ mint_oidc_cookie_session() {
 	local jar
 	jar="$(mktemp)"
 	COOKIE_JARS+=("$jar")
+	local verifier challenge
+	verifier="$(mint_pkce_verifier)"
+	challenge="$(pkce_challenge "$verifier")"
 	local loc1
 	loc1=$(curl -sk "${CURL_TLS[@]}" -o /dev/null -w "%{redirect_url}" \
 		-c "$jar" -b "$jar" \
-		"$BASE/oauth/upstream/authorize?provider=local-oidc&state=$state")
+		"$BASE/oauth/upstream/authorize?provider=local-oidc&state=$state&code_challenge=$challenge&code_challenge_method=S256")
 	local loc2
 	loc2=$(curl -sk "${CURL_TLS[@]}" -o /dev/null -w "%{redirect_url}" \
 		-c "$jar" -b "$jar" "$loc1")
@@ -55,7 +59,7 @@ mint_oidc_cookie_session() {
 	local resp
 	resp=$(curl -sk "${CURL_TLS[@]}" \
 		-c "$jar" -b "$jar" \
-		"$BASE/oauth/upstream/callback?provider=local-oidc&code=$code&state=$callback_state")
+		"$BASE/oauth/upstream/callback?provider=local-oidc&code=$code&state=$callback_state&code_verifier=$verifier")
 	local subject
 	subject=$(echo "$resp" | python3 -c "
 import json, sys

@@ -127,8 +127,14 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 def mint_subject_via_oauth() -> str:
     state = "passkey_e2e_" + secrets.token_hex(8)
+    # The caller owns the PKCE pair: /authorize forwards the challenge upstream
+    # and /callback refuses to exchange the code without the verifier.
+    verifier = secrets.token_hex(32)
+    challenge = b64url_encode(hashlib.sha256(verifier.encode()).digest())
     status, headers, _body = http_request(
-        "GET", f"/oauth/upstream/authorize?provider=local-oidc&state={state}",
+        "GET",
+        f"/oauth/upstream/authorize?provider=local-oidc&state={state}"
+        f"&code_challenge={challenge}&code_challenge_method=S256",
     )
     if status != 302:
         sys.exit(f"oauth authorize did not 302 (got {status})")
@@ -142,7 +148,8 @@ def mint_subject_via_oauth() -> str:
     callback_state = callback_query["state"][0]
     status, _headers, body = http_request(
         "GET",
-        f"/oauth/upstream/callback?provider=local-oidc&code={code}&state={callback_state}",
+        f"/oauth/upstream/callback?provider=local-oidc&code={code}"
+        f"&state={callback_state}&code_verifier={verifier}",
     )
     if status != 200:
         sys.exit(f"oauth callback failed: {status} {body}")
