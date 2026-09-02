@@ -229,6 +229,21 @@ test("local-substrate static builders use read-only sources and isolated outputs
   expect(appDocsBuild).toContain("cp -a dashboard/dist/. /dashboard-output/");
 });
 
+test("local-substrate pays the deploy-control cold start before announcing readiness", () => {
+  // The seam bootstraps its control-D1 schema on the first request that reaches
+  // it, and that bootstrap blocks every other request the Worker is serving —
+  // tens of seconds on an ordinary CI disk. Bring-up absorbs it, or a bounded
+  // smoke check inherits it and can only report that something hung.
+  const readyBlock = platformWorkerRunner.match(
+    /const url = await mf\.ready;[\s\S]*?miniflare serving/u,
+  )?.[0];
+  expect(readyBlock).toBeDefined();
+  expect(readyBlock).toContain("await warmDeployControlSeam(");
+  expect(platformWorkerRunner).toContain(
+    'dispatchFetch(\n      "http://localhost/internal/v1/runner-profiles"',
+  );
+});
+
 test("local-substrate builds the static-builder image instead of pulling it", () => {
   // `takosumi-local-static-builder:node22` is published in no registry. A
   // service that names it without declaring the build makes `docker compose up`

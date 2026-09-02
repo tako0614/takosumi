@@ -151,7 +151,42 @@ const mf = new Miniflare({
 await applyLocalAccountsD1Migrations(mf, accountsD1MigrationsPath);
 
 const url = await mf.ready;
+await warmDeployControlSeam(mf, bindings.TAKOSUMI_DEPLOY_CONTROL_TOKEN);
 console.log(`[takosumi-platform-worker] miniflare serving at ${url}`);
+}
+
+/**
+ * Bootstrap the deploy-control ledger schema before the port is announced.
+ *
+ * The seam initializes its control-D1 schema lazily on the first request that
+ * reaches it, and that initialization blocks every other request the Worker is
+ * serving — on a cold control D1 it replays the whole migration set one
+ * statement at a time, which is storage-latency-bound and takes tens of
+ * seconds on an ordinary CI disk. Paying it here keeps it inside the
+ * bring-up readiness wait, where a slow start belongs, instead of inside a
+ * bounded smoke check that can only report "it hung".
+ *
+ * The elapsed time is logged rather than swallowed: this cost is real, it is
+ * also paid by a freshly provisioned Worker in production, and it should stay
+ * visible.
+ */
+async function warmDeployControlSeam(miniflare, deployControlToken) {
+  const started = Date.now();
+  try {
+    const response = await miniflare.dispatchFetch(
+      "http://localhost/internal/v1/runner-profiles",
+      { headers: { authorization: `Bearer ${deployControlToken}` } },
+    );
+    await response.arrayBuffer();
+    console.log(
+      `[takosumi-platform-worker] deploy-control seam warm status=${response.status} elapsed=${Date.now() - started}ms`,
+    );
+  } catch (cause) {
+    console.error(
+      `[takosumi-platform-worker] deploy-control seam warm failed after ${Date.now() - started}ms:`,
+      cause,
+    );
+  }
 }
 
 if (

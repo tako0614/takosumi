@@ -56,26 +56,39 @@ step() {
 # worth waiting on.
 CURL_BOUNDS=(--connect-timeout 10 --max-time 60)
 
+# `set -e` would abort on a curl that never completes without saying anything,
+# so name the transport failure instead of dying silently mid-step.
+report_curl_failure() {
+	echo "FAIL: $1 $2 did not complete (curl exit $3; bounds ${CURL_BOUNDS[*]})" >&2
+	exit 1
+}
+
 post_json() {
 	local path="$1"
 	local body="$2"
-	curl -sk --cacert "$CA" \
+	local out exit_code=0
+	out="$(curl -sk --cacert "$CA" \
 		"${CURL_RESOLVE[@]}" "${CURL_BOUNDS[@]}" \
 		-H "Authorization: Bearer $TOKEN" \
 		-H "Content-Type: application/json" \
 		-d "$body" \
 		-w "\n%{http_code}\n" \
-		"$SERVICE_URL$path"
+		"$SERVICE_URL$path")" || exit_code=$?
+	[[ "$exit_code" -eq 0 ]] || report_curl_failure POST "$path" "$exit_code"
+	printf '%s' "$out"
 }
 
 get_json() {
 	local path="$1"
-	curl -sk --cacert "$CA" \
+	local out exit_code=0
+	out="$(curl -sk --cacert "$CA" \
 		"${CURL_RESOLVE[@]}" "${CURL_BOUNDS[@]}" \
 		-H "Authorization: Bearer $TOKEN" \
 		-H "Content-Type: application/json" \
 		-w "\n%{http_code}\n" \
-		"$SERVICE_URL$path"
+		"$SERVICE_URL$path")" || exit_code=$?
+	[[ "$exit_code" -eq 0 ]] || report_curl_failure GET "$path" "$exit_code"
+	printf '%s' "$out"
 }
 
 response_body() {
