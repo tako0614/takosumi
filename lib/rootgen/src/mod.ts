@@ -132,6 +132,41 @@ export const ROOT_RUNTIME_INPUTS_VARIABLE_PREFIX =
   "takosumi_runtime_inputs__" as const;
 
 const RUNTIME_INPUT_NONCE_PATTERN = /^[A-Za-z0-9_-]{22,128}$/u;
+const RUNTIME_INPUT_NONCE_MIN_BYTES = 16;
+
+/**
+ * A provider does not merely regex-match the nonce: it decodes it as unpadded
+ * base64url, requires at least 16 decoded bytes, and re-encodes to check the
+ * value is canonical. A nonce that passes the pattern but fails any of those
+ * would be refused only after the reviewed root was already baked, so rootgen
+ * applies the same three checks here.
+ */
+function isCanonicalRuntimeInputNonce(value: string): boolean {
+  if (typeof value !== "string" || !RUNTIME_INPUT_NONCE_PATTERN.test(value)) {
+    return false;
+  }
+  // Unpadded base64url encodes 4 characters per 3 bytes; a remainder of 1 is
+  // not producible by any byte string.
+  if (value.length % 4 === 1) return false;
+  let decoded: Uint8Array;
+  try {
+    const padded = value.replaceAll("-", "+").replaceAll("_", "/");
+    const binary = atob(padded + "=".repeat((4 - (padded.length % 4)) % 4));
+    decoded = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    return false;
+  }
+  // The 22-character minimum already implies 16 bytes; the check stays because
+  // the provider applies it independently and the two must not drift.
+  if (decoded.byteLength < RUNTIME_INPUT_NONCE_MIN_BYTES) return false;
+  let binary = "";
+  for (const byte of decoded) binary += String.fromCharCode(byte);
+  const canonical = btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
+  return canonical === value;
+}
 
 /**
  * Exact generated-root variable name carrying one provider instance's Apply-only
@@ -218,43 +253,60 @@ interface RuntimeInputVariableDeclaration {
  * One declaration per declaring provider instance, keyed by the exact generated
  * variable name. Two bindings that resolve to the same provider instance must
  * agree byte-for-byte; disagreement is a wiring conflict, never a silent merge.
+ *
+ * The variable name flattens `(moduleLocalName, rootAlias)` with a `__`
+ * separator, so two DIFFERENT instances can collide on one name — a local name
+ * of `a__b` and the alias `b` of local name `a` both render
+ * `takosumi_runtime_inputs__a__b`. That is refused outright: one ephemeral
+ * variable can only carry one provider instance's map.
  */
 function runtimeInputVariableDeclarations(
   providerBindings: ReadonlyArray<RootProviderBinding>,
 ): readonly RuntimeInputVariableDeclaration[] {
-  const byVariableName = new Map<string, RootProviderRuntimeInputs>();
+  const byVariableName = new Map<
+    string,
+    { readonly identity: string; readonly runtimeInputs: RootProviderRuntimeInputs }
+  >();
   for (const binding of providerBindings) {
     const runtimeInputs = binding.runtimeInputs;
     if (!runtimeInputs) continue;
     assertRuntimeInputs(binding, runtimeInputs);
     const variableName = rootRuntimeInputsVariableName(binding);
+    const identity = JSON.stringify([
+      binding.moduleLocalName,
+      binding.rootAlias ?? null,
+    ]);
     const existing = byVariableName.get(variableName);
     if (
       existing &&
-      (existing.nonce !== runtimeInputs.nonce ||
-        existing.nonceArgument !== runtimeInputs.nonceArgument ||
-        existing.mapArgument !== runtimeInputs.mapArgument)
+      (existing.identity !== identity ||
+        existing.runtimeInputs.nonce !== runtimeInputs.nonce ||
+        existing.runtimeInputs.nonceArgument !== runtimeInputs.nonceArgument ||
+        existing.runtimeInputs.mapArgument !== runtimeInputs.mapArgument)
     ) {
       throw new RootgenValidationError(
         "rootgen_runtime_input_argument_conflict",
         `rootgen: conflicting run-scoped sensitive input wiring for ${variableName}`,
       );
     }
-    byVariableName.set(variableName, runtimeInputs);
+    byVariableName.set(variableName, { identity, runtimeInputs });
   }
   return Array.from(byVariableName.entries())
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([variableName, runtimeInputs]) => ({ variableName, runtimeInputs }));
+    .map(([variableName, entry]) => ({
+      variableName,
+      runtimeInputs: entry.runtimeInputs,
+    }));
 }
 
 function assertRuntimeInputs(
   binding: RootProviderBinding,
   runtimeInputs: RootProviderRuntimeInputs,
 ): void {
-  if (!RUNTIME_INPUT_NONCE_PATTERN.test(runtimeInputs.nonce)) {
+  if (!isCanonicalRuntimeInputNonce(runtimeInputs.nonce)) {
     throw new RootgenValidationError(
       "rootgen_runtime_input_nonce_invalid",
-      "rootgen: run-scoped sensitive input nonce must be 22..128 unpadded base64url characters",
+      "rootgen: run-scoped sensitive input nonce must be 22..128 canonical unpadded base64url characters decoding to at least 16 bytes",
     );
   }
   for (const name of [runtimeInputs.nonceArgument, runtimeInputs.mapArgument]) {
@@ -287,8 +339,10 @@ const RUNTIME_INPUT_VARIABLES_COMMENT = [
   "# Apply-only sensitive provider inputs. The runner supplies these as",
   "# ephemeral variables; values never enter this file, the plan, or state.",
   "# They carry no default on purpose: OpenTofu then enforces that a variable",
-  "# set at plan is set again at apply, so a dropped map fails the run instead",
-  "# of silently handing the provider an empty one.",
+  "# set at plan is SET again at apply, so a dropped map fails the run. It does",
+  "# not enforce the contents — an apply may supply a narrower map than the",
+  "# plan did — so the provider's own exact name-set check is what fences the",
+  "# values themselves.",
 ].join("\n");
 
 function renderRuntimeInputVariablesTf(

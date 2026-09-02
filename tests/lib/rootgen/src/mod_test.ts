@@ -650,6 +650,27 @@ test("rootgen rejects unusable run-scoped sensitive input wiring", () => {
       reason: "rootgen_runtime_input_nonce_invalid",
     },
     {
+      // Passes the character class, but the trailing bits are not zero, so the
+      // provider's canonical base64url re-encode check refuses it.
+      runtimeInputs: {
+        nonce: "8Jd1nQ2vK7pR4sT6wX9zB0cE3fH5jL8mN1qS4uV7yA1",
+        nonceArgument: "runtime_input_nonce",
+        mapArgument: "runtime_inputs",
+      },
+      configuration: undefined,
+      reason: "rootgen_runtime_input_nonce_invalid",
+    },
+    {
+      // 25 characters: a length no byte string can encode unpadded.
+      runtimeInputs: {
+        nonce: "8Jd1nQ2vK7pR4sT6wX9zB0cE3",
+        nonceArgument: "runtime_input_nonce",
+        mapArgument: "runtime_inputs",
+      },
+      configuration: undefined,
+      reason: "rootgen_runtime_input_nonce_invalid",
+    },
+    {
       runtimeInputs: {
         nonce: NONCE_A,
         nonceArgument: "alias",
@@ -716,4 +737,48 @@ test("rootgen rejects unusable run-scoped sensitive input wiring", () => {
       details: { reason: fixture.reason },
     });
   }
+});
+
+test("rootgen refuses two provider instances that flatten to one variable name", () => {
+  // `takosumi_runtime_inputs__<local>__<alias>` flattens the instance tuple, so
+  // a local name that already contains `__` can collide with an aliased one.
+  // One ephemeral variable cannot carry two provider instances' maps.
+  let thrown: unknown;
+  try {
+    generateOpenTofuChildModuleRoot({
+      rootProviderRequirements: [
+        { source: TAKOFORM, moduleLocalName: "takoform" },
+        { source: TAKOFORM, moduleLocalName: "takoform__edge" },
+      ],
+      inputs: {},
+      outputAllowlist: {},
+      providerBindings: [
+        {
+          provider: TAKOFORM,
+          moduleLocalName: "takoform",
+          rootAlias: "edge",
+          runtimeInputs: {
+            nonce: NONCE_A,
+            nonceArgument: "runtime_input_nonce",
+            mapArgument: "runtime_inputs",
+          },
+        },
+        {
+          provider: TAKOFORM,
+          moduleLocalName: "takoform__edge",
+          runtimeInputs: {
+            nonce: NONCE_A,
+            nonceArgument: "runtime_input_nonce",
+            mapArgument: "runtime_inputs",
+          },
+        },
+      ],
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(RootgenValidationError);
+  expect(thrown).toMatchObject({
+    details: { reason: "rootgen_runtime_input_argument_conflict" },
+  });
 });
