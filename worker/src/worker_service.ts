@@ -12,6 +12,7 @@ import type {
   ReleaseActivator,
 } from "../../core/domains/deploy-control/mod.ts";
 import type { OpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
+import { capsuleLifecycleExpected } from "../../core/domains/deploy-control/store.ts";
 import type { EnqueueSourceSync } from "../../core/domains/sources/mod.ts";
 import type { CapsuleCoordination } from "../../core/domains/deploy-control/capsule_lease.ts";
 import { D1GitInstallPlanStore } from "../../core/domains/install-plans/d1_store.ts";
@@ -232,17 +233,45 @@ export async function createWorkerServiceApp(
     });
   // One durable reservation ledger, read by the Apply-phase credential exchange
   // and written by the plan-time public-origin port. It lives on the Capsule
-  // record because the reservation outlives every Run that observes it.
+  // record because the reservation outlives every Run that observes it, and it
+  // is written through the lifecycle CAS boundary rather than a whole-record
+  // patch: a plan-time reservation must never clobber a concurrent Apply's
+  // state cursor. One retry absorbs the benign race with a Capsule that moved
+  // between the read and the write; a persistent conflict stops the lane rather
+  // than silently leaving Apply without the reservation it must present.
   const capsulePublicOriginReservations: PlatformExtensionCapsulePublicOriginLedger =
     {
       read: async (capsuleId) =>
         (await opentofuControlStore.getCapsule(capsuleId))
           ?.publicOriginReservation,
       write: async (capsuleId, reservation) => {
-        await opentofuControlStore.patchCapsule(capsuleId, {
-          publicOriginReservation: reservation,
-          updatedAt: new Date().toISOString(),
-        });
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const capsule = await opentofuControlStore.getCapsule(capsuleId);
+          const epoch =
+            await opentofuControlStore.getCapsuleExecutionAuthorityEpoch(
+              capsuleId,
+            );
+          if (!capsule || epoch === undefined) {
+            throw new TypeError(
+              "capsule public origin reservation has no current Capsule",
+            );
+          }
+          const result = await opentofuControlStore.updateCapsuleLifecycle({
+            capsuleId,
+            expected: capsuleLifecycleExpected(capsule, epoch),
+            mutation: { kind: "public-origin-reservation", reservation },
+            updatedAt: new Date().toISOString(),
+          });
+          if (result.kind === "updated" || result.kind === "unchanged") return;
+          if (result.kind === "not-found") {
+            throw new TypeError(
+              "capsule public origin reservation has no current Capsule",
+            );
+          }
+        }
+        throw new TypeError(
+          "capsule public origin reservation lost its Capsule revision twice",
+        );
       },
     };
   const envCredentialRecipeHost = mergeCredentialRecipeHostContributions(
