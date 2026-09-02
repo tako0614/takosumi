@@ -217,7 +217,7 @@ export function createTakosumiRuntimeBindingMaterializer(input: {
       }
       const clientId = await derivePublicOidcClientId(
         derivationKey,
-        oidcClientDerivationParts(profile.contract, authority, config.id),
+        runtimeOidcClientDerivationParts(profile.contract, authority, config.id),
       );
       const identity = await deriveCapsulePublicOidcClientIdentity({
         capsule,
@@ -360,7 +360,7 @@ interface ResolvedRuntimeBindingMaterialization {
   readonly oidc?: ResolvedRuntimeBindingOidc;
 }
 
-type RuntimeBindingProfileContract =
+export type RuntimeBindingProfileContract =
   | typeof PROFILE_CONTRACT_V1
   | typeof PROFILE_CONTRACT_V2;
 
@@ -477,9 +477,17 @@ function generatedSecretDerivationParts(
       ];
 }
 
-function oidcClientDerivationParts(
+/**
+ * Preimage of the Capsule's public OIDC client id.
+ *
+ * Exported because the run-scoped provider-input lane delivers the SAME
+ * bindings for the same profile and must therefore derive the SAME client: a
+ * second preimage would register a second client under one Capsule, which the
+ * shared Accounts registration refuses outright.
+ */
+export function runtimeOidcClientDerivationParts(
   profileContract: RuntimeBindingProfileContract,
-  authority: RuntimeBindingAuthority,
+  authority: { readonly workspaceId: string; readonly capsuleId: string },
   installConfigId: string,
 ): readonly string[] {
   return profileContract === PROFILE_CONTRACT_V1

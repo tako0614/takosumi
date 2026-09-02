@@ -183,6 +183,7 @@ import {
   createRuntimeInputMaterializer,
   runtimeInputDerivedValueSource,
   type RuntimeInputMaterializer,
+  type RuntimeInputOidcClientSource,
 } from "./domains/deploy-control/runtime_input_materializer.ts";
 import { log } from "./shared/log.ts";
 import type { Run } from "takosumi-contract/runs";
@@ -422,6 +423,17 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * that supply secretCrypto receive the generic sealed implementation.
    */
   readonly runtimeInputMaterializer?: RuntimeInputMaterializer;
+  /**
+   * Accounts authority for a Capsule whose runtime binding profile ALSO
+   * delivers `identity.oidc` by bindings.
+   *
+   * The run-scoped map must equal the Worker Version's declared sensitive names
+   * exactly, so such a Capsule needs the OIDC values in the same map as its
+   * generated secrets. Their one authority is the Capsule's existing Accounts
+   * OIDC client, which lives outside Core; a composition without this port
+   * fails those Capsules closed instead of delivering a partial map.
+   */
+  readonly runtimeInputOidcClientSource?: RuntimeInputOidcClientSource;
   /**
    * Host key for the private runtime-binding derivation.
    *
@@ -1073,6 +1085,9 @@ export async function createTakosumiService(
                   options.runtimeBindingDerivationKey,
                 ),
               }
+            : {}),
+          ...(options.runtimeInputOidcClientSource
+            ? { oidcClient: options.runtimeInputOidcClientSource }
             : {}),
         })
       : undefined);
