@@ -30,9 +30,19 @@ resolve_service_worker_host() {
 		candidates+=(service-worker.takosumi.test service.takosumi.test)
 	fi
 
-	local host body
+	local host body probe probe_exit
 	for host in "${candidates[@]}"; do
+		# Bounded, and report the timing breakdown per candidate: a host that
+		# never answers must say whether it stalled at TCP connect, at the TLS
+		# handshake, or waiting for a first byte.
+		probe_exit=0
+		probe=$(curl -sk --cacert "$CA" --resolve "${host}:443:127.0.0.1" \
+			--connect-timeout 5 --max-time 20 -o /dev/null \
+			-w 'http=%{http_code} connect=%{time_connect}s tls=%{time_appconnect}s firstbyte=%{time_starttransfer}s total=%{time_total}s' \
+			"https://${host}/healthz") || probe_exit=$?
+		echo "--> probe ${host}: ${probe} curl_exit=${probe_exit}" >&2
 		body=$(curl -sk --cacert "$CA" --resolve "${host}:443:127.0.0.1" \
+			--connect-timeout 5 --max-time 20 \
 			"https://${host}/healthz" || true)
 		if echo "$body" | python3 -c "
 import json, sys
