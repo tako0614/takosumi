@@ -94,6 +94,12 @@ deciding an authority question by array order. Every realized descriptor's
 handler is an unroutable route that would only fail on the first real request
 after the irreversible upload.
 
+A realized config predating this shape fails the gate at plan, before any
+upload. Reconciling it is a non-secret config edit: add the three broker fields
+to the sponsorship descriptor, and set `takosumi-ai.workspaceContext` to
+`query-optional`. The Hosted service must serve the declared
+`publicInputExchangePath` before the platform that advertises it is released.
+
 ## Official staging release
 
 The official staging target is a reviewed two-step owner surface. Plan is
