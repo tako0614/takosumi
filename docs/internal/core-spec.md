@@ -261,6 +261,59 @@ so archived Workspaces and rows beyond the active prefix are included. Deferred
 attempt timestamps are rotated into oldest-attempt-first bounded scans on later
 sweeps, providing eventual coverage without a second lifecycle ledger.
 
+## Run-scoped provider sensitive inputs
+
+An installed CredentialRecipe auth mode may declare that its provider reads
+run-scoped sensitive inputs: a plan-stable nonce plus an Apply-only sensitive
+`map(string)`, named by two provider-block arguments. The declaration is the
+protocol shape only. It never carries, names, or selects a value, and Core holds
+no provider identity of its own: the recipe is the sole place Takosumi learns
+that a provider understands the protocol.
+
+The deliverable name set is the Capsule's manifest-gated runtime binding
+profile, exactly its `generatedSecrets[].binding` entries. Values are sealed once
+per Capsule in the host secret boundary under an AAD that pins the owner and the
+value-free profile digest, and are reopened for every later Run. A changed
+profile is a fence, not an implicit rotation.
+
+The nonce is deterministic per (Workspace, Capsule, InstallConfig, profile
+digest, material key version, provider instance). It is never random per Run: a
+provider derives its apply-idempotency identity from the nonce and that identity
+forces replacement, so a per-Run nonce would propose a replacement on every plan
+and could deadlock a rename-free resource. Rotating a value under the same nonce
+does not change the identity; rotating the material generation does.
+
+Exactly one resolved Provider Connection may declare the protocol for a Capsule.
+Two declaring instances fail closed, because one manifest-gated value set has no
+rule for splitting itself. A Capsule without a generated root also fails closed:
+Takosumi owns no provider block there, so it can declare neither the ephemeral
+variable nor the two arguments.
+
+The generated root renders the nonce as a literal and the map as a bare
+reference to an ephemeral, sensitive, defaultless `map(string)` root variable in
+the reserved `takosumi_runtime_inputs__` namespace. No value enters the generated
+root, the plan file, the `tfplan.json` artifact, `runs_inputs`, planned or
+committed Outputs, state, Run or audit records, credential-mint evidence, or the
+Durable Object's mutation record, which projects only the variable name, the
+declared binding names, and one-way value digests.
+
+Plan pins a value-free descriptor — variable, provider instance, nonce, names,
+profile digest — into the private run-inputs sidecar. Apply re-derives the nonce
+and the name set and fails closed with `runtime_inputs_nonce_changed` or
+`runtime_inputs_name_set_changed` when either moved, so a rotated generation
+forces a re-plan instead of applying a reviewed root against different material.
+
+The runner binds each map to its declared variable and supplies it to OpenTofu on
+standard input through `-var-file=/dev/stdin`, at plan (empty) and again at apply
+(exact). `-var` and `TF_VAR_*` are never used, so no value reaches the process
+argv or environment, and no plaintext reaches the filesystem. The variable has no
+default, so OpenTofu itself enforces that a map supplied at plan is supplied
+again at apply. Every value joins the runner's stdout/stderr redaction list.
+
+The path is completely inert for a Capsule whose resolved Provider Connections
+declare nothing: no variable file, no dispatch field, and a byte-identical
+generated root.
+
 ## Repository-manifest Accounts OIDC capability
 
 Provider runtime-binding remains read-only and has no registration authority.
