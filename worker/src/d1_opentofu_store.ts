@@ -6588,8 +6588,8 @@ async function d1CapsuleExecutionAuthorityEpochStatements(
  * count and total bytes keeps a group's payload bounded even when a few
  * generated statements are unusually large.
  */
-const D1_MAX_STATEMENT_BYTES = 100_000;
-const D1_SCHEMA_BATCH_MAX_STATEMENTS = 50;
+export const D1_MAX_STATEMENT_BYTES = 100_000;
+export const D1_SCHEMA_BATCH_MAX_STATEMENTS = 50;
 const D1_SCHEMA_BATCH_MAX_BYTES = 80_000;
 
 /**
