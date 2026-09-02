@@ -14,6 +14,19 @@
 # Source mount + Bun command pattern を採用 (image build 不要)。 production
 # image でないのは「test bed」 のために意図的。 ファイル変更が即反映される。
 
+# Shared build for the two VitePress static builders. VitePress reads the Git
+# history for last-updated timestamps, so the node:22-slim base needs git. Both
+# services declare this build (compose keys the image by tag, so the second one
+# is a cache hit): without a `build:` of its own a service would ask a registry
+# for `takosumi-local-static-builder`, which is published nowhere.
+x-static-builder-build: &static-builder-build
+  context: .
+  dockerfile_inline: |
+    FROM node:22-slim
+    RUN apt-get update \
+      && apt-get install -y --no-install-recommends git ca-certificates \
+      && rm -rf /var/lib/apt/lists/*
+
 services:
   # ---- 共通 storage / queue ----
   substrate-postgres:
@@ -317,6 +330,7 @@ services:
   takosumi-docs-build:
     profiles: ["postgres", "workers"]
     image: takosumi-local-static-builder:node22
+    build: *static-builder-build
     restart: "no"
     working_dir: /build/docs
     command:
@@ -442,13 +456,7 @@ services:
   takosumi-app-docs-build:
     profiles: ["postgres", "workers"]
     image: takosumi-local-static-builder:node22
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM node:22-slim
-        RUN apt-get update \
-          && apt-get install -y --no-install-recommends git ca-certificates \
-          && rm -rf /var/lib/apt/lists/*
+    build: *static-builder-build
     restart: "no"
     depends_on:
       takosumi-dashboard-build:

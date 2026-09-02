@@ -229,6 +229,27 @@ test("local-substrate static builders use read-only sources and isolated outputs
   expect(appDocsBuild).toContain("cp -a dashboard/dist/. /dashboard-output/");
 });
 
+test("local-substrate builds the static-builder image instead of pulling it", () => {
+  // `takosumi-local-static-builder:node22` is published in no registry. A
+  // service that names it without declaring the build makes `docker compose up`
+  // ask Docker Hub for a tag that does not exist.
+  expect(compose).toContain("x-static-builder-build: &static-builder-build");
+
+  const naming: string[] = [];
+  for (const service of compose.matchAll(
+    /\n {2}(?<name>[a-zA-Z0-9_-]+):\n(?<body>(?: {4}.*\n|\n)*)/g,
+  )) {
+    const { name, body } = service.groups as { name: string; body: string };
+    if (!body.includes("image: takosumi-local-static-builder:node22")) continue;
+    naming.push(name);
+    expect(body, name).toContain("build: *static-builder-build");
+  }
+  expect(naming.sort()).toEqual([
+    "takosumi-app-docs-build",
+    "takosumi-docs-build",
+  ]);
+});
+
 test("local-substrate waits only for builders active in the selected profile", () => {
   const staticWaitBlock = upScript.match(
     /static_build_services=\(\)[\s\S]*?for service in "\$\{static_build_services\[@\]\}"; do[\s\S]*?done/,
