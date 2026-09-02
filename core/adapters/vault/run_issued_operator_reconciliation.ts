@@ -5,7 +5,11 @@ import {
   isWorkspaceBindableOperatorConnection,
   type FixedOperatorProviderConnectionDeclaration,
 } from "takosumi-contract";
-import type { CredentialRecipe } from "takosumi-contract/credential-recipes";
+import {
+  isProviderRuntimeInputs,
+  PROVIDER_RUNTIME_INPUTS_CONTRACT,
+  type CredentialRecipe,
+} from "takosumi-contract/credential-recipes";
 import {
   canonicalProviderSource,
   sameProviderSource,
@@ -169,6 +173,20 @@ export function resolveTargetConnection(
       audience: mode.runIssuance.audience,
       scopes: [...mode.runIssuance.scopes].sort(),
     },
+    // The installed mode's run-scoped sensitive input protocol is recipe
+    // authority exactly like `runIssuance`. Dropping it here would silently
+    // un-wire a run-issued recipe that declares it, and the failure would only
+    // surface at the provider.
+    ...(isProviderRuntimeInputs(mode.runtimeInputs)
+      ? {
+          runtimeInputs: {
+            contract: PROVIDER_RUNTIME_INPUTS_CONTRACT,
+            nonceArgument: mode.runtimeInputs.nonceArgument,
+            mapArgument: mode.runtimeInputs.mapArgument,
+            minimumProviderVersion: mode.runtimeInputs.minimumProviderVersion,
+          },
+        }
+      : {}),
   };
   return Object.freeze({
     id: descriptor.id,
