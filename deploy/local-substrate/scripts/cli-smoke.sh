@@ -43,6 +43,14 @@ if [[ ! -f "$CA" ]]; then
 	exit 1
 fi
 
+# Progress markers. cli-smoke drives a real Git clone + tofu plan/apply
+# through the runner, so when it is killed for exceeding its bound the log
+# has to say which step was still in flight.
+step() {
+	# stderr: wait_for_run's stdout is the captured Run JSON.
+	echo "--> $*" >&2
+}
+
 post_json() {
 	local path="$1"
 	local body="$2"
@@ -94,11 +102,15 @@ json_field() {
 wait_for_run() {
 	local run_id="$1"
 	local label="$2"
-	local response status
+	local response status last_status=""
 	for _ in $(seq 1 120); do
 		response="$(get_json "/internal/v1/runs/$run_id")"
 		require_code "read $label run" "$response" "200"
 		status="$(response_body "$response" | json_field "data['run']['status']")"
+		if [[ "$status" != "$last_status" ]]; then
+			step "waiting on $label run $run_id: $status"
+			last_status="$status"
+		fi
 		case "$status" in
 			succeeded|waiting_approval)
 				printf '%s' "$(response_body "$response")"
@@ -116,6 +128,7 @@ wait_for_run() {
 	exit 1
 }
 
+step "1. runner profiles"
 PROFILES_RESPONSE="$(get_json "/internal/v1/runner-profiles")"
 require_code "runner profiles" "$PROFILES_RESPONSE" "200"
 PROFILE_IDS="$(response_body "$PROFILES_RESPONSE" | json_field "','.join(p['id'] for p in data.get('runnerProfiles') or [])")"
@@ -133,6 +146,7 @@ WORKSPACE_REQUEST=$(cat <<EOF
 }
 EOF
 )
+step "2. create workspace"
 WORKSPACE_RESPONSE="$(post_json "/internal/v1/workspaces" "$WORKSPACE_REQUEST")"
 require_code "workspace create" "$WORKSPACE_RESPONSE" "201"
 WORKSPACE_ID="$(response_body "$WORKSPACE_RESPONSE" | json_field "data['workspace']['id']")"
@@ -147,14 +161,17 @@ SOURCE_REQUEST=$(cat <<EOF
 }
 EOF
 )
+step "3. create source $SOURCE_GIT@$SOURCE_REF"
 SOURCE_RESPONSE="$(post_json "/internal/v1/sources" "$SOURCE_REQUEST")"
 require_code "source create" "$SOURCE_RESPONSE" "201"
 SOURCE_ID="$(response_body "$SOURCE_RESPONSE" | json_field "data['source']['id']")"
 
+step "4. sync source $SOURCE_ID"
 SYNC_RESPONSE="$(post_json "/internal/v1/sources/$SOURCE_ID/sync" '{}')"
 require_code "source sync create" "$SYNC_RESPONSE" "201"
 SYNC_ID="$(response_body "$SYNC_RESPONSE" | json_field "data['run']['id']")"
 wait_for_run "$SYNC_ID" "source sync" >/dev/null
+step "5. read snapshots"
 SNAPSHOTS_RESPONSE="$(get_json "/internal/v1/sources/$SOURCE_ID/snapshots")"
 require_code "source snapshots" "$SNAPSHOTS_RESPONSE" "200"
 SNAPSHOT_COUNT="$(response_body "$SNAPSHOTS_RESPONSE" | json_field "len(data.get('snapshots') or [])")"
@@ -178,10 +195,12 @@ CAPSULE_REQUEST=$(cat <<EOF
 }
 EOF
 )
+step "6. create capsule"
 CAPSULE_RESPONSE="$(post_json "/internal/v1/workspaces/$WORKSPACE_ID/capsules" "$CAPSULE_REQUEST")"
 require_code "capsule create" "$CAPSULE_RESPONSE" "201"
 CAPSULE_ID="$(response_body "$CAPSULE_RESPONSE" | json_field "data['capsule']['id']")"
 
+step "7. plan capsule $CAPSULE_ID"
 PLAN_RESPONSE="$(post_json "/internal/v1/capsules/$CAPSULE_ID/plan" '{}')"
 require_code "capsule plan create" "$PLAN_RESPONSE" "201"
 PLAN_BODY="$(response_body "$PLAN_RESPONSE")"
@@ -226,6 +245,7 @@ expected["planRunId"] = plan_run_id
 expected["runnerProfileId"] = runner_profile_id
 print(json.dumps({"planRunId": run["id"], "expected": expected}))
 ')"
+step "8. apply run"
 APPLY_RESPONSE="$(post_json "/internal/v1/apply-runs" "$APPLY_REQUEST")"
 require_code "apply run create" "$APPLY_RESPONSE" "201"
 APPLY_BODY="$(response_body "$APPLY_RESPONSE")"
@@ -243,6 +263,7 @@ if [[ "$APPLY_STATUS" != "succeeded" ]]; then
 	exit 1
 fi
 
+step "9. read capsule + state versions"
 GET_CAPSULE_RESPONSE="$(get_json "/internal/v1/capsules/$CAPSULE_ID")"
 require_code "get capsule" "$GET_CAPSULE_RESPONSE" "200"
 LIST_STATE_VERSIONS_RESPONSE="$(get_json "/internal/v1/capsules/$CAPSULE_ID/state-versions")"

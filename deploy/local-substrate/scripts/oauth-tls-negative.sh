@@ -16,6 +16,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/pkce-helpers.sh"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 APP_HOST="${TAKOSUMI_LOCAL_APP_HOST:-app.takosumi.test}"
 OAUTH_HOST="${TAKOSUMI_LOCAL_OAUTH_MOCK_HOST:-oauth-mock.test}"
@@ -23,13 +24,15 @@ BASE="https://${APP_HOST}"
 CURL_TLS=(--cacert "$CA" --resolve "${APP_HOST}:443:127.0.0.1" --resolve "${OAUTH_HOST}:443:127.0.0.1")
 
 STATE="oauth_tls_neg_$(date +%s%N)_$$"
+VERIFIER="$(mint_pkce_verifier)"
+CHALLENGE="$(pkce_challenge "$VERIFIER")"
 JAR=$(mktemp)
 trap 'rm -f "$JAR"' EXIT
 
 # 1. /oauth/upstream/authorize?provider=tls-fail → 302 to mock /tls-fail/authorize
 #    (use a cookie jar so the worker's state-binding cookie sticks for step 3).
 LOC1=$(curl -sk "${CURL_TLS[@]}" -c "$JAR" -b "$JAR" -o /dev/null -w "%{redirect_url}" \
-	"${BASE}/oauth/upstream/authorize?provider=tls-fail&state=$STATE")
+	"${BASE}/oauth/upstream/authorize?provider=tls-fail&state=$STATE&code_challenge=$CHALLENGE&code_challenge_method=S256")
 [[ -n "$LOC1" ]] || { echo "FAIL: worker /authorize did not 302 for tls-fail provider" >&2; exit 1; }
 
 # 2. Follow mock /tls-fail/authorize → 302 with code (this part still works)
@@ -42,7 +45,7 @@ CALLBACK_STATE=$(echo "$LOC2" | sed -nE 's/.*[?&]state=([^&]*).*/\1/p')
 # 3. Worker /callback hits /tls-fail/token → 503 → worker should return 502
 #    upstream_oauth_failed. State cookie matches because we reused the jar.
 RESP=$(curl -sk "${CURL_TLS[@]}" -c "$JAR" -b "$JAR" -w "\n%{http_code}" \
-	"${BASE}/oauth/upstream/callback?provider=tls-fail&code=$CODE&state=$CALLBACK_STATE")
+	"${BASE}/oauth/upstream/callback?provider=tls-fail&code=$CODE&state=$CALLBACK_STATE&code_verifier=$VERIFIER")
 STATUS=$(echo "$RESP" | tail -n1)
 BODY=$(echo "$RESP" | head -n -1)
 

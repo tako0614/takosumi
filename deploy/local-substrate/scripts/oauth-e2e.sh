@@ -12,12 +12,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/pkce-helpers.sh"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 PROVIDER="${1:-local-oidc}"
 APP_HOST="${TAKOSUMI_LOCAL_APP_HOST:-app.takosumi.test}"
 OAUTH_HOST="${TAKOSUMI_LOCAL_OAUTH_MOCK_HOST:-oauth-mock.test}"
 BASE="https://${APP_HOST}"
 STATE="oauth_e2e_$(date +%s%N)_$$"
+VERIFIER="$(mint_pkce_verifier)"
+CHALLENGE="$(pkce_challenge "$VERIFIER")"
 COOKIE_JAR="$(mktemp)"
 trap 'rm -f "$COOKIE_JAR"' EXIT
 CURL_TLS=(--cacert "$CA" --resolve "${APP_HOST}:443:127.0.0.1" --resolve "${OAUTH_HOST}:443:127.0.0.1")
@@ -30,7 +33,7 @@ fi
 LOC1=$(curl -sk --cacert "$CA" -o /dev/null -w "%{redirect_url}" \
 	"${CURL_TLS[@]}" \
 	-c "$COOKIE_JAR" -b "$COOKIE_JAR" \
-	"${BASE}/oauth/upstream/authorize?provider=${PROVIDER}&state=${STATE}")
+	"${BASE}/oauth/upstream/authorize?provider=${PROVIDER}&state=${STATE}&code_challenge=${CHALLENGE}&code_challenge_method=S256")
 [[ -n "$LOC1" ]] || { echo "FAIL: worker /authorize returned no redirect" >&2; exit 1; }
 
 # 2. Follow mock /authorize → 302 to /sign-in/callback with code
@@ -46,7 +49,7 @@ CALLBACK_STATE=$(echo "$LOC2" | sed -nE 's/.*[?&]state=([^&]*).*/\1/p')
 RESP=$(curl -sk --cacert "$CA" \
 	"${CURL_TLS[@]}" \
 	-c "$COOKIE_JAR" -b "$COOKIE_JAR" \
-	"${BASE}/oauth/upstream/callback?provider=${PROVIDER}&code=${CODE}&state=${CALLBACK_STATE}")
+	"${BASE}/oauth/upstream/callback?provider=${PROVIDER}&code=${CODE}&state=${CALLBACK_STATE}&code_verifier=${VERIFIER}")
 SUBJECT=$(echo "$RESP" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('subject') or '')")
 SESSION_ID_IN_BODY=$(echo "$RESP" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('session_id') or '')")
 if [[ -z "$SUBJECT" ]]; then

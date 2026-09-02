@@ -28,6 +28,12 @@ FAIL=0
 SMOKE_LOG_DIR="${SMOKE_LOG_DIR:-/tmp/smoke-logs}"
 mkdir -p "$SMOKE_LOG_DIR"
 
+# Every check runs under a wall-clock bound. A check that hangs must FAIL —
+# without a bound one stuck HTTP call spends the whole CI job budget, the job
+# is cancelled rather than failed, and cancellation skips the log-capture step
+# that would have said where it stopped.
+SMOKE_STEP_TIMEOUT_SECONDS="${SMOKE_STEP_TIMEOUT_SECONDS:-240}"
+
 # Wrap a script invocation so its full stdout+stderr is captured to
 # $SMOKE_LOG_DIR/<label>.log when it fails. CI uploads the dir as a
 # build artifact so post-mortem doesn't require manual re-run.
@@ -35,13 +41,18 @@ run_script() {
 	local label=$1
 	local cmd=$2  # space-separated command-line
 	local logfile="$SMOKE_LOG_DIR/${label}.log"
-	if eval "$cmd" >"$logfile" 2>&1; then
+	local status=0
+	timeout --signal=TERM --kill-after=10 "$SMOKE_STEP_TIMEOUT_SECONDS" \
+		bash -c "$cmd" >"$logfile" 2>&1 || status=$?
+	if [[ "$status" -eq 0 ]]; then
 		return 0
-	else
-		echo "      → log: $logfile (last 5 lines:)"
-		tail -n 5 "$logfile" | sed 's/^/        /'
-		return 1
 	fi
+	if [[ "$status" -eq 124 || "$status" -eq 137 ]]; then
+		echo "      → TIMEOUT after ${SMOKE_STEP_TIMEOUT_SECONDS}s"
+	fi
+	echo "      → log: $logfile (last 5 lines:)"
+	tail -n 5 "$logfile" | sed 's/^/        /'
+	return 1
 }
 
 # Bundle freshness gate — refuse to run smoke against a stale worker /
