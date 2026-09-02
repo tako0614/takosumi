@@ -51,11 +51,16 @@ step() {
 	echo "--> $*" >&2
 }
 
+# No request may hang. An unbounded curl here has cost this smoke entire CI
+# jobs, and a stalled control-plane call is a failure worth reporting, not
+# worth waiting on.
+CURL_BOUNDS=(--connect-timeout 10 --max-time 60)
+
 post_json() {
 	local path="$1"
 	local body="$2"
 	curl -sk --cacert "$CA" \
-		"${CURL_RESOLVE[@]}" \
+		"${CURL_RESOLVE[@]}" "${CURL_BOUNDS[@]}" \
 		-H "Authorization: Bearer $TOKEN" \
 		-H "Content-Type: application/json" \
 		-d "$body" \
@@ -66,7 +71,7 @@ post_json() {
 get_json() {
 	local path="$1"
 	curl -sk --cacert "$CA" \
-		"${CURL_RESOLVE[@]}" \
+		"${CURL_RESOLVE[@]}" "${CURL_BOUNDS[@]}" \
 		-H "Authorization: Bearer $TOKEN" \
 		-H "Content-Type: application/json" \
 		-w "\n%{http_code}\n" \
@@ -127,6 +132,22 @@ wait_for_run() {
 	echo "FAIL: $label run $run_id did not finish within timeout" >&2
 	exit 1
 }
+
+# Reachability first, with the timing breakdown. When this host stops
+# answering, the breakdown says whether it died at TCP connect, at the TLS
+# handshake, or waiting for a first byte — three very different faults that a
+# bare "it hung" cannot tell apart.
+step "0. probe $SERVICE_URL"
+probe_exit=0
+probe="$(curl -sk --cacert "$CA" "${CURL_RESOLVE[@]}" \
+	--connect-timeout 5 --max-time 20 -o /dev/null \
+	-w 'http=%{http_code} connect=%{time_connect}s tls=%{time_appconnect}s firstbyte=%{time_starttransfer}s total=%{time_total}s' \
+	"$SERVICE_URL/healthz")" || probe_exit=$?
+step "   $probe curl_exit=$probe_exit"
+if [[ "$probe_exit" -ne 0 ]]; then
+	echo "FAIL: $SERVICE_URL is not reachable from the host ($probe curl_exit=$probe_exit)" >&2
+	exit 1
+fi
 
 step "1. runner profiles"
 PROFILES_RESPONSE="$(get_json "/internal/v1/runner-profiles")"
