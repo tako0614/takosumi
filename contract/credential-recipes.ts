@@ -1,3 +1,5 @@
+import { isOpenTofuIdentifier } from "./provider-env-rules.ts";
+
 export type CredentialRecipeMaterialSource =
   "secret" | "value" | "generated" | "literal" | "user_defined";
 
@@ -71,6 +73,14 @@ export interface CredentialRecipeAuthMode {
    */
   readonly runIssuance?: CredentialRecipeRunIssuance;
   /**
+   * Run-scoped sensitive provider inputs this auth mode's provider understands.
+   * It declares only the PROTOCOL SHAPE — the two provider-block argument names
+   * the provider reads. It never carries, names, or selects a value: the value
+   * set is the Capsule's manifest-gated runtime binding profile, minted per Run
+   * by the host and delivered to OpenTofu as an Apply-only ephemeral variable.
+   */
+  readonly runtimeInputs?: CredentialRecipeRuntimeInputs;
+  /**
    * Optional service-side form hints. They are presentation only: Core derives
    * execution exclusively from env/files/preRun and never treats a hint as
    * credential material or admission authority.
@@ -87,6 +97,63 @@ export interface CredentialRecipeRunIssuance {
   readonly audience: string;
   /** Exact minimal scope set minted for every phase of this recipe mode. */
   readonly scopes: readonly string[];
+}
+
+export const PROVIDER_RUNTIME_INPUTS_CONTRACT =
+  "takosumi.provider-runtime-inputs/v1" as const;
+
+/**
+ * Protocol shape for run-scoped sensitive provider inputs.
+ *
+ * A provider that understands this protocol reads two provider-block arguments:
+ * a plan-stable nonce and an Apply-only sensitive `map(string)`. This descriptor
+ * names ONLY those two arguments. It is deliberately value-free: it can never
+ * carry material, select a value source, or widen the name set. The exact names
+ * that may be delivered come from the Capsule's manifest-gated runtime binding
+ * profile, and the values are minted per Run by the host.
+ */
+export interface CredentialRecipeRuntimeInputs {
+  readonly contract: typeof PROVIDER_RUNTIME_INPUTS_CONTRACT;
+  /** Provider-block argument receiving the plan-stable nonce. */
+  readonly nonceArgument: string;
+  /** Provider-block argument receiving the Apply-only sensitive map. */
+  readonly mapArgument: string;
+}
+
+/**
+ * Closed check for the only run-scoped sensitive input descriptor v1 supports.
+ * Both argument names must be distinct OpenTofu identifiers and neither may
+ * shadow the `alias` meta-argument of a provider block.
+ */
+export function isProviderRuntimeInputs(
+  value: unknown,
+): value is CredentialRecipeRuntimeInputs {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).length === 3 &&
+    record.contract === PROVIDER_RUNTIME_INPUTS_CONTRACT &&
+    isRuntimeInputArgumentName(record.nonceArgument) &&
+    isRuntimeInputArgumentName(record.mapArgument) &&
+    record.nonceArgument !== record.mapArgument
+  );
+}
+
+/** Set-exact comparison for the descriptor pinned on a recipe/Connection. */
+export function sameProviderRuntimeInputs(
+  left: unknown,
+  right: unknown,
+): boolean {
+  return (
+    isProviderRuntimeInputs(left) &&
+    isProviderRuntimeInputs(right) &&
+    left.nonceArgument === right.nonceArgument &&
+    left.mapArgument === right.mapArgument
+  );
+}
+
+function isRuntimeInputArgumentName(value: unknown): value is string {
+  return isOpenTofuIdentifier(value) && value !== "alias";
 }
 
 /**

@@ -1,6 +1,9 @@
 import type { JsonValue } from "./types.ts";
 import { containsSecretLikeString, isSecretKey } from "./redaction.ts";
-import type { CredentialRecipeRunIssuance } from "./credential-recipes.ts";
+import type {
+  CredentialRecipeRunIssuance,
+  CredentialRecipeRuntimeInputs,
+} from "./credential-recipes.ts";
 import type { SourceGitConnectionKind } from "./sources.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
@@ -58,6 +61,12 @@ export interface ProviderConnectionRecipeRef {
   readonly preRunAction?: string;
   /** Server-resolved run-issuance authority pinned from the installed mode. */
   readonly runIssuance?: CredentialRecipeRunIssuance;
+  /**
+   * Server-resolved run-scoped sensitive input protocol pinned from the
+   * installed mode. Value-free: it names only the two provider-block arguments
+   * this provider reads, never a value or a value source.
+   */
+  readonly runtimeInputs?: CredentialRecipeRuntimeInputs;
 }
 
 /** Closed check for the only run-issued credential descriptor supported by v1. */

@@ -268,10 +268,15 @@ const RULES: readonly BoundaryRule[] = [
   {
     id: "oss-takoform-run-credential-env",
     message:
-      "OSS run credentials are recipe-declared and provider-neutral; TAKOFORM endpoint, space, and token env semantics are allowed only in the compatibility decoder",
+      "OSS run credentials are recipe-declared and provider-neutral; TAKOFORM endpoint, space, and token env semantics are allowed only in the compatibility decoder and in the declarative reference recipe catalog generated from recipes/providers/*.yaml",
     appliesTo: (path) =>
       isImplementationPath(path) &&
-      path !== "core/domains/capsules/repository_install_ux_compiler.ts",
+      path !== "core/domains/capsules/repository_install_ux_compiler.ts" &&
+      // The reference recipe catalog is data generated from
+      // `recipes/providers/*.yaml`, not code: a recipe declaring its own
+      // provider's env names IS the recipe-declared, provider-neutral path this
+      // rule protects. Hand-written provider code stays covered.
+      path !== "providers/credential-recipes.generated.ts",
     patterns: [/\bTAKOFORM_(?:ENDPOINT|SPACE|TOKEN)\b/],
   },
   {
