@@ -118,12 +118,23 @@ export interface CredentialRecipeRuntimeInputs {
   readonly nonceArgument: string;
   /** Provider-block argument receiving the Apply-only sensitive map. */
   readonly mapArgument: string;
+  /**
+   * Lowest exact provider version that accepts the two arguments.
+   *
+   * Below it the arguments do not exist in the provider schema and a plan fails
+   * with `Unsupported argument`, so the wiring must stay inert instead. It is a
+   * property of the provider's own contract, which is why the recipe — the one
+   * place that already knows which provider understands the protocol — is what
+   * declares it.
+   */
+  readonly minimumProviderVersion: string;
 }
 
 /**
  * Closed check for the only run-scoped sensitive input descriptor v1 supports.
- * Both argument names must be distinct OpenTofu identifiers and neither may
- * shadow the `alias` meta-argument of a provider block.
+ * Both argument names must be distinct OpenTofu identifiers, neither may shadow
+ * the `alias` meta-argument of a provider block, and the version floor must be
+ * an exact release.
  */
 export function isProviderRuntimeInputs(
   value: unknown,
@@ -131,11 +142,12 @@ export function isProviderRuntimeInputs(
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return (
-    Object.keys(record).length === 3 &&
+    Object.keys(record).length === 4 &&
     record.contract === PROVIDER_RUNTIME_INPUTS_CONTRACT &&
     isRuntimeInputArgumentName(record.nonceArgument) &&
     isRuntimeInputArgumentName(record.mapArgument) &&
-    record.nonceArgument !== record.mapArgument
+    record.nonceArgument !== record.mapArgument &&
+    isExactProviderVersion(record.minimumProviderVersion)
   );
 }
 
@@ -148,8 +160,87 @@ export function sameProviderRuntimeInputs(
     isProviderRuntimeInputs(left) &&
     isProviderRuntimeInputs(right) &&
     left.nonceArgument === right.nonceArgument &&
-    left.mapArgument === right.mapArgument
+    left.mapArgument === right.mapArgument &&
+    left.minimumProviderVersion === right.minimumProviderVersion
   );
+}
+
+/**
+ * Whether a Capsule's pinned provider version PROVES the arguments exist.
+ *
+ * Only an exact version proves anything: a range, or no declared version at
+ * all, could resolve to a provider release that never had them. An unproven
+ * version leaves the wiring inert rather than baking arguments into a reviewed
+ * root that the provider will reject.
+ */
+export function providerVersionMeetsRuntimeInputFloor(
+  version: string | undefined,
+  minimumProviderVersion: string,
+): boolean {
+  if (
+    !isExactProviderVersion(version) ||
+    !isExactProviderVersion(minimumProviderVersion)
+  ) {
+    return false;
+  }
+  return compareExactProviderVersions(version, minimumProviderVersion) >= 0;
+}
+
+const EXACT_PROVIDER_VERSION =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+
+function isExactProviderVersion(value: unknown): value is string {
+  return typeof value === "string" && EXACT_PROVIDER_VERSION.test(value);
+}
+
+/** Semantic-version precedence: build metadata is ignored, prereleases rank low. */
+function compareExactProviderVersions(left: string, right: string): number {
+  const [leftCore, leftPre] = splitProviderVersion(left);
+  const [rightCore, rightPre] = splitProviderVersion(right);
+  for (let index = 0; index < 3; index++) {
+    const difference = leftCore[index]! - rightCore[index]!;
+    if (difference !== 0) return difference < 0 ? -1 : 1;
+  }
+  if (leftPre === undefined && rightPre === undefined) return 0;
+  if (leftPre === undefined) return 1;
+  if (rightPre === undefined) return -1;
+  return comparePrereleaseIdentifiers(leftPre, rightPre);
+}
+
+function splitProviderVersion(
+  value: string,
+): [readonly number[], readonly string[] | undefined] {
+  const withoutBuild = value.split("+", 1)[0]!;
+  const dash = withoutBuild.indexOf("-");
+  const core = (dash < 0 ? withoutBuild : withoutBuild.slice(0, dash))
+    .split(".")
+    .map((part) => Number(part));
+  const prerelease =
+    dash < 0 ? undefined : withoutBuild.slice(dash + 1).split(".");
+  return [core, prerelease];
+}
+
+function comparePrereleaseIdentifiers(
+  left: readonly string[],
+  right: readonly string[],
+): number {
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index++) {
+    const leftPart = left[index];
+    const rightPart = right[index];
+    if (leftPart === undefined) return -1;
+    if (rightPart === undefined) return 1;
+    const leftNumeric = /^\d+$/u.test(leftPart);
+    const rightNumeric = /^\d+$/u.test(rightPart);
+    if (leftNumeric && rightNumeric) {
+      const difference = Number(leftPart) - Number(rightPart);
+      if (difference !== 0) return difference < 0 ? -1 : 1;
+      continue;
+    }
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    if (leftPart !== rightPart) return leftPart < rightPart ? -1 : 1;
+  }
+  return 0;
 }
 
 function isRuntimeInputArgumentName(value: unknown): value is string {

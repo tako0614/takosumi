@@ -51,6 +51,39 @@ export const RUNTIME_INPUTS_NAME_SET_CHANGED_REASON =
   "runtime_inputs_name_set_changed";
 export const RUNTIME_INPUTS_LIMIT_EXCEEDED_REASON =
   "runtime_inputs_limit_exceeded";
+/**
+ * The Capsule material behind the profile cannot be read or re-sealed. It is a
+ * precondition on Capsule state, never an internal fault.
+ */
+export const RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON =
+  "runtime_inputs_material_unusable";
+/**
+ * The declaring provider instance is not pinned to a version that proves the
+ * provider accepts the two arguments, so the wiring stays inert. This is a
+ * plan warning, not a failure: a Capsule that needs no run-scoped sensitive
+ * inputs must still plan.
+ */
+export const RUNTIME_INPUTS_PROVIDER_VERSION_UNPROVEN_REASON =
+  "runtime_inputs_provider_version_unproven";
+/**
+ * An Apply whose reviewed plan pinned a run-scoped sensitive input descriptor
+ * that the live resolution no longer produces.
+ */
+/**
+ * An Apply whose reviewed plan pinned a run-scoped sensitive input descriptor
+ * that the live provider resolution no longer produces. The reviewed root
+ * declares a defaultless ephemeral variable, so delivering nothing would fail
+ * unattributably inside OpenTofu instead.
+ */
+export const RUNTIME_INPUTS_WIRING_MISSING_REASON =
+  "runtime_inputs_wiring_missing";
+/**
+ * The reviewed generated-root variable and the live provider instance's
+ * variable disagree. Distinct from a rotated nonce: the material may be
+ * untouched while the wiring moved.
+ */
+export const RUNTIME_INPUTS_VARIABLE_CHANGED_REASON =
+  "runtime_inputs_variable_changed";
 
 const STRUCTURED_ERROR_REASON_RE = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u;
 

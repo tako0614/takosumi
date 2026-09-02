@@ -49,15 +49,18 @@ import {
   PROVIDER_CONNECTION_SETUP_REQUIRED_REASON,
   RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON,
   RUNTIME_INPUTS_LIMIT_EXCEEDED_REASON,
+  RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON,
   RUNTIME_INPUTS_NAME_SET_CHANGED_REASON,
   RUNTIME_INPUTS_NONCE_CHANGED_REASON,
-  RUNTIME_INPUTS_REQUIRE_GENERATED_ROOT_REASON,
+  RUNTIME_INPUTS_VARIABLE_CHANGED_REASON,
+  RUNTIME_INPUTS_WIRING_MISSING_REASON,
   structuredErrorReason,
 } from "./errors.ts";
 import {
   RUNTIME_INPUT_MAX_NAMES,
   RUNTIME_INPUT_MAX_TOTAL_BYTES,
   RUNTIME_INPUT_MAX_VALUE_BYTES,
+  RUNTIME_INPUT_MIN_VALUE_LENGTH,
   RUNTIME_INPUT_NAME_PATTERN,
   type RuntimeInputMaterializer,
 } from "./runtime_input_materializer.ts";
@@ -158,6 +161,7 @@ export class RunCredentialBroker {
       phase,
       auditRunId,
       credentialRunId,
+      { releaseCommand: true },
     );
   }
 
@@ -166,6 +170,7 @@ export class RunCredentialBroker {
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
     credentialRunId: string = auditRunId,
+    options: { readonly releaseCommand?: boolean } = {},
   ): Promise<RunCredentials | undefined> {
     if (planRun.requiredProviders.length === 0) {
       return undefined;
@@ -256,6 +261,7 @@ export class RunCredentialBroker {
         planRun,
         phase,
         mintable,
+        options.releaseCommand === true,
       );
       const bundle = new CredentialBundle({});
       if (providerEntries.length === 0) {
@@ -360,34 +366,47 @@ export class RunCredentialBroker {
     planRun: PlanRun,
     phase: "plan" | "apply" | "destroy",
     mintable: readonly ResolvedCapsuleProviderBinding[],
+    releaseCommand: boolean,
   ): Promise<readonly RunCredentialRuntimeInputs[] | undefined> {
-    const wiring = runtimeInputWiringFromResolved(mintable);
-    if (!wiring) return undefined;
-    const descriptors = await this.#runtimeInputsForPlanRun?.(planRun);
-    const descriptor = descriptors?.find(
-      (entry) => entry.providerInstance === wiring.providerInstance,
-    );
+    // A lifecycle release command runs its own dispatch with no generated root
+    // and no ephemeral variable, so nothing there could consume a map. Minting
+    // one would widen exposure past the Apply-only, generated-root-only path.
+    if (releaseCommand) return undefined;
+    const descriptor = (await this.#runtimeInputsForPlanRun?.(planRun))?.[0];
     if (!descriptor) {
+      // The reviewed plan wired no run-scoped sensitive inputs: a destroy plan,
+      // a provider version that cannot accept them yet, or a Capsule whose
+      // Provider Connection does not declare the protocol. The generated root
+      // therefore declares no ephemeral variable either.
+      return undefined;
+    }
+    const wiring = runtimeInputWiringFromResolved(mintable);
+    if (!wiring || wiring.providerInstance !== descriptor.providerInstance) {
+      // The plan pinned a descriptor, so the reviewed root declares a
+      // defaultless ephemeral variable. Delivering nothing would fail inside
+      // `tofu` with an unattributable "No value for required variable".
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `runtime_inputs_not_reviewed: plan run ${planRun.id} did not wire ` +
-          `run-scoped sensitive provider inputs into its generated root; ` +
-          `re-plan before apply`,
-        { reason: RUNTIME_INPUTS_REQUIRE_GENERATED_ROOT_REASON },
+        `${RUNTIME_INPUTS_WIRING_MISSING_REASON}: plan run ${planRun.id} was ` +
+          `reviewed with run-scoped sensitive provider inputs, but no resolved ` +
+          `Provider Connection declares them for this apply; re-plan before apply`,
+        { reason: RUNTIME_INPUTS_WIRING_MISSING_REASON },
       );
     }
     assertRuntimeInputNames(descriptor.names);
     if (descriptor.variableName !== wiring.variableName) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `runtime_inputs_nonce_changed: plan run ${planRun.id} was reviewed ` +
-          `against a different generated-root variable; re-plan before apply`,
-        { reason: RUNTIME_INPUTS_NONCE_CHANGED_REASON },
+        `${RUNTIME_INPUTS_VARIABLE_CHANGED_REASON}: plan run ${planRun.id} was ` +
+          `reviewed against generated-root variable ${descriptor.variableName}, ` +
+          `but the resolved provider instance now binds ${wiring.variableName}; ` +
+          `re-plan before apply`,
+        { reason: RUNTIME_INPUTS_VARIABLE_CHANGED_REASON },
       );
     }
-    // A destroy plan's provider teardown never reads the map, and a plan never
-    // reads it either. Both still declare the same ephemeral variable, so the
-    // runner supplies an empty map to keep plan/apply variable symmetry.
+    // A plan never reads the map, and a destroy plan pins no descriptor at all,
+    // so only a create/update apply opens material. Plan still supplies the
+    // variable with an empty map to keep OpenTofu's plan/apply symmetry.
     if (phase !== "apply") {
       return [
         {
@@ -401,7 +420,7 @@ export class RunCredentialBroker {
     if (!materializer) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "credential_mint_failed: no runtime input materializer is configured for run-scoped sensitive provider inputs",
+        `${RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON}: no runtime input materializer is configured for run-scoped sensitive provider inputs`,
         { reason: RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON },
       );
     }
@@ -412,22 +431,34 @@ export class RunCredentialBroker {
     if (!capsule || capsule.workspaceId !== planRun.workspaceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "credential_mint_failed: run-scoped sensitive provider inputs require a current Capsule authority",
+        `${RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON}: run-scoped sensitive provider inputs require a current Capsule authority`,
         { reason: RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON },
       );
     }
-    const minted = await materializer.materialize({
-      workspaceId: capsule.workspaceId,
-      capsuleId: capsule.id,
-      installConfigId: capsule.installConfigId,
-      providerInstance: wiring.providerInstance,
-      phase: "apply",
-    });
+    let minted;
+    try {
+      minted = await materializer.materialize({
+        workspaceId: capsule.workspaceId,
+        capsuleId: capsule.id,
+        installConfigId: capsule.installConfigId,
+        providerInstance: wiring.providerInstance,
+        phase: "apply",
+      });
+    } catch (error) {
+      if (error instanceof OpenTofuControllerError) throw error;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `${RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON}: run-scoped sensitive provider input material is not usable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { reason: RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON },
+      );
+    }
     if (minted.nonce !== descriptor.nonce) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `runtime_inputs_nonce_changed: plan run ${planRun.id} was reviewed ` +
-          `against a different run-scoped sensitive input generation; ` +
+        `${RUNTIME_INPUTS_NONCE_CHANGED_REASON}: plan run ${planRun.id} was ` +
+          `reviewed against a different run-scoped sensitive input generation; ` +
           `re-plan before apply`,
         { reason: RUNTIME_INPUTS_NONCE_CHANGED_REASON },
       );
@@ -439,8 +470,8 @@ export class RunCredentialBroker {
     ) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `runtime_inputs_name_set_changed: the runtime binding profile changed ` +
-          `since plan run ${planRun.id} was reviewed; re-plan before apply`,
+        `${RUNTIME_INPUTS_NAME_SET_CHANGED_REASON}: the runtime binding profile ` +
+          `changed since plan run ${planRun.id} was reviewed; re-plan before apply`,
         { reason: RUNTIME_INPUTS_NAME_SET_CHANGED_REASON },
       );
     }
@@ -717,6 +748,13 @@ function assertRuntimeInputValues(
     if (typeof value !== "string" || value.length === 0) {
       throw runtimeInputLimitExceeded(
         "run-scoped sensitive input value is missing",
+      );
+    }
+    // Below the runner's redaction floor a value could not be stripped out of
+    // runner stdout/stderr, so it must never leave the control plane.
+    if (value.length < RUNTIME_INPUT_MIN_VALUE_LENGTH) {
+      throw runtimeInputLimitExceeded(
+        `run-scoped sensitive input value is shorter than the ${RUNTIME_INPUT_MIN_VALUE_LENGTH}-character redaction floor`,
       );
     }
     const bytes = new TextEncoder().encode(value).byteLength;

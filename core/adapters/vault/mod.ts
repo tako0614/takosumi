@@ -49,6 +49,7 @@ import type {
 import {
   isProviderRuntimeInputs,
   PROVIDER_RUNTIME_INPUTS_CONTRACT,
+  sameProviderRuntimeInputs,
 } from "takosumi-contract/credential-recipes";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import {
@@ -1155,6 +1156,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         );
       }
       assertConnectionVerified(connection);
+      this.#assertPinnedRuntimeInputsStillInstalled(connection);
       const runIssuance = isCapsuleRunCredentialIssuance(
         connection.credentialRecipe?.runIssuance,
       );
@@ -1572,6 +1574,32 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     connection: ProviderConnection,
   ): Promise<Record<string, string>> {
     return { ...(await this.#openProviderSecretMaterial(connection)).env };
+  }
+
+  /**
+   * Reconciles the protocol descriptor pinned when the Provider Connection was
+   * registered against the recipe catalog installed NOW.
+   *
+   * The descriptor names provider-block arguments that get baked into a
+   * reviewed generated root. A catalog upgrade that renames them, moves the
+   * version floor, or drops the protocol must stop the Run and ask for
+   * re-registration rather than keep wiring the stale names.
+   */
+  #assertPinnedRuntimeInputsStillInstalled(connection: ProviderConnection): void {
+    const recipe = connection.credentialRecipe;
+    const pinned = recipe?.runtimeInputs;
+    if (!recipe || pinned === undefined) return;
+    const installed = this.#credentialRecipeResolver(recipe.id)?.authModes[
+      recipe.authMode
+    ]?.runtimeInputs;
+    if (!sameProviderRuntimeInputs(pinned, installed)) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${connection.id} pins a run-scoped sensitive input protocol the installed Credential Recipe no longer declares; re-register the Provider Connection`,
+        undefined,
+        "provider_connection_setup_required",
+      );
+    }
   }
 
   async #mintProviderValues(
@@ -2872,6 +2900,7 @@ function resolvedRuntimeInputs(
     contract: PROVIDER_RUNTIME_INPUTS_CONTRACT,
     nonceArgument: value.nonceArgument,
     mapArgument: value.mapArgument,
+    minimumProviderVersion: value.minimumProviderVersion,
   };
 }
 
