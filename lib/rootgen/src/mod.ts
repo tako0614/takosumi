@@ -38,7 +38,7 @@ import {
   canonicalProviderSource,
   isOpenTofuBuiltinProviderSource,
   isOpenTofuIdentifier,
-} from "takosumi-contract/provider-env-rules";
+} from "../../../contract/provider-env-rules.ts";
 
 const CHILD_MODULE_SOURCE = "./module";
 
