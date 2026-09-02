@@ -129,6 +129,12 @@ export async function readOpenTofuOutputsFromStateFile(
   return outputs;
 }
 
+/** The live child a {@link runCommand} caller may observe, but not write to. */
+export interface SpawnedCommand {
+  readonly pid: number;
+  readonly exited: Promise<number>;
+}
+
 export async function runCommand(
   command: readonly string[],
   options: {
@@ -142,11 +148,15 @@ export async function runCommand(
      */
     readonly isolateProcessGroup?: boolean;
     /**
-     * Bytes written to the child's standard input. Used to hand OpenTofu a
-     * transient ephemeral-variable file through `-var-file=/dev/stdin` so its
-     * plaintext never reaches a file, an argv element, or an env variable.
+     * Invoked the instant the child process exists.
+     *
+     * The run-scoped sensitive input lane uses it to open the write end of its
+     * FIFO variable file only once a reader can exist, and to stop waiting if
+     * the child dies first. Standard input is deliberately never written: it
+     * stays Bun's default `ignore`, so every provider plugin OpenTofu spawns
+     * inherits `/dev/null` on fd 0 instead of a re-readable var-file body.
      */
-    readonly stdin?: Uint8Array;
+    readonly onSpawn?: (child: SpawnedCommand) => void;
   },
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const signal = options.context?.signal;
@@ -157,10 +167,13 @@ export async function runCommand(
   const subprocess = Bun.spawn([...command], {
     cwd: options.cwd,
     env: options.context?.env ?? baseCommandEnv(),
-    ...(options.stdin ? { stdin: options.stdin } : {}),
     stdout: "pipe",
     stderr: "pipe",
     ...(isolate ? { detached: true } : {}),
+  });
+  options.onSpawn?.({
+    pid: subprocess.pid,
+    exited: subprocess.exited,
   });
   const stdoutPromise = new Response(subprocess.stdout).text();
   const stderrPromise = new Response(subprocess.stderr).text();

@@ -54,7 +54,7 @@ import {
 import { assertSafeRelativePath } from "./policy.ts";
 import {
   assertRuntimeInputVariablesDeclared,
-  runtimeInputVariableFileBody,
+  prepareRuntimeInputVariableFile,
 } from "./runtime_inputs.ts";
 import {
   commandContextFromRequest,
@@ -393,37 +393,43 @@ export async function initPlanAndBuildResponse(
     await readDependencyLockIfPresent(moduleDir),
   );
   // OpenTofu requires an ephemeral variable set at plan to be set again at
-  // apply, so plan supplies the same variables with an empty map. The body goes
-  // to standard input: never `-var` (argv) and never `TF_VAR_*` (env).
-  const runtimeInputVariableFile = runtimeInputVariableFileBody(
+  // apply, so plan supplies the same variables with an empty map. The body
+  // travels through a run-private FIFO: never `-var` (argv), never `TF_VAR_*`
+  // (env), and never standard input (which every provider plugin inherits).
+  const runtimeInputVariableFile = await prepareRuntimeInputVariableFile(
     commandContext.runtimeInputs ?? [],
+    workspace.root,
   );
-  const plan = await timer.measure("tofu_plan", () =>
-    runCommand(
-      [
-        "tofu",
-        "plan",
-        ...(operation === "destroy" ? ["-destroy"] : []),
-        ...(options.refreshOnly ? ["-refresh-only"] : []),
-        ...(options.variableFilePath
-          ? [`-var-file=${options.variableFilePath}`]
-          : []),
-        ...(runtimeInputVariableFile ? ["-var-file=/dev/stdin"] : []),
-        "-input=false",
-        "-no-color",
-        "-out",
-        workspace.planPath,
-      ],
-      {
-        cwd: moduleDir,
-        context: commandContext,
-        isolateProcessGroup: true,
-        ...(runtimeInputVariableFile
-          ? { stdin: runtimeInputVariableFile }
-          : {}),
-      },
-    ),
-  );
+  let plan: Awaited<ReturnType<typeof runCommand>>;
+  try {
+    plan = await timer.measure("tofu_plan", () =>
+      runCommand(
+        [
+          "tofu",
+          "plan",
+          ...(operation === "destroy" ? ["-destroy"] : []),
+          ...(options.refreshOnly ? ["-refresh-only"] : []),
+          ...(options.variableFilePath
+            ? [`-var-file=${options.variableFilePath}`]
+            : []),
+          ...runtimeInputVariableFile.args,
+          "-input=false",
+          "-no-color",
+          "-out",
+          workspace.planPath,
+        ],
+        {
+          cwd: moduleDir,
+          context: commandContext,
+          isolateProcessGroup: true,
+          onSpawn: runtimeInputVariableFile.onSpawn,
+        },
+      ),
+    );
+    await runtimeInputVariableFile.delivered();
+  } finally {
+    await runtimeInputVariableFile.dispose();
+  }
   if (plan.exitCode !== 0) {
     return withPhaseTimings(
       mergeBuildLog(
@@ -624,30 +630,35 @@ export async function runReviewedPlanApply(
       strictMirrorInit?.attestation,
     );
     // A saved plan carries no ephemeral variable value, so apply re-supplies the
-    // map here. The values reach `tofu` only through standard input.
-    const runtimeInputVariableFile = runtimeInputVariableFileBody(
+    // map here, through the same run-private FIFO the plan used.
+    const runtimeInputVariableFile = await prepareRuntimeInputVariableFile(
       applyContext.runtimeInputs ?? [],
+      workspace.root,
     );
-    const result = await timer.measure("tofu_apply", () =>
-      runCommand(
-        [
-          "tofu",
-          "apply",
-          ...(runtimeInputVariableFile ? ["-var-file=/dev/stdin"] : []),
-          "-input=false",
-          "-no-color",
-          workspace.planPath,
-        ],
-        {
-          cwd: moduleDir,
-          context: applyContext,
-          isolateProcessGroup: true,
-          ...(runtimeInputVariableFile
-            ? { stdin: runtimeInputVariableFile }
-            : {}),
-        },
-      ),
-    );
+    let result: Awaited<ReturnType<typeof runCommand>>;
+    try {
+      result = await timer.measure("tofu_apply", () =>
+        runCommand(
+          [
+            "tofu",
+            "apply",
+            ...runtimeInputVariableFile.args,
+            "-input=false",
+            "-no-color",
+            workspace.planPath,
+          ],
+          {
+            cwd: moduleDir,
+            context: applyContext,
+            isolateProcessGroup: true,
+            onSpawn: runtimeInputVariableFile.onSpawn,
+          },
+        ),
+      );
+      await runtimeInputVariableFile.delivered();
+    } finally {
+      await runtimeInputVariableFile.dispose();
+    }
     const outputs =
       action === "apply" && result.exitCode === 0
         ? await timer.measure("tofu_output", () =>

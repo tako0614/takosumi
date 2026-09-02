@@ -5,21 +5,37 @@
 // Some providers accept an Apply-only sensitive `map(string)` on their provider
 // block. The control plane mints that map and sends it on the dispatch-only
 // credential bundle; this module turns it into an OpenTofu ephemeral-variable
-// file body that the runner writes to the `tofu` process's STANDARD INPUT.
+// file body and hands it to `tofu` through a FIFO that only `tofu` itself
+// reads.
 //
-// Nothing here ever reaches a file, an argv element, or an environment
-// variable:
+// Why a FIFO and not standard input: OpenTofu launches every provider plugin
+// with `cmd.Stdin = os.Stdin`, so anything on fd 0 is inherited by — and
+// re-readable by — every plugin in the root, including third-party providers
+// that are not the declaring instance. Standard input therefore stays unset
+// (Bun's default `ignore` ⇒ `/dev/null`), and the body travels through a
+// named pipe inside a 0700 directory:
+//   - a FIFO holds no bytes at rest, so there is no file to shred and no
+//     seekable handle for a same-uid process to re-read from `/proc/<pid>/fd`;
+//   - the writer opens it only once `tofu` has opened the read end, writes the
+//     whole body once, closes, and the pipe and its directory are removed
+//     immediately afterwards;
 //   - `-var` is never used, so no value can appear in `ps` output;
 //   - `TF_VAR_*` is never set, and the credential lane explicitly reserves it;
-//   - the body goes to `/dev/stdin`, so no plaintext touches the filesystem and
-//     there is no shred path to fail;
-//   - every value joins `CommandContext.redactionValues`, so a provider that
-//     echoes one back is redacted out of runner stdout/stderr.
+//   - every value (and its escaped HCL form) joins
+//     `CommandContext.redactionValues`, so a provider that echoes one back is
+//     redacted out of runner stdout/stderr.
 //
 // OpenTofu reads a `-var-file` exactly once per command and requires an
 // ephemeral variable set at plan to be set again at apply, so plan and apply
 // both supply the same variable — empty at plan/destroy, exact at apply.
+import { constants } from "node:fs";
+import { mkdtemp, open, rm } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import { join } from "node:path";
+
 import { hclString } from "../../lib/rootgen/src/mod.ts";
+import type { SpawnedCommand } from "./exec.ts";
+import { RUNNER_REDACTION_MIN_VALUE_LENGTH } from "./redaction.ts";
 import type { GeneratedRoot, RuntimeInputsDispatch } from "./types.ts";
 import { isRecord, recordField, stringField } from "./util.ts";
 
@@ -77,11 +93,25 @@ export function runtimeInputsFromRequest(
   return entries;
 }
 
-/** Every delivered value, for the runner's stdout/stderr redaction list. */
+/**
+ * Every delivered value, for the runner's stdout/stderr redaction list.
+ *
+ * The escaped HCL form is added alongside the raw value: a diagnostic that
+ * quotes the variable file back at the operator contains the escaped form, and
+ * `redactExactCredentialValues` only matches literal substrings.
+ */
 export function runtimeInputRedactionValues(
   entries: readonly RuntimeInputsDispatch[],
 ): string[] {
-  return entries.flatMap((entry) => Object.values(entry.values));
+  return entries.flatMap((entry) =>
+    Object.values(entry.values).flatMap((value) => {
+      const escaped = hclString(value);
+      // `hclString` wraps in quotes; the inner form is what appears inside the
+      // variable file body, so redact that too.
+      const inner = escaped.slice(1, -1);
+      return inner === value ? [value] : [value, inner];
+    }),
+  );
 }
 
 /**
@@ -111,9 +141,163 @@ export function assertRuntimeInputVariablesDeclared(
 }
 
 /**
- * Renders the transient HCL variable-file body handed to `tofu` on standard
- * input. `hclString` neutralizes `${` and `%{`, so no value can open an
- * interpolation or template directive inside the generated body.
+ * A transient `-var-file` this run delivers through a FIFO.
+ *
+ * `args` is spread into the `tofu` argv; `onSpawn` is handed to `runCommand` so
+ * the write end is opened only once the child exists; `delivered` re-raises any
+ * delivery failure after the command result is in hand; `dispose` removes the
+ * pipe and its directory.
+ */
+export interface RuntimeInputVariableFile {
+  readonly args: readonly string[];
+  readonly onSpawn: (child: SpawnedCommand) => void;
+  delivered(): Promise<void>;
+  dispose(): Promise<void>;
+}
+
+const NO_RUNTIME_INPUT_VARIABLE_FILE: RuntimeInputVariableFile = {
+  args: [],
+  onSpawn: () => {},
+  delivered: async () => {},
+  dispose: async () => {},
+};
+
+/** Bounded wait for `tofu` to open the read end before the run fails closed. */
+const VARIABLE_FILE_OPEN_TIMEOUT_MS = 120_000;
+const VARIABLE_FILE_POLL_MS = 5;
+
+/**
+ * Creates the 0700 directory and the 0600 FIFO this run's variable file travels
+ * through. Nothing is written until {@link RuntimeInputVariableFile.onSpawn}
+ * reports that `tofu` exists, and nothing is ever stored at rest.
+ */
+export async function prepareRuntimeInputVariableFile(
+  entries: readonly RuntimeInputsDispatch[],
+  workspaceRoot: string,
+): Promise<RuntimeInputVariableFile> {
+  if (entries.length === 0) return NO_RUNTIME_INPUT_VARIABLE_FILE;
+  const body = runtimeInputVariableFileBody(entries);
+  if (!body) return NO_RUNTIME_INPUT_VARIABLE_FILE;
+  // `mkdtemp` creates the directory 0700, and only this process ever names the
+  // pipe inside it. A sibling of the run workspace keeps it on the same
+  // run-scoped volume the container already owns.
+  const directory = await mkdtemp(`${workspaceRoot}-runtime-inputs-`);
+  // Not a `.json` name: OpenTofu parses this body as HCL tfvars.
+  const path = join(directory, "runtime-inputs.tfvars");
+  const made = Bun.spawnSync(["mkfifo", "-m", "600", path]);
+  if (made.exitCode !== 0) {
+    await rm(directory, { recursive: true, force: true });
+    invalid(
+      "run-scoped sensitive inputs could not create their transient variable pipe",
+    );
+  }
+  let delivery: Promise<void> | undefined;
+  let failure: unknown;
+  return {
+    args: [`-var-file=${path}`],
+    onSpawn: (child) => {
+      delivery = feedVariableFile(path, body, child).catch((error: unknown) => {
+        failure = error;
+      });
+    },
+    delivered: async () => {
+      await delivery;
+      if (failure !== undefined) throw failure;
+    },
+    dispose: async () => {
+      await delivery;
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+/**
+ * Opens the write end once `tofu` has opened the read end, writes the whole
+ * body, and closes so the reader sees a clean EOF.
+ *
+ * A FIFO's write-side `open(O_WRONLY | O_NONBLOCK)` fails with `ENXIO` until a
+ * reader exists, which is exactly the signal this loop waits for. It stops the
+ * moment the child dies: a child that failed carries its own diagnostic, while
+ * a child that succeeded without ever reading the file means OpenTofu silently
+ * ignored the variable, so that case fails the run.
+ */
+async function feedVariableFile(
+  path: string,
+  body: Uint8Array,
+  child: SpawnedCommand,
+): Promise<void> {
+  let exitCode: number | undefined;
+  void child.exited.then(
+    (code) => {
+      exitCode = code;
+    },
+    () => {
+      exitCode = -1;
+    },
+  );
+  const deadline = Date.now() + VARIABLE_FILE_OPEN_TIMEOUT_MS;
+  let handle: FileHandle | undefined;
+  while (handle === undefined) {
+    try {
+      handle = await open(path, constants.O_WRONLY | constants.O_NONBLOCK);
+    } catch (error) {
+      if (errorCode(error) !== "ENXIO") throw error;
+      if (exitCode !== undefined) {
+        if (exitCode === 0) {
+          invalid(
+            "run-scoped sensitive inputs were never read: OpenTofu exited successfully without opening its variable file",
+          );
+        }
+        return;
+      }
+      if (Date.now() > deadline) {
+        invalid(
+          "run-scoped sensitive inputs were not read by OpenTofu before the delivery deadline",
+        );
+      }
+      await Bun.sleep(VARIABLE_FILE_POLL_MS);
+    }
+  }
+  try {
+    let written = 0;
+    while (written < body.byteLength) {
+      try {
+        const result = await handle.write(
+          body,
+          written,
+          body.byteLength - written,
+        );
+        written += result.bytesWritten;
+      } catch (error) {
+        const code = errorCode(error);
+        if (code === "EAGAIN") {
+          if (Date.now() > deadline) {
+            invalid(
+              "run-scoped sensitive inputs were not drained by OpenTofu before the delivery deadline",
+            );
+          }
+          await Bun.sleep(VARIABLE_FILE_POLL_MS);
+          continue;
+        }
+        if (code === "EPIPE" && (await child.exited) !== 0) return;
+        throw error;
+      }
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+function errorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String((error as { readonly code?: unknown }).code)
+    : undefined;
+}
+
+/**
+ * Renders the transient HCL variable-file body. `hclString` neutralizes `${`
+ * and `%{`, so no value can open an interpolation or template directive inside
+ * the generated body.
  */
 export function runtimeInputVariableFileBody(
   entries: readonly RuntimeInputsDispatch[],
@@ -186,6 +370,13 @@ function exactRuntimeInputs(value: unknown): RuntimeInputsDispatch {
     const item = rawValues[name];
     if (typeof item !== "string" || item.length === 0 || item.includes(NUL)) {
       invalid("run-scoped sensitive input value is malformed");
+    }
+    // Anything shorter than the redaction floor could not be stripped out of
+    // runner stdout/stderr if a provider echoed it back.
+    if (item.length < RUNNER_REDACTION_MIN_VALUE_LENGTH) {
+      invalid(
+        `run-scoped sensitive input value is shorter than the ${RUNNER_REDACTION_MIN_VALUE_LENGTH}-character redaction floor`,
+      );
     }
     if (new TextEncoder().encode(item).byteLength > MAX_VALUE_BYTES) {
       invalid(

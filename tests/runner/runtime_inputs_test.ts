@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { inflateRawSync } from "node:zlib";
 
+import { generateOpenTofuChildModuleRoot } from "../../lib/rootgen/src/mod.ts";
 import { workspaceForRun, planJsonPath } from "../../runner/lib/artifacts.ts";
 import { runPlan, runReviewedPlanApply } from "../../runner/lib/plan_apply.ts";
 
@@ -169,8 +171,13 @@ test("run-scoped sensitive inputs reach tofu without entering any artifact", asy
     // The validation block above only passes when the map was delivered, so a
     // succeeded apply IS the positive delivery proof. Everything below proves
     // the value did not survive anywhere it must not.
-    const planBytes = await readFile(workspace.planPath);
-    expect(new TextDecoder().decode(planBytes)).not.toContain(SECRET);
+    //
+    // A `.tfplan` is a deflate zip, so grepping its raw bytes proves nothing —
+    // a value that DID reach the plan would be compressed and invisible. Every
+    // entry is inflated first.
+    const planEntries = unzipEntries(await readFile(workspace.planPath));
+    expect(planEntries.length).toBeGreaterThan(0);
+    for (const entry of planEntries) expect(entry).not.toContain(SECRET);
     expect(await readFile(planJsonPath(workspace), "utf8")).not.toContain(
       SECRET,
     );
@@ -194,8 +201,9 @@ test("run-scoped sensitive inputs reach tofu without entering any artifact", asy
     ).catch(() => "");
     expect(state).not.toContain(SECRET);
 
-    // The stdin lane writes no plaintext to disk. Any fallback would mkdtemp a
-    // sibling of the run workspace, so no such sibling may exist.
+    // The variable file is a FIFO inside a 0700 sibling of the run workspace.
+    // It holds no bytes at rest, and both the pipe and its directory are
+    // removed as soon as OpenTofu has consumed the body.
     const siblings = await readdir(dirname(workspace.root));
     expect(
       siblings.filter((name) =>
@@ -311,7 +319,7 @@ test("run-scoped sensitive input dispatch shapes fail closed", async () => {
   }
 });
 
-test("run-scoped sensitive inputs never reach tofu argv or env", async () => {
+test("run-scoped sensitive inputs reach neither tofu argv, env, nor fd 0", async () => {
   const runId = `runtime-inputs-argv-${crypto.randomUUID()}`;
   const workspace = workspaceForRun(runId);
   const auditDir = join(workspace.root, "..", `${runId}-audit`);
@@ -320,14 +328,27 @@ test("run-scoped sensitive inputs never reach tofu argv or env", async () => {
   try {
     await mkdir(fakeBinDir, { recursive: true });
     const auditLog = join(auditDir, "invocations.log");
-    // A `tofu` shim earlier on PATH than the real binary. It records argv and
-    // env for every invocation, lets `init` succeed so the runner reaches the
-    // `plan` command, then fails.
+    // A `tofu` shim earlier on PATH than the real binary. It records argv, env,
+    // what its own standard input is bound to, and the first bytes readable
+    // there — the exact vantage point every provider plugin inherits, since
+    // OpenTofu launches plugins with `cmd.Stdin = os.Stdin`. It then drains any
+    // `-var-file` so the runner's FIFO writer completes, lets `init` succeed so
+    // the runner reaches the `plan` command, and fails.
     await writeFile(
       join(fakeBinDir, "tofu"),
       [
         "#!/usr/bin/env bash",
-        `{ for arg in "$@"; do printf 'argv\\t%s\\n' "$arg"; done; env | sed 's/^/env\\t/'; } >> ${JSON.stringify(auditLog)}`,
+        "{",
+        `  for arg in "$@"; do printf 'argv\\t%s\\n' "$arg"; done`,
+        `  env | sed 's/^/env\\t/'`,
+        `  printf 'fd0link\\t%s\\n' "$(readlink /proc/self/fd/0 || echo unreadable)"`,
+        `  printf 'fd0data\\t%s\\n' "$(head -c 512 /proc/self/fd/0 2>/dev/null | tr -d '\\n')"`,
+        "} >> " + JSON.stringify(auditLog),
+        'for arg in "$@"; do',
+        "  case \"$arg\" in",
+        '    -var-file=*) cat "${arg#-var-file=}" > /dev/null 2>&1 || true ;;',
+        "  esac",
+        "done",
         'if [ "$1" = "init" ]; then exit 0; fi',
         "exit 3",
       ].join("\n"),
@@ -349,15 +370,184 @@ test("run-scoped sensitive inputs never reach tofu argv or env", async () => {
     );
     expect(result.status).toBe("failed");
     const audit = await readFile(auditLog, "utf8");
-    // The plan command really ran, and it carried the stdin var file.
+    // The plan command really ran, and it carried a var file.
     expect(audit).toContain("argv\tplan");
-    expect(audit).toContain("argv\t-var-file=/dev/stdin");
+    expect(audit).toMatch(
+      /argv\t-var-file=\S*-runtime-inputs-\S*\/runtime-inputs\.tfvars/u,
+    );
+    // Standard input is never used for the body: fd 0 stays Bun's default
+    // `ignore`, so plugins inherit /dev/null and read nothing.
+    expect(audit).not.toContain("/dev/stdin");
+    expect(audit).toMatch(/(^|\n)fd0link\t\/dev\/null(\n|$)/u);
+    expect(audit).toMatch(/(^|\n)fd0data\t(\n|$)/u);
     expect(audit).not.toContain(OTHER_SECRET);
     expect(audit).not.toMatch(/(^|\n)argv\t-var$/mu);
     expect(audit).not.toMatch(/(^|\n)env\tTF_VAR_/u);
+    // Nothing is left behind once the child has read the pipe.
+    const siblings = await readdir(dirname(workspace.root));
+    expect(
+      siblings.filter(
+        (name) =>
+          name.startsWith(`${basename(workspace.root)}-runtime-inputs-`),
+      ),
+    ).toEqual([]);
   } finally {
     Bun.env.PATH = originalPath ?? "";
     await rm(auditDir, { recursive: true, force: true });
     await cleanup(runId);
   }
 }, 120_000);
+
+test("a rootgen-produced generated root parses under real OpenTofu and carries the run-scoped variable it declares", async () => {
+  const runId = `runtime-inputs-rootgen-${crypto.randomUUID()}`;
+  const workspace = workspaceForRun(runId);
+  const nonce = "Zm9vYmFyYmF6cXV4MDEyMzQ1Njc4OWFiY2RlZmdoaWo";
+  const generated = generateOpenTofuChildModuleRoot({
+    rootProviderRequirements: [
+      {
+        moduleLocalName: "probe",
+        source: "registry.opentofu.org/example/probe",
+        version: "1.0.0",
+      },
+    ],
+    inputs: {},
+    outputAllowlist: { message: { from: "message" } },
+    providerBindings: [
+      {
+        provider: "registry.opentofu.org/example/probe",
+        moduleLocalName: "probe",
+        configuration: { endpoint: "https://probe.example" },
+        runtimeInputs: {
+          nonce,
+          nonceArgument: "runtime_input_nonce",
+          mapArgument: "runtime_inputs",
+        },
+      },
+    ],
+  });
+  const variableName = "takosumi_runtime_inputs__probe";
+  expect(Object.keys(generated.files).sort()).toEqual([
+    "main.tf",
+    "outputs.tf",
+    "variables.tf",
+    "versions.tf",
+  ]);
+  expect(generated.files["main.tf"]).toContain(
+    `runtime_inputs = var.${variableName}`,
+  );
+  expect(generated.files["main.tf"]).toContain(
+    `runtime_input_nonce = "${nonce}"`,
+  );
+
+  // 1. Real OpenTofu parses the exact bytes rootgen emits. `tofu fmt` exits 0
+  //    only when every file parses; a syntax defect exits 2 with diagnostics.
+  const parseDir = join(auditRootFor(runId), "rootgen");
+  await mkdir(parseDir, { recursive: true });
+  for (const [name, text] of Object.entries(generated.files)) {
+    await writeFile(join(parseDir, name), text);
+  }
+  const fmt = Bun.spawnSync(["tofu", "fmt", "-no-color", "-list=false"], {
+    cwd: parseDir,
+  });
+  expect(
+    `${new TextDecoder().decode(fmt.stdout)}${new TextDecoder().decode(fmt.stderr)}`,
+  ).not.toContain("Error");
+  expect(fmt.exitCode).toBe(0);
+
+  // 2. The rootgen-produced `variables.tf` — verbatim — is what the runner
+  //    binds the map to, and real `tofu` accepts the delivery through it. The
+  //    executed root keeps rootgen's variables/outputs and swaps only the
+  //    provider-bearing `main.tf`, because a declaring provider block cannot be
+  //    initialized offline without that provider's plugin.
+  const executable = {
+    files: {
+      "versions.tf": "terraform {}\n",
+      "variables.tf": generated.files["variables.tf"]!,
+      "main.tf": 'module "child" {\n  source = "./module"\n}\n',
+      "outputs.tf": generated.files["outputs.tf"]!,
+    },
+  };
+  try {
+    const plan = await runPlan(
+      runId,
+      baseRequest({
+        generatedRoot: executable,
+        runtimeInputs: [
+          { variableName, names: ["SIGNING_KEY"], values: {} },
+        ],
+      }),
+    );
+    expect(plan.status).toBe("succeeded");
+    const apply = await runReviewedPlanApply(
+      runId,
+      "destroy",
+      baseRequest({
+        generatedRoot: executable,
+        planDigest: String(plan.planDigest),
+        runtimeInputs: [
+          {
+            variableName,
+            names: ["SIGNING_KEY"],
+            values: { SIGNING_KEY: SECRET },
+          },
+        ],
+      }),
+      undefined,
+    );
+    expect(apply.status).toBe("succeeded");
+    expect(String(apply.stdout ?? "")).not.toContain(SECRET);
+    const state = await readFile(
+      join(workspace.generatedRootDir, "terraform.tfstate"),
+      "utf8",
+    ).catch(() => "");
+    expect(state).not.toContain(SECRET);
+  } finally {
+    await rm(auditRootFor(runId), { recursive: true, force: true });
+    await cleanup(runId);
+  }
+}, 120_000);
+
+function auditRootFor(runId: string): string {
+  return join(dirname(workspaceForRun(runId).root), `${runId}-rootgen`);
+}
+
+/**
+ * Minimal zip reader for OpenTofu's `.tfplan`. It walks the central directory
+ * and inflates every entry, so an assertion about plan contents is real rather
+ * than a grep of compressed bytes.
+ */
+function unzipEntries(archive: Buffer): string[] {
+  let eocd = -1;
+  for (let index = archive.length - 22; index >= 0; index--) {
+    if (archive.readUInt32LE(index) === 0x06054b50) {
+      eocd = index;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error("plan artifact is not a zip archive");
+  const count = archive.readUInt16LE(eocd + 10);
+  let offset = archive.readUInt32LE(eocd + 16);
+  const entries: string[] = [];
+  for (let index = 0; index < count; index++) {
+    if (archive.readUInt32LE(offset) !== 0x02014b50) {
+      throw new Error("plan artifact central directory is malformed");
+    }
+    const method = archive.readUInt16LE(offset + 10);
+    const compressedSize = archive.readUInt32LE(offset + 20);
+    const nameLength = archive.readUInt16LE(offset + 28);
+    const extraLength = archive.readUInt16LE(offset + 30);
+    const commentLength = archive.readUInt16LE(offset + 32);
+    const localOffset = archive.readUInt32LE(offset + 42);
+    const localNameLength = archive.readUInt16LE(localOffset + 26);
+    const localExtraLength = archive.readUInt16LE(localOffset + 28);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    const data = archive.subarray(dataStart, dataStart + compressedSize);
+    entries.push(
+      (method === 8 ? inflateRawSync(data) : Buffer.from(data)).toString(
+        "latin1",
+      ),
+    );
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
