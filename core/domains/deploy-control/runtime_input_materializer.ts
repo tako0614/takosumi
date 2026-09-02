@@ -3,14 +3,21 @@
  *
  * Some OpenTofu providers accept a run-scoped sensitive `map(string)` on their
  * provider block instead of persisting the values themselves. Takosumi mints
- * that map from the Capsule's manifest-gated runtime binding profile — the exact
- * `generatedSecrets[].binding` name set — and hands it to the runner as an
- * Apply-only dispatch value. The values are never written into the generated
- * root, the plan, `runs_inputs`, outputs, state, logs, audit rows, or a
- * credential-mint event.
+ * that map from the Capsule's manifest-gated runtime binding profile and hands
+ * it to the runner as an Apply-only dispatch value. The values are never
+ * written into the generated root, the plan, `runs_inputs`, outputs, state,
+ * logs, audit rows, or a credential-mint event.
  *
- * There are two value lanes, and a host picks exactly one. Without a host
- * derivation the values are fresh randomness sealed the way
+ * The name set is EVERY binding-delivered sensitive value the manifest requests
+ * for the Worker: the `generatedSecrets[].binding` entries plus, when the
+ * profile also delivers `identity.oidc` by bindings, that grant's four
+ * `oidcClient` binding names. The Worker's host and the provider both require
+ * the delivered map to equal the Worker Version's `required_sensitive_vars`
+ * exactly, so a partial map is refused before any host mutation — carrying only
+ * the generated secrets would make such a Capsule unappliable.
+ *
+ * There are two value lanes for the generated secrets, and a host picks exactly
+ * one. Without a host derivation they are fresh randomness sealed the way
  * {@link ./runtime_secret_file_materializer.ts} seals its file: one AES-GCM
  * blob per Capsule, authenticated by an AAD that pins the owner and the
  * value-free profile digest, created once and reopened for every later Run. A
@@ -19,10 +26,16 @@
  * pure function of the host key and the profile, so both lanes necessarily mint
  * the same bytes for the same Capsule.
  *
- * A profile change (the Capsule's manifest adds or renames a generated secret)
- * retires the previous sealed generation and seals a new one. Fencing it off
- * instead would leave the Capsule unable to plan OR destroy, with no recovery
- * path.
+ * The OIDC values have no such lane and are never sealed or minted here: an
+ * OIDC client is one registration under the Capsule's Accounts authority, so
+ * the host injects that authority as a port and this module only carries what
+ * it returns. Minting a second client — or sealing a copy of the first — would
+ * put two identities under one Capsule.
+ *
+ * A profile change (the Capsule's manifest adds or renames a generated secret,
+ * or changes which bindings the OIDC grant delivers) retires the previous
+ * sealed generation and seals a new one. Fencing it off instead would leave the
+ * Capsule unable to plan OR destroy, with no recovery path.
  *
  * The nonce is deliberately NOT random per Run. A provider derives its
  * apply-idempotency identity from the nonce, and that identity forces resource
@@ -31,7 +44,10 @@
  * material generation, provider instance): it changes when the material
  * generation changes and at no other time. The material generation is a digest
  * of the sealed ciphertext, so re-sealing — the only way the values can move —
- * always rotates it, and nothing else does. `installConfigId` is deliberately
+ * always rotates it, and nothing else does. When the profile also delivers
+ * OIDC, the port's value-free generation is folded in on top, so a moved
+ * registration (a new public origin, a rotated Accounts authority) rotates the
+ * nonce exactly like re-sealed material. `installConfigId` is deliberately
  * NOT part of the preimage: a repo re-sync can repoint a Capsule at a
  * content-identical InstallConfig, and rotating the nonce there would force a
  * provider-side replacement of resources whose content never changed.
@@ -40,6 +56,7 @@
 import type {
   InstallConfigRuntimeBindingMaterialization,
   RuntimeGeneratedSecretBinding,
+  RuntimeOidcClientBindings,
 } from "takosumi-contract/install-configs";
 import type { SecretBoundaryCrypto } from "../../adapters/secret-store/memory.ts";
 import type { SecretPartition } from "../../adapters/secret-store/types.ts";
@@ -56,6 +73,12 @@ const PROFILE_CONTRACT_V2 = "takosumi.runtime-binding-profile/v2";
 const RUNNER_CONTRACT = "takosumi.runner-runtime-inputs/v1";
 const BLOB_CONTRACT = "takosumi.runtime-provider-input/v1";
 const NONCE_DOMAIN = "takosumi.provider-runtime-input-nonce/v1";
+/**
+ * Generated-secret half of the material generation for a profile that declares
+ * none. Only an OIDC-only profile reaches it, and its own generation is folded
+ * in on top, so the nonce still moves exactly when the delivered values do.
+ */
+const NO_GENERATED_SECRET_GENERATION = `${NONCE_DOMAIN}#no-generated-secrets`;
 const BLOB_SCHEME = "runtime-input-aes-gcm/v1";
 /**
  * Derivation-part prefixes shared with the private runtime-binding lane. They
@@ -97,7 +120,11 @@ export interface RuntimeInputAuthority {
 /** Value-free description of what this Capsule may deliver. */
 export interface RuntimeInputProfile {
   readonly profileDigest: `sha256:${string}`;
-  /** Exact `generatedSecrets[].binding` set, sorted. Never a value. */
+  /**
+   * Exact deliverable name set, sorted: every `generatedSecrets[].binding`
+   * plus the four `oidcClient` binding names when the profile delivers OIDC by
+   * bindings. Never a value.
+   */
   readonly names: readonly string[];
 }
 
@@ -204,6 +231,46 @@ export function runtimeInputDerivedValueSource(
   };
 }
 
+/**
+ * One Capsule's binding-delivered OIDC grant, as the host port sees it.
+ *
+ * The bindings are the value-free declaration Core read out of the DB-owned
+ * InstallConfig; the port re-reads its own authority and must refuse anything
+ * that disagrees with it.
+ */
+export interface RuntimeInputOidcRequest {
+  readonly profileContract: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly installConfigId: string;
+  readonly bindings: RuntimeOidcClientBindings;
+}
+
+/**
+ * Host authority for the Capsule's OIDC client delivery.
+ *
+ * Core owns the NAME set (the manifest-gated profile) and owns nothing about
+ * the values: the issuer, the client id, the owner subject, and the redirect
+ * URI all belong to the one Accounts OIDC client registration the Capsule
+ * already has, so the host injects that registration here rather than letting a
+ * second lane mint or seal a copy of it.
+ *
+ * `generation` is called wherever the nonce is (Plan and Apply) and must not
+ * mutate anything; `materialize` is Apply-only, may complete the registration,
+ * and returns the generation it actually delivered so a registration that moved
+ * between Plan and Apply rotates the nonce and fails the pinned descriptor
+ * instead of silently applying different values.
+ */
+export interface RuntimeInputOidcClientSource {
+  /** Value-free generation identity: moves if and only if the values move. */
+  generation(input: RuntimeInputOidcRequest): Promise<string>;
+  /** Apply-only exact `binding -> value` map for the declared OIDC bindings. */
+  materialize(input: RuntimeInputOidcRequest): Promise<{
+    readonly generation: string;
+    readonly values: Readonly<Record<string, string>>;
+  }>;
+}
+
 function generatedSecretDerivationParts(request: {
   readonly profileContract: string;
   readonly workspaceId: string;
@@ -283,9 +350,59 @@ export function createRuntimeInputMaterializer(input: {
    * second lane materializes the same profile, so both mint the same bytes.
    */
   readonly values?: RuntimeInputValueSource;
+  /**
+   * Host authority for a profile that ALSO delivers OIDC by bindings. Required
+   * for such a Capsule: without it the lane fails closed rather than delivering
+   * a partial map the Worker's host would refuse anyway.
+   */
+  readonly oidcClient?: RuntimeInputOidcClientSource;
   readonly clock?: () => Date;
 }): RuntimeInputMaterializer {
   const clock = input.clock ?? (() => new Date());
+
+  const oidcSource = (): RuntimeInputOidcClientSource => {
+    if (!input.oidcClient) {
+      invalid(
+        "runtime input profile delivers OIDC bindings but no OIDC client source is configured",
+      );
+    }
+    return input.oidcClient;
+  };
+
+  const oidcRequest = (
+    declaration: RuntimeInputDeclaration,
+    authority: RuntimeInputAuthority,
+    bindings: RuntimeOidcClientBindings,
+  ): RuntimeInputOidcRequest => ({
+    profileContract: declaration.contract,
+    workspaceId: authority.workspaceId,
+    capsuleId: authority.capsuleId,
+    installConfigId: authority.installConfigId,
+    bindings,
+  });
+
+  /**
+   * Folds the OIDC generation into the generated-secret material generation.
+   *
+   * A profile with no OIDC delivery keeps its existing preimage byte for byte:
+   * rotating the nonce of every already-applied Capsule would force a
+   * provider-side replacement of resources whose material never moved.
+   */
+  const foldedMaterialGeneration = async (
+    base: string,
+    oidcGeneration: string | undefined,
+  ): Promise<string> => {
+    if (oidcGeneration === undefined) return base;
+    const preimage = stableStringify({
+      domain: `${NONCE_DOMAIN}#oidc-generation`,
+      base,
+      oidcGeneration,
+    });
+    const digest = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(preimage)),
+    );
+    return `sha256:${bytesToHex(digest)}`;
+  };
 
   /**
    * The generation identity of derived material.
@@ -407,38 +524,44 @@ export function createRuntimeInputMaterializer(input: {
         profileDigest: (await stableJsonDigest(
           current.declaration,
         )) as `sha256:${string}`,
-        names: current.declaration.generatedSecrets.map(
-          (entry) => entry.binding,
-        ),
+        names: runtimeInputDeclarationNames(current.declaration),
       };
     },
     async nonce(request) {
       const providerInstance = exactProviderInstance(request.providerInstance);
-      if (input.values) {
-        const current = await currentProfile(input.store, request);
-        if (current.capsule.status === "destroyed") {
-          invalid("runtime input Capsule is destroyed");
-        }
-        return await runtimeInputNonce({
-          workspaceId: request.workspaceId,
-          capsuleId: request.capsuleId,
-          profileDigest: (await stableJsonDigest(
-            current.declaration,
-          )) as `sha256:${string}`,
-          materialGeneration: await derivedGeneration(
-            current.declaration,
-            request,
-          ),
-          providerInstance,
-        });
+      const current = await currentProfile(input.store, request);
+      if (current.capsule.status === "destroyed") {
+        invalid("runtime input Capsule is destroyed");
       }
-      const material = await sealedMaterial(request);
+      const declaration = current.declaration;
+      const oidcGeneration = declaration.oidcClient
+        ? exactOidcGeneration(
+            await oidcSource().generation(
+              oidcRequest(declaration, request, declaration.oidcClient),
+            ),
+          )
+        : undefined;
+      // The generated-secret half keeps its own two lanes: a host derivation
+      // never seals, and without one the sealed ciphertext IS the generation.
+      const base =
+        declaration.generatedSecrets.length === 0
+          ? NO_GENERATED_SECRET_GENERATION
+          : input.values
+            ? await derivedGeneration(declaration, request)
+            : await materialGenerationDigest(
+                (await sealedMaterial(request)).blob,
+              );
       return await runtimeInputNonce({
         workspaceId: request.workspaceId,
         capsuleId: request.capsuleId,
-        profileDigest: material.profileDigest,
-        materialGeneration: await materialGenerationDigest(material.blob),
-        providerInstance: exactProviderInstance(request.providerInstance),
+        profileDigest: (await stableJsonDigest(
+          declaration,
+        )) as `sha256:${string}`,
+        materialGeneration: await foldedMaterialGeneration(
+          base,
+          oidcGeneration,
+        ),
+        providerInstance,
       });
     },
     async materialize(request) {
@@ -446,62 +569,73 @@ export function createRuntimeInputMaterializer(input: {
         invalid("runtime inputs are materialized only for apply");
       }
       const providerInstance = exactProviderInstance(request.providerInstance);
-      if (input.values) {
-        // Host derivation lane: the values ARE a pure function of the host key
-        // and the profile, so nothing is sealed. Sealing here would pin one
-        // generation and let the other lane drift away from it silently.
-        const current = await currentProfile(input.store, request);
-        if (current.capsule.status === "destroyed") {
-          invalid("runtime input Capsule is destroyed");
-        }
-        const profileDigest = (await stableJsonDigest(
-          current.declaration,
-        )) as `sha256:${string}`;
-        const values = exactRuntimeInputValues(
-          await generateRuntimeInputValues(
-            current.declaration,
-            request,
-            input.values,
-          ),
-          current.declaration,
-        );
-        return new RuntimeInputBundle({
-          contract: RUNNER_CONTRACT,
-          profileDigest,
-          nonce: await runtimeInputNonce({
-            workspaceId: request.workspaceId,
-            capsuleId: request.capsuleId,
-            profileDigest,
-            materialGeneration: await derivedGeneration(
-              current.declaration,
+      const current = await currentProfile(input.store, request);
+      if (current.capsule.status === "destroyed") {
+        invalid("runtime input Capsule is destroyed");
+      }
+      const declaration = current.declaration;
+      const profileDigest = (await stableJsonDigest(
+        declaration,
+      )) as `sha256:${string}`;
+      let generatedSecrets: Readonly<Record<string, string>> = {};
+      let base = NO_GENERATED_SECRET_GENERATION;
+      if (declaration.generatedSecrets.length > 0) {
+        if (input.values) {
+          // Host derivation lane: the values ARE a pure function of the host
+          // key and the profile, so nothing is sealed. Sealing here would pin
+          // one generation and let the other lane drift away from it silently.
+          generatedSecrets = exactGeneratedSecretValues(
+            await generateRuntimeInputValues(
+              declaration,
               request,
+              input.values,
             ),
-            providerInstance,
-          }),
-          names: Object.keys(values).sort(),
-          values,
-        });
+            declaration,
+          );
+          base = await derivedGeneration(declaration, request);
+        } else {
+          const material = await sealedMaterial(request);
+          let content: string;
+          try {
+            content = await input.crypto.open(
+              base64ToBytes(material.blob.ciphertext),
+              material.partition,
+              new TextEncoder().encode(material.aad),
+            );
+          } catch {
+            invalid("sealed runtime inputs could not be opened");
+          }
+          generatedSecrets = exactGeneratedSecretValues(
+            content,
+            material.declaration,
+          );
+          base = await materialGenerationDigest(material.blob);
+        }
       }
-      const material = await sealedMaterial(request);
-      let content: string;
-      try {
-        content = await input.crypto.open(
-          base64ToBytes(material.blob.ciphertext),
-          material.partition,
-          new TextEncoder().encode(material.aad),
+      let oidcGeneration: string | undefined;
+      let oidcValues: Readonly<Record<string, string>> = {};
+      if (declaration.oidcClient) {
+        const minted = await oidcSource().materialize(
+          oidcRequest(declaration, request, declaration.oidcClient),
         );
-      } catch {
-        invalid("sealed runtime inputs could not be opened");
+        oidcGeneration = exactOidcGeneration(minted.generation);
+        oidcValues = exactOidcValues(minted.values, declaration.oidcClient);
       }
-      const values = exactRuntimeInputValues(content, material.declaration);
+      const values = exactRuntimeInputValues(
+        { ...generatedSecrets, ...oidcValues },
+        declaration,
+      );
       return new RuntimeInputBundle({
         contract: RUNNER_CONTRACT,
-        profileDigest: material.profileDigest,
+        profileDigest,
         nonce: await runtimeInputNonce({
           workspaceId: request.workspaceId,
           capsuleId: request.capsuleId,
-          profileDigest: material.profileDigest,
-          materialGeneration: await materialGenerationDigest(material.blob),
+          profileDigest,
+          materialGeneration: await foldedMaterialGeneration(
+            base,
+            oidcGeneration,
+          ),
           providerInstance,
         }),
         names: Object.keys(values).sort(),
@@ -546,13 +680,47 @@ export function createRuntimeInputMaterializer(input: {
 }
 
 /**
- * Value-free profile projection the nonce and the AAD bind to. Only the
- * generated-secret declarations participate: an unrelated OIDC or runtime
- * secret-file edit must not rotate a provider's apply-idempotency identity.
+ * Value-free profile projection the nonce and the AAD bind to: every
+ * binding-delivered sensitive value this Capsule's manifest requests. An
+ * unrelated runtime secret-file edit stays out of it, because it changes
+ * nothing this map delivers and must not rotate a provider's
+ * apply-idempotency identity.
  */
 interface RuntimeInputDeclaration {
   readonly contract: typeof PROFILE_CONTRACT_V1 | typeof PROFILE_CONTRACT_V2;
   readonly generatedSecrets: readonly RuntimeGeneratedSecretBinding[];
+  /** Present only when the profile delivers `identity.oidc` by bindings. */
+  readonly oidcClient?: RuntimeOidcClientBindings;
+}
+
+/** The exact deliverable name set of one declaration, sorted. */
+function runtimeInputDeclarationNames(
+  declaration: RuntimeInputDeclaration,
+): readonly string[] {
+  return [
+    ...declaration.generatedSecrets.map((entry) => entry.binding),
+    ...(declaration.oidcClient
+      ? oidcBindingNames(declaration.oidcClient)
+      : []),
+  ].sort();
+}
+
+/**
+ * The four binding names one OIDC grant delivers, in a fixed order.
+ *
+ * The order is the declaration order, not the sorted one: it is the order the
+ * private Takoserver runtime-binding lane uses for the same profile, and both
+ * lanes must agree about which value belongs to which name.
+ */
+function oidcBindingNames(
+  bindings: RuntimeOidcClientBindings,
+): readonly string[] {
+  return [
+    bindings.issuerBinding,
+    bindings.clientIdBinding,
+    bindings.ownerSubjectBinding,
+    bindings.redirectUriBinding,
+  ];
 }
 
 async function currentProfile(
@@ -592,12 +760,9 @@ export function exactRuntimeInputProfile(
   ) {
     invalid("runtime input profile is missing");
   }
-  const generatedSecrets = profile.generatedSecrets;
-  if (!Array.isArray(generatedSecrets) || generatedSecrets.length === 0) {
-    invalid("runtime input profile declares no generated secret binding");
-  }
-  if (generatedSecrets.length > RUNTIME_INPUT_MAX_NAMES) {
-    invalid("runtime input profile declares too many bindings");
+  const generatedSecrets = profile.generatedSecrets ?? [];
+  if (!Array.isArray(generatedSecrets)) {
+    invalid("runtime input generated secret declaration is invalid");
   }
   const names: string[] = [];
   for (const entry of generatedSecrets) {
@@ -612,6 +777,14 @@ export function exactRuntimeInputProfile(
     }
     names.push(entry.binding);
   }
+  const oidcClient = exactRuntimeInputOidcClient(profile.oidcClient);
+  if (oidcClient) names.push(...oidcBindingNames(oidcClient));
+  if (names.length === 0) {
+    invalid("runtime input profile declares no deliverable binding");
+  }
+  if (names.length > RUNTIME_INPUT_MAX_NAMES) {
+    invalid("runtime input profile declares too many bindings");
+  }
   if (new Set(names).size !== names.length) {
     invalid("runtime input binding names must be unique");
   }
@@ -624,6 +797,65 @@ export function exactRuntimeInputProfile(
         encoding: entry.encoding,
       }))
       .sort((left, right) => left.binding.localeCompare(right.binding)),
+    ...(oidcClient ? { oidcClient } : {}),
+  };
+}
+
+/**
+ * The value-free OIDC grant, normalized to exactly the members that decide
+ * WHICH names this map delivers. `callbackPath` and `scopes` stay in: they are
+ * the grant the host port re-reads and registers against, so a Capsule whose
+ * manifest moves its callback must re-seal and rotate rather than keep
+ * delivering a redirect URI nothing accepts any more.
+ */
+function exactRuntimeInputOidcClient(
+  value: unknown,
+): RuntimeOidcClientBindings | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) invalid("runtime input OIDC declaration is invalid");
+  const bindings = [
+    value.issuerBinding,
+    value.clientIdBinding,
+    value.ownerSubjectBinding,
+    value.redirectUriBinding,
+  ];
+  if (
+    bindings.some(
+      (binding) =>
+        typeof binding !== "string" ||
+        !RUNTIME_INPUT_NAME_PATTERN.test(binding),
+    ) ||
+    typeof value.callbackPath !== "string" ||
+    !value.callbackPath.startsWith("/") ||
+    value.callbackPath.startsWith("//") ||
+    value.callbackPath.length > 1024 ||
+    /[\u0000-\u001f\u007f?#]/u.test(value.callbackPath)
+  ) {
+    invalid("runtime input OIDC declaration is invalid");
+  }
+  const scopes = value.scopes;
+  if (
+    scopes !== undefined &&
+    (!Array.isArray(scopes) ||
+      scopes.length === 0 ||
+      scopes.length > 32 ||
+      scopes.some(
+        (scope) =>
+          typeof scope !== "string" ||
+          scope.length === 0 ||
+          scope.length > 128 ||
+          CONTROL_CHARACTER_PATTERN.test(scope),
+      ))
+  ) {
+    invalid("runtime input OIDC declaration is invalid");
+  }
+  return {
+    issuerBinding: value.issuerBinding as string,
+    clientIdBinding: value.clientIdBinding as string,
+    ownerSubjectBinding: value.ownerSubjectBinding as string,
+    redirectUriBinding: value.redirectUriBinding as string,
+    callbackPath: value.callbackPath,
+    ...(scopes ? { scopes: [...(scopes as readonly string[])] } : {}),
   };
 }
 
@@ -725,7 +957,13 @@ async function generateRuntimeInputValues(
   return stableStringify(values);
 }
 
-function exactRuntimeInputValues(
+/**
+ * The sealed (or derived) generated-secret half, checked against exactly the
+ * `generatedSecrets` names. The OIDC values are not in this document: they are
+ * one Accounts registration, never sealed material, and merging them before
+ * this check would let a drifted blob pass by borrowing an OIDC name.
+ */
+function exactGeneratedSecretValues(
   content: string,
   declaration: RuntimeInputDeclaration,
 ): Readonly<Record<string, string>> {
@@ -746,28 +984,101 @@ function exactRuntimeInputValues(
   ) {
     invalid("sealed runtime inputs differ from their profile");
   }
-  let totalBytes = 0;
+  const values: Record<string, string> = {};
   for (const name of actual) {
     const value = parsed[name];
     if (typeof value !== "string" || value.length === 0) {
       invalid("sealed runtime inputs differ from their profile");
     }
+    values[name] = value;
+  }
+  return values;
+}
+
+/** One host-supplied OIDC generation, bounded before it enters a preimage. */
+function exactOidcGeneration(value: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 512 ||
+    CONTROL_CHARACTER_PATTERN.test(value)
+  ) {
+    invalid("runtime input OIDC generation is invalid");
+  }
+  return value;
+}
+
+/**
+ * The host port's OIDC map, fenced against the declaration before it joins the
+ * dispatch. A port that answers with a different name set is answering about a
+ * different grant, so the run stops rather than delivering a map the Worker's
+ * host would refuse.
+ */
+function exactOidcValues(
+  values: unknown,
+  bindings: RuntimeOidcClientBindings,
+): Readonly<Record<string, string>> {
+  if (!isRecord(values)) {
+    invalid("runtime input OIDC values are invalid");
+  }
+  const declared = [...oidcBindingNames(bindings)].sort();
+  const actual = Object.keys(values).sort();
+  if (
+    actual.length !== declared.length ||
+    actual.some((name, index) => name !== declared[index])
+  ) {
+    invalid("runtime input OIDC values differ from their profile");
+  }
+  const exact: Record<string, string> = {};
+  for (const name of actual) {
+    const value = values[name];
+    if (typeof value !== "string" || value.length === 0) {
+      invalid("runtime input OIDC values differ from their profile");
+    }
+    exact[name] = value;
+  }
+  return exact;
+}
+
+/**
+ * The complete dispatch map, checked against the profile's full name set and
+ * the provider's limits. Every lane meets here, so no value reaches the runner
+ * without passing the redaction floor and the size bounds.
+ */
+function exactRuntimeInputValues(
+  values: Readonly<Record<string, string>>,
+  declaration: RuntimeInputDeclaration,
+): Readonly<Record<string, string>> {
+  const declared = [...runtimeInputDeclarationNames(declaration)];
+  const actual = Object.keys(values).sort();
+  if (
+    actual.length !== declared.length ||
+    actual.some((name, index) => name !== declared[index])
+  ) {
+    invalid("runtime inputs differ from their profile");
+  }
+  let totalBytes = 0;
+  for (const name of actual) {
+    const value = values[name];
+    if (typeof value !== "string" || value.length === 0) {
+      invalid("runtime inputs differ from their profile");
+    }
     // Below the runner's redaction floor a value could not be stripped out of
     // command output, so it must never leave the control plane.
     if (value.length < RUNTIME_INPUT_MIN_VALUE_LENGTH) {
-      invalid("sealed runtime input value is below the redaction floor");
+      invalid("runtime input value is below the redaction floor");
     }
     const bytes = new TextEncoder().encode(value).byteLength;
     if (bytes > RUNTIME_INPUT_MAX_VALUE_BYTES || value.includes(NUL)) {
-      invalid("sealed runtime input value exceeds the provider limit");
+      invalid("runtime input value exceeds the provider limit");
     }
     totalBytes += bytes;
   }
   if (totalBytes > RUNTIME_INPUT_MAX_TOTAL_BYTES) {
-    invalid("sealed runtime inputs exceed the provider total limit");
+    invalid("runtime inputs exceed the provider total limit");
   }
   return Object.fromEntries(
-    actual.map((name) => [name, parsed[name] as string]),
+    actual.map((name) => [name, values[name] as string]),
   );
 }
 

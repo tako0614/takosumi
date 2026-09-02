@@ -280,21 +280,41 @@ fails a Capsule, because a Capsule that needs no run-scoped sensitive inputs mus
 still plan.
 
 The deliverable name set is the Capsule's manifest-gated runtime binding
-profile, exactly its `generatedSecrets[].binding` entries. Which lane mints the
-values depends on the host. Without a host derivation they are fresh randomness
-sealed once per Capsule in the host secret boundary, under an AAD that pins the
-owner and the value-free profile digest, and reopened for every later Run. A host
-that ALSO materializes the same profile through its private runtime-binding lane
-injects that derivation instead; nothing is then sealed, because the values are a
-pure function of the host key and the profile and both lanes necessarily mint the
-same bytes. Sealing one lane's first generation would let the other drift away
-from it with no drift signal.
+profile: every binding-delivered sensitive value the manifest requests for the
+Worker. That is its `generatedSecrets[].binding` entries, plus the four
+`oidcClient` binding names whenever the profile also delivers `identity.oidc` by
+bindings. Both the Worker's Host and the provider require the delivered map to
+equal the Worker Version's declared sensitive names exactly, so a partial map is
+refused before any Host mutation — a name set that carried only the generated
+secrets would make an OIDC-requesting Capsule unappliable rather than
+under-configured.
 
-A profile change — the Capsule's manifest adds or renames a generated secret —
-retires the previous sealed generation and seals a new one. Fencing it off
-instead would leave the Capsule unable to plan OR destroy, with no recovery path.
-Re-sealing rotates the nonce, which is exactly the replacement semantics a
-provider expects from rotated material.
+Which lane mints the generated-secret values depends on the host. Without a host
+derivation they are fresh randomness sealed once per Capsule in the host secret
+boundary, under an AAD that pins the owner and the value-free profile digest,
+and reopened for every later Run. A host that ALSO materializes the same profile
+through its private runtime-binding lane injects that derivation instead; nothing
+is then sealed, because the values are a pure function of the host key and the
+profile and both lanes necessarily mint the same bytes. Sealing one lane's first
+generation would let the other drift away from it with no drift signal.
+
+The OIDC values have no such lane and are never sealed or minted here. An OIDC
+client is one registration under the Capsule's Accounts authority — the same
+public client the private runtime-binding lane registers, derived from the same
+host key — so the host injects that authority as a port and Core carries only
+what it returns: the issuer origin, the derived client id, the pairwise owner
+subject, and the redirect URI. Minting a second client, or sealing a copy of the
+first, would put two identities under one Capsule. The port also answers a
+value-free generation identity, which is folded into the nonce so a moved
+registration rotates it exactly like re-sealed material. A profile that declares
+OIDC bindings and a host with no such port fail closed.
+
+A profile change — the Capsule's manifest adds or renames a generated secret, or
+changes which bindings the OIDC grant delivers — retires the previous sealed
+generation and seals a new one. Fencing it off instead would leave the Capsule
+unable to plan OR destroy, with no recovery path. Re-sealing rotates the nonce,
+which is exactly the replacement semantics a provider expects from rotated
+material.
 
 The nonce is deterministic per (Workspace, Capsule, profile digest, material
 generation, provider instance). It is never random per Run: a provider derives
