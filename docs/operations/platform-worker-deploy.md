@@ -49,6 +49,51 @@ route-less Hosted target receives only verified context, never a browser cookie,
 the original bearer, an account id, a legal Organization id, or an unverified
 Workspace context.
 
+### Realized Hosted extension descriptors
+
+`TAKOSUMI_PLATFORM_EXTENSIONS` is operator-realized config outside this
+repository, but the release gate pins the official composition's two `HOSTED`
+descriptors exactly, key set included. An unknown key is a refusal, not a
+tolerated addition, because a descriptor the OSS parser rejects makes the whole
+route unloadable rather than degrade quietly.
+
+- `takosumi-hosted-sponsorship` at `/api/v1/account/subscription`, carrying the
+  account service, the `hosted-resource.inventory.v1` workspace contribution,
+  the generic Run credential audience, and the provider credential broker.
+- `takosumi-ai` at `/api/v1/ai`, the authenticated OpenAI-compatible data
+  plane. Its `workspaceContext` is `query-optional`: an OpenAI-compatible client
+  is configured with a base URL and sends `POST /chat/completions`, so it cannot
+  attach a `workspaceId` query, and `query-required` would answer every such
+  request with `invalid_request`. When the query is present it is still bound to
+  verified platform access before dispatch.
+
+The sponsorship descriptor's `providerCredentialBroker` declares exactly ten
+keys. Six are the broker identity — `connectionId`, `recipeId`,
+`providerSource`, `displayName`, `exchangePath`, `envNames` — and
+`runCredentialSettings` carries the provider floor for run-issued credentials.
+The remaining three are required, not optional, for an official release:
+
+- `publicInputExchangePath` is the non-secret public-input route. Takosumi OSS
+  neither allocates nor derives a Capsule's public origin; it asks the host
+  composition that publishes the Worker, over this path. A broker without it
+  cannot answer, and Capsules that need their own origin fail closed at plan.
+- `publicInputCapabilities` is the closed set of public-input questions the
+  broker answers. v1 defines one, `http_endpoint_url`.
+- `runtimeInputs` is the value-free run-scoped sensitive-input protocol
+  descriptor: `contract`, the two provider-block argument names
+  (`nonceArgument`, `mapArgument`), and the exact provider version floor at
+  which those arguments exist. Without it a broker Connection is invisible to
+  the run-scoped sensitive-input lane, so a Capsule asking for
+  binding-delivered values has nowhere to deliver them.
+
+Exactly one realized route may declare `publicInputExchangePath`. A Capsule has
+one public origin and no rule for splitting it, so the runtime seam throws when
+two routes claim to answer, and the release refuses that composition rather than
+deciding an authority question by array order. Every realized descriptor's
+`handlerKey` must also name a declared `[[services]]` binding; an unbound
+handler is an unroutable route that would only fail on the first real request
+after the irreversible upload.
+
 ## Official staging release
 
 The official staging target is a reviewed two-step owner surface. Plan is
