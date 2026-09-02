@@ -71,10 +71,21 @@ export function redactExactCredentialValues(
   return redacted;
 }
 
+/**
+ * Redaction floor. A shorter literal is too collision-prone to blanket-replace
+ * in command output, so it is never redacted — which is why every lane that
+ * mints a value the runner must be able to redact rejects anything shorter.
+ */
+export const RUNNER_REDACTION_MIN_VALUE_LENGTH = 8;
+
 export function normalizedRedactionValues(values: readonly string[]): string[] {
-  return [...new Set(values.filter((value) => value.length >= 8))].sort(
-    (left, right) => right.length - left.length,
-  );
+  return [
+    ...new Set(
+      values.filter(
+        (value) => value.length >= RUNNER_REDACTION_MIN_VALUE_LENGTH,
+      ),
+    ),
+  ].sort((left, right) => right.length - left.length);
 }
 export function redactBuildOutput(text: string): string {
   // Build commands run credential-free, but redact any value that LOOKS like a
