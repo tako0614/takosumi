@@ -18,6 +18,8 @@
     "wrangler": "wrangler",
     "check": "bun scripts/check-portable-gate.ts",
     "check:tools": "bun scripts/check-tools.ts",
+    "check:contract-package-files": "bun scripts/check-contract-package-files.ts --check",
+    "contract-package-files:write": "bun scripts/check-contract-package-files.ts --write",
     "fmt:check": "bun scripts/check-source-format.mjs",
     "deploy": "bun scripts/deploy.mjs",
     "check:package-script-boundaries": "bun scripts/check-package-script-boundaries.ts",

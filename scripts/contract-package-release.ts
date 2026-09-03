@@ -236,21 +236,55 @@ async function checkConsumer(root: string, dependency: string, name: string): Pr
         2,
       )}\n`,
     ),
-    writeFile(
-      resolve(directory, "smoke.ts"),
-      `import { createTakosumiWellKnownDocument } from "${PACKAGE_NAME}/discovery";
-import { TAKOSUMI_ACCOUNTS_USERINFO_PATH } from "${PACKAGE_NAME}/identity-oidc";
-import type { Interface } from "${PACKAGE_NAME}/runtime-interfaces";
-void (undefined as unknown as Interface);
-const discovery = createTakosumiWellKnownDocument({ origin: "https://host.example" });
-if (discovery.apiBaseUrl !== "https://host.example/api/v1") throw new Error("bad discovery");
-if (TAKOSUMI_ACCOUNTS_USERINFO_PATH !== "/oauth/userinfo") throw new Error("bad OIDC path");
-`,
-    ),
+    writeFile(resolve(directory, "smoke.ts"), await consumerSmokeSource()),
   ]);
   runChecked("bun", ["install", "--ignore-scripts"], directory);
   runChecked(resolve(REPOSITORY, "node_modules/.bin/tsc"), ["--project", "tsconfig.json"], directory);
   runChecked("bun", ["smoke.ts"], directory);
+}
+
+/**
+ * The consumer check imports EVERY declared export subpath.
+ *
+ * Derived, not listed: the previous smoke module named three subpaths by hand,
+ * so a subpath whose target the package did not ship was published and only
+ * found by the consumer who tried to import it. Deriving the check from the
+ * same `exports` map the package publishes means adding an export adds its own
+ * proof.
+ */
+async function consumerSmokeSource(): Promise<string> {
+  const manifest = JSON.parse(
+    await readFile(resolve(PACKAGE_ROOT, "package.json"), "utf8"),
+  ) as { readonly exports?: Readonly<Record<string, string>> };
+  const subpaths = Object.keys(manifest.exports ?? {});
+  if (subpaths.length === 0) {
+    throw new Error("contract/package.json declares no exports to verify");
+  }
+  const imports: string[] = [
+    `import { createTakosumiWellKnownDocument } from "${PACKAGE_NAME}/discovery";`,
+    `import { TAKOSUMI_ACCOUNTS_USERINFO_PATH } from "${PACKAGE_NAME}/identity-oidc";`,
+  ];
+  subpaths.forEach((subpath, index) => {
+    const specifier =
+      subpath === "." ? PACKAGE_NAME : `${PACKAGE_NAME}${subpath.slice(1)}`;
+    imports.push(`import * as module${index} from "${specifier}";`);
+  });
+  const body = [
+    `const modules: unknown[] = [${subpaths
+      .map((_, index) => `module${index}`)
+      .join(", ")}];`,
+    `if (modules.length !== ${subpaths.length}) throw new Error("export subpath count changed");`,
+    "for (const module of modules) {",
+    '  if (typeof module !== "object" || module === null) {',
+    '    throw new Error("an exported subpath did not resolve to a module");',
+    "  }",
+    "}",
+    // Two value assertions so the check is not satisfied by empty modules.
+    'const discovery = createTakosumiWellKnownDocument({ origin: "https://host.example" });',
+    'if (discovery.apiBaseUrl !== "https://host.example/api/v1") throw new Error("bad discovery");',
+    'if (TAKOSUMI_ACCOUNTS_USERINFO_PATH !== "/oauth/userinfo") throw new Error("bad OIDC path");',
+  ];
+  return `${[...imports, "", ...body].join("\n")}\n`;
 }
 
 async function publishedPackageIntegrity(version: string): Promise<string | undefined> {
