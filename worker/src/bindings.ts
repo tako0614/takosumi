@@ -45,7 +45,13 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   /** OpenTofu state bucket (`takosumi-state`). Used from M2. */
   readonly R2_STATE?: R2Bucket;
   /** Backup/export bucket (`takosumi-backups`, core-spec.md §26 / §33). */
-  readonly R2_BACKUPS?: R2Bucket;
+  /**
+   * Required, not optional: `checkPlatformBindings` calls it required and a
+   * composition without it cannot take the backup its own recovery path
+   * assumes. It used to be optional here while readiness demanded it, so the
+   * type said one thing and `/readyz` said another.
+   */
+  readonly R2_BACKUPS: R2Bucket;
   readonly COORDINATION: DurableObjectNamespace;
   /**
    * Per-run Durable Object that is the sole GA execution authority. The create
