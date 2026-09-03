@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { requireCleanPushedSource } from "./lib/deploy-lineage.ts";
+
 const REPOSITORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_ROOT = resolve(REPOSITORY, "contract");
 const PACKAGE_NAME = "@takosjp/takosumi-contract";
@@ -41,13 +43,6 @@ export async function runContractPackageRelease(args: readonly string[]): Promis
     throw new Error(`usage: bun run deploy -- ${SURFACE}`);
   }
 
-  const dirty = git("status", "--porcelain");
-  if (dirty !== "") {
-    throw new Error(
-      `deploy blocked before publication: immutable package bytes require a clean worktree\n${dirty}`,
-    );
-  }
-
   const manifest = JSON.parse(await readFile(resolve(PACKAGE_ROOT, "package.json"), "utf8")) as {
     readonly name?: string;
     readonly version?: string;
@@ -57,23 +52,25 @@ export async function runContractPackageRelease(args: readonly string[]): Promis
   }
   const version = manifest.version;
   const tag = requiredContractReleaseTag(version);
+
+  // The shared `published-identity` lineage class: clean, on main, at or an
+  // ancestor of a freshly fetched origin/main, AND the tag already on origin at
+  // that commit. Hoisted onto scripts/lib/deploy-lineage.ts so control's corpus
+  // exercises the same function this publication is guarded by; it also fixed a
+  // real gap here, which accepted any branch.
+  await requireCleanPushedSource("published-identity", {
+    cwd: REPOSITORY,
+    tag,
+  });
   const commit = git("rev-parse", "HEAD");
   const branch = git("rev-parse", "--abbrev-ref", "HEAD");
+  // Tightening this surface adds: an immutable npm identity is cut from the
+  // exact remote tip, never from an older ancestor of it.
   const remoteBranchCommit = git("ls-remote", "--heads", "origin", `refs/heads/${branch}`)
     .split(/\s+/u)[0];
   if (remoteBranchCommit !== commit) {
     throw new Error(
       `deploy blocked before publication: HEAD ${commit} is not the exact pushed remote branch commit ${remoteBranchCommit ?? "missing"}`,
-    );
-  }
-  if (git("rev-parse", `${tag}^{commit}`) !== commit) {
-    throw new Error(`deploy blocked before publication: ${tag} does not point at HEAD`);
-  }
-  const remoteTag = git("ls-remote", "--tags", "origin", `refs/tags/${tag}`)
-    .split(/\s+/u)[0];
-  if (remoteTag !== commit) {
-    throw new Error(
-      `deploy blocked before publication: lightweight tag ${tag} is not pushed at ${commit}`,
     );
   }
 

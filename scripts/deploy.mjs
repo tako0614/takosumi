@@ -18,7 +18,11 @@
 // `--contract` は副作用なしで、この repo が publish できる surface と、それぞれの
 // trigger・義務の果たし方を印字します。takos-control の
 // `scripts/check-deploy-contract.mjs` がそれを probe し、負う義務すべてに答えが
-// あること、前回の snapshot から答えが変わっていないことを確認します。
+// あること、宣言した script/tool/env が実在することを確認します。
+//
+// `--lineage-selftest <corpusDir> <class>` は takos-control の lineage corpus に
+// 対して、この repo が実際の deploy で使う lineage 関数そのものを走らせ、case ごと
+// の verdict を一つの JSON document で印字します。副作用はありません。
 //
 // OSS platform worker の self-host deploy は利用者/operator自身のauthorityです。
 // 公式 Takosumi も同じ OSS entry を operator-private config で実行します。
@@ -29,6 +33,12 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
+
+import {
+  isDeployLineageClass,
+  requireCleanPushedSource,
+  runLineageSelfTest,
+} from "./lib/deploy-lineage.ts";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -97,8 +107,9 @@ const CONTRACT = {
       // バイト列だけです。durable state も server handler も target 側
       // credential も持たず、消費者が pin する identity も発行しません。
       triggers: [],
+      lineage: "production-routine",
       obligations: {
-        provenance: `refuses a dirty worktree, builds ${WEBSITE.outputDir} with \`${WEBSITE.build.join(" ")}\` from that worktree — which is what validates these bytes, since the landing and the VitePress docs both have to compile — scans the output for credential material, and records the commit and the index.html sha256. It deliberately does not run the repository-wide gate: the Go provider suite and the control-plane tests cannot fail because of a documentation page, and gating a typo fix on them blocks publishing for reasons unrelated to what is being published.`,
+        provenance: `requires the production-routine lineage class — a clean worktree on main, at or an ancestor of a freshly fetched origin/main — then builds ${WEBSITE.outputDir} with \`${WEBSITE.build.join(" ")}\` from that worktree, which is what validates these bytes since the landing and the VitePress docs both have to compile, scans the output for credential material, and records the commit and the index.html sha256. It deliberately does not run the repository-wide gate: the control-plane and runner suites cannot fail because of a documentation page, and gating a typo fix on them blocks publishing for reasons unrelated to what is being published.`,
         "post-conditions": `fetches the immutable deployment URL and ${WEBSITE.site}/ and requires both to serve the exact index.html digest just built, then requires ${WEBSITE.site}/docs/ to return 200`,
         reversal: `the previous production deployment id is read and printed before publishing; restore it with \`wrangler pages deployment list --project-name ${WEBSITE.project}\` and a rollback to that id`,
         "failure-handling":
@@ -110,6 +121,7 @@ const CONTRACT = {
       target: CONTRACT_PACKAGE.target,
       covers: ["contract", "scripts/contract-package-release.ts"],
       triggers: ["published-identity"],
+      lineage: "published-identity",
       requiresScripts: ["check", "deploy"],
       requiresTools: ["git", "bun", "npm"],
       obligations: {
@@ -130,6 +142,42 @@ const CONTRACT = {
 
 if (process.argv.includes("--contract")) {
   process.stdout.write(`${JSON.stringify(CONTRACT, null, 2)}\n`);
+  process.exit(0);
+}
+
+// Control's lineage corpus: run the function that guards the real deploy over
+// seven materialized git states and print one verdict document. Side-effect
+// free, and it reads nothing but the checkouts it is handed.
+if (process.argv[2] === "--lineage-selftest") {
+  const corpusRoot = process.argv[3];
+  const lineageClass = process.argv[4];
+  if (!corpusRoot || !lineageClass || !isDeployLineageClass(lineageClass)) {
+    process.stderr.write(
+      "usage: bun run deploy -- --lineage-selftest <corpusDir> <lineage-class>\n",
+    );
+    process.exit(1);
+  }
+  const { requiredContractReleaseTag } = await import(
+    "./contract-package-release.ts"
+  );
+  const contractVersion = JSON.parse(
+    readFileSync(join(repo, "contract/package.json"), "utf8"),
+  ).version;
+  process.stdout.write(
+    `${JSON.stringify(
+      await runLineageSelfTest(corpusRoot, lineageClass, {
+        // The only identity this repository publishes as a git tag. No corpus
+        // checkout carries it, which is why every case is refused for the
+        // published-identity class — exactly what that class owes.
+        tag:
+          lineageClass === "published-identity"
+            ? requiredContractReleaseTag(contractVersion)
+            : null,
+      }),
+      null,
+      2,
+    )}\n`,
+  );
   process.exit(0);
 }
 
@@ -204,13 +252,14 @@ function walk(directory) {
   return found;
 }
 
-// provenance: 公開バイト列を一つの commit に結び付ける。
-const dirty = git("status", "--porcelain");
-if (dirty !== "") {
-  die(
-    "the worktree is not clean; published bytes must belong to one commit",
-    dirty.split("\n").slice(0, 20),
-  );
+// provenance: 公開バイト列を一つの commit に結び付ける。takosumi.com は
+// production-routine class で、clean な worktree だけでは足りない — その commit が
+// fetch 済みの origin/main から実際に取得できることまで要求する。以前はここが
+// dirty 判定だけで、このマシンにしか存在しない commit を公開できた。
+try {
+  await requireCleanPushedSource("production-routine", { cwd: repo });
+} catch (error) {
+  die(error instanceof Error ? error.message : String(error));
 }
 const commit = git("rev-parse", "HEAD");
 const branch = git("rev-parse", "--abbrev-ref", "HEAD");
@@ -219,8 +268,8 @@ process.stdout.write(`source ${commit} (${branch})\n`);
 
 // The build is the gate for these bytes. The landing and the docs both have to
 // compile, and a broken page fails here. The repository-wide `bun run check`
-// covers the Go provider, the control plane, and the runner — none of which can
-// be broken by a documentation change, and all of which would block one.
+// covers the control plane, the dashboard and the runner — none of which can be
+// broken by a documentation change, and all of which would block one.
 process.stdout.write(`\n==> ${WEBSITE.build.join(" ")}\n`);
 execFileSync(WEBSITE.build[0], WEBSITE.build.slice(1), {
   cwd: repo,
