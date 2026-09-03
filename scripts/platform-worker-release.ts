@@ -23,6 +23,8 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+import { lineageVerdict } from "./lib/deploy-lineage.ts";
+
 const ROOT = resolve(import.meta.dir, "..");
 const WRANGLER = resolve(ROOT, "node_modules/.bin/wrangler");
 const MAX_OUTPUT = 64 * 1024 * 1024;
@@ -1583,7 +1585,7 @@ async function plan(
   options: Extract<Options, { action: "plan" }>,
   environment: PlatformEnvironment,
 ): Promise<void> {
-  assertCleanAndPushed();
+  await assertCleanAndPushed();
   assertReadableConfig(options.config);
   assertExternalAbsent(options.planOut);
   const closurePath = `${options.planOut}.closure`;
@@ -1649,7 +1651,7 @@ async function plan(
     restoreDryRunConfig?.dispose();
   }
   const secrets = await readSecretNames(sealed.configPath);
-  assertCleanAndPushed();
+  await assertCleanAndPushed();
 
   const identity = {
     kind: "takosumi.platform-worker-release-plan@v5" as const,
@@ -1703,7 +1705,7 @@ async function execute(
   assertExternalAbsent(options.evidence);
   let releasePlan: PlatformReleasePlan | undefined;
   try {
-    assertCleanAndPushed();
+    await assertCleanAndPushed();
     assertPrivateFile(options.plan);
     if (!/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(options.reviewer)) {
       throw new Error("platform_worker_release_reviewer_invalid");
@@ -1734,7 +1736,7 @@ async function recover(
   assertExternalAbsent(options.evidence);
   let releasePlan: PlatformReleasePlan | undefined;
   try {
-    assertCleanAndPushed();
+    await assertCleanAndPushed();
     assertPrivateFile(options.plan);
     if (!/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(options.reviewer)) {
       throw new Error("platform_worker_release_reviewer_invalid");
@@ -1766,7 +1768,7 @@ async function restore(
   assertExternalAbsent(options.evidence);
   let releasePlan: PlatformReleasePlan | undefined;
   try {
-    assertCleanAndPushed();
+    await assertCleanAndPushed();
     assertPrivateFile(options.plan);
     if (!/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(options.reviewer)) {
       throw new Error("platform_worker_release_reviewer_invalid");
@@ -3896,9 +3898,25 @@ export function remoteBranchContainsCommit(
   });
 }
 
-function assertCleanAndPushed(): void {
-  if (git(["status", "--porcelain", "--untracked-files=all"]).trim() !== "") {
-    throw new Error("platform_worker_release_source_dirty");
+/**
+ * The shared `production-routine` lineage class, plus this surface's own
+ * tightening.
+ *
+ * The shared predicate (scripts/lib/deploy-lineage.ts) is what control's
+ * corpus is run against, and it closes the hole this function used to have:
+ * it accepted ANY branch, so a production Worker release could be cut from a
+ * feature branch that happened to be pushed. A surface may only tighten the
+ * class it declares, and this one does: HEAD must be the EXACT freshly read
+ * remote tip of its branch, not merely an ancestor of it.
+ */
+async function assertCleanAndPushed(): Promise<void> {
+  const answer = await lineageVerdict("production-routine", { cwd: ROOT });
+  if (answer.verdict !== "accept") {
+    throw new Error(
+      answer.reason === "dirty-worktree"
+        ? "platform_worker_release_source_dirty"
+        : "platform_worker_release_source_not_pushed",
+    );
   }
   const commit = git(["rev-parse", "HEAD"]).trim();
   const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]).trim();

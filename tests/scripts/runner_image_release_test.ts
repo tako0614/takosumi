@@ -155,6 +155,17 @@ function gitFor(
     }
     if (gitArgs[0] === "status") return "";
     if (gitArgs.join(" ") === "branch --show-current") return branch;
+    // The shared production-routine lineage predicate
+    // (scripts/lib/deploy-lineage.ts) speaks these; the release's own checks
+    // speak the ones below. Both run through this one seam.
+    if (gitArgs.join(" ") === "symbolic-ref --quiet --short HEAD") {
+      if (!branch) throw new Error("detached HEAD");
+      return branch;
+    }
+    if (gitArgs[0] === "fetch") return "";
+    if (gitArgs.join(" ") === `rev-parse --verify refs/remotes/origin/${branch}`) {
+      return originCommit;
+    }
     if (gitArgs.join(" ") === "rev-parse HEAD") return head;
     if (gitArgs.join(" ") === `rev-parse origin/${branch}`) return originCommit;
     if (gitArgs[0] === "ls-remote") {
@@ -167,6 +178,11 @@ function gitFor(
       return options.resolvedCommits?.[commit] ?? commit;
     }
     if (gitArgs[0] === "merge-base" && gitArgs[1] === "--is-ancestor") {
+      // The lineage predicate asks the plain question; the reconciliation path
+      // asks it with replacement disabled, and that distinction is its own.
+      if (!noReplaceObjects && gitArgs[2] === head && gitArgs[3] === originCommit) {
+        return "";
+      }
       if (!noReplaceObjects) throw new Error("ancestry must disable replacement");
       const pair = `${gitArgs[2]}:${gitArgs[3]}`;
       if (options.nonAncestorPairs?.includes(pair)) throw new Error("not an ancestor");
@@ -627,7 +643,9 @@ test("production rejects a feature branch and accepts only pushed main", async (
       repositoryRoot: input.repository,
       git: gitFor("fix/TASK-0032-runner-image"),
     }),
-  ).rejects.toThrow("production releases require main");
+  ).rejects.toThrow(
+    "not the default branch main",
+  );
   await expect(
     runRunnerImageRelease(buildOptions(input, "production"), {
       repositoryRoot: input.repository,

@@ -20,6 +20,7 @@ import { userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { dashboardAssetTreeSeal } from "./platform-worker-release.ts";
+import { lineageVerdict } from "./lib/deploy-lineage.ts";
 
 export type RunnerImageReleaseCommand = "build" | "reconcile" | "verify";
 export type RunnerImageReleaseEnvironment = "staging" | "production";
@@ -1956,6 +1957,25 @@ async function repositoryIdentity(
   if (replaceRefs.trim()) {
     throw new Error("runner_image_git_replace_refs_forbidden");
   }
+  if (environment === "production") {
+    // The shared `production-routine` lineage class, run through this
+    // surface's own injected git seam so the corpus self-test and the real
+    // release exercise one predicate: clean, on main, at or an ancestor of a
+    // freshly fetched origin/main.
+    const answer = await lineageVerdict("production-routine", {
+      cwd: root,
+      git: async (args, cwd) => {
+        try {
+          return (await git(cwd, [...args])).trim();
+        } catch {
+          return null;
+        }
+      },
+    });
+    if (answer.verdict !== "accept") {
+      throw new Error(`${root} refused by production lineage: ${answer.why}`);
+    }
+  }
   const status = await git(root, [
     "status",
     "--porcelain=v1",
@@ -1964,9 +1984,6 @@ async function repositoryIdentity(
   if (status.trim()) throw new Error(`${root} must be clean`);
   const branch = (await git(root, ["branch", "--show-current"])).trim();
   if (!branch) throw new Error(`${root} must be on an attached branch`);
-  if (environment === "production" && branch !== "main") {
-    throw new Error("production releases require main");
-  }
   const commit = (await git(root, ["rev-parse", "HEAD"])).trim();
   let originCommit = "";
   let remoteCommit = "";
