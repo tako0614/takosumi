@@ -35,6 +35,11 @@ import {
   isWorkerReadinessPath,
 } from "./routes.ts";
 import { checkPlatformBindings } from "./bindings-check.ts";
+import {
+  RUNTIME_BINDING_DERIVATION_KEY_ENV,
+  resolveRuntimeBindingDerivationKey,
+  runtimeBindingDerivationMode,
+} from "../../../core/domains/deploy-control/runtime_binding_derivation_key.ts";
 import { ensureAccountsD1WorkerSchema } from "./d1-schema-gate.ts";
 
 export interface CloudflareWorkerEnv {
@@ -175,17 +180,35 @@ export function createCloudflareWorker<
         const check = checkPlatformBindings(
           env as unknown as Record<string, unknown>,
         );
-        if (!check.ok) {
+        // The runtime-binding derivation key is not a required binding: a
+        // composition without one is on the sealed lane, which is a legitimate
+        // mode. It is only legitimate when it is DECLARED, though — the defect
+        // this closes is a lane that switched itself silently — so readiness
+        // names the mode, and a key that is present but unusable is a refusal
+        // rather than a silent downgrade.
+        const derivation = resolveRuntimeBindingDerivationKey(
+          (env as unknown as Record<string, unknown>)[
+            RUNTIME_BINDING_DERIVATION_KEY_ENV
+          ],
+        );
+        if (!check.ok || derivation.status === "invalid") {
+          const invalid =
+            derivation.status === "invalid"
+              ? [`${RUNTIME_BINDING_DERIVATION_KEY_ENV}: ${derivation.why}`]
+              : [];
           console.error(
             "platform_bindings_missing",
-            JSON.stringify({ missing: check.missing }),
+            JSON.stringify({ missing: check.missing, invalid }),
           );
           return Response.json(
-            { ok: false, missing: check.missing },
+            { ok: false, missing: check.missing, invalid },
             { status: 503 },
           );
         }
-        return Response.json({ ok: true });
+        return Response.json({
+          ok: true,
+          runtimeBindingDerivation: runtimeBindingDerivationMode(derivation),
+        });
       }
       // Non-API paths = the dashboard SPA, served from this Worker's static
       // assets (deep links fall back to index.html via not_found_handling).

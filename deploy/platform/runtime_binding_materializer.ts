@@ -20,6 +20,10 @@ import type {
   CapsuleRunCredentialPhase,
 } from "../../core/domains/deploy-control/run_credential_context.ts";
 import { resolveCanonicalCapsuleRunCredentialContext } from "../../core/domains/deploy-control/run_credential_context.ts";
+import {
+  RuntimeBindingDerivationKeyError,
+  requireRuntimeBindingDerivationKey,
+} from "../../core/domains/deploy-control/runtime_binding_derivation_key.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
 import type { D1Database as ControlD1Database } from "../../worker/src/bindings.ts";
 import {
@@ -114,8 +118,30 @@ export function createCloudflareTakosumiRuntimeBindingMaterializer(
     issuer: env.TAKOSUMI_ACCOUNTS_ISSUER ?? "",
     pairwiseSubjectSecret:
       env.TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET ?? "",
-    derivationKey: env.TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY ?? "",
+    // One resolution, shared with the run-scoped lane. An absent or malformed
+    // key used to reach `boundedSecret` as `""` and throw during a live apply,
+    // because this materializer was constructed per RPC call; the other lane
+    // read the same variable and silently sealed instead. Both now answer from
+    // `resolveRuntimeBindingDerivationKey`, and this lane refuses to compose at
+    // all unless the key is configured — it is the host-derivation lane, and a
+    // host-derivation entrypoint without a host key is not a degraded mode, it
+    // is a lie.
+    derivationKey: requireCloudflareRuntimeBindingDerivationKey(env),
   });
+}
+
+function requireCloudflareRuntimeBindingDerivationKey(
+  env: RuntimeBindingMaterializerCloudflareEnv,
+): string {
+  const resolved = requireRuntimeBindingDerivationKey(
+    env.TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY,
+  );
+  if (resolved.status !== "configured") {
+    throw new RuntimeBindingDerivationKeyError(
+      "is required to compose the runtime-binding materializer entrypoint",
+    );
+  }
+  return resolved.key;
 }
 
 export function createTakosumiRuntimeBindingMaterializer(input: {

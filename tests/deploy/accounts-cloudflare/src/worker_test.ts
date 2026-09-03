@@ -103,6 +103,36 @@ test("Cloudflare readiness checks canonical platform bindings only", async () =>
     env(complete),
   );
   expect(ready.status).toBe(200);
+  // Readiness NAMES the runtime-binding lane. Absence of the derivation key is
+  // a legitimate mode; a lane that switches itself without saying so is what
+  // this line exists to stop.
+  expect(await ready.json()).toEqual({
+    ok: true,
+    runtimeBindingDerivation: "sealed",
+  });
+
+  const derived = await createCloudflareWorker().fetch(
+    new Request("https://app.example.test/readyz"),
+    env({
+      ...complete,
+      TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY: "k".repeat(48),
+    }),
+  );
+  expect(await derived.json()).toEqual({
+    ok: true,
+    runtimeBindingDerivation: "host-derivation",
+  });
+
+  // A key that is present but unusable refuses readiness rather than silently
+  // sealing while the private RPC lane throws mid-apply on the same value.
+  const unusable = await createCloudflareWorker().fetch(
+    new Request("https://app.example.test/readyz"),
+    env({ ...complete, TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY: "short" }),
+  );
+  expect(unusable.status).toBe(503);
+  expect((await unusable.json()).invalid).toEqual([
+    "TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY: must be at least 32 bytes, found 5",
+  ]);
 });
 
 test("Cloudflare readiness keeps the same JSON response for a trailing slash", async () => {
