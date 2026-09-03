@@ -46,6 +46,10 @@ export class PortableGateFailure extends Error {
  * scripts retain their own fail-fast behavior and no capability is skipped.
  */
 export const PORTABLE_GATE_PHASES: readonly PortableGatePhase[] = [
+  // First, because a gate that cannot exercise a capability must refuse rather
+  // than skip: a missing `tofu` used to make the live OpenTofu proof silently
+  // disappear while the gate printed the same green line.
+  phase("tools", ["bun", "run", "check:tools"]),
   phase("format", ["bun", "run", "fmt:check"]),
   phase("package-script-boundaries", [
     "bun",

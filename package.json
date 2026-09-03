@@ -17,6 +17,7 @@
   "scripts": {
     "wrangler": "wrangler",
     "check": "bun scripts/check-portable-gate.ts",
+    "check:tools": "bun scripts/check-tools.ts",
     "fmt:check": "bun scripts/check-source-format.mjs",
     "deploy": "bun scripts/deploy.mjs",
     "check:package-script-boundaries": "bun scripts/check-package-script-boundaries.ts",
