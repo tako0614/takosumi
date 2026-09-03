@@ -22,6 +22,7 @@
     "check:package-script-boundaries": "bun scripts/check-package-script-boundaries.ts",
     "check:production-migrations": "bun scripts/check-production-migration-boundary.ts",
     "check:no-first-party-provider": "bun scripts/check-no-first-party-provider.ts",
+    "check:platform-bindings": "bun scripts/check-platform-bindings.ts --check",
     "check:authoritative-docs": "bun scripts/check-authoritative-doc-boundaries.ts",
     "check:generalization-boundaries": "bun scripts/check-generalization-boundaries.ts",
     "check:import-boundaries": "bun scripts/check-import-boundaries.ts",

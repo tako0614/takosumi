@@ -62,6 +62,7 @@ export const PORTABLE_GATE_PHASES: readonly PortableGatePhase[] = [
     "run",
     "check:no-first-party-provider",
   ]),
+  phase("platform-bindings", ["bun", "run", "check:platform-bindings"]),
   phase("generated-assets", ["bun", "run", "generated-assets:check"]),
   phase("authoritative-docs", [
     "bun",

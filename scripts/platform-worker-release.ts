@@ -24,6 +24,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { lineageVerdict } from "./lib/deploy-lineage.ts";
+import {
+  PLATFORM_BINDINGS,
+  platformBindingNames,
+} from "../deploy/accounts-cloudflare/src/bindings-check.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const WRANGLER = resolve(ROOT, "node_modules/.bin/wrangler");
@@ -38,14 +42,10 @@ const COMMIT = /^[0-9a-f]{40}$/u;
 const VERSION = /^[0-9a-f]{8}-[0-9a-f-]{27,}$/u;
 const RUNNER_IMAGE =
   /^registry\.cloudflare\.com\/[0-9a-f]{32}\/takosumi-runner@sha256:[0-9a-f]{64}$/u;
-const REQUIRED_BINDINGS = [
-  "ASSETS",
-  "TAKOSUMI_ACCOUNTS_DB",
-  "TAKOSUMI_CONTROL_DB",
-  "HOSTED",
-  "TAKOSUMI_VERSION_METADATA",
-  "TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY",
-] as const;
+// Projected from the one binding authority, not restated. This list used to
+// hold six names and neither R2 nor the Durable Objects, and nothing compared
+// it with the readiness list, the shipped template, or the local substrate.
+const REQUIRED_BINDINGS = platformBindingNames("officialRelease");
 
 export type DashboardAssetSeal = Readonly<{
   digest: string;
@@ -3343,14 +3343,7 @@ export function assertPublishedVersion(
         record(binding) &&
         (binding.name === required || binding.binding === required),
     );
-    const expectedType = {
-      ASSETS: "assets",
-      TAKOSUMI_ACCOUNTS_DB: "d1",
-      TAKOSUMI_CONTROL_DB: "d1",
-      HOSTED: "service",
-      TAKOSUMI_VERSION_METADATA: "version_metadata",
-      TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY: "secret_text",
-    }[required];
+    const expectedType = PLATFORM_BINDINGS[required]?.kind;
     if (
       matches.length !== 1 ||
       !record(matches[0]) ||
