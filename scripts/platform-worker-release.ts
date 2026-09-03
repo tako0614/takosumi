@@ -3,6 +3,7 @@ import {
   closeSync,
   chmodSync,
   constants,
+  existsSync,
   fchmodSync,
   fstatSync,
   fsyncSync,
@@ -387,11 +388,14 @@ export function assertPinnedSourceRoot(pin: PlatformReleaseSourcePin): void {
 }
 
 /**
- * Materialize a fresh disposable checkout of the pinned `{repository, commit}`.
+ * Materialize the pinned remote default branch as a fresh disposable checkout.
  *
- * The release is then run from that directory. The build toolchain still has to
- * be installed there, which is why this is a separate step an operator runs
- * rather than something the release does silently mid-plan.
+ * The remote default branch tip must be the pinned commit. The checkout remains
+ * attached to that tracking branch because the release lineage guard refuses a
+ * detached HEAD; an older commit or a synthetic local branch cannot bypass it.
+ * The build toolchain still has to be installed there, which is why this is a
+ * separate step an operator runs rather than something the release does silently
+ * mid-plan.
  */
 export async function materializePinnedSource(
   pin: PlatformReleaseSourcePin,
@@ -406,6 +410,30 @@ export async function materializePinnedSource(
   mkdirSync(into, { recursive: true, mode: 0o700 });
   await requiredCommand(["git", "init", "--quiet", into]);
   await requiredCommand(["git", "-C", into, "remote", "add", "origin", pin.repository]);
+  const remoteHead = parseRemoteDefaultBranch(
+    (
+      await requiredCommand([
+        "git",
+        "-C",
+        into,
+        "ls-remote",
+        "--symref",
+        "origin",
+        "HEAD",
+      ])
+    ).stdout,
+  );
+  if (remoteHead.commit !== pin.commit) {
+    throw new Error("platform_worker_release_source_materialize_invalid");
+  }
+  await requiredCommand([
+    "git",
+    "-C",
+    into,
+    "check-ref-format",
+    "--branch",
+    remoteHead.branch,
+  ]);
   await requiredCommand([
     "git",
     "-C",
@@ -414,16 +442,103 @@ export async function materializePinnedSource(
     "--quiet",
     "--depth",
     "1",
+    "--no-tags",
     "origin",
-    pin.commit,
+    `${remoteHead.ref}:refs/remotes/origin/${remoteHead.branch}`,
   ]);
-  await requiredCommand(["git", "-C", into, "checkout", "--quiet", pin.commit]);
+  const fetchedTip = (
+    await requiredCommand([
+      "git",
+      "-C",
+      into,
+      "rev-parse",
+      `refs/remotes/origin/${remoteHead.branch}`,
+    ])
+  ).stdout.trim();
+  if (fetchedTip !== pin.commit) {
+    throw new Error("platform_worker_release_source_materialize_invalid");
+  }
+  await requiredCommand([
+    "git",
+    "-C",
+    into,
+    "checkout",
+    "--quiet",
+    "--track",
+    "-b",
+    remoteHead.branch,
+    `refs/remotes/origin/${remoteHead.branch}`,
+  ]);
   const head = (
     await requiredCommand(["git", "-C", into, "rev-parse", "HEAD"])
   ).stdout.trim();
-  if (head !== pin.commit) {
+  const branch = (
+    await requiredCommand(["git", "-C", into, "symbolic-ref", "--short", "HEAD"])
+  ).stdout.trim();
+  const upstream = (
+    await requiredCommand([
+      "git",
+      "-C",
+      into,
+      "rev-parse",
+      "--abbrev-ref",
+      "--symbolic-full-name",
+      "@{upstream}",
+    ])
+  ).stdout.trim();
+  const status = (
+    await requiredCommand([
+      "git",
+      "-C",
+      into,
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+    ])
+  ).stdout.trim();
+  const currentRemoteHead = parseRemoteDefaultBranch(
+    (
+      await requiredCommand([
+        "git",
+        "-C",
+        into,
+        "ls-remote",
+        "--symref",
+        "origin",
+        "HEAD",
+      ])
+    ).stdout,
+  );
+  if (
+    head !== pin.commit ||
+    branch !== remoteHead.branch ||
+    upstream !== `origin/${remoteHead.branch}` ||
+    status !== "" ||
+    currentRemoteHead.ref !== remoteHead.ref ||
+    currentRemoteHead.commit !== pin.commit
+  ) {
     throw new Error("platform_worker_release_source_materialize_invalid");
   }
+}
+
+function parseRemoteDefaultBranch(output: string): Readonly<{
+  ref: string;
+  branch: string;
+  commit: string;
+}> {
+  const lines = output.trim().split("\n");
+  const symrefs = lines.flatMap((line) => {
+    const match = /^ref:\s+(refs\/heads\/(\S+))\s+HEAD$/u.exec(line.trim());
+    return match ? [{ ref: match[1]!, branch: match[2]! }] : [];
+  });
+  const commits = lines.flatMap((line) => {
+    const match = /^([0-9a-f]{40})\s+HEAD$/u.exec(line.trim());
+    return match ? [match[1]!] : [];
+  });
+  if (symrefs.length !== 1 || commits.length !== 1) {
+    throw new Error("platform_worker_release_source_materialize_invalid");
+  }
+  return { ...symrefs[0]!, commit: commits[0]! };
 }
 
 export function platformSealedConfigProjection(
@@ -1823,21 +1938,14 @@ async function plan(
   );
   let sealed: Awaited<ReturnType<typeof createPlatformDeployClosure>>;
   let restoreSealed: Awaited<ReturnType<typeof createPlatformDeployClosure>>;
-  let restoreDryRunConfig:
-    | ReturnType<typeof createPlatformDryRunConfig>
-    | undefined;
   try {
-    const transientRestoreConfig = createPlatformDryRunConfig(
-      restoreConfigSource,
-      options.config,
-    );
-    restoreDryRunConfig = transientRestoreConfig;
     sealed = await createPlatformDeployClosure(
       closurePath,
       configSource,
       options.config,
       dashboardAssets,
       sourceCommit,
+      { pathCustodyRoot: dirname(options.planOut) },
     );
     restoreSealed = await createPlatformDeployClosure(
       restoreClosurePath,
@@ -1845,14 +1953,12 @@ async function plan(
       options.config,
       dashboardAssets,
       sourceCommit,
-      transientRestoreConfig.path,
+      { pathCustodyRoot: dirname(options.planOut) },
     );
   } catch (error) {
     rmSync(closurePath, { recursive: true, force: true });
     rmSync(restoreClosurePath, { recursive: true, force: true });
     throw error;
-  } finally {
-    restoreDryRunConfig?.dispose();
   }
   const secrets = await readSecretNames(sealed.configPath);
   await assertCleanAndPushed();
@@ -2122,15 +2228,67 @@ async function buildDeterministicDashboard(
 
 type PlatformDryRunConfig = Readonly<{
   path: string;
+  assertUnchanged: () => void;
   dispose: () => void;
 }>;
+
+type PlatformClosureDependencies = Readonly<{
+  evidence: Uint8Array;
+  assertUnchanged: () => void;
+  dispose: () => void;
+}>;
+
+type PhysicalTreeIdentitySeal = readonly Readonly<{
+  path: string;
+  kind: "directory" | "file";
+  device: string;
+  inode: string;
+  mode: string;
+  links: string;
+  size: string;
+  modifiedNanoseconds: string;
+  changedNanoseconds: string;
+}>[];
+
+type PhysicalFileContentSeal = Readonly<{
+  size: number;
+  sha256: string;
+}>;
+
+type PhysicalDirectoryIdentitySeal = PhysicalTreeIdentitySeal[number];
+
+type PhysicalDirectoryPathCustodySeal = readonly Readonly<{
+  path: string;
+  identity: PhysicalDirectoryIdentitySeal;
+}>[];
 
 export function createPlatformDryRunConfig(
   source: string,
   originalConfigPath: string,
   pinnedRoot: string = ROOT,
 ): PlatformDryRunConfig {
-  if (!isAbsolute(originalConfigPath)) {
+  if (!isAbsolute(pinnedRoot)) {
+    throw new Error("platform_worker_release_dry_run_config_invalid");
+  }
+  return createPlatformDryRunConfigForPaths(
+    source,
+    originalConfigPath,
+    resolve(pinnedRoot, "deploy/platform/entry-worker.ts"),
+    resolve(pinnedRoot, "dashboard/dist"),
+  );
+}
+
+function createPlatformDryRunConfigForPaths(
+  source: string,
+  originalConfigPath: string,
+  entryPath: string,
+  assetsPath: string,
+): PlatformDryRunConfig {
+  if (
+    !isAbsolute(originalConfigPath) ||
+    !isAbsolute(entryPath) ||
+    !isAbsolute(assetsPath)
+  ) {
     throw new Error("platform_worker_release_dry_run_config_invalid");
   }
   const workspace = createGlobalTransientDirectory(
@@ -2142,58 +2300,560 @@ export function createPlatformDryRunConfig(
     writePrivate(
       path,
       new TextEncoder().encode(
-        platformDryRunConfigProjection(source, originalConfigPath, pinnedRoot),
+        platformDryRunConfigProjection(
+          source,
+          originalConfigPath,
+          entryPath,
+          assetsPath,
+        ),
       ),
     );
+    chmodSync(path, 0o400);
+    // Wrangler creates its local scratch tree beside the selected config.
+    // Pre-create that direct child so legitimate writes below it do not alter
+    // the workspace directory identity that guards path resolution.
+    mkdirSync(join(workspace, ".wrangler/tmp"), {
+      recursive: true,
+      mode: 0o700,
+    });
+    const bytes = readStablePhysicalBytes(
+      path,
+      "platform_worker_release_dry_run_config_invalid",
+    );
+    const content = { size: bytes.byteLength, sha256: digest(bytes) };
+    const identity = physicalTreeIdentitySeal(path);
+    const workspaceIdentity = physicalDirectoryIdentitySeal(workspace);
     let disposed = false;
+    const assertUnchanged = (): void => {
+      if (disposed) {
+        throw new Error("platform_worker_release_dry_run_config_drift");
+      }
+      assertPhysicalDirectoryUnchanged(
+        workspace,
+        workspaceIdentity,
+        "platform_worker_release_dry_run_config_drift",
+      );
+      assertPhysicalFileUnchanged(
+        path,
+        content,
+        identity,
+        "platform_worker_release_dry_run_config_drift",
+      );
+      assertPhysicalDirectoryUnchanged(
+        workspace,
+        workspaceIdentity,
+        "platform_worker_release_dry_run_config_drift",
+      );
+    };
     return {
       path,
+      assertUnchanged,
       dispose: () => {
         if (disposed) return;
-        disposed = true;
-        rmSync(workspace, { recursive: true, force: true });
+        try {
+          assertUnchanged();
+        } finally {
+          disposed = true;
+          try {
+            if (existsSync(workspace)) {
+              makePhysicalTreeDirectoriesWritable(workspace);
+            }
+          } finally {
+            rmSync(workspace, { recursive: true, force: true });
+          }
+        }
       },
     };
   } catch (error) {
-    rmSync(workspace, { recursive: true, force: true });
+    try {
+      if (existsSync(workspace)) {
+        makePhysicalTreeDirectoriesWritable(workspace);
+      }
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
     throw error;
   }
 }
 
 /**
- * Project the realized config into a wrangler-usable one that points at the
- * PINNED checkout.
+ * Project the realized config into a wrangler-usable one that points at an
+ * explicitly selected pinned source tree.
  *
  * The realized config declares no source path, so this is what makes it
- * runnable at all — and the paths it injects come from the commit the config's
- * source pin names, never from wherever this script happens to live.
+ * runnable at all. Provider reads select the pinned checkout; deploy closures
+ * select their private archived source and copied dashboard. Neither path is
+ * inferred from wherever this script happens to live.
  */
 function platformDryRunConfigProjection(
   source: string,
   originalConfigPath: string,
-  pinnedRoot: string,
+  entryPath: string,
+  assetsPath: string,
 ): string {
-  if (!isAbsolute(originalConfigPath) || !isAbsolute(pinnedRoot)) {
+  if (
+    !isAbsolute(originalConfigPath) ||
+    !isAbsolute(entryPath) ||
+    !isAbsolute(assetsPath)
+  ) {
     throw new Error("platform_worker_release_dry_run_config_invalid");
   }
   try {
-    return injectPlatformSourcePaths(
-      source,
-      resolve(pinnedRoot, "deploy/platform/entry-worker.ts"),
-      resolve(pinnedRoot, "dashboard/dist"),
-    );
+    return injectPlatformSourcePaths(source, entryPath, assetsPath);
   } catch {
     throw new Error("platform_worker_release_dry_run_config_invalid");
   }
 }
 
-async function createPlatformDeployClosure(
+async function preparePlatformClosureDependencies(
+  sourcePath: string,
+  closurePath: string,
+): Promise<PlatformClosureDependencies> {
+  const nodeModulesPath = join(sourcePath, "node_modules");
+  const installHome = join(closurePath, ".dependency-install-home");
+  const cachePath = join(installHome, "cache");
+  if (existsSync(nodeModulesPath) || existsSync(installHome)) {
+    throw new Error("platform_worker_release_dependencies_invalid");
+  }
+  const archivedSource = dashboardAssetTreeSeal(sourcePath);
+  const packageBytes = readStablePhysicalBytes(
+    join(sourcePath, "package.json"),
+    "platform_worker_release_dependencies_invalid",
+  );
+  const lockfileBytes = readStablePhysicalBytes(
+    join(sourcePath, "bun.lock"),
+    "platform_worker_release_dependencies_invalid",
+  );
+  mkdirSync(installHome, { mode: 0o700 });
+  try {
+    mkdirSync(cachePath, { mode: 0o700 });
+    if (readdirSync(cachePath).length !== 0) {
+      throw new Error("platform_worker_release_dependencies_invalid");
+    }
+    await requiredCommand(
+      [
+        process.execPath,
+        "install",
+        "--frozen-lockfile",
+        "--production",
+        "--ignore-scripts",
+        "--no-save",
+        "--backend=copyfile",
+        "--linker=hoisted",
+        "--no-progress",
+        "--no-summary",
+        "--registry=https://registry.npmjs.org/",
+        `--cache-dir=${cachePath}`,
+      ],
+      undefined,
+      sourcePath,
+      {
+        PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+        HOME: installHome,
+        LANG: "C.UTF-8",
+        LC_ALL: "C.UTF-8",
+        CI: "true",
+        NO_COLOR: "1",
+      },
+    );
+    removePlatformDependencyLinks(nodeModulesPath, sourcePath);
+    if (
+      readdirSync(installHome).sort(codePointCompare).join(",") !== "cache"
+    ) {
+      throw new Error("platform_worker_release_dependencies_invalid");
+    }
+    const dependencySeal = dashboardAssetTreeSeal(nodeModulesPath);
+    const buildInputSeal = dashboardAssetTreeSeal(sourcePath);
+    freezePhysicalTree(sourcePath);
+    const buildInputIdentity = physicalTreeIdentitySeal(sourcePath);
+    rmSync(installHome, { recursive: true, force: true });
+    let disposed = false;
+    return {
+      evidence: new TextEncoder().encode(
+        `${JSON.stringify(
+          {
+            kind: "takosumi.platform-worker-dependencies@v1",
+            installer: {
+              name: "bun",
+              version: Bun.version,
+              platform: process.platform,
+              architecture: process.arch,
+              frozenLockfile: true,
+              production: true,
+              lifecycleScripts: false,
+              backend: "copyfile",
+              linker: "hoisted",
+            },
+            cache: {
+              scope: "closure-private",
+              initiallyEmpty: true,
+              externalFallback: false,
+              retained: false,
+            },
+            packageSha256: digest(packageBytes),
+            lockfileSha256: digest(lockfileBytes),
+            treeSha256: dependencySeal.digest,
+            files: dependencySeal.entries.length,
+            bytes: dependencySeal.entries.reduce(
+              (total, entry) => total + entry.size,
+              0,
+            ),
+          },
+          null,
+          2,
+        )}\n`,
+      ),
+      assertUnchanged: () => {
+        if (disposed) {
+          throw new Error("platform_worker_release_dependencies_drift");
+        }
+        assertPhysicalTreeUnchanged(
+          sourcePath,
+          buildInputSeal,
+          buildInputIdentity,
+          "platform_worker_release_dependencies_drift",
+        );
+      },
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        makePhysicalTreeDirectoriesWritable(sourcePath);
+        rmSync(nodeModulesPath, { recursive: true, force: true });
+        rmSync(installHome, { recursive: true, force: true });
+        if (
+          JSON.stringify(dashboardAssetTreeSeal(sourcePath)) !==
+          JSON.stringify(archivedSource)
+        ) {
+          throw new Error("platform_worker_release_dependencies_drift");
+        }
+      },
+    };
+  } catch (error) {
+    if (existsSync(sourcePath)) {
+      makePhysicalTreeDirectoriesWritable(sourcePath);
+    }
+    rmSync(nodeModulesPath, { recursive: true, force: true });
+    rmSync(installHome, { recursive: true, force: true });
+    if (
+      JSON.stringify(dashboardAssetTreeSeal(sourcePath)) !==
+      JSON.stringify(archivedSource)
+    ) {
+      throw new Error("platform_worker_release_dependencies_drift", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+}
+
+function removePlatformDependencyLinks(
+  nodeModulesPath: string,
+  sourcePath: string,
+): void {
+  rmSync(join(nodeModulesPath, ".bin"), { recursive: true, force: true });
+  const visit = (directory: string): void => {
+    for (const name of readdirSync(directory).sort(codePointCompare)) {
+      const path = join(directory, name);
+      const status = lstatSync(path);
+      if (status.isSymbolicLink()) {
+        const target = realpathSync(path);
+        if (
+          !insideDirectory(target, sourcePath) ||
+          insideDirectory(target, nodeModulesPath)
+        ) {
+          throw new Error("platform_worker_release_dependencies_invalid");
+        }
+        unlinkSync(path);
+      } else if (status.isDirectory()) {
+        visit(path);
+      }
+    }
+  };
+  visit(nodeModulesPath);
+}
+
+function freezePhysicalTree(root: string): void {
+  const visit = (directory: string): void => {
+    for (const name of readdirSync(directory).sort(codePointCompare)) {
+      const path = join(directory, name);
+      const status = lstatSync(path);
+      if (status.isSymbolicLink()) {
+        throw new Error("platform_worker_release_dependencies_invalid");
+      }
+      if (status.isDirectory()) visit(path);
+      else if (status.isFile()) chmodSync(path, 0o400);
+      else throw new Error("platform_worker_release_dependencies_invalid");
+    }
+    chmodSync(directory, 0o500);
+  };
+  visit(root);
+}
+
+function physicalTreeIdentitySeal(root: string): PhysicalTreeIdentitySeal {
+  const absoluteRoot = resolve(root);
+  const entries: Array<PhysicalTreeIdentitySeal[number]> = [];
+  const visit = (path: string): void => {
+    const before = lstatSync(path, { bigint: true });
+    const kind = before.isDirectory()
+      ? "directory"
+      : before.isFile()
+        ? "file"
+        : null;
+    if (
+      kind === null ||
+      before.isSymbolicLink() ||
+      (kind === "file" && before.nlink !== 1n) ||
+      realpathSync(path) !== path
+    ) {
+      throw new Error("platform_worker_release_asset_tree_invalid");
+    }
+    entries.push({
+      path:
+        path === absoluteRoot
+          ? "."
+          : relative(absoluteRoot, path).replaceAll("\\", "/"),
+      kind,
+      device: before.dev.toString(),
+      inode: before.ino.toString(),
+      mode: before.mode.toString(),
+      links: before.nlink.toString(),
+      size: before.size.toString(),
+      modifiedNanoseconds: before.mtimeNs.toString(),
+      changedNanoseconds: before.ctimeNs.toString(),
+    });
+    if (kind === "directory") {
+      for (const name of readdirSync(path).sort(codePointCompare)) {
+        visit(join(path, name));
+      }
+    }
+    const after = lstatSync(path, { bigint: true });
+    if (
+      !samePhysicalIdentity(before, after) ||
+      before.nlink !== after.nlink
+    ) {
+      throw new Error("platform_worker_release_asset_tree_invalid");
+    }
+  };
+  visit(absoluteRoot);
+  return entries;
+}
+
+function physicalDirectoryIdentitySeal(
+  path: string,
+): PhysicalDirectoryIdentitySeal {
+  const absolutePath = resolve(path);
+  const before = lstatSync(absolutePath, { bigint: true });
+  if (
+    before.isSymbolicLink() ||
+    !before.isDirectory() ||
+    realpathSync(absolutePath) !== absolutePath
+  ) {
+    throw new Error("platform_worker_release_asset_tree_invalid");
+  }
+  const identity = {
+    path: ".",
+    kind: "directory" as const,
+    device: before.dev.toString(),
+    inode: before.ino.toString(),
+    mode: before.mode.toString(),
+    links: before.nlink.toString(),
+    size: before.size.toString(),
+    modifiedNanoseconds: before.mtimeNs.toString(),
+    changedNanoseconds: before.ctimeNs.toString(),
+  };
+  const after = lstatSync(absolutePath, { bigint: true });
+  if (!samePhysicalIdentity(before, after) || before.nlink !== after.nlink) {
+    throw new Error("platform_worker_release_asset_tree_invalid");
+  }
+  return identity;
+}
+
+function assertPhysicalDirectoryUnchanged(
+  path: string,
+  identity: PhysicalDirectoryIdentitySeal,
+  errorCode: string,
+): void {
+  try {
+    const before = physicalDirectoryIdentitySeal(path);
+    const after = physicalDirectoryIdentitySeal(path);
+    if (
+      JSON.stringify(before) !== JSON.stringify(identity) ||
+      JSON.stringify(after) !== JSON.stringify(identity)
+    ) {
+      throw new Error(errorCode);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === errorCode) throw error;
+    throw new Error(errorCode, { cause: error });
+  }
+}
+
+function declaredPathCustodyDirectories(
+  custodyRoot: string,
+  target: string,
+): readonly string[] {
+  if (
+    !isAbsolute(custodyRoot) ||
+    resolve(custodyRoot) !== custodyRoot ||
+    !isAbsolute(target) ||
+    resolve(target) !== target ||
+    target === custodyRoot ||
+    !insideDirectory(target, custodyRoot)
+  ) {
+    throw new Error("platform_worker_release_path_custody_invalid");
+  }
+  const directories = [target];
+  let cursor = dirname(target);
+  while (cursor !== custodyRoot) {
+    if (cursor === dirname(cursor) || !insideDirectory(cursor, custodyRoot)) {
+      throw new Error("platform_worker_release_path_custody_invalid");
+    }
+    directories.push(cursor);
+    cursor = dirname(cursor);
+  }
+  directories.push(custodyRoot);
+  directories.reverse();
+  return directories;
+}
+
+function physicalDirectoryPathCustodySeal(
+  custodyRoot: string,
+  target: string,
+): PhysicalDirectoryPathCustodySeal {
+  return declaredPathCustodyDirectories(custodyRoot, target).map((path) => ({
+    path,
+    identity: privatePhysicalDirectoryIdentitySeal(path),
+  }));
+}
+
+function privatePhysicalDirectoryIdentitySeal(
+  path: string,
+): PhysicalDirectoryIdentitySeal {
+  try {
+    const status = lstatSync(path);
+    if (
+      status.uid !== process.getuid?.() ||
+      (status.mode & 0o077) !== 0
+    ) {
+      throw new Error("platform_worker_release_path_custody_invalid");
+    }
+    return physicalDirectoryIdentitySeal(path);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "platform_worker_release_path_custody_invalid"
+    ) {
+      throw error;
+    }
+    throw new Error("platform_worker_release_path_custody_invalid", {
+      cause: error,
+    });
+  }
+}
+
+function assertDeclaredPathCustodyRoot(
+  custodyRoot: string,
+  target: string,
+): void {
+  assertOutsideGitWorktree(target);
+  const existingDirectories = declaredPathCustodyDirectories(
+    custodyRoot,
+    target,
+  ).slice(0, -1);
+  for (const path of existingDirectories) {
+    privatePhysicalDirectoryIdentitySeal(path);
+  }
+}
+
+function assertPhysicalDirectoryPathUnchanged(
+  custody: PhysicalDirectoryPathCustodySeal,
+  errorCode: string,
+): void {
+  try {
+    for (const entry of custody) {
+      assertPhysicalDirectoryUnchanged(entry.path, entry.identity, errorCode);
+    }
+    for (const entry of [...custody].reverse()) {
+      assertPhysicalDirectoryUnchanged(entry.path, entry.identity, errorCode);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === errorCode) throw error;
+    throw new Error(errorCode, { cause: error });
+  }
+}
+
+function assertPhysicalTreeUnchanged(
+  root: string,
+  content: DashboardAssetSeal,
+  identity: PhysicalTreeIdentitySeal,
+  errorCode: string,
+): void {
+  try {
+    const identityBefore = physicalTreeIdentitySeal(root);
+    const currentContent = dashboardAssetTreeSeal(root);
+    const identityAfter = physicalTreeIdentitySeal(root);
+    if (
+      JSON.stringify(identityBefore) !== JSON.stringify(identity) ||
+      JSON.stringify(currentContent) !== JSON.stringify(content) ||
+      JSON.stringify(identityAfter) !== JSON.stringify(identity)
+    ) {
+      throw new Error(errorCode);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === errorCode) throw error;
+    throw new Error(errorCode, { cause: error });
+  }
+}
+
+function assertPhysicalFileUnchanged(
+  path: string,
+  content: PhysicalFileContentSeal,
+  identity: PhysicalTreeIdentitySeal,
+  errorCode: string,
+): void {
+  try {
+    const identityBefore = physicalTreeIdentitySeal(path);
+    const bytes = readStablePhysicalBytes(path, errorCode);
+    const identityAfter = physicalTreeIdentitySeal(path);
+    if (
+      JSON.stringify(identityBefore) !== JSON.stringify(identity) ||
+      bytes.byteLength !== content.size ||
+      digest(bytes) !== content.sha256 ||
+      JSON.stringify(identityAfter) !== JSON.stringify(identity)
+    ) {
+      throw new Error(errorCode);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === errorCode) throw error;
+    throw new Error(errorCode, { cause: error });
+  }
+}
+
+function makePhysicalTreeDirectoriesWritable(root: string): void {
+  const visit = (directory: string): void => {
+    chmodSync(directory, 0o700);
+    for (const name of readdirSync(directory).sort(codePointCompare)) {
+      const path = join(directory, name);
+      const status = lstatSync(path);
+      if (status.isDirectory() && !status.isSymbolicLink()) visit(path);
+    }
+  };
+  visit(root);
+}
+
+export async function createPlatformDeployClosure(
   closurePath: string,
   configSource: string,
   originalConfigPath: string,
   dashboardAssets: DashboardAssetSeal,
   sourceCommit: string,
-  dryRunConfigPath = originalConfigPath,
+  runtime: Readonly<{
+    pathCustodyRoot: string;
+    repositoryRoot?: string;
+    /** Test-only source for an independently sealed dashboard fixture. */
+    fixtureDashboardAssetsRoot?: string;
+    command?: PlatformReleaseCommand;
+  }>,
 ): Promise<Readonly<{
   configPath: string;
   configSha256: string;
@@ -2201,6 +2861,23 @@ async function createPlatformDeployClosure(
   dryRun: DashboardAssetSeal;
   closure: DashboardAssetSeal;
 }>> {
+  const repositoryRoot = runtime.repositoryRoot ?? ROOT;
+  const dashboardAssetsRoot =
+    runtime.fixtureDashboardAssetsRoot ??
+    resolve(repositoryRoot, "dashboard/dist");
+  if (
+    runtime.fixtureDashboardAssetsRoot !== undefined &&
+    (runtime.repositoryRoot === undefined ||
+      runtime.command === undefined ||
+      !isAbsolute(dashboardAssetsRoot) ||
+      resolve(dashboardAssetsRoot) !== dashboardAssetsRoot)
+  ) {
+    throw new Error("platform_worker_release_dashboard_source_invalid");
+  }
+  // The caller explicitly declares the physical trust anchor. Every existing
+  // directory from that anchor through the closure parent is validated now;
+  // the complete chain, including the closure, is sealed before Wrangler.
+  assertDeclaredPathCustodyRoot(runtime.pathCustodyRoot, closurePath);
   mkdirSync(closurePath, { mode: 0o700 });
   const sourcePath = join(closurePath, "source");
   const dashboardPath = join(closurePath, "dashboard");
@@ -2208,27 +2885,36 @@ async function createPlatformDeployClosure(
   const configPath = join(closurePath, "wrangler.toml");
   mkdirSync(sourcePath, { mode: 0o700 });
   const archive = join(closurePath, "source.tar");
-  await requiredCommand([
-    "git",
-    "archive",
-    "--format=tar",
-    `--output=${archive}`,
-    sourceCommit,
-  ]);
-  await requiredCommand([
-    "tar",
-    "--extract",
-    "--file",
-    archive,
-    "--directory",
-    sourcePath,
-    "--no-same-owner",
-    "--no-same-permissions",
-  ]);
+  await requiredCommand(
+    [
+      "git",
+      "--no-replace-objects",
+      "archive",
+      "--format=tar",
+      `--output=${archive}`,
+      sourceCommit,
+    ],
+    undefined,
+    repositoryRoot,
+  );
+  await requiredCommand(
+    [
+      "tar",
+      "--extract",
+      "--file",
+      archive,
+      "--directory",
+      sourcePath,
+      "--no-same-owner",
+      "--no-same-permissions",
+    ],
+    undefined,
+    repositoryRoot,
+  );
   rmSync(archive);
   dashboardAssetTreeSeal(sourcePath);
   copyExactAssetTree(
-    resolve(ROOT, "dashboard/dist"),
+    dashboardAssetsRoot,
     dashboardPath,
     dashboardAssets,
   );
@@ -2241,11 +2927,112 @@ async function createPlatformDeployClosure(
   );
   writePrivate(configPath, new TextEncoder().encode(sealedSource));
   mkdirSync(dryRunPath, { mode: 0o700 });
-  const dryRun = await buildDryRunSeal(
-    dryRunConfigPath,
-    dryRunPath,
-    true,
+  // A realized config deliberately has no source paths. Each closure owns this
+  // projection so forward and restore cannot diverge based on caller plumbing,
+  // and points it only at the archived source/copied dashboard already inside
+  // the closure. The private transient bytes never become part of the retained
+  // closure.
+  const dependencies = await preparePlatformClosureDependencies(
+    sourcePath,
+    closurePath,
   );
+  let dryRunConfig: PlatformDryRunConfig | undefined;
+  let dashboardFrozen = false;
+  let dashboardIdentity: PhysicalTreeIdentitySeal | undefined;
+  let closureIdentity: PhysicalDirectoryPathCustodySeal | undefined;
+  const assertClosureCustody = (): void => {
+    if (closureIdentity === undefined) return;
+    assertPhysicalDirectoryPathUnchanged(
+      closureIdentity,
+      "platform_worker_release_closure_custody_drift",
+    );
+  };
+  let dryRun: DashboardAssetSeal;
+  let retainDryRun = false;
+  try {
+    try {
+      dryRunConfig = createPlatformDryRunConfigForPaths(
+        configSource,
+        originalConfigPath,
+        join(sourcePath, "deploy/platform/entry-worker.ts"),
+        dashboardPath,
+      );
+      dashboardFrozen = true;
+      freezePhysicalTree(dashboardPath);
+      dashboardIdentity = physicalTreeIdentitySeal(dashboardPath);
+      // The source and dashboard seals cover every descendant Wrangler reads;
+      // retain the closure root identity as their path-resolving ancestor.
+      // Writes inside the pre-created dry-run directory do not change it.
+      closureIdentity = physicalDirectoryPathCustodySeal(
+        runtime.pathCustodyRoot,
+        closurePath,
+      );
+      const command = runtime.command ?? requiredCommand;
+      const guardedCommand: PlatformReleaseCommand = async (
+        argv,
+        stdin,
+        cwd,
+        environment,
+      ) => {
+        assertClosureCustody();
+        dryRunConfig!.assertUnchanged();
+        try {
+          return await command(argv, stdin, cwd, environment);
+        } finally {
+          try {
+            dryRunConfig!.assertUnchanged();
+          } finally {
+            assertClosureCustody();
+          }
+        }
+      };
+      dryRun = await buildDryRunSeal(
+        dryRunConfig.path,
+        dryRunPath,
+        true,
+        guardedCommand,
+        repositoryRoot,
+      );
+      assertClosureCustody();
+      dependencies.assertUnchanged();
+      assertPhysicalTreeUnchanged(
+        dashboardPath,
+        dashboardAssets,
+        dashboardIdentity,
+        "platform_worker_release_dashboard_drift",
+      );
+      assertClosureCustody();
+    } finally {
+      try {
+        dryRunConfig?.dispose();
+      } finally {
+        try {
+          assertClosureCustody();
+        } finally {
+          try {
+            dependencies.dispose();
+          } finally {
+            try {
+              assertClosureCustody();
+            } finally {
+              try {
+                if (dashboardFrozen) {
+                  makePhysicalTreeDirectoriesWritable(dashboardPath);
+                }
+              } finally {
+                assertClosureCustody();
+              }
+            }
+          }
+        }
+      }
+    }
+    retainDryRun = true;
+  } finally {
+    if (!retainDryRun) {
+      rmSync(dryRunPath, { recursive: true, force: true });
+    }
+  }
   const entryCandidates = dryRun.entries.filter(
     (entry) => !entry.path.includes("/") && entry.path.endsWith(".js"),
   );
@@ -2255,6 +3042,10 @@ async function createPlatformDeployClosure(
   const uploadEntrypointPath = join(
     dryRunPath,
     entryCandidates[0]!.path,
+  );
+  writePrivate(
+    join(closurePath, "dependencies.json"),
+    dependencies.evidence,
   );
   return {
     configPath,
@@ -2305,6 +3096,7 @@ export function createPlatformUploadCustody(
   closurePath: string;
   configPath: string;
   uploadEntrypointPath: string;
+  assertUnchanged: () => void;
   dispose: () => void;
 }> {
   const sourceRoot = resolve(closurePath);
@@ -2345,11 +3137,32 @@ export function createPlatformUploadCustody(
     ) {
       throw new Error("platform_worker_release_upload_custody_invalid");
     }
+    const identity = physicalTreeIdentitySeal(destinationRoot);
+    const pathCustody = physicalDirectoryPathCustodySeal(
+      parent,
+      destinationRoot,
+    );
+    let disposed = false;
     return {
       closurePath: destinationRoot,
       configPath: join(destinationRoot, "wrangler.toml"),
       uploadEntrypointPath: join(destinationRoot, entryRelative),
-      dispose: () => rmSync(workspace, { recursive: true, force: true }),
+      assertUnchanged: () => {
+        if (disposed) {
+          throw new Error("platform_worker_release_upload_custody_drift");
+        }
+        assertPlatformUploadCustody({
+          closurePath: destinationRoot,
+          expected,
+          identity,
+          pathCustody,
+        });
+      },
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        rmSync(workspace, { recursive: true, force: true });
+      },
     };
   } catch (error) {
     rmSync(workspace, { recursive: true, force: true });
@@ -2358,14 +3171,45 @@ export function createPlatformUploadCustody(
 }
 
 function assertPlatformUploadCustody(
-  custody: Readonly<{ closurePath: string }>,
-  expected: DashboardAssetSeal,
+  custody: Readonly<{
+    closurePath: string;
+    expected: DashboardAssetSeal;
+    identity: PhysicalTreeIdentitySeal;
+    pathCustody: PhysicalDirectoryPathCustodySeal;
+  }>,
 ): void {
-  if (
-    JSON.stringify(dashboardAssetTreeSeal(custody.closurePath)) !==
-    JSON.stringify(expected)
-  ) {
-    throw new Error("platform_worker_release_upload_custody_drift");
+  const errorCode = "platform_worker_release_upload_custody_drift";
+  try {
+    assertPhysicalDirectoryPathUnchanged(custody.pathCustody, errorCode);
+    assertPhysicalTreeUnchanged(
+      custody.closurePath,
+      custody.expected,
+      custody.identity,
+      errorCode,
+    );
+    assertPhysicalDirectoryPathUnchanged(custody.pathCustody, errorCode);
+  } catch (error) {
+    if (error instanceof Error && error.message === errorCode) throw error;
+    throw new Error(errorCode, { cause: error });
+  }
+}
+
+async function requiredPlatformUploadMutation(
+  custody: Readonly<{ assertUnchanged: () => void }>,
+  argv: readonly string[],
+): Promise<CommandResult> {
+  return withPlatformUploadCustody(custody, () => requiredCommand(argv));
+}
+
+export async function withPlatformUploadCustody<T>(
+  custody: Readonly<{ assertUnchanged: () => void }>,
+  mutation: () => Promise<T>,
+): Promise<T> {
+  custody.assertUnchanged();
+  try {
+    return await mutation();
+  } finally {
+    custody.assertUnchanged();
   }
 }
 
@@ -2505,13 +3349,15 @@ async function completeRelease(
     fence?.outcome ?? "not-started";
   let lostAcknowledgement = false;
   let custody: ReturnType<typeof createPlatformUploadCustody> | null = null;
-  try {
-    custody = createPlatformUploadCustody(
+  const takeUploadCustody = () =>
+    createPlatformUploadCustody(
       plan.closurePath,
       plan.closure,
       plan.uploadEntrypointPath,
       dirname(plan.checkpointPath),
     );
+  try {
+    custody = takeUploadCustody();
     if (fence === null) {
       if (!allowMutation) {
         throw new Error("platform_worker_release_recovery_not_started");
@@ -2522,15 +3368,22 @@ async function completeRelease(
       ) {
         throw new Error("platform_worker_release_predecessor_drift");
       }
-      assertPlatformUploadCustody(custody, plan.closure);
+      custody.assertUnchanged();
+      // The first durable fence creates a sibling in the declared custody root
+      // and therefore legitimately changes that root's ctime. Dispose the
+      // preflight copy and take a new complete path/tree seal after the fence,
+      // before the provider can observe any upload path.
+      custody.dispose();
+      custody = null;
       appendPlatformMutationFence(
         options.plan,
         plan.confirmation,
         { outcome: "unknown", versionId: null },
       );
       mutationOutcome = "unknown";
-      assertPlatformUploadCustody(custody, plan.closure);
-      const deployed = await requiredCommand(
+      custody = takeUploadCustody();
+      const deployed = await requiredPlatformUploadMutation(
+        custody,
         platformWorkerDeployArguments(
           custody.configPath,
           plan.releaseTag,
@@ -2538,7 +3391,6 @@ async function completeRelease(
           custody.uploadEntrypointPath,
         ),
       );
-      assertPlatformUploadCustody(custody, plan.closure);
       const deployedVersionId = parseDeployedVersion(
         `${deployed.stdout}\n${deployed.stderr}`,
       );
@@ -2594,7 +3446,7 @@ async function completeRelease(
       plan.environment,
       configuredRunnerImage(custody.configPath),
     );
-    assertPlatformUploadCustody(custody, plan.closure);
+    custody.assertUnchanged();
     const evidence = {
       kind: "takosumi.platform-worker-release-evidence@v2",
       status: "ready",
@@ -2781,13 +3633,15 @@ async function completeRestore(
     throw new Error("platform_worker_restore_forward_release_incomplete");
   }
   let custody: ReturnType<typeof createPlatformUploadCustody> | null = null;
-  try {
-    custody = createPlatformUploadCustody(
+  const takeUploadCustody = () =>
+    createPlatformUploadCustody(
       plan.restoreClosurePath,
       plan.restoreClosure,
       plan.restoreUploadEntrypointPath,
       dirname(plan.checkpointPath),
     );
+  try {
+    custody = takeUploadCustody();
     const restoreTag = platformRestoreTag(plan);
     const restoreMessage = platformRestoreMessage(plan);
     let fence = readPlatformRestoreFence(options.plan, plan.confirmation);
@@ -2806,14 +3660,21 @@ async function completeRestore(
         plan.predecessorContainer,
         configuredRunnerImage(plan.sealedConfigPath),
       );
-      assertPlatformUploadCustody(custody, plan.restoreClosure);
+      custody.assertUnchanged();
+      // Creating the staged restore fence changes the custody root's directory
+      // identity. Re-copy and re-seal after that durable write so the provider
+      // mutation is guarded by one stable root-to-file path graph.
+      custody.dispose();
+      custody = null;
       appendPlatformRestoreFence(
         options.plan,
         plan.confirmation,
         "container",
         { outcome: "unknown", versionId: null },
       );
-      const restored = await requiredCommand(
+      custody = takeUploadCustody();
+      const restored = await requiredPlatformUploadMutation(
+        custody,
         platformWorkerDeployArguments(
           custody.configPath,
           restoreTag,
@@ -2821,7 +3682,6 @@ async function completeRestore(
           custody.uploadEntrypointPath,
         ),
       );
-      assertPlatformUploadCustody(custody, plan.restoreClosure);
       restoreVersionId = parseDeployedVersion(
         `${restored.stdout}\n${restored.stderr}`,
       );
@@ -2890,7 +3750,8 @@ async function completeRestore(
         "worker",
         { outcome: "unknown", versionId: null },
       );
-      await requiredCommand(
+      await requiredPlatformUploadMutation(
+        custody,
         platformWorkerRestoreVersionArguments(
           custody.configPath,
           plan.predecessorVersionId,
@@ -2912,7 +3773,8 @@ async function completeRestore(
         // This is an explicit reviewed recovery after authoritative readback
         // proved the exact predecessor is not serving. Re-issuing the exact
         // one-Version routing intent is idempotent; no upload is repeated.
-        await requiredCommand(
+        await requiredPlatformUploadMutation(
+          custody,
           platformWorkerRestoreVersionArguments(
             custody.configPath,
             plan.predecessorVersionId,
@@ -2950,7 +3812,7 @@ async function completeRestore(
       finalContainer,
       plan.predecessorContainer.image,
     );
-    assertPlatformUploadCustody(custody, plan.restoreClosure);
+    custody.assertUnchanged();
     const evidence = {
       kind: "takosumi.platform-worker-restore-evidence@v1",
       status: "restored",
@@ -4110,11 +4972,12 @@ export function remoteBranchContainsCommit(
  * corpus is run against, and it closes the hole this function used to have:
  * it accepted ANY branch, so a production Worker release could be cut from a
  * feature branch that happened to be pushed. A surface may only tighten the
- * class it declares, and this one does: HEAD must be the EXACT freshly read
- * remote tip of its branch, not merely an ancestor of it.
+ * class it declares, and this one does: the attached branch must still be the
+ * freshly advertised remote default and HEAD must equal that branch's exact
+ * remote tip, not merely be an ancestor of it.
  */
-async function assertCleanAndPushed(): Promise<void> {
-  const answer = await lineageVerdict("production-routine", { cwd: ROOT });
+export async function assertCleanAndPushed(root: string = ROOT): Promise<void> {
+  const answer = await lineageVerdict("production-routine", { cwd: root });
   if (answer.verdict !== "accept") {
     throw new Error(
       answer.reason === "dirty-worktree"
@@ -4122,15 +4985,26 @@ async function assertCleanAndPushed(): Promise<void> {
         : "platform_worker_release_source_not_pushed",
     );
   }
-  const commit = git(["rev-parse", "HEAD"]).trim();
-  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
-  const remote = git([
+  const commit = gitAt(root, ["rev-parse", "HEAD"]).trim();
+  const branch = gitAt(root, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+  const remote = gitAt(root, [
     "ls-remote",
-    "--heads",
+    "--symref",
     "origin",
+    "HEAD",
     `refs/heads/${branch}`,
   ]);
-  if (!remoteBranchContainsCommit(remote, branch, commit)) {
+  let remoteHead: ReturnType<typeof parseRemoteDefaultBranch>;
+  try {
+    remoteHead = parseRemoteDefaultBranch(remote);
+  } catch {
+    throw new Error("platform_worker_release_source_not_pushed");
+  }
+  if (
+    remoteHead.branch !== branch ||
+    remoteHead.commit !== commit ||
+    !remoteBranchContainsCommit(remote, branch, commit)
+  ) {
     throw new Error("platform_worker_release_source_not_pushed");
   }
 }
@@ -4402,8 +5276,12 @@ function boundedPlatformDiagnostic(value: string): string {
 }
 
 function git(args: readonly string[]): string {
+  return gitAt(ROOT, args);
+}
+
+function gitAt(cwd: string, args: readonly string[]): string {
   const result = Bun.spawnSync(["git", ...args], {
-    cwd: ROOT,
+    cwd,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
