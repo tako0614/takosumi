@@ -11,6 +11,7 @@ test("preserves the complete check phase order and commands", () => {
   validatePortableGatePhases(PORTABLE_GATE_PHASES);
 
   expect(PORTABLE_GATE_PHASES.map((phase) => phase.name)).toEqual([
+    "tools",
     "format",
     "package-script-boundaries",
     "production-migrations",
@@ -30,6 +31,7 @@ test("preserves the complete check phase order and commands", () => {
     "cloudflare-worker-build",
   ]);
   expect(PORTABLE_GATE_PHASES.map((phase) => phase.command.join(" "))).toEqual([
+    "bun run check:tools",
     "bun run fmt:check",
     "bun run check:package-script-boundaries",
     "bun run check:production-migrations",

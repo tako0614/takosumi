@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { runLiveOpenTofuPlanApplyProof } from "../proofs/live-opentofu-plan-apply.ts";
 
-const hasTofu = await commandExists("tofu");
-
-test.skipIf(!hasTofu)(
+// No `skipIf`. `bun run check:tools` refuses before this suite runs when `tofu`
+// is absent, so this proof either executes or the whole gate stops — it never
+// disappears behind a green line.
+test(
   "live local proof executes tofu plan/apply and records Output projection",
   async () => {
     const proof = await runLiveOpenTofuPlanApplyProof({
@@ -25,10 +26,3 @@ test.skipIf(!hasTofu)(
   15_000,
 );
 
-async function commandExists(command: string): Promise<boolean> {
-  const proc = Bun.spawn(["bash", "-lc", `command -v ${command}`], {
-    stdout: "ignore",
-    stderr: "ignore",
-  });
-  return await proc.exited === 0;
-}
