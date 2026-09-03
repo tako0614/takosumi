@@ -54,6 +54,69 @@ export type RunStatus =
   | "cancelled"
   | "expired";
 
+/**
+ * Where a Run sits in its own lifecycle, as one classification.
+ *
+ * WHY this exists. This partition was written three times, by negation, over
+ * two different unions: `NON_TERMINAL_RUN_STATUSES` listed the in-flight
+ * statuses of `RunStatus`, the Run-owner Durable Object listed them again for
+ * dispatch, and its `isTerminalOwnerStatus` derived the settled half by
+ * excluding two names from a separately declared owner union. Adding a status
+ * to `RunStatus` therefore made it silently settled everywhere, with no
+ * compile error anywhere — a run nothing would ever drive, and a terminal
+ * transition allowed to fire from a state that had not finished.
+ *
+ * `Record<RunStatus, RunProgressPhase>` is exhaustive by construction: a new
+ * status does not compile until it is classified here, and every predicate
+ * derives from this one map instead of restating it.
+ */
+export type RunProgressPhase = "in-flight" | "settled";
+
+export const RUN_PROGRESS_PHASE = {
+  queued: "in-flight",
+  running: "in-flight",
+  // A plan parked for approval is not executing: the run engine has finished
+  // with it and the approval is a separate act, so it is settled for every
+  // question this classification answers. The internal run model does not
+  // write this status at all — a plan awaiting approval stays `succeeded` —
+  // and its later cancel is handled by the `succeeded`-from cancel CAS.
+  waiting_approval: "settled",
+  succeeded: "settled",
+  failed: "settled",
+  cancelled: "settled",
+  expired: "settled",
+} as const satisfies { readonly [S in RunStatus]: RunProgressPhase };
+
+/**
+ * The two halves of the partition, as types. Derived from the map, so a status
+ * moved between phases moves in every narrowing at once.
+ */
+export type InFlightRunStatus = {
+  [S in RunStatus]: (typeof RUN_PROGRESS_PHASE)[S] extends "in-flight"
+    ? S
+    : never;
+}[RunStatus];
+export type SettledRunStatus = Exclude<RunStatus, InFlightRunStatus>;
+
+/** The in-flight statuses, derived. No call site writes this array. */
+export const IN_FLIGHT_RUN_STATUSES: readonly InFlightRunStatus[] = Object.freeze(
+  (Object.keys(RUN_PROGRESS_PHASE) as RunStatus[]).filter(
+    (status): status is InFlightRunStatus =>
+      RUN_PROGRESS_PHASE[status] === "in-flight",
+  ),
+);
+
+export function runProgressPhase(status: RunStatus): RunProgressPhase {
+  return RUN_PROGRESS_PHASE[status];
+}
+
+/** Whether a run is still worth driving: dispatching, polling, terminalizing. */
+export function runIsInFlight(
+  status: RunStatus | undefined,
+): status is InFlightRunStatus {
+  return status !== undefined && RUN_PROGRESS_PHASE[status] === "in-flight";
+}
+
 export type RunSubject =
   | { readonly kind: "capsule"; readonly id: string }
   | { readonly kind: "resource"; readonly id: string }
