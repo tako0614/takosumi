@@ -33,6 +33,12 @@ const PUBLIC_INPUT_RESERVATION_KIND =
 const PUBLIC_INPUT_RELEASED_KIND = "takosumi.provider-public-input-release@v1";
 const PUBLIC_INPUT_IDEMPOTENCY_DOMAIN =
   "takosumi.capsule-public-origin-request/v1";
+// Keep the platform-extension RPC below the generic root-dispatch 25-second
+// outer deadline so a stalled dynamic RPC proxy fails closed before the caller.
+const PUBLIC_INPUT_RPC_DEADLINE_MS = 5_000;
+const PUBLIC_INPUT_RPC_TIMEOUT = Symbol(
+  "platform-extension-public-input-timeout",
+);
 /**
  * The reservation label the host is asked for. It is a DNS label, not a
  * hostname: Takosumi contributes the name it reviewed and the host alone owns
@@ -483,6 +489,11 @@ export interface PlatformExtensionCapsulePublicOriginPort {
   }): Promise<void>;
 }
 
+export interface PlatformExtensionCapsulePublicOriginOptions {
+  /** Test seam for the bounded host RPC; production defaults to five seconds. */
+  readonly handlerRpcDeadlineMs?: number;
+}
+
 /**
  * The Capsule public-origin port, composed from the platform extension seam.
  *
@@ -505,6 +516,7 @@ export function capsulePublicOriginFromPlatformExtensions(
   },
   ledger: PlatformExtensionCapsulePublicOriginLedger,
   clock: () => Date = () => new Date(),
+  options: PlatformExtensionCapsulePublicOriginOptions = {},
 ): PlatformExtensionCapsulePublicOriginPort | undefined {
   const routes = platformExtensionRoutes(env).filter((route) =>
     brokerAnswersPublicOrigin(route.providerCredentialBroker),
@@ -525,6 +537,12 @@ export function capsulePublicOriginFromPlatformExtensions(
     `${route.basePath}${broker.publicInputExchangePath!}`,
     origin,
   ).href;
+  const handlerRpcDeadlineMs =
+    Number.isFinite(options.handlerRpcDeadlineMs) &&
+    options.handlerRpcDeadlineMs !== undefined &&
+    options.handlerRpcDeadlineMs > 0
+      ? Math.floor(options.handlerRpcDeadlineMs)
+      : PUBLIC_INPUT_RPC_DEADLINE_MS;
 
   const exchange = async (input: {
     readonly kind:
@@ -541,34 +559,50 @@ export function capsulePublicOriginFromPlatformExtensions(
       return undefined;
     }
     let exchanged: { readonly status: number; readonly body: string };
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      exchanged = await handler.exchangeProviderPublicInput(
-        Object.freeze({
-          url,
-          request: Object.freeze({
-            kind: input.kind,
-            providerSource: broker.providerSource,
-            publicInputs: Object.freeze({
-              httpEndpointUrl: Object.freeze({
-                clientIdempotencyKey: input.clientIdempotencyKey,
-                requestedSubdomain: input.requestedLabel,
-                ...(input.reservationRef === undefined
-                  ? {}
-                  : { reservationRef: input.reservationRef }),
+      const result = await Promise.race([
+        handler.exchangeProviderPublicInput(
+          Object.freeze({
+            url,
+            request: Object.freeze({
+              kind: input.kind,
+              providerSource: broker.providerSource,
+              publicInputs: Object.freeze({
+                httpEndpointUrl: Object.freeze({
+                  clientIdempotencyKey: input.clientIdempotencyKey,
+                  requestedSubdomain: input.requestedLabel,
+                  ...(input.reservationRef === undefined
+                    ? {}
+                    : { reservationRef: input.reservationRef }),
+                }),
               }),
+              settings: broker.runCredentialSettings ?? Object.freeze({}),
             }),
-            settings: broker.runCredentialSettings ?? Object.freeze({}),
+            context: Object.freeze({
+              authKind: PUBLIC_INPUT_AUTH_KIND as typeof PUBLIC_INPUT_AUTH_KIND,
+              providerSource: broker.providerSource,
+              workspaceId: input.workspaceId,
+            }),
           }),
-          context: Object.freeze({
-            authKind: PUBLIC_INPUT_AUTH_KIND as typeof PUBLIC_INPUT_AUTH_KIND,
-            providerSource: broker.providerSource,
-            workspaceId: input.workspaceId,
-          }),
+        ),
+        new Promise<typeof PUBLIC_INPUT_RPC_TIMEOUT>((resolve) => {
+          timeout = setTimeout(
+            () => resolve(PUBLIC_INPUT_RPC_TIMEOUT),
+            handlerRpcDeadlineMs,
+          );
         }),
-      );
+      ]);
+      if (result === PUBLIC_INPUT_RPC_TIMEOUT) {
+        logPublicInputExchangeFailure("handler_rpc_timeout");
+        return PUBLIC_INPUT_RPC_TIMEOUT;
+      }
+      exchanged = result;
     } catch {
       logPublicInputExchangeFailure("handler_rpc_failed");
       return undefined;
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
     }
     if (
       !isRecord(exchanged) ||
@@ -610,18 +644,18 @@ export function capsulePublicOriginFromPlatformExtensions(
       const requestedLabel = held
         ? held.requestedLabel
         : capsulePublicOriginRequestedLabel({ capsule, installConfig });
-      const reserved = publicOriginReservation(
-        await exchange({
-          kind: PUBLIC_INPUT_REQUEST_KIND,
-          workspaceId: capsule.workspaceId,
-          clientIdempotencyKey,
-          requestedLabel,
-          // Presence of the reference is what distinguishes "fix me an origin"
-          // from "tell me the origin you already fixed". Plan must not burn a
-          // second reservation, and Apply must never quietly obtain a new one.
-          ...(held ? { reservationRef: held.reservationRef } : {}),
-        }),
-      );
+      const exchanged = await exchange({
+        kind: PUBLIC_INPUT_REQUEST_KIND,
+        workspaceId: capsule.workspaceId,
+        clientIdempotencyKey,
+        requestedLabel,
+        // Presence of the reference is what distinguishes "fix me an origin"
+        // from "tell me the origin you already fixed". Plan must not burn a
+        // second reservation, and Apply must never quietly obtain a new one.
+        ...(held ? { reservationRef: held.reservationRef } : {}),
+      });
+      if (exchanged === PUBLIC_INPUT_RPC_TIMEOUT) return undefined;
+      const reserved = publicOriginReservation(exchanged);
       if (!reserved) return undefined;
       if (held) {
         if (
