@@ -33,6 +33,51 @@ Run queue, coordination/run-owner Durable Objects, and an OpenTofu runner.
 
 `deploy/platform/wrangler.toml` is a placeholder reference. Realized bindings,
 origins, IDs, and secrets belong to operator state outside the repository.
+
+## The realized config names a source identity, not a path
+
+A realized config declares no `main` and no `[assets] directory`. It declares
+what it *is* — account, Worker name, database ids, vars, bindings — and the
+source it deploys is named by identity in a sibling file:
+
+```json
+// <realized config>.source.json, e.g. platform/wrangler.staging.source.json
+{
+  "kind": "takosumi.platform-release-source@v1",
+  "repository": "https://github.com/tako0614/takosumi.git",
+  "commit": "<40 hex>"
+}
+```
+
+`plan` refuses a config that states either source path
+(`platform_worker_release_config_declares_source_path`), and refuses to run at
+all from a checkout that is not exactly that repository at that commit
+(`platform_worker_release_source_pin_mismatch`). It then injects both paths
+itself: into the immutable `git archive` snapshot for the bytes that get
+uploaded, and into a transient private projection for read-only provider
+queries.
+
+Why: a path names a directory on one machine. The production realized config
+carried `main = "../../.release/TASK-0041-takosumi-production/..."` — a second
+clone, absent from `git worktree list`, named after a task id the ledger has
+never contained — while staging pointed at a different tree entirely, so the two
+environments could no longer be released from one checkout, and neither config
+could say **which commit** it meant.
+
+Materialize the pinned source when the current checkout is not it:
+
+```bash
+bun run deploy -- takosumi-platform-staging materialize-source \
+  --config <realized config> --into <empty directory>
+```
+
+That is a fresh, disposable, depth-1 checkout of the pinned commit. Install the
+toolchain there and run `plan` from it. The recovery path is the same command
+against the commit the stored plan recorded, so a restore no longer depends on
+one directory continuing to exist.
+
+Advancing the pin is part of cutting a release: set `commit` to the reviewed
+source commit, then plan and execute.
 Operators may wrap this composition through the documented generic extension
 and port seams; the OSS config must not name a closed handler as a dependency.
 The worker does not install or host a Form Registry, FormActivation, or hosted

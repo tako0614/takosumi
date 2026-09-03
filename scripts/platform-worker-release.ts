@@ -275,6 +275,157 @@ export function platformWorkerDeployArguments(
   ];
 }
 
+/**
+ * The realized config names the identity of a source, never a path into one.
+ *
+ * WHY. The production realized config used to carry
+ * `main = "../../.release/TASK-0041-takosumi-production/..."` — a separate
+ * clone on one machine, not listed by `git worktree list`, named after a task
+ * id the ledger has never contained. Staging pointed at a different tree
+ * entirely, so the two environments could no longer be released from one
+ * checkout, and neither config could say WHICH COMMIT it meant. The tree was
+ * re-materializable — that commit is an ancestor of origin/main — but nothing
+ * in the config recorded which one it was.
+ *
+ * So the config declares no source path at all. A sibling
+ * `<config>.source.json` names `{ repository, commit }`, the release refuses to
+ * run from a checkout that is not exactly that commit of that repository, and
+ * the tool injects `main` and the asset directory itself: into the immutable
+ * `git archive` snapshot for the sealed bytes, and into the pinned checkout for
+ * read-only provider queries.
+ */
+export interface PlatformReleaseSourcePin {
+  readonly kind: "takosumi.platform-release-source@v1";
+  readonly repository: string;
+  readonly commit: string;
+}
+
+/** `platform/wrangler.staging.toml` → `platform/wrangler.staging.source.json`. */
+export function platformReleaseSourcePinPath(configPath: string): string {
+  if (!configPath.endsWith(".toml")) {
+    throw new Error("platform_worker_release_config_invalid");
+  }
+  return `${configPath.slice(0, -".toml".length)}.source.json`;
+}
+
+export function parsePlatformReleaseSourcePin(
+  text: string,
+): PlatformReleaseSourcePin {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("platform_worker_release_source_pin_invalid");
+  }
+  if (
+    !record(parsed) ||
+    parsed.kind !== "takosumi.platform-release-source@v1" ||
+    typeof parsed.repository !== "string" ||
+    parsed.repository.length === 0 ||
+    typeof parsed.commit !== "string" ||
+    !COMMIT.test(parsed.commit) ||
+    Object.keys(parsed).sort().join(",") !== "commit,kind,repository"
+  ) {
+    throw new Error("platform_worker_release_source_pin_invalid");
+  }
+  return {
+    kind: "takosumi.platform-release-source@v1",
+    repository: parsed.repository,
+    commit: parsed.commit,
+  };
+}
+
+/** Two spellings of one Git remote are one remote. */
+export function sameGitRemote(left: string, right: string): boolean {
+  const normalize = (value: string) =>
+    value
+      .trim()
+      .replace(/^git\+/u, "")
+      .replace(/\.git$/u, "")
+      .replace(/\/+$/u, "")
+      .replace(/^git@([^:]+):/u, "https://$1/")
+      .replace(/^ssh:\/\/git@/u, "https://")
+      .toLowerCase();
+  return normalize(left) === normalize(right);
+}
+
+/** Read and validate the realized config's source pin. */
+export function readPlatformReleaseSourcePin(
+  configPath: string,
+): PlatformReleaseSourcePin {
+  const pinPath = platformReleaseSourcePinPath(configPath);
+  assertReadableConfig(pinPath);
+  return parsePlatformReleaseSourcePin(
+    new TextDecoder("utf-8", { fatal: true }).decode(
+      readStablePhysicalBytes(
+        pinPath,
+        "platform_worker_release_source_pin_invalid",
+      ),
+    ),
+  );
+}
+
+/**
+ * Refuse to release from a checkout that is not the pinned source.
+ *
+ * This is what makes `ROOT` derive from the pinned commit rather than from
+ * `import.meta.dir`: a tool running in the wrong tree stops here and is told
+ * the exact command that materializes the right one, instead of quietly
+ * publishing whatever happened to be beside it.
+ */
+export function assertPinnedSourceRoot(pin: PlatformReleaseSourcePin): void {
+  const head = git(["rev-parse", "HEAD"]).trim();
+  const origin = git(["remote", "get-url", "origin"]).trim();
+  if (!sameGitRemote(origin, pin.repository) || head !== pin.commit) {
+    throw new Error(
+      `platform_worker_release_source_pin_mismatch: this checkout is ${origin} at ${head}, ` +
+        `the realized config pins ${pin.repository} at ${pin.commit}. ` +
+        `Materialize it with: bun run deploy -- <surface> materialize-source ` +
+        `--config <config> --into <empty directory>`,
+    );
+  }
+}
+
+/**
+ * Materialize a fresh disposable checkout of the pinned `{repository, commit}`.
+ *
+ * The release is then run from that directory. The build toolchain still has to
+ * be installed there, which is why this is a separate step an operator runs
+ * rather than something the release does silently mid-plan.
+ */
+export async function materializePinnedSource(
+  pin: PlatformReleaseSourcePin,
+  into: string,
+): Promise<void> {
+  if (!isAbsolute(into)) {
+    throw new Error("platform_worker_release_source_materialize_invalid");
+  }
+  if (existsSync(into) && readdirSync(into).length !== 0) {
+    throw new Error("platform_worker_release_source_materialize_invalid");
+  }
+  mkdirSync(into, { recursive: true, mode: 0o700 });
+  await requiredCommand(["git", "init", "--quiet", into]);
+  await requiredCommand(["git", "-C", into, "remote", "add", "origin", pin.repository]);
+  await requiredCommand([
+    "git",
+    "-C",
+    into,
+    "fetch",
+    "--quiet",
+    "--depth",
+    "1",
+    "origin",
+    pin.commit,
+  ]);
+  await requiredCommand(["git", "-C", into, "checkout", "--quiet", pin.commit]);
+  const head = (
+    await requiredCommand(["git", "-C", into, "rev-parse", "HEAD"])
+  ).stdout.trim();
+  if (head !== pin.commit) {
+    throw new Error("platform_worker_release_source_materialize_invalid");
+  }
+}
+
 export function platformSealedConfigProjection(
   source: string,
   originalConfigPath: string,
@@ -292,24 +443,6 @@ export function platformSealedConfigProjection(
       throw new Error("platform_worker_release_sealed_config_invalid");
     }
   }
-  const replaceUnique = (
-    input: string,
-    name: "main" | "directory",
-    value: string,
-  ): string => {
-    const expression = new RegExp(
-      `^(${name}\\s*=\\s*)"[^"]+"(\\s*)$`,
-      "gmu",
-    );
-    const matches = [...input.matchAll(expression)];
-    if (matches.length !== 1) {
-      throw new Error("platform_worker_release_sealed_config_invalid");
-    }
-    return input.replace(
-      expression,
-      `$1${JSON.stringify(value.replaceAll("\\", "/"))}$2`,
-    );
-  };
   const entry = relative(dirname(sealedConfigPath), sealedEntrypointPath);
   const assets = relative(dirname(sealedConfigPath), sealedAssetsPath);
   if (
@@ -322,19 +455,46 @@ export function platformSealedConfigProjection(
   ) {
     throw new Error("platform_worker_release_sealed_config_invalid");
   }
-  const withMain = replaceUnique(source, "main", entry);
-  const projected = replaceUnique(withMain, "directory", assets);
-  const originalMain = /^main\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
-  const originalAssets = /^directory\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
+  return injectPlatformSourcePaths(source, entry, assets);
+}
+
+/**
+ * Insert the source paths the realized config deliberately does not carry.
+ *
+ * Insertion, not substitution: a realized config that already names a `main`
+ * or an asset directory is refused upstream by `assertConfigTargetsSource`, so
+ * finding one here means the config was edited between the check and the
+ * projection.
+ */
+export function injectPlatformSourcePaths(
+  source: string,
+  entry: string,
+  assets: string,
+): string {
   if (
-    !originalMain ||
-    !originalAssets ||
-    !isAbsolute(resolve(dirname(originalConfigPath), originalMain)) ||
-    !isAbsolute(resolve(dirname(originalConfigPath), originalAssets))
+    /^\s*main\s*=/mu.test(source) ||
+    /^\s*directory\s*=/mu.test(source)
   ) {
     throw new Error("platform_worker_release_sealed_config_invalid");
   }
-  return projected;
+  const nameLine = /^name\s*=\s*"[^"]+"\s*$/mu.exec(source);
+  const assetsHeading = /^\[assets\]\s*$/mu.exec(source);
+  if (!nameLine || !assetsHeading) {
+    throw new Error("platform_worker_release_sealed_config_invalid");
+  }
+  const withAssets = `${source.slice(
+    0,
+    assetsHeading.index! + assetsHeading[0].length,
+  )}\ndirectory = ${JSON.stringify(assets.replaceAll("\\", "/"))}${source.slice(
+    assetsHeading.index! + assetsHeading[0].length,
+  )}`;
+  const name = /^name\s*=\s*"[^"]+"\s*$/mu.exec(withAssets)!;
+  return `${withAssets.slice(
+    0,
+    name.index! + name[0].length,
+  )}\nmain = ${JSON.stringify(entry.replaceAll("\\", "/"))}${withAssets.slice(
+    name.index! + name[0].length,
+  )}`;
 }
 
 /** Project exactly one OpenTofuRunnerObject image literal for reviewed restore. */
@@ -1452,6 +1612,11 @@ type Options =
       readonly planOut: string;
     }
   | {
+      readonly action: "materialize-source";
+      readonly config: string;
+      readonly into: string;
+    }
+  | {
       readonly action: "execute";
       readonly plan: string;
       readonly confirmation: string;
@@ -1492,7 +1657,22 @@ export async function runPlatformWorkerRelease(
 ): Promise<void> {
   const options = parsePlatformWorkerReleaseArgs(argv);
   if (options.action === "plan") await plan(options, environment);
-  else if (options.action === "execute") await execute(options, environment);
+  else if (options.action === "materialize-source") {
+    const pin = readPlatformReleaseSourcePin(options.config);
+    await materializePinnedSource(pin, options.into);
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          kind: "takosumi.platform-release-source-materialized@v1",
+          repository: pin.repository,
+          commit: pin.commit,
+          root: options.into,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } else if (options.action === "execute") await execute(options, environment);
   else if (options.action === "recover") await recover(options, environment);
   else await restore(options, environment);
 }
@@ -1503,6 +1683,7 @@ export function parsePlatformWorkerReleaseArgs(
   const [action, ...rest] = argv;
   if (
     action !== "plan" &&
+    action !== "materialize-source" &&
     action !== "execute" &&
     action !== "recover" &&
     action !== "restore"
@@ -1527,7 +1708,9 @@ export function parsePlatformWorkerReleaseArgs(
   const allowed =
     action === "plan"
       ? ["--config", "--plan-out"]
-      : ["--plan", "--confirm", "--review", "--evidence"];
+      : action === "materialize-source"
+        ? ["--config", "--into"]
+        : ["--plan", "--confirm", "--review", "--evidence"];
   if (
     values.size !== allowed.length ||
     allowed.some((key) => !values.has(key)) ||
@@ -1540,6 +1723,13 @@ export function parsePlatformWorkerReleaseArgs(
       action,
       config: absolute(values.get("--config")!),
       planOut: absolute(values.get("--plan-out")!),
+    };
+  }
+  if (action === "materialize-source") {
+    return {
+      action,
+      config: absolute(values.get("--config")!),
+      into: absolute(values.get("--into")!),
     };
   }
   const common = {
@@ -1600,18 +1790,32 @@ async function plan(
     "platform_worker_release_config_invalid",
   );
   const configSource = new TextDecoder("utf-8", { fatal: true }).decode(config);
-  assertConfigTargetsSource(
-    configSource,
-    options.config,
-    environment,
-  );
+  assertConfigTargetsSource(configSource, environment);
+  // The config names a commit; this checkout has to BE that commit. Everything
+  // below — the dashboard build, the git archive, the injected paths — is then
+  // derived from the pinned identity rather than from wherever this script sits.
+  const sourcePin = readPlatformReleaseSourcePin(options.config);
+  assertPinnedSourceRoot(sourcePin);
   const dashboardAssets = await buildDeterministicDashboard(environment);
   const sourceCommit = git(["rev-parse", "HEAD"]).trim();
-  const predecessorVersionId = await readServingVersion(options.config);
-  const predecessorContainer = await readPlatformContainer(
+  // Provider reads need a runnable config, and the realized one deliberately
+  // is not: project the pinned source paths into a transient private copy.
+  const operatorConfig = createPlatformDryRunConfig(
+    configSource,
     options.config,
-    environment,
+    ROOT,
   );
+  let predecessorVersionId: string;
+  let predecessorContainer: PlatformContainerState;
+  try {
+    predecessorVersionId = await readServingVersion(operatorConfig.path);
+    predecessorContainer = await readPlatformContainer(
+      operatorConfig.path,
+      environment,
+    );
+  } finally {
+    operatorConfig.dispose();
+  }
   assertPlatformContainerComplete(predecessorContainer);
   const restoreConfigSource = platformRestoreConfigProjection(
     configSource,
@@ -1924,6 +2128,7 @@ type PlatformDryRunConfig = Readonly<{
 export function createPlatformDryRunConfig(
   source: string,
   originalConfigPath: string,
+  pinnedRoot: string = ROOT,
 ): PlatformDryRunConfig {
   if (!isAbsolute(originalConfigPath)) {
     throw new Error("platform_worker_release_dry_run_config_invalid");
@@ -1937,7 +2142,7 @@ export function createPlatformDryRunConfig(
     writePrivate(
       path,
       new TextEncoder().encode(
-        platformDryRunConfigProjection(source, originalConfigPath),
+        platformDryRunConfigProjection(source, originalConfigPath, pinnedRoot),
       ),
     );
     let disposed = false;
@@ -1955,30 +2160,31 @@ export function createPlatformDryRunConfig(
   }
 }
 
+/**
+ * Project the realized config into a wrangler-usable one that points at the
+ * PINNED checkout.
+ *
+ * The realized config declares no source path, so this is what makes it
+ * runnable at all — and the paths it injects come from the commit the config's
+ * source pin names, never from wherever this script happens to live.
+ */
 function platformDryRunConfigProjection(
   source: string,
   originalConfigPath: string,
+  pinnedRoot: string,
 ): string {
-  const base = dirname(originalConfigPath);
-  let projected = source;
-  for (const name of ["main", "directory"] as const) {
-    const expression = new RegExp(
-      `^(${name}\\s*=\\s*)"([^"]+)"(\\s*)$`,
-      "gmu",
-    );
-    const matches = [...projected.matchAll(expression)];
-    if (matches.length !== 1) {
-      throw new Error("platform_worker_release_dry_run_config_invalid");
-    }
-    projected = projected.replace(
-      expression,
-      (_match, prefix: string, value: string, suffix: string) =>
-        `${prefix}${JSON.stringify(
-          resolve(base, value).replaceAll("\\", "/"),
-        )}${suffix}`,
-    );
+  if (!isAbsolute(originalConfigPath) || !isAbsolute(pinnedRoot)) {
+    throw new Error("platform_worker_release_dry_run_config_invalid");
   }
-  return projected;
+  try {
+    return injectPlatformSourcePaths(
+      source,
+      resolve(pinnedRoot, "deploy/platform/entry-worker.ts"),
+      resolve(pinnedRoot, "dashboard/dist"),
+    );
+  } catch {
+    throw new Error("platform_worker_release_dry_run_config_invalid");
+  }
 }
 
 async function createPlatformDeployClosure(
@@ -2229,11 +2435,7 @@ async function assertPlanClosure(plan: PlatformReleasePlan): Promise<void> {
     "platform_worker_release_config_invalid",
   );
   const configSource = new TextDecoder("utf-8", { fatal: true }).decode(config);
-  assertConfigTargetsSource(
-    configSource,
-    plan.configPath,
-    plan.environment,
-  );
+  assertConfigTargetsSource(configSource, plan.environment);
   if (digest(config) !== plan.configSha256) {
     throw new Error("platform_worker_release_config_drift");
   }
@@ -3553,12 +3755,16 @@ function hasHostedDiscovery(value: unknown, origin: string): boolean {
 
 export function assertConfigTargetsSource(
   source: string,
-  path: string,
   environment: PlatformEnvironment,
 ): void {
   const target = platformTargetForEnvironment(environment);
-  const main = /^main\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
-  const assets = /^directory\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
+  // A realized config carries identity, not paths. `main` and the asset
+  // directory are injected by this tool from the commit the config's source pin
+  // names; a config that states them instead names a directory on one machine
+  // and cannot say which commit it meant.
+  if (/^\s*main\s*=/mu.test(source) || /^\s*directory\s*=/mu.test(source)) {
+    throw new Error("platform_worker_release_config_declares_source_path");
+  }
   const name = /^name\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
   const configuredEnvironment =
     /^TAKOSUMI_ENVIRONMENT\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
@@ -3632,12 +3838,7 @@ export function assertConfigTargetsSource(
     !publicOriginAnswerValid ||
     !handlerKeysBound ||
     !versionMetadataValid ||
-    !requestSignalEnabled ||
-    !main ||
-    !assets ||
-    resolve(dirname(path), main) !==
-      resolve(ROOT, "deploy/platform/entry-worker.ts") ||
-    resolve(dirname(path), assets) !== resolve(ROOT, "dashboard/dist")
+    !requestSignalEnabled
   ) {
     throw new Error("platform_worker_release_config_source_invalid");
   }

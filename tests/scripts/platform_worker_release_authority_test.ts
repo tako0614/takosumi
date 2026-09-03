@@ -34,6 +34,10 @@ import {
   platformRestoreLockPath,
   platformWorkerRestoreVersionArguments,
   platformSealedConfigProjection,
+  platformReleaseSourcePinPath,
+  parsePlatformReleaseSourcePin,
+  assertPinnedSourceRoot,
+  sameGitRemote,
   platformWorkerDeployArguments,
   readPlatformMutationFence,
   readPlatformRestoreFence,
@@ -95,13 +99,13 @@ test("asset-tree seal refuses hardlinks even when their bytes match", () => {
   );
 });
 
-test("sealed deploy config changes only main and asset paths to reviewed closure inputs", () => {
+test("sealed deploy config injects the closure's source paths into an identity-only config", () => {
+  // The realized config carries identity, never a path into a source tree.
   const original = [
     'name = "takosumi-staging"',
-    'main = "../checkout/deploy/platform/entry-worker.ts"',
     'compatibility_date = "2026-08-27"',
     "[assets]",
-    'directory = "../checkout/dashboard/dist"',
+    'binding = "ASSETS"',
     "[[containers]]",
     'class_name = "OpenTofuRunnerObject"',
     'image = "registry.cloudflare.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/takosumi-runner@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"',
@@ -118,14 +122,26 @@ test("sealed deploy config changes only main and asset paths to reviewed closure
   ).toBe(
     original
       .replace(
-        'main = "../checkout/deploy/platform/entry-worker.ts"',
-        'main = "source/deploy/platform/entry-worker.ts"',
+        'name = "takosumi-staging"',
+        'name = "takosumi-staging"\nmain = "source/deploy/platform/entry-worker.ts"',
       )
-      .replace(
-        'directory = "../checkout/dashboard/dist"',
-        'directory = "dashboard"',
-      ),
+      .replace("[assets]", '[assets]\ndirectory = "dashboard"'),
   );
+
+  // A config that already states a source path is refused, not silently
+  // overwritten: it means the config changed after it was checked.
+  expect(() =>
+    platformSealedConfigProjection(
+      original.replace(
+        'name = "takosumi-staging"',
+        'name = "takosumi-staging"\nmain = "../checkout/deploy/platform/entry-worker.ts"',
+      ),
+      "/operator/wrangler.toml",
+      "/release/closure/wrangler.toml",
+      "/release/closure/source/deploy/platform/entry-worker.ts",
+      "/release/closure/dashboard",
+    ),
+  ).toThrow("platform_worker_release_sealed_config_invalid");
 });
 
 test("platform upload consumes a fresh exact sealed custody copy, not the retained plan tree", () => {
@@ -198,9 +214,7 @@ test("plan dry-run invokes Wrangler from the exact candidate worktree root", asy
 test("transient restore dry-run config stays global and cleans up", () => {
   const originalConfigPath = resolve(import.meta.dir, "../../deploy/platform/wrangler.toml");
   const transient = createPlatformDryRunConfig(
-    ['main = "entry-worker.ts"', 'directory = "../../dashboard/dist"', ""].join(
-      "\n",
-    ),
+    ['name = "takosumi"', "[assets]", 'binding = "ASSETS"', ""].join("\n"),
     originalConfigPath,
   );
   try {
@@ -940,4 +954,66 @@ test("reviewed restore projects only the predecessor image and routes the predec
     "takosumi-platform-restore sha256:proof",
     "--yes",
   ]);
+});
+
+test("the realized config's source pin is an identity, and only an identity", () => {
+  expect(platformReleaseSourcePinPath("/operator/platform/wrangler.staging.toml")).toBe(
+    "/operator/platform/wrangler.staging.source.json",
+  );
+  expect(() => platformReleaseSourcePinPath("/operator/platform/wrangler")).toThrow(
+    "platform_worker_release_config_invalid",
+  );
+
+  const pin = {
+    kind: "takosumi.platform-release-source@v1",
+    repository: "https://github.com/tako0614/takosumi.git",
+    commit: "a".repeat(40),
+  };
+  expect(parsePlatformReleaseSourcePin(JSON.stringify(pin))).toEqual(pin);
+
+  for (const broken of [
+    "{",
+    JSON.stringify({ ...pin, kind: "something-else" }),
+    JSON.stringify({ ...pin, commit: "not-a-commit" }),
+    JSON.stringify({ ...pin, repository: "" }),
+    // A path is exactly what a pin must not be able to say.
+    JSON.stringify({ ...pin, main: "../../.release/whatever/entry-worker.ts" }),
+    JSON.stringify({ kind: pin.kind, commit: pin.commit }),
+  ]) {
+    expect(() => parsePlatformReleaseSourcePin(broken)).toThrow(
+      "platform_worker_release_source_pin_invalid",
+    );
+  }
+});
+
+test("one remote written two ways is one remote", () => {
+  expect(
+    sameGitRemote(
+      "git@github.com:tako0614/takosumi.git",
+      "https://github.com/tako0614/takosumi",
+    ),
+  ).toBeTrue();
+  expect(
+    sameGitRemote(
+      "https://github.com/tako0614/takosumi.git",
+      "https://github.com/tako0614/takosumi-hosted.git",
+    ),
+  ).toBeFalse();
+});
+
+test("a checkout that is not the pinned commit refuses and names the way out", () => {
+  expect(() =>
+    assertPinnedSourceRoot({
+      kind: "takosumi.platform-release-source@v1",
+      repository: "https://github.com/tako0614/takosumi.git",
+      commit: "b".repeat(40),
+    }),
+  ).toThrow("platform_worker_release_source_pin_mismatch");
+  expect(() =>
+    assertPinnedSourceRoot({
+      kind: "takosumi.platform-release-source@v1",
+      repository: "https://github.com/tako0614/some-other-repository.git",
+      commit: "b".repeat(40),
+    }),
+  ).toThrow("materialize-source");
 });

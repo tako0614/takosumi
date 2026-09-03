@@ -17,7 +17,16 @@ test("platform worker wrangler wires D1/R2 and the OpenTofu runner container", a
   assert.doesNotMatch(wrangler, /TAKOS_SERVICE_CONTAINER/);
   // The single composed worker: accounts ledger + control-plane ledger.
   assert.match(wrangler, /name = "takosumi-platform"/);
-  assert.match(wrangler, /main = "entry-worker\.ts"/);
+  // The template declares no source path at all: a realized config names the
+  // identity of a source (`<config>.source.json`), and the release tool injects
+  // `main` and the asset directory from the commit that pin names.
+  assert.doesNotMatch(wrangler, /^\s*main\s*=/mu);
+  assert.doesNotMatch(wrangler, /^\s*directory\s*=/mu);
+  const pin = JSON.parse(
+    await readText(new URL("wrangler.source.json", platformRoot)),
+  ) as Record<string, unknown>;
+  assert.equal(pin.kind, "takosumi.platform-release-source@v1");
+  assert.match(String(pin.commit), /^[0-9a-f]{40}$/u);
   assert.match(wrangler, /enable_request_signal/);
   assert.match(wrangler, /binding = "TAKOSUMI_ACCOUNTS_DB"/);
   assert.match(wrangler, /binding = "TAKOSUMI_CONTROL_DB"/);

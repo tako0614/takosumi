@@ -1,21 +1,30 @@
 # Takosumi platform worker — operator-neutral REFERENCE TEMPLATE.
 #
 # The REALIZED config actually deployed by the operator (real resource IDs)
-# lives in the operator-private takosumi-private repo (platform/wrangler.toml),
-# which references this repo's worker.ts / dashboard / runner Dockerfile by
-# relative path. This template documents the full binding shape with
-# placeholder IDs; keep the two in sync.
+# lives in the operator-private takosumi-private repo (platform/wrangler.toml).
+# It names the identity of the source it deploys — a `{repository, commit}` pin
+# in its sibling `<config>.source.json` — and never a path into a checkout.
+# This template documents the full binding shape with placeholder IDs; keep the
+# two in sync.
 #
 # One worker = accounts plane (bare-origin OIDC issuer) + in-process
 # deploy-control plane + dashboard SPA (served from ASSETS) + OpenTofu runner
 # container. The Takos product is never officially deployed here; users deploy
 # Takos onto their own infra via Takosumi.
 #
-# All relative paths below resolve from THIS config's directory
-# (takosumi/deploy/platform/).
+# Every remaining relative path below resolves from THIS config's directory
+# (takosumi/deploy/platform/). The Worker entrypoint and the dashboard assets
+# are deliberately not among them; see the note on `name` below.
 
 name = "takosumi-platform"
-main = "entry-worker.ts"
+# No `main` and no `[assets] directory`. A realized config carries the identity
+# of a source, never a path into one: the release tool refuses a config that
+# states either, reads `{repository, commit}` from the sibling
+# `wrangler.source.json`, refuses to run from a checkout that is not exactly
+# that commit, and injects both paths itself — into the immutable `git archive`
+# snapshot for the uploaded bytes. A self-host operator who runs
+# `wrangler deploy` directly instead of `bun run deploy` adds `main` and
+# `[assets] directory` to their own copy and owns that choice.
 compatibility_date = "2026-04-01"
 # Restore relies on Cloudflare propagating incoming Request.signal aborts into
 # the Durable Object handler so a lost run lease can stop in-flight R2 work.
@@ -30,7 +39,6 @@ custom_domain = true
 # run_worker_first lets the worker inspect the request (API namespaces, export
 # downloads) before static assets answer.
 [assets]
-directory = "../../dashboard/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 run_worker_first = true
