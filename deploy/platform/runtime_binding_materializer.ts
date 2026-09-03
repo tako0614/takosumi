@@ -481,6 +481,22 @@ function declaredBindings(
   return exactBindingSet(values);
 }
 
+/**
+ * Preimage of a generated secret.
+ *
+ * KNOWN HAZARD, v1 only. The `takosumi.runtime-binding-profile/v1` preimage
+ * includes `installConfigId`, so a Capsule whose install config is replaced
+ * derives DIFFERENT bytes for the same binding — an installed app's key rotates
+ * because its configuration was edited, which is not what an operator editing a
+ * configuration expects. v2 drops it: workspace, Capsule and binding are the
+ * identity, and the config is not part of it.
+ *
+ * v1 is not dead. `core/domains/deploy-control/runtime_secret_file_materializer.ts`
+ * still pins `takosumi.runtime-binding-profile/v1` as its profile contract, so
+ * a v1 profile is still materializable and this rotation is still reachable.
+ * Retiring it means migrating those profiles to v2, which rotates every
+ * affected secret once, deliberately, instead of accidentally.
+ */
 function generatedSecretDerivationParts(
   profileContract: RuntimeBindingProfileContract,
   authority: RuntimeBindingAuthority,

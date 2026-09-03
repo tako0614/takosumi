@@ -3385,6 +3385,16 @@ async function readSecretNames(config: string): Promise<readonly string[]> {
   return secretNames(result.stdout);
 }
 
+/**
+ * Read the live secret-name set again and refuse if it moved since plan.
+ *
+ * Keep this shape. It is the ecosystem's counter-example to the class of defect
+ * where a deploy asserts a fact it captured at plan time and never re-reads:
+ * the plan snapshots the provider's own metadata-only `wrangler secret list`,
+ * this re-reads it immediately BEFORE the irreversible upload, and a difference
+ * is a refusal rather than a warning. Nothing here is a stored claim about the
+ * world; both sides are live reads of the same authority.
+ */
 async function assertSecretNamesUnchanged(
   config: string,
   expectedDigest: string,

@@ -6,17 +6,28 @@ import {
   edgeExposureForEndpointPath,
 } from "../../../core/api/edge_public_paths.ts";
 import { registerInterfaceRoutes } from "../../../core/api/interface_routes.ts";
+import { mountDeployControlInternalRoutes } from "../../../core/api/deploy_control_internal_routes.ts";
+import { registerMetricsRoutes } from "../../../core/api/metrics_routes.ts";
+import { registerReadinessRoutes } from "../../../core/api/readiness_routes.ts";
 
 /**
  * The gate the platform worker uses is static, so nothing stops it from
  * disagreeing with the router — that disagreement is the defect this file
  * exists for. Mount the real registrars and require that every path they
  * actually register is covered.
+ *
+ * All of them, not just Interfaces: mounting one family meant the other four
+ * could add an edge-reachable path with no declared exposure. The
+ * deploy-control internal seam is the one that matters most here, since its
+ * paths are exactly the ones the edge must NOT expose.
  */
 function mountedRouterPaths(): readonly string[] {
   const app = new Hono();
   const stub = {} as never;
   registerInterfaceRoutes(app, { service: stub } as never);
+  mountDeployControlInternalRoutes(app, {} as never);
+  registerMetricsRoutes(app, { observability: stub } as never);
+  registerReadinessRoutes(app, { probes: {} as never });
   return [...new Set(app.routes.map((route) => route.path))];
 }
 
