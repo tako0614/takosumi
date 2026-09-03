@@ -351,6 +351,56 @@ test("a non-2xx or malformed answer fails closed with no origin and no ledger wr
   }
 });
 
+test("a Proxy-shaped handler that never settles is bounded by the RPC deadline", async () => {
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  const ledger = memoryLedger();
+  const neverSettlingHandler = new Proxy(
+    {},
+    {
+      get: (_target, property) =>
+        property === "exchangeProviderPublicInput"
+          ? () => new Promise<never>(() => {})
+          : undefined,
+    },
+  );
+  try {
+    const port = capsulePublicOriginFromPlatformExtensions(
+      {
+        TAKOSUMI_PLATFORM_EXTENSIONS: routes(),
+        TAKOSUMI_ACCOUNTS_ISSUER: ISSUER,
+        HOSTED: neverSettlingHandler,
+      },
+      ledger,
+      () => new Date("2026-09-01T12:00:00.000Z"),
+      { handlerRpcDeadlineMs: 5 },
+    );
+    let outerTimeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        port!.resolve({ capsule: capsule(), installConfig: installConfig() }),
+        new Promise<"outer-timeout">((resolve) => {
+          outerTimeout = setTimeout(() => resolve("outer-timeout"), 100);
+        }),
+      ]);
+
+      expect(result).toBeUndefined();
+      expect(ledger.current()).toBeUndefined();
+      expect(
+        warn.mock.calls.map(([message]) => JSON.parse(message as string)),
+      ).toEqual([
+        {
+          event: "platform_extension_provider_public_input_exchange_failed",
+          stage: "handler_rpc_timeout",
+        },
+      ]);
+    } finally {
+      if (outerTimeout !== undefined) clearTimeout(outerTimeout);
+    }
+  } finally {
+    warn.mockRestore();
+  }
+});
+
 test("a route that cannot answer the question composes no port at all", () => {
   expect(
     capsulePublicOriginFromPlatformExtensions(
