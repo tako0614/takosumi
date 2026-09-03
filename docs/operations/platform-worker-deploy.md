@@ -71,10 +71,14 @@ bun run deploy -- takosumi-platform-staging materialize-source \
   --config <realized config> --into <empty directory>
 ```
 
-That is a fresh, disposable, depth-1 checkout of the pinned commit. Install the
-toolchain there and run `plan` from it. The recovery path is the same command
-against the commit the stored plan recorded, so a restore no longer depends on
-one directory continuing to exist.
+That is a fresh, disposable, depth-1 tracking checkout of the remote default
+branch. Materialization refuses unless that branch's current remote tip is the
+pinned commit; it does not detach HEAD or create a synthetic release branch.
+Install the toolchain there and run `plan` from it. Every later source-lineage
+check re-reads remote `HEAD` and refuses if the checkout's attached branch is no
+longer the remote default, even when that old branch still points at the pinned
+commit. The recovery path is the same command against the commit the stored plan
+recorded, so a restore no longer depends on one directory continuing to exist.
 
 Advancing the pin is part of cutting a release: set `commit` to the reviewed
 source commit, then plan and execute.
@@ -153,7 +157,36 @@ dashboard build twice, seals every physical output path/size/digest, validates
 that the external config points at that same worktree, seals the metadata-only
 secret-name inventory and exact serving predecessor, and seals Wrangler's
 strict immediate-rollout dry-run output tree in an external, non-worktree
-release closure. It also reads and seals the exact healthy predecessor
+release closure. Each forward and restore closure derives, uses, and disposes
+its own transient private source-path projection from the identity-only realized
+config. That projection points only at the closure's immutable `git archive`
+source and exact copied dashboard, never at the mutable checkout, so neither an
+omitted projection nor checkout ABA changes can alter Wrangler's sealed bundle.
+The transient projection itself is read-only and held under a content plus
+inode/change-time identity seal. Its owned workspace directory is independently
+identity-sealed, with Wrangler's expected scratch parent created before the
+seal. The physical parent of `--plan-out` is the declared trusted path-custody
+root: it must be an operator-owned `0700` directory outside a Git worktree whose
+mapping above that root is protected for the operation. The root itself and
+every directory from it through each closure are identity-sealed above the
+recursively sealed source, dependency, and dashboard trees. Those path-custody
+seals are checked before and after Wrangler and again throughout cleanup, so
+changing `main` or the asset directory and restoring the bytes, or renaming and
+substituting the config workspace, a closure parent, or the entire closure root
+before restoring it, refuses the closure before its dry-run output is retained.
+Before Wrangler runs, the closure performs a frozen, production-only,
+scripts-disabled Bun install from that archived `package.json` and `bun.lock`
+using physical copies and a new empty cache private to that one closure. It does
+not read or fall back to the operator's global Bun cache, and an unavailable
+registry therefore fails closed rather than reusing unqualified bytes. It
+removes workspace/bin links, seals the resulting dependency files, makes the
+complete build input read-only, and requires the same content and physical
+inode/change-time identity after bundling, including when bytes are changed and
+restored. The retained closure records the Bun/platform, private-cache policy,
+lockfile, package, and dependency-tree digests in `dependencies.json`, then
+removes both the cache and transient `node_modules`; execute still uploads only
+the reviewed Wrangler output with `--no-bundle`.
+It also reads and seals the exact healthy predecessor
 Container application identity, immutable image, version, rollout state, and
 instance health. A second sealed closure projects only that image literal back
 to the predecessor digest for reviewed restore.
