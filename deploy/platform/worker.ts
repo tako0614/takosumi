@@ -48,6 +48,7 @@ import {
 } from "../../worker/src/handler.ts";
 import { cachedDeployControlService } from "../../worker/src/deploy_control_seam.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
+import { fenceControlDatabase } from "./fenced-control-database.ts";
 import { createCloudflareD1PatWorkspaceMembershipReader } from "./pat-workspace-membership-reader.ts";
 import type {
   CapsuleExecutionAuthorityResolver,
@@ -162,6 +163,10 @@ export {
   type ProductionHardeningContributionResult,
   type ProductionHardeningGateResult,
 } from "./production_hardening.ts";
+export {
+  fenceControlDatabase,
+  type FencedControlDatabase,
+} from "./fenced-control-database.ts";
 export {
   createCloudflareD1WorkspaceBootstrapReader,
   readWorkspaceBootstrapRequest,
@@ -618,9 +623,13 @@ const accountsWorker = createCloudflareWorker<CloudflareWorkerEnv>({
   // shape (see `controlPlaneOperationsFor`).
   controlPlaneOperations: (env) => controlPlaneOperationsFor(env),
   // PAT self authority is one bounded Control D1 membership SELECT. It must
-  // not initialize the full deploy-control service or run schema/bootstrap.
+  // not initialize the full deploy-control service or run schema/bootstrap —
+  // but it must still refuse while an operator holds the maintenance fence, so
+  // the binding is fenced once here rather than trusted at each call site.
   patWorkspaceMembershipReader: (env) =>
-    createCloudflareD1PatWorkspaceMembershipReader(env.TAKOSUMI_CONTROL_DB),
+    createCloudflareD1PatWorkspaceMembershipReader(
+      fenceControlDatabase(env.TAKOSUMI_CONTROL_DB),
+    ),
   personalAccessTokenSelfServiceScopes: (env) =>
     platformExtensionSelfServicePatScopesForAccounts(env),
 });

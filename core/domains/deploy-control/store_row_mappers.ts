@@ -24,6 +24,11 @@ import type { ArtifactRecord } from "takosumi-contract/runs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import type { UsageEvent } from "takosumi-contract/billing";
 import { usageEventUsdMicros } from "takosumi-contract/billing";
+import type {
+  WorkspaceMember,
+  WorkspaceMemberStatus,
+  WorkspaceRole,
+} from "takosumi-contract/workspaces";
 
 export function workspaceKeyOf(scope: {
   readonly workspaceId: string;
@@ -180,4 +185,152 @@ export function artifactRecordFromRow(row: {
     sizeBytes: row.sizeBytes,
     createdAt: row.createdAt,
   };
+}
+
+/**
+ * The one decoder from a persisted `workspace_members` row to the domain
+ * {@link WorkspaceMember}.
+ *
+ * WHY it is here. The row carries the same identity twice — as indexed columns
+ * and inside the record JSON — and three readers used to decode it
+ * independently: the bounded PAT authority reader validated both halves and
+ * cross-checked them, while both stores cast the record straight to the domain
+ * type. The strict half is the correct one; a membership decision made from a
+ * row whose columns and record disagree is not a decision anybody can defend.
+ * One decoder means one answer to "is this row a membership", and a widened
+ * `WorkspaceRole` or `WorkspaceMemberStatus` has exactly one place to be taught
+ * about.
+ */
+export interface WorkspaceMemberRowIdentity {
+  readonly id: unknown;
+  readonly workspaceId: unknown;
+  readonly accountId: unknown;
+  readonly status: unknown;
+  readonly recordJson: unknown;
+  readonly createdAt: unknown;
+  readonly updatedAt: unknown;
+}
+
+export class WorkspaceMemberRowError extends TypeError {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkspaceMemberRowError";
+  }
+}
+
+/**
+ * Decode one row against the identity it was selected by.
+ *
+ * `expected` is the query's own predicate. Passing it in is what turns the
+ * decode into evidence: a row that came back for a different Workspace or
+ * account is corruption, not a membership.
+ */
+export function workspaceMemberFromRow(
+  row: WorkspaceMemberRowIdentity,
+  expected: { readonly workspaceId: string; readonly accountId: string },
+): WorkspaceMember {
+  if (
+    typeof row.id !== "string" ||
+    row.workspaceId !== expected.workspaceId ||
+    row.accountId !== expected.accountId ||
+    !isWorkspaceMemberStatus(row.status) ||
+    !isCanonicalMemberTimestamp(row.createdAt) ||
+    !isCanonicalMemberTimestamp(row.updatedAt)
+  ) {
+    throw new WorkspaceMemberRowError(
+      "Workspace membership evidence identity is invalid",
+    );
+  }
+  const record = parseWorkspaceMemberRecord(row.recordJson);
+  if (
+    record.workspaceId !== expected.workspaceId ||
+    record.accountId !== expected.accountId ||
+    record.id !== row.id ||
+    record.status !== row.status ||
+    record.createdAt !== row.createdAt ||
+    record.updatedAt !== row.updatedAt
+  ) {
+    throw new WorkspaceMemberRowError(
+      "Workspace membership evidence identity is invalid",
+    );
+  }
+  return {
+    id: record.id,
+    workspaceId: expected.workspaceId,
+    accountId: expected.accountId,
+    status: record.status,
+    roles: record.roles,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+/** Decode the persisted record half alone, for a caller that selects only it. */
+export function parseWorkspaceMemberRecord(value: unknown): WorkspaceMember {
+  let parsed: unknown;
+  try {
+    parsed =
+      typeof value === "string"
+        ? JSON.parse(value)
+        : isWorkspaceMemberRecord(value)
+          ? value
+          : undefined;
+  } catch {
+    throw new WorkspaceMemberRowError(
+      "Workspace membership evidence is malformed",
+    );
+  }
+  if (
+    !isWorkspaceMemberRecord(parsed) ||
+    typeof parsed.id !== "string" ||
+    parsed.id.length === 0 ||
+    typeof parsed.workspaceId !== "string" ||
+    typeof parsed.accountId !== "string" ||
+    !isWorkspaceMemberStatus(parsed.status) ||
+    !Array.isArray(parsed.roles) ||
+    !parsed.roles.every(isWorkspaceRole) ||
+    new Set(parsed.roles).size !== parsed.roles.length ||
+    !isCanonicalMemberTimestamp(parsed.createdAt) ||
+    !isCanonicalMemberTimestamp(parsed.updatedAt)
+  ) {
+    throw new WorkspaceMemberRowError(
+      "Workspace membership evidence is malformed",
+    );
+  }
+  return {
+    id: parsed.id,
+    workspaceId: parsed.workspaceId,
+    accountId: parsed.accountId,
+    status: parsed.status,
+    roles: parsed.roles as WorkspaceRole[],
+    createdAt: parsed.createdAt,
+    updatedAt: parsed.updatedAt,
+  };
+}
+
+function isWorkspaceMemberRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isWorkspaceRole(value: unknown): value is WorkspaceRole {
+  return (
+    value === "owner" ||
+    value === "admin" ||
+    value === "member" ||
+    value === "viewer"
+  );
+}
+
+function isWorkspaceMemberStatus(
+  value: unknown,
+): value is WorkspaceMemberStatus {
+  return value === "active" || value === "invited" || value === "suspended";
+}
+
+function isCanonicalMemberTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
 }
