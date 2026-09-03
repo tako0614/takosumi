@@ -2850,6 +2850,8 @@ export async function createPlatformDeployClosure(
   runtime: Readonly<{
     pathCustodyRoot: string;
     repositoryRoot?: string;
+    /** Test-only source for an independently sealed dashboard fixture. */
+    fixtureDashboardAssetsRoot?: string;
     command?: PlatformReleaseCommand;
   }>,
 ): Promise<Readonly<{
@@ -2860,6 +2862,18 @@ export async function createPlatformDeployClosure(
   closure: DashboardAssetSeal;
 }>> {
   const repositoryRoot = runtime.repositoryRoot ?? ROOT;
+  const dashboardAssetsRoot =
+    runtime.fixtureDashboardAssetsRoot ??
+    resolve(repositoryRoot, "dashboard/dist");
+  if (
+    runtime.fixtureDashboardAssetsRoot !== undefined &&
+    (runtime.repositoryRoot === undefined ||
+      runtime.command === undefined ||
+      !isAbsolute(dashboardAssetsRoot) ||
+      resolve(dashboardAssetsRoot) !== dashboardAssetsRoot)
+  ) {
+    throw new Error("platform_worker_release_dashboard_source_invalid");
+  }
   // The caller explicitly declares the physical trust anchor. Every existing
   // directory from that anchor through the closure parent is validated now;
   // the complete chain, including the closure, is sealed before Wrangler.
@@ -2900,7 +2914,7 @@ export async function createPlatformDeployClosure(
   rmSync(archive);
   dashboardAssetTreeSeal(sourcePath);
   copyExactAssetTree(
-    resolve(repositoryRoot, "dashboard/dist"),
+    dashboardAssetsRoot,
     dashboardPath,
     dashboardAssets,
   );

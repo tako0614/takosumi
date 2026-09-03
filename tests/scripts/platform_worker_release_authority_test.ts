@@ -1207,6 +1207,8 @@ test("deploy closure bundles the actual archived platform graph with pinned depe
   const closure = join(root, "closure");
   const originalConfig = join(root, "wrangler.toml");
   const home = join(root, "home");
+  const dashboardAssetsRoot = assets();
+  const dashboardAssets = dashboardAssetTreeSeal(dashboardAssetsRoot);
   mkdirSync(home);
   const configSource = [
     'name = "takosumi-real-platform-graph"',
@@ -1222,11 +1224,12 @@ test("deploy closure bundles the actual archived platform graph with pinned depe
     closure,
     configSource,
     originalConfig,
-    dashboardAssetTreeSeal(join(repository, "dashboard/dist")),
+    dashboardAssets,
     gitCommand(["rev-parse", "HEAD"], repository),
     {
       pathCustodyRoot: dirname(closure),
       repositoryRoot: repository,
+      fixtureDashboardAssetsRoot: dashboardAssetsRoot,
       command: (argv, _stdin, cwd) => runActualWrangler(argv, cwd, home),
     },
   );
