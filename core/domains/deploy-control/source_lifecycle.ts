@@ -36,6 +36,7 @@ import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type { SourcesService } from "../sources/mod.ts";
 import type { OpenTofuControlStore, StoredSource } from "./store.ts";
 import type { OpenTofuRunner, OpenTofuSourceSyncResult } from "./mod.ts";
+import { NON_TERMINAL_RUN_STATUSES } from "./mod.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "./capsule_source_revision.ts";
 import {
   mapVaultError,
@@ -595,7 +596,7 @@ export class SourceLifecycleService {
     const result = await this.#store.transitionRun({
       id: terminal.id,
       kind: "source_sync",
-      expectFrom: ["queued", "running"],
+      expectFrom: NON_TERMINAL_RUN_STATUSES,
       expectLeaseToken: leaseToken,
       run: terminal,
       clearLeaseToken: true,

@@ -10,7 +10,15 @@ import {
   RetrySchedule,
 } from "../../../core/shared/lifecycle/mod.ts";
 import { log } from "../../../core/shared/log.ts";
-import type { RunStatus } from "takosumi-contract/runs";
+import type {
+  InFlightRunStatus,
+  RunProgressPhase,
+  RunStatus,
+} from "takosumi-contract/runs";
+import {
+  RUN_PROGRESS_PHASE,
+  runIsInFlight,
+} from "takosumi-contract/runs";
 
 const RUN_OWNER_RECORD_KEY = "run";
 const RUN_OWNER_MAX_ATTEMPTS = 3;
@@ -62,20 +70,32 @@ interface RunOwnerStartRequest {
   readonly messageId?: string;
 }
 
+/**
+ * The owner record's own lifecycle vocabulary.
+ *
+ * It is the canonical `RunStatus` with `queued` replaced by `scheduled`: the
+ * owner is the thing that queues, so "queued" is not a state it can be in.
+ * Deriving it — rather than declaring a parallel union inline — is what makes
+ * {@link RUN_OWNER_PROGRESS_PHASE} below exhaustive against the contract: a new
+ * `RunStatus` fails to compile here until it is classified, instead of falling
+ * into the settled half by negation.
+ */
+type RunOwnerStatus = "scheduled" | Exclude<RunStatus, "queued">;
+
+const RUN_OWNER_PROGRESS_PHASE: {
+  readonly [S in RunOwnerStatus]: RunProgressPhase;
+} = {
+  scheduled: "in-flight",
+  ...RUN_PROGRESS_PHASE,
+};
+
 interface RunOwnerRecord {
   readonly kind: "takosumi.opentofu-run-owner@v1";
   readonly action: DispatchableRunAction;
   readonly requestedAction: OpenTofuRunAction;
   readonly runId: string;
   readonly workspaceId: string;
-  readonly status:
-    | "scheduled"
-    | "running"
-    | "succeeded"
-    | "failed"
-    | "cancelled"
-    | "expired"
-    | "waiting_approval";
+  readonly status: RunOwnerStatus;
   readonly attempts: number;
   readonly maxAttempts: number;
   readonly createdAt: string;
@@ -806,14 +826,12 @@ function redactErrorMessage(message: string): string {
 
 function isRunStillDispatchable(
   status: RunStatus | undefined,
-): status is "queued" | "running" {
-  return status === "queued" || status === "running";
+): status is InFlightRunStatus {
+  return runIsInFlight(status);
 }
 
-function isTerminalOwnerStatus(
-  status: RunOwnerRecord["status"],
-): status is Exclude<RunOwnerRecord["status"], "scheduled" | "running"> {
-  return status !== "scheduled" && status !== "running";
+function isTerminalOwnerStatus(status: RunOwnerStatus): boolean {
+  return RUN_OWNER_PROGRESS_PHASE[status] === "settled";
 }
 
 function parseIsoMs(value: string, fallback: number): number {

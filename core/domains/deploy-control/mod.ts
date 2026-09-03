@@ -165,6 +165,7 @@ import type {
   RunLogsResponse,
   RunServiceDataRestoreResult,
 } from "takosumi-contract/runs";
+import { IN_FLIGHT_RUN_STATUSES, runIsInFlight } from "takosumi-contract/runs";
 import type {
   CreateRestoreRequest,
   ServiceDataBackupPointer,
@@ -928,16 +929,16 @@ export const RUN_RENEWAL_INTERVAL_MS = Math.floor(
 
 /**
  * The non-terminal run statuses a TERMINAL transition (succeeded / failed /
- * cancelled) is allowed to fire from. (The internal run model has no distinct
- * `waiting_approval` status — a plan that parks for approval stays `succeeded`,
- * so its later cancel is handled by the `succeeded`-from cancel CAS, not here.)
- * A run already in a terminal state is never re-terminalized (the fenced CAS
- * loses and the existing row stands).
+ * cancelled) is allowed to fire from. A run already in a terminal state is
+ * never re-terminalized (the fenced CAS loses and the existing row stands).
+ *
+ * Derived from the contract's one exhaustive `RUN_PROGRESS_PHASE` map rather
+ * than restated: a new `RunStatus` fails to compile until it is classified
+ * there, instead of silently becoming a state no terminal transition may fire
+ * from.
  */
-export const NON_TERMINAL_RUN_STATUSES: readonly RunStatus[] = [
-  "queued",
-  "running",
-];
+export const NON_TERMINAL_RUN_STATUSES: readonly RunStatus[] =
+  IN_FLIGHT_RUN_STATUSES;
 
 export function providersRequiringProviderBindings(
   providers: readonly string[],
@@ -2887,13 +2888,11 @@ export function newId(prefix: string): string {
  * The unified RunStatus has no `blocked`; `waiting_approval` is settled for this
  * purpose (the plan execution finished and is parked awaiting a human approval,
  * so a DLQ retry must NOT re-fail it).
+ *
+ * The exact complement of {@link NON_TERMINAL_RUN_STATUSES}, and derived from
+ * the same map so the two can never disagree about a status one of them has
+ * been taught about and the other has not.
  */
 export function isTerminalStatus(status: RunStatus): boolean {
-  return (
-    status === "succeeded" ||
-    status === "failed" ||
-    status === "waiting_approval" ||
-    status === "expired" ||
-    status === "cancelled"
-  );
+  return !runIsInFlight(status);
 }
