@@ -25,13 +25,36 @@ export {
   OpenTofuRunnerObject,
 };
 
+/**
+ * One materializer per environment, resolved at composition.
+ *
+ * It used to be constructed inside every RPC method, so the derivation key was
+ * validated during a live apply rather than when the entrypoint was composed.
+ * A malformed key surfaced as a `TypeError` mid-mutation while the other lane,
+ * reading the same variable, had already switched itself to the sealed lane.
+ */
+const materializers = new WeakMap<
+  RuntimeBindingMaterializerCloudflareEnv,
+  ReturnType<typeof createCloudflareTakosumiRuntimeBindingMaterializer>
+>();
+
+function runtimeBindingMaterializerFor(
+  env: RuntimeBindingMaterializerCloudflareEnv,
+): ReturnType<typeof createCloudflareTakosumiRuntimeBindingMaterializer> {
+  const existing = materializers.get(env);
+  if (existing) return existing;
+  const created = createCloudflareTakosumiRuntimeBindingMaterializer(env);
+  materializers.set(env, created);
+  return created;
+}
+
 /** Private RPC target used only by Takoserver's service binding. */
 export class TakosumiRuntimeBindingMaterializerEntrypoint extends WorkerEntrypoint<
   VersionedPlatformEnv & RuntimeBindingMaterializerCloudflareEnv
 > {
   async materializeRuntimeBindings(input: RuntimeBindingMaterializerInput) {
     try {
-      return await createCloudflareTakosumiRuntimeBindingMaterializer(
+      return await runtimeBindingMaterializerFor(
         this.env,
       ).materializeRuntimeBindings(input);
     } catch (error) {
@@ -49,9 +72,9 @@ export class TakosumiRuntimeBindingMaterializerEntrypoint extends WorkerEntrypoi
     input: RuntimeBindingMaterializerInput,
   ): Promise<void> {
     try {
-      await createCloudflareTakosumiRuntimeBindingMaterializer(
-        this.env,
-      ).commitRuntimeBindings(input);
+      await runtimeBindingMaterializerFor(this.env).commitRuntimeBindings(
+        input,
+      );
     } catch (error) {
       console.error(
         JSON.stringify({
@@ -67,9 +90,9 @@ export class TakosumiRuntimeBindingMaterializerEntrypoint extends WorkerEntrypoi
     readonly request: unknown;
     readonly rollbackReceipt: string;
   }) {
-    return createCloudflareTakosumiRuntimeBindingMaterializer(
-      this.env,
-    ).rollbackRuntimeBindings(input);
+    return runtimeBindingMaterializerFor(this.env).rollbackRuntimeBindings(
+      input,
+    );
   }
 }
 

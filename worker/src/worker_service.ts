@@ -15,6 +15,7 @@ import type { OpenTofuControlStore } from "../../core/domains/deploy-control/sto
 import { capsuleLifecycleExpected } from "../../core/domains/deploy-control/store.ts";
 import type { EnqueueSourceSync } from "../../core/domains/sources/mod.ts";
 import type { CapsuleCoordination } from "../../core/domains/deploy-control/capsule_lease.ts";
+import { requireRuntimeBindingDerivationKey } from "../../core/domains/deploy-control/runtime_binding_derivation_key.ts";
 import { D1GitInstallPlanStore } from "../../core/domains/install-plans/d1_store.ts";
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import type {
@@ -336,11 +337,18 @@ export async function createWorkerServiceApp(
   const runCredentialIssuer = runCredentialIssuerFromEnv(env);
   // Both lanes materialize the same `runtimeBindingMaterialization` profile, so
   // a composition that configures one must configure the other from the same
-  // key or a Capsule's generated secrets would exist in two copies.
+  // key or a Capsule's generated secrets would exist in two copies. That is
+  // why the key is resolved by one shared function rather than by each lane's
+  // own fallback: this one used to map a malformed key to `undefined` and seal
+  // silently while the private RPC lane threw mid-apply on the same value.
+  // `require…` refuses at composition; absence stays an explicitly declared
+  // sealed mode that `/readyz` names.
+  const resolvedDerivationKey = requireRuntimeBindingDerivationKey(
+    env.TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY,
+  );
   const runtimeBindingDerivationKey =
-    typeof env.TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY === "string" &&
-    env.TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY.length > 0
-      ? env.TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY
+    resolvedDerivationKey.status === "configured"
+      ? resolvedDerivationKey.key
       : undefined;
   // A Capsule whose profile delivers OIDC by bindings needs those four values
   // inside the same run-scoped map as its generated secrets, and their one
