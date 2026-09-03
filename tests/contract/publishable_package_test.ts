@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+
+import { contractPackageFiles } from "../../scripts/check-contract-package-files.ts";
 import { readFile } from "node:fs/promises";
 
 import * as rootRuntime from "../../contract/runtime.ts";
@@ -7,6 +9,21 @@ import {
   TAKOSUMI_MANAGED_RUNTIME_GATEWAY_BINDING,
   TAKOSUMI_MANAGED_RUNTIME_MATERIALIZATION_BINDING,
 } from "../../contract/managed-runtime-connections.ts";
+
+async function packedFiles(): Promise<readonly string[]> {
+  const packed = Bun.spawnSync(
+    ["npm", "pack", "--dry-run", "--ignore-scripts", "--json"],
+    {
+      cwd: new URL("../../contract", import.meta.url).pathname,
+      stdout: "pipe",
+      stderr: "ignore",
+    },
+  );
+  const report = JSON.parse(packed.stdout.toString()) as readonly {
+    readonly files: readonly { readonly path: string }[];
+  }[];
+  return report[0]!.files.map((file) => file.path);
+}
 
 const packageJson = JSON.parse(
   await readFile(
@@ -31,34 +48,42 @@ test("the OSS contract directory is an explicit public package", () => {
     publishConfig: { access: "public" },
   });
   expect(packageJson.private).not.toBe(true);
-  expect(packageJson.files).toEqual([
-    "runtime.ts",
-    "cron.ts",
-    "background-events.ts",
-    "managed-runtime-connections.ts",
-    "managed-relational-runtime.ts",
-    "discovery.ts",
-    "api-surface.ts",
-    "capabilities.ts",
-    "interface-types.ts",
-    "runtime-interfaces.ts",
-    "notification-pushers.ts",
-    "identity-oidc.ts",
-    "types.ts",
-    "LICENSE",
-    "README.md",
-  ]);
-  expect(packageJson.exports).toEqual({
-    ".": "./runtime.ts",
-    "./background-events": "./background-events.ts",
-    "./managed-runtime-connections": "./managed-runtime-connections.ts",
-    "./managed-relational-runtime": "./managed-relational-runtime.ts",
-    "./discovery": "./discovery.ts",
-    "./interface-types": "./interface-types.ts",
-    "./runtime-interfaces": "./runtime-interfaces.ts",
-    "./notification-pushers": "./notification-pushers.ts",
-    "./identity-oidc": "./identity-oidc.ts",
-  });
+  // `files` is DERIVED from `exports` — every export target plus everything it
+  // transitively imports — not hand-listed. The hand-listed array named 13 of
+  // 57 modules, so every wire type a consumer tracks (runs, capsules,
+  // workspaces, the deploy-control API) was importable in this repository and
+  // absent from the published bytes. The package stays curated: what is curated
+  // is `exports`, and `files` follows from it.
+  expect(packageJson.files).toEqual([...contractPackageFiles(packageJson)]);
+});
+
+test("every export subpath resolves to a module the package actually ships", async () => {
+  const exported = Object.entries(packageJson.exports ?? {});
+  expect(exported.length).toBeGreaterThan(0);
+  const packed = new Set(await packedFiles());
+  for (const [subpath, target] of exported) {
+    expect(target.startsWith("./")).toBe(true);
+    // The relation, not a list: a subpath whose target is not in the packed
+    // tarball is exactly the shape of a broken published export.
+    expect({ subpath, packed: packed.has(target.slice(2)) }).toEqual({
+      subpath,
+      packed: true,
+    });
+    await import(new URL(`../../contract/${target.slice(2)}`, import.meta.url).pathname);
+  }
+});
+
+test("the wire modules a consumer tracks are importable subpaths", () => {
+  // These are what an external consumer pins against: they were reachable in
+  // this repository and unreachable from the published package.
+  for (const subpath of [
+    "./deploy-control-api",
+    "./runs",
+    "./capsules",
+    "./workspaces",
+  ]) {
+    expect(Object.keys(packageJson.exports ?? {})).toContain(subpath);
+  }
 });
 
 test("root and explicit runtime subpaths expose one contract identity", () => {

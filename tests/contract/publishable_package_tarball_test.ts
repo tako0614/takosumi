@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -8,24 +9,21 @@ const CONTRACT = join(ROOT, "contract");
 const TSC = join(ROOT, "node_modules/.bin/tsc");
 const TARBALL_NAME = "takosjp-takosumi-contract-2.1.0.tgz";
 
-const EXPECTED_PACKAGE_FILES = [
-  "LICENSE",
-  "README.md",
-  "api-surface.ts",
-  "background-events.ts",
-  "capabilities.ts",
-  "cron.ts",
-  "discovery.ts",
-  "identity-oidc.ts",
-  "interface-types.ts",
-  "managed-relational-runtime.ts",
-  "managed-runtime-connections.ts",
-  "notification-pushers.ts",
+/**
+ * Derived, not listed. `files` is itself derived from `exports` by
+ * `scripts/check-contract-package-files.ts`, so what this test compares the
+ * tarball against is the manifest the package publishes — a relation that stays
+ * true across the next legitimate export, rather than a value someone has to
+ * remember to edit alongside it.
+ */
+const EXPECTED_PACKAGE_FILES: readonly string[] = [
+  ...(
+    JSON.parse(
+      readFileSync(join(CONTRACT, "package.json"), "utf8"),
+    ) as { readonly files: readonly string[] }
+  ).files,
   "package.json",
-  "runtime-interfaces.ts",
-  "runtime.ts",
-  "types.ts",
-] as const;
+].sort();
 
 const LEGACY_ROOT_EXPORTS = [
   "MANAGED_RELATIONAL_LIMITS",
@@ -92,6 +90,19 @@ test(
       expect(parseDryRunFiles(dryRun.stdout)).toEqual([
         ...EXPECTED_PACKAGE_FILES,
       ]);
+      // Every export subpath's target is in the packed bytes. This is the
+      // defect the derivation closes: `files` named 13 of 57 modules while the
+      // repository imported runs / capsules / workspaces / the deploy-control
+      // API from `contract/` directly, so every wire type an external consumer
+      // tracks was importable here and absent from the published package.
+      const exported = (
+        JSON.parse(readFileSync(join(CONTRACT, "package.json"), "utf8")) as {
+          readonly exports: Readonly<Record<string, string>>;
+        }
+      ).exports;
+      for (const target of Object.values(exported)) {
+        expect(EXPECTED_PACKAGE_FILES).toContain(target.slice(2));
+      }
 
       await runChecked(
         ["bun", "pm", "pack", "--destination", directory, "--ignore-scripts"],
