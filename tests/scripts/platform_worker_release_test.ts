@@ -69,7 +69,6 @@ test("production config must bind the isolated production Hosted service", () =>
   };
   const source = (
     service: string,
-    main = resolve(root, "deploy/platform/entry-worker.ts"),
     includeBroker = true,
     basePath = "/api/v1/account/subscription",
     includeVersionMetadata = true,
@@ -84,10 +83,9 @@ test("production config must bind the isolated production Hosted service", () =>
     } = {},
   ) => `
 name = "takosumi"
-main = "${main}"
 compatibility_flags = ["nodejs_compat"${includeRequestSignal ? ', "enable_request_signal"' : ""}]
 [assets]
-directory = "${resolve(root, "dashboard/dist")}"
+binding = "ASSETS"
 ${includeVersionMetadata ? '[version_metadata]\nbinding = "TAKOSUMI_VERSION_METADATA"' : ""}
 [[services]]
 binding = "HOSTED"
@@ -172,7 +170,6 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
   expect(() =>
     assertConfigTargetsSource(
       source("takosumi-hosted"),
-      "/private/wrangler.toml",
       "production",
     ),
   ).not.toThrow();
@@ -182,7 +179,6 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
         '"workspaceContext":"query-optional"',
         '"workspaceContext":"query-required"',
       ),
-      "/private/wrangler.toml",
       "production",
     ),
   ).toThrow("platform_worker_release_config_source_invalid");
@@ -192,32 +188,42 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
         '"workspaceContext":"query-required"',
         '"workspaceContext":"query-optional"',
       ),
-      "/private/wrangler.toml",
       "production",
     ),
   ).toThrow("platform_worker_release_config_source_invalid");
   expect(() =>
     assertConfigTargetsSource(
       source("takosumi-hosted-staging"),
-      "/private/wrangler.toml",
       "production",
     ),
   ).toThrow("platform_worker_release_config_source_invalid");
+  // A realized config carries identity, not paths. Declaring either source
+  // path is refused with its own code, because the tool injects both from the
+  // commit the config's source pin names.
   expect(() =>
     assertConfigTargetsSource(
-      source("takosumi-hosted", resolve(root, "deploy/platform/worker.ts")),
-      "/private/wrangler.toml",
+      source("takosumi-hosted").replace(
+        'name = "takosumi"',
+        `name = "takosumi"\nmain = "${resolve(root, "deploy/platform/worker.ts")}"`,
+      ),
       "production",
     ),
-  ).toThrow("platform_worker_release_config_source_invalid");
+  ).toThrow("platform_worker_release_config_declares_source_path");
+  expect(() =>
+    assertConfigTargetsSource(
+      source("takosumi-hosted").replace(
+        "[assets]",
+        `[assets]\ndirectory = "${resolve(root, "dashboard/dist")}"`,
+      ),
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_declares_source_path");
   expect(() =>
     assertConfigTargetsSource(
       source(
         "takosumi-hosted",
-        resolve(root, "deploy/platform/entry-worker.ts"),
         false,
       ),
-      "/private/wrangler.toml",
       "production",
     ),
   ).toThrow("platform_worker_release_config_source_invalid");
@@ -225,11 +231,9 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
     assertConfigTargetsSource(
       source(
         "takosumi-hosted",
-        resolve(root, "deploy/platform/entry-worker.ts"),
         true,
         "/v1/hosted/subscription",
       ),
-      "/private/wrangler.toml",
       "production",
     ),
   ).toThrow("platform_worker_release_config_source_invalid");
@@ -237,12 +241,10 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
     assertConfigTargetsSource(
       source(
         "takosumi-hosted",
-        resolve(root, "deploy/platform/entry-worker.ts"),
         true,
         "/api/v1/hosted/subscription",
         false,
       ),
-      "/private/wrangler.toml",
       "production",
     ),
   ).toThrow("platform_worker_release_config_source_invalid");
@@ -250,13 +252,11 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
     assertConfigTargetsSource(
       source(
         "takosumi-hosted",
-        resolve(root, "deploy/platform/entry-worker.ts"),
         true,
         "/api/v1/account/subscription",
         true,
         false,
       ),
-      "/private/wrangler.toml",
       "production",
     ),
   ).toThrow("platform_worker_release_config_source_invalid");
@@ -276,7 +276,6 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
   ) =>
     source(
       "takosumi-hosted",
-      resolve(root, "deploy/platform/entry-worker.ts"),
       true,
       "/api/v1/account/subscription",
       true,
@@ -316,7 +315,6 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
     expect(() =>
       assertConfigTargetsSource(
         withBroker(overrides),
-        "/private/wrangler.toml",
         "production",
       ),
     ).toThrow("platform_worker_release_config_source_invalid");
@@ -349,7 +347,6 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
           services: [{ binding: "SECONDARY", service: "takosumi-secondary" }],
         },
       ),
-      "/private/wrangler.toml",
       "production",
     ),
   ).not.toThrow();
@@ -370,7 +367,6 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
           services: [{ binding: "SECONDARY", service: "takosumi-secondary" }],
         },
       ),
-      "/private/wrangler.toml",
       "production",
     ),
   ).toThrow("platform_worker_release_config_source_invalid");
@@ -379,7 +375,6 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
   expect(() =>
     assertConfigTargetsSource(
       withBroker({}, { descriptors: [secondaryBroker({})] }),
-      "/private/wrangler.toml",
       "production",
     ),
   ).toThrow("platform_worker_release_config_source_invalid");
