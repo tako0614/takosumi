@@ -68,7 +68,13 @@ const CONTRACT_PACKAGE = {
   target: "npm:@takosjp/takosumi-contract",
 };
 
-const runnerImageRelease = await import("./runner-image-release.ts");
+// The runner image surface's DECLARATION only. Its implementation is imported
+// lazily, in the branch that runs it: importing it here would hand every other
+// surface — including the npm package publish — the capabilities of a
+// Cloudflare container release it never uses.
+const { RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE } = await import(
+  "./runner-image-release-contract.ts"
+);
 
 const platformContract = ({ surface, target, environment }) => ({
   surface,
@@ -97,7 +103,7 @@ const CONTRACT = {
   surfaces: [
     platformContract(PLATFORM_STAGING),
     platformContract(PLATFORM_PRODUCTION),
-    runnerImageRelease.RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE,
+    RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE,
     {
       surface: WEBSITE.surface,
       target: `cloudflare-pages:${WEBSITE.project}`,
@@ -212,7 +218,8 @@ if (
   process.exit(0);
 }
 
-if (selected === runnerImageRelease.RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE.surface) {
+if (selected === RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE.surface) {
+  const runnerImageRelease = await import("./runner-image-release.ts");
   const options = runnerImageRelease.parseRunnerImageReleaseArgs(
     process.argv.slice(3),
   );
