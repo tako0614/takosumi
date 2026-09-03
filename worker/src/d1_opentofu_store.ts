@@ -170,6 +170,7 @@ import {
   normalizeOptionalSourceSnapshotRecord,
   normalizeSourceSnapshotRecord,
   usageEventFromRow,
+  workspaceMemberFromRow,
 } from "../../core/domains/deploy-control/store_row_mappers.ts";
 import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
 import {
@@ -1852,14 +1853,29 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     workspaceId: string,
     accountId: string,
   ): Promise<WorkspaceMember | undefined> {
-    return await this.#drizzleFirstJson<WorkspaceMember>(
+    // The exact same question the bounded PAT authority reader asks, decoded by
+    // the exact same authority: a row whose indexed identity and record_json
+    // disagree is corruption, and a membership decision taken from it is not
+    // one anybody can defend. Selecting the identity columns alongside the
+    // record is what makes that check possible here.
+    const row = await this.#drizzleFirst(
       schema.workspaceMembers,
-      schema.workspaceMembers.recordJson,
+      {
+        id: schema.workspaceMembers.id,
+        workspaceId: schema.workspaceMembers.workspaceId,
+        accountId: schema.workspaceMembers.accountId,
+        status: schema.workspaceMembers.status,
+        recordJson: schema.workspaceMembers.recordJson,
+        createdAt: schema.workspaceMembers.createdAt,
+        updatedAt: schema.workspaceMembers.updatedAt,
+      },
       and(
         eq(schema.workspaceMembers.workspaceId, workspaceId),
         eq(schema.workspaceMembers.accountId, accountId),
       ),
     );
+    if (!row) return undefined;
+    return workspaceMemberFromRow(row, { workspaceId, accountId });
   }
 
   async listWorkspaceMembers(
@@ -4996,6 +5012,27 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .where(where)
       .get();
     return row?.value as T | undefined;
+  }
+
+  /**
+   * Select an explicit column projection rather than only the JSON record.
+   *
+   * Used where the decode has to cross-check the indexed identity against the
+   * record it carries; `#drizzleFirstJson` cannot, because it selects only the
+   * record.
+   */
+  async #drizzleFirst<S extends Record<string, SQLiteColumn>>(
+    table: SQLiteTable,
+    columns: S,
+    where: SQL | undefined,
+  ): Promise<Record<keyof S, unknown> | undefined> {
+    await this.#ensureSchema();
+    const row = await this.#orm
+      .select(columns)
+      .from(table)
+      .where(where)
+      .get();
+    return row as Record<keyof S, unknown> | undefined;
   }
 
   async #drizzleManyJson<T>(

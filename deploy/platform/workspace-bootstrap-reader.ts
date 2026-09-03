@@ -18,7 +18,10 @@ import {
   createCloudflareD1PatWorkspaceMembershipReader,
   type CloudflareD1PatWorkspaceMembershipReader,
 } from "./pat-workspace-membership-reader.ts";
-import type { ReadOnlyD1Database } from "./pat-workspace-membership-reader.ts";
+import type {
+  FencedControlDatabase,
+  ReadOnlyD1Database,
+} from "./fenced-control-database.ts";
 
 export interface WorkspaceBootstrapReadInput {
   readonly sessionId: string;
@@ -75,7 +78,13 @@ export async function readWorkspaceBootstrapRequest(
 
 export interface CloudflareD1WorkspaceBootstrapReaderOptions {
   readonly accountsDb: ReadOnlyD1Database;
-  readonly controlDb: ReadOnlyD1Database;
+  /**
+   * Control D1 behind the operator maintenance fence. Every read this reader
+   * makes — membership and the Workspace/Project bootstrap join alike — goes
+   * through it, so a held fence refuses the bootstrap instead of answering
+   * from a half-migrated control schema.
+   */
+  readonly controlDb: FencedControlDatabase;
   /** Canonical Accounts session hash salt, injected only at composition time. */
   readonly sessionHashSalt: string;
 }
@@ -351,9 +360,15 @@ function membershipReadFailureResult(
     : { status: "incomplete" };
 }
 
+/**
+ * Translate raw D1 seam failures into {@link WorkspaceBootstrapD1ReadError}
+ * without removing the fence the caller already applied. The cast re-states
+ * that: this wraps an already-fenced port and adds only error translation, so
+ * the result is still a fenced read port.
+ */
 function workspaceBootstrapMembershipDatabase(
-  db: ReadOnlyD1Database,
-): ReadOnlyD1Database {
+  db: FencedControlDatabase,
+): FencedControlDatabase {
   return {
     prepare(query) {
       let statement: ReadOnlyD1PreparedStatement;
@@ -364,7 +379,7 @@ function workspaceBootstrapMembershipDatabase(
       }
       return workspaceBootstrapMembershipStatement(statement);
     },
-  };
+  } as FencedControlDatabase;
 }
 
 function workspaceBootstrapMembershipStatement(

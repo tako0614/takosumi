@@ -1,13 +1,17 @@
 import type {
   PatWorkspaceMembershipReader,
 } from "@takosjp/takosumi-accounts-service";
-import type {
-  WorkspaceMember,
-  WorkspaceMemberStatus,
-  WorkspaceRole,
-} from "takosumi-contract/workspaces";
+import type { WorkspaceMember } from "takosumi-contract/workspaces";
 
 import { deployControlD1TableNames } from "../../core/adapters/storage/drizzle/schema/logical.ts";
+import { workspaceMemberFromRow } from "../../core/domains/deploy-control/store_row_mappers.ts";
+import type { FencedControlDatabase } from "./fenced-control-database.ts";
+
+export type {
+  FencedControlDatabase,
+  ReadOnlyD1Database,
+  ReadOnlyD1PreparedStatement,
+} from "./fenced-control-database.ts";
 
 interface WorkspaceMemberRow {
   readonly id: unknown;
@@ -17,18 +21,6 @@ interface WorkspaceMemberRow {
   readonly record_json: unknown;
   readonly created_at: unknown;
   readonly updated_at: unknown;
-}
-
-export interface ReadOnlyD1Database {
-  prepare(query: string): ReadOnlyD1PreparedStatement;
-}
-
-interface ReadOnlyD1PreparedStatement {
-  bind(...values: readonly unknown[]): ReadOnlyD1PreparedStatement;
-  all<T = unknown>(): Promise<{
-    readonly success?: boolean;
-    readonly results?: readonly T[];
-  }>;
 }
 
 export interface CloudflareD1PatWorkspaceMembershipReader
@@ -45,9 +37,14 @@ export interface CloudflareD1PatWorkspaceMembershipReader
  * This intentionally bypasses the full deploy-control store: the latter owns
  * lazy schema/bootstrap work, while this authority check must remain one
  * bounded SELECT with no initialization or mutation path.
+ *
+ * What it must NOT bypass is the operator maintenance fence, which is why the
+ * parameter is a {@link FencedControlDatabase} rather than the raw binding: the
+ * fence is a property of the binding this reader is handed, so an unfenced
+ * composition does not compile.
  */
 export function createCloudflareD1PatWorkspaceMembershipReader(
-  db: ReadOnlyD1Database,
+  db: FencedControlDatabase,
 ): CloudflareD1PatWorkspaceMembershipReader {
   return {
     async getMember(workspaceId, subject) {
@@ -72,95 +69,21 @@ export function createCloudflareD1PatWorkspaceMembershipReader(
       }
 
       const row = result.results[0];
-      if (
-        !row ||
-        typeof row.id !== "string" ||
-        row.workspace_id !== workspaceId ||
-        row.account_id !== subject ||
-        !isWorkspaceMemberStatus(row.status) ||
-        !isCanonicalTimestamp(row.created_at) ||
-        !isCanonicalTimestamp(row.updated_at)
-      ) {
+      if (!row) {
         throw new TypeError("Workspace membership evidence identity is invalid");
       }
-      const record = parseWorkspaceMemberRecord(row.record_json);
-      if (
-        record.workspaceId !== workspaceId ||
-        record.accountId !== subject ||
-        record.id !== row.id ||
-        record.status !== row.status ||
-        record.createdAt !== row.created_at ||
-        record.updatedAt !== row.updated_at
-      ) {
-        throw new TypeError("Workspace membership evidence identity is invalid");
-      }
-      return {
-        id: record.id,
-        workspaceId,
-        accountId: subject,
-        status: record.status,
-        roles: record.roles,
-        createdAt: record.createdAt,
-        updatedAt: record.updatedAt,
-      };
+      return workspaceMemberFromRow(
+        {
+          id: row.id,
+          workspaceId: row.workspace_id,
+          accountId: row.account_id,
+          status: row.status,
+          recordJson: row.record_json,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        },
+        { workspaceId, accountId: subject },
+      );
     },
   };
-}
-
-function parseWorkspaceMemberRecord(value: unknown): WorkspaceMember {
-  let parsed: unknown;
-  try {
-    parsed = typeof value === "string" ? JSON.parse(value) : undefined;
-  } catch {
-    throw new TypeError("Workspace membership evidence is malformed");
-  }
-  if (
-    !isRecord(parsed) ||
-    typeof parsed.id !== "string" ||
-    parsed.id.length === 0 ||
-    typeof parsed.workspaceId !== "string" ||
-    typeof parsed.accountId !== "string" ||
-    !isWorkspaceMemberStatus(parsed.status) ||
-    !Array.isArray(parsed.roles) ||
-    !parsed.roles.every(isWorkspaceRole) ||
-    new Set(parsed.roles).size !== parsed.roles.length ||
-    !isCanonicalTimestamp(parsed.createdAt) ||
-    !isCanonicalTimestamp(parsed.updatedAt)
-  ) {
-    throw new TypeError("Workspace membership evidence is malformed");
-  }
-  return {
-    id: parsed.id,
-    workspaceId: parsed.workspaceId,
-    accountId: parsed.accountId,
-    status: parsed.status,
-    roles: parsed.roles as WorkspaceRole[],
-    createdAt: parsed.createdAt,
-    updatedAt: parsed.updatedAt,
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isWorkspaceRole(value: unknown): value is WorkspaceRole {
-  return (
-    value === "owner" ||
-    value === "admin" ||
-    value === "member" ||
-    value === "viewer"
-  );
-}
-
-function isWorkspaceMemberStatus(
-  value: unknown,
-): value is WorkspaceMemberStatus {
-  return value === "active" || value === "invited" || value === "suspended";
-}
-
-function isCanonicalTimestamp(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
 }

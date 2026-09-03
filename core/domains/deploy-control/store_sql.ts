@@ -157,6 +157,7 @@ import {
   normalizeOptionalSourceSnapshotRecord,
   normalizeSourceSnapshotRecord,
   normalizeUsageEvent,
+  parseWorkspaceMemberRecord,
   usageEventFromRow,
   usageResourceMetadataFromRow,
 } from "./store_row_mappers.ts";
@@ -1547,7 +1548,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     workspaceId: string,
     accountId: string,
   ): Promise<WorkspaceMember | undefined> {
-    return await this.#pgFirstJson<WorkspaceMember>(
+    // One decoder across both dialects and the bounded PAT reader: a persisted
+    // record that is not a well-formed membership is corruption, not a member.
+    const record = await this.#pgFirstJson<unknown>(
       pgSchema.workspaceMembers,
       pgSchema.workspaceMembers.memberJson,
       and(
@@ -1555,6 +1558,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         eq(pgSchema.workspaceMembers.accountId, accountId),
       ),
     );
+    return record === undefined
+      ? undefined
+      : parseWorkspaceMemberRecord(record);
   }
 
   async listWorkspaceMembers(
