@@ -1,11 +1,12 @@
 /** Operator-only, create-only self-host Capsule configuration import. */
 
 import type { CapsulesService } from "../domains/capsules/mod.ts";
-import type { InstallConfig } from "takosumi-contract/install-configs";
+import type { Capsule, InstallConfig } from "takosumi-contract/install-configs";
 import type { JsonValue } from "takosumi-contract";
 import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
 import { stableJsonDigest } from "../adapters/source/digest.ts";
 import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
+import { defaultProjectId } from "../domains/projects/mod.ts";
 import {
   defineRoute,
   type DeployControlEndpoint,
@@ -224,7 +225,32 @@ export function mountDeployControlCapsuleRestoreRoutes(
           createdAt,
           updatedAt: createdAt,
         };
-        let planRun = await optionalPlanRun(ctx, planRunId);
+        const candidateCapsule: Capsule = {
+          id: capsuleId,
+          workspaceId: body.workspaceId,
+          projectId: defaultProjectId(body.workspaceId),
+          name: body.capsule.name,
+          slug: body.capsule.name,
+          environment: body.capsule.environment,
+          sourceId: source.id,
+          installConfigId,
+          installingPrincipalId: principal.actor,
+          currentStateGeneration: 0,
+          status: "pending",
+          ...(body.capsule.autoUpdate === true ? { autoUpdate: true } : {}),
+          createdAt,
+          updatedAt: createdAt,
+        };
+        const existingPlanBeforeAuthority = await optionalPlanRun(ctx, planRunId);
+        if (!existingPlanBeforeAuthority) {
+          await ctx.controller.validateCapsuleConfigurationProviderBindings({
+            capsule: candidateCapsule,
+            installConfig,
+            compatibilityReport: report,
+            providerBindings: [],
+          });
+        }
+        let planRun = existingPlanBeforeAuthority;
         const ordinaryReplay = planRun !== undefined;
         let capsule;
         if (planRun) {

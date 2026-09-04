@@ -947,6 +947,133 @@ test("required providers must have explicit ProviderConnection bindings", async 
   ).rejects.toThrow(/provider connection is required/);
 });
 
+const AWS = "registry.opentofu.org/hashicorp/aws";
+
+for (const providerFailure of [
+  "revoked connection",
+  "provider source mismatch",
+  "duplicate provider identity",
+  "missing required provider",
+  "provider policy invalid",
+] as const) {
+  test(`complete proposed provider binding validation rejects ${providerFailure}`, async () => {
+    const { store, model, service } = await setup();
+    let bindings: Parameters<
+      ConnectionsService["validateProposedProviderBindingsForRun"]
+    >[0]["bindings"] = [];
+    let requiredProviders: readonly RequiredProviderBindingIdentity[] = [];
+    let installConfigPolicy: Parameters<
+      ConnectionsService["validateProposedProviderBindingsForRun"]
+    >[0]["installConfigPolicy"];
+    let expectedMessage: RegExp;
+    let expectedReason = "provider_connection_setup_required";
+
+    if (providerFailure === "revoked connection") {
+      await store.putConnection(
+        connection({
+          id: "conn_proposed_revoked",
+          workspaceId: model.workspace.id,
+          status: "revoked",
+        }),
+      );
+      bindings = [
+        {
+          provider: CLOUDFLARE,
+          moduleLocalName: "cloudflare",
+          connectionId: "conn_proposed_revoked",
+        },
+      ];
+      requiredProviders = [requiredBinding()];
+      expectedMessage = /status revoked is not verified/;
+      expectedReason = "provider_connection_not_ready";
+    } else if (providerFailure === "provider source mismatch") {
+      await store.putConnection(
+        connection({
+          id: "conn_proposed_mismatch",
+          workspaceId: model.workspace.id,
+          provider: CLOUDFLARE,
+          providerSource: CLOUDFLARE,
+        }),
+      );
+      bindings = [
+        {
+          provider: AWS,
+          moduleLocalName: "aws",
+          connectionId: "conn_proposed_mismatch",
+        },
+      ];
+      requiredProviders = [
+        requiredBinding({ source: AWS, moduleLocalName: "aws" }),
+      ];
+      expectedMessage = /does not match binding provider/;
+    } else if (providerFailure === "duplicate provider identity") {
+      for (const id of ["conn_proposed_duplicate_a", "conn_proposed_duplicate_b"]) {
+        await store.putConnection(
+          connection({ id, workspaceId: model.workspace.id }),
+        );
+      }
+      bindings = [
+        {
+          provider: CLOUDFLARE,
+          moduleLocalName: "cloudflare",
+          connectionId: "conn_proposed_duplicate_a",
+        },
+        {
+          provider: CLOUDFLARE,
+          moduleLocalName: "cloudflare",
+          connectionId: "conn_proposed_duplicate_b",
+        },
+      ];
+      requiredProviders = [requiredBinding()];
+      expectedMessage = /duplicate provider binding identity/;
+    } else if (providerFailure === "missing required provider") {
+      requiredProviders = [requiredBinding()];
+      expectedMessage = /provider connection is required/;
+    } else {
+      await store.putConnection(
+        connection({
+          id: "conn_proposed_policy",
+          workspaceId: model.workspace.id,
+          credentialRecipe: { id: "cloudflare", authMode: "oauth" },
+        }),
+      );
+      bindings = [
+        {
+          provider: CLOUDFLARE,
+          moduleLocalName: "cloudflare",
+          connectionId: "conn_proposed_policy",
+        },
+      ];
+      requiredProviders = [requiredBinding()];
+      installConfigPolicy = {
+        providerCredentials: {
+          allowedCredentialRecipes: [
+            { id: "cloudflare", authMode: "api_token" },
+          ],
+        },
+      };
+      expectedMessage = /credential recipe cloudflare:oauth/;
+    }
+
+    let thrown: unknown;
+    try {
+      await service.validateProposedProviderBindingsForRun({
+        capsule: model.capsule,
+        bindings,
+        requiredProviders,
+        ...(installConfigPolicy ? { installConfigPolicy } : {}),
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      details: { reason: expectedReason },
+    });
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(expectedMessage);
+  });
+}
+
 test("an explicit empty requirement list resolves zero bindings", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(

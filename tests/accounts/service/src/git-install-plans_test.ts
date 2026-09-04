@@ -728,6 +728,46 @@ test("Git install plan fails closed when host policy requires an invalid manifes
   });
 });
 
+test("Git install plan runs complete provider semantic preflight before initial authority", async () => {
+  const fixture = installFixture({
+    providerValidationError: new OpenTofuControllerError(
+      "failed_precondition",
+      "provider semantic preflight rejected the proposed binding set",
+      { reason: "provider_connection_setup_required" },
+    ),
+  });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "provider-preflight-before-authority" },
+  );
+  expect(created.status).toBe(201);
+  const planId = (await created.json()).installPlan.id as string;
+
+  await fixture.reconcile(planId); // Source
+  await fixture.reconcile(planId); // Source sync
+  fixture.succeedSourceSync();
+  await fixture.reconcile(planId); // snapshot -> compilation
+  await fixture.reconcile(planId); // compilation -> Capsule creation
+  const rejected = await fixture.reconcile(planId);
+  expect(rejected.status).toBe(200);
+  expect((await rejected.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: {
+      code: "provider_binding_invalid",
+      reason: "provider_connection_setup_required",
+    },
+  });
+  expect(fixture.counts).toEqual({ source: 1, sync: 1, capsule: 0, plan: 0 });
+  expect(fixture.installConfigMutationCount).toBe(0);
+  expect(fixture.authorityRows()).toEqual({
+    capsules: 0,
+    bindingSets: 0,
+    epochs: 0,
+  });
+});
+
 test("Git install plan preserves exact provider local and alias tuples through reconcile", async () => {
   const provider = "registry.opentofu.org/hashicorp/aws";
   const providerBindings: readonly GitInstallPlanProviderBindingRequest[] = [
@@ -1067,6 +1107,7 @@ function installFixture(
     readonly compatibilityRunStatus?: "succeeded" | "failed";
     readonly compatibilityRootModuleVariableDeclarations?: CapsuleCompatibilityReport["rootModuleVariableDeclarations"];
     readonly omitCompatibilityRootModuleVariableDeclarations?: boolean;
+    readonly providerValidationError?: OpenTofuControllerError;
   } = {},
 ) {
   const planStore = new InMemoryGitInstallPlanStore();
@@ -1079,6 +1120,7 @@ function installFixture(
   const runs = new Map<string, Run>();
   const compatibilityReports = new Map<string, CapsuleCompatibilityReport>();
   const providerBindingSets = new Map<string, ProviderBindingSet>();
+  const capsuleAuthorityEpochs = new Map<string, number>();
   const installConfigs = new Map<string, InstallConfig>([
     ["cfg-default-opentofu-capsule", defaultCapsuleInstallConfig()],
     ...(options.installConfigs ?? []).map(
@@ -1352,6 +1394,7 @@ function installFixture(
           `${providerBindingSet.capsuleId}:${providerBindingSet.environment}`,
           providerBindingSet,
         );
+        capsuleAuthorityEpochs.set(input.capsuleId, 1);
         lose("capsule");
         return { capsule, replayed: false };
       },
@@ -1392,6 +1435,11 @@ function installFixture(
       const run = runs.get(id);
       if (!run) throw new OpenTofuControllerError("not_found", "missing");
       return run;
+    },
+    validateCapsuleConfigurationProviderBindings: async () => {
+      if (options.providerValidationError) {
+        throw options.providerValidationError;
+      }
     },
     createCapsulePlan: async (
       capsuleId: string,
@@ -1474,6 +1522,11 @@ function installFixture(
     },
     getProviderBindingSet: (capsuleId: string, environment: string) =>
       providerBindingSets.get(`${capsuleId}:${environment}`),
+    authorityRows: () => ({
+      capsules: capsules.length,
+      bindingSets: providerBindingSets.size,
+      epochs: capsuleAuthorityEpochs.size,
+    }),
     get approvalCalls() {
       return approvalCalls;
     },

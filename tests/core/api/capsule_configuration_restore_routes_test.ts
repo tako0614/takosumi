@@ -4,6 +4,7 @@ import type { Run } from "takosumi-contract/runs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { createTakosumiService } from "../../../core/bootstrap.ts";
 import type { OpenTofuRunner } from "../../../core/domains/deploy-control/mod.ts";
+import { OpenTofuControllerError } from "../../../core/domains/deploy-control/errors.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 
 const NOW = "2026-09-04T00:00:00.000Z";
@@ -405,4 +406,39 @@ test("restore requires unrestricted operator, exact key/digest, and provider neu
   expect(driftedSource.status).toBe(409);
   expect(await store.listCapsules(WORKSPACE_ID)).toEqual([]);
   expect(await store.listInstallConfigs(WORKSPACE_ID)).toEqual([]);
+});
+
+test("operator restore runs complete provider semantic preflight before initial authority", async () => {
+  const { app, operations, store } = await harness();
+  const controller = operations.controller as unknown as {
+    validateCapsuleConfigurationProviderBindings: () => Promise<void>;
+  };
+  const original = controller.validateCapsuleConfigurationProviderBindings;
+  controller.validateCapsuleConfigurationProviderBindings = async () => {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "provider semantic preflight rejected the proposed binding set",
+      { reason: "provider_connection_setup_required" },
+    );
+  };
+  try {
+    const response = await app.request(
+      "/internal/v1/capsule-configuration-restores",
+      restoreRequest("operator-token"),
+    );
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toMatchObject({
+      code: "failed_precondition",
+      details: { reason: "provider_connection_setup_required" },
+    });
+  } finally {
+    controller.validateCapsuleConfigurationProviderBindings = original;
+  }
+  expect(await store.listCapsules(WORKSPACE_ID)).toEqual([]);
+  expect(await store.listInstallConfigs(WORKSPACE_ID)).toEqual([]);
+  expect(
+    (await store.listRunsByWorkspace(WORKSPACE_ID)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toEqual([]);
 });

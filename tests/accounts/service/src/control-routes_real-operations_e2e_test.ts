@@ -610,6 +610,61 @@ test("capsule configuration Plan atomically preserves authority and replays one 
   ).toHaveLength(1);
 });
 
+test("completed configuration Plan replay ignores later Source deactivation", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-source-disabled-replay",
+  );
+  const first = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-source-disabled-v1" },
+      body,
+    },
+    201,
+  );
+
+  const authorityBeforeReplay = await configurationAuthoritySnapshot(fixture);
+  const source = await fixture.deployStore.getSource(
+    fixture.seeded.capsule.sourceId,
+  );
+  if (!source) throw new Error("fixture Source is missing");
+  await fixture.deployStore.putSource({
+    ...source,
+    status: "disabled",
+    updatedAt: "2026-09-04T00:00:00.001Z",
+  });
+
+  const replay = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-source-disabled-v1" },
+      body,
+    },
+    200,
+  );
+  expect(replay.configurationPlan).toMatchObject({
+    replayed: true,
+    planRunId: first.configurationPlan.planRunId,
+    targetInstallConfigId: first.configurationPlan.targetInstallConfigId,
+  });
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(
+    authorityBeforeReplay,
+  );
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(1);
+});
+
 test("capsule configuration Plan requires a successful exact compatibility declaration", async () => {
   const { fixture, path, body } = await configurationPlanRouteFixture(
     "configuration-plan-failed-compatibility",
@@ -1696,6 +1751,16 @@ test("configuration Plan replays the persisted Plan after its acknowledgement is
   } finally {
     operations.createCapsulePlan = original;
   }
+  const source = await fixture.deployStore.getSource(
+    fixture.seeded.capsule.sourceId,
+  );
+  if (!source) throw new Error("fixture Source is missing");
+  await fixture.deployStore.putSource({
+    ...source,
+    status: "disabled",
+    updatedAt: "2026-09-04T00:00:00.001Z",
+  });
+  const authorityBeforeReplay = await configurationAuthoritySnapshot(fixture);
   const recovered = await controlJson<CapsuleConfigurationPlanResponse>(
     {
       operations: fixture.operations,
@@ -1709,6 +1774,9 @@ test("configuration Plan replays the persisted Plan after its acknowledgement is
     200,
   );
   expect(recovered.configurationPlan.replayed).toBe(true);
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(
+    authorityBeforeReplay,
+  );
   expect(
     (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
       (run) => run.type === "plan",

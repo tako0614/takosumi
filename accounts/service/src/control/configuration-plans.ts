@@ -424,12 +424,6 @@ async function finishConfigurationPlan(input: {
   const current = await input.ctx.operations.capsules.getCapsule(
     input.receipt.capsuleId,
   );
-  const [sourceResponse, sourceSnapshot] = await Promise.all([
-    input.ctx.operations.getSource(current.sourceId),
-    input.ctx.operations.getSourceSnapshot(input.receipt.sourceSnapshotId),
-  ]);
-  const source = sourceResponse.source;
-  assertSourceSnapshotScope(current, source, sourceSnapshot);
   if (input.target.modulePath === undefined) {
     throw configurationIdentityConflict(
       "The sealed target does not retain its exact OpenTofu module.",
@@ -452,7 +446,7 @@ async function finishConfigurationPlan(input: {
     targetInstallConfigId: input.target.id,
     targetProviderBindingSetDigest,
     baseInstallConfigDigest,
-    sourceSnapshotId: sourceSnapshot.id,
+    sourceSnapshotId: input.receipt.sourceSnapshotId,
     modulePath: input.target.modulePath,
   });
   // A Plan is the durable completion receipt for this operation. Read it by
@@ -461,6 +455,19 @@ async function finishConfigurationPlan(input: {
   // rebind the current (possibly newer) InstallConfig back to this target.
   const existingPlan = await planRunIfPresent(input.ctx, evidence.planRunId);
   if (existingPlan) {
+    // Replay is authorized by the immutable target receipt, exact compatibility
+    // evidence, and deterministic Plan identity. The current Source may have
+    // been disabled after the Plan was persisted; that does not invalidate an
+    // already-completed operation and must not turn a same-key retry into a
+    // new mutation attempt.
+    const [sourceResponse, sourceSnapshot] = await Promise.all([
+      input.ctx.operations.getSource(current.sourceId),
+      input.ctx.operations.getSourceSnapshot(input.receipt.sourceSnapshotId),
+    ]);
+    const source = sourceResponse.source;
+    assertSourceSnapshotScope(current, source, sourceSnapshot, {
+      requireActiveSource: false,
+    });
     const compatibility = await observeExactCompatibilityEvidence({
       ctx: input.ctx,
       source,
@@ -507,6 +514,14 @@ async function finishConfigurationPlan(input: {
   ) {
     throw configurationIdentityConflict(
       "The Capsule authority changed while recovering this configuration Plan.",
+    );
+  }
+  const sourceContext = await currentSourceContext(input.ctx, authority);
+  const source = sourceContext.source;
+  const sourceSnapshot = sourceContext.sourceSnapshot;
+  if (sourceSnapshot.id !== input.receipt.sourceSnapshotId) {
+    throw configurationIdentityConflict(
+      "The Capsule's current SourceSnapshot does not match this configuration target.",
     );
   }
   const targetInstallConfigDigest = await stableJsonDigest(input.target);
@@ -831,11 +846,12 @@ function assertSourceSnapshotScope(
   capsule: Capsule,
   source: Source,
   snapshot: SourceSnapshot,
+  options: { readonly requireActiveSource?: boolean } = {},
 ): void {
   if (
     source.id !== capsule.sourceId ||
     source.workspaceId !== capsule.workspaceId ||
-    source.status !== "active" ||
+    (options.requireActiveSource !== false && source.status !== "active") ||
     snapshot.origin !== "git" ||
     snapshot.sourceId !== source.id ||
     snapshot.workspaceId !== capsule.workspaceId ||

@@ -2151,6 +2151,22 @@ export class RunEngine {
     const profile = await this.#requireRunnerProfile(
       input.installConfig.runnerId ?? this.#defaultRunnerProfileId,
     );
+    const workspace = await this.#store.getWorkspace(input.capsule.workspaceId);
+    const policy = mergePolicyConfigs(
+      workspace?.policy,
+      input.installConfig.policy,
+    );
+    const compatibilityPolicy = evaluateCompatibilityReportAgainstPolicy(
+      input.compatibilityReport,
+      policy,
+    );
+    if (!compatibilityPolicy.runnable) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "The compatibility report is not runnable under the Workspace/InstallConfig provider policy.",
+        { reason: "compatibility_report_not_runnable" },
+      );
+    }
     const requiredProviders = requiredProvidersFromCompatibilityReport(
       input.compatibilityReport,
       profile.allowedProviders,

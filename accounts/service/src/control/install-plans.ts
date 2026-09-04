@@ -45,6 +45,7 @@ import {
 import { evaluateSourceUrl } from "../../../../core/domains/sources/url-policy.ts";
 import type { InstallPlanCompatibilityCheckRequest } from "../../../../core/domains/sources/mod.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
+import { defaultProjectId } from "../../../../core/domains/projects/mod.ts";
 import {
   errorJson,
   json,
@@ -808,6 +809,42 @@ async function createCapsule(
     });
   }
   const capsuleId = deterministicInitialCapsuleId(plan.id);
+  const candidateCapsule: Capsule = {
+    id: capsuleId,
+    workspaceId: plan.workspaceId,
+    projectId: defaultProjectId(plan.workspaceId),
+    name: plan.capsule.name,
+    slug: plan.capsule.name,
+    environment: plan.capsule.environment,
+    sourceId: source.id,
+    installConfigId: installConfig.id,
+    installingPrincipalId: plan.createdBy,
+    currentStateGeneration: 0,
+    status: "pending",
+    createdAt: installConfig.createdAt,
+    updatedAt: installConfig.updatedAt,
+  };
+  try {
+    await operations.validateCapsuleConfigurationProviderBindings({
+      capsule: candidateCapsule,
+      installConfig,
+      compatibilityReport: compatibility.report,
+      providerBindings: resolved.bindings,
+    });
+  } catch (error) {
+    if (error instanceof OpenTofuControllerError) {
+      return failedPlan(plan, {
+        code: "provider_binding_invalid",
+        message:
+          "The complete provider semantic preflight failed before initial authority was committed.",
+        controllerCode: error.code,
+        ...(structuredErrorReason(error)
+          ? { reason: structuredErrorReason(error) }
+          : {}),
+      });
+    }
+    throw error;
+  }
   const created = await operations.capsules.createCapsuleInitialAuthority({
     capsuleId,
     workspaceId: plan.workspaceId,
