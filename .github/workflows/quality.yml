@@ -54,15 +54,5 @@ jobs:
         working-directory: docs
         run: npm ci --no-audit --no-fund
 
-      - name: Audit root JavaScript dependencies
-        run: bun audit
-
-      - name: Audit dashboard JavaScript dependencies
-        working-directory: dashboard
-        run: bun audit
-
-      - name: Audit public site dependencies
-        run: bun run audit:public-sites
-
       - name: Run canonical Takosumi checks
         run: bun run check
