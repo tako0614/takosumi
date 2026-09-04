@@ -1,7 +1,12 @@
 import platformWorker, {
   type CloudflareWorkerEnv,
   type PlatformExecutionContext,
+  OpenTofuRunOwnerObject as BaseOpenTofuRunOwnerObject,
 } from "./worker.ts";
+import {
+  executionEvidenceAuthorityFromEnv,
+  validateRunnerProfileConfiguration,
+} from "../../worker/src/deploy_control_seam.ts";
 import {
   OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
   operatorControlMcpEnabled,
@@ -12,9 +17,35 @@ import type { InstallConfig } from "takosumi-contract/install-configs";
 export {
   CoordinationObject,
   LocalSubstrateOpenTofuRunnerProxyObject,
-  OpenTofuRunOwnerObject,
   OpenTofuRunnerObject,
 } from "./worker.ts";
+
+/**
+ * The platform's RunOwner Durable Object is constructed by Wrangler with the
+ * raw binding object, before the entrypoint's fetch/scheduled handlers run.
+ * Route that constructor through the same hosted composition used by both
+ * request paths so the owner dispatches with the release-pinned evidence
+ * authority too.  The base class remains the implementation owner; this
+ * wrapper only supplies its composed environment.
+ */
+export class OpenTofuRunOwnerObject extends BaseOpenTofuRunOwnerObject {
+  constructor(
+    ...args: ConstructorParameters<typeof BaseOpenTofuRunOwnerObject>
+  ) {
+    const [state, env, deps] = args;
+    // The base DO is declared against the deploy-control bindings only while
+    // the hosted entrypoint composes the Accounts/deploy intersection.  The
+    // wrapper adds no required binding; retain the base constructor's narrow
+    // env type after composing the shared runtime object.
+    super(
+      state,
+      composeTakoserverHostedWorkerEnv(
+        env as unknown as CloudflareWorkerEnv,
+      ),
+      deps,
+    );
+  }
+}
 
 const composed = new WeakMap<object, CloudflareWorkerEnv>();
 const EMPTY_INSTALL_CONFIGS = Object.freeze([]);
@@ -49,6 +80,31 @@ export function composeTakoserverHostedWorkerEnv(
   // Copy the Worker bindings/variables as own enumerable properties and add
   // only the code-owned install composition.
   const value = { ...env } as CloudflareWorkerEnv;
+  const existingComposition = validateRunnerProfileConfiguration(env)
+    .hostComposition;
+  const executionEvidenceAuthority = executionEvidenceAuthorityFromEnv(env);
+  if (executionEvidenceAuthority) {
+    const existingAuthority = existingComposition?.executionEvidenceAuthority;
+    if (
+      existingAuthority &&
+      JSON.stringify(existingAuthority) !==
+        JSON.stringify(executionEvidenceAuthority)
+    ) {
+      throw new TypeError(
+        "runner host composition execution evidence authority conflicts with release pins",
+      );
+    }
+    Object.defineProperty(value, "TAKOSUMI_RUNNER_HOST_COMPOSITION", {
+      configurable: false,
+      enumerable: true,
+      value: Object.freeze({
+        ...(existingComposition ?? { profiles: [] }),
+        executionEvidenceAuthority:
+          existingAuthority ?? executionEvidenceAuthority,
+      }),
+      writable: false,
+    });
+  }
   const operatorOrigin =
     typeof env.TAKOSUMI_ACCOUNTS_ISSUER === "string"
       ? new URL(env.TAKOSUMI_ACCOUNTS_ISSUER).origin

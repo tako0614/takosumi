@@ -2,8 +2,9 @@
 //
 // Provider discovery, runner-policy-before-init, strict provider-mirror init, plan-JSON projection.
 //
-// Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
-// behavior change; see runner/entrypoint.ts for the re-exported public surface.
+// Pure code-motion out of runner/entrypoint.ts (P3 god-file split), plus the
+// owner-observed installation digest used by mutation evidence; see
+// runner/entrypoint.ts for the re-exported public surface.
 import { constants as fsConstants, type Stats } from "node:fs";
 import {
   lstat,
@@ -491,7 +492,9 @@ export async function providerInstallationEvidence(
     readonly installationMethod: "filesystem_mirror" | "direct" | "unknown";
     readonly mirrorPath?: string;
     readonly attested?: boolean;
-    readonly attestationMethod?: "forced_filesystem_mirror_init";
+    readonly attestationMethod?:
+      | "forced_filesystem_mirror_init"
+      | "runner_observed_installed_artifact";
     readonly cliConfigDigest?: string;
     readonly installedPath?: string;
     readonly installedDigest?: string;
@@ -511,7 +514,12 @@ export async function providerInstallationEvidence(
       );
       const mirrored = await pathExists(mirrorPath);
       const installedDigest = await digestPathIfExists(installedPath);
-      const attested = mirrored && attestedProviders.has(canonical);
+      const mirrorAttested = mirrored && attestedProviders.has(canonical);
+      // A direct installation has no mirror attestation to inherit. Its
+      // truthful owner observation is the exact digest of the installed
+      // provider tree, so mutation evidence can bind the provider source to
+      // the artifact that actually ran.
+      const attested = installedDigest !== undefined;
       return {
         provider: canonical,
         mirrored,
@@ -521,9 +529,11 @@ export async function providerInstallationEvidence(
         ...(attested
           ? {
               attested: true,
-              attestationMethod: "forced_filesystem_mirror_init" as const,
+              attestationMethod: mirrorAttested
+                ? ("forced_filesystem_mirror_init" as const)
+                : ("runner_observed_installed_artifact" as const),
               installedPath,
-              ...(attestation
+              ...(mirrorAttested && attestation
                 ? { cliConfigDigest: attestation.cliConfigDigest }
                 : {}),
             }

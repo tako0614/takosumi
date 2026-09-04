@@ -29,7 +29,11 @@ import { analyzeOpenTofuCapsuleFiles } from "../../../../core/domains/sources/ca
 import { RunCredentialBroker } from "../../../../core/domains/deploy-control/run_credential_broker.ts";
 import { generateOpenTofuChildModuleRoot } from "../../../../lib/rootgen/src/mod.ts";
 import { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../../providers/registry.ts";
-import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import {
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+  fixtureExecutionEvidence,
+  seedCapsuleModel,
+} from "../../../helpers/deploy-control/model_fixture.ts";
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
 
 const TAKOSERVER_PROVIDER = "registry.terraform.io/tako0614/takoform";
@@ -163,11 +167,11 @@ function runnerProfile(): RunnerProfile {
     lifecycle: { state: "active" },
     availability: { state: "available" },
     allowedProviders: [TAKOSERVER_PROVIDER],
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     requireProviderBindings: true,
     stateBackend: { kind: "operator-managed", ref: "r2://state" },
-    stateLock: { kind: "native" },
     networkPolicy: { mode: "operator-managed" },
-    secretExposure: {
+    secretExposurePolicy: {
       providerCredentials: "runner-only",
       tenantWorkerOperatorSecrets: "forbidden",
       redactLogs: true,
@@ -197,6 +201,7 @@ function planResult(): OpenTofuPlanResult {
         attestationMethod: "test_filesystem_mirror",
         mirrorPath:
           "/opt/opentofu/provider-mirror/registry.terraform.io/tako0614/takoform",
+        installedDigest: `sha256:${"e".repeat(64)}`,
       },
     ],
   };
@@ -212,6 +217,19 @@ function applyResult(job: OpenTofuApplyJob): OpenTofuApplyResult {
     },
     stateDigest: `sha256:${"d".repeat(64)}`,
     rawOutputRef: job.rawOutputRef,
+    providerInstallation: [
+      {
+        provider: TAKOSERVER_PROVIDER,
+        mirrored: true,
+        installationMethod: "filesystem_mirror",
+        attested: true,
+        attestationMethod: "test_filesystem_mirror",
+        mirrorPath:
+          "/opt/opentofu/provider-mirror/registry.terraform.io/tako0614/takoform",
+        installedDigest: `sha256:${"e".repeat(64)}`,
+      },
+    ],
+    executionEvidence: fixtureExecutionEvidence(job, "apply"),
   };
 }
 
@@ -228,8 +246,21 @@ function recordingRunner(observed: {
       observed.apply = job;
       return applyResult(job);
     },
-    destroy: async () => ({
+    destroy: async (job) => ({
       stateDigest: `sha256:${"d".repeat(64)}`,
+      providerInstallation: [
+        {
+          provider: TAKOSERVER_PROVIDER,
+          mirrored: true,
+          installationMethod: "filesystem_mirror",
+          attested: true,
+          attestationMethod: "test_filesystem_mirror",
+          mirrorPath:
+            "/opt/opentofu/provider-mirror/registry.terraform.io/tako0614/takoform",
+          installedDigest: `sha256:${"e".repeat(64)}`,
+        },
+      ],
+      executionEvidence: fixtureExecutionEvidence(job, "destroy"),
     }),
   } as OpenTofuRunner;
 }

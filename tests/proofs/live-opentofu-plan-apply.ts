@@ -19,8 +19,13 @@ import {
 } from "../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
-import { seedCapsuleModel } from "../helpers/deploy-control/model_fixture.ts";
+import {
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+  fixtureExecutionEvidence,
+  seedCapsuleModel,
+} from "../helpers/deploy-control/model_fixture.ts";
 import { parseOpenTofuOutputs } from "./opentofu-output.ts";
+import { providerInstallationEvidence } from "../../runner/lib/providers.ts";
 
 const FIXTURE_SOURCE = "fixtures/opentofu-output-proof/source";
 const PROOF_KIND = "takosumi.live-local-opentofu-plan-apply-proof@v1";
@@ -222,6 +227,7 @@ class LocalTofuRunner implements OpenTofuRunner {
     const providerLockDigest = digestBytes(
       await readFile(`${this.#workdir}/.terraform.lock.hcl`),
     );
+    const installation = await localProviderInstallationEvidence(this.#workdir);
     return {
       planDigest,
       planArtifact: {
@@ -233,7 +239,7 @@ class LocalTofuRunner implements OpenTofuRunner {
       sourceCommit: digestJson(job.planRun.source),
       providerLockDigest,
       requiredProviders: ["registry.opentofu.org/hashicorp/local"],
-      providerInstallation: [localProviderInstallationEvidence()],
+      providerInstallation: [installation],
       summary: summarizePlanJson(planJson),
     };
   }
@@ -244,37 +250,66 @@ class LocalTofuRunner implements OpenTofuRunner {
       this.#workdir,
     );
     const outputs = await runTofu(["output", "-json"], this.#workdir);
+    const installation = await localProviderInstallationEvidence(this.#workdir);
     return {
       outputs: parseOpenTofuOutputs(outputs) as OpenTofuOutputEnvelope,
       stateDigest: digestBytes(
         await readFile(`${this.#workdir}/terraform.tfstate`),
       ),
       rawOutputRef: job.rawOutputRef,
-      providerInstallation: [localProviderInstallationEvidence()],
+      providerInstallation: [installation],
+      executionEvidence: fixtureExecutionEvidence(job, "apply", {
+        providerArtifacts: providerArtifactsForInstallation(installation),
+      }),
     };
   }
 
-  async destroy(_job: OpenTofuDestroyJob) {
+  async destroy(job: OpenTofuDestroyJob) {
     await runTofu(
       ["apply", "-input=false", "-no-color", "tfplan"],
       this.#workdir,
     );
+    const installation = await localProviderInstallationEvidence(this.#workdir);
     return {
       stateDigest: digestBytes(
         await readFile(`${this.#workdir}/terraform.tfstate`),
       ),
-      providerInstallation: [localProviderInstallationEvidence()],
+      providerInstallation: [installation],
+      executionEvidence: fixtureExecutionEvidence(job, "destroy", {
+        providerArtifacts: providerArtifactsForInstallation(installation),
+      }),
     };
   }
 }
 
-function localProviderInstallationEvidence() {
-  return {
-    provider: "registry.opentofu.org/hashicorp/local",
-    mirrored: false,
-    installationMethod: "direct" as const,
-    attested: false,
-  };
+async function localProviderInstallationEvidence(moduleDir: string) {
+  const [installation] = await providerInstallationEvidence(
+    moduleDir,
+    ["registry.opentofu.org/hashicorp/local"],
+  );
+  if (
+    !installation ||
+    installation.attested !== true ||
+    !installation.installedDigest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(installation.installedDigest)
+  ) {
+    throw new Error(
+      "live local OpenTofu proof lacks owner-observed provider installation evidence",
+    );
+  }
+  return installation;
+}
+
+function providerArtifactsForInstallation(
+  installation: Awaited<ReturnType<typeof localProviderInstallationEvidence>>,
+) {
+  return [
+    {
+      source: installation.provider,
+      digest: installation.installedDigest as `sha256:${string}`,
+      attested: true as const,
+    },
+  ];
 }
 
 function summarizePlanJson(planJson: string) {
@@ -311,6 +346,7 @@ function liveLocalRunnerProfile(now: number): RunnerProfile {
     },
     allowedProviders: ["*"],
     requireProviderBindings: false,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     resourceLimits: { maxRunSeconds: 120, cpu: "1", memoryMb: 512 },
     networkPolicy: { mode: "operator-managed" },
     createdAt: now,

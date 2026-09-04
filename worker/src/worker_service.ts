@@ -21,6 +21,7 @@ import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import type {
   CloudflareWorkerEnv,
   OpenTofuRunAction,
+  RunnerHostComposition,
 } from "./bindings.ts";
 import {
   createCloudflareD1OpenTofuControlStore,
@@ -88,6 +89,8 @@ export async function createWorkerServiceApp(
     readonly runnerProfiles?: readonly RunnerProfile[];
     readonly defaultRunnerProfileId?: string;
     readonly runnerExecutors?: OpenTofuRunnerExecutorRegistry;
+    /** Host-pinned immutable identities for terminal mutation evidence. */
+    readonly executionEvidenceAuthority?: RunnerHostComposition["executionEvidenceAuthority"];
     readonly releaseActivator?: ReleaseActivator;
     readonly enqueueRun?: EnqueueRun;
     readonly enqueueSourceSync?: EnqueueSourceSync;
@@ -425,6 +428,9 @@ export async function createWorkerServiceApp(
     opentofuRunner,
     ...(options.runnerExecutors
       ? { opentofuRunnerExecutors: options.runnerExecutors }
+      : {}),
+    ...(options.executionEvidenceAuthority
+      ? { executionEvidenceAuthority: options.executionEvidenceAuthority }
       : {}),
     allowOperatorScopedProviderConnections,
     secretCrypto,

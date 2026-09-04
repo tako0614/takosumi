@@ -34,6 +34,8 @@ import {
 import { createInMemoryInterfaceStores } from "../../../../core/domains/interfaces/stores.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+  fixtureExecutionEvidence,
   fakeProviderVault,
   providerRequirementsForFixture,
   seedCapsuleModel,
@@ -55,6 +57,7 @@ const CLOUDFLARE_MIRROR_EVIDENCE = {
   attestationMethod: "forced_filesystem_mirror_init",
   mirrorPath:
     "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
+  installedDigest: `sha256:${"e".repeat(64)}`,
 } as const;
 
 function restoreAck(
@@ -334,6 +337,7 @@ output "endpoint" {
         stateDigest: LOCK_DIGEST,
         rawOutputRef: job.rawOutputRef,
         providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
       }),
     destroy: () => Promise.resolve({}),
   };
@@ -348,6 +352,7 @@ output "endpoint" {
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     opentofuRunner: runner,
     opentofuConnectionVault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     capsuleCoordination: coordination,
   });
 
@@ -437,6 +442,7 @@ output "endpoint" {
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     opentofuRunner: runner,
     opentofuConnectionVault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     capsuleCoordination: coordination,
   });
   const claimsBeforeReplay = store.claimEvents.length;
@@ -542,6 +548,7 @@ output "endpoint" {
         stateDigest: LOCK_DIGEST,
         rawOutputRef: job.rawOutputRef,
         providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
       }),
     destroy: () => Promise.resolve({}),
   };
@@ -552,6 +559,7 @@ output "endpoint" {
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     opentofuRunner: runner,
     opentofuConnectionVault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   });
 
   const { planRun } = await operations.controller.createCapsulePlan(capsule.id);
@@ -720,6 +728,7 @@ output "endpoint" {
         stateDigest: LOCK_DIGEST,
         rawOutputRef: job.rawOutputRef,
         providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
       }),
     destroy: () => Promise.resolve({}),
   };
@@ -730,6 +739,7 @@ output "endpoint" {
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     opentofuRunner: runner,
     opentofuConnectionVault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     releaseActivator: {
       activate: () =>
         Promise.resolve({ status: "failed", message: "not healthy" }),
@@ -953,6 +963,7 @@ output "endpoint" {
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     opentofuRunner: runner,
     opentofuConnectionVault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     interfaceCredentialIssuer: {
       issuePrincipalOAuth2Token: () =>
         Promise.resolve({

@@ -44,6 +44,7 @@ import {
   platformSealedConfigProjection,
   platformReleaseSourcePinPath,
   parsePlatformReleaseSourcePin,
+  platformExecutionEvidenceReleasePins,
   assertPinnedSourceRoot,
   sameGitRemote,
   platformWorkerDeployArguments,
@@ -69,6 +70,16 @@ const COMMITTED_SOURCE_MARKER = "closure-committed-source-marker";
 const ABA_SOURCE_MARKER = "closure-aba-source-marker";
 const REPLACEMENT_SOURCE_MARKER = "closure-replacement-source-marker";
 const POISONED_CACHE_MARKER = "closure-poisoned-global-cache-marker";
+
+test("platform release binds controller and runner evidence to sealed entry bytes", () => {
+  const entry = new TextEncoder().encode("sealed-entry-v1");
+  const image = `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`;
+  const pins = platformExecutionEvidenceReleasePins(entry, image);
+
+  expect(pins.controllerArtifactDigest).toBe(testDigest(entry));
+  expect(pins.runnerArtifactDigest).toBe(testDigest(entry));
+  expect(pins.executorArtifactDigest).toBe(`sha256:${"b".repeat(64)}`);
+});
 
 setDefaultTimeout(180_000);
 
@@ -1286,7 +1297,9 @@ test("forward and restore closures ignore a poisoned global Bun cache independen
     else process.env.HOME = previousHome;
   }
 
-  expect(observedDependencies).toHaveLength(2);
+  // A container closure is built once to derive the sealed entry digest, then
+  // once more after injecting the controller/runner/executor pins.
+  expect(observedDependencies).toHaveLength(4);
   expect(observedDependencies.every((source) => !source.includes(POISONED_CACHE_MARKER))).toBeTrue();
   for (const targetClosure of [closure, restoreClosure]) {
     expect(existsSync(join(targetClosure, ".dependency-install-home"))).toBeFalse();

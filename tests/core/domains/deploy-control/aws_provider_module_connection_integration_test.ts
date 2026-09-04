@@ -22,7 +22,9 @@ import { analyzeOpenTofuCapsuleFiles } from "../../../../core/domains/sources/ca
 import { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../../providers/registry.ts";
 import {
   FIXTURE_AWS_MIRROR_EVIDENCE,
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   FIXTURE_STATE_DIGEST,
+  fixtureExecutionEvidence,
   seedCapsuleModel,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
@@ -110,9 +112,15 @@ function recordingRunner(observed: {
         stateDigest: FIXTURE_STATE_DIGEST,
         rawOutputRef: job.rawOutputRef,
         outputs: {},
+        providerInstallation: [FIXTURE_AWS_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
       };
     },
-    destroy: async () => ({ stateDigest: FIXTURE_STATE_DIGEST }),
+    destroy: async (job) => ({
+      stateDigest: FIXTURE_STATE_DIGEST,
+      providerInstallation: [FIXTURE_AWS_MIRROR_EVIDENCE],
+      executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+    }),
   };
 }
 
@@ -263,6 +271,7 @@ test("AWS module + verified Workspace binding mints only its declared provider",
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: () => Date.parse(NOW),
     newId: (prefix) => `${prefix}_aws_generic_e2e`,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   });
 
   const planned = await controller.createCapsulePlan(

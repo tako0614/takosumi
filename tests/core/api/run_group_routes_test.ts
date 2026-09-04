@@ -25,7 +25,9 @@ import { createTakosumiService } from "../../../core/bootstrap.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   fakeProviderVault,
+  fixtureExecutionEvidence,
   fixtureStateCommit,
   seedProviderConnections,
 } from "../../helpers/deploy-control/model_fixture.ts";
@@ -65,7 +67,8 @@ function runner(value: {
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
       }),
     apply: (job) =>
-      Promise.resolve(fixtureStateCommit({
+      Promise.resolve({
+        ...fixtureStateCommit({
         outputs: {
           base_domain: {
             sensitive: false,
@@ -76,8 +79,17 @@ function runner(value: {
           },
         } as never,
         rawOutputRef: job.rawOutputRef,
-      })),
-    destroy: () => Promise.resolve(fixtureStateCommit()),
+        providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
+      }),
+    destroy: (job) =>
+      Promise.resolve({
+        ...fixtureStateCommit({
+          providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+        executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+      }),
   };
 }
 
@@ -259,6 +271,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
     opentofuRunner: runner(producerValue),
     opentofuConnectionVault: fakeProviderVault() as never,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   });
 
   const workspaceRes = await app.request("/internal/v1/workspaces", {

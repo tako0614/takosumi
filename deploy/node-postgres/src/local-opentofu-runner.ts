@@ -52,7 +52,12 @@ import type {
   PlanResourceChange,
   RunnerProfile,
   RunDiagnostic,
+  RunExecutionAuthority,
+  RunExecutionCommit,
+  RunExecutionEvidence,
 } from "@takosumi/internal/deploy-control-api";
+import { RUN_EXECUTION_EVIDENCE_CONTRACT } from "../../../contract/runs.ts";
+import { assertRunExecutionEvidence } from "../../../contract/runs.ts";
 import { handleRunnerRequest } from "../../../runner/entrypoint.ts";
 
 export const LOCAL_OPENTOFU_RUNNER_PROFILE_ID = "local-opentofu";
@@ -471,13 +476,25 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         stateBytes ? await digestBytes(stateBytes) : undefined,
         "apply",
       );
-      if (!stateBytes) return normalizedFailure;
+      const failedEvidence = stateBytes
+        ? mutationExecutionEvidence(
+            job,
+            "apply",
+            normalizedFailure,
+            { stateVersionId: requireStateVersionId(job) },
+            "provider_failed_state_persisted",
+          )
+        : undefined;
+      const failureWithEvidence = failedEvidence
+        ? { ...normalizedFailure, executionEvidence: failedEvidence }
+        : normalizedFailure;
+      if (!stateBytes) return failureWithEvidence;
       const committed = await this.commitStateMutation(
         job.applyRun.id,
         "apply",
         job.stateScope,
         stateBytes,
-        normalizedFailure,
+        failureWithEvidence,
       );
       return committed.result as OpenTofuApplyResult;
     }
@@ -488,6 +505,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       control?.signal,
     );
     const stateDigest = await digestBytes(stateBytes);
+    const normalizedProviderInstallation = providerInstallation(result);
     const normalizedResult: OpenTofuApplyResult = {
       ...(recordValue(result, "outputs")
         ? {
@@ -498,10 +516,17 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
           }
         : {}),
       stateDigest,
-      ...(providerInstallation(result)
-        ? { providerInstallation: providerInstallation(result) }
+      ...(normalizedProviderInstallation
+        ? { providerInstallation: normalizedProviderInstallation }
         : {}),
       diagnostics: diagnostics(result),
+      executionEvidence: mutationExecutionEvidence(
+        job,
+        "apply",
+        { providerInstallation: normalizedProviderInstallation },
+        job.executionEvidenceCommit,
+        "committed",
+      ),
     };
     const committed = await this.commitStateMutation(
       job.applyRun.id,
@@ -561,13 +586,25 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         stateBytes ? await digestBytes(stateBytes) : undefined,
         "destroy",
       );
-      if (!stateBytes) return normalizedFailure as OpenTofuDestroyResult;
+      const failedEvidence = stateBytes
+        ? mutationExecutionEvidence(
+            job,
+            "destroy",
+            normalizedFailure,
+            { stateVersionId: requireStateVersionId(job) },
+            "provider_failed_state_persisted",
+          )
+        : undefined;
+      const failureWithEvidence = failedEvidence
+        ? { ...normalizedFailure, executionEvidence: failedEvidence }
+        : normalizedFailure;
+      if (!stateBytes) return failureWithEvidence as OpenTofuDestroyResult;
       const committed = await this.commitStateMutation(
         job.applyRun.id,
         "destroy",
         job.stateScope,
         stateBytes,
-        normalizedFailure,
+        failureWithEvidence,
       );
       return committed.result as OpenTofuDestroyResult;
     }
@@ -578,12 +615,20 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       control?.signal,
     );
     const stateDigest = await digestBytes(stateBytes);
+    const normalizedProviderInstallation = providerInstallation(result);
     const normalizedResult: OpenTofuDestroyResult = {
-      ...(providerInstallation(result)
-        ? { providerInstallation: providerInstallation(result) }
+      ...(normalizedProviderInstallation
+        ? { providerInstallation: normalizedProviderInstallation }
         : {}),
       diagnostics: diagnostics(result),
       stateDigest,
+      executionEvidence: mutationExecutionEvidence(
+        job,
+        "destroy",
+        { providerInstallation: normalizedProviderInstallation },
+        job.executionEvidenceCommit,
+        "committed",
+      ),
     };
     const committed = await this.commitStateMutation(
       job.applyRun.id,
@@ -1065,6 +1110,98 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
   }
 }
 
+type LocalMutationJob = Pick<
+  OpenTofuApplyJob | OpenTofuDestroyJob,
+  "applyRun" | "planRun" | "planArtifact" | "runnerProfile" | "executionEvidenceAuthority"
+>;
+
+function mutationExecutionEvidence(
+  job: LocalMutationJob,
+  action: "apply" | "destroy",
+  result:
+    | OpenTofuApplyResult
+    | OpenTofuDestroyResult
+    | undefined,
+  commit: RunExecutionCommit | undefined,
+  outcome: "committed" | "provider_failed_state_persisted",
+): RunExecutionEvidence {
+  const authority = job.executionEvidenceAuthority;
+  if (!authority) {
+    throw new Error(
+      `local OpenTofu ${action} ${job.applyRun.id} requires immutable execution evidence authority`,
+    );
+  }
+  if (!commit) {
+    throw new Error(
+      `local OpenTofu ${action} ${job.applyRun.id} requires an execution evidence commit coordinate`,
+    );
+  }
+  const providerArtifacts = (result?.providerInstallation ?? [])
+    .map((installation) => {
+      if (
+        installation.attested !== true ||
+        !installation.installedDigest ||
+        !/^sha256:[0-9a-f]{64}$/u.test(installation.installedDigest)
+      ) {
+        throw new Error(
+          `local OpenTofu ${action} ${job.applyRun.id} lacks immutable provider artifact evidence`,
+        );
+      }
+      return {
+        source: installation.provider,
+        digest: installation.installedDigest as `sha256:${string}`,
+        attested: true as const,
+      };
+    })
+    .sort((left, right) =>
+      left.source === right.source
+        ? left.digest.localeCompare(right.digest)
+        : left.source.localeCompare(right.source),
+    );
+  const planDigest = job.planRun.planDigest;
+  if (
+    !planDigest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(planDigest) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(job.planArtifact.digest)
+  ) {
+    throw new Error(
+      `local OpenTofu ${action} ${job.applyRun.id} lacks immutable plan artifact evidence`,
+    );
+  }
+  return assertRunExecutionEvidence({
+    format: RUN_EXECUTION_EVIDENCE_CONTRACT,
+    runId: job.applyRun.id,
+    planRunId: job.planRun.id,
+    action,
+    outcome,
+    authority: {
+      ...authority,
+      runnerProfileId: job.runnerProfile.id,
+      executorId: job.runnerProfile.executorId,
+      providerArtifacts,
+    },
+    plan: {
+      digest: planDigest as `sha256:${string}`,
+      artifactDigest: job.planArtifact.digest as `sha256:${string}`,
+    },
+    commit,
+    receipt: { operationId: job.applyRun.id, version: 1, fence: 1 },
+    committedAt: new Date().toISOString(),
+  });
+}
+
+function requireStateVersionId(
+  job: Pick<OpenTofuApplyJob | OpenTofuDestroyJob, "executionEvidenceCommit" | "applyRun">,
+): string {
+  const commit = job.executionEvidenceCommit;
+  if (!commit || !("stateVersionId" in commit) || !commit.stateVersionId) {
+    throw new Error(
+      `local OpenTofu ${job.applyRun.id} requires a stateVersionId for execution evidence`,
+    );
+  }
+  return commit.stateVersionId;
+}
+
 const inProcessRunnerTransport: RunnerTransport = {
   fetch: async (path, init) =>
     await handleRunnerRequest(
@@ -1317,6 +1454,12 @@ function providerInstallation(
         ...(stringValue(entry, "attestationMethod") ===
         "forced_filesystem_mirror_init"
           ? { attestationMethod: "forced_filesystem_mirror_init" as const }
+          : stringValue(entry, "attestationMethod") ===
+              "runner_observed_installed_artifact"
+            ? {
+                attestationMethod:
+                  "runner_observed_installed_artifact" as const,
+              }
           : {}),
         ...(stringValue(entry, "cliConfigDigest")
           ? { cliConfigDigest: stringValue(entry, "cliConfigDigest") }

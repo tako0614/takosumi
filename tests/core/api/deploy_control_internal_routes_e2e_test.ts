@@ -22,6 +22,9 @@ import {
   InMemoryOpenTofuControlStore,
 } from "../../../core/domains/deploy-control/store.ts";
 import {
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+  FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
+  fixtureExecutionEvidence,
   fakeProviderVault,
   fixtureStateCommit,
 } from "../../helpers/deploy-control/model_fixture.ts";
@@ -334,6 +337,7 @@ async function seedCapsuleViaRoutes(
         }
       : {}),
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     ...(options.releaseActivator
       ? { releaseActivator: options.releaseActivator }
       : {}),
@@ -1344,6 +1348,7 @@ function fakeRunner(): OpenTofuRunner {
             attestationMethod: "forced_filesystem_mirror_init",
             mirrorPath:
               "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
+            installedDigest: `sha256:${"e".repeat(64)}`,
           },
         ],
         // A replace (delete+create) change so the §25 action policy flags the
@@ -1359,7 +1364,8 @@ function fakeRunner(): OpenTofuRunner {
         ],
       }),
     apply: (job) =>
-      Promise.resolve(fixtureStateCommit({
+      Promise.resolve({
+        ...fixtureStateCommit({
         outputs: {
           launch_url: {
             sensitive: false,
@@ -1367,7 +1373,16 @@ function fakeRunner(): OpenTofuRunner {
           },
         },
         rawOutputRef: job.rawOutputRef,
-      })),
-    destroy: () => Promise.resolve(fixtureStateCommit()),
+        providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
+      }),
+    destroy: (job) =>
+      Promise.resolve({
+        ...fixtureStateCommit({
+          providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+        executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+      }),
   };
 }

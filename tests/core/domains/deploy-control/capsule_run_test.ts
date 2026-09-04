@@ -87,6 +87,8 @@ import type {
 import {
   FIXTURE_ARCHIVE_DIGEST,
   FIXTURE_CLOUDFLARE_PROVIDER,
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+  fixtureExecutionEvidence,
   seedCapsuleModel,
   seedProviderConnections,
   type SeedCapsuleModelOptions,
@@ -158,6 +160,7 @@ const CLOUDFLARE_MIRROR_EVIDENCE = {
   attestationMethod: "forced_filesystem_mirror_init",
   mirrorPath:
     "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
+  installedDigest: `sha256:${"e".repeat(64)}`,
 } as const;
 const AWS_MIRROR_EVIDENCE = {
   provider: AWS,
@@ -166,7 +169,32 @@ const AWS_MIRROR_EVIDENCE = {
   attested: true,
   attestationMethod: "forced_filesystem_mirror_init",
   mirrorPath: "/opt/opentofu/provider-mirror/registry.opentofu.org/hashicorp/aws",
+  installedDigest: `sha256:${"e".repeat(64)}`,
 } as const;
+
+function providerInstallationForMutation(
+  providers: readonly string[],
+): readonly {
+  readonly provider: string;
+  readonly mirrored: true;
+  readonly installationMethod: "filesystem_mirror";
+  readonly attested: true;
+  readonly attestationMethod: "forced_filesystem_mirror_init";
+  readonly mirrorPath: string;
+  readonly installedDigest: `sha256:${string}`;
+}[] {
+  return providers
+    .filter((provider) => !provider.includes("/builtin/"))
+    .map((provider) => ({
+      provider,
+      mirrored: true as const,
+      installationMethod: "filesystem_mirror" as const,
+      attested: true as const,
+      attestationMethod: "forced_filesystem_mirror_init" as const,
+      mirrorPath: `/opt/opentofu/provider-mirror/${provider}`,
+      installedDigest: `sha256:${"e".repeat(64)}` as `sha256:${string}`,
+    }));
+}
 const PROVIDER_FREE_COMPATIBILITY_GRAPH = {
   providerPackages: [],
   rootProviderRequirements: [],
@@ -225,7 +253,9 @@ function recordingRunner(
         },
         providerLockDigest: LOCK_DIGEST,
         requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        providerInstallation: providerInstallationForMutation(
+          job.planRun.requiredProviders,
+        ),
         ...planResult,
       });
     },
@@ -245,15 +275,21 @@ function recordingRunner(
           admin_token: { sensitive: true, value: "super-secret-token" },
         },
         stateDigest: STATE_DIGEST,
-        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        providerInstallation: providerInstallationForMutation(
+          job.planRun.requiredProviders,
+        ),
         rawOutputRef: job.rawOutputRef,
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
       });
     },
     destroy: (job) => {
       destroyJobs.push(job);
       return Promise.resolve({
         stateDigest: STATE_DIGEST,
-        providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        providerInstallation: providerInstallationForMutation(
+          job.planRun.requiredProviders,
+        ),
+        executionEvidence: fixtureExecutionEvidence(job, "destroy"),
       });
     },
   };
@@ -269,6 +305,7 @@ function controllerWith(
     runner,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     vault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
     ...overrides,
@@ -456,11 +493,11 @@ function multiProviderRunnerProfile(
     lifecycle: { state: "active" },
     availability: { state: "available" },
     allowedProviders: providers,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     requireProviderBindings: true,
     stateBackend: { kind: "operator-managed", ref: "r2://state" },
-    stateLock: { kind: "native" },
     networkPolicy: { mode: "operator-managed" },
-    secretExposure: {
+    secretExposurePolicy: {
       providerCredentials: "runner-only",
       tenantWorkerOperatorSecrets: "forbidden",
       redactLogs: true,
@@ -980,8 +1017,13 @@ async function failedFirstApplyScenario(
         statePersistence: "persisted" as const,
       },
       stateDigest: STATE_DIGEST,
-      providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      providerInstallation: providerInstallationForMutation(
+        job.planRun.requiredProviders,
+      ),
       rawOutputRef: job.rawOutputRef,
+      executionEvidence: fixtureExecutionEvidence(job, "apply", {
+        outcome: "provider_failed_state_persisted",
+      }),
     };
   };
   await seedRunnableCapsuleModel(store, {
@@ -3730,6 +3772,7 @@ test("capsule queued plan fails closed when exact prepared inputs are missing or
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     runner,
     vault: counted.vault as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
     enqueueRun: () => Promise.resolve(),
@@ -3955,6 +3998,7 @@ output "attachments_bucket" {
     runner,
     sourcesService,
     vault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -4062,6 +4106,7 @@ test("capsule plan reuses a preflight CompatibilityReport hint without recheckin
     runner,
     sourcesService,
     vault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -4131,6 +4176,7 @@ test("capsule plan reuses the latest matching preflight CompatibilityReport when
     runner,
     sourcesService,
     vault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -4204,6 +4250,7 @@ test("capsule plan ignores a stale cached CompatibilityReport when a matching pr
     runner,
     sourcesService,
     vault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -4256,6 +4303,7 @@ test("failed compatibility analysis does not replace the Capsule current report"
     runner,
     sourcesService,
     vault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -4312,6 +4360,7 @@ output "attachments_bucket" {
     runner,
     sourcesService,
     vault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -4550,9 +4599,8 @@ test("generic OpenTofu runner profile derives pre-init requiredProviders from Pr
     availability: { state: "available" },
     allowedProviders: ["*"],
     stateBackend: { kind: "operator-managed", ref: "r2://state" },
-    stateLock: { kind: "native" },
     networkPolicy: { mode: "operator-managed" },
-    secretExposure: {
+    secretExposurePolicy: {
       providerCredentials: "runner-only",
       tenantWorkerOperatorSecrets: "forbidden",
       redactLogs: true,
@@ -4653,17 +4701,48 @@ test("compatibility-declared arbitrary provider credentials require an explicit 
 
 test("generic OpenTofu runner profile permits direct provider install by default", async () => {
   const provider = "registry.opentofu.org/vercel/vercel";
+  const directDigest = `sha256:${"d".repeat(64)}` as `sha256:${string}`;
+  const directInstallation = {
+    provider,
+    mirrored: false,
+    installationMethod: "direct" as const,
+    attested: true as const,
+    attestationMethod: "runner_observed_installed_artifact" as const,
+    installedPath: "/runner/.terraform/providers/registry.opentofu.org/vercel/vercel",
+    installedDigest: directDigest,
+  };
   const store = new InMemoryOpenTofuControlStore();
-  const runner = recordingRunner({
+  const recording = recordingRunner({
     requiredProviders: [provider],
-    providerInstallation: [
-      {
-        provider,
-        mirrored: false,
-        installationMethod: "direct",
-      },
-    ],
+    providerInstallation: [directInstallation],
   });
+  const runner: RecordingRunner = {
+    ...recording,
+    apply: async (job) => {
+      const result = await recording.apply(job);
+      return {
+        ...result,
+        providerInstallation: [directInstallation],
+        executionEvidence: fixtureExecutionEvidence(job, "apply", {
+          providerArtifacts: [
+            { source: provider, digest: directDigest, attested: true },
+          ],
+        }),
+      };
+    },
+    destroy: async (job) => {
+      const result = await recording.destroy!(job);
+      return {
+        ...result,
+        providerInstallation: [directInstallation],
+        executionEvidence: fixtureExecutionEvidence(job, "destroy", {
+          providerArtifacts: [
+            { source: provider, digest: directDigest, attested: true },
+          ],
+        }),
+      };
+    },
+  };
   const seeded = await seedRunnableCapsuleModel(store, {
     environment: "preview",
   });
@@ -4704,9 +4783,8 @@ test("generic OpenTofu runner profile permits direct provider install by default
     availability: { state: "available" },
     allowedProviders: ["*"],
     stateBackend: { kind: "operator-managed", ref: "r2://state" },
-    stateLock: { kind: "native" },
     networkPolicy: { mode: "operator-managed" },
-    secretExposure: {
+    secretExposurePolicy: {
       providerCredentials: "runner-only",
       tenantWorkerOperatorSecrets: "forbidden",
       redactLogs: true,
@@ -4723,6 +4801,24 @@ test("generic OpenTofu runner profile permits direct provider install by default
   expect(runner.planJobs[0]?.providerInstallationPolicy).toBeUndefined();
   expect(planRun.status).toEqual("succeeded");
   expect(planRun.policy.status).toEqual("passed");
+
+  const applied = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(applied.applyRun.status).toBe("succeeded");
+  expect(runner.applyJobs).toHaveLength(1);
+
+  const destroyPlan = await controller.createCapsuleDestroyPlan(
+    seeded.capsule.id,
+  );
+  await controller.approveRun(destroyPlan.planRun.id);
+  const destroyed = await controller.createApplyRun({
+    planRunId: destroyPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan.planRun),
+  });
+  expect(destroyed.applyRun.status).toBe("succeeded");
+  expect(runner.destroyJobs).toHaveLength(1);
 });
 
 test("generic Capsule plan allows provider-free modules without ProviderConnection", async () => {
@@ -4911,9 +5007,8 @@ test("low-level plan does not infer requiredProviders from ProviderBinding alone
     availability: { state: "available" },
     allowedProviders: ["*"],
     stateBackend: { kind: "operator-managed", ref: "r2://state" },
-    stateLock: { kind: "native" },
     networkPolicy: { mode: "operator-managed" },
-    secretExposure: {
+    secretExposurePolicy: {
       providerCredentials: "runner-only",
       tenantWorkerOperatorSecrets: "forbidden",
       redactLogs: true,
@@ -4975,9 +5070,8 @@ test("low-level plan never treats allowedProviders as discovered requirements", 
     allowedProviders: [],
     requireProviderBindings: true,
     stateBackend: { kind: "operator-managed", ref: "state://strict" },
-    stateLock: { kind: "native" },
     networkPolicy: { mode: "operator-managed" },
-    secretExposure: {
+    secretExposurePolicy: {
       providerCredentials: "runner-only",
       tenantWorkerOperatorSecrets: "forbidden",
       redactLogs: true,
@@ -5188,6 +5282,7 @@ output "attachments_bucket" {
     runner,
     sourcesService,
     vault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -5265,6 +5360,7 @@ test("capsule apply revalidates CompatibilityReport before provider credential m
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     runner,
     vault: counted.vault as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -5358,6 +5454,7 @@ test("capsule apply rejects a CompatibilityReport scoped to another Capsule befo
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     runner,
     vault: counted.vault as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -5422,6 +5519,7 @@ test("capsule apply fails closed when the exact generated-root sidecar is missin
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     runner,
     vault: counted.vault as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -6068,8 +6166,13 @@ test("failed provider apply and destroy admission never expose or rotate runtime
         statePersistence: "persisted" as const,
       },
       stateDigest: STATE_DIGEST,
-      providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      providerInstallation: providerInstallationForMutation(
+        job.planRun.requiredProviders,
+      ),
       rawOutputRef: job.rawOutputRef,
+      executionEvidence: fixtureExecutionEvidence(job, "apply", {
+        outcome: "provider_failed_state_persisted",
+      }),
     };
   };
   await seedRunnableCapsuleModel(store, {
@@ -8443,6 +8546,7 @@ test("Workspace-owned ProviderConnection apply is not capped by host-managed pol
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     runner,
     vault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -9081,7 +9185,12 @@ test("first-apply cleanup not_applicable marker survives an ambiguous destroy fa
         statePersistence: "persisted" as const,
       },
       stateDigest: STATE_DIGEST,
-      providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      providerInstallation: providerInstallationForMutation(
+        job.planRun.requiredProviders,
+      ),
+      executionEvidence: fixtureExecutionEvidence(job, "apply", {
+        outcome: "provider_failed_state_persisted",
+      }),
       rawOutputRef: job.rawOutputRef,
     };
   };
@@ -9193,7 +9302,12 @@ test("failed provider apply atomically retains partial state, consumes the Plan,
         must_not_publish: { sensitive: false, value: "stale" },
       },
       rawOutputRef: job.rawOutputRef,
-      providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      providerInstallation: providerInstallationForMutation(
+        job.planRun.requiredProviders,
+      ),
+      executionEvidence: fixtureExecutionEvidence(job, "apply", {
+        outcome: "provider_failed_state_persisted",
+      }),
       diagnostics: [
         {
           severity: "error",
@@ -9276,6 +9390,87 @@ test("failed provider apply atomically retains partial state, consumes the Plan,
   });
 });
 
+test("failed provider apply without execution evidence is rejected before partial-state commit", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  runner.apply = (job) => {
+    runner.applyJobs.push(job);
+    return Promise.resolve({
+      providerExecutionFailure: {
+        kind: "provider_execution_failed" as const,
+        statePersistence: "persisted" as const,
+        errorCode: "apply_failed",
+      },
+      stateDigest: STATE_DIGEST,
+      rawOutputRef: job.rawOutputRef,
+    });
+  };
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner);
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+
+  const failed = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(failed.applyRun.status).toBe("failed");
+  expect(failed.applyRun.stateVersionId).toBeUndefined();
+  expect(failed.applyRun.outputId).toBeUndefined();
+  expect(await store.getStateVersion(`state_${failed.applyRun.id}`)).toBeUndefined();
+  expect(await store.getPlanRun(planRun.id)).not.toMatchObject({
+    appliedApplyRunId: failed.applyRun.id,
+  });
+  expect(failed.capsule).toMatchObject({
+    status: "pending",
+    currentStateGeneration: 0,
+  });
+});
+
+test("provider artifact mismatch is rejected before a successful apply ledger commit", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  runner.apply = (job) => {
+    runner.applyJobs.push(job);
+    return Promise.resolve({
+      stateDigest: STATE_DIGEST,
+      providerInstallation: providerInstallationForMutation(
+        job.planRun.requiredProviders,
+      ),
+      rawOutputRef: job.rawOutputRef,
+      executionEvidence: fixtureExecutionEvidence(job, "apply", {
+        providerArtifacts: job.planRun.requiredProviders.map((source) => ({
+          source,
+          digest: `sha256:${"f".repeat(64)}` as `sha256:${string}`,
+          attested: true as const,
+        })),
+      }),
+    });
+  };
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner);
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+
+  const failed = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(failed.applyRun.status).toBe("failed");
+  expect(failed.applyRun.stateVersionId).toBeUndefined();
+  expect(failed.applyRun.outputId).toBeUndefined();
+  expect(failed.applyRun.diagnostics).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        code: "execution_evidence_provider_mismatch",
+      }),
+    ]),
+  );
+  expect(await store.getPlanRun(planRun.id)).not.toMatchObject({
+    appliedApplyRunId: failed.applyRun.id,
+  });
+});
+
 test("failed provider apply without readable state consumes the Plan without inventing a StateVersion", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
@@ -9338,7 +9533,12 @@ test("failed provider destroy atomically retains partial state, consumes the Pla
         errorCode: "apply_failed",
       },
       stateDigest: STATE_DIGEST,
-      providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      providerInstallation: providerInstallationForMutation(
+        job.planRun.requiredProviders,
+      ),
+      executionEvidence: fixtureExecutionEvidence(job, "destroy", {
+        outcome: "provider_failed_state_persisted",
+      }),
       diagnostics: [
         {
           severity: "error",
