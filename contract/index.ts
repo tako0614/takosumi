@@ -143,6 +143,7 @@ export * from "./platform-readiness.ts";
 export * from "./platform-hardening.ts";
 export * from "./platform-extension-routes.ts";
 export * from "./security.ts";
+export * from "./sqlite-logical-content.ts";
 // `RunStatus` from ./runs.ts is exported selectively: the internal `/v1`
 // compatibility seam owns a separate status union for its private execution
 // records. The public Run status union is reachable via the
