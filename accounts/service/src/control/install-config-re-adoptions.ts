@@ -1,15 +1,19 @@
 import type { JsonValue } from "takosumi-contract";
 import type {
   Capsule,
+  CapsuleInstallConfigReAdoptionResponse,
+  CreateCapsuleInstallConfigReAdoptionRequest,
   InstallConfig,
   InstallConfigCommittedPostApplyRecoveryProof,
-  PublicCapsule,
 } from "takosumi-contract/install-configs";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
-import { containsSecretLikeString } from "../../../../contract/redaction.ts";
+import {
+  containsSecretLikeString,
+  isSecretKey,
+} from "../../../../contract/redaction.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import {
@@ -31,17 +35,13 @@ import {
 
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
 const MAX_REASON_BYTES = 256;
+const MAX_REVIEWED_USER_VARIABLE_JSON_DEPTH = 32;
+const MAX_REVIEWED_USER_VARIABLE_JSON_NODES = 4_096;
+const MAX_REVIEWED_USER_VARIABLE_JSON_KEY_BYTES = 256;
+const MAX_REVIEWED_USER_VARIABLE_JSON_STRING_BYTES = 32 * 1_024;
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const EMPTY_DERIVED_TARGET_DIGEST = `sha256:${"0".repeat(64)}`;
-
-interface ReAdoptionRequest {
-  readonly baseInstallConfigId?: string;
-  readonly sourceSnapshotId: string;
-  readonly reason: string;
-  readonly expected: {
-    readonly authorityGuard: string;
-  };
-}
+const UTF8_ENCODER = new TextEncoder();
 
 interface ReAdoptionReceipt {
   readonly capsuleId: string;
@@ -122,7 +122,7 @@ export async function handleCapsuleInstallConfigReAdoption(
   if (!request) {
     return errorJson(
       "invalid_request",
-      "Re-adoption requires a SourceSnapshot, bounded reason, and exact current Capsule authority guard.",
+      "Re-adoption requires a SourceSnapshot, bounded reason, exact current Capsule authority guard, and an optional JSON reviewed-user-variable record.",
       400,
       ctx.request,
     );
@@ -257,14 +257,6 @@ export async function handleCapsuleInstallConfigReAdoption(
     );
   }
   const { baseConfig, modulePath } = resolved;
-  const compatibility = await ctx.operations.createSourceCompatibilityCheck(
-    source.id,
-    {
-      sourceSnapshotId: sourceSnapshot.id,
-      modulePath,
-      installConfigId: baseConfig.id,
-    },
-  );
   const reviewedVariables = jsonRecord(currentConfig.variableMapping);
   if (!reviewedVariables) {
     throw new OpenTofuControllerError(
@@ -283,7 +275,25 @@ export async function handleCapsuleInstallConfigReAdoption(
     modulePath: repositoryManifestModulePath(sourceSnapshot, modulePath) ??
       modulePath,
     values: reviewedVariables,
+    requested: request.reviewedUserVariables,
+    baseValues: baseConfig.variableMapping,
   });
+  if (!reviewedUserVariables.ok) {
+    return errorJson(
+      "failed_precondition",
+      reviewedUserVariables.message,
+      409,
+      ctx.request,
+    );
+  }
+  const compatibility = await ctx.operations.createSourceCompatibilityCheck(
+    source.id,
+    {
+      sourceSnapshotId: sourceSnapshot.id,
+      modulePath,
+      installConfigId: baseConfig.id,
+    },
+  );
   const adoption = await adoptRepoOwnedInstallConfig({
     operations: ctx.operations,
     source,
@@ -292,13 +302,15 @@ export async function handleCapsuleInstallConfigReAdoption(
     modulePath,
     capsuleName: current.name,
     workspaceId: current.workspaceId,
-    reviewedVariables: reviewedUserVariables,
+    reviewedVariables: reviewedUserVariables.values,
     reviewedInterfaceBlueprints: currentConfig.interfaceBlueprints,
     reviewedOutputAllowlist: currentConfig.outputAllowlist,
     installingPrincipalId:
       current.installingPrincipalId ?? actorSubject,
     compatibilityReport: compatibility.report,
-    requireReviewedValues: false,
+    requireReviewedValues: request.reviewedUserVariables === undefined
+      ? false
+      : true,
   });
   if (adoption.status !== "accepted") {
     return errorJson(
@@ -523,6 +535,13 @@ async function rebindResponse(input: {
   readonly reason: string;
   readonly expected: ReAdoptionCasExpected;
 }): Promise<Response> {
+  const sourceSnapshotId = input.target.internal?.reAdoption?.sourceSnapshotId;
+  if (!sourceSnapshotId) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "The immutable re-adoption target has no SourceSnapshot authority.",
+    );
+  }
   const result = await input.operations.capsules.rebindInstallConfig({
     capsuleId: input.capsule.id,
     targetInstallConfigId: input.targetInstallConfigId,
@@ -539,12 +558,9 @@ async function rebindResponse(input: {
       previousInstallConfigDigest: input.expected.installConfigDigest,
       targetInstallConfigId: input.target.id,
       targetInstallConfigDigest: result.targetInstallConfigDigest,
-      sourceSnapshotId: input.target.internal?.sourceSnapshotId,
+      sourceSnapshotId,
     },
-  } satisfies {
-    readonly capsule: PublicCapsule;
-    readonly installConfigReAdoption: Readonly<Record<string, unknown>>;
-  });
+  } satisfies CapsuleInstallConfigReAdoptionResponse);
 }
 
 async function existingTarget(
@@ -689,11 +705,12 @@ async function targetId(input: {
 
 function parseRequest(
   value: Readonly<Record<string, unknown>>,
-): ReAdoptionRequest | undefined {
+): CreateCapsuleInstallConfigReAdoptionRequest | undefined {
   const allowed = new Set([
     "baseInstallConfigId",
     "sourceSnapshotId",
     "reason",
+    "reviewedUserVariables",
     "expected",
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return undefined;
@@ -715,8 +732,13 @@ function parseRequest(
   }
   const sourceSnapshotId = exactString(value.sourceSnapshotId);
   const reason = exactString(value.reason);
+  const reviewedUserVariables = value.reviewedUserVariables === undefined
+    ? undefined
+    : reviewedUserVariablesRecord(value.reviewedUserVariables);
   const authorityGuard = exactString(expected.authorityGuard);
   if (
+    (value.reviewedUserVariables !== undefined &&
+      reviewedUserVariables === undefined) ||
     !sourceSnapshotId ||
     !reason ||
     new TextEncoder().encode(reason).byteLength > MAX_REASON_BYTES ||
@@ -731,6 +753,7 @@ function parseRequest(
     ...(baseInstallConfigId ? { baseInstallConfigId } : {}),
     sourceSnapshotId,
     reason,
+    ...(reviewedUserVariables ? { reviewedUserVariables } : {}),
     expected: {
       authorityGuard,
     },
@@ -738,7 +761,7 @@ function parseRequest(
 }
 
 function jsonRecord(
-  value: Readonly<Record<string, unknown>>,
+  value: unknown,
 ): Readonly<Record<string, JsonValue>> | undefined {
   try {
     const roundTrip = JSON.parse(JSON.stringify(value)) as unknown;
@@ -751,38 +774,206 @@ function jsonRecord(
 }
 
 /**
- * Re-adoption removes only values explicitly declared as non-user-owned in the
- * pinned repository module. Capsule/workspace names, module defaults, and
- * host-materialized values are compiled again from current authority.
- * Undeclared values stay in the request so the compiler can reject them. This
- * projection is intentionally limited to this re-adoption route; ordinary
- * install flows still pass their complete request to the compiler.
+ * Validate caller-owned JSON iteratively before it can enter a request digest.
+ * Top-level keys are manifest variable names; nested keys are user JSON and
+ * therefore participate in the ordinary secret-key vocabulary.
  */
+function reviewedUserVariablesRecord(
+  value: unknown,
+): Readonly<Record<string, JsonValue>> | undefined {
+  if (!isPlainJsonObject(value)) return undefined;
+  const pending: {
+    readonly value: unknown;
+    readonly depth: number;
+    readonly inspectObjectKeys: boolean;
+  }[] = [{ value, depth: 0, inspectObjectKeys: false }];
+  let discoveredNodes = 1;
+
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.depth > MAX_REVIEWED_USER_VARIABLE_JSON_DEPTH) {
+      return undefined;
+    }
+    if (current.value === null || typeof current.value === "boolean") {
+      continue;
+    }
+    if (typeof current.value === "number") {
+      if (!Number.isFinite(current.value)) return undefined;
+      continue;
+    }
+    if (typeof current.value === "string") {
+      if (
+        UTF8_ENCODER.encode(current.value).byteLength >
+          MAX_REVIEWED_USER_VARIABLE_JSON_STRING_BYTES ||
+        containsSecretLikeString(current.value)
+      ) {
+        return undefined;
+      }
+      continue;
+    }
+    if (!current.value || typeof current.value !== "object") return undefined;
+
+    if (Array.isArray(current.value)) {
+      if (
+        discoveredNodes + current.value.length >
+          MAX_REVIEWED_USER_VARIABLE_JSON_NODES
+      ) {
+        return undefined;
+      }
+      discoveredNodes += current.value.length;
+      for (let index = current.value.length - 1; index >= 0; index -= 1) {
+        pending.push({
+          value: current.value[index],
+          depth: current.depth + 1,
+          inspectObjectKeys: true,
+        });
+      }
+      continue;
+    }
+    if (!isPlainJsonObject(current.value)) return undefined;
+    const entries = Object.entries(current.value);
+    if (
+      discoveredNodes + entries.length >
+        MAX_REVIEWED_USER_VARIABLE_JSON_NODES
+    ) {
+      return undefined;
+    }
+    discoveredNodes += entries.length;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const [key, child] = entries[index]!;
+      if (
+        UTF8_ENCODER.encode(key).byteLength >
+          MAX_REVIEWED_USER_VARIABLE_JSON_KEY_BYTES ||
+        (current.inspectObjectKeys && isSecretKey(key))
+      ) {
+        return undefined;
+      }
+      pending.push({
+        value: child,
+        depth: current.depth + 1,
+        inspectObjectKeys: true,
+      });
+    }
+  }
+  return value as Readonly<Record<string, JsonValue>>;
+}
+
+/**
+ * An explicit request replaces every required non-secret user input plus the
+ * exact selected optional set declared by the pinned repository module.
+ * Optional omission therefore clears a prior mapping. The omitted-field
+ * legacy path instead removes only values explicitly declared as non-user-
+ * owned; undeclared current values remain so the compiler still rejects them.
+ * In both paths Capsule/workspace names, module defaults, and host-materialized
+ * values are compiled again from current authority.
+ */
+type ReAdoptionReviewedUserVariablesResult =
+  | {
+      readonly ok: true;
+      readonly values: Readonly<Record<string, JsonValue>>;
+    }
+  | { readonly ok: false; readonly message: string };
+
 function reAdoptionReviewedUserVariables(input: {
   readonly document: RepositoryManifestDocument | undefined;
   readonly modulePath: string;
   readonly values: Readonly<Record<string, JsonValue>>;
-}): Readonly<Record<string, JsonValue>> {
+  readonly requested: Readonly<Record<string, JsonValue>> | undefined;
+  readonly baseValues: Readonly<Record<string, unknown>>;
+}): ReAdoptionReviewedUserVariablesResult {
   const modulePath = input.modulePath === "" ? "." : input.modulePath;
   const modules = input.document?.install.modules;
   if (!modules || !Object.prototype.hasOwnProperty.call(modules, modulePath)) {
-    return input.values;
+    return input.requested === undefined
+      ? { ok: true, values: input.values }
+      : {
+          ok: false,
+          message:
+            "The selected repository module does not declare a reviewable user-variable set.",
+        };
   }
   const module = modules[modulePath];
-  if (!module) return input.values;
+  if (!module) {
+    return input.requested === undefined
+      ? { ok: true, values: input.values }
+      : {
+          ok: false,
+          message:
+            "The selected repository module does not declare a reviewable user-variable set.",
+        };
+  }
   const inputOwnershipByName = new Map(
     module.inputs.map(
-      (declaration) => [declaration.name, declaration.source.kind] as const,
+      (declaration) => [declaration.name, declaration] as const,
     ),
   );
-  return Object.fromEntries(
-    Object.entries(input.values).filter(([name]) => {
-      const inputOwnership = inputOwnershipByName.get(name);
-      // Preserve undeclared values so the compiler can reject them. Only a
-      // manifest declaration that explicitly assigns a non-user source is
-      // re-derived during re-adoption.
-      return inputOwnership === undefined || inputOwnership === "user";
-    }),
+  if (input.requested !== undefined) {
+    for (const declaration of module.inputs) {
+      if (
+        declaration.source.kind === "user" &&
+        Object.prototype.hasOwnProperty.call(
+          input.baseValues,
+          declaration.name,
+        )
+      ) {
+        return {
+          ok: false,
+          message:
+            `The generic host policy mapping collides with the user input ${boundedVariableName(declaration.name)}.`,
+        };
+      }
+    }
+    for (const name of Object.keys(input.requested)) {
+      const declaration = inputOwnershipByName.get(name);
+      if (
+        !declaration ||
+        declaration.source.kind !== "user" ||
+        declaration.secret === true
+      ) {
+        return {
+          ok: false,
+          message:
+            `The reviewed value ${boundedVariableName(name)} is not a declared non-secret user input.`,
+        };
+      }
+    }
+    for (const declaration of module.inputs) {
+      if (
+        declaration.source.kind !== "user" ||
+        declaration.secret === true ||
+        declaration.required !== true ||
+        Object.prototype.hasOwnProperty.call(
+          input.requested,
+          declaration.name,
+        )
+      ) {
+        continue;
+      }
+      return {
+        ok: false,
+        message:
+          `The complete reviewed user-variable set is missing ${boundedVariableName(declaration.name)}.`,
+      };
+    }
+    return { ok: true, values: input.requested };
+  }
+  return {
+    ok: true,
+    values: Object.fromEntries(
+      Object.entries(input.values).filter(([name]) => {
+        const declaration = inputOwnershipByName.get(name);
+        // Preserve undeclared values so the compiler can reject them. Only a
+        // manifest declaration that explicitly assigns a non-user source is
+        // re-derived during re-adoption.
+        return declaration === undefined || declaration.source.kind === "user";
+      }),
+    ),
+  };
+}
+
+function boundedVariableName(value: string): string {
+  return JSON.stringify(
+    value.replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 96),
   );
 }
 

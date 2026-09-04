@@ -329,13 +329,25 @@ Content-Type: application/json
   "baseInstallConfigId": "<base-install-config-id>",
   "sourceSnapshotId": "<source-snapshot-id>",
   "reason": "<bounded non-secret reason>",
+  "reviewedUserVariables": {
+    "public_url": "https://example.test",
+    "feature_enabled": true
+  },
   "expected": { "authorityGuard": "<guard-from-capsule-get>" }
 }
 ```
 
 body はこの閉じた shape だけを受け付け、`reason` は bounded かつ secret-like value を
-含めません。成功は 200 で、response は
-次の value-free projection です。
+含めません。任意の `reviewedUserVariables` を送る場合、それは pinned repository module が
+`source.kind=user` と宣言した non-secret input の complete replacement です。required input
+は全件必須です。optional input の省略は unset を意味するため、値を維持する
+場合は再送します。unknown、secret、Capsule/Workspace 由来、module default、host delivery、
+generic host policy mapping と衝突する値は拒否されます。recursive な secret-like key/value、
+32 level、4,096 node、key ごと 256 UTF-8 byte、string ごと 32,768 UTF-8 byte の上限を超える
+JSON は digest と source scan より前に拒否されます。field を省略した既存 client は current
+InstallConfig mapping を使う従来の再採用を続けます。exact set は request digest と同一 key
+replay に含まれ、partial patch として扱われません。成功は 200 で、response は次の
+value-free projection です。
 
 ```json
 {

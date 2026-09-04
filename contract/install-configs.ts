@@ -21,7 +21,7 @@ import type {
 } from "./repository-manifest.ts";
 import type { JsonValue } from "./types.ts";
 import type { ConnectionScopeKind } from "./connections.ts";
-import type { CapsuleStatus } from "./capsules.ts";
+import type { CapsuleStatus, PublicCapsule } from "./capsules.ts";
 
 export type { Capsule, PublicCapsule, CapsuleStatus } from "./capsules.ts";
 export type {
@@ -728,6 +728,44 @@ export interface InstallConfigCommittedPostApplyRecoveryProof {
   readonly outputDigest: string;
   readonly stateGeneration: number;
   readonly evidenceDigest: string;
+}
+
+/**
+ * Closed public request for one immutable Capsule InstallConfig re-adoption.
+ *
+ * `reviewedUserVariables`, when present, is a complete replacement set for
+ * non-secret inputs declared by the exact repository module with
+ * `source.kind=user`. Every required input must be present. An omitted optional
+ * input is unset, so an unchanged optional value must be repeated to preserve
+ * it. It is never a partial patch. Derived, defaulted, host-delivered, unknown,
+ * secret, secret-like, or generic-host-policy-colliding inputs are rejected.
+ * JSON is bounded to 32 levels, 4,096 nodes, 256 UTF-8 bytes per key, and
+ * 32,768 UTF-8 bytes per string before request digesting. Omitting the field
+ * preserves the original re-adoption behavior for existing clients.
+ */
+export interface CreateCapsuleInstallConfigReAdoptionRequest {
+  readonly baseInstallConfigId?: string;
+  readonly sourceSnapshotId: string;
+  readonly reason: string;
+  readonly reviewedUserVariables?: Readonly<Record<string, JsonValue>>;
+  readonly expected: {
+    readonly authorityGuard: string;
+  };
+}
+
+/** Value-free result of one immutable target creation and Capsule CAS rebind. */
+export interface CapsuleInstallConfigReAdoptionResult {
+  readonly replayed: boolean;
+  readonly previousInstallConfigId: string;
+  readonly previousInstallConfigDigest: string;
+  readonly targetInstallConfigId: string;
+  readonly targetInstallConfigDigest: string;
+  readonly sourceSnapshotId: string;
+}
+
+export interface CapsuleInstallConfigReAdoptionResponse {
+  readonly capsule: PublicCapsule;
+  readonly installConfigReAdoption: CapsuleInstallConfigReAdoptionResult;
 }
 
 /**

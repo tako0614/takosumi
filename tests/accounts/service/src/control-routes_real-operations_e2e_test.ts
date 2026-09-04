@@ -21,6 +21,7 @@ import type {
   InstallConfig,
   SourceBuildConfig,
 } from "takosumi-contract/install-configs";
+import type { JsonValue } from "takosumi-contract/types";
 import type {
   OpenTofuApplyJob,
   OpenTofuApplyResult,
@@ -271,18 +272,21 @@ function request(
   init: {
     readonly cookie?: string;
     readonly body?: unknown;
+    readonly rawBody?: string;
     readonly headers?: Readonly<Record<string, string>>;
   } = {},
 ): { readonly request: Request; readonly url: URL } {
   const url = new URL(`${ORIGIN}${path}`);
   const headers: Record<string, string> = { ...init.headers };
   if (init.cookie) headers.cookie = init.cookie;
-  if (init.body !== undefined) headers["content-type"] = "application/json";
+  const body = init.rawBody ??
+    (init.body !== undefined ? JSON.stringify(init.body) : undefined);
+  if (body !== undefined) headers["content-type"] = "application/json";
   return {
     request: new Request(url, {
       method,
       headers,
-      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+      ...(body !== undefined ? { body } : {}),
     }),
     url,
   };
@@ -296,6 +300,7 @@ async function controlJson<T>(
     readonly method: string;
     readonly path: string;
     readonly body?: unknown;
+    readonly rawBody?: string;
     readonly headers?: Readonly<Record<string, string>>;
   },
   expectedStatus: number,
@@ -303,6 +308,7 @@ async function controlJson<T>(
   const built = request(input.method, input.path, {
     cookie: input.cookie,
     ...(input.body !== undefined ? { body: input.body } : {}),
+    ...(input.rawBody !== undefined ? { rawBody: input.rawBody } : {}),
     ...(input.headers ? { headers: input.headers } : {}),
   });
   const response = await handleControlRoute({
@@ -3017,6 +3023,7 @@ async function reAdoptionRouteFixture(
   options: {
     readonly legacyProfile?: boolean;
     readonly genericDefault?: boolean;
+    readonly baseVariableMapping?: Readonly<Record<string, JsonValue>>;
     readonly currentVariableMapping?: Readonly<Record<string, unknown>>;
     readonly repositoryInputs?: readonly RepositoryInstallUxInput[];
   } = {},
@@ -3049,7 +3056,20 @@ async function reAdoptionRouteFixture(
                 : input.type === "json"
                   ? "any"
                   : "string";
-          return `variable "${input.name}" {\n  type = ${type}\n}`;
+          const hasDefault = input.source.kind === "module_default" ||
+            input.required === false;
+          const defaultValue = hasDefault
+            ? input.type === "boolean"
+              ? "false"
+              : input.type === "number"
+                ? "0"
+                : input.type === "json"
+                  ? "{}"
+                  : '""'
+            : undefined;
+          return `variable "${input.name}" {\n  type = ${type}${
+            defaultValue === undefined ? "" : `\n  default = ${defaultValue}`
+          }\n}`;
         })
         .join("\n\n");
       return Promise.resolve([
@@ -3076,7 +3096,7 @@ output "launch_url" { value = var.public_url }
     : {
     id: `cfg_takos_profile_${suffix}`,
     name: `takos-profile-${suffix}`,
-    variableMapping: {},
+    variableMapping: options.baseVariableMapping ?? {},
     installExperience: {
       projections: [
         {
@@ -3517,7 +3537,10 @@ test("re-adoption guard becomes stale when an exact recovery row drifts", async 
       path:
         `/api/v1/capsules/${recovery.current.id}/install-config-re-adoptions`,
       headers: { "idempotency-key": "re-adopt-post-apply-stale-v1" },
-      body: reAdoptionBody(fixture, authorityGuard),
+      body: {
+        ...reAdoptionBody(fixture, authorityGuard),
+        reviewedUserVariables: { public_url: TAKOS_PUBLIC_ORIGIN },
+      },
     },
     409,
   );
@@ -3842,6 +3865,555 @@ test("re-adoption re-derives Capsule-owned variables while preserving reviewed u
   expect(
     await fixture.operations.capsules.getInstallConfig(target.id),
   ).toEqual(targetBeforeReplay);
+});
+
+test("re-adoption replaces the complete reviewed user-variable set without changing current state", async () => {
+  const fixture = await reAdoptionRouteFixture("reviewed-replacement", {
+    currentVariableMapping: {
+      feature_enabled: false,
+      provisioning_acknowledgement: "I accept the initial provisioning path",
+    },
+    repositoryInputs: [
+      {
+        name: "public_url",
+        source: { kind: "user" },
+        type: "string",
+        required: true,
+        label: { ja: "公開URL", en: "Public URL" },
+      },
+      {
+        name: "feature_enabled",
+        source: { kind: "user" },
+        type: "boolean",
+        required: true,
+        label: { ja: "機能", en: "Feature" },
+      },
+      {
+        name: "provisioning_acknowledgement",
+        source: { kind: "user" },
+        type: "string",
+        required: true,
+        label: { ja: "確認", en: "Acknowledgement" },
+      },
+    ],
+  });
+  const recovery = await seedRouteCommittedPostApplyRecovery(
+    fixture,
+    "reviewed-replacement",
+  );
+  const capsuleBefore = recovery.current;
+  const originalStateVersion = recovery.stateVersion;
+
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const path =
+    `/api/v1/capsules/${capsuleBefore.id}/install-config-re-adoptions`;
+  const reviewedUserVariables = {
+    public_url: TAKOS_PUBLIC_ORIGIN,
+    feature_enabled: true,
+    provisioning_acknowledgement: "",
+  };
+  const requestBody = {
+    ...reAdoptionBody(fixture, authorityGuard),
+    reviewedUserVariables,
+  };
+  const adopted = await controlJson<{
+    readonly capsule: {
+      readonly id: string;
+      readonly installConfigId: string;
+      readonly currentStateVersionId?: string;
+      readonly currentStateGeneration: number;
+    };
+    readonly installConfigReAdoption: {
+      readonly replayed: boolean;
+      readonly targetInstallConfigId: string;
+      readonly sourceSnapshotId: string;
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-reviewed-replacement-v1" },
+      body: requestBody,
+    },
+    200,
+  );
+
+  expect(adopted.installConfigReAdoption.replayed).toBe(false);
+  expect(adopted.installConfigReAdoption.sourceSnapshotId).toBe(
+    fixture.seeded.snapshot.id,
+  );
+  expect(adopted.capsule).toMatchObject({
+    id: capsuleBefore.id,
+    currentStateVersionId: originalStateVersion.id,
+    currentStateGeneration: originalStateVersion.generation,
+  });
+  const target = await fixture.operations.capsules.getInstallConfig(
+    adopted.installConfigReAdoption.targetInstallConfigId,
+  );
+  expect(target.variableMapping).toEqual(reviewedUserVariables);
+  expect(target.internal?.sourceSnapshotId).toBe(fixture.seeded.snapshot.id);
+  expect(await fixture.deployStore.getStateVersion(originalStateVersion.id))
+    .toEqual(originalStateVersion);
+  expect(fixture.runner.planJobs).toHaveLength(0);
+  expect(fixture.runner.applyJobs).toHaveLength(0);
+
+  const targetBeforeReplay = { ...target };
+  const replay = await controlJson<typeof adopted>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-reviewed-replacement-v1" },
+      body: requestBody,
+    },
+    200,
+  );
+  expect(replay.installConfigReAdoption).toMatchObject({
+    replayed: true,
+    targetInstallConfigId:
+      adopted.installConfigReAdoption.targetInstallConfigId,
+  });
+  expect(
+    await fixture.operations.capsules.getInstallConfig(target.id),
+  ).toEqual(targetBeforeReplay);
+
+  const changedReplay = await controlJson<{
+    readonly error: { readonly code: string };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "re-adopt-reviewed-replacement-v1" },
+      body: {
+        ...requestBody,
+        reviewedUserVariables: {
+          ...reviewedUserVariables,
+          feature_enabled: false,
+        },
+      },
+    },
+    409,
+  );
+  expect(changedReplay.error.code).toBe("idempotency_conflict");
+  expect(await fixture.deployStore.getStateVersion(originalStateVersion.id))
+    .toEqual(originalStateVersion);
+});
+
+test("re-adoption treats omitted optional user inputs as absent while preserving repeated values", async () => {
+  const cases = [
+    {
+      suffix: "optional-never-set",
+      currentVariableMapping: {},
+      reviewedUserVariables: { public_url: TAKOS_PUBLIC_ORIGIN },
+      expectedVariableMapping: { public_url: TAKOS_PUBLIC_ORIGIN },
+    },
+    {
+      suffix: "optional-preserved",
+      currentVariableMapping: { optional_note: "keep this value" },
+      reviewedUserVariables: {
+        public_url: TAKOS_PUBLIC_ORIGIN,
+        optional_note: "keep this value",
+      },
+      expectedVariableMapping: {
+        public_url: TAKOS_PUBLIC_ORIGIN,
+        optional_note: "keep this value",
+      },
+    },
+    {
+      suffix: "optional-cleared",
+      currentVariableMapping: { optional_note: "clear this value" },
+      reviewedUserVariables: { public_url: TAKOS_PUBLIC_ORIGIN },
+      expectedVariableMapping: { public_url: TAKOS_PUBLIC_ORIGIN },
+    },
+  ] as const;
+
+  for (const currentCase of cases) {
+    const fixture = await reAdoptionRouteFixture(currentCase.suffix, {
+      currentVariableMapping: currentCase.currentVariableMapping,
+      repositoryInputs: [
+        {
+          name: "public_url",
+          source: { kind: "user" },
+          type: "string",
+          required: true,
+          label: { ja: "公開URL", en: "Public URL" },
+        },
+        {
+          name: "optional_note",
+          source: { kind: "user" },
+          type: "string",
+          required: false,
+          label: { ja: "任意メモ", en: "Optional note" },
+        },
+      ],
+    });
+    const authorityGuard = await readReAdoptionGuard(fixture);
+    const adopted = await controlJson<{
+      readonly installConfigReAdoption: {
+        readonly targetInstallConfigId: string;
+      };
+    }>(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path:
+          `/api/v1/capsules/${fixture.seeded.capsule.id}/install-config-re-adoptions`,
+        headers: {
+          "idempotency-key": `re-adopt-${currentCase.suffix}-v1`,
+        },
+        body: {
+          ...reAdoptionBody(fixture, authorityGuard),
+          reviewedUserVariables: currentCase.reviewedUserVariables,
+        },
+      },
+      200,
+    );
+    const target = await fixture.operations.capsules.getInstallConfig(
+      adopted.installConfigReAdoption.targetInstallConfigId,
+    );
+    expect(target.variableMapping).toEqual(
+      currentCase.expectedVariableMapping,
+    );
+    expect(fixture.runner.planJobs).toHaveLength(0);
+    expect(fixture.runner.applyJobs).toHaveLength(0);
+  }
+});
+
+test("re-adoption rejects missing-required or non-user reviewed-variable sets without persisting their values", async () => {
+  const fixture = await reAdoptionRouteFixture("reviewed-set-rejections", {
+    currentVariableMapping: {
+      feature_enabled: false,
+      provisioning_acknowledgement: "initial acknowledgement",
+    },
+    repositoryInputs: [
+      {
+        name: "public_url",
+        source: { kind: "user" },
+        type: "string",
+        required: true,
+        label: { ja: "公開URL", en: "Public URL" },
+      },
+      {
+        name: "feature_enabled",
+        source: { kind: "user" },
+        type: "boolean",
+        required: true,
+        label: { ja: "機能", en: "Feature" },
+      },
+      {
+        name: "provisioning_acknowledgement",
+        source: { kind: "user" },
+        type: "string",
+        required: true,
+        label: { ja: "確認", en: "Acknowledgement" },
+      },
+      {
+        name: "capsule_identity",
+        source: { kind: "capsule_name" },
+        type: "string",
+        label: { ja: "Capsule", en: "Capsule" },
+      },
+      {
+        name: "module_mode",
+        source: { kind: "module_default" },
+        type: "string",
+        label: { ja: "Module mode", en: "Module mode" },
+      },
+      {
+        name: "bootstrap_secret",
+        source: { kind: "user" },
+        type: "string",
+        required: true,
+        secret: true,
+        label: { ja: "Secret", en: "Secret" },
+      },
+    ],
+  });
+  const capsuleBefore = await fixture.operations.capsules.getCapsule(
+    fixture.seeded.capsule.id,
+  );
+  const configIdsBefore = (
+    await fixture.deployStore.listInstallConfigs(capsuleBefore.workspaceId)
+  ).map((config) => config.id).sort();
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const path =
+    `/api/v1/capsules/${capsuleBefore.id}/install-config-re-adoptions`;
+  const complete = {
+    public_url: TAKOS_PUBLIC_ORIGIN,
+    feature_enabled: true,
+    provisioning_acknowledgement: "",
+  };
+  const secret = "do-not-persist-reviewed-sensitive-value";
+  const attempts = [
+    {
+      key: "unknown",
+      reviewedUserVariables: { ...complete, unknown_input: "unsupported" },
+    },
+    {
+      key: "omitted",
+      reviewedUserVariables: {
+        public_url: complete.public_url,
+        feature_enabled: complete.feature_enabled,
+      },
+    },
+    {
+      key: "capsule-owned",
+      reviewedUserVariables: {
+        ...complete,
+        capsule_identity: "caller-must-not-derive-this",
+      },
+    },
+    {
+      key: "module-default",
+      reviewedUserVariables: { ...complete, module_mode: "caller-override" },
+    },
+    {
+      key: "secret",
+      reviewedUserVariables: { ...complete, bootstrap_secret: secret },
+    },
+  ] as const;
+
+  for (const attempt of attempts) {
+    const rejected = await controlJson<{
+      readonly error: { readonly code: string; readonly message: string };
+    }>(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: {
+          "idempotency-key": `re-adopt-reviewed-reject-${attempt.key}-v1`,
+        },
+        body: {
+          ...reAdoptionBody(fixture, authorityGuard),
+          reviewedUserVariables: attempt.reviewedUserVariables,
+        },
+      },
+      409,
+    );
+    expect(rejected.error.code).toBe("failed_precondition");
+    expect(JSON.stringify(rejected)).not.toContain(secret);
+  }
+
+  expect(
+    await fixture.operations.capsules.getCapsule(capsuleBefore.id),
+  ).toEqual(capsuleBefore);
+  expect(
+    (
+      await fixture.deployStore.listInstallConfigs(capsuleBefore.workspaceId)
+    ).map((config) => config.id).sort(),
+  ).toEqual(configIdsBefore);
+  expect(fixture.runner.capsuleSourceFileJobs).toHaveLength(0);
+});
+
+test("re-adoption rejects recursive secret-like reviewed material before digestible work", async () => {
+  const materials = [
+    {
+      suffix: "pem-material",
+      value: {
+        nested: ["-----BEGIN ", "PRIVATE KEY-----", "\nfixture\n"].join(""),
+      },
+    },
+    {
+      suffix: "credential-dsn",
+      value: {
+        nested: ["postgres", "://fixture:password@db.example.test/app"].join(
+          "",
+        ),
+      },
+    },
+    {
+      suffix: "github-token",
+      value: { nested: ["ghp", "_", "a".repeat(24)].join("") },
+    },
+    {
+      suffix: "api-token",
+      value: { nested: [["sk", "-", "b".repeat(24)].join("")] },
+    },
+    {
+      suffix: "nested-secret-key",
+      value: { nested: { apiToken: "fixture-sensitive-material" } },
+    },
+  ] as const;
+
+  for (const material of materials) {
+    const fixture = await reAdoptionRouteFixture(material.suffix, {
+      repositoryInputs: [
+        {
+          name: "public_url",
+          source: { kind: "user" },
+          type: "string",
+          required: true,
+          label: { ja: "公開URL", en: "Public URL" },
+        },
+        {
+          name: "settings",
+          source: { kind: "user" },
+          type: "json",
+          required: false,
+          label: { ja: "設定", en: "Settings" },
+        },
+      ],
+    });
+    const capsuleBefore = await fixture.operations.capsules.getCapsule(
+      fixture.seeded.capsule.id,
+    );
+    const configIdsBefore = (
+      await fixture.deployStore.listInstallConfigs(capsuleBefore.workspaceId)
+    ).map((config) => config.id).sort();
+    const authorityGuard = await readReAdoptionGuard(fixture);
+    const rejected = await controlJson<{
+      readonly error: { readonly code: string };
+    }>(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path:
+          `/api/v1/capsules/${capsuleBefore.id}/install-config-re-adoptions`,
+        headers: {
+          "idempotency-key": `re-adopt-${material.suffix}-v1`,
+        },
+        body: {
+          ...reAdoptionBody(fixture, authorityGuard),
+          reviewedUserVariables: {
+            public_url: TAKOS_PUBLIC_ORIGIN,
+            settings: material.value,
+          },
+        },
+      },
+      400,
+    );
+    expect(rejected.error.code).toBe("invalid_request");
+    expect(JSON.stringify(rejected)).not.toContain(JSON.stringify(material.value));
+    expect(
+      await fixture.operations.capsules.getCapsule(capsuleBefore.id),
+    ).toEqual(capsuleBefore);
+    expect(
+      (
+        await fixture.deployStore.listInstallConfigs(capsuleBefore.workspaceId)
+      ).map((config) => config.id).sort(),
+    ).toEqual(configIdsBefore);
+    expect(fixture.runner.capsuleSourceFileJobs).toHaveLength(0);
+  }
+});
+
+test("re-adoption rejects base-policy collisions with explicit user variables before scanning", async () => {
+  const fixture = await reAdoptionRouteFixture("base-user-collision", {
+    baseVariableMapping: {
+      public_url: "https://base-policy-must-not-win.example.test",
+    },
+  });
+  const capsuleBefore = await fixture.operations.capsules.getCapsule(
+    fixture.seeded.capsule.id,
+  );
+  const configIdsBefore = (
+    await fixture.deployStore.listInstallConfigs(capsuleBefore.workspaceId)
+  ).map((config) => config.id).sort();
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const rejected = await controlJson<{
+    readonly error: { readonly code: string };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path:
+        `/api/v1/capsules/${capsuleBefore.id}/install-config-re-adoptions`,
+      headers: { "idempotency-key": "re-adopt-base-user-collision-v1" },
+      body: {
+        ...reAdoptionBody(fixture, authorityGuard),
+        reviewedUserVariables: {
+          public_url: "https://reviewed-must-not-be-overwritten.example.test",
+        },
+      },
+    },
+    409,
+  );
+  expect(rejected.error.code).toBe("failed_precondition");
+  expect(
+    await fixture.operations.capsules.getCapsule(capsuleBefore.id),
+  ).toEqual(capsuleBefore);
+  expect(
+    (
+      await fixture.deployStore.listInstallConfigs(capsuleBefore.workspaceId)
+    ).map((config) => config.id).sort(),
+  ).toEqual(configIdsBefore);
+  expect(fixture.runner.capsuleSourceFileJobs).toHaveLength(0);
+});
+
+test("re-adoption bounds reviewed JSON depth, nodes, strings, and keys before hashing or scanning", async () => {
+  const fixture = await reAdoptionRouteFixture("reviewed-json-bounds");
+  const capsuleBefore = await fixture.operations.capsules.getCapsule(
+    fixture.seeded.capsule.id,
+  );
+  const configIdsBefore = (
+    await fixture.deployStore.listInstallConfigs(capsuleBefore.workspaceId)
+  ).map((config) => config.id).sort();
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const ordinaryBody = reAdoptionBody(fixture, authorityGuard);
+  const requestPrefix = [
+    `{"baseInstallConfigId":${JSON.stringify(ordinaryBody.baseInstallConfigId)}`,
+    `,"sourceSnapshotId":${JSON.stringify(ordinaryBody.sourceSnapshotId)}`,
+    `,"reason":${JSON.stringify(ordinaryBody.reason)}`,
+    `,"expected":${JSON.stringify(ordinaryBody.expected)}`,
+    `,"reviewedUserVariables":`,
+  ].join("");
+  const deeplyNestedValue = `${"[".repeat(15_000)}null${"]".repeat(15_000)}`;
+  const wideValue = `[${Array.from({ length: 5_000 }, () => "null").join(",")}]`;
+  const longStringValue = JSON.stringify("x".repeat(32 * 1_024 + 1));
+  const longKeyValue = `{${JSON.stringify("k".repeat(257))}:null}`;
+
+  for (const [suffix, value] of [
+    ["depth", deeplyNestedValue],
+    ["nodes", wideValue],
+    ["string-bytes", longStringValue],
+    ["key-bytes", longKeyValue],
+  ] as const) {
+    const rejected = await controlJson<{
+      readonly error: { readonly code: string };
+    }>(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path:
+          `/api/v1/capsules/${capsuleBefore.id}/install-config-re-adoptions`,
+        headers: {
+          "idempotency-key": `re-adopt-reviewed-json-${suffix}-v1`,
+        },
+        rawBody:
+          `${requestPrefix}{"public_url":${value}}}`,
+      },
+      400,
+    );
+    expect(rejected.error.code).toBe("invalid_request");
+  }
+
+  expect(
+    await fixture.operations.capsules.getCapsule(capsuleBefore.id),
+  ).toEqual(capsuleBefore);
+  expect(
+    (
+      await fixture.deployStore.listInstallConfigs(capsuleBefore.workspaceId)
+    ).map((config) => config.id).sort(),
+  ).toEqual(configIdsBefore);
+  expect(fixture.runner.capsuleSourceFileJobs).toHaveLength(0);
 });
 
 test("re-adoption keeps undeclared reviewed values fail-closed", async () => {

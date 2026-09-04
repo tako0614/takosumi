@@ -57,12 +57,26 @@ reconcile step.
      "baseInstallConfigId": "<base-install-config-id>",
      "sourceSnapshotId": "<source-snapshot-id>",
      "reason": "<bounded non-secret reason>",
+     "reviewedUserVariables": {
+       "public_url": "https://example.test",
+       "feature_enabled": true
+     },
      "expected": { "authorityGuard": "<guard-from-capsule-get>" }
    }
    ```
 
-   Unknown fields, secret-like reasons, malformed guards, and missing
-   idempotency keys fail before mutation.
+   `reviewedUserVariables` is optional for existing clients. When supplied, it
+   must be the complete replacement set of non-secret `source.kind=user` inputs
+   from the exact pinned repository module. Every required input must be
+   present. Omission unsets an optional input, so repeat an unchanged optional
+   value to preserve it. Unknown, secret, Capsule/Workspace-derived,
+   module-default, host-delivered, or generic-host-policy-colliding values are
+   rejected; this is a full review/replacement, not a patch. Recursive
+   secret-like keys/values and JSON beyond 32 levels, 4,096 nodes, 256 UTF-8
+   bytes per key, or 32,768 UTF-8 bytes per string fail before digest and source
+   scanning. Unknown fields, secret-like reasons, malformed guards, and missing
+   idempotency keys also fail before mutation. The exact reviewed set is bound
+   into the request digest and same-key replay identity.
 
 3. On 200, re-read the Capsule and the returned target InstallConfig. The
    target is a new immutable derived row; the response is value-free and

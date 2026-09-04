@@ -187,9 +187,19 @@ The caller first reads the Capsule and uses the returned opaque
 `installConfigReAdoption.authorityGuard`. The guard is usable as-is; it does
 not require the caller to know or submit the private InstallConfig digest. The
 closed request body is `baseInstallConfigId`, `sourceSnapshotId`, bounded
-non-secret `reason`, and
-`expected.authorityGuard`. The operation is not an InstallConfig patch and does
-not apply infrastructure.
+non-secret `reason`, optional `reviewedUserVariables`, and
+`expected.authorityGuard`. When present, `reviewedUserVariables` is the exact
+complete replacement set for non-secret inputs declared by that pinned
+repository module with `source.kind=user`. Every required input must be present.
+Omitting an optional input unsets it; an unchanged optional value must be
+repeated to preserve it. Unknown, secret, derived, module-default,
+host-delivered, and generic-host-policy-colliding inputs are rejected. Recursive
+secret-like keys or values are rejected before digest or source scanning. JSON
+is bounded before digest to 32 levels, 4,096 nodes, 256 UTF-8 bytes per key, and
+32,768 UTF-8 bytes per string. Omitting the field preserves the original
+mapping-based re-adoption behavior. The exact set is part of the request digest
+and same-key replay identity. The operation is not an InstallConfig patch and
+does not apply infrastructure.
 
 The operation creates one immutable, derived InstallConfig target and then
 performs one authority-fenced Capsule rebind. The memory, PostgreSQL, and D1

@@ -26,6 +26,9 @@ export type { CapsuleFullName } from "./workspaces.ts";
 export type { Project, PublicProject } from "./projects.ts";
 export type {
   BackupConfig,
+  CapsuleInstallConfigReAdoptionResponse,
+  CapsuleInstallConfigReAdoptionResult,
+  CreateCapsuleInstallConfigReAdoptionRequest,
   InstallConfigLifecycleAction,
   InstallConfigLifecycleCommandAction,
   InstallConfigLifecycleExecutor,
