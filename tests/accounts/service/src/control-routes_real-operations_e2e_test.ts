@@ -36,8 +36,12 @@ import {
   InMemoryCapsuleCoordination,
   type CapsuleCoordination,
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  planRunExecutionInputsDigestMaterial,
+} from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleInstallConfig,
@@ -436,6 +440,14 @@ async function seedQueuedNoStateCapsuleApply(
     installingPrincipalId: "user_test",
   };
   await store.putCapsule(capsule);
+  const inputs = {
+    planRunId: input.planRunId,
+    variables: {},
+    generatedRoot: {
+      files: { "main.tf": 'module "child" { source = "./module" }' },
+      moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
+    },
+  } as const;
   const planRun: PlanRun = {
     id: input.planRunId,
     workspaceId: capsule.workspaceId,
@@ -455,7 +467,10 @@ async function seedQueuedNoStateCapsuleApply(
     sourceDigest: "sha256:source",
     operation: "create",
     runnerProfileId: "opentofu-default",
-    variablesDigest: "sha256:variables",
+    variablesDigest: await stableJsonDigest(inputs.variables),
+    executionInputsDigest: await stableJsonDigest(
+      planRunExecutionInputsDigestMaterial(inputs, undefined),
+    ),
     requiredProviders: [],
     status: "succeeded",
     policy: { status: "passed", reasons: [], checkedAt: 1 },
@@ -471,15 +486,7 @@ async function seedQueuedNoStateCapsuleApply(
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.putPlanRun(planRun);
-  await store.putPlanRunInputs({
-    planRunId: planRun.id,
-    variables: {},
-    generatedRoot: {
-      files: { "main.tf": 'module "child" { source = "./module" }' },
-      moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
-    },
-  });
+  await store.preparePlanRun({ run: planRun, inputs });
   const applyRun: ApplyRun = {
     id: input.applyRunId,
     planRunId: planRun.id,

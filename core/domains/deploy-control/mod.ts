@@ -307,7 +307,9 @@ export function publicCapsule(capsule: Capsule): PublicCapsule {
 }
 
 export function publicPlanRun(planRun: PlanRun): PublicPlanRun {
-  return planRun;
+  const { executionInputsDigest: _executionInputsDigest, ...publicRecord } =
+    planRun;
+  return publicRecord;
 }
 
 /**

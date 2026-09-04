@@ -100,6 +100,18 @@ decoded only behind a controller-owned marker for exact pre-v1 source-less
 destroy/recovery of already-persisted state. That drain cannot create or update
 infrastructure and must be removed after operator inventory reaches zero.
 
+Creating a PlanRun publishes the public Run, its private `PlanRunInputs`, and
+its immutable `DependencySnapshot` as one store operation. The Run carries the
+exact `executionInputsDigest`; credentials and runner dispatch are forbidden
+until the store has durably accepted that complete preparation. Redelivery may
+adopt only byte-equivalent preparation, may re-enqueue only a still-`queued`
+Run, and rejects an occupied Run id or any changed input/dependency evidence.
+A Plan that is terminally rejected by create-time policy persists the public
+failure and dependency evidence but omits the private input sidecar. Historical
+Plan rows without `executionInputsDigest` remain readable evidence but cannot
+be dispatched or applied; operators must create a fresh Plan rather than
+synthesizing or backfilling private preparation.
+
 Public hostname, DNS, and application endpoint ownership stays inside the Git
 module and its provider. Takosumi does not synthesize or reserve Capsule
 hostnames. The optional `.well-known/takosumi.json` owns only install-input

@@ -97,6 +97,8 @@ import type {
   CapsulePatch,
   CapsuleStateVersionGuard,
   OpenTofuControlStore,
+  PreparePlanRunInput,
+  PreparePlanRunResult,
   PlanRunInputs,
   PublicHostReservation,
   RecoverableOpenTofuRunListOptions,
@@ -116,6 +118,7 @@ import type {
 } from "./store.ts";
 import {
   assertSourceSyncSuccessCommit,
+  assertPlanRunPreparation,
   assertCapsuleInterfaceMaterializationIntentClaimInput,
   assertCapsuleInterfaceMaterializationIntentSettlementInput,
   assertRetryCapsuleInterfaceMaterializationIntentInput,
@@ -136,7 +139,10 @@ import {
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
   parseStoredCapsuleCompatibilityProviderGraph,
+  planRunPreparationPersistsInputs,
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
+  planRunPreparationExactlyMatches,
+  PlanRunPreparationConflictError,
   runtimeSecretRetirementDispatchAttempt,
   sourceSnapshotsExactlyMatch,
   storedCapsuleCompatibilityProviderGraph,
@@ -824,6 +830,100 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       },
     );
     return run;
+  }
+
+  async preparePlanRun(
+    input: PreparePlanRunInput,
+  ): Promise<PreparePlanRunResult> {
+    assertPlanRunPreparation(input);
+    return await this.#client.transaction(async (transaction) => {
+      const db = this.#drizzleForClient(transaction);
+      const run = input.run;
+      const inserted = await db
+        .insert(pgSchema.runs)
+        .values({
+          id: run.id,
+          kind: run.driftCheck === true
+            ? "drift_check"
+            : run.operation === "destroy"
+              ? "destroy_plan"
+              : "plan",
+          workspaceId: run.workspaceId,
+          sourceId: null,
+          capsuleId: run.capsuleId ?? null,
+          status: run.status,
+          leaseToken: null,
+          heartbeatAt: run.heartbeatAt ?? null,
+          createdAt: String(run.createdAt),
+          runJson: run,
+        })
+        .onConflictDoNothing({ target: pgSchema.runs.id })
+        .returning({ json: pgSchema.runs.runJson });
+      if (inserted.length === 0) {
+        const currentRunRows = await db
+          .select({ json: pgSchema.runs.runJson })
+          .from(pgSchema.runs)
+          .where(eq(pgSchema.runs.id, run.id))
+          .limit(1);
+        const currentInputRows = await db
+          .select({ json: pgSchema.planRunInputs.inputsJson })
+          .from(pgSchema.planRunInputs)
+          .where(eq(pgSchema.planRunInputs.planRunId, run.id))
+          .limit(1);
+        const parsedCurrentRun = parseRow(currentRunRows[0]) as
+          | StoredRunRecord
+          | undefined;
+        const currentRun = coerceRunRowStatus(
+          parsedCurrentRun && isPlanRunRecord(parsedCurrentRun)
+            ? parsedCurrentRun
+            : undefined,
+        );
+        const currentSnapshotRows = currentRun?.dependencySnapshotId
+          ? await db
+            .select({ json: pgSchema.dependencySnapshots.snapshotJson })
+            .from(pgSchema.dependencySnapshots)
+            .where(
+              eq(
+                pgSchema.dependencySnapshots.id,
+                currentRun.dependencySnapshotId,
+              ),
+            )
+            .limit(1)
+          : [];
+        const currentInputs = parseRow(currentInputRows[0]) as
+          | PlanRunInputs
+          | undefined;
+        const currentSnapshot = parseRow(currentSnapshotRows[0]) as
+          | DependencySnapshot
+          | undefined;
+        if (
+          planRunPreparationExactlyMatches(
+            currentRun,
+            currentInputs,
+            currentSnapshot,
+            input,
+          )
+        ) {
+          return { status: "existing" as const, run: currentRun };
+        }
+        throw new PlanRunPreparationConflictError(run.id);
+      }
+      if (input.dependencySnapshot) {
+        await db.insert(pgSchema.dependencySnapshots).values({
+          id: input.dependencySnapshot.id,
+          runId: input.dependencySnapshot.runId,
+          snapshotJson: input.dependencySnapshot,
+          createdAt: input.dependencySnapshot.createdAt,
+        });
+      }
+      if (planRunPreparationPersistsInputs(run)) {
+        await db.insert(pgSchema.planRunInputs).values({
+          planRunId: input.inputs.planRunId,
+          inputsJson: input.inputs,
+        });
+      }
+      return { status: "created" as const, run };
+    });
   }
 
   async getPlanRun(id: string): Promise<PlanRun | undefined> {

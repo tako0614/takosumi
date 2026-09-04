@@ -16,8 +16,12 @@ import {
   capsuleLeaseScope,
   withCapsuleLease,
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  planRunExecutionInputsDigestMaterial,
+} from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
   fixtureStateCommit,
   seedCapsuleModel,
@@ -73,6 +77,16 @@ async function seedApply(
     url: source.url,
     commit: "abcdef0123456789abcdef0123456789abcdef01",
   };
+  const inputs = {
+    planRunId: ids.planRunId,
+    variables: {},
+    generatedRoot: {
+      files: {
+        "main.tf": 'module "child" { source = "./module" }',
+      },
+      moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
+    },
+  } as const;
   const planRun: PlanRun = {
     id: ids.planRunId,
     workspaceId: capsule.workspaceId,
@@ -88,7 +102,10 @@ async function seedApply(
     sourceDigest: "sha256:src",
     operation: "update",
     runnerProfileId: "opentofu-default",
-    variablesDigest: "sha256:vars",
+    variablesDigest: await stableJsonDigest(inputs.variables),
+    executionInputsDigest: await stableJsonDigest(
+      planRunExecutionInputsDigestMaterial(inputs, undefined),
+    ),
     requiredProviders: [],
     status: "succeeded",
     policy: { status: "passed", reasons: [], checkedAt: 1 },
@@ -100,17 +117,7 @@ async function seedApply(
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.putPlanRun(planRun);
-  await store.putPlanRunInputs({
-    planRunId: planRun.id,
-    variables: {},
-    generatedRoot: {
-      files: {
-        "main.tf": 'module "child" { source = "./module" }',
-      },
-      moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
-    },
-  });
+  await store.preparePlanRun({ run: planRun, inputs });
   const applyRun: ApplyRun = {
     id: ids.applyRunId,
     planRunId: ids.planRunId,
@@ -125,7 +132,7 @@ async function seedApply(
       currentStateVersionId: seedStateVersionId,
       runnerProfileId: "opentofu-default",
       sourceDigest: "sha256:src",
-      variablesDigest: "sha256:vars",
+      variablesDigest: planRun.variablesDigest,
       policyDecisionDigest: "sha256:policy",
       planDigest: PLAN_DIGEST,
       planArtifactDigest: PLAN_DIGEST,

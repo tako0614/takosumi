@@ -26,6 +26,8 @@ import {
   InMemoryOpenTofuControlStore,
   type CapsulePatch,
   type CapsuleStateVersionGuard,
+  type TransitionRunInput,
+  type TransitionRunResult,
   type UpdateCapsuleLifecycleCommand,
   type UpdateCapsuleLifecycleResult,
 } from "../../../../core/domains/deploy-control/store.ts";
@@ -75,6 +77,7 @@ class FullStubRunner implements OpenTofuRunner {
     },
   };
   planCalls = 0;
+  applyCalls = 0;
 
   plan(_job: OpenTofuPlanJob): Promise<OpenTofuPlanResult> {
     this.planCalls += 1;
@@ -95,6 +98,7 @@ class FullStubRunner implements OpenTofuRunner {
     });
   }
   apply(job: OpenTofuApplyJob) {
+    this.applyCalls += 1;
     return Promise.resolve({
       outputs: {
         launch_url: { sensitive: false, value: "https://app.example.com" },
@@ -158,6 +162,31 @@ class AutoUpdateClaimBarrierStore extends InMemoryOpenTofuControlStore {
     if (this.claimAttempts === 1) this.#resolveFirstClaim();
     if (this.claimAttempts === 2) this.#resolveClaims();
     await this.#releaseClaims;
+  }
+}
+
+class CorruptingAutoApplyInputsStore extends InMemoryOpenTofuControlStore {
+  override async transitionRun(
+    input: TransitionRunInput,
+  ): Promise<TransitionRunResult> {
+    const result = await super.transitionRun(input);
+    if (
+      result.won &&
+      input.kind === "plan" &&
+      input.run.autoApplyRequested === true &&
+      input.run.status === "succeeded"
+    ) {
+      const prepared = await super.getPlanRunInputs(input.run.id);
+      if (!prepared) throw new Error("auto-update Plan inputs are missing");
+      // Simulate corruption after Plan success but before #maybeAutoApply reads
+      // the retained preparation. Apply admission must authenticate the exact
+      // reviewed bundle and refuse to create any provider-mutating ApplyRun.
+      await super.putPlanRunInputs({
+        ...prepared,
+        variables: { alteredAfterReview: true },
+      });
+    }
+    return result;
   }
 }
 
@@ -235,7 +264,8 @@ output "launch_url" {
     });
   }
   const initialPlanCalls = runner.planCalls;
-  return { store, controller, runner, initialPlanCalls };
+  const initialApplyCalls = runner.applyCalls;
+  return { store, controller, runner, initialPlanCalls, initialApplyCalls };
 }
 
 async function syncNewCommit(controller: OpenTofuController): Promise<void> {
@@ -308,6 +338,27 @@ test("a destructive update stops at waiting_approval and is never auto-applied",
   expect(autoPlan?.status).toBe("succeeded");
   expect(autoPlan?.requiresApproval).toBe(true);
   expect(autoPlan?.appliedApplyRunId).toBeUndefined();
+});
+
+test("auto-update never applies a Plan whose exact prepared inputs changed", async () => {
+  const store = new CorruptingAutoApplyInputsStore();
+  const { controller, runner, initialPlanCalls, initialApplyCalls } =
+    await buildActiveCapsule({ autoUpdate: true, store });
+
+  await syncNewCommit(controller);
+
+  const capsule = await store.getCapsule("cap_auto0001");
+  expect(capsule?.status).toBe("stale");
+  expect(capsule?.currentStateGeneration).toBe(1);
+  expect(runner.planCalls).toBe(initialPlanCalls + 1);
+  const plans = await planRunsOf(controller, store);
+  const autoPlan = plans.find((run) => run.autoApplyRequested === true);
+  expect(autoPlan).toMatchObject({
+    status: "succeeded",
+    autoApplyRequested: true,
+  });
+  expect(autoPlan?.appliedApplyRunId).toBeUndefined();
+  expect(runner.applyCalls).toBe(initialApplyCalls);
 });
 
 test("without the opt-in a stale capsule stays stale and no auto plan is created", async () => {

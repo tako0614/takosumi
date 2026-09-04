@@ -281,8 +281,8 @@ function requiredStoredBoolean(value: unknown, field: string): boolean {
  * Internal (non-public) plan inputs persisted alongside a PlanRun so the queue
  * consumer can re-run the plan after the create call returns. The public PlanRun
  * deliberately keeps only `variablesDigest`; the values live here and are never
- * projected into the public ledger. Removed when the run reaches a terminal
- * state.
+ * projected into the public ledger. Retained for an applyable succeeded or
+ * approval-waiting Plan until Apply consumes it; other terminal Plans remove it.
  */
 export interface PlanRunInputs {
   readonly planRunId: string;
@@ -327,13 +327,208 @@ export interface PlanRunInputs {
    * sensitive `published_output` value injected into a plan flows into
    * `variables` AND is baked as a literal into the generic Capsule's generated
    * `main.tf`; either would persist as a cleartext ledger value here. When a
-   * sensitive value was injected, the controller seals `{ variables,
-   * generatedRoot, outputAllowlist }` into this blob with the SAME AES-GCM
-   * envelope used for state / plan / dependency-value artifacts and leaves the
-   * cleartext fields empty/absent on the row; it unseals transparently at
-   * plan/apply dispatch. The store only ever sees the ciphertext.
+   * sensitive value was injected, the controller seals the complete sidecar
+   * payload into this blob with the SAME AES-GCM envelope used for state / plan /
+   * dependency-value artifacts and leaves the cleartext fields empty/absent on
+   * the row; it unseals transparently at plan/apply dispatch. The store only ever
+   * sees the ciphertext.
    */
   readonly sealed?: SealedDependencyValues;
+}
+
+/**
+ * One immutable Plan preparation unit. The Run must not become queue-visible
+ * unless its exact private inputs and optional DependencySnapshot commit with
+ * it. `inputs` is the at-rest representation (possibly sealed); the Run's
+ * `executionInputsDigest` pins the canonical plaintext bundle.
+ */
+export interface PreparePlanRunInput {
+  readonly run: PlanRun;
+  readonly inputs: PlanRunInputs;
+  readonly dependencySnapshot?: DependencySnapshot;
+}
+
+export interface PreparePlanRunResult {
+  readonly status: "created" | "existing";
+  readonly run: PlanRun;
+}
+
+/**
+ * Failed Plans are terminal and are never dispatched. Their private
+ * preparation bundle has no recovery consumer, so retaining it would only
+ * leave sensitive/generated inputs in the sidecar indefinitely. A create-time
+ * policy denial is the normal path that reaches `preparePlanRun` already
+ * failed, but the status check also keeps manually recovered/legacy failures
+ * bounded.
+ */
+export function planRunPreparationPersistsInputs(run: PlanRun): boolean {
+  return run.status !== "failed";
+}
+
+export class PlanRunPreparationConflictError extends Error {
+  override readonly name = "PlanRunPreparationConflictError";
+
+  constructor(readonly planRunId: string) {
+    super(
+      `PlanRun ${planRunId} already exists with different immutable preparation inputs`,
+    );
+  }
+}
+
+export function assertPlanRunPreparation(input: PreparePlanRunInput): void {
+  const digest = input.run.executionInputsDigest;
+  if (!digest?.trim()) {
+    throw new TypeError("prepared PlanRun must carry executionInputsDigest");
+  }
+  if (input.inputs.planRunId !== input.run.id) {
+    throw new TypeError("PlanRunInputs must reference the prepared PlanRun");
+  }
+  const snapshotId = input.run.dependencySnapshotId;
+  if (
+    (snapshotId === undefined) !== (input.dependencySnapshot === undefined) ||
+    (input.dependencySnapshot !== undefined &&
+      (input.dependencySnapshot.id !== snapshotId ||
+        input.dependencySnapshot.runId !== input.run.id))
+  ) {
+    throw new TypeError(
+      "DependencySnapshot must exactly match the prepared PlanRun link",
+    );
+  }
+}
+
+export function planRunPreparationExactlyMatches(
+  existingRun: PlanRun | undefined,
+  existingInputs: PlanRunInputs | undefined,
+  existingSnapshot: DependencySnapshot | undefined,
+  candidate: PreparePlanRunInput,
+): existingRun is PlanRun {
+  if (!existingRun) return false;
+  if (
+    existingRun.executionInputsDigest !== candidate.run.executionInputsDigest ||
+    stableStringify(planRunPreparationIdentity(existingRun)) !==
+      stableStringify(planRunPreparationIdentity(candidate.run)) ||
+    (existingInputs !== undefined &&
+      !planRunInputsPreparationExactlyMatches(existingInputs, candidate.inputs))
+  ) {
+    return false;
+  }
+  // A failed create is intentionally committed without its private inputs.
+  // The immutable Run identity/digest still makes an exact retry
+  // idempotent, while a missing sidecar on any other terminal row remains a
+  // conflict that must not be repaired from mutable state. Continue below to
+  // compare any linked DependencySnapshot as well.
+  if (
+    existingInputs === undefined &&
+    !(
+      existingRun.status === "failed" &&
+      candidate.run.status === "failed" &&
+      !planRunPreparationPersistsInputs(candidate.run)
+    )
+  ) {
+    return false;
+  }
+  if (candidate.dependencySnapshot === undefined) {
+    return (
+      existingRun.dependencySnapshotId === undefined &&
+      existingSnapshot === undefined
+    );
+  }
+  return (
+    existingRun.dependencySnapshotId !== undefined &&
+    existingSnapshot !== undefined &&
+    existingSnapshot.id === existingRun.dependencySnapshotId &&
+    existingSnapshot.runId === existingRun.id &&
+    stableStringify(dependencySnapshotPreparationContent(existingSnapshot)) ===
+      stableStringify(
+        dependencySnapshotPreparationContent(candidate.dependencySnapshot),
+      )
+  );
+}
+
+function planRunInputsPreparationExactlyMatches(
+  existing: PlanRunInputs,
+  candidate: PlanRunInputs,
+): boolean {
+  if (
+    existing.planRunId === "" ||
+    existing.planRunId !== candidate.planRunId
+  ) {
+    return false;
+  }
+  if (!existing.sealed && !candidate.sealed) {
+    return stableStringify(existing) === stableStringify(candidate);
+  }
+  if (!existing.sealed || !candidate.sealed) return false;
+  // AES-GCM ciphertext intentionally changes on every seal. The stable content
+  // digest + key inventory identify the same sealed plaintext, while the Run's
+  // executionInputsDigest pins the complete plaintext PlanRunInputs bundle.
+  return (
+    existing.sealed.contentDigest === candidate.sealed.contentDigest &&
+    stableStringify(existing.sealed.names) ===
+      stableStringify(candidate.sealed.names)
+  );
+}
+
+function dependencySnapshotPreparationContent(snapshot: DependencySnapshot) {
+  return {
+    mode: snapshot.mode,
+    dependencies: snapshot.dependencies.map((entry) => ({
+      ...entry,
+      ...(entry.sealedValues
+        ? {
+            sealedValues: {
+              contentDigest: entry.sealedValues.contentDigest,
+              names: entry.sealedValues.names,
+            },
+          }
+        : {}),
+    })),
+  };
+}
+
+/**
+ * Canonical plaintext execution material pinned by a Plan. Snapshot row ids,
+ * timestamps, and randomized ciphertext are storage metadata; the semantic
+ * dependency pins and sealed plaintext digests are execution authority.
+ */
+export function planRunExecutionInputsDigestMaterial(
+  inputs: PlanRunInputs,
+  dependencySnapshot: DependencySnapshot | undefined,
+) {
+  return {
+    planRunInputs: inputs,
+    dependencySnapshot: dependencySnapshot
+      ? dependencySnapshotPreparationContent(dependencySnapshot)
+      : null,
+  };
+}
+
+function planRunPreparationIdentity(run: PlanRun) {
+  return {
+    id: run.id,
+    workspaceId: run.workspaceId,
+    createdBy: run.createdBy,
+    capsuleId: run.capsuleId,
+    capsuleCurrentStateVersionId: run.capsuleCurrentStateVersionId,
+    capsuleExecutionAuthorityEpoch: run.capsuleExecutionAuthorityEpoch,
+    source: run.source,
+    sourceDigest: run.sourceDigest,
+    operation: run.operation,
+    runnerProfileId: run.runnerProfileId,
+    variablesDigest: run.variablesDigest,
+    executionInputsDigest: run.executionInputsDigest,
+    requiredProviders: run.requiredProviders,
+    requiredProviderRequirements: run.requiredProviderRequirements,
+    policy: { status: run.policy.status, reasons: run.policy.reasons },
+    compatibilityReportId: run.compatibilityReportId,
+    baseStateGeneration: run.baseStateGeneration,
+    sourceSnapshotId: run.sourceSnapshotId,
+    capsuleContext: run.capsuleContext,
+    runGroupId: run.runGroupId,
+    driftCheck: run.driftCheck,
+    refreshOnly: run.refreshOnly,
+    autoApplyRequested: run.autoApplyRequested,
+  };
 }
 
 /**
@@ -1334,6 +1529,9 @@ export interface OpenTofuControlStore {
   putPlanRun(run: PlanRun): Promise<PlanRun>;
   getPlanRun(id: string): Promise<PlanRun | undefined>;
 
+  /** Insert-or-adopt one atomic, immutable Plan preparation unit. */
+  preparePlanRun(input: PreparePlanRunInput): Promise<PreparePlanRunResult>;
+
   // Internal (non-public) plan inputs for the RunOwner. Never projected.
   putPlanRunInputs(inputs: PlanRunInputs): Promise<void>;
   getPlanRunInputs(planRunId: string): Promise<PlanRunInputs | undefined>;
@@ -2036,6 +2234,54 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   putPlanRun(run: PlanRun): Promise<PlanRun> {
     this.#runs.set(run.id, run);
     return Promise.resolve(run);
+  }
+
+  async preparePlanRun(
+    input: PreparePlanRunInput,
+  ): Promise<PreparePlanRunResult> {
+    assertPlanRunPreparation(input);
+    const current = this.#runs.get(input.run.id);
+    if (current !== undefined) {
+      const currentRun = isPlanRunRecord(current)
+        ? coerceRunRowStatus(current)
+        : undefined;
+      const currentInputs = this.#planRunInputs.get(input.run.id);
+      const currentSnapshot = currentRun?.dependencySnapshotId
+        ? this.#dependencySnapshots.get(currentRun.dependencySnapshotId)
+        : undefined;
+      if (
+        planRunPreparationExactlyMatches(
+          currentRun,
+          currentInputs,
+          currentSnapshot,
+          input,
+        )
+      ) {
+        return { status: "existing", run: currentRun };
+      }
+      throw new PlanRunPreparationConflictError(input.run.id);
+    }
+    if (
+      this.#planRunInputs.has(input.run.id) ||
+      (input.dependencySnapshot !== undefined &&
+        this.#dependencySnapshots.has(input.dependencySnapshot.id))
+    ) {
+      throw new PlanRunPreparationConflictError(input.run.id);
+    }
+    // No await or externally observable callback exists between these writes.
+    // Publish the queue-visible Run last so even an in-process observer cannot
+    // see it before the exact private inputs are present.
+    if (planRunPreparationPersistsInputs(input.run)) {
+      this.#planRunInputs.set(input.run.id, input.inputs);
+    }
+    if (input.dependencySnapshot) {
+      this.#dependencySnapshots.set(
+        input.dependencySnapshot.id,
+        input.dependencySnapshot,
+      );
+    }
+    this.#runs.set(input.run.id, input.run);
+    return { status: "created", run: input.run };
   }
 
   getPlanRun(id: string): Promise<PlanRun | undefined> {

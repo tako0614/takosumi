@@ -39,6 +39,9 @@ import {
 import {
   InMemoryOpenTofuControlStore,
   type OpenTofuControlStore,
+  type PlanRunInputs,
+  type PreparePlanRunInput,
+  type PreparePlanRunResult,
   type TransitionRunInput,
   type TransitionRunResult,
 } from "../../../../core/domains/deploy-control/store.ts";
@@ -1396,10 +1399,10 @@ test("Capsule Plan without a materializer rejects re-adoption between outer auth
           return await targetStore.getCapsuleExecutionAuthorityEpoch(capsuleId);
         };
       }
-      if (property === "putPlanRun") {
-        return async (planRun: PlanRun) => {
+      if (property === "preparePlanRun") {
+        return async (input: PreparePlanRunInput) => {
           planWrites += 1;
-          return await targetStore.putPlanRun(planRun);
+          return await targetStore.preparePlanRun(input);
         };
       }
       const value = Reflect.get(targetStore, property, receiver);
@@ -1458,8 +1461,8 @@ test("Capsule Plan re-adoption after the final authority check remains fenced at
   let rebound = false;
   const store = new Proxy(inner, {
     get(targetStore, property, receiver) {
-      if (property === "putPlanRun") {
-        return async (planRun: PlanRun) => {
+      if (property === "preparePlanRun") {
+        return async (input: PreparePlanRunInput) => {
           if (!rebound) {
             const result = await targetStore.rebindCapsuleInstallConfig({
               capsuleId: seeded.capsule.id,
@@ -1470,7 +1473,7 @@ test("Capsule Plan re-adoption after the final authority check remains fenced at
             expect(result.status).toBe("updated");
             rebound = true;
           }
-          return await targetStore.putPlanRun(planRun);
+          return await targetStore.preparePlanRun(input);
         };
       }
       const value = Reflect.get(targetStore, property, receiver);
@@ -3647,7 +3650,47 @@ test("capsule plan uses InstallConfig modulePath inside a repo-root SourceSnapsh
   );
 });
 
-test("capsule queued plan reconstructs dispatch when generated-root sidecar is missing", async () => {
+class CrashBeforePlanInputsStore extends InMemoryOpenTofuControlStore {
+  observedPlanRunId: string | undefined;
+
+  override putPlanRun(run: PlanRun): Promise<PlanRun> {
+    this.observedPlanRunId = run.id;
+    return super.putPlanRun(run);
+  }
+
+  override putPlanRunInputs(_inputs: PlanRunInputs): Promise<void> {
+    throw new Error("fault after the PlanRun write and before runs_inputs");
+  }
+
+  override preparePlanRun(
+    input: PreparePlanRunInput,
+  ): Promise<PreparePlanRunResult> {
+    this.observedPlanRunId = input.run.id;
+    throw new Error("fault inside atomic PlanRun preparation");
+  }
+}
+
+test("capsule plan preparation failure never exposes a queued PlanRun without exact inputs", async () => {
+  const store = new CrashBeforePlanInputsStore();
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, {
+    enqueueRun: () => Promise.resolve(),
+  });
+
+  await expect(controller.createCapsulePlan("cap_fixture1")).rejects.toThrow(
+    /fault/,
+  );
+
+  expect(store.observedPlanRunId).toBeDefined();
+  expect(await store.getPlanRun(store.observedPlanRunId!)).toBeUndefined();
+  expect(
+    await store.getPlanRunInputs(store.observedPlanRunId!),
+  ).toBeUndefined();
+  expect(runner.planJobs).toHaveLength(0);
+});
+
+test("capsule queued plan fails closed when exact prepared inputs are missing or changed", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   const seeded = await seedRunnableCapsuleModel(store, {
@@ -3694,14 +3737,69 @@ test("capsule queued plan reconstructs dispatch when generated-root sidecar is m
 
   const { planRun } = await controller.createCapsulePlan("cap_fixture1");
   expect(planRun.status).toBe("queued");
+  expect("executionInputsDigest" in planRun).toBe(false);
+  expect(
+    (await store.getPlanRun(planRun.id))?.executionInputsDigest,
+  ).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(await store.getPlanRunInputs(planRun.id)).toBeDefined();
 
   await store.deletePlanRunInputs(planRun.id);
+  const recovered = await store.listRecoverableOpenTofuRuns({
+    staleQueuedBeforeMs: Number.MAX_SAFE_INTEGER,
+    staleRunningBeforeMs: Number.MAX_SAFE_INTEGER,
+  });
+  expect(recovered.map((run) => run.id)).toContain(planRun.id);
   const completed = await controller.runQueuedPlan(planRun.id);
 
-  expect(completed?.status).toBe("succeeded");
-  expect(counted.mintCount).toBeGreaterThan(0);
-  expect(runner.planJobs).toHaveLength(1);
+  expect(completed?.status).toBe("failed");
+  expect(completed?.diagnostics?.[0]?.message).toContain(
+    "plan_run_inputs_missing",
+  );
+  expect(counted.mintCount).toBe(0);
+  expect(runner.planJobs).toHaveLength(0);
+
+  const { planRun: corruptPlan } = await controller.createCapsulePlan(
+    "cap_fixture1",
+  );
+  const preparedInputs = await store.getPlanRunInputs(corruptPlan.id);
+  expect(preparedInputs?.generatedRoot).toBeDefined();
+  await store.putPlanRunInputs({
+    ...preparedInputs!,
+    generatedRoot: {
+      ...preparedInputs!.generatedRoot!,
+      files: {
+        ...preparedInputs!.generatedRoot!.files,
+        "main.tf": "# altered after review",
+      },
+    },
+  });
+
+  const corrupt = await controller.runQueuedPlan(corruptPlan.id);
+  expect(corrupt?.status).toBe("failed");
+  expect(corrupt?.diagnostics?.[0]?.code).toBe("plan_run_inputs_corrupt");
+  expect(counted.mintCount).toBe(0);
+  expect(runner.planJobs).toHaveLength(0);
+
+  const { planRun: applyPlan } = await controller.createCapsulePlan(
+    "cap_fixture1",
+  );
+  const planned = await controller.runQueuedPlan(applyPlan.id);
+  expect(planned?.status).toBe("succeeded");
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: applyPlan.id,
+    expected: applyExpectedGuardFromPlanRun(planned!),
+  });
+  expect(applyRun.status).toBe("queued");
+  await store.deletePlanRunInputs(applyPlan.id);
+  const mintCountBeforeApplyRepair = counted.mintCount;
+
+  const failedApply = await controller.runQueuedApply(applyRun.id);
+  expect(failedApply.applyRun.status).toBe("failed");
+  expect(failedApply.applyRun.diagnostics?.[0]?.code).toBe(
+    "plan_run_inputs_missing",
+  );
+  expect(counted.mintCount).toBe(mintCountBeforeApplyRepair);
+  expect(runner.applyJobs).toHaveLength(0);
 });
 
 test("capsule plan verifies CompatibilityReport before provider credential mint", async () => {
@@ -5284,7 +5382,7 @@ test("capsule apply rejects a CompatibilityReport scoped to another Capsule befo
   expect(runner.applyJobs).toHaveLength(0);
 });
 
-test("capsule apply reconstructs dispatch when generated-root sidecar is missing", async () => {
+test("capsule apply fails closed when the exact generated-root sidecar is missing", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   const seeded = await seedRunnableCapsuleModel(store, {
@@ -5334,14 +5432,18 @@ test("capsule apply reconstructs dispatch when generated-root sidecar is missing
   expect(mintCountAfterPlan).toBeGreaterThan(0);
 
   await store.deletePlanRunInputs(planRun.id);
-  const { applyRun } = await controller.createApplyRun({
-    planRunId: planRun.id,
-    expected: applyExpectedGuardFromPlanRun(planRun),
+  await expect(
+    controller.createApplyRun({
+      planRunId: planRun.id,
+      expected: applyExpectedGuardFromPlanRun(planRun),
+    }),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "plan_run_inputs_missing" },
   });
 
-  expect(applyRun.status).toBe("succeeded");
-  expect(counted.mintCount).toBeGreaterThan(mintCountAfterPlan);
-  expect(runner.applyJobs).toHaveLength(1);
+  expect(counted.mintCount).toBe(mintCountAfterPlan);
+  expect(runner.applyJobs).toHaveLength(0);
 });
 
 test("capsule plan blocks when provider lockfile digest is required but missing", async () => {
