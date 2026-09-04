@@ -30,6 +30,15 @@ import {
   stableJsonDigest,
   stableStringify,
 } from "../../../core/adapters/source/digest.ts";
+import type {
+  OpenTofuApplyJob,
+  OpenTofuDestroyJob,
+} from "../../../core/domains/deploy-control/mod.ts";
+import {
+  RUN_EXECUTION_EVIDENCE_CONTRACT,
+  type RunExecutionCommit,
+  type RunExecutionEvidence,
+} from "takosumi-contract/runs";
 
 /*
  * This module is test-only. ProviderBindingSet fixture changes deliberately go
@@ -112,6 +121,7 @@ export const FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE = {
   attestationMethod: "forced_filesystem_mirror_init",
   mirrorPath:
     "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
+  installedDigest: `sha256:${"e".repeat(64)}`,
 } as const;
 export const FIXTURE_AWS_MIRROR_EVIDENCE = {
   provider: FIXTURE_AWS_PROVIDER,
@@ -121,7 +131,80 @@ export const FIXTURE_AWS_MIRROR_EVIDENCE = {
   attestationMethod: "forced_filesystem_mirror_init",
   mirrorPath:
     "/opt/opentofu/provider-mirror/registry.opentofu.org/hashicorp/aws",
+  installedDigest: `sha256:${"e".repeat(64)}`,
 } as const;
+
+const FIXTURE_PROVIDER_ARTIFACT_DIGEST =
+  `sha256:${"e".repeat(64)}` as `sha256:${string}`;
+
+function fixtureProviderArtifacts(
+  providers: readonly string[],
+): RunExecutionEvidence["authority"]["providerArtifacts"] {
+  return providers
+    .filter((provider) => !provider.includes("/builtin/"))
+    .map((source) => ({
+      source: normalizeProviderSourceAddress(source),
+      digest: FIXTURE_PROVIDER_ARTIFACT_DIGEST,
+      attested: true as const,
+    }))
+    .sort((left, right) =>
+      left.source === right.source
+        ? left.digest.localeCompare(right.digest)
+        : left.source.localeCompare(right.source),
+    );
+}
+
+/** Explicit immutable identities for test-only runner compositions. */
+export const FIXTURE_EXECUTION_EVIDENCE_AUTHORITY = {
+  controllerArtifact: { digest: `sha256:${"a".repeat(64)}`, immutable: true },
+  runnerArtifact: { digest: `sha256:${"b".repeat(64)}`, immutable: true },
+  executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
+} as const;
+
+/** Build the exact evidence a successful fixture runner must return. */
+export function fixtureExecutionEvidence(
+  job: OpenTofuApplyJob | OpenTofuDestroyJob,
+  action: "apply" | "destroy",
+  options: {
+    readonly providerArtifacts?: RunExecutionEvidence["authority"]["providerArtifacts"];
+    readonly outcome?: RunExecutionEvidence["outcome"];
+    readonly commit?: RunExecutionCommit;
+  } = {},
+): RunExecutionEvidence {
+  if (!job.executionEvidenceCommit) {
+    throw new Error("fixture runner job is missing execution evidence commit");
+  }
+  if (!job.planRun.planDigest) {
+    throw new Error("fixture runner plan is missing plan digest");
+  }
+  return {
+    format: RUN_EXECUTION_EVIDENCE_CONTRACT,
+    runId: job.applyRun.id,
+    planRunId: job.planRun.id,
+    action,
+    outcome: options.outcome ?? "committed",
+    authority: {
+      ...FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+      runnerProfileId: job.runnerProfile.id,
+      executorId: job.runnerProfile.executorId,
+      providerArtifacts:
+        options.providerArtifacts ??
+        fixtureProviderArtifacts(job.planRun.requiredProviders),
+    },
+    plan: {
+      digest: job.planRun.planDigest as `sha256:${string}`,
+      artifactDigest: job.planArtifact.digest as `sha256:${string}`,
+    },
+    commit:
+      options.commit ??
+      (options.outcome === "provider_failed_state_persisted" &&
+      "stateVersionId" in job.executionEvidenceCommit
+        ? { stateVersionId: job.executionEvidenceCommit.stateVersionId }
+        : job.executionEvidenceCommit),
+    receipt: { operationId: job.applyRun.id, version: 1, fence: 1 },
+    committedAt: "2026-06-06T00:00:00.000Z",
+  };
+}
 
 /** A successful runner mutation always returns evidence of its durable state. */
 export function fixtureStateCommit(): { readonly stateDigest: string };

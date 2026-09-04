@@ -31,7 +31,9 @@ import type {
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   fakeProviderVault,
+  fixtureExecutionEvidence,
   fixtureStateCommit,
   seedCapsuleModel,
   seedProviderConnections,
@@ -125,6 +127,7 @@ async function seededFailureController(
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: sequenceNow(1),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   });
   return { store, controller, events };
 }
@@ -197,7 +200,11 @@ test("a successful plan + apply records NO run.failed Activity event", async () 
       }),
     apply: (job: OpenTofuApplyJob) =>
       Promise.resolve(
-        fixtureStateCommit({ rawOutputRef: job.rawOutputRef }),
+        fixtureStateCommit({
+          rawOutputRef: job.rawOutputRef,
+          providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+          executionEvidence: fixtureExecutionEvidence(job, "apply"),
+        }),
       ),
   });
 

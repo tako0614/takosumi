@@ -88,9 +88,8 @@ function runnerProfile(): RunnerProfile {
     allowedProviders: [PROVIDER],
     requireProviderBindings: true,
     stateBackend: { kind: "operator-managed", ref: "r2://state" },
-    stateLock: { kind: "native" },
     networkPolicy: { mode: "operator-managed" },
-    secretExposure: {
+    secretExposurePolicy: {
       providerCredentials: "runner-only",
       tenantWorkerOperatorSecrets: "forbidden",
       redactLogs: true,
@@ -119,6 +118,7 @@ function planResult(): OpenTofuPlanResult {
         attested: true,
         attestationMethod: "test_filesystem_mirror",
         mirrorPath: `/opt/opentofu/provider-mirror/${PROVIDER}`,
+        installedDigest: `sha256:${"e".repeat(64)}`,
       },
     ],
   };

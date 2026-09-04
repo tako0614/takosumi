@@ -133,6 +133,9 @@ export interface ComposedServerOverrides {
   readonly runnerProfiles?: Parameters<
     typeof buildComposedApp
   >[0]["runnerProfiles"];
+  readonly executionEvidenceAuthority?: Parameters<
+    typeof buildComposedApp
+  >[0]["executionEvidenceAuthority"];
   readonly defaultRunnerProfileId?: Parameters<
     typeof buildComposedApp
   >[0]["defaultRunnerProfileId"];
@@ -182,6 +185,9 @@ export async function buildComposedServer(
       : {}),
     ...(overrides.runnerProfiles
       ? { runnerProfiles: overrides.runnerProfiles }
+      : {}),
+    ...(overrides.executionEvidenceAuthority
+      ? { executionEvidenceAuthority: overrides.executionEvidenceAuthority }
       : {}),
     ...(overrides.defaultRunnerProfileId
       ? { defaultRunnerProfileId: overrides.defaultRunnerProfileId }

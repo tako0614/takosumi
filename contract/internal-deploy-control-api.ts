@@ -14,6 +14,12 @@ import type { StateVersion } from "./state-versions.ts";
 import type { ProviderResolution } from "./provider-resolution.ts";
 import type { CapsuleProviderRequirement } from "./capsules.ts";
 import type { PlanResourceScope } from "./plan-scope.ts";
+import type {
+  RunExecutionArtifactIdentity,
+  RunExecutionAuthority,
+  RunExecutionCommit,
+  RunExecutionEvidence,
+} from "./runs.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 export type {
   CredentialRecipe,
@@ -187,6 +193,15 @@ export interface RunnerProfile {
   readonly concurrency?: number;
   /** Descriptive/search metadata only. It MUST NOT affect policy or execution. */
   readonly labels?: Readonly<Record<string, string>>;
+  /**
+   * Immutable controller/runner/executor identities supplied by the composing
+   * host. Newly successful mutations fail closed when this is absent.
+   */
+  readonly executionEvidenceAuthority?: {
+    readonly controllerArtifact: RunExecutionArtifactIdentity;
+    readonly runnerArtifact: RunExecutionArtifactIdentity;
+    readonly executorArtifact: RunExecutionArtifactIdentity;
+  };
   readonly createdAt: number;
 }
 
@@ -451,6 +466,8 @@ export interface ApplyRun {
   readonly providerResolutions?: readonly ProviderResolution[];
   readonly runEnvironmentEvidenceDigest?: string;
   readonly redactionProfileId?: string;
+  /** Durable value-free receipt for a terminal provider mutation. */
+  readonly executionEvidence?: RunExecutionEvidence;
   readonly diagnostics?: readonly RunDiagnostic[];
   readonly auditEvents: readonly DeployControlAuditEvent[];
   readonly createdAt: number;
@@ -736,6 +753,12 @@ export interface GetStateVersionResponse {
 
 export * from "./connections.ts";
 export * from "./deploy-control-errors.ts";
+export type {
+  RunExecutionArtifactIdentity,
+  RunExecutionAuthority,
+  RunExecutionCommit,
+  RunExecutionEvidence,
+} from "./runs.ts";
 export {
   CREDENTIAL_RECIPE_PATH,
   CREDENTIAL_RECIPES_PATH,

@@ -11,6 +11,12 @@ import {
   type LocalOpenTofuStateArtifact,
 } from "../../../deploy/node-postgres/src/local-opentofu-runner.ts";
 
+const FIXTURE_EXECUTION_EVIDENCE_AUTHORITY = {
+  controllerArtifact: { digest: `sha256:${"a".repeat(64)}`, immutable: true },
+  runnerArtifact: { digest: `sha256:${"b".repeat(64)}`, immutable: true },
+  executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
+} as const;
+
 test("local OpenTofu runner restores an exact source into an operation-scoped immutable artifact", async () => {
   const stateBytes = new TextEncoder().encode('{"version":4,"serial":1}');
   const stateDigest = await sha256(stateBytes);
@@ -672,6 +678,177 @@ test("HTTP OpenTofu runner keeps an unchanged object-storage source archive with
   }
 });
 
+test("HTTP OpenTofu runner carries direct provider evidence through apply and destroy commits", async () => {
+  const provider = "registry.opentofu.org/example/direct";
+  const installedDigest = `sha256:${"d".repeat(64)}`;
+  const planBytes = new TextEncoder().encode("reviewed direct-provider plan");
+  const planDigest = await sha256(planBytes);
+  const stateBytes = new TextEncoder().encode('{"serial":1}');
+  const installation = {
+    provider,
+    mirrored: false,
+    installationMethod: "direct",
+    attested: true,
+    attestationMethod: "runner_observed_installed_artifact",
+    installedPath: "/runner/.terraform/providers/example/direct",
+    installedDigest,
+  };
+  const requests: string[] = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      requests.push(`${request.method} ${url.pathname}`);
+      const planArtifactMatch =
+        /^\/runs\/(plan_http_apply|plan_http_destroy)\/artifacts\/tfplan$/u.exec(
+          url.pathname,
+        );
+      if (request.method === "GET" && planArtifactMatch) {
+        return new Response(planBytes, {
+          headers: { "content-type": "application/vnd.opentofu.plan" },
+        });
+      }
+      if (
+        request.method === "PUT" &&
+        /^\/runs\/(apply_http_direct|destroy_http_direct)\/artifacts\/tfplan$/u.test(
+          url.pathname,
+        )
+      ) {
+        return Response.json({ ok: true });
+      }
+      const runMatch =
+        /^\/runs\/(apply_http_direct|destroy_http_direct)$/u.exec(url.pathname);
+      if (request.method === "POST" && runMatch) {
+        return Response.json({
+          status: "succeeded",
+          exitCode: 0,
+          ...(runMatch[1] === "apply_http_direct"
+            ? {
+                outputs: {
+                  public_url: {
+                    sensitive: false,
+                    type: "string",
+                    value: "https://direct.example",
+                  },
+                },
+              }
+            : {}),
+          providerInstallation: [installation],
+        });
+      }
+      if (
+        request.method === "GET" &&
+        /^\/runs\/(apply_http_direct|destroy_http_direct)\/artifacts\/tfstate$/u.test(
+          url.pathname,
+        )
+      ) {
+        return new Response(stateBytes, {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+
+  const stored: LocalOpenTofuStateArtifact[] = [];
+  const stateStore = {
+    read: async (stateRef: string) =>
+      stored.find((artifact) => artifact.stateRef === stateRef),
+    commit: async (artifact: LocalOpenTofuStateArtifact) => {
+      stored.push(artifact);
+      return artifact;
+    },
+    readRawOutput: async () => undefined,
+    commitRawOutput: async <T>(artifact: T): Promise<T> => artifact,
+  };
+
+  try {
+    const runner = createHttpOpenTofuRunner({
+      stateStore,
+      archiveStore: {
+        write: async () => {},
+        read: async () => {
+          throw new Error("not used");
+        },
+      },
+      baseUrl: server.url.href,
+    });
+    const authority = FIXTURE_EXECUTION_EVIDENCE_AUTHORITY;
+    const profile = {
+      id: "opentofu-default",
+      executorId: "opentofu.default",
+    };
+    const expectedArtifacts = [
+      { source: provider, digest: installedDigest, attested: true },
+    ];
+    const apply = await runner.apply({
+      applyRun: { id: "apply_http_direct" },
+      planRun: { id: "plan_http_apply", planDigest },
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_http_apply/tfplan",
+        digest: planDigest,
+      },
+      runnerProfile: profile,
+      executionEvidenceAuthority: authority,
+      executionEvidenceCommit: {
+        stateVersionId: "state_http_apply",
+        outputId: "output_http_apply",
+      },
+      stateScope: {
+        workspaceId: "workspace_http",
+        subject: { kind: "resource", id: "resource_http_apply" },
+        environment: "production",
+        generation: 1,
+        stateRef: "state://http/direct-apply",
+      },
+      rawOutputRef: "output://http/direct-apply",
+    } as Parameters<typeof runner.apply>[0]);
+    expect(apply.executionEvidence?.authority.providerArtifacts).toEqual(
+      expectedArtifacts,
+    );
+
+    const destroy = await runner.destroy({
+      applyRun: { id: "destroy_http_direct" },
+      planRun: { id: "plan_http_destroy", planDigest },
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_http_destroy/tfplan",
+        digest: planDigest,
+      },
+      runnerProfile: profile,
+      executionEvidenceAuthority: authority,
+      executionEvidenceCommit: {
+        destroyed: true,
+        stateVersionId: "state_http_destroy",
+      },
+      stateScope: {
+        workspaceId: "workspace_http",
+        subject: { kind: "resource", id: "resource_http_destroy" },
+        environment: "production",
+        generation: 1,
+        stateRef: "state://http/direct-destroy",
+      },
+    } as Parameters<typeof runner.destroy>[0]);
+    expect(destroy.executionEvidence?.authority.providerArtifacts).toEqual(
+      expectedArtifacts,
+    );
+    expect(stored).toHaveLength(2);
+    expect(requests).toEqual([
+      "GET /runs/plan_http_apply/artifacts/tfplan",
+      "PUT /runs/apply_http_direct/artifacts/tfplan",
+      "POST /runs/apply_http_direct",
+      "GET /runs/apply_http_direct/artifacts/tfstate",
+      "GET /runs/plan_http_destroy/artifacts/tfplan",
+      "PUT /runs/destroy_http_direct/artifacts/tfplan",
+      "POST /runs/destroy_http_direct",
+      "GET /runs/destroy_http_direct/artifacts/tfstate",
+    ]);
+  } finally {
+    server.stop(true);
+  }
+});
+
 test("HTTP OpenTofu runner durably returns failed apply state without replaying provider execution", async () => {
   const planBytes = new TextEncoder().encode("reviewed plan");
   const planDigest = await sha256(planBytes);
@@ -752,13 +929,21 @@ test("HTTP OpenTofu runner durably returns failed apply state without replaying 
     });
     const job = {
       applyRun: { id: "apply_partial" },
-      planRun: { id: "plan_partial" },
+      planRun: { id: "plan_partial", planDigest },
       planArtifact: {
         kind: "runner-local",
         ref: "runner-local://plan_partial/tfplan",
         digest: planDigest,
       },
-      runnerProfile: {},
+      runnerProfile: {
+        id: "opentofu-default",
+        executorId: "opentofu.default",
+      },
+      executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+      executionEvidenceCommit: {
+        stateVersionId: "state_apply_partial",
+        outputId: "output_apply_partial",
+      },
       stateScope: {
         workspaceId: "workspace_1",
         subject: { kind: "capsule", id: "capsule_1" },
@@ -873,13 +1058,21 @@ test("HTTP OpenTofu runner durably returns failed destroy state without replayin
     });
     const job = {
       applyRun: { id: "destroy_partial" },
-      planRun: { id: "plan_destroy_partial" },
+      planRun: { id: "plan_destroy_partial", planDigest },
       planArtifact: {
         kind: "runner-local",
         ref: "runner-local://plan_destroy_partial/tfplan",
         digest: planDigest,
       },
-      runnerProfile: {},
+      runnerProfile: {
+        id: "opentofu-default",
+        executorId: "opentofu.default",
+      },
+      executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+      executionEvidenceCommit: {
+        stateVersionId: "state_destroy_partial",
+        destroyed: true,
+      },
       stateScope: {
         workspaceId: "workspace_1",
         subject: { kind: "capsule", id: "capsule_1" },

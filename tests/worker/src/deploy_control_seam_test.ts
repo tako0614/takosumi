@@ -3,6 +3,8 @@ import {
   cachedServiceAttempt,
   createInProcessDeployControlSeam,
   deployControlServiceOptions,
+  executionEvidenceAuthorityFromComposition,
+  executionEvidenceAuthorityFromEnv,
 } from "../../../worker/src/deploy_control_seam.ts";
 import { createCloudflareWorker } from "../../../worker/src/handler.ts";
 import type {
@@ -101,6 +103,126 @@ test("Worker composition accepts explicit host RunnerProfiles and executors", ()
   );
 });
 
+test("Worker composition forwards explicit immutable execution evidence authority", () => {
+  const authority = {
+    controllerArtifact: { digest: `sha256:${"a".repeat(64)}`, immutable: true },
+    runnerArtifact: { digest: `sha256:${"b".repeat(64)}`, immutable: true },
+    executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
+  } as const;
+  const options = deployControlServiceOptions({
+    TAKOSUMI_RUNNER_HOST_COMPOSITION: {
+      profiles: [],
+      executionEvidenceAuthority: authority,
+    },
+  } as unknown as CloudflareWorkerEnv);
+
+  expect(options.executionEvidenceAuthority).toEqual(authority);
+});
+
+test("Worker composition resolves release-pinned execution evidence authority from raw env", () => {
+  const options = deployControlServiceOptions({
+    TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+    TAKOSUMI_RUNNER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+    TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST: `sha256:${"b".repeat(64)}`,
+  } as unknown as CloudflareWorkerEnv);
+
+  expect(options.executionEvidenceAuthority).toEqual({
+    controllerArtifact: {
+      digest: `sha256:${"a".repeat(64)}`,
+      immutable: true,
+    },
+    runnerArtifact: {
+      digest: `sha256:${"a".repeat(64)}`,
+      immutable: true,
+    },
+    executorArtifact: {
+      digest: `sha256:${"b".repeat(64)}`,
+      immutable: true,
+    },
+  });
+});
+
+test("Worker composition rejects partial, mutable, or conflicting release pins", () => {
+  expect(() =>
+    executionEvidenceAuthorityFromEnv({
+      TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+    }),
+  ).toThrow("execution evidence authority is incomplete");
+  expect(() =>
+    executionEvidenceAuthorityFromEnv({
+      TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST: "controller:latest",
+      TAKOSUMI_RUNNER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+      TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST: `sha256:${"b".repeat(64)}`,
+    }),
+  ).toThrow("must be an exact sha256 digest");
+  expect(() =>
+    deployControlServiceOptions({
+      TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+      TAKOSUMI_RUNNER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+      TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST: `sha256:${"b".repeat(64)}`,
+      TAKOSUMI_RUNNER_HOST_COMPOSITION: {
+        profiles: [],
+        executionEvidenceAuthority: {
+          controllerArtifact: {
+            digest: `sha256:${"c".repeat(64)}`,
+            immutable: true,
+          },
+          runnerArtifact: {
+            digest: `sha256:${"a".repeat(64)}`,
+            immutable: true,
+          },
+          executorArtifact: {
+            digest: `sha256:${"b".repeat(64)}`,
+            immutable: true,
+          },
+        },
+      },
+    } as unknown as CloudflareWorkerEnv),
+  ).toThrow("execution evidence authority conflicts with release pins");
+});
+
+test("Worker composition validates host evidence authority as a closed identity", () => {
+  expect(() =>
+    executionEvidenceAuthorityFromComposition({
+      controllerArtifact: {
+        digest: `sha256:${"a".repeat(64)}`,
+        immutable: true,
+        label: "mutable-alias",
+      },
+      runnerArtifact: {
+        digest: `sha256:${"a".repeat(64)}`,
+        immutable: true,
+      },
+      executorArtifact: {
+        digest: `sha256:${"b".repeat(64)}`,
+        immutable: true,
+      },
+    }),
+  ).toThrow("authority is invalid");
+  expect(() =>
+    deployControlServiceOptions({
+      TAKOSUMI_RUNNER_HOST_COMPOSITION: {
+        profiles: [],
+        executionEvidenceAuthority: {
+          controllerArtifact: {
+            digest: `sha256:${"a".repeat(64)}`,
+            immutable: true,
+          },
+          runnerArtifact: {
+            digest: `sha256:${"a".repeat(64)}`,
+            immutable: true,
+          },
+          executorArtifact: {
+            digest: `sha256:${"b".repeat(64)}`,
+            immutable: true,
+          },
+          unexpected: true,
+        } as never,
+      },
+    } as unknown as CloudflareWorkerEnv),
+  ).toThrow("authority is not closed");
+});
+
 test("Worker composition rejects duplicate built-in profile ids", () => {
   const reference = createDefaultRunnerProfiles(1)[0]!;
   expect(() =>
@@ -108,6 +230,123 @@ test("Worker composition rejects duplicate built-in profile ids", () => {
       TAKOSUMI_RUNNER_HOST_COMPOSITION: { profiles: [reference] },
     } as unknown as CloudflareWorkerEnv),
   ).toThrow("duplicate profile opentofu-default");
+});
+
+test("Worker composition rejects a missing or non-array profile catalog", () => {
+  expect(() =>
+    deployControlServiceOptions({
+      TAKOSUMI_RUNNER_HOST_COMPOSITION: {},
+    } as unknown as CloudflareWorkerEnv),
+  ).toThrow("profiles must be an array");
+  expect(() =>
+    deployControlServiceOptions({
+      TAKOSUMI_RUNNER_HOST_COMPOSITION: { profiles: "opentofu-default" },
+    } as unknown as CloudflareWorkerEnv),
+  ).toThrow("profiles must be an array");
+});
+
+test("Worker composition rejects partial profiles and unknown composition keys", () => {
+  expect(() =>
+    deployControlServiceOptions({
+      TAKOSUMI_RUNNER_HOST_COMPOSITION: {
+        profiles: [{ id: "private-network" }],
+      },
+    } as unknown as CloudflareWorkerEnv),
+  ).toThrow("runner profile private-network");
+  expect(() =>
+    deployControlServiceOptions({
+      TAKOSUMI_RUNNER_HOST_COMPOSITION: {
+        profiles: [],
+        unexpected: true,
+      },
+    } as unknown as CloudflareWorkerEnv),
+  ).toThrow("unknown key unexpected");
+});
+
+test("Worker composition rejects unknown nested profile keys", () => {
+  const reference = createDefaultRunnerProfiles(1)[0]!;
+  expect(() =>
+    deployControlServiceOptions({
+      TAKOSUMI_RUNNER_HOST_COMPOSITION: {
+        profiles: [
+          {
+            ...reference,
+            id: "private-network",
+            executorId: "operator.private-network",
+            lifecycle: {
+              ...reference.lifecycle,
+              credentialRef: "vault://unexpected",
+            },
+          },
+        ],
+      },
+    } as unknown as CloudflareWorkerEnv),
+  ).toThrow("unknown key credentialRef");
+});
+
+test("Worker composition rejects profile authority that conflicts with release pins", () => {
+  const reference = createDefaultRunnerProfiles(1)[0]!;
+  const releaseAuthority = {
+    controllerArtifact: { digest: `sha256:${"a".repeat(64)}`, immutable: true },
+    runnerArtifact: { digest: `sha256:${"b".repeat(64)}`, immutable: true },
+    executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
+  } as const;
+  const profileAuthority = {
+    ...releaseAuthority,
+    executorArtifact: { digest: `sha256:${"d".repeat(64)}`, immutable: true },
+  } as const;
+
+  expect(() =>
+    deployControlServiceOptions({
+      TAKOSUMI_ENABLED_RUNNER_PROFILES: "private-network",
+      TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST:
+        releaseAuthority.controllerArtifact.digest,
+      TAKOSUMI_RUNNER_ARTIFACT_DIGEST:
+        releaseAuthority.runnerArtifact.digest,
+      TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST:
+        releaseAuthority.executorArtifact.digest,
+      TAKOSUMI_RUNNER_HOST_COMPOSITION: {
+        profiles: [
+          {
+            ...reference,
+            id: "private-network",
+            executorId: "operator.private-network",
+            executionEvidenceAuthority: profileAuthority,
+          },
+        ],
+      },
+    } as unknown as CloudflareWorkerEnv),
+  ).toThrow("execution evidence authority conflicts");
+});
+
+test("Worker composition accepts profile authority equal to release pins", () => {
+  const reference = createDefaultRunnerProfiles(1)[0]!;
+  const authority = {
+    controllerArtifact: { digest: `sha256:${"a".repeat(64)}`, immutable: true },
+    runnerArtifact: { digest: `sha256:${"b".repeat(64)}`, immutable: true },
+    executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
+  } as const;
+  const options = deployControlServiceOptions({
+    TAKOSUMI_ENABLED_RUNNER_PROFILES: "private-network",
+    TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST: authority.controllerArtifact.digest,
+    TAKOSUMI_RUNNER_ARTIFACT_DIGEST: authority.runnerArtifact.digest,
+    TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST: authority.executorArtifact.digest,
+    TAKOSUMI_RUNNER_HOST_COMPOSITION: {
+      profiles: [
+        {
+          ...reference,
+          id: "private-network",
+          executorId: "operator.private-network",
+          executionEvidenceAuthority: authority,
+        },
+      ],
+    },
+  } as unknown as CloudflareWorkerEnv);
+
+  expect(options.executionEvidenceAuthority).toEqual(authority);
+  expect(options.runnerProfiles[0]?.executionEvidenceAuthority).toEqual(
+    authority,
+  );
 });
 
 test("Worker composition rejects a text RunnerProfile catalog", () => {

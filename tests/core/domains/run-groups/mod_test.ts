@@ -25,7 +25,9 @@ import { DependenciesService } from "../../../../core/domains/dependencies/mod.t
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   fakeProviderVault,
+  fixtureExecutionEvidence,
   seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -105,6 +107,8 @@ function recordingRunner(
         stateDigest:
           "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
         rawOutputRef: job.rawOutputRef,
+        providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
       });
     },
     destroy: () => Promise.resolve({}),
@@ -120,6 +124,7 @@ function controllerWith(
     store,
     runner,
     vault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
@@ -360,6 +365,7 @@ test("producer output change cascades stale to chained consumers (core -> files 
     store,
     runner: changed,
     vault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(10_000),
     newId: (() => {
       let n = 1;
@@ -442,6 +448,7 @@ test("workspace_update e2e: stale -> plan-update group (topo layers) -> approve 
       ]),
     ),
     vault: fakeProviderVault() as never,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(20_000),
     newId: (() => {
       let n = 1;

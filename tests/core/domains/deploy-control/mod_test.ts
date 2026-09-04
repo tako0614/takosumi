@@ -19,6 +19,10 @@ import type {
   CreatePlanRunRequest,
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
+import {
+  RUN_EXECUTION_EVIDENCE_CONTRACT,
+  type RunExecutionEvidence,
+} from "takosumi-contract/runs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
@@ -198,6 +202,12 @@ const PLAN_DIGEST =
 const LOCK_DIGEST =
   "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
+const TEST_EXECUTION_EVIDENCE_AUTHORITY = {
+  controllerArtifact: { digest: `sha256:${"a".repeat(64)}`, immutable: true },
+  runnerArtifact: { digest: `sha256:${"b".repeat(64)}`, immutable: true },
+  executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
+} as const;
+
 function restoreAck(
   job: OpenTofuRestoreJob,
   digest = PLAN_DIGEST,
@@ -228,6 +238,7 @@ const CLOUDFLARE_MIRROR_EVIDENCE = {
   attestationMethod: "forced_filesystem_mirror_init",
   mirrorPath:
     "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
+  installedDigest: `sha256:${"e".repeat(64)}`,
 } as const;
 const AWS_MIRROR_EVIDENCE = {
   provider: "registry.opentofu.org/hashicorp/aws",
@@ -237,6 +248,7 @@ const AWS_MIRROR_EVIDENCE = {
   attestationMethod: "forced_filesystem_mirror_init",
   mirrorPath:
     "/opt/opentofu/provider-mirror/registry.opentofu.org/hashicorp/aws",
+  installedDigest: `sha256:${"e".repeat(64)}`,
 } as const;
 
 test("apply and destroy audit construction rejects live builtin provider installation evidence", () => {
@@ -496,6 +508,7 @@ test("plan/apply records Capsule, StateVersion, and explicitly allowlisted Outpu
     store,
     now: sequenceNow(10),
     newId: deterministicIds(),
+    executionEvidenceAuthority: TEST_EXECUTION_EVIDENCE_AUTHORITY,
     runner: fakeRunner(),
   });
 
@@ -543,6 +556,47 @@ test("plan/apply records Capsule, StateVersion, and explicitly allowlisted Outpu
   );
 });
 
+test("a new successful apply without execution evidence fails closed before ledger commit", async () => {
+  const { store, request, capsuleId, currentStateVersionId } =
+    await seedUpdatableCapsule();
+  const baseRunner = fakeRunner();
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(10),
+    newId: deterministicIds(),
+    executionEvidenceAuthority: TEST_EXECUTION_EVIDENCE_AUTHORITY,
+    runner: {
+      ...baseRunner,
+      apply: (job) =>
+        Promise.resolve(
+          fixtureStateCommit({
+            rawOutputRef: job.rawOutputRef,
+            // Deliberately omit executionEvidence: a newly terminal success
+            // cannot be claimed without the runner's durable receipt.
+          }),
+        ),
+    },
+  });
+
+  const { planRun } = await controller.createPlanRun(request);
+  const applied = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  const capsule = await store.getCapsule(capsuleId);
+
+  expect(applied.applyRun.status).toBe("failed");
+  expect(applied.applyRun.diagnostics?.[0]?.code).toBe(
+    "execution_evidence_missing",
+  );
+  expect(capsule?.currentStateVersionId).toBe(currentStateVersionId);
+  expect(capsule?.currentStateGeneration).toBe(0);
+  expect(applied.applyRun.stateVersionId).toBeUndefined();
+  expect(applied.applyRun.outputId).toBeUndefined();
+});
+
 test("apply rejects live builtin provider installation evidence before audit or state persistence", async () => {
   const { store, request, capsuleId, currentStateVersionId } =
     await seedUpdatableCapsule();
@@ -553,12 +607,14 @@ test("apply rejects live builtin provider installation evidence before audit or 
     store,
     now: sequenceNow(10),
     newId: deterministicIds(),
+    executionEvidenceAuthority: TEST_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       ...baseRunner,
       apply: (job) =>
         Promise.resolve(
           fixtureStateCommit({
             rawOutputRef: job.rawOutputRef,
+            executionEvidence: executionEvidenceForJob(job, "apply"),
             providerInstallation: [
               {
                 provider: "terraform.io/builtin/terraform",
@@ -606,6 +662,7 @@ test("apply treats former runtime declaration names as ordinary allowlisted Outp
     store,
     now: sequenceNow(40),
     newId: deterministicIds(),
+    executionEvidenceAuthority: TEST_EXECUTION_EVIDENCE_AUTHORITY,
     runner: fakeRunner({
       launch_url: {
         sensitive: false,
@@ -651,6 +708,7 @@ test("apply treats app_deployment as an ordinary allowlisted Output", async () =
     store,
     now: sequenceNow(50),
     newId: deterministicIds(),
+    executionEvidenceAuthority: TEST_EXECUTION_EVIDENCE_AUTHORITY,
     runner: fakeRunner({
       launch_url: {
         sensitive: false,
@@ -864,6 +922,7 @@ test("apply rejects a stale update PlanRun after the current StateVersion change
     store,
     now: sequenceNow(80),
     newId: deterministicIds(),
+    executionEvidenceAuthority: TEST_EXECUTION_EVIDENCE_AUTHORITY,
     runner: fakeRunner(),
   });
   // Two update plans are created against the same current StateVersion.
@@ -1046,6 +1105,7 @@ test("runner diagnostics are redacted before PlanRun and ApplyRun persistence", 
     store,
     now: sequenceNow(15),
     newId: deterministicIds(),
+    executionEvidenceAuthority: TEST_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       plan: () =>
         Promise.resolve({
@@ -1065,6 +1125,8 @@ test("runner diagnostics are redacted before PlanRun and ApplyRun persistence", 
       apply: (job) =>
         Promise.resolve(fixtureStateCommit({
           rawOutputRef: job.rawOutputRef,
+          executionEvidence: executionEvidenceForJob(job, "apply"),
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
           diagnostics: [
             {
               severity: "warning",
@@ -1750,12 +1812,11 @@ test("generic-env providers run on an ordinary runner profile when the provider 
     substrate: "cloudflare-containers",
     allowedProviders: [provider],
     stateBackend: { kind: "operator-managed", ref: "r2://state" },
-    stateLock: { kind: "native" },
     networkPolicy: {
       mode: "egress-allowlist",
       allowedHosts: ["registry.opentofu.org", "api.vercel.com"],
     },
-    secretExposure: {
+    secretExposurePolicy: {
       providerCredentials: "runner-only",
       tenantWorkerOperatorSecrets: "forbidden",
       redactLogs: true,
@@ -1845,12 +1906,11 @@ test("generic-env provider policy uses the profile's explicitly registered execu
     executorId: "test.vercel",
     labels: { purpose: "custom-network" },
     stateBackend: { kind: "operator-managed", ref: "r2://state" },
-    stateLock: { kind: "native" },
     networkPolicy: {
       mode: "egress-allowlist",
       allowedHosts: ["registry.opentofu.org", "api.vercel.com"],
     },
-    secretExposure: {
+    secretExposurePolicy: {
       providerCredentials: "runner-only",
       tenantWorkerOperatorSecrets: "forbidden",
       redactLogs: true,
@@ -1941,6 +2001,7 @@ test("destroy is recorded as an ApplyRun when the runner succeeds", async () => 
     store,
     now: sequenceNow(40),
     newId: deterministicIds(),
+    executionEvidenceAuthority: TEST_EXECUTION_EVIDENCE_AUTHORITY,
     runner: fakeRunner(),
   });
 
@@ -1980,11 +2041,13 @@ test("destroy rejects live builtin provider installation evidence before audit o
     store,
     now: sequenceNow(40),
     newId: deterministicIds(),
+    executionEvidenceAuthority: TEST_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       ...baseRunner,
-      destroy: () =>
+      destroy: (job) =>
         Promise.resolve(
           fixtureStateCommit({
+            executionEvidence: executionEvidenceForJob(job, "destroy"),
             providerInstallation: [
               {
                 provider: "terraform.io/builtin/terraform",
@@ -2031,6 +2094,7 @@ test("destroy apply is rejected until the plan is approved (always two-stage, sp
     store,
     now: sequenceNow(40),
     newId: deterministicIds(),
+    executionEvidenceAuthority: TEST_EXECUTION_EVIDENCE_AUTHORITY,
     runner: fakeRunner(),
   });
 
@@ -2818,11 +2882,55 @@ function fakeRunner(
         summary: { add: 1, change: 0, destroy: 0 },
       }),
     apply: (job) =>
-      Promise.resolve(fixtureStateCommit({
-        outputs,
-        rawOutputRef: job.rawOutputRef,
-      })),
-    destroy: () => Promise.resolve(fixtureStateCommit()),
+      Promise.resolve(
+        fixtureStateCommit({
+          outputs,
+          rawOutputRef: job.rawOutputRef,
+          executionEvidence: executionEvidenceForJob(job, "apply"),
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      ),
+    destroy: (job) =>
+      Promise.resolve(
+        fixtureStateCommit({
+          executionEvidence: executionEvidenceForJob(job, "destroy"),
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      ),
+  };
+}
+
+function executionEvidenceForJob(
+  job: Parameters<NonNullable<OpenTofuRunner["apply"]>>[0],
+  action: "apply" | "destroy",
+): RunExecutionEvidence {
+  const commit = job.executionEvidenceCommit;
+  if (!commit) throw new Error("test apply job is missing evidence commit");
+  return {
+    format: RUN_EXECUTION_EVIDENCE_CONTRACT,
+    runId: job.applyRun.id,
+    planRunId: job.planRun.id,
+    action,
+    outcome: "committed",
+    authority: {
+      ...TEST_EXECUTION_EVIDENCE_AUTHORITY,
+      runnerProfileId: job.runnerProfile.id,
+      executorId: job.runnerProfile.executorId,
+      providerArtifacts: job.planRun.requiredProviders
+        .filter((provider) => !provider.includes("/builtin/"))
+        .map((source) => ({
+          source,
+          digest: `sha256:${"e".repeat(64)}` as `sha256:${string}`,
+          attested: true as const,
+        })),
+    },
+    plan: {
+      digest: job.planRun.planDigest!,
+      artifactDigest: job.planArtifact.digest,
+    },
+    commit,
+    receipt: { operationId: job.applyRun.id, version: 1, fence: 1 },
+    committedAt: "2026-06-06T00:00:00.000Z",
   };
 }
 

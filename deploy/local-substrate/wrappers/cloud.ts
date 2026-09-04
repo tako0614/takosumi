@@ -79,6 +79,13 @@ if (runnerProfiles.length === 0) {
   throw new Error("local-substrate cloud requires at least one runner profile");
 }
 
+// Local/self-hosted runs do not receive a platform Worker Version or a
+// published runner image identity automatically. An operator may provide the
+// exact immutable release digests explicitly; partial configuration is
+// rejected, while an entirely absent authority keeps plan/read-only paths
+// available and makes apply/destroy fail closed in Core.
+const executionEvidenceAuthority = executionEvidenceAuthorityFromEnv(env);
+
 // Blocks on serveOnAnyRuntime (port 8787 from config).
 await buildComposedServer({
   opentofuRunner: externalRunnerUrl
@@ -93,12 +100,45 @@ await buildComposedServer({
       }),
   runnerProfiles,
   defaultRunnerProfileId,
+  ...(executionEvidenceAuthority ? { executionEvidenceAuthority } : {}),
 });
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : undefined;
+}
+
+function executionEvidenceAuthorityFromEnv(
+  values: Readonly<Record<string, string | undefined>>,
+): {
+  readonly controllerArtifact: { readonly digest: `sha256:${string}`; readonly immutable: true };
+  readonly runnerArtifact: { readonly digest: `sha256:${string}`; readonly immutable: true };
+  readonly executorArtifact: { readonly digest: `sha256:${string}`; readonly immutable: true };
+} | undefined {
+  const names = [
+    "TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST",
+    "TAKOSUMI_RUNNER_ARTIFACT_DIGEST",
+    "TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST",
+  ] as const;
+  const valuesByName = names.map((name) => nonEmptyString(values[name]));
+  if (valuesByName.every((value) => value === undefined)) return undefined;
+  const missing = names.filter((_, index) => valuesByName[index] === undefined);
+  if (missing.length > 0) {
+    throw new Error(
+      `local-substrate execution evidence authority is incomplete; missing ${missing.join(", ")}`,
+    );
+  }
+  for (const [index, digest] of valuesByName.entries()) {
+    if (!/^sha256:[0-9a-f]{64}$/u.test(digest!)) {
+      throw new Error(`${names[index]} must be a sha256 digest`);
+    }
+  }
+  return {
+    controllerArtifact: { digest: valuesByName[0]! as `sha256:${string}`, immutable: true },
+    runnerArtifact: { digest: valuesByName[1]! as `sha256:${string}`, immutable: true },
+    executorArtifact: { digest: valuesByName[2]! as `sha256:${string}`, immutable: true },
+  };
 }
 
 async function writeGatewayProjection(

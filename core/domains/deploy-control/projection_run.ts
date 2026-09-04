@@ -308,6 +308,9 @@ export function projectApplyRun(
     ...(applyRun.expected.planDigest
       ? { planDigest: applyRun.expected.planDigest }
       : {}),
+    ...(applyRun.executionEvidence
+      ? { executionEvidence: applyRun.executionEvidence }
+      : {}),
     ...runEnvironmentEvidence(applyRun),
     ...(errorCode ? { errorCode } : {}),
     createdBy: DEFAULT_CREATED_BY,

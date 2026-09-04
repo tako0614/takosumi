@@ -23,6 +23,8 @@ import {
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+  fixtureExecutionEvidence,
   fixtureStateCommit,
   seedCapsuleModel,
 } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -172,12 +174,18 @@ function controllerWith(
       let n = 0;
       return (p) => `${p}_${(n += 1).toString().padStart(4, "0")}`;
     })(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       plan: () => Promise.reject(new Error("not used")),
-      apply: async (job) => ({
-        ...(await runner.apply(job)),
-        rawOutputRef: job.rawOutputRef,
-      }),
+      apply: async (job) => {
+        const result = await runner.apply(job);
+        return {
+          ...result,
+          rawOutputRef: job.rawOutputRef,
+          executionEvidence:
+            result.executionEvidence ?? fixtureExecutionEvidence(job, "apply"),
+        };
+      },
     },
   });
 }

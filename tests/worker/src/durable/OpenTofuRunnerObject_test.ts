@@ -576,6 +576,67 @@ test("OpenTofu runner keeps immutable state-put failures out of logs", async () 
   ]);
 });
 
+test("OpenTofu runner rejects non-boolean truthy provider attestations before evidence or state writes", async () => {
+  const invalidAttestations: readonly [string, unknown][] = [
+    ["string", "yes"],
+    ["number", 1],
+    ["object", { observed: true }],
+    ["array", [true]],
+  ];
+
+  for (const [label, attested] of invalidAttestations) {
+    for (const action of ["apply", "destroy"] as const) {
+      const runId = `${action}_non_boolean_attested_${label}`;
+      const planArtifacts = new FakeR2Bucket();
+      await seedEncryptedPlan(planArtifacts, runId);
+      const state = new FakeR2Bucket();
+      const storage = new FakeDoStorage();
+      const token = await signedMutationToken(runId, {
+        action,
+        jti: `${action}-non-boolean-${label}`,
+      });
+      let providerCalls = 0;
+      const response = await runnerWithContainer(
+        planArtifacts,
+        mutationSuccessContainer(
+          runId,
+          () => {
+            providerCalls += 1;
+          },
+          attested,
+        ),
+        {
+          storage,
+          stateBucket: state,
+          env: {
+            TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+              RUN_CREDENTIAL_SIGNING_SECRET,
+          },
+        },
+      ).fetch(
+        signedMutationRequest(runId, token, {
+          action,
+          stateScope: capsuleStateScope(),
+          ...(action === "apply"
+            ? { rawOutputRef: rawOutputRefFor(runId) }
+            : {}),
+        }),
+      );
+
+      assert.equal(response.status, 500, `${action}/${label}`);
+      assert.equal(providerCalls, 1, `${action}/${label} provider dispatch`);
+      assert.deepEqual(state.keys(), [], `${action}/${label} R2_STATE writes`);
+      assert.equal(
+        storage
+          .entries()
+          .some(([key]) => key.includes("execution-evidence")),
+        false,
+        `${action}/${label} canonical evidence write`,
+      );
+    }
+  }
+});
+
 test("OpenTofu runner keeps current-state pointer retry logs finite", async () => {
   const planRunId = "apply_current_pointer_retry";
   const stateScope = capsuleStateScope();
@@ -2099,6 +2160,10 @@ test("OpenTofu runner adopts completed state only after fresh exact mutation aut
   );
   assert.equal(first.status, 200);
   assert.equal(providerCalls, 1);
+  const firstPayload = (await first.json()) as {
+    readonly executionEvidence?: unknown;
+  };
+  assert.ok(firstPayload.executionEvidence);
   assert.match(JSON.stringify(storage.entries()), /"phase":"dispatched"/);
 
   const expiredToken = await signedMutationToken(planRunId, {
@@ -2226,6 +2291,16 @@ test("OpenTofu runner adopts completed state only after fresh exact mutation aut
   );
   assert.equal(exactReplay.status, 200);
   assert.equal(providerCalls, 1);
+  const replayPayload = (await exactReplay.json()) as {
+    readonly executionEvidence?: unknown;
+  };
+  // The R2_STATE replay is the same committed acknowledgement, not a fresh
+  // mutation result. In particular, the receipt/committedAt bytes must stay
+  // identical after the DO isolate is recreated.
+  assert.deepEqual(
+    replayPayload.executionEvidence,
+    firstPayload.executionEvidence,
+  );
 });
 
 test("OpenTofu runner Durable Object grants one concurrent mutation dispatch authority", async () => {
@@ -3105,6 +3180,10 @@ test("OpenTofu runner Durable Object restores and persists operator-managed stat
         action: "apply",
         runId: "plan_1",
         request: {
+          applyRun: {
+            id: "apply_plan_1",
+            planRunId: "plan_1",
+          },
           planRun: {
             id: "plan_1",
             capsuleId: "inst_1",
@@ -3115,9 +3194,12 @@ test("OpenTofu runner Durable Object restores and persists operator-managed stat
               url: "https://github.com/example/app.git",
               ref: "main",
             },
+            planDigest: PLAN_DIGEST,
+            requiredProviders: [],
           },
           runnerProfile: {
             id: "opentofu-default",
+            executorId: "opentofu.default",
             stateBackend: {
               kind: "operator-managed",
               ref: stateBackendRef,
@@ -3127,6 +3209,27 @@ test("OpenTofu runner Durable Object restores and persists operator-managed stat
             kind: "object-storage",
             ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
             digest: PLAN_DIGEST,
+          },
+          executionEvidenceAuthority: {
+            controllerArtifact: {
+              digest:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              immutable: true,
+            },
+            runnerArtifact: {
+              digest:
+                "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              immutable: true,
+            },
+            executorArtifact: {
+              digest:
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              immutable: true,
+            },
+          },
+          executionEvidenceCommit: {
+            stateVersionId: "state_apply_plan_1",
+            outputId: "output_apply_plan_1",
           },
         },
       }),
@@ -4860,6 +4963,37 @@ function signedMutationRequest(
           updatedAt: options.heartbeatAt ?? 1,
         },
         planArtifact,
+        runnerProfile: {
+          id: "opentofu-default",
+          executorId: "opentofu.default",
+        },
+        executionEvidenceAuthority: {
+          controllerArtifact: {
+            digest:
+              "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            immutable: true,
+          },
+          runnerArtifact: {
+            digest:
+              "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            immutable: true,
+          },
+          executorArtifact: {
+            digest:
+              "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            immutable: true,
+          },
+        },
+        executionEvidenceCommit:
+          action === "destroy"
+            ? {
+                destroyed: true,
+                stateVersionId: `state_apply_${planRunId}`,
+              }
+            : {
+                stateVersionId: `state_apply_${planRunId}`,
+                outputId: `output_apply_${planRunId}`,
+              },
         ...(options.stateScope ? { stateScope: options.stateScope } : {}),
         ...(options.rawOutputRef ? { rawOutputRef: options.rawOutputRef } : {}),
         credentials: {
@@ -4937,6 +5071,7 @@ function assertNoSensitiveR2LogSerialization(
 function mutationSuccessContainer(
   planRunId: string,
   onProviderCall: () => void,
+  providerAttested: unknown = true,
 ): ContainerRequestFetcher {
   return {
     async containerFetch(request) {
@@ -4944,7 +5079,18 @@ function mutationSuccessContainer(
       if (request.method === "PUT") return Response.json({ ok: true });
       if (request.method === "POST" && path === `/runs/${planRunId}`) {
         onProviderCall();
-        return Response.json({ status: "succeeded", exitCode: 0 });
+        return Response.json({
+          status: "succeeded",
+          exitCode: 0,
+          providerInstallation: [
+            {
+              provider: RUN_CREDENTIAL_PROVIDER,
+              attested: providerAttested,
+              installedDigest:
+                "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            },
+          ],
+        });
       }
       if (
         request.method === "GET" &&

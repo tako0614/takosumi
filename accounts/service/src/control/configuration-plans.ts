@@ -332,7 +332,7 @@ export async function handleCapsuleConfigurationPlans(
     reAdoption: _previousReAdoption,
     ...preservedInternal
   } = currentInternal ?? { reason: "per_install_overrides" as const };
-  const targetDraft: InstallConfig = {
+  const targetDraft = {
     ...authority.installConfig,
     id: targetInstallConfigId,
     workspaceId: authority.capsule.workspaceId,
@@ -357,7 +357,7 @@ export async function handleCapsuleConfigurationPlans(
     interfaceBlueprints: resolvedInterfaceBlueprints,
     createdAt: now,
     updatedAt: now,
-  };
+  } satisfies InstallConfig;
   await ctx.operations.validateCapsuleConfigurationProviderBindings({
     capsule: authority.capsule,
     installConfig: targetDraft,

@@ -38,6 +38,7 @@ import {
   type CapsulePlanCreationFence,
   type OpenTofuRunner,
   type OpenTofuRunnerExecutorRegistry,
+  type RunExecutionAuthority,
   type ReleaseActivator,
   type RecordMeteredUsageInput,
 } from "./domains/deploy-control/mod.ts";
@@ -544,6 +545,11 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly enqueueSourceSync?: EnqueueSourceSync;
   readonly runnerProfiles?: readonly RunnerProfile[];
   readonly defaultRunnerProfileId?: string;
+  /** Host-pinned immutable identities required for new terminal mutations. */
+  readonly executionEvidenceAuthority?: Pick<
+    RunExecutionAuthority,
+    "controllerArtifact" | "runnerArtifact" | "executorArtifact"
+  >;
   /**
    * Capsule lease seam (Core Specification §10.2). The Workers adapter
    * injects a DO-backed implementation fronting the `COORDINATION`
@@ -1253,6 +1259,9 @@ export async function createTakosumiService(
       : {}),
     ...(options.defaultRunnerProfileId
       ? { defaultRunnerProfileId: options.defaultRunnerProfileId }
+      : {}),
+    ...(options.executionEvidenceAuthority
+      ? { executionEvidenceAuthority: options.executionEvidenceAuthority }
       : {}),
     capsuleCoordination,
     ...(options.sensitiveOutputResolver

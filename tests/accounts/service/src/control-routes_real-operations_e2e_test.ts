@@ -58,6 +58,8 @@ import {
   FIXTURE_ARCHIVE_DIGEST,
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+  fixtureExecutionEvidence,
   seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -205,12 +207,14 @@ function recordingRunner(
         stateDigest: STATE_DIGEST,
         rawOutputRef: job.rawOutputRef,
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
       });
     },
     destroy: (job) => {
       destroyJobs.push(job);
       return Promise.resolve({
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "destroy"),
       });
     },
     readCapsuleSourceFiles: (job) => {
@@ -2032,11 +2036,17 @@ function applyRunner(input: {
     plan: () => Promise.reject(new Error("not used")),
     apply: async (job) => {
       input.jobs.push(job);
-      if (input.apply) return await input.apply(job);
+      const result = input.apply
+        ? await input.apply(job)
+        : {
+            outputs: {},
+            stateDigest: STATE_DIGEST,
+            rawOutputRef: job.rawOutputRef,
+          };
       return {
-        outputs: {},
-        stateDigest: STATE_DIGEST,
-        rawOutputRef: job.rawOutputRef,
+        ...result,
+        executionEvidence:
+          result.executionEvidence ?? fixtureExecutionEvidence(job, "apply"),
       };
     },
   };
@@ -2071,6 +2081,7 @@ test("default service coordination returns 409 while provider Apply holds the Ca
         };
       },
     }),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
   });
   const seeded = await seedQueuedNoStateCapsuleApply(deployStore, {
@@ -2140,6 +2151,7 @@ test("abandon wins the Capsule lifecycle lease before a queued Apply rechecks de
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
     opentofuRunner: applyRunner({ jobs: applyJobs }),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     capsuleCoordination: coordination,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
   });
@@ -3424,6 +3436,7 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
     opentofuRunner: runner,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
   });
   const seeded = await seedCapsuleModel(deployStore, {
@@ -3674,6 +3687,7 @@ test("account session control routes execute plan and apply through the real Ope
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
     opentofuRunner: runner,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     opentofuConnectionVault: fakeProviderVault() as never,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
   });
@@ -3962,6 +3976,7 @@ test("authenticated repository Interface review persists exact proposals and app
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
     opentofuRunner: runner,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     opentofuConnectionVault: fakeProviderVault() as never,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
   });
@@ -4367,6 +4382,7 @@ output "launch_url" { value = var.public_url }
     opentofuRunner: runner,
     opentofuConnectionVault: fakeProviderVault() as never,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     operatorInstallConfigs: options.genericDefault ? [] : [baseInstallConfig],
   });
   const snapshotId = `snap_re_adoption_${suffix}`;

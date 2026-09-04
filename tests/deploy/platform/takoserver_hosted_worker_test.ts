@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import { OPERATOR_CONTROL_MCP_INSTALL_CONFIG } from "../../../deploy/operator-control-mcp.ts";
 import * as hostedWorker from "../../../deploy/platform/takoserver_hosted_worker.ts";
 import { composeTakoserverHostedWorkerEnv } from "../../../deploy/platform/takoserver_hosted_worker.ts";
+import { deployControlServiceOptions } from "../../../worker/src/deploy_control_seam.ts";
 
 const HOSTED_PROVIDER_CONNECTION_ID = "conn_hostedProvider01";
 const HOSTED_PROVIDER_SOURCE = "registry.terraform.io/tako0614/takoform";
@@ -45,6 +46,158 @@ test("Takosumi Hosted requires the explicit local-exec staging flag", () => {
   } as never);
 
   expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toEqual([]);
+});
+
+test("Takosumi Hosted rejects malformed or open runner composition before composing", () => {
+  expect(() =>
+    composeTakoserverHostedWorkerEnv({
+      TAKOSUMI_RUNNER_HOST_COMPOSITION: {},
+    } as never),
+  ).toThrow("profiles must be an array");
+  expect(() =>
+    composeTakoserverHostedWorkerEnv({
+      TAKOSUMI_RUNNER_HOST_COMPOSITION: {
+        profiles: [],
+        unknown: true,
+      },
+    } as never),
+  ).toThrow("unknown key unknown");
+  expect(() =>
+    composeTakoserverHostedWorkerEnv({
+      TAKOSUMI_ENABLED_RUNNER_PROFILES: "not-configured",
+    } as never),
+  ).toThrow("unknown runner profile id not-configured");
+});
+
+test("Takosumi Hosted projects release-pinned evidence authority into the fetch composition", () => {
+  const composed = composeTakoserverHostedWorkerEnv({
+    TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+    TAKOSUMI_RUNNER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+    TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST: `sha256:${"b".repeat(64)}`,
+  } as never);
+
+  expect(composed.TAKOSUMI_RUNNER_HOST_COMPOSITION).toMatchObject({
+    executionEvidenceAuthority: {
+      controllerArtifact: {
+        digest: `sha256:${"a".repeat(64)}`,
+        immutable: true,
+      },
+      runnerArtifact: {
+        digest: `sha256:${"a".repeat(64)}`,
+        immutable: true,
+      },
+      executorArtifact: {
+        digest: `sha256:${"b".repeat(64)}`,
+        immutable: true,
+      },
+    },
+  });
+});
+
+test("Takosumi Hosted composition is consumable by deploy-control options", () => {
+  const composed = composeTakoserverHostedWorkerEnv({
+    TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+    TAKOSUMI_RUNNER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+    TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST: `sha256:${"b".repeat(64)}`,
+  } as never);
+
+  const options = deployControlServiceOptions(composed);
+  expect(options.runnerProfiles.map((profile) => profile.id)).toEqual([
+    "opentofu-default",
+  ]);
+  expect(options.executionEvidenceAuthority).toEqual(
+    composed.TAKOSUMI_RUNNER_HOST_COMPOSITION?.executionEvidenceAuthority,
+  );
+});
+
+test("Takosumi Hosted refuses a release-pin conflict in an existing composition", () => {
+  expect(() =>
+    composeTakoserverHostedWorkerEnv({
+      TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+      TAKOSUMI_RUNNER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+      TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST: `sha256:${"b".repeat(64)}`,
+      TAKOSUMI_RUNNER_HOST_COMPOSITION: {
+        profiles: [],
+        executionEvidenceAuthority: {
+          controllerArtifact: {
+            digest: `sha256:${"c".repeat(64)}`,
+            immutable: true,
+          },
+          runnerArtifact: {
+            digest: `sha256:${"a".repeat(64)}`,
+            immutable: true,
+          },
+          executorArtifact: {
+            digest: `sha256:${"b".repeat(64)}`,
+            immutable: true,
+          },
+        },
+      },
+    } as never),
+  ).toThrow("authority conflicts with release pins");
+});
+
+test("Takosumi Hosted RunOwner receives the composed release authority", async () => {
+  const rawEnv = {
+    TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+    TAKOSUMI_RUNNER_ARTIFACT_DIGEST: `sha256:${"a".repeat(64)}`,
+    TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST: `sha256:${"b".repeat(64)}`,
+  } as never;
+  const values = new Map<string, unknown>();
+  let alarmAt: number | undefined;
+  const storage = {
+    async get<T>(key: string) {
+      return values.get(key) as T | undefined;
+    },
+    async put<T>(key: string, value: T) {
+      values.set(key, value);
+    },
+    async delete(key: string) {
+      return values.delete(key);
+    },
+    async getAlarm() {
+      return alarmAt ?? null;
+    },
+    async setAlarm(value: number) {
+      alarmAt = value;
+    },
+    async deleteAlarm() {
+      alarmAt = undefined;
+    },
+  };
+  let dispatchedEnv: unknown;
+  const owner = new hostedWorker.OpenTofuRunOwnerObject(
+    { storage },
+    rawEnv,
+    {
+      now: () => 0,
+      dispatch: (_dispatch, env) => {
+        dispatchedEnv = env;
+        return Promise.resolve();
+      },
+      readRunStatus: () => Promise.resolve("succeeded"),
+    },
+  );
+
+  const response = await owner.fetch(
+    new Request("https://run-owner/start", {
+      method: "POST",
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run-owner.start@v1",
+        action: "apply",
+        runId: "run_hosted_1",
+        workspaceId: "workspace_1",
+      }),
+    }),
+  );
+  expect(response.status).toBe(202);
+  await owner.alarm();
+
+  const composed = composeTakoserverHostedWorkerEnv(rawEnv);
+  expect(dispatchedEnv).toBe(composed);
+  expect(deployControlServiceOptions(dispatchedEnv as never).executionEvidenceAuthority).toEqual(
+    composed.TAKOSUMI_RUNNER_HOST_COMPOSITION?.executionEvidenceAuthority,
+  );
 });
 
 test("Takoserver Hosted wrapper preserves every Worker Durable Object export", () => {

@@ -16,6 +16,7 @@ import {
   applyExpectedGuardFromPlanRun,
   OpenTofuController,
   type OpenTofuApplyJob,
+  type OpenTofuDestroyJob,
   type OpenTofuPlanJob,
   type OpenTofuPlanResult,
   type OpenTofuRunner,
@@ -37,7 +38,9 @@ import type { PlanResourceChange } from "@takosumi/internal/deploy-control-api";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   fakeProviderVault,
+  fixtureExecutionEvidence,
   seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -106,10 +109,17 @@ class FullStubRunner implements OpenTofuRunner {
       stateDigest:
         "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
       rawOutputRef: job.rawOutputRef,
+      providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+      executionEvidence: fixtureExecutionEvidence(job, "apply"),
     });
   }
-  destroy() {
-    return Promise.resolve({});
+  destroy(job: OpenTofuDestroyJob) {
+    return Promise.resolve({
+      stateDigest:
+        "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+      executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+    });
   }
   sourceSync(_job: OpenTofuSourceSyncJob): Promise<OpenTofuSourceSyncResult> {
     return Promise.resolve(this.sourceSyncResult);
@@ -247,6 +257,7 @@ output "launch_url" {
       return () => v++;
     })(),
     newId,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   });
   // First apply: plan + manual apply → active at generation 1.
   const first = await controller.createCapsulePlan("cap_auto0001");

@@ -19,6 +19,8 @@ import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/s
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
   fixtureStateCommit,
+  fixtureExecutionEvidence,
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   providerRequirementsForFixture,
   seedCapsuleModel,
   transitionProviderBindingSetForFixture,
@@ -57,6 +59,7 @@ const CLOUDFLARE_MIRROR_EVIDENCE = {
   attestationMethod: "forced_filesystem_mirror_init",
   mirrorPath:
     "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
+  installedDigest: `sha256:${"e".repeat(64)}`,
 } as const;
 const RUNNER_CONTAINER_CAPACITY_EXCEEDED =
   "OpenTofu runner rejected destroy-plan run plan_live: 500 (Maximum number of running container instances exceeded. Try again later, or try configuring a higher value for max_instances)";
@@ -164,6 +167,7 @@ test("consumer plan + apply: credentials reach the dispatch payload but never th
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(1000),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: capturingRunner(captured),
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
   });
@@ -232,6 +236,7 @@ test("secret-bearing mint evidence fails without leaking into the Run or audit e
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(1100),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: stubRunner(),
     vault,
   });
@@ -262,6 +267,7 @@ test("ApplyRun preparation checkpoint runs before durable put and provider dispa
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(1400),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       ...stubRunner(),
       apply: () => {
@@ -307,12 +313,17 @@ test("exact queued ApplyRun recovery repairs a lost insert acknowledgement witho
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(1425),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       ...stubRunner(),
       apply: (job) => {
         providerApplyCalls += 1;
         return Promise.resolve(
-          fixtureStateCommit({ rawOutputRef: job.rawOutputRef }),
+          fixtureStateCommit({
+            rawOutputRef: job.rawOutputRef,
+            providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+            executionEvidence: fixtureExecutionEvidence(job, "apply"),
+          }),
         );
       },
     },
@@ -374,6 +385,7 @@ test("beginApplyRun adoption repairs the exact queued row when the optimistic re
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(1440),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: stubRunner(),
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
     enqueueRun: (dispatch) => {
@@ -432,6 +444,7 @@ test("exact ApplyRun recovery adopts running and succeeded rows without queued r
       artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
       now: monotonicNow(status === "running" ? 1450 : 1475),
       newId: deterministicIds(),
+      executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
       runner: stubRunner(),
       vault: fakeVault({
         [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN },
@@ -492,6 +505,7 @@ test("exact ApplyRun recovery rejects an immutable authority mismatch", async ()
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(1490),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: stubRunner(),
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
     enqueueRun: () => Promise.resolve(),
@@ -539,6 +553,7 @@ test("successful apply observer sees the atomically committed terminal run and C
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(1500),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: stubRunner(),
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
   });
@@ -588,6 +603,7 @@ test("failed apply observer fires once after provider dispatch and terminal pers
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(1750),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       ...stubRunner(),
       apply: () => Promise.reject(new Error("provider apply failed")),
@@ -631,6 +647,7 @@ test("raw-output durability ambiguity replays the same ApplyRun before publishin
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(1800),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       ...stubRunner(),
       apply: (job) => {
@@ -647,14 +664,16 @@ test("raw-output durability ambiguity replays the same ApplyRun before publishin
           throw new Error("consumer omitted the allocated rawOutputRef");
         }
         return Promise.resolve(
-          fixtureStateCommit({
-            rawOutputRef: job.rawOutputRef,
-            outputs: {
+            fixtureStateCommit({
+              rawOutputRef: job.rawOutputRef,
+              providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+              outputs: {
               launch_url: {
                 sensitive: false,
                 value: "https://app.example.test",
               },
             },
+            executionEvidence: fixtureExecutionEvidence(job, "apply"),
           }),
         );
       },
@@ -741,12 +760,18 @@ test("apply publishes the exact confirmed raw-output ref even when outputs are e
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(1850),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       ...stubRunner(),
       apply: (job) => {
         confirmedRawOutputRef = job.rawOutputRef;
         return Promise.resolve(
-          fixtureStateCommit({ outputs: {}, rawOutputRef: job.rawOutputRef }),
+          fixtureStateCommit({
+            outputs: {},
+            rawOutputRef: job.rawOutputRef,
+            providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+            executionEvidence: fixtureExecutionEvidence(job, "apply"),
+          }),
         );
       },
     },
@@ -777,6 +802,7 @@ test("apply missing its confirmed raw-output ref fails before ledger pointers pu
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(1900),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       ...stubRunner(),
       apply: () => Promise.resolve(fixtureStateCommit({ outputs: {} })),
@@ -814,6 +840,7 @@ test("queued destroy cancellation emits one terminal callback after its early li
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(1850),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: stubRunner(),
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
     enqueueRun: noopEnqueue,
@@ -877,6 +904,7 @@ test("idempotency: dispatching a terminal run no-ops", async () => {
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(2000),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: countingRunner(() => planCalls++),
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
   });
@@ -902,6 +930,7 @@ test("replaying plan creation repairs a lost queued enqueue but not a completed 
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(2250),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: stubRunner(),
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
     enqueueRun: (dispatch) => {
@@ -1012,6 +1041,7 @@ test("a runner failure records the run failed and never persists the minted cred
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(5000),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       plan: () => Promise.reject(new Error("opentofu init failed: exit 1")),
       apply: () => Promise.resolve({}),
@@ -1039,6 +1069,7 @@ test("a retryable runner infrastructure reset requeues plan without dropping inp
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(5250),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       plan: () => {
         planCalls++;
@@ -1119,6 +1150,7 @@ test("runner container capacity exhaustion requeues destroy plan without failing
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(5375),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       plan: () => {
         planCalls++;
@@ -1203,6 +1235,7 @@ test("runner infrastructure errors fail a plan after the retry budget is exhaust
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(5450),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       plan: () => {
         planCalls++;
@@ -1267,6 +1300,7 @@ test("a typed indeterminate runner mutation terminally fails apply without retry
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(5500),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       plan: () =>
         Promise.resolve({
@@ -1370,6 +1404,7 @@ test("runner infrastructure errors fail apply after the retry budget is exhauste
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(5650),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       plan: () =>
         Promise.resolve({
@@ -1451,6 +1486,7 @@ test("an ambiguous runner substrate reset terminally fails destroy without repla
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(5750),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       plan: () =>
         Promise.resolve({
@@ -1544,6 +1580,7 @@ test("runner infrastructure errors fail destroy apply after the retry budget is 
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(5900),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: {
       plan: () =>
         Promise.resolve({
@@ -1637,6 +1674,7 @@ test("DLQ backstop marks a non-terminal run failed (retries-exhausted)", async (
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(6000),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: stubRunner(),
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
     enqueueRun: noopEnqueue, // leave the run queued
@@ -1667,6 +1705,7 @@ test("DLQ backstop does not clobber a running run with a fresh owner", async () 
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(6500),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: stubRunner(),
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
     enqueueRun: noopEnqueue,
@@ -1712,6 +1751,7 @@ test("state generation: a successful apply increments the capsule generation", a
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(7000),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: stubRunner(),
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
   });
@@ -1731,6 +1771,7 @@ test("state generation: a stale plan is rejected at apply (state_generation_mism
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: monotonicNow(8000),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: stubRunner(),
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
   });
@@ -1820,16 +1861,28 @@ function capturingRunner(captured: {
     },
     apply: (job) => {
       captured.apply = job;
-      return Promise.resolve(fixtureStateCommit({
-        outputs: {
-          launch_url: { sensitive: false, value: "https://app.example.test" },
-        },
-        rawOutputRef: job.rawOutputRef,
-      }));
+      return Promise.resolve(
+        fixtureStateCommit({
+          outputs: {
+            launch_url: {
+              sensitive: false,
+              value: "https://app.example.test",
+            },
+          },
+          rawOutputRef: job.rawOutputRef,
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+          executionEvidence: fixtureExecutionEvidence(job, "apply"),
+        }),
+      );
     },
     destroy: (job) => {
       captured.destroy = job;
-      return Promise.resolve(fixtureStateCommit());
+      return Promise.resolve(
+        fixtureStateCommit({
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+          executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+        }),
+      );
     },
   };
 }
@@ -1846,7 +1899,14 @@ function countingRunner(onPlan: () => void): OpenTofuRunner {
         providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
       });
     },
-    apply: () => Promise.resolve({}),
+    apply: (job) =>
+      Promise.resolve(
+        fixtureStateCommit({
+          rawOutputRef: job.rawOutputRef,
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+          executionEvidence: fixtureExecutionEvidence(job, "apply"),
+        }),
+      ),
   };
 }
 
@@ -1861,13 +1921,26 @@ function stubRunner(): OpenTofuRunner {
         providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
       }),
     apply: (job) =>
-      Promise.resolve(fixtureStateCommit({
-        outputs: {
-          launch_url: { sensitive: false, value: "https://app.example.test" },
-        },
-        rawOutputRef: job.rawOutputRef,
-      })),
-    destroy: () => Promise.resolve(fixtureStateCommit()),
+      Promise.resolve(
+        fixtureStateCommit({
+          outputs: {
+            launch_url: {
+              sensitive: false,
+              value: "https://app.example.test",
+            },
+          },
+          rawOutputRef: job.rawOutputRef,
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+          executionEvidence: fixtureExecutionEvidence(job, "apply"),
+        }),
+      ),
+    destroy: (job) =>
+      Promise.resolve(
+        fixtureStateCommit({
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+          executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+        }),
+      ),
   };
 }
 

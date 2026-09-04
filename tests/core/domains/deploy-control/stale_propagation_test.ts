@@ -21,7 +21,9 @@ import { DependenciesService } from "../../../../core/domains/dependencies/mod.t
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   fakeProviderVault,
+  fixtureExecutionEvidence,
   seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -75,6 +77,8 @@ function runnerEmitting(
         stateDigest:
           "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
         rawOutputRef: job.rawOutputRef,
+        providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
       }),
     destroy: () => Promise.resolve({}),
   };
@@ -164,6 +168,7 @@ test("a changed producer output marks an active consumer stale", async () => {
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: nowSeq(1),
     newId: ids(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   });
 
   // Producer + consumer both apply -> both active.
@@ -197,6 +202,7 @@ test("a changed producer output marks an active consumer stale", async () => {
       let n = 1;
       return (p: string) => `${p}_r${String(n++).padStart(6, "0")}`;
     })(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   });
   const replan = await changed.createCapsulePlan("cap_producer1");
   await changed.createApplyRun({
@@ -261,6 +267,7 @@ test("a not-yet-applied (pending) consumer is left untouched by a producer chang
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: nowSeq(1),
     newId: ids(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   });
   const applyOf = async (id: string) => {
     const plan = await controller.createCapsulePlan(id);
@@ -281,6 +288,7 @@ test("a not-yet-applied (pending) consumer is left untouched by a producer chang
       let n = 1;
       return (p: string) => `${p}_r${String(n++).padStart(6, "0")}`;
     })(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   });
   const replan = await changed.createCapsulePlan("cap_producer1");
   await changed.createApplyRun({

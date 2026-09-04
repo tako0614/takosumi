@@ -7,6 +7,10 @@ import {
   resolveEnabledRunnerProfiles,
 } from "../../../../core/domains/deploy-control/runner_profiles.ts";
 import { evaluatePolicy } from "../../../../core/domains/deploy-control/policy.ts";
+import {
+  InMemoryOpenTofuControlStore,
+} from "../../../../core/domains/deploy-control/store.ts";
+import { OpenTofuController } from "../../../../core/domains/deploy-control/mod.ts";
 
 const SEEDS = createDefaultRunnerProfiles(123);
 
@@ -37,7 +41,7 @@ test("empty profile configuration selects the provider-neutral default", () => {
   }
 });
 
-test("explicit profile ids are trimmed, deduplicated, and operator-curated", () => {
+test("explicit profile ids are trimmed and operator-curated", () => {
   const privateNetwork = {
     ...SEEDS[0]!,
     id: "private-network",
@@ -46,7 +50,7 @@ test("explicit profile ids are trimmed, deduplicated, and operator-curated", () 
   };
   const enabled = resolveEnabledRunnerProfiles(
     [...SEEDS, privateNetwork],
-    " private-network, opentofu-default,private-network,missing ",
+    " private-network, opentofu-default ",
   );
   expect(enabled.map((row) => row.id)).toEqual([
     "private-network",
@@ -56,10 +60,100 @@ test("explicit profile ids are trimmed, deduplicated, and operator-curated", () 
   expect(enabled.every((row) => row.labels === undefined)).toBe(true);
 });
 
-test("an all-unknown explicit profile set fails closed", () => {
-  expect(resolveEnabledRunnerProfiles(SEEDS, "missing,also-missing")).toEqual(
-    [],
+test("an unknown explicit profile id fails closed", () => {
+  expect(() => resolveEnabledRunnerProfiles(SEEDS, "missing")).toThrow(
+    "unknown runner profile id missing",
   );
+});
+
+test("duplicate explicit profile ids fail closed", () => {
+  expect(() =>
+    resolveEnabledRunnerProfiles(SEEDS, "opentofu-default,opentofu-default"),
+  ).toThrow("duplicate enabled runner profile id opentofu-default");
+});
+
+test("duplicate configured profile ids fail closed", () => {
+  expect(() =>
+    resolveEnabledRunnerProfiles([...SEEDS, SEEDS[0]!], undefined),
+  ).toThrow("duplicate runner profile id opentofu-default");
+});
+
+test("malformed profile catalogs fail before controller seeding", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const malformed = {
+    ...SEEDS[0]!,
+    id: "malformed",
+    stateBackend: undefined,
+  };
+
+  expect(() =>
+    new OpenTofuController({
+      store,
+      runnerProfiles: [malformed] as never,
+    }),
+  ).toThrow("runner profile malformed.stateBackend");
+  expect(await store.listRunnerProfiles()).toEqual([]);
+});
+
+test("controller rejects unknown nested profile keys before controller seeding", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const malformed = {
+    ...SEEDS[0]!,
+    id: "nested-malformed",
+    lifecycle: {
+      ...SEEDS[0]!.lifecycle,
+      credentialRef: "vault://unexpected",
+    },
+  };
+
+  expect(() =>
+    new OpenTofuController({
+      store,
+      runnerProfiles: [malformed] as never,
+    }),
+  ).toThrow("unknown key credentialRef");
+  expect(await store.listRunnerProfiles()).toEqual([]);
+});
+
+test("controller rejects profile and global execution evidence authority conflicts", () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const globalAuthority = {
+    controllerArtifact: { digest: `sha256:${"a".repeat(64)}`, immutable: true },
+    runnerArtifact: { digest: `sha256:${"b".repeat(64)}`, immutable: true },
+    executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
+  } as const;
+  const profileAuthority = {
+    ...globalAuthority,
+    executorArtifact: { digest: `sha256:${"d".repeat(64)}`, immutable: true },
+  } as const;
+
+  expect(() =>
+    new OpenTofuController({
+      store,
+      runnerProfiles: [
+        { ...SEEDS[0]!, executionEvidenceAuthority: profileAuthority },
+      ],
+      executionEvidenceAuthority: globalAuthority,
+    }),
+  ).toThrow("execution evidence authority conflicts");
+});
+
+test("controller accepts equal profile and global execution evidence authority", () => {
+  const authority = {
+    controllerArtifact: { digest: `sha256:${"a".repeat(64)}`, immutable: true },
+    runnerArtifact: { digest: `sha256:${"b".repeat(64)}`, immutable: true },
+    executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
+  } as const;
+
+  expect(() =>
+    new OpenTofuController({
+      store: new InMemoryOpenTofuControlStore(),
+      runnerProfiles: [
+        { ...SEEDS[0]!, executionEvidenceAuthority: authority },
+      ],
+      executionEvidenceAuthority: authority,
+    }),
+  ).not.toThrow();
 });
 
 test("the same profile admits known and arbitrary provider sources", () => {

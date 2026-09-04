@@ -10,7 +10,9 @@ import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/s
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   fakeProviderVault,
+  fixtureExecutionEvidence,
   fixtureStateCommit,
   providerRequirementsForFixture,
   seedCapsuleModel,
@@ -54,7 +56,11 @@ function succeedingRunner() {
       }),
     apply: (job) =>
       Promise.resolve(
-        fixtureStateCommit({ rawOutputRef: job.rawOutputRef }),
+        fixtureStateCommit({
+          rawOutputRef: job.rawOutputRef,
+          providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+          executionEvidence: fixtureExecutionEvidence(job, "apply"),
+        }),
       ),
   };
 }
@@ -137,6 +143,7 @@ test("getRun projects a succeeded plan + its apply run", async () => {
     store,
     now: sequenceNow(1),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: succeedingRunner(),
     vault: fakeProviderVault() as never,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
@@ -163,6 +170,7 @@ test("listRuns returns unified Workspace Runs newest first", async () => {
     store,
     now: sequenceNow(1000),
     newId: deterministicIds(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     runner: succeedingRunner(),
     vault: fakeProviderVault() as never,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
