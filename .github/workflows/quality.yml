@@ -55,11 +55,10 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Audit root JavaScript dependencies
-        run: bun audit
+        run: bun scripts/run-bun-audit.ts
 
       - name: Audit dashboard JavaScript dependencies
-        working-directory: dashboard
-        run: bun audit
+        run: bun scripts/run-bun-audit.ts --cwd dashboard
 
       - name: Audit public site dependencies
         run: bun run audit:public-sites
