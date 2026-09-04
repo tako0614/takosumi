@@ -49,6 +49,20 @@ source it deploys is named by identity in a sibling file:
 }
 ```
 
+Release artifacts do not reduce that pin to its commit. The canonical
+`sourceAuthoritySha256` is the SHA-256 of the UTF-8 JSON serialization of
+this object in the exact member order shown:
+
+```text
+{"kind":"takosumi.platform-release-source-authority@v1","pin":{"kind":"takosumi.platform-release-source@v1","repository":"<exact repository>","commit":"<exact commit>"}}
+```
+
+Platform plan v6 and ready evidence v3 carry both the readable
+repository/commit and this digest. The plan confirmation covers all three
+fields, so changing only the repository changes the reviewed release authority
+even when commit and realized config bytes are unchanged. Older plan and ready
+envelopes fail closed and must be recreated.
+
 `plan` refuses a config that states either source path
 (`platform_worker_release_config_declares_source_path`), and refuses to run at
 all from a checkout that is not exactly that repository at that commit
@@ -159,7 +173,8 @@ to the sponsorship descriptor, and set `takosumi-ai.workspaceContext` to
 ## Official staging release
 
 The official staging target is a reviewed two-step owner surface. Plan is
-read-only: it requires clean pushed source, reproduces the environment-specific
+read-only: it requires clean pushed source, binds its exact repository/commit
+authority into the confirmed plan, reproduces the environment-specific
 dashboard build twice, seals every physical output path/size/digest, validates
 that the external config points at that same worktree, seals the metadata-only
 secret-name inventory and exact serving predecessor, and seals Wrangler's
@@ -210,7 +225,7 @@ bun run deploy -- takosumi-platform-staging execute \
   --evidence /absolute/non-worktree-release-state/release-evidence.json
 ```
 
-Execute rechecks the exact source, config, secret names, complete dashboard
+Execute rechecks the confirmed source, config, secret names, complete dashboard
 tree, and dry-run tree. It copies that closure with stable no-follow reads into
 fresh external single-link upload custody, then deploys the custody dry-run
 entry with `--no-bundle` and its exact projected config. Custody is re-sealed
@@ -229,9 +244,10 @@ and requires its nonce-bound plan-unique tag, message, required binding types,
 configured Hosted service, and fetch handler. The public root and discovery
 document must then emit that same UUID as `x-takosumi-version-id`; a cache hit,
 50/50 split, unchanged predecessor, or concurrent Version cannot satisfy ready
-evidence. Ready evidence also requires the unique Container list row and
-authoritative detail to agree on the exact application id, name, version, and
-immutable configured image. Wrangler's list row supplies the synthesized
+evidence. Ready evidence repeats the plan's readable source repository/commit
+and canonical source-authority digest. It also requires the unique Container
+list row and authoritative detail to agree on the exact application id, name,
+version, and immutable configured image. Wrangler's list row supplies the synthesized
 application state; raw detail may omit that field, but must agree when it is
 present. The result must have no active rollout and no failed, starting,
 scheduling, or error entries.

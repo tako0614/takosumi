@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
-  chmodSync,
+  cpSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -17,20 +18,32 @@ import {
 } from "../../scripts/runner-image-release.ts";
 import {
   assertConfigTargetsSource,
-  createPlatformReadyEvidence,
-  createPlatformReleasePlan,
+  completeRelease,
+  dashboardAssetTreeSeal,
+  runPlatformWorkerRelease,
+  type PlatformContainerState,
+  type PlatformReleaseCommand,
+  type PlatformReleasePlan,
+  type PlatformReleasePlanRuntime,
 } from "../../scripts/platform-worker-release.ts";
-import { resolvePlatformReleaseSourceAuthority } from "../../scripts/lib/platform-release-source.ts";
 
 const roots: string[] = [];
 const COMMIT = "a".repeat(40);
 const REPOSITORY = "https://github.com/tako0614/takosumi.git";
+const OTHER_REPOSITORY = "https://github.com/example/takosumi.git";
 const PREVIOUS_IMAGE =
   `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${"c".repeat(64)}`;
 const NEXT_IMAGE =
   `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${"d".repeat(64)}`;
 const PREDECESSOR_VERSION = "11111111-1111-4111-8111-111111111111";
 const DEPLOYED_VERSION = "22222222-2222-4222-8222-222222222222";
+const OPENTOFU_SHA256 = "9".repeat(64);
+const DOCKERFILE = [
+  "FROM scratch",
+  "ARG OPENTOFU_VERSION=1.12.5",
+  `ARG OPENTOFU_SHA256=${OPENTOFU_SHA256}`,
+  "",
+].join("\n");
 
 afterEach(() => {
   for (const root of roots.splice(0)) {
@@ -38,7 +51,7 @@ afterEach(() => {
   }
 });
 
-test("one pathless realized config composes runner build with platform release", async () => {
+test("real release producers reject a repository-only source-authority change before verify readback", async () => {
   const root = mkdtempSync(join(tmpdir(), "takosumi-release-composition-"));
   roots.push(root);
   const repositoryRoot = join(root, "takosumi");
@@ -47,7 +60,7 @@ test("one pathless realized config composes runner build with platform release",
   mkdirSync(join(repositoryRoot, "deploy/platform"), { recursive: true });
   mkdirSync(join(repositoryRoot, "dashboard/dist"), { recursive: true });
   mkdirSync(operatorRoot, { recursive: true, mode: 0o700 });
-  writeFileSync(join(repositoryRoot, "runner/Dockerfile"), "FROM scratch\n");
+  writeFileSync(join(repositoryRoot, "runner/Dockerfile"), DOCKERFILE);
   writeFileSync(
     join(repositoryRoot, "deploy/platform/entry-worker.ts"),
     "export default {};\n",
@@ -69,37 +82,29 @@ test("one pathless realized config composes runner build with platform release",
   // This is the exact pathless shape accepted by the platform plan seam.
   expect(() => assertConfigTargetsSource(source, "staging")).not.toThrow();
 
+  const buildEvidence = join(operatorRoot, "runner-build.jsonl");
   const build = (await runRunnerImageRelease(
     {
       command: "build",
       config,
       environment: "staging",
       release: "release-1",
-      evidence: join(operatorRoot, "runner-build.jsonl"),
+      evidence: buildEvidence,
       state: join(operatorRoot, "runner-state.jsonl"),
-      execute: false,
+      review: "operator:builder",
+      execute: true,
     },
-    {
-      repositoryRoot,
-      nonce: () => "01".repeat(16),
-      git: releaseGit(),
-    },
+    runnerBuildRuntime(repositoryRoot),
   )) as RunnerImageBuildRecord;
 
   expect(build).toMatchObject({
     operation: "build",
-    status: "planned",
-    source: { commit: COMMIT },
+    status: "published",
+    source: { repository: REPOSITORY, commit: COMMIT },
+    image: { immutableRef: NEXT_IMAGE },
   });
   expect(build.config.buildSha256).toBe(sha256(source));
 
-  const buildAuthority = resolvePlatformReleaseSourceAuthority({
-    configPath: config,
-    configSource: source,
-    repositoryRoot,
-    checkoutRepository: REPOSITORY,
-    checkoutCommit: COMMIT,
-  });
   const activatedSource = source.replace(PREVIOUS_IMAGE, NEXT_IMAGE);
   expect(activatedSource).not.toBe(source);
   const activationSha256 = assertRunnerImageOnlyConfigChange(
@@ -109,93 +114,56 @@ test("one pathless realized config composes runner build with platform release",
     NEXT_IMAGE,
   );
   expect(activationSha256).toBe(sha256(activatedSource));
+  expect(build.config.expectedActivationSha256).toBe(activationSha256);
   writeFileSync(config, activatedSource);
 
-  // Feed the activated bytes through the same pure producers used by platform
-  // plan/execute. The runner below consumes their exact ready-evidence output,
-  // so a production field rename or identity remap breaks this composition.
   expect(() => assertConfigTargetsSource(activatedSource, "staging")).not.toThrow();
-  const platformAuthority = resolvePlatformReleaseSourceAuthority({
-    configPath: config,
-    configSource: activatedSource,
-    repositoryRoot,
-    checkoutRepository: REPOSITORY,
-    checkoutCommit: COMMIT,
-  });
-  expect(platformAuthority.pin).toEqual(buildAuthority.pin);
-  const closurePath = join(operatorRoot, "platform-plan.closure");
-  const restoreClosurePath = join(operatorRoot, "platform-plan.restore-closure");
-  const dashboardAssets = assetSeal("index.html", "dashboard\n");
-  const platformPlan = createPlatformReleasePlan({
-    kind: "takosumi.platform-worker-release-plan@v5",
-    createdAt: "2026-09-04T00:00:00.000Z",
-    environment: "staging",
-    sourceCommit: platformAuthority.pin.commit,
-    releaseNonce: "01".repeat(16),
-    configPath: config,
-    configSha256: activationSha256,
-    closurePath,
-    closure: assetSeal("source/entry-worker.ts", "export default {};\n"),
-    sealedConfigPath: join(closurePath, "wrangler.toml"),
-    sealedConfigSha256: `sha256:${"1".repeat(64)}`,
-    uploadEntrypointPath: join(closurePath, "dry-run/entry-worker.mjs"),
-    checkpointPath: join(operatorRoot, "platform-plan.checkpoint.jsonl"),
-    restoreClosurePath,
-    restoreClosure: assetSeal("source/entry-worker.ts", "export default {};\n"),
-    restoreSealedConfigPath: join(restoreClosurePath, "wrangler.toml"),
-    restoreSealedConfigSha256: `sha256:${"2".repeat(64)}`,
-    restoreUploadEntrypointPath: join(
-      restoreClosurePath,
-      "dry-run/entry-worker.mjs",
-    ),
-    restoreDryRun: assetSeal("entry-worker.mjs", "restore bundle\n"),
-    dashboardAssets,
-    dryRun: assetSeal("entry-worker.mjs", "forward bundle\n"),
-    secretNamesSha256: `sha256:${"3".repeat(64)}`,
-    predecessorVersionId: PREDECESSOR_VERSION,
-    predecessorContainer: platformContainer(PREVIOUS_IMAGE, 1),
-  });
+  const planPath = join(operatorRoot, "platform-plan.json");
+  await runPlatformWorkerRelease(
+    ["plan", "--config", config, "--plan-out", planPath],
+    "staging",
+    platformPlanRuntime(repositoryRoot),
+  );
+  const platformPlan = JSON.parse(
+    readFileSync(planPath, "utf8"),
+  ) as PlatformReleasePlan;
   expect({
+    sourceRepository: platformPlan.sourceRepository,
     sourceCommit: platformPlan.sourceCommit,
+    sourceAuthoritySha256: platformPlan.sourceAuthoritySha256,
     configPath: platformPlan.configPath,
     configSha256: platformPlan.configSha256,
   }).toEqual({
-    sourceCommit: buildAuthority.pin.commit,
+    sourceRepository: build.source.repository,
+    sourceCommit: build.source.commit,
+    sourceAuthoritySha256: build.source.authoritySha256,
     configPath: build.config.path,
     configSha256: activationSha256,
   });
 
-  const publishedBuild: RunnerImageBuildRecord = {
-    ...build,
-    status: "published",
-    config: {
-      ...build.config,
-      expectedActivationSha256: activationSha256,
-    },
-    image: {
-      ...build.image,
-      transportRef:
-        `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner:${build.image.transportTag}`,
-      immutableRef: NEXT_IMAGE,
-    },
-    review: "operator:builder",
-  };
-  const buildEvidence = join(operatorRoot, "published-runner-build.jsonl");
-  writePrivate(buildEvidence, `${JSON.stringify(publishedBuild)}\n`);
-
   const platformEvidence = join(operatorRoot, "platform-evidence.json");
-  const readyEvidence = createPlatformReadyEvidence({
-    plan: platformPlan,
-    completedAt: "2026-09-04T00:01:00.000Z",
-    deployedVersionId: DEPLOYED_VERSION,
-    deployedContainer: platformContainer(NEXT_IMAGE, 2),
-    reviewer: "operator:platform-reviewer",
-    lostAcknowledgement: false,
-  });
-  writePrivate(
-    platformEvidence,
-    `${JSON.stringify(readyEvidence)}\n`,
+  await completeRelease(
+    {
+      action: "execute",
+      plan: planPath,
+      confirmation: platformPlan.confirmation,
+      reviewer: "operator:platform-reviewer",
+      evidence: platformEvidence,
+    },
+    platformPlan,
+    true,
+    undefined,
+    successfulPlatformReleaseCommand(platformPlan),
+    undefined,
+    async () => {},
   );
+  expect(JSON.parse(readFileSync(platformEvidence, "utf8"))).toMatchObject({
+    kind: "takosumi.platform-worker-release-evidence@v3",
+    status: "ready",
+    sourceRepository: build.source.repository,
+    sourceAuthoritySha256: build.source.authoritySha256,
+    planConfirmation: platformPlan.confirmation,
+  });
 
   const verify = await runRunnerImageRelease(
     {
@@ -216,13 +184,254 @@ test("one pathless realized config composes runner build with platform release",
   expect(verify).toMatchObject({
     operation: "verify",
     status: "planned",
-    source: { commit: platformPlan.sourceCommit },
+    source: {
+      repository: platformPlan.sourceRepository,
+      commit: platformPlan.sourceCommit,
+      authoritySha256: platformPlan.sourceAuthoritySha256,
+    },
     image: NEXT_IMAGE,
     platformVersionId: DEPLOYED_VERSION,
   });
+
+  writeFileSync(
+    join(operatorRoot, "wrangler.staging.source.json"),
+    `${JSON.stringify({
+      kind: "takosumi.platform-release-source@v1",
+      repository: OTHER_REPOSITORY,
+      commit: COMMIT,
+    })}\n`,
+  );
+  let liveReadbackCalls = 0;
+  await expect(
+    runRunnerImageRelease(
+      {
+        command: "verify",
+        config,
+        environment: "staging",
+        release: "release-1",
+        evidence: join(operatorRoot, "runner-verify-repository-drift.jsonl"),
+        buildEvidence,
+        platformEvidence,
+        review: "operator:verifier",
+        execute: true,
+      },
+      {
+        repositoryRoot,
+        git: releaseGit(OTHER_REPOSITORY),
+        command: async () => {
+          liveReadbackCalls += 1;
+          throw new Error("live readback must not run after source authority drift");
+        },
+      },
+    ),
+  ).rejects.toThrow("runner_image_source_authority_mismatch");
+  expect(liveReadbackCalls).toBe(0);
 });
 
-function releaseGit() {
+function runnerBuildRuntime(repositoryRoot: string) {
+  return {
+    repositoryRoot,
+    nonce: () => "01".repeat(16),
+    accountId: "b".repeat(32),
+    git: releaseGit(),
+    materializeSource: async (
+      sourceRoot: string,
+      _commit: string,
+      destination: string,
+    ) => {
+      cpSync(sourceRoot, destination, { recursive: true });
+    },
+    command: async (_executable: string, args: readonly string[]) => {
+      if (args[0] === "buildx") return commandResult("");
+      if (args[0] === "image") {
+        return commandResult(
+          JSON.stringify({
+            Id: `sha256:${"d".repeat(64)}`,
+            Descriptor: {
+              digest: `sha256:${"d".repeat(64)}`,
+              mediaType:
+                "application/vnd.docker.distribution.manifest.v2+json",
+            },
+            Os: "linux",
+            Architecture: "amd64",
+          }),
+        );
+      }
+      if (args[0] === "manifest") {
+        return commandResult(
+          JSON.stringify({
+            Descriptor: {
+              mediaType:
+                "application/vnd.docker.distribution.manifest.v2+json",
+              digest: `sha256:${"d".repeat(64)}`,
+              platform: { os: "linux", architecture: "amd64" },
+            },
+            SchemaV2Manifest: {
+              schemaVersion: 2,
+              mediaType:
+                "application/vnd.docker.distribution.manifest.v2+json",
+              config: { digest: `sha256:${"f".repeat(64)}` },
+            },
+          }),
+        );
+      }
+      if (args[1] === "containers" && args[2] === "push") {
+        const localTag = args[3]!;
+        return commandResult(
+          `Pushed image: registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner:${localTag.slice(localTag.indexOf(":") + 1)}\n`,
+        );
+      }
+      if (args.includes("--output")) {
+        const output = args[args.indexOf("--output") + 1]!;
+        const url = args.at(-1)!;
+        writeFileSync(
+          output,
+          url.endsWith("_SHA256SUMS")
+            ? `${OPENTOFU_SHA256}  tofu_1.12.5_linux_amd64.zip\n`
+            : "sigstore material\n",
+        );
+        return commandResult("");
+      }
+      if (args[0] === "verify-blob") return commandResult("Verified OK\n");
+      throw new Error(`unexpected runner build command: ${args.join(" ")}`);
+    },
+  };
+}
+
+function platformPlanRuntime(
+  repositoryRoot: string,
+): PlatformReleasePlanRuntime {
+  return {
+    repositoryRoot,
+    assertCleanAndPushed: async () => {},
+    checkoutIdentity: () => ({ repository: REPOSITORY, commit: COMMIT }),
+    buildDashboard: async () =>
+      dashboardAssetTreeSeal(join(repositoryRoot, "dashboard/dist")),
+    readPredecessor: async () => ({
+      versionId: PREDECESSOR_VERSION,
+      container: platformContainer(PREVIOUS_IMAGE, 1),
+    }),
+    createClosure: async (input) => {
+      const dryRunPath = join(input.closurePath, "dry-run");
+      mkdirSync(dryRunPath, { recursive: true });
+      const configPath = join(input.closurePath, "wrangler.toml");
+      const uploadEntrypointPath = join(dryRunPath, "entry-worker.mjs");
+      writeFileSync(configPath, input.configSource, { mode: 0o600 });
+      writeFileSync(uploadEntrypointPath, "export default {};\n");
+      return {
+        configPath,
+        configSha256: sha256(input.configSource),
+        uploadEntrypointPath,
+        dryRun: dashboardAssetTreeSeal(dryRunPath),
+        closure: dashboardAssetTreeSeal(input.closurePath),
+      };
+    },
+    readSecretNames: async () => [],
+    now: () => new Date("2026-09-04T00:00:00.000Z"),
+    nonce: () => "02".repeat(16),
+  };
+}
+
+function successfulPlatformReleaseCommand(
+  plan: PlatformReleasePlan,
+): PlatformReleaseCommand {
+  let uploaded = false;
+  return async (argv) => {
+    if (argv[1] === "deployments" && argv[2] === "status") {
+      return commandResult(
+        JSON.stringify({
+          id: "deployment",
+          versions: [
+            {
+              version_id: uploaded
+                ? DEPLOYED_VERSION
+                : plan.predecessorVersionId,
+              percentage: 100,
+            },
+          ],
+        }),
+      );
+    }
+    if (argv[1] === "containers" && argv[2] === "list") {
+      const state = uploaded
+        ? platformContainer(NEXT_IMAGE, 2)
+        : plan.predecessorContainer;
+      return commandResult(
+        JSON.stringify([
+          {
+            id: state.id,
+            name: state.name,
+            state: state.state,
+            image: state.image,
+            version: state.version,
+          },
+        ]),
+      );
+    }
+    if (argv[1] === "containers" && argv[2] === "info") {
+      const state = uploaded
+        ? platformContainer(NEXT_IMAGE, 2)
+        : plan.predecessorContainer;
+      return commandResult(JSON.stringify(platformContainerDetail(state)));
+    }
+    if (argv[1] === "deploy") {
+      uploaded = true;
+      return commandResult(`Current Version ID: ${DEPLOYED_VERSION}\n`);
+    }
+    if (argv[1] === "versions" && argv[2] === "view") {
+      return commandResult(
+        JSON.stringify({
+          id: DEPLOYED_VERSION,
+          annotations: {
+            "workers/tag": plan.releaseTag,
+            "workers/message":
+              `takosumi-platform-release ${plan.confirmation}`,
+          },
+          resources: {
+            script: { handlers: ["fetch"] },
+            bindings: [
+              { name: "ASSETS", type: "assets" },
+              { name: "HOSTED", type: "service", service: "takosumi-hosted-staging" },
+              { name: "TAKOSUMI_ACCOUNTS_DB", type: "d1" },
+              { name: "TAKOSUMI_CONTROL_DB", type: "d1" },
+              {
+                name: "TAKOSUMI_RUNTIME_BINDING_DERIVATION_KEY",
+                type: "secret_text",
+              },
+              { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" },
+            ],
+          },
+        }),
+      );
+    }
+    throw new Error(`unexpected platform release command: ${argv.join(" ")}`);
+  };
+}
+
+function commandResult(stdout: string) {
+  return { exitCode: 0, stdout, stderr: "" } as const;
+}
+
+function platformContainerDetail(state: PlatformContainerState) {
+  return {
+    id: state.id,
+    name: state.name,
+    state: state.state,
+    version: state.version,
+    configuration: { image: state.image },
+    active_rollout_id: state.hasActiveRollout ? "rollout" : null,
+    health: {
+      instances: {
+        failed: state.health.failed,
+        starting: state.health.starting,
+        scheduling: state.health.scheduling,
+      },
+      errors: Array.from({ length: state.health.errorCount }, () => ({})),
+    },
+  };
+}
+
+function releaseGit(repository = REPOSITORY) {
   return async (_root: string, args: readonly string[]): Promise<string> => {
     const command = args.join(" ");
     if (command === "--no-replace-objects for-each-ref --format=%(refname) refs/replace") {
@@ -230,7 +439,7 @@ function releaseGit() {
     }
     if (command === "status --porcelain=v1 --untracked-files=all") return "";
     if (command === "branch --show-current") return "main";
-    if (command === "remote get-url origin") return REPOSITORY;
+    if (command === "remote get-url origin") return repository;
     if (command === "rev-parse HEAD") return COMMIT;
     if (command === "rev-parse origin/main") return COMMIT;
     if (args[0] === "ls-remote") return `${COMMIT}\trefs/heads/main`;
@@ -238,27 +447,8 @@ function releaseGit() {
   };
 }
 
-function writePrivate(path: string, source: string): void {
-  writeFileSync(path, source, { mode: 0o600 });
-  chmodSync(path, 0o600);
-}
-
 function sha256(value: string | Uint8Array): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
-
-function assetSeal(path: string, source: string) {
-  const bytes = new TextEncoder().encode(source);
-  const entries = [{ path, size: bytes.byteLength, sha256: sha256(bytes) }];
-  return {
-    digest: sha256(
-      JSON.stringify({
-        kind: "takosumi.dashboard-asset-tree@v1",
-        entries,
-      }),
-    ),
-    entries,
-  } as const;
 }
 
 function platformContainer(image: string, version: number) {

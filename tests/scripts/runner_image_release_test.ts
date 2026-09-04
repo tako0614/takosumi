@@ -26,6 +26,7 @@ import {
   dashboardAssetTreeSeal,
   injectPlatformSourcePaths,
 } from "../../scripts/platform-worker-release.ts";
+import { platformReleaseSourceAuthorityDigest } from "../../scripts/lib/platform-release-source.ts";
 
 const roots: string[] = [];
 const COMMIT = "a".repeat(40);
@@ -265,7 +266,7 @@ function writeBuildEvidence(
     PREVIOUS,
   );
   const record = {
-    kind: "takosumi.runner-image-release@v2",
+    kind: "takosumi.runner-image-release@v3",
     operation: "build",
     status: "published",
     environment: "staging",
@@ -273,7 +274,12 @@ function writeBuildEvidence(
     observedAt: "2026-08-27T00:00:00.000Z",
     source: {
       branch: overrides.branch ?? "fix/TASK-0032-runner-image",
+      repository: REPOSITORY,
       commit: overrides.commit ?? COMMIT,
+      authoritySha256: sourceAuthorityDigest(
+        REPOSITORY,
+        overrides.commit ?? COMMIT,
+      ),
       dockerfileSha256: sha256(
         readFileSync(join(input.repository, "runner", "Dockerfile")),
       ),
@@ -305,10 +311,15 @@ function writePlatformEvidence(
   }> = {},
 ): void {
   const record = {
-    kind: "takosumi.platform-worker-release-evidence@v2",
+    kind: "takosumi.platform-worker-release-evidence@v3",
     status: "ready",
     environment: "staging",
+    sourceRepository: REPOSITORY,
     sourceCommit: overrides.sourceCommit ?? COMMIT,
+    sourceAuthoritySha256: sourceAuthorityDigest(
+      REPOSITORY,
+      overrides.sourceCommit ?? COMMIT,
+    ),
     configPath: overrides.configPath ?? input.config,
     configSha256: overrides.configSha256 ?? sha256(input.configSource),
     dashboardAssetsSha256: `sha256:${"e".repeat(64)}`,
@@ -346,6 +357,7 @@ function publicationAttempt(
   input: Fixture,
   overrides: Readonly<{
     branch?: string;
+    repository?: string;
     commit?: string;
     dockerfileSha256?: string;
     buildContextSha256?: string;
@@ -357,18 +369,24 @@ function publicationAttempt(
     localDescriptorDigest?: string | null;
   }> = {},
 ) {
+  const repository = overrides.repository ?? REPOSITORY;
   const localDescriptorDigest = overrides.localDescriptorDigest === undefined
     ? null
     : overrides.localDescriptorDigest;
   return {
-    kind: "takosumi.runner-image-publication-state@v1",
+    kind: "takosumi.runner-image-publication-state@v2",
     status: "publication-started",
     environment: "staging",
     release: "release-1",
     observedAt: "2026-08-27T00:00:00.000Z",
     source: {
       branch: overrides.branch ?? "fix/TASK-0032-runner-image",
+      repository,
       commit: overrides.commit ?? COMMIT,
+      authoritySha256: sourceAuthorityDigest(
+        repository,
+        overrides.commit ?? COMMIT,
+      ),
       dockerfileSha256: overrides.dockerfileSha256 ?? sha256(DOCKERFILE),
       buildContextSha256:
         overrides.buildContextSha256 ?? dashboardAssetTreeSeal(input.repository).digest,
@@ -390,6 +408,17 @@ function publicationAttempt(
 
 function sha256(value: string | Uint8Array): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function sourceAuthorityDigest(
+  repository: string,
+  commit: string,
+): string {
+  return platformReleaseSourceAuthorityDigest({
+    kind: "takosumi.platform-release-source@v1",
+    repository,
+    commit,
+  });
 }
 
 function healthySummary(image = NEXT, name = APPLICATION_NAME) {
@@ -1253,13 +1282,17 @@ test("a pushed descendant tool reconciles the exact archived attempt under the j
     status: "published",
     source: {
       branch: attempt.source.branch,
+      repository: REPOSITORY,
       commit: attempt.source.commit,
+      authoritySha256: sourceAuthorityDigest(REPOSITORY, COMMIT),
       dockerfileSha256: attempt.source.dockerfileSha256,
       buildContextSha256: attempt.source.buildContextSha256,
     },
     reconciledBy: {
       branch: "fix/TASK-0032-runner-image",
+      repository: REPOSITORY,
       commit: RECONCILER_COMMIT,
+      authoritySha256: sourceAuthorityDigest(REPOSITORY, RECONCILER_COMMIT),
     },
     image: { immutableRef: NEXT },
     review: attempt.review,
@@ -1276,12 +1309,19 @@ test("historical reconciliation rejects untrusted current or attempt Git history
   const cases: ReadonlyArray<{
     name: string;
     attemptBranch?: string;
+    attemptRepository?: string;
     git: Parameters<typeof gitFor>[1];
     error: string;
   }> = [
     {
       name: "different branch",
       attemptBranch: "other-branch",
+      git: trusted,
+      error: "runner_image_publication_reconciliation_identity_mismatch",
+    },
+    {
+      name: "different repository",
+      attemptRepository: "https://example.invalid/other/takosumi.git",
       git: trusted,
       error: "runner_image_publication_reconciliation_identity_mismatch",
     },
@@ -1323,6 +1363,9 @@ test("historical reconciliation rejects untrusted current or attempt Git history
     writeSourcePin(input.sourcePin, RECONCILER_COMMIT);
     const attempt = publicationAttempt(input, {
       ...(scenario.attemptBranch ? { branch: scenario.attemptBranch } : {}),
+      ...(scenario.attemptRepository
+        ? { repository: scenario.attemptRepository }
+        : {}),
     });
     writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
     let materializations = 0;
@@ -1577,6 +1620,18 @@ test("a recovered historical build verifies activation on the trusted reconciler
       command: withLegacyLocalImageProof(successfulPublicationCommand),
     },
   );
+  expect(reconciled).toMatchObject({
+    source: {
+      repository: REPOSITORY,
+      commit: COMMIT,
+      authoritySha256: sourceAuthorityDigest(REPOSITORY, COMMIT),
+    },
+    reconciledBy: {
+      repository: REPOSITORY,
+      commit: RECONCILER_COMMIT,
+      authoritySha256: sourceAuthorityDigest(REPOSITORY, RECONCILER_COMMIT),
+    },
+  });
   writePrivate(input.buildEvidence, `${JSON.stringify(reconciled)}\n`);
   const activatedConfig = realizedConfig(
     input.repository,
@@ -2308,7 +2363,7 @@ test("a mismatched journal resolution cannot clear an unknown publication", asyn
     [
       JSON.stringify(publicationAttempt(input)),
       JSON.stringify({
-        kind: "takosumi.runner-image-publication-state@v1",
+        kind: "takosumi.runner-image-publication-state@v2",
         status: "reconciled-absent",
         environment: "staging",
         release: "different-release",

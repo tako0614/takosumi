@@ -23,7 +23,9 @@ import { dashboardAssetTreeSeal } from "./platform-worker-release.ts";
 import { lineageVerdict } from "./lib/deploy-lineage.ts";
 import {
   injectPlatformSourcePaths,
+  platformReleaseSourceAuthorityDigest,
   resolvePlatformReleaseSourceAuthority,
+  sameGitRemote,
   type PlatformReleaseSourceAuthority,
 } from "./lib/platform-release-source.ts";
 
@@ -72,7 +74,7 @@ type ReleaseContext = Readonly<{
 }>;
 
 export type RunnerImageBuildRecord = Readonly<{
-  kind: "takosumi.runner-image-release@v2";
+  kind: "takosumi.runner-image-release@v3";
   operation: "build";
   status: "planned" | "published";
   environment: RunnerImageReleaseEnvironment;
@@ -80,7 +82,9 @@ export type RunnerImageBuildRecord = Readonly<{
   observedAt: string;
   source: {
     branch: string;
+    repository: string;
     commit: string;
+    authoritySha256: string;
     dockerfileSha256: string;
     buildContextSha256?: string;
   };
@@ -99,20 +103,24 @@ export type RunnerImageBuildRecord = Readonly<{
   /** Present only when a later trusted checkout reconciled an earlier attempt. */
   reconciledBy?: {
     branch: string;
+    repository: string;
     commit: string;
+    authoritySha256: string;
   };
   review: string | null;
 }>;
 
 type RunnerPublicationAttempt = Readonly<{
-  kind: "takosumi.runner-image-publication-state@v1";
+  kind: "takosumi.runner-image-publication-state@v2";
   status: "publication-started";
   environment: RunnerImageReleaseEnvironment;
   release: string;
   observedAt: string;
   source: {
     branch: string;
+    repository: string;
     commit: string;
+    authoritySha256: string;
     dockerfileSha256: string;
     buildContextSha256: string;
   };
@@ -134,7 +142,7 @@ type RunnerPublicationAttempt = Readonly<{
 
 type RunnerPublicationResolution =
   | Readonly<{
-      kind: "takosumi.runner-image-publication-state@v1";
+      kind: "takosumi.runner-image-publication-state@v2";
       status: "published";
       environment: RunnerImageReleaseEnvironment;
       release: string;
@@ -145,7 +153,7 @@ type RunnerPublicationResolution =
       build: RunnerImageBuildRecord;
     }>
   | Readonly<{
-      kind: "takosumi.runner-image-publication-state@v1";
+      kind: "takosumi.runner-image-publication-state@v2";
       status: "reconciled-absent";
       environment: RunnerImageReleaseEnvironment;
       release: string;
@@ -159,10 +167,12 @@ type RunnerPublishedResolution = Extract<
 >;
 
 type PlatformReadyEvidence = Readonly<{
-  kind: "takosumi.platform-worker-release-evidence@v2";
+  kind: "takosumi.platform-worker-release-evidence@v3";
   status: "ready";
   environment: RunnerImageReleaseEnvironment;
+  sourceRepository: string;
   sourceCommit: string;
+  sourceAuthoritySha256: string;
   configPath: string;
   configSha256: string;
   dashboardAssetsSha256: string;
@@ -546,7 +556,7 @@ export async function runRunnerImageRelease(
       if (options.execute) {
         await prepareEvidenceFile(options.evidence, [repositoryRoot]);
         await appendEvidence(options.evidence, {
-          kind: "takosumi.runner-image-release@v2",
+          kind: "takosumi.runner-image-release@v3",
           operation: "build",
           status: "failed",
           mutationOutcome: "not-started",
@@ -555,7 +565,9 @@ export async function runRunnerImageRelease(
           observedAt,
           source: {
             branch: context.repository.branch,
+            repository: context.releaseSource.pin.repository,
             commit: context.repository.commit,
+            authoritySha256: context.releaseSource.authoritySha256,
             dockerfileSha256: context.dockerfileSha256,
           },
           review: options.review ?? null,
@@ -749,14 +761,16 @@ async function buildRunnerImage(
     );
     const localIdentity = parseLocalRunnerImageIdentity(localImage.stdout);
     const attempt: RunnerPublicationAttempt = {
-      kind: "takosumi.runner-image-publication-state@v1",
+      kind: "takosumi.runner-image-publication-state@v2",
       status: "publication-started",
       environment: options.environment,
       release: options.release,
       observedAt,
       source: {
         branch: context.repository.branch,
+        repository: context.releaseSource.pin.repository,
         commit: context.repository.commit,
+        authoritySha256: context.releaseSource.authoritySha256,
         dockerfileSha256: context.dockerfileSha256,
         buildContextSha256: buildContext.digest,
       },
@@ -845,7 +859,7 @@ async function buildRunnerImage(
       },
     };
     const resolution: RunnerPublicationResolution = {
-      kind: "takosumi.runner-image-publication-state@v1",
+      kind: "takosumi.runner-image-publication-state@v2",
       status: "published",
       environment: options.environment,
       release: options.release,
@@ -862,7 +876,7 @@ async function buildRunnerImage(
     const diagnostic = releaseDiagnostic(error);
     if (publicationAttempted) {
       await appendEvidence(options.evidence, {
-        kind: "takosumi.runner-image-release@v2",
+        kind: "takosumi.runner-image-release@v3",
         operation: "build",
         status: "publication-incomplete",
         mutationOutcome: "unknown",
@@ -871,7 +885,9 @@ async function buildRunnerImage(
         observedAt,
         source: {
           branch: context.repository.branch,
+          repository: context.releaseSource.pin.repository,
           commit: context.repository.commit,
+          authoritySha256: context.releaseSource.authoritySha256,
           dockerfileSha256: context.dockerfileSha256,
         },
         transportTag,
@@ -882,7 +898,7 @@ async function buildRunnerImage(
       });
     } else {
       await appendEvidence(options.evidence, {
-        kind: "takosumi.runner-image-release@v2",
+        kind: "takosumi.runner-image-release@v3",
         operation: "build",
         status: "failed",
         mutationOutcome: "not-started",
@@ -891,7 +907,9 @@ async function buildRunnerImage(
         observedAt,
         source: {
           branch: context.repository.branch,
+          repository: context.releaseSource.pin.repository,
           commit: context.repository.commit,
+          authoritySha256: context.releaseSource.authoritySha256,
           dockerfileSha256: context.dockerfileSha256,
         },
         transportTag,
@@ -986,6 +1004,10 @@ function publicationAttemptMatchesReconciliationContext(
     attempt.environment === options.environment &&
     attempt.release === options.release &&
     attempt.source.branch === context.repository.branch &&
+    sameGitRemote(
+      attempt.source.repository,
+      context.releaseSource.pin.repository,
+    ) &&
     attempt.config.path === context.config.path &&
     attempt.config.buildSha256 === context.config.sha256 &&
     attempt.config.previousImage === context.config.runnerImage &&
@@ -1091,6 +1113,15 @@ async function reconcileRunnerImage(
         branch: attempt.source.branch,
         commit: attempt.source.commit,
       },
+      releaseSource: {
+        ...context.releaseSource,
+        pin: {
+          kind: "takosumi.platform-release-source@v1",
+          repository: attempt.source.repository,
+          commit: attempt.source.commit,
+        },
+        authoritySha256: attempt.source.authoritySha256,
+      },
       dockerfileSha256: attempt.source.dockerfileSha256,
     };
     const base = buildRecord(
@@ -1112,12 +1143,14 @@ async function reconcileRunnerImage(
       image: { ...base.image, imageConfigDigest: image.imageConfigDigest },
       reconciledBy: {
         branch: context.repository.branch,
+        repository: context.releaseSource.pin.repository,
         commit: context.repository.commit,
+        authoritySha256: context.releaseSource.authoritySha256,
       },
       review: attempt.review,
     };
     const resolution: RunnerPublicationResolution = {
-      kind: "takosumi.runner-image-publication-state@v1",
+      kind: "takosumi.runner-image-publication-state@v2",
       status: "published",
       environment: options.environment,
       release: options.release,
@@ -1134,7 +1167,7 @@ async function reconcileRunnerImage(
     if (isExactRemoteManifestAbsence(error, attempt.image.transportRef)) {
       const diagnostic = releaseDiagnostic(error);
       const resolution: RunnerPublicationResolution = {
-        kind: "takosumi.runner-image-publication-state@v1",
+        kind: "takosumi.runner-image-publication-state@v2",
         status: "reconciled-absent",
         environment: options.environment,
         release: options.release,
@@ -1144,7 +1177,7 @@ async function reconcileRunnerImage(
       };
       await publicationJournal.append(resolution);
       const record = {
-        kind: "takosumi.runner-image-release@v2",
+        kind: "takosumi.runner-image-release@v3",
         operation: "reconcile",
         status: "absent",
         mutationOutcome: "read-only",
@@ -1158,7 +1191,7 @@ async function reconcileRunnerImage(
       return record;
     }
     await appendEvidence(options.evidence, {
-      kind: "takosumi.runner-image-release@v2",
+      kind: "takosumi.runner-image-release@v3",
       operation: "reconcile",
       status: "incomplete",
       mutationOutcome: "read-only",
@@ -1406,7 +1439,9 @@ function publicationResolutionMatchesAttempt(
     build.environment === attempt.environment &&
     build.release === attempt.release &&
     build.source.branch === attempt.source.branch &&
+    build.source.repository === attempt.source.repository &&
     build.source.commit === attempt.source.commit &&
+    build.source.authoritySha256 === attempt.source.authoritySha256 &&
     build.source.dockerfileSha256 === attempt.source.dockerfileSha256 &&
     build.source.buildContextSha256 === attempt.source.buildContextSha256 &&
     build.config.path === attempt.config.path &&
@@ -1465,7 +1500,7 @@ function parsePublicationState(
     } catch {
       throw new Error("runner_image_publication_state_invalid");
     }
-    if (!isRecord(value) || value.kind !== "takosumi.runner-image-publication-state@v1") {
+    if (!isRecord(value) || value.kind !== "takosumi.runner-image-publication-state@v2") {
       throw new Error("runner_image_publication_state_invalid");
     }
     if (value.status === "publication-started") {
@@ -1497,8 +1532,7 @@ function validPublicationAttempt(value: Record<string, unknown>): boolean {
     Number.isFinite(Date.parse(value.observedAt)) &&
     isRecord(value.source) &&
     isBoundedString(value.source.branch, 512) &&
-    typeof value.source.commit === "string" &&
-    /^[0-9a-f]{40}$/u.test(value.source.commit) &&
+    validSourceAuthority(value.source) &&
     typeof value.source.dockerfileSha256 === "string" &&
     SHA256.test(value.source.dockerfileSha256) &&
     typeof value.source.buildContextSha256 === "string" &&
@@ -1566,7 +1600,7 @@ function validPublishedBuildRecord(
 } {
   if (
     !isRecord(value) ||
-    value.kind !== "takosumi.runner-image-release@v2" ||
+    value.kind !== "takosumi.runner-image-release@v3" ||
     value.operation !== "build" ||
     value.status !== "published" ||
     (value.environment !== "staging" && value.environment !== "production") ||
@@ -1576,8 +1610,7 @@ function validPublishedBuildRecord(
     !Number.isFinite(Date.parse(value.observedAt)) ||
     !isRecord(value.source) ||
     !isBoundedString(value.source.branch, 512) ||
-    typeof value.source.commit !== "string" ||
-    !/^[0-9a-f]{40}$/u.test(value.source.commit) ||
+    !validSourceAuthority(value.source) ||
     typeof value.source.dockerfileSha256 !== "string" ||
     !SHA256.test(value.source.dockerfileSha256) ||
     typeof value.source.buildContextSha256 !== "string" ||
@@ -1604,14 +1637,35 @@ function validPublishedBuildRecord(
       (!isRecord(value.reconciledBy) ||
         !isBoundedString(value.reconciledBy.branch, 512) ||
         value.reconciledBy.branch !== value.source.branch ||
-        typeof value.reconciledBy.commit !== "string" ||
-        !/^[0-9a-f]{40}$/u.test(value.reconciledBy.commit))) ||
+        !validSourceAuthority(value.reconciledBy))) ||
     typeof value.review !== "string" ||
     !isBoundedString(value.review, 256)
   ) {
     return false;
   }
   return true;
+}
+
+function validSourceAuthority(value: unknown): value is Readonly<{
+  repository: string;
+  commit: string;
+  authoritySha256: string;
+}> {
+  return (
+    isRecord(value) &&
+    isBoundedString(value.repository, 4_096) &&
+    value.repository.trim().length > 0 &&
+    typeof value.commit === "string" &&
+    /^[0-9a-f]{40}$/u.test(value.commit) &&
+    typeof value.authoritySha256 === "string" &&
+    SHA256.test(value.authoritySha256) &&
+    value.authoritySha256 ===
+      platformReleaseSourceAuthorityDigest({
+        kind: "takosumi.platform-release-source@v1",
+        repository: value.repository,
+        commit: value.commit,
+      })
+  );
 }
 
 function validReleaseDiagnostic(value: unknown): boolean {
@@ -1710,6 +1764,12 @@ async function verifyRunnerImage(
   ) {
     throw new Error("build evidence does not match current runner source");
   }
+  if (
+    activationSource.repository !== context.releaseSource.pin.repository ||
+    activationSource.authoritySha256 !== context.releaseSource.authoritySha256
+  ) {
+    throw new Error("runner_image_source_authority_mismatch");
+  }
   const immutableRef = build.image.immutableRef;
   if (!immutableRef || !DIGEST_IMAGE.test(immutableRef)) {
     throw new Error("build evidence has no immutable runner image");
@@ -1740,6 +1800,13 @@ async function verifyRunnerImage(
   }
   const platform = await readPlatformEvidence(platformPath);
   if (
+    platform.sourceRepository !== activationSource.repository ||
+    platform.sourceAuthoritySha256 !== activationSource.authoritySha256 ||
+    platform.sourceAuthoritySha256 !== context.releaseSource.authoritySha256
+  ) {
+    throw new Error("runner_image_source_authority_mismatch");
+  }
+  if (
     platform.environment !== options.environment ||
     platform.sourceCommit !== context.repository.commit ||
     platform.configPath !== context.config.path ||
@@ -1748,7 +1815,7 @@ async function verifyRunnerImage(
     throw new Error("platform evidence does not bind the runner activation");
   }
   const planned = {
-    kind: "takosumi.runner-image-release@v2",
+    kind: "takosumi.runner-image-release@v3",
     operation: "verify",
     status: "planned",
     environment: options.environment,
@@ -1756,7 +1823,9 @@ async function verifyRunnerImage(
     observedAt,
     source: {
       branch: context.repository.branch,
+      repository: context.releaseSource.pin.repository,
       commit: context.repository.commit,
+      authoritySha256: context.releaseSource.authoritySha256,
     },
     image: immutableRef,
     platformVersionId: platform.deployedVersionId,
@@ -2211,7 +2280,7 @@ function buildRecord(
   status: RunnerImageBuildRecord["status"],
 ): RunnerImageBuildRecord {
   return {
-    kind: "takosumi.runner-image-release@v2",
+    kind: "takosumi.runner-image-release@v3",
     operation: "build",
     status,
     environment: options.environment,
@@ -2219,7 +2288,9 @@ function buildRecord(
     observedAt,
     source: {
       branch: context.repository.branch,
+      repository: context.releaseSource.pin.repository,
       commit: context.repository.commit,
+      authoritySha256: context.releaseSource.authoritySha256,
       dockerfileSha256: context.dockerfileSha256,
     },
     config: {
@@ -2251,7 +2322,7 @@ async function readBuildRecord(
     }
     if (
       isRecord(value) &&
-      value.kind === "takosumi.runner-image-release@v2" &&
+      value.kind === "takosumi.runner-image-release@v3" &&
       value.operation === "build" &&
       value.status === "published" &&
       value.environment === environment &&
@@ -2266,7 +2337,7 @@ async function readBuildRecord(
   const record = records[0]!;
   if (
     !isBoundedString(record.source?.branch, 512) ||
-    !/^[0-9a-f]{40}$/u.test(record.source?.commit ?? "") ||
+    !validSourceAuthority(record.source) ||
     !SHA256.test(record.source?.dockerfileSha256 ?? "") ||
     !isBoundedString(record.config?.path, 4096) ||
     !SHA256.test(record.config?.buildSha256 ?? "") ||
@@ -2278,7 +2349,7 @@ async function readBuildRecord(
     (record.reconciledBy !== undefined &&
       (!isBoundedString(record.reconciledBy.branch, 512) ||
         record.reconciledBy.branch !== record.source.branch ||
-        !/^[0-9a-f]{40}$/u.test(record.reconciledBy.commit))) ||
+        !validSourceAuthority(record.reconciledBy))) ||
     !isBoundedString(record.review, 256)
   ) {
     throw new Error("build evidence has invalid provenance or image fields");
@@ -2300,11 +2371,22 @@ async function readPlatformEvidence(path: string): Promise<PlatformReadyEvidence
   }
   if (
     !isRecord(value) ||
-    value.kind !== "takosumi.platform-worker-release-evidence@v2" ||
+    value.kind !== "takosumi.platform-worker-release-evidence@v3" ||
     value.status !== "ready" ||
     (value.environment !== "staging" && value.environment !== "production") ||
+    typeof value.sourceRepository !== "string" ||
+    value.sourceRepository.trim().length === 0 ||
+    value.sourceRepository.length > 4_096 ||
     typeof value.sourceCommit !== "string" ||
     !/^[0-9a-f]{40}$/u.test(value.sourceCommit) ||
+    typeof value.sourceAuthoritySha256 !== "string" ||
+    !SHA256.test(value.sourceAuthoritySha256) ||
+    value.sourceAuthoritySha256 !==
+      platformReleaseSourceAuthorityDigest({
+        kind: "takosumi.platform-release-source@v1",
+        repository: value.sourceRepository,
+        commit: value.sourceCommit,
+      }) ||
     !isBoundedString(value.configPath, 4096) ||
     !SHA256.test(value.configSha256 as string) ||
     !SHA256.test(value.dashboardAssetsSha256 as string) ||

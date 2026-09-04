@@ -25,7 +25,8 @@ Both runner operations require clean attached source. `staging` accepts the
 current feature branch only when `HEAD` equals both local
 `origin/<current-branch>` and a fresh `git ls-remote` read of the same branch.
 `production` additionally requires `main`, with `HEAD` exactly equal to pushed
-`origin/main`. The evidence records the branch and commit.
+`origin/main`. The evidence records the branch, repository, commit, and source
+authority digest.
 
 The external Wrangler config must use exactly `takosumi-staging` or `takosumi`
 for the selected environment and contain exactly one `OpenTofuRunnerObject`
@@ -41,15 +42,22 @@ The runner derives `deploy/platform/entry-worker.ts` and `dashboard/dist` only
 from that exact pinned checkout and injects them into a private ephemeral
 Wrangler projection. The realized config bytes remain pathless and are the
 sole config SHA bound into build, platform-plan, platform-ready, and runner
-verification evidence. Consequently one config can flow through runner build,
-an image-literal-only pin replacement, platform plan/execute, and runner verify
-without changing its source authority or inventing a second config identity.
+verification evidence. Separately, every one of those artifacts carries the
+same `sourceAuthoritySha256`: the domain-separated SHA-256 of the exact source
+pin kind, repository, and commit. Changing only the sibling pin's repository
+therefore changes source authority even when commit and config bytes are
+unchanged. One config can still flow through runner build, an image-literal-only
+pin replacement, platform plan/execute, and runner verify without inventing a
+second config identity.
 
 Publication state, plans, checkpoints, and evidence are absolute, physical,
 single-link files in operator-private directories outside every Git worktree,
 and use exact mode `0600`. `takosumi-private` owns their policy and realized
 pin, but these runtime files are not written inside that checkout. Records
-contain bounded, redacted diagnostics and digest fields, never secrets.
+contain bounded, redacted diagnostics and digest fields, never secrets. The
+closed artifact revisions carrying source authority are runner release v3,
+runner publication state v2, platform plan v6, and platform ready evidence v3.
+Older artifacts fail closed; rebuild and re-plan instead of translating them.
 Before any evidence or coordination file is opened, the runner CLI canonicalizes
 existing and future paths and requires the realized config, its sibling source
 pin, publication state, terminal evidence, build/platform input evidence,
@@ -93,7 +101,8 @@ cannot fork coordination while pushing to the same registry target.
 
 Immediately before the one push, build fsyncs the exact transport reference,
 locally inspected Docker image ID and explicit image descriptor digest, sealed
-source/config identities, and reviewer to the publication state journal. After
+source/config identities (including the readable repository/commit and their
+authority digest), and reviewer to the publication state journal. After
 the push it reads Docker 29's exact `Descriptor.platform`, requires one
 `linux/amd64` manifest, and accepts exactly one Docker schema-2 or OCI manifest
 payload. The remote descriptor digest must exactly equal the locally inspected
@@ -153,8 +162,9 @@ image-config digest, or an exact-tag authoritative manifest absence. Auth,
 network, TLS, malformed, or ambiguous failures leave the journal unresolved.
 
 The reconciler may run from a later tool commit only when that checkout is
-clean, attached to the attempt's same branch, and byte-identical to both the
-local and freshly read remote branch tip. Git replace refs are refused. While
+clean, attached to the attempt's same repository and branch, and byte-identical
+to both the local and freshly read remote branch tip. Git replace refs are
+refused. While
 holding the publication lock, it requires the attempt commit to be an ancestor
 of the current tool and remote tip, archives that exact historical commit with
 replace objects disabled, and recomputes both the complete source-tree seal and
@@ -165,8 +175,9 @@ also retain its exact local transport tag: Docker must report both its image ID
 and descriptor digest as the journal's legacy `localImageId`. Otherwise the
 attempt remains unresolved.
 
-A recovered build record keeps the attempt commit, Dockerfile, and source-tree
-digest under `source`; it records the later clean, pushed release-tool commit
+A recovered build record keeps the attempt repository, commit, source-authority
+digest, Dockerfile, and source-tree digest under `source`; it records the later
+clean, pushed release-tool repository, commit, and source-authority digest
 separately under `reconciledBy`. This prevents a tool repair from being
 misrepresented as the image's source provenance.
 
@@ -194,9 +205,11 @@ bun run deploy -- takosumi-platform-staging execute \
 ```
 
 For production, use `takosumi-platform`. The platform plan seals the exact
-config SHA, complete dashboard asset tree, deterministic dry-run tree, source,
-secret-name inventory, and predecessor Worker Version. The plan retains an
-external sealed Git/config/assets/dry-run closure; execute uploads its exact
+config SHA, complete dashboard asset tree, deterministic dry-run tree, source
+repository/commit authority, secret-name inventory, and predecessor Worker
+Version. The plan confirmation covers the readable source pin fields and their
+canonical authority digest; ready evidence carries the same values. The plan
+retains an external sealed Git/config/assets/dry-run closure; execute uploads its exact
 dry-run entry from a fresh re-sealed custody copy with `--no-bundle` and does
 not re-read live source, the retained plan tree, or asset bytes. Execute uses
 immediate Container rollout with Wrangler strict conflict
@@ -221,11 +234,13 @@ bun run deploy -- takosumi-runner-image verify \
 ```
 
 Verify requires the current config SHA to equal the build record's exact
-image-only transform and the platform ready evidence to bind that same config,
-activation source commit, and serving Worker Version. For a normal build the
+image-only transform. Before any live provider readback, it also requires the
+build activation source authority, platform ready source authority, and freshly
+resolved sibling source-pin authority to be identical. For a normal build the
 activation source is `source`; for a recovered build it is `reconciledBy`, while
-the historical image provenance remains in `source`. It then requires exactly
-`takosumi-staging-opentofurunnerobject` or
+the historical image provenance remains in `source`. Platform evidence must
+also bind the same config and serving Worker Version. Verify then requires
+exactly `takosumi-staging-opentofurunnerobject` or
 `takosumi-opentofurunnerobject`, with matching list/detail identity, the exact
 selected digest, no active rollout, `active`/`ready` state, and zero failed,
 starting, scheduling, or error entries. Readback is bounded; an unsettled or

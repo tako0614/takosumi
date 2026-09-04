@@ -29,6 +29,7 @@ import {
   assertPlatformReleaseConfigPathless,
   assertPlatformReleaseSourcePinMatchesCheckout,
   injectPlatformSourcePaths,
+  platformReleaseSourceAuthorityDigest,
   readPlatformReleaseSourcePin,
   resolvePlatformReleaseSourceAuthority,
   type PlatformReleaseSourcePin,
@@ -1714,10 +1715,12 @@ export function platformDashboardBuildEnvironment(
 }
 
 export interface PlatformReleasePlan {
-  readonly kind: "takosumi.platform-worker-release-plan@v5";
+  readonly kind: "takosumi.platform-worker-release-plan@v6";
   readonly createdAt: string;
   readonly environment: PlatformEnvironment;
+  readonly sourceRepository: string;
   readonly sourceCommit: string;
+  readonly sourceAuthoritySha256: string;
   readonly releaseNonce: string;
   readonly configPath: string;
   readonly configSha256: string;
@@ -1755,6 +1758,16 @@ export type PlatformReleasePlanIdentity = Omit<
 export function createPlatformReleasePlan(
   identity: PlatformReleasePlanIdentity,
 ): PlatformReleasePlan {
+  if (
+    identity.sourceAuthoritySha256 !==
+    platformReleaseSourceAuthorityDigest({
+      kind: "takosumi.platform-release-source@v1",
+      repository: identity.sourceRepository,
+      commit: identity.sourceCommit,
+    })
+  ) {
+    throw new Error("platform_worker_release_plan_invalid");
+  }
   const subject = {
     ...identity,
     releaseTag: platformReleaseTag(identity),
@@ -1781,11 +1794,13 @@ export function createPlatformReadyEvidence(
 ) {
   const { plan } = input;
   return {
-    kind: "takosumi.platform-worker-release-evidence@v2",
+    kind: "takosumi.platform-worker-release-evidence@v3",
     status: "ready",
     completedAt: input.completedAt,
     environment: plan.environment,
+    sourceRepository: plan.sourceRepository,
     sourceCommit: plan.sourceCommit,
+    sourceAuthoritySha256: plan.sourceAuthoritySha256,
     ...(input.recoverySourceCommit &&
     input.recoverySourceCommit !== plan.sourceCommit
       ? { recoverySourceCommit: input.recoverySourceCommit }
@@ -1864,13 +1879,57 @@ export type PlatformReleaseCommand = (
   environment?: Record<string, string>,
 ) => Promise<CommandResult>;
 
+export type PlatformReleasePlanClosureInput = Readonly<{
+  closurePath: string;
+  configSource: string;
+  originalConfigPath: string;
+  dashboardAssets: DashboardAssetSeal;
+  sourceCommit: string;
+  pathCustodyRoot: string;
+}>;
+
+/**
+ * Programmatic plan dependencies. The CLI never accepts these; the explicit
+ * seam lets tests exercise the production plan action without provider or
+ * production filesystem authority.
+ */
+export type PlatformReleasePlanRuntime = Readonly<{
+  repositoryRoot: string;
+  assertCleanAndPushed: () => Promise<void>;
+  checkoutIdentity: () => Readonly<{ repository: string; commit: string }>;
+  buildDashboard: (
+    environment: PlatformEnvironment,
+  ) => Promise<DashboardAssetSeal>;
+  readPredecessor: (
+    configSource: string,
+    configPath: string,
+    repositoryRoot: string,
+    environment: PlatformEnvironment,
+  ) => Promise<Readonly<{
+    versionId: string;
+    container: PlatformContainerState;
+  }>>;
+  createClosure: (
+    input: PlatformReleasePlanClosureInput,
+  ) => Promise<Awaited<ReturnType<typeof createPlatformDeployClosure>>>;
+  readSecretNames: (configPath: string) => Promise<readonly string[]>;
+  now: () => Date;
+  nonce: () => string;
+}>;
+
 export async function runPlatformWorkerRelease(
   argv: readonly string[],
   environment: PlatformEnvironment = "staging",
+  planRuntime?: PlatformReleasePlanRuntime,
 ): Promise<void> {
   const options = parsePlatformWorkerReleaseArgs(argv);
-  if (options.action === "plan") await plan(options, environment);
-  else if (options.action === "materialize-source") {
+  if (options.action === "plan") {
+    await plan(
+      options,
+      environment,
+      planRuntime ?? productionPlatformReleasePlanRuntime(),
+    );
+  } else if (options.action === "materialize-source") {
     const pin = readPlatformReleaseSourcePin(options.config);
     await materializePinnedSource(pin, options.into);
     process.stdout.write(
@@ -1888,6 +1947,53 @@ export async function runPlatformWorkerRelease(
   } else if (options.action === "execute") await execute(options, environment);
   else if (options.action === "recover") await recover(options, environment);
   else await restore(options, environment);
+}
+
+function productionPlatformReleasePlanRuntime(): PlatformReleasePlanRuntime {
+  return {
+    repositoryRoot: ROOT,
+    assertCleanAndPushed: () => assertCleanAndPushed(ROOT),
+    checkoutIdentity: () => ({
+      repository: gitAt(ROOT, ["remote", "get-url", "origin"]).trim(),
+      commit: gitAt(ROOT, ["rev-parse", "HEAD"]).trim(),
+    }),
+    buildDashboard: buildDeterministicDashboard,
+    readPredecessor: async (
+      configSource,
+      configPath,
+      repositoryRoot,
+      environment,
+    ) => {
+      const operatorConfig = createPlatformDryRunConfig(
+        configSource,
+        configPath,
+        repositoryRoot,
+      );
+      try {
+        return {
+          versionId: await readServingVersion(operatorConfig.path),
+          container: await readPlatformContainer(
+            operatorConfig.path,
+            environment,
+          ),
+        };
+      } finally {
+        operatorConfig.dispose();
+      }
+    },
+    createClosure: (input) =>
+      createPlatformDeployClosure(
+        input.closurePath,
+        input.configSource,
+        input.originalConfigPath,
+        input.dashboardAssets,
+        input.sourceCommit,
+        { pathCustodyRoot: input.pathCustodyRoot },
+      ),
+    readSecretNames,
+    now: () => new Date(),
+    nonce: () => randomBytes(16).toString("hex"),
+  };
 }
 
 export function parsePlatformWorkerReleaseArgs(
@@ -1987,8 +2093,9 @@ export function platformWorkerRestoreVersionArguments(
 async function plan(
   options: Extract<Options, { action: "plan" }>,
   environment: PlatformEnvironment,
+  runtime: PlatformReleasePlanRuntime,
 ): Promise<void> {
-  await assertCleanAndPushed();
+  await runtime.assertCleanAndPushed();
   assertReadableConfig(options.config);
   assertExternalAbsent(options.planOut);
   const closurePath = `${options.planOut}.closure`;
@@ -2007,33 +2114,26 @@ async function plan(
   // The config names a commit; this checkout has to BE that commit. Everything
   // below — the dashboard build, the git archive, the injected paths — is then
   // derived from the pinned identity rather than from wherever this script sits.
+  const checkout = runtime.checkoutIdentity();
   const sourceAuthority = resolvePlatformReleaseSourceAuthority({
     configPath: options.config,
     configSource,
-    repositoryRoot: ROOT,
-    checkoutRepository: git(["remote", "get-url", "origin"]).trim(),
-    checkoutCommit: git(["rev-parse", "HEAD"]).trim(),
+    repositoryRoot: runtime.repositoryRoot,
+    checkoutRepository: checkout.repository,
+    checkoutCommit: checkout.commit,
   });
-  const dashboardAssets = await buildDeterministicDashboard(environment);
+  const dashboardAssets = await runtime.buildDashboard(environment);
   const sourceCommit = sourceAuthority.pin.commit;
   // Provider reads need a runnable config, and the realized one deliberately
   // is not: project the pinned source paths into a transient private copy.
-  const operatorConfig = createPlatformDryRunConfig(
+  const predecessor = await runtime.readPredecessor(
     configSource,
     options.config,
     sourceAuthority.repositoryRoot,
+    environment,
   );
-  let predecessorVersionId: string;
-  let predecessorContainer: PlatformContainerState;
-  try {
-    predecessorVersionId = await readServingVersion(operatorConfig.path);
-    predecessorContainer = await readPlatformContainer(
-      operatorConfig.path,
-      environment,
-    );
-  } finally {
-    operatorConfig.dispose();
-  }
+  const predecessorVersionId = predecessor.versionId;
+  const predecessorContainer = predecessor.container;
   assertPlatformContainerComplete(predecessorContainer);
   const restoreConfigSource = platformRestoreConfigProjection(
     configSource,
@@ -2042,36 +2142,38 @@ async function plan(
   let sealed: Awaited<ReturnType<typeof createPlatformDeployClosure>>;
   let restoreSealed: Awaited<ReturnType<typeof createPlatformDeployClosure>>;
   try {
-    sealed = await createPlatformDeployClosure(
+    sealed = await runtime.createClosure({
       closurePath,
       configSource,
-      options.config,
+      originalConfigPath: options.config,
       dashboardAssets,
       sourceCommit,
-      { pathCustodyRoot: dirname(options.planOut) },
-    );
-    restoreSealed = await createPlatformDeployClosure(
-      restoreClosurePath,
-      restoreConfigSource,
-      options.config,
+      pathCustodyRoot: dirname(options.planOut),
+    });
+    restoreSealed = await runtime.createClosure({
+      closurePath: restoreClosurePath,
+      configSource: restoreConfigSource,
+      originalConfigPath: options.config,
       dashboardAssets,
       sourceCommit,
-      { pathCustodyRoot: dirname(options.planOut) },
-    );
+      pathCustodyRoot: dirname(options.planOut),
+    });
   } catch (error) {
     rmSync(closurePath, { recursive: true, force: true });
     rmSync(restoreClosurePath, { recursive: true, force: true });
     throw error;
   }
-  const secrets = await readSecretNames(sealed.configPath);
-  await assertCleanAndPushed();
+  const secrets = await runtime.readSecretNames(sealed.configPath);
+  await runtime.assertCleanAndPushed();
 
   const releasePlan = createPlatformReleasePlan({
-    kind: "takosumi.platform-worker-release-plan@v5" as const,
-    createdAt: new Date().toISOString(),
+    kind: "takosumi.platform-worker-release-plan@v6" as const,
+    createdAt: runtime.now().toISOString(),
     environment,
+    sourceRepository: sourceAuthority.pin.repository,
     sourceCommit,
-    releaseNonce: randomBytes(16).toString("hex"),
+    sourceAuthoritySha256: sourceAuthority.authoritySha256,
+    releaseNonce: runtime.nonce(),
     configPath: options.config,
     configSha256: digest(config),
     closurePath,
@@ -2272,13 +2374,15 @@ function writePlatformFailureIfAbsent(
     new TextEncoder().encode(
       `${JSON.stringify(
         {
-          kind: "takosumi.platform-worker-release-evidence@v2",
+          kind: "takosumi.platform-worker-release-evidence@v3",
           status: "incomplete",
           completedAt: new Date().toISOString(),
           environment,
           ...(plan
             ? {
+                sourceRepository: plan.sourceRepository,
                 sourceCommit: plan.sourceCommit,
+                sourceAuthoritySha256: plan.sourceAuthoritySha256,
                 configPath: plan.configPath,
                 configSha256: plan.configSha256,
                 sealedConfigSha256: plan.sealedConfigSha256,
@@ -3566,6 +3670,7 @@ export async function completeRelease(
   command: PlatformReleaseCommand = requiredCommand,
   uploadCustodyFactory: typeof createPlatformUploadCustody =
     createPlatformUploadCustody,
+  publicReadback: typeof verifyPublicReadback = verifyPublicReadback,
 ): Promise<void> {
   let fence = readPlatformMutationFence(options.plan, plan.confirmation);
   let mutationOutcome: "not-started" | "unknown" | "accepted" =
@@ -3668,7 +3773,7 @@ export async function completeRelease(
       platformReleaseMessage(plan),
       command,
     );
-    await verifyPublicReadback(plan.environment, deployedVersionId);
+    await publicReadback(plan.environment, deployedVersionId);
     const deployedContainer = await waitForPlatformContainer(
       custody.configPath,
       plan.environment,
@@ -3705,11 +3810,13 @@ export async function completeRelease(
       mutationOutcome = "unknown";
     }
     const evidence = {
-      kind: "takosumi.platform-worker-release-evidence@v2",
+      kind: "takosumi.platform-worker-release-evidence@v3",
       status: "incomplete",
       completedAt: new Date().toISOString(),
       environment: plan.environment,
+      sourceRepository: plan.sourceRepository,
       sourceCommit: plan.sourceCommit,
+      sourceAuthoritySha256: plan.sourceAuthoritySha256,
       configPath: plan.configPath,
       configSha256: plan.configSha256,
       sealedConfigSha256: plan.sealedConfigSha256,
@@ -4103,7 +4210,9 @@ function parsePlan(
           "kind",
           "createdAt",
           "environment",
+          "sourceRepository",
           "sourceCommit",
+          "sourceAuthoritySha256",
           "releaseNonce",
           "configPath",
           "configSha256",
@@ -4128,12 +4237,23 @@ function parsePlan(
           "confirmation",
         ].sort(),
       ) ||
-    value.kind !== "takosumi.platform-worker-release-plan@v5" ||
+    value.kind !== "takosumi.platform-worker-release-plan@v6" ||
     typeof value.createdAt !== "string" ||
     !Number.isFinite(Date.parse(value.createdAt)) ||
     value.environment !== environment ||
+    typeof value.sourceRepository !== "string" ||
+    value.sourceRepository.trim().length === 0 ||
+    value.sourceRepository.length > 4_096 ||
     typeof value.sourceCommit !== "string" ||
     !COMMIT.test(value.sourceCommit) ||
+    typeof value.sourceAuthoritySha256 !== "string" ||
+    !SHA256.test(value.sourceAuthoritySha256) ||
+    value.sourceAuthoritySha256 !==
+      platformReleaseSourceAuthorityDigest({
+        kind: "takosumi.platform-release-source@v1",
+        repository: value.sourceRepository,
+        commit: value.sourceCommit,
+      }) ||
     typeof value.releaseNonce !== "string" ||
     !/^[0-9a-f]{32}$/u.test(value.releaseNonce) ||
     typeof value.configPath !== "string" ||

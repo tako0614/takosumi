@@ -18,6 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { platformReleaseSourceAuthorityDigest } from "../../scripts/lib/platform-release-source.ts";
 
 import {
   assertCleanAndPushed,
@@ -294,14 +295,25 @@ function forwardExecuteFixture(prefix: string): Readonly<{
     hasActiveRollout: false,
     health: { failed: 0, starting: 0, scheduling: 0, errorCount: 0 },
   };
+  const sourceRepository = gitCommand(
+    ["remote", "get-url", "origin"],
+    resolve(import.meta.dir, "../.."),
+  );
+  const sourceCommit = gitCommand(
+    ["rev-parse", "HEAD"],
+    resolve(import.meta.dir, "../.."),
+  );
   const identity = {
-    kind: "takosumi.platform-worker-release-plan@v5" as const,
+    kind: "takosumi.platform-worker-release-plan@v6" as const,
     createdAt: "2026-09-04T00:00:00.000Z",
     environment: "staging" as const,
-    sourceCommit: gitCommand(
-      ["rev-parse", "HEAD"],
-      resolve(import.meta.dir, "../.."),
-    ),
+    sourceRepository,
+    sourceCommit,
+    sourceAuthoritySha256: platformReleaseSourceAuthorityDigest({
+      kind: "takosumi.platform-release-source@v1",
+      repository: sourceRepository,
+      commit: sourceCommit,
+    }),
     releaseNonce: "a".repeat(32),
     configPath: operatorConfigPath,
     configSha256: testDigest(readFileSync(operatorConfigPath)),

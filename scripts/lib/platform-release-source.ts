@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   closeSync,
   constants,
@@ -26,9 +27,29 @@ export interface PlatformReleaseSourcePin {
 export interface PlatformReleaseSourceAuthority {
   readonly pinPath: string;
   readonly pin: PlatformReleaseSourcePin;
+  readonly authoritySha256: string;
   readonly repositoryRoot: string;
   readonly entryWorkerPath: string;
   readonly dashboardAssetsPath: string;
+}
+
+/**
+ * Hash the exact source pin under a release-specific domain. The JSON member
+ * order below is the canonical preimage and is part of this v1 contract; do
+ * not reuse a bare repository/commit hash across other authority domains.
+ */
+export function platformReleaseSourceAuthorityDigest(
+  pin: PlatformReleaseSourcePin,
+): string {
+  const preimage = JSON.stringify({
+    kind: "takosumi.platform-release-source-authority@v1",
+    pin: {
+      kind: pin.kind,
+      repository: pin.repository,
+      commit: pin.commit,
+    },
+  });
+  return `sha256:${createHash("sha256").update(preimage, "utf8").digest("hex")}`;
 }
 
 /** `platform/wrangler.staging.toml` -> `platform/wrangler.staging.source.json`. */
@@ -154,6 +175,7 @@ export function resolvePlatformReleaseSourceAuthority(input: Readonly<{
   return {
     pinPath,
     pin,
+    authoritySha256: platformReleaseSourceAuthorityDigest(pin),
     repositoryRoot: input.repositoryRoot,
     entryWorkerPath: resolve(
       input.repositoryRoot,
