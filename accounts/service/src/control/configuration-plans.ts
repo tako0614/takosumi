@@ -552,6 +552,18 @@ async function finishConfigurationPlan(input: {
       evidence,
     });
     assertConfigurationCompatibilityPolicy(compatibility, input.target);
+    // A persisted successor can outlive an acknowledgement failure before the
+    // Capsule CAS. Re-run the complete connection/provider preflight on every
+    // predecessor recovery, immediately before that CAS, so a connection that
+    // was revoked (or otherwise changed) after successor creation cannot move
+    // the Capsule pointer, ProviderBindingSet, or execution epoch and only then
+    // fail during Plan construction.
+    await input.ctx.operations.validateCapsuleConfigurationProviderBindings({
+      capsule: authority.capsule,
+      installConfig: input.target,
+      compatibilityReport: compatibility.report,
+      providerBindings: targetBindingSet.bindings,
+    });
     const rebound = await input.ctx.operations.capsules.rebindInstallConfig({
       capsuleId: input.receipt.capsuleId,
       targetInstallConfigId: input.target.id,

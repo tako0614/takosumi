@@ -1513,6 +1513,95 @@ test("configuration Plan recovers a lost acknowledgement at target creation", as
   ).toHaveLength(1);
 });
 
+test("configuration Plan revalidates provider semantics after a lost target acknowledgement", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-lost-target-provider-revalidation",
+  );
+  const binding = body.providerBindings[0];
+  if (!binding) throw new Error("fixture ProviderBinding is missing");
+  const before = await configurationAuthoritySnapshot(fixture);
+  const capsules = fixture.operations.capsules as unknown as {
+    createInstallConfigIfAbsent: typeof fixture.operations.capsules.createInstallConfigIfAbsent;
+  };
+  const original = capsules.createInstallConfigIfAbsent.bind(
+    fixture.operations.capsules,
+  );
+  let loseAck = true;
+  capsules.createInstallConfigIfAbsent = async (config) => {
+    const created = await original(config);
+    if (loseAck) {
+      loseAck = false;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "simulated target persistence acknowledgement loss",
+      );
+    }
+    return created;
+  };
+  try {
+    await controlJson(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: {
+          "idempotency-key":
+            "configuration-plan-lost-target-provider-revalidation-v1",
+        },
+        body,
+      },
+      409,
+    );
+  } finally {
+    capsules.createInstallConfigIfAbsent = original;
+  }
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
+
+  const connection = await fixture.deployStore.getConnection(
+    binding.connectionId,
+  );
+  if (!connection) throw new Error("fixture ProviderConnection is missing");
+  await fixture.deployStore.putConnection({
+    ...connection,
+    status: "revoked",
+    revokedAt: "2026-09-04T00:00:00.000Z",
+    updatedAt: "2026-09-04T00:00:00.000Z",
+  });
+
+  const rejected = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly reason?: string };
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: {
+        "idempotency-key":
+          "configuration-plan-lost-target-provider-revalidation-v1",
+      },
+      body,
+    },
+    409,
+  );
+  expect(rejected.error).toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "provider_connection_not_ready" },
+  });
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toEqual([]);
+});
+
 test("configuration Plan recovers after the atomic rebind acknowledgement is lost", async () => {
   const { fixture, path, body } = await configurationPlanRouteFixture(
     "configuration-plan-lost-rebind",
