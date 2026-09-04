@@ -44,9 +44,21 @@ const TRANSIENT_FAILURE =
   /(?:audit request failed|connectionclosed|connectionreset|connectionrefused|econnreset|econnrefused|etimedout|fetch failed|network error|timed?\s*out)/iu;
 
 export function isTransientAuditFailure(result: AuditAttemptResult): boolean {
+  if (hasJsonAuditResult(result.stdout)) return false;
   if (result.timedOut) return true;
   if (result.exitCode === 0) return false;
   return TRANSIENT_FAILURE.test(`${result.stdout}\n${result.stderr}`);
+}
+
+function hasJsonAuditResult(stdout: string): boolean {
+  const candidate = stdout.trim();
+  if (candidate.length === 0) return false;
+  try {
+    JSON.parse(candidate);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function runBunAudit(
