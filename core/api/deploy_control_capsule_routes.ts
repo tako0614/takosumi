@@ -7,28 +7,15 @@
  */
 
 import type {
-  CreateCapsuleRequest,
-  CapsulesService,
-} from "../domains/capsules/mod.ts";
-import type {
   Capsule,
   CapsuleStatus,
   PublicCapsule,
 } from "takosumi-contract/capsules";
-import type { InstallConfig } from "takosumi-contract/install-configs";
-import type { CapsuleInterfaceBlueprint } from "takosumi-contract/interfaces";
-import {
-  capsuleInterfaceBlueprintsNeedInstallingPrincipal,
-  resolveCapsuleInterfaceBlueprintInstallingPrincipal,
-} from "takosumi-contract/interfaces";
-import type { JsonValue } from "takosumi-contract";
-import { isAbsolute, normalize } from "node:path";
 import {
   defineRoute,
   type DeployControlEndpoint,
   type DeployControlRouteContext,
   ensureOperationPermission,
-  ensureRunnerProfilePermission,
   ensureRunnerProfileSelectionPermission,
   ensureWorkspacePermission,
   errorEnvelope,
@@ -40,9 +27,6 @@ import {
   WORKSPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
-import { validateCapsuleInterfaceBlueprints } from "../domains/interfaces/service.ts";
-import { normalizeVariablePathRecord } from "../domains/deploy-control/validation.ts";
-import { defaultCapsuleOutputAllowlist } from "../domains/capsules/default_install_config.ts";
 import { publicInstallConfigRecord } from "../domains/capsules/public_install_config.ts";
 import {
   TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE,
@@ -74,14 +58,6 @@ const CAPSULE_ID_PARAM = { id: "capsuleId" } as const;
 
 interface PatchCapsuleRequest {
   readonly status?: CapsuleStatus;
-}
-
-interface CreateCapsuleRouteRequest extends CreateCapsuleRequest {
-  readonly modulePath?: string;
-  readonly outputAllowlist?: InstallConfig["outputAllowlist"];
-  readonly interfaceBlueprints?: readonly CapsuleInterfaceBlueprint[];
-  readonly runnerId?: string;
-  readonly vars?: Readonly<Record<string, JsonValue>>;
 }
 
 interface CapsulePlanRouteRequest {
@@ -222,21 +198,6 @@ function parseIncludeDestroyed(
 export const DEPLOY_CONTROL_CAPSULE_ENDPOINTS: readonly DeployControlEndpoint[] =
   [
     {
-      method: "POST",
-      path: TAKOSUMI_WORKSPACE_CAPSULES_ROUTE,
-      summary:
-        "Creates a Capsule under a Workspace (UNIQUE(workspace, name, environment)) from a Source + InstallConfig.",
-      auth: "deploy-control-token",
-      operationId: "createCapsule",
-      openapi: {
-        pathParams: ["workspaceId"],
-        requestSchema: "CreateCapsuleRequest",
-        okStatus: "201",
-        okSchema: "CapsuleResponse",
-      },
-      notImplementedMessage: "capsules not wired",
-    },
-    {
       method: "GET",
       path: TAKOSUMI_WORKSPACE_CAPSULES_ROUTE,
       summary: "Lists the Capsules of a Workspace.",
@@ -368,7 +329,7 @@ export const DEPLOY_CONTROL_CAPSULE_ENDPOINTS: readonly DeployControlEndpoint[] 
       method: "PATCH",
       path: TAKOSUMI_INSTALL_CONFIG_ROUTE,
       summary:
-        "Applies a strict versioned service-side patch to one explicitly selected InstallConfig.",
+        "Atomically patches one explicitly selected, Workspace-neutral, provenance-free InstallConfig template only while no Capsule of any status references it.",
       auth: "deploy-control-token",
       operationId: "patchInstallConfig",
       openapi: {
@@ -432,147 +393,24 @@ export function mountDeployControlCapsuleRoutes(
   const requireCapsules = (deps: typeof dependencies): string | undefined =>
     deps.capsulesService ? undefined : "capsules not wired";
 
+  // Capsule creation is coordinated exclusively by the exact-provenance initial
+  // install authority. Keep an authenticated tombstone so callers learn the
+  // surviving read method without disclosing Workspace existence before auth.
   app.post(
     TAKOSUMI_WORKSPACE_CAPSULES_ROUTE,
-    deployControlBodyLimit,
     defineRoute({
       ctx,
-      requireService: requireCapsules,
       param: WORKSPACE_ID_PARAM,
-      enforceBody: true,
       handler: async ({ c, principal, id }) => {
         ensureWorkspacePermission(principal, id);
-        const body = await readJsonBody<CreateCapsuleRouteRequest>(
-          c,
-          "capsuleCreate",
+        c.header("Allow", "GET");
+        return c.json(
+          errorEnvelope(c, "method_not_allowed", "method not allowed"),
+          405,
         );
-        const {
-          outputAllowlist: rawOutputAllowlist,
-          interfaceBlueprints: rawInterfaceBlueprints,
-          modulePath: rawModulePath,
-          vars: rawVars,
-          runnerId: rawRunnerId,
-          ...request
-        } = body as Omit<
-          CreateCapsuleRouteRequest,
-          | "outputAllowlist"
-          | "interfaceBlueprints"
-          | "modulePath"
-          | "vars"
-          | "runnerId"
-        > & {
-          readonly outputAllowlist?: unknown;
-          readonly interfaceBlueprints?: unknown;
-          readonly modulePath?: unknown;
-          readonly vars?: unknown;
-          readonly runnerId?: unknown;
-        };
-        const outputAllowlist =
-          rawOutputAllowlist === undefined
-            ? undefined
-            : outputAllowlistValue(rawOutputAllowlist);
-        if (rawOutputAllowlist !== undefined && outputAllowlist === undefined) {
-          throw new OpenTofuControllerError(
-            "invalid_argument",
-            "outputAllowlist must be an object of { from, type, required?, sensitive? } entries",
-          );
-        }
-        let interfaceBlueprints:
-          readonly CapsuleInterfaceBlueprint[] | undefined;
-        if (rawInterfaceBlueprints !== undefined) {
-          if (!Array.isArray(rawInterfaceBlueprints)) {
-            throw new OpenTofuControllerError(
-              "invalid_argument",
-              "interfaceBlueprints must be an array",
-            );
-          }
-          try {
-            validateCapsuleInterfaceBlueprints(
-              rawInterfaceBlueprints as readonly CapsuleInterfaceBlueprint[],
-            );
-          } catch (error) {
-            throw new OpenTofuControllerError(
-              "invalid_argument",
-              error instanceof Error
-                ? error.message
-                : "interfaceBlueprints contains an invalid declaration",
-            );
-          }
-          interfaceBlueprints =
-            rawInterfaceBlueprints as readonly CapsuleInterfaceBlueprint[];
-        }
-        const modulePath =
-          rawModulePath === undefined
-            ? undefined
-            : modulePathValue(rawModulePath);
-        if (rawModulePath !== undefined && modulePath === undefined) {
-          throw new OpenTofuControllerError(
-            "invalid_argument",
-            "modulePath must be a safe relative path inside the SourceSnapshot",
-          );
-        }
-        const vars =
-          rawVars === undefined ? undefined : jsonRecordValue(rawVars);
-        if (rawVars !== undefined && vars === undefined) {
-          throw new OpenTofuControllerError(
-            "invalid_argument",
-            "vars must be an object of JSON values keyed by OpenTofu variable names",
-          );
-        }
-        const normalizedVars =
-          vars === undefined
-            ? undefined
-            : normalizeVariablePathRecord(vars, "vars");
-        const runnerProfileId =
-          rawRunnerId === undefined
-            ? undefined
-            : runnerIdFromBody({ runnerId: rawRunnerId });
-        if (runnerProfileId) {
-          ensureRunnerProfilePermission(principal, runnerProfileId);
-        }
-        const baseInstallConfig = await capsules!.getInstallConfig(
-          request.installConfigId,
-        );
-        const selectedInterfaceBlueprints =
-          interfaceBlueprints ?? baseInstallConfig.interfaceBlueprints;
-        const needsInstallingPrincipalScope =
-          capsuleInterfaceBlueprintsNeedInstallingPrincipal(
-            selectedInterfaceBlueprints,
-          );
-        const installConfigId =
-          (normalizedVars !== undefined &&
-            Object.keys(normalizedVars).length > 0) ||
-          modulePath !== undefined ||
-          runnerProfileId ||
-          outputAllowlist !== undefined ||
-          interfaceBlueprints !== undefined ||
-          needsInstallingPrincipalScope
-            ? (
-                await createScopedInstallConfigForCapsule({
-                  capsules: capsules!,
-                  workspaceId: id,
-                  baseInstallConfig,
-                  capsuleName: request.name,
-                  modulePath,
-                  vars: normalizedVars ?? {},
-                  outputAllowlist,
-                  interfaceBlueprints: selectedInterfaceBlueprints,
-                  installingPrincipalId: principal.actor,
-                  runnerProfileId,
-                })
-              ).id
-            : request.installConfigId;
-        const capsule = await capsules!.createCapsule({
-          ...request,
-          workspaceId: id,
-          installConfigId,
-          installingPrincipalId: principal.actor,
-        });
-        return c.json(capsuleResponse(capsule), 201);
       },
     }),
   );
-
   app.get(
     TAKOSUMI_WORKSPACE_CAPSULES_ROUTE,
     defineRoute({
@@ -938,178 +776,4 @@ export function mountDeployControlCapsuleRoutes(
       },
     }),
   );
-}
-
-async function createScopedInstallConfigForCapsule(input: {
-  readonly capsules: CapsulesService;
-  readonly workspaceId: string;
-  readonly baseInstallConfig: InstallConfig;
-  readonly capsuleName: string;
-  readonly modulePath?: string;
-  readonly vars: Readonly<Record<string, JsonValue>>;
-  readonly outputAllowlist?: InstallConfig["outputAllowlist"];
-  readonly interfaceBlueprints?: readonly CapsuleInterfaceBlueprint[];
-  readonly installingPrincipalId: string;
-  readonly runnerProfileId?: string;
-}): Promise<InstallConfig> {
-  for (const [key, value] of Object.entries(input.vars)) {
-    if (!isJsonValue(value)) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        `vars.${key} must be a JSON value`,
-      );
-    }
-  }
-  const baseConfig = input.baseInstallConfig;
-  if (
-    baseConfig.workspaceId !== undefined &&
-    baseConfig.workspaceId !== input.workspaceId
-  ) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
-      "install config is not available to this workspace",
-    );
-  }
-  const now = new Date().toISOString();
-  const { modulePath: _baseModulePath, ...baseConfigWithoutModulePath } =
-    baseConfig;
-  const configBase =
-    input.modulePath === "" ? baseConfigWithoutModulePath : baseConfig;
-  return await input.capsules.putInstallConfig({
-    ...configBase,
-    id: `cfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
-    workspaceId: input.workspaceId,
-    name: `${input.capsuleName}-config`,
-    internal: { reason: "per_install_overrides" },
-    ...(input.modulePath ? { modulePath: input.modulePath } : {}),
-    variableMapping: { ...baseConfig.variableMapping, ...input.vars },
-    ...(input.runnerProfileId ? { runnerId: input.runnerProfileId } : {}),
-    ...(input.interfaceBlueprints
-      ? {
-          interfaceBlueprints:
-            resolveCapsuleInterfaceBlueprintInstallingPrincipal(
-              input.interfaceBlueprints,
-              input.installingPrincipalId,
-            ),
-        }
-      : {}),
-    outputAllowlist:
-      input.outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
-    createdAt: now,
-    updatedAt: now,
-  });
-}
-
-function isSelectableInstallConfig(config: InstallConfig): boolean {
-  if (config.internal?.reason === "per_install_overrides") return false;
-  if (
-    config.workspaceId !== undefined &&
-    /^icfg_[0-9a-f]{16}$/iu.test(config.id)
-  ) {
-    return false;
-  }
-  return true;
-}
-
-function scopedCloneOutputAllowlist(
-  baseConfig: InstallConfig,
-): InstallConfig["outputAllowlist"] {
-  if (Object.keys(baseConfig.outputAllowlist).length > 0) {
-    return baseConfig.outputAllowlist;
-  }
-  return defaultCapsuleOutputAllowlist();
-}
-
-function modulePathValue(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const raw = value.trim();
-  if (!raw) return undefined;
-  if (isAbsolute(raw) || raw.includes("\0") || /^[A-Za-z]:[\\/]/u.test(raw)) {
-    return undefined;
-  }
-  const normalized = normalize(raw)
-    .replaceAll("\\", "/")
-    .replace(/^\.\//u, "")
-    .replace(/\/+$/u, "");
-  if (normalized.length === 0 || normalized === ".") return "";
-  if (
-    normalized === ".." ||
-    normalized.startsWith("../") ||
-    normalized.includes("/../")
-  ) {
-    return undefined;
-  }
-  return normalized;
-}
-
-function outputAllowlistValue(
-  value: unknown,
-): InstallConfig["outputAllowlist"] | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const out: Record<string, InstallConfig["outputAllowlist"][string]> = {};
-  for (const [name, item] of Object.entries(value)) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) return undefined;
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      return undefined;
-    }
-    const record = item as Record<string, unknown>;
-    const from = typeof record.from === "string" ? record.from.trim() : "";
-    const type = typeof record.type === "string" ? record.type.trim() : "";
-    if (!from || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(from)) return undefined;
-    if (
-      type !== "string" &&
-      type !== "url" &&
-      type !== "hostname" &&
-      type !== "number" &&
-      type !== "boolean" &&
-      type !== "json"
-    ) {
-      return undefined;
-    }
-    out[name] = {
-      from,
-      type,
-      ...(typeof record.required === "boolean"
-        ? { required: record.required }
-        : {}),
-      ...(typeof record.sensitive === "boolean"
-        ? { sensitive: record.sensitive }
-        : {}),
-    };
-  }
-  return out;
-}
-
-function isJsonValue(value: unknown): value is JsonValue {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return true;
-  }
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  if (typeof value !== "object") return false;
-  return Object.values(value as Record<string, unknown>).every(isJsonValue);
-}
-
-function jsonRecordValue(
-  value: unknown,
-): Readonly<Record<string, JsonValue>> | undefined {
-  if (!isPlainJsonObject(value)) return undefined;
-  const out: Record<string, JsonValue> = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (!isJsonValue(item)) return undefined;
-    out[key] = item;
-  }
-  return out;
-}
-
-function isPlainJsonObject(
-  value: unknown,
-): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -6,6 +6,9 @@
  * one canonical Plan Run. It never approves or applies that Run.
  */
 
+import type { JsonValue } from "./types.ts";
+import type { InstallConfig } from "./install-configs.ts";
+
 export type GitInstallPlanPhase =
   | "syncing_source"
   | "compiling_install"
@@ -34,6 +37,8 @@ export interface GitInstallPlanProviderBindingRequest {
   readonly moduleLocalName: string;
   /** Exact child-module configuration alias; absent means the default. */
   readonly childAlias?: string;
+  /** Exact root-module alias wired to the child identity. */
+  readonly rootAlias?: string;
   /** Existing Provider Connection id; credential values never enter this record. */
   readonly connectionId: string;
 }
@@ -58,10 +63,36 @@ export interface GitInstallPlanOptions {
   readonly providerBindings?: readonly GitInstallPlanProviderBindingRequest[];
 }
 
+/**
+ * Exact successful preflight already observed by an interactive installer.
+ * The coordinator revalidates every id and never infers a latest snapshot.
+ */
+export interface GitInstallPlanPreflightAuthority {
+  readonly sourceId: string;
+  readonly sourceSnapshotId: string;
+  readonly compatibilityCheckRunId: string;
+  readonly compatibilityReportId: string;
+  readonly installConfigId: string;
+}
+
+/** Reviewed fields applied only by the create-only initial authority commit. */
+export interface GitInstallPlanInitialConfiguration {
+  readonly runnerProfileId?: string;
+  readonly outputAllowlist?: InstallConfig["outputAllowlist"];
+  readonly interfaceBlueprints?: InstallConfig["interfaceBlueprints"];
+  readonly store?: InstallConfig["store"];
+  readonly sourceBuild?: InstallConfig["sourceBuild"];
+}
+
 export interface CreateGitInstallPlanRequest {
   readonly source: GitInstallPlanSourceRequest;
   readonly capsule: GitInstallPlanCapsuleRequest;
   readonly options?: GitInstallPlanOptions;
+  readonly preflight?: GitInstallPlanPreflightAuthority;
+  /** Private reviewed inputs; never projected from the coordinator record. */
+  readonly variables?: Readonly<Record<string, JsonValue>>;
+  /** Private create-only configuration; never projected from the coordinator record. */
+  readonly initialConfiguration?: GitInstallPlanInitialConfiguration;
 }
 
 /** Exact, value-free upgrade intent for an existing Capsule. */
@@ -109,6 +140,8 @@ export interface GitInstallPlan {
   readonly source: GitInstallPlanSourceRequest;
   readonly capsule: GitInstallPlanCapsuleRequest;
   readonly options: GitInstallPlanOptions;
+  /** Exact value-free preflight identity, when supplied by an installer. */
+  readonly preflight?: GitInstallPlanPreflightAuthority;
   /** Present only for `operation: "revision"`. */
   readonly revision?: GitRevisionPlanIntent;
   readonly sourceId?: string;

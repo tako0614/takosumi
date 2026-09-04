@@ -100,6 +100,35 @@ test("public InstallConfig projection never returns secret install variables", (
   expect(serialized).not.toContain("FILE_SECRET");
 });
 
+test("generic OpenTofu provenance makes every variable value write-only", () => {
+  const projected = publicInstallConfigRecord({
+    ...installConfig(),
+    variableMapping: {
+      region: "secret-region-value",
+      display_name: "secret-display-value",
+      nested: { ordinary: "nested-secret-value" },
+    },
+    variablePresentation: [
+      { name: "region", label: { en: "Region" } },
+      { name: "display_name", label: { en: "Display name" } },
+      { name: "nested", label: { en: "Nested" } },
+    ],
+    internal: {
+      genericOpenTofuVariableContractDigest: `sha256:${"1".repeat(64)}`,
+      genericOpenTofuSourceSnapshotId: "snapshot-generic-redaction",
+    },
+  });
+
+  expect(projected.variableMapping).toEqual({
+    region: "[REDACTED]",
+    display_name: "[REDACTED]",
+    nested: "[REDACTED]",
+  });
+  expect(JSON.stringify(projected)).not.toContain("secret-region-value");
+  expect(JSON.stringify(projected)).not.toContain("secret-display-value");
+  expect(JSON.stringify(projected)).not.toContain("nested-secret-value");
+});
+
 test("public InstallConfig policy projection keeps only safe policy fields", () => {
   const projected = publicInstallConfigRecord({
     ...installConfig(),

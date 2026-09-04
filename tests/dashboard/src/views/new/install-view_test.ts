@@ -251,7 +251,7 @@ describe("single-screen install surface", () => {
     expect(ensureSource).not.toContain("if (workspaceId()) {");
   });
 
-  test("only ready compatibility can reach Capsule creation", () => {
+  test("only ready compatibility can reach the create-only install coordinator", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain('if (result.level !== "ready")');
     expect(view).toContain('if (checked.level !== "ready")');
@@ -259,8 +259,10 @@ describe("single-screen install surface", () => {
       view.indexOf("const config = await getInstallConfig(configId"),
     );
     expect(view.indexOf('if (checked.level !== "ready")')).toBeLessThan(
-      view.indexOf("const capsule = await createCapsule"),
+      view.indexOf("const response = await createReviewableGitInstallPlan"),
     );
+    expect(view).not.toContain("const capsule = await createCapsule");
+    expect(view).not.toContain("putCapsuleProviderBindingSet");
   });
 
   test("aborted InstallConfig preparation returns to configure before mutations", () => {
@@ -272,10 +274,10 @@ describe("single-screen install surface", () => {
       'preparationTimedOut ? t("installStore.preparingTimeout") : undefined',
     );
     expect(view.indexOf(configRead)).toBeLessThan(
-      view.indexOf("const capsule = await createCapsule"),
+      view.indexOf("const response = await createReviewableGitInstallPlan"),
     );
     expect(view.indexOf(configRead)).toBeLessThan(
-      view.indexOf("const envelope = await planCapsule"),
+      view.indexOf("const response = await createReviewableGitInstallPlan"),
     );
   });
 

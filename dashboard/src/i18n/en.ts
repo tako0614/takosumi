@@ -517,7 +517,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Select a ready connected account for {provider}.",
   "app.config.title": "Settings",
   "app.config.subtitle":
-    "Change the public name, URL, first sign-in value, and service variables. Saved values apply on the next deploy review.",
+    "Change the public name, URL, first sign-in value, and service variables. Submitting creates one deployment review; nothing is applied immediately.",
   "app.config.publicUrl": "Public URL",
   "app.config.subdomain": "Public subdomain",
   "app.config.updatedAt": "Updated",
@@ -537,7 +537,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.config.removeAria": "Remove setting {name}",
   "app.config.undoResetAria": "Undo reset of {name}",
   "app.config.defaultBadge": "Default value",
-  "app.config.resetPendingHint": "Reverts to the default when you save.",
+  "app.config.resetPendingHint": "Reverts to the default in the reviewed change.",
   "app.config.customName": "CUSTOM_ENV",
   "app.config.errorNameRequired": "Enter a setting name.",
   "app.config.errorNameInvalid": "{name} cannot contain spaces.",
@@ -567,8 +567,6 @@ export const en: Record<keyof typeof ja, string> = {
   "app.usage.subCent": "< $0.01",
   "app.usage.unrated": "Unrated",
   "app.usage.unratedCount": "Unrated usage records: {n}",
-  "app.config.savedNeedsDeploy": "Saved. Deploy to apply the change.",
-  "app.config.deployChanges": "Deploy changes",
   "app.updateNow": "Update",
   "app.autoUpdate.title": "Automatic updates",
   "app.autoUpdate.body":

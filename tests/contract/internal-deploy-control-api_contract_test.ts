@@ -43,6 +43,7 @@ test("Deploy Control API v1 error code and HTTP status table is frozen", () => {
     "not_found",
     "failed_precondition",
     "resource_exhausted",
+    "method_not_allowed",
     "not_implemented",
     "internal_error",
   ]);
@@ -53,6 +54,7 @@ test("Deploy Control API v1 error code and HTTP status table is frozen", () => {
     not_found: 404,
     failed_precondition: 409,
     resource_exhausted: 413,
+    method_not_allowed: 405,
     not_implemented: 501,
     internal_error: 500,
   });

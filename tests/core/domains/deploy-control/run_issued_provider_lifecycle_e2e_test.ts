@@ -35,6 +35,7 @@ import {
   FIXTURE_STATE_DIGEST,
   fixtureExecutionEvidence,
   seedCapsuleModel,
+  transitionProviderBindingSetForFixture,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 
 const WORKSPACE_ID = "workspace_run_issued_e2e";
@@ -183,7 +184,7 @@ test("generic run-issued credentials reach plan, apply, and destroy runner dispa
   expect(pending.status).toBe("pending");
   expect(await store.getSecretBlob(CONNECTION_ID)).toBeUndefined();
   expect(await vault.test(CONNECTION_ID)).toEqual({ status: "verified" });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "provider_bindings_run_issued_e2e",
     workspaceId: WORKSPACE_ID,
     capsuleId: CAPSULE_ID,

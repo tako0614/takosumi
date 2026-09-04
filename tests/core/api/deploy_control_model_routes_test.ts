@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import { createTakosumiService } from "../../../core/bootstrap.ts";
 import type { InstallConfig } from "takosumi-contract/install-configs";
+import type { CapsulesService } from "../../../core/domains/capsules/mod.ts";
 
 const TOKEN = "deploy-control-token";
 
@@ -120,12 +121,17 @@ test("model e2e: duplicate handle is a 409 failed_precondition", async () => {
   expect((await res.json()).error.code).toBe("failed_precondition");
 });
 
-test("model e2e: create Capsule -> list -> 409 on duplicate name+environment", async () => {
+test("model e2e: Workspace Capsule POST is retired after authentication", async () => {
   const { app, operations } = await service();
   const workspaceId = await createWorkspace(app, "shop");
   const sourceId = await createSource(app, workspaceId);
   const installConfigId = await seedInstallConfig(operations, workspaceId);
 
+  const beforeCapsules = await operations.capsules.listCapsules(workspaceId);
+  const beforeConfigs = await operations.capsules.listInstallConfigs(
+    workspaceId,
+    { includeInternal: true },
+  );
   const createRes = await app.request(
     `/internal/v1/workspaces/${workspaceId}/capsules`,
     {
@@ -136,51 +142,26 @@ test("model e2e: create Capsule -> list -> 409 on duplicate name+environment", a
         environment: "production",
         sourceId,
         installConfigId,
+        vars: { secret: "must-not-be-stored" },
       }),
     },
   );
-  expect(createRes.status).toBe(201);
-  const capsule = (await createRes.json()).capsule;
-  expect(capsule.workspaceId).toBe(workspaceId);
-  expect(capsule.name).toBe("web");
-  expect(capsule.environment).toBe("production");
-  expect(capsule.status).toBe("pending");
-  const capsuleId = capsule.id as string;
-
-  const listRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      headers: headers(),
-    },
+  expect(createRes.status).toBe(405);
+  expect(createRes.headers.get("allow")).toBe("GET");
+  expect(await operations.capsules.listCapsules(workspaceId)).toEqual(
+    beforeCapsules,
   );
-  expect(listRes.status).toBe(200);
-  const capsules = (await listRes.json()).capsules as Array<{
-    id: string;
-  }>;
-  expect(capsules.some((i) => i.id === capsuleId)).toBe(true);
+  expect(
+    await operations.capsules.listInstallConfigs(workspaceId, {
+      includeInternal: true,
+    }),
+  ).toEqual(beforeConfigs);
 
-  // A different environment is allowed (UNIQUE is per workspace+name+environment).
-  const previewRes = await app.request(
+  const unauthorized = await app.request(
     `/internal/v1/workspaces/${workspaceId}/capsules`,
     {
       method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "web",
-        environment: "preview",
-        sourceId,
-        installConfigId,
-      }),
-    },
-  );
-  expect(previewRes.status).toBe(201);
-
-  // Same name + environment is a 409 failed_precondition.
-  const dupRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({
         name: "web",
         environment: "production",
@@ -189,429 +170,8 @@ test("model e2e: create Capsule -> list -> 409 on duplicate name+environment", a
       }),
     },
   );
-  expect(dupRes.status).toBe(409);
-  expect((await dupRes.json()).error.code).toBe("failed_precondition");
-});
-
-test("model e2e: create Capsule with vars clones a Workspace-scoped InstallConfig", async () => {
-  const { app, operations } = await service();
-  const workspaceId = await createWorkspace(app, "vars");
-  const sourceId = await createSource(app, workspaceId);
-  const installConfigId = await seedInstallConfig(operations, workspaceId);
-
-  const createRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "takos",
-        environment: "production",
-        sourceId,
-        installConfigId,
-        vars: { project_name: "takos-vars", cloudflare: {} },
-      }),
-    },
-  );
-  const createBody = await createRes.json();
-  expect({ status: createRes.status, body: createBody }).toMatchObject({
-    status: 201,
-  });
-  const capsule = createBody.capsule as {
-    installConfigId: string;
-  };
-  expect(capsule.installConfigId).not.toBe(installConfigId);
-
-  const config = await operations.capsules.getInstallConfig(
-    capsule.installConfigId,
-  );
-  expect(config.workspaceId).toBe(workspaceId);
-  expect(config.internal).toEqual({ reason: "per_install_overrides" });
-  expect(config.variableMapping).toEqual({
-    project_name: "takos-vars",
-    cloudflare: {},
-  });
-  expect(config.outputAllowlist).toEqual({});
-});
-
-test("model e2e: create Capsule stores explicit Interface blueprints in its scoped InstallConfig", async () => {
-  const { app, operations } = await service();
-  const workspaceId = await createWorkspace(app, "interface-blueprints");
-  const sourceId = await createSource(app, workspaceId);
-  const installConfigId = await seedInstallConfig(operations, workspaceId);
-  const interfaceBlueprints = [
-    {
-      key: "takos.mcp",
-      name: "app.storage.mcp",
-      spec: {
-        type: "mcp.server",
-        version: "2025-11-25",
-        document: { transport: "streamable-http" },
-        inputs: {
-          endpoint: {
-            source: "capsule_output",
-            outputName: "mcp_url",
-          },
-        },
-        access: {
-          visibility: "workspace",
-          resourceUriInput: "endpoint",
-        },
-      },
-      bindings: [
-        {
-          key: "installing-principal",
-          subjectRef: { kind: "Principal", id: "principal_pairwise_1" },
-          permissions: ["mcp.invoke"],
-          delivery: { type: "none" },
-        },
-      ],
-    },
-  ];
-
-  const createRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "storage",
-        environment: "production",
-        sourceId,
-        installConfigId,
-        interfaceBlueprints,
-      }),
-    },
-  );
-
-  const createBody = await createRes.json();
-  expect({ status: createRes.status, body: createBody }).toMatchObject({
-    status: 201,
-  });
-  const capsule = createBody.capsule as {
-    installConfigId: string;
-  };
-  expect(capsule.installConfigId).not.toBe(installConfigId);
-  const config = await operations.capsules.getInstallConfig(
-    capsule.installConfigId,
-  );
-  expect(config.workspaceId).toBe(workspaceId);
-  expect(config.internal).toEqual({ reason: "per_install_overrides" });
-  expect(config.interfaceBlueprints).toEqual(interfaceBlueprints);
-});
-
-test("model e2e: a service-side installer binding is fixed to the authenticated Principal", async () => {
-  const { app, operations } = await service();
-  const workspaceId = await createWorkspace(app, "installer-binding");
-  const sourceId = await createSource(app, workspaceId);
-  const installConfigId = await seedInstallConfig(operations, workspaceId);
-  const baseConfig =
-    await operations.capsules.getInstallConfig(installConfigId);
-  await operations.capsules.putInstallConfig({
-    ...baseConfig,
-    interfaceBlueprints: [
-      {
-        key: "launcher",
-        name: "app.launcher",
-        spec: {
-          type: "interface.ui.surface",
-          version: "1",
-          document: { launcher: true },
-          inputs: {
-            url: { source: "capsule_output", outputName: "launch_url" },
-          },
-          access: { visibility: "workspace" },
-        },
-        bindings: [
-          {
-            key: "launcher.installer",
-            subject: { source: "installing_principal" },
-            permissions: ["ui.open"],
-            delivery: { type: "none" },
-          },
-        ],
-      },
-    ],
-  });
-
-  const createRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "launcher",
-        environment: "production",
-        sourceId,
-        installConfigId,
-      }),
-    },
-  );
-  const createBody = await createRes.json();
-  expect({ status: createRes.status, body: createBody }).toMatchObject({
-    status: 201,
-  });
-  const capsule = createBody.capsule as { installConfigId: string };
-  expect(capsule.installConfigId).not.toBe(installConfigId);
-  const scopedConfig = await operations.capsules.getInstallConfig(
-    capsule.installConfigId,
-  );
-  expect(scopedConfig.interfaceBlueprints?.[0]?.bindings?.[0]).toEqual({
-    key: "launcher.installer",
-    subjectRef: { kind: "Principal", id: "deploy-control-bearer" },
-    permissions: ["ui.open"],
-    delivery: { type: "none" },
-  });
-});
-
-test("model e2e: create Capsule rejects retired managed-hostname input", async () => {
-  const { app, operations } = await service();
-  const workspaceId = await createWorkspace(app, "vanity-host");
-  const sourceId = await createSource(app, workspaceId);
-  const installConfigId = await seedInstallConfig(operations, workspaceId);
-
-  const createRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "takos",
-        environment: "production",
-        sourceId,
-        installConfigId,
-        managedPublicHostname: { mode: "vanity" },
-      }),
-    },
-  );
-
-  expect(createRes.status).toBe(400);
-  expect(await createRes.json()).toMatchObject({
-    error: {
-      code: "invalid_argument",
-      message: "unknown_field: managedPublicHostname",
-    },
-  });
-});
-
-test("model e2e: create Capsule expands dotted vars into object inputs", async () => {
-  const { app, operations } = await service();
-  const workspaceId = await createWorkspace(app, "dotted-vars");
-  const sourceId = await createSource(app, workspaceId);
-  const installConfigId = await seedInstallConfig(operations, workspaceId);
-
-  const createRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "takos",
-        environment: "production",
-        sourceId,
-        installConfigId,
-        vars: {
-          project_name: "takos-vars",
-          cloudflare: { zone_id: "zone_123" },
-          "cloudflare.workers_subdomain": "shoutatomiyama0614",
-        },
-      }),
-    },
-  );
-  expect(createRes.status).toBe(201);
-  const capsule = (await createRes.json()).capsule as {
-    installConfigId: string;
-  };
-
-  const config = await operations.capsules.getInstallConfig(
-    capsule.installConfigId,
-  );
-  expect(config.variableMapping).toEqual({
-    project_name: "takos-vars",
-    cloudflare: {
-      zone_id: "zone_123",
-      workers_subdomain: "shoutatomiyama0614",
-    },
-  });
-});
-
-test("model e2e: create Capsule with runnerId and outputAllowlist stores a scoped InstallConfig", async () => {
-  const { app, operations } = await service();
-  const workspaceId = await createWorkspace(app, "runner-profile");
-  const sourceId = await createSource(app, workspaceId);
-  const installConfigId = await seedInstallConfig(operations, workspaceId);
-
-  const createRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "generic",
-        environment: "production",
-        sourceId,
-        installConfigId,
-        runnerId: "opentofu-default",
-        outputAllowlist: {
-          url: {
-            from: "url",
-            type: "string",
-            required: true,
-          },
-        },
-      }),
-    },
-  );
-  expect(createRes.status).toBe(201);
-  const capsule = (await createRes.json()).capsule as {
-    installConfigId: string;
-    runnerId?: string;
-  };
-  expect(capsule.installConfigId).not.toBe(installConfigId);
-  expect(capsule.runnerId).toBeUndefined();
-
-  const config = await operations.capsules.getInstallConfig(
-    capsule.installConfigId,
-  );
-  expect(config.workspaceId).toBe(workspaceId);
-  expect(config.internal).toEqual({ reason: "per_install_overrides" });
-  expect(config.runnerId).toBe("opentofu-default");
-  expect(config.variableMapping).toEqual({});
-  expect(config.outputAllowlist).toEqual({
-    url: { from: "url", type: "string", required: true },
-  });
-
-  const listRes = await app.request(
-    `/internal/v1/install-configs?workspaceId=${workspaceId}`,
-    { headers: headers() },
-  );
-  expect(listRes.status).toBe(200);
-  const listed = (await listRes.json()).installConfigs as Array<{
-    id: string;
-    internal?: unknown;
-    runnerId?: string;
-  }>;
-  expect(listed.some((item) => item.id === config.id)).toBe(false);
-  expect(listed.every((item) => item.internal === undefined)).toBe(true);
-  expect(listed.every((item) => item.runnerId === undefined)).toBe(true);
-});
-
-test("model e2e: create Capsule with modulePath stores a scoped InstallConfig", async () => {
-  const { app, operations } = await service();
-  const workspaceId = await createWorkspace(app, "module-path");
-  const sourceId = await createSource(app, workspaceId);
-  const installConfigId = await seedInstallConfig(operations, workspaceId);
-
-  const createRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "takos",
-        environment: "staging",
-        sourceId,
-        installConfigId,
-        modulePath: "deploy/opentofu",
-      }),
-    },
-  );
-  expect(createRes.status).toBe(201);
-  const capsule = (await createRes.json()).capsule as {
-    installConfigId: string;
-  };
-  expect(capsule.installConfigId).not.toBe(installConfigId);
-
-  const config = await operations.capsules.getInstallConfig(
-    capsule.installConfigId,
-  );
-  expect(config.workspaceId).toBe(workspaceId);
-  expect(config.internal).toEqual({ reason: "per_install_overrides" });
-  expect(config.modulePath).toBe("deploy/opentofu");
-});
-
-test("model e2e: create Capsule accepts repo-root modulePath", async () => {
-  const { app, operations } = await service();
-  const workspaceId = await createWorkspace(app, "module-root");
-  const sourceId = await createSource(app, workspaceId);
-  const installConfigId = await seedInstallConfig(operations, workspaceId);
-
-  const createRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "yurucommu",
-        environment: "staging",
-        sourceId,
-        installConfigId,
-        modulePath: ".",
-      }),
-    },
-  );
-  expect(createRes.status).toBe(201);
-  const capsule = (await createRes.json()).capsule as {
-    installConfigId: string;
-  };
-  const config = await operations.capsules.getInstallConfig(
-    capsule.installConfigId,
-  );
-  expect(config.internal).toEqual({ reason: "per_install_overrides" });
-  expect(config.modulePath).toBeUndefined();
-});
-
-test("model e2e: create Capsule rejects non-object vars", async () => {
-  const { app, operations } = await service();
-  const workspaceId = await createWorkspace(app, "bad-vars");
-  const sourceId = await createSource(app, workspaceId);
-  const installConfigId = await seedInstallConfig(operations, workspaceId);
-
-  const createRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "takos",
-        environment: "production",
-        sourceId,
-        installConfigId,
-        vars: "project_name=takos",
-      }),
-    },
-  );
-  expect(createRes.status).toBe(400);
-  const body = await createRes.json();
-  expect(body.error.message).toContain("vars must be an object");
-});
-
-test("model e2e: create Capsule rejects conflicting dotted vars", async () => {
-  const { app, operations } = await service();
-  const workspaceId = await createWorkspace(app, "bad-dotted-vars");
-  const sourceId = await createSource(app, workspaceId);
-  const installConfigId = await seedInstallConfig(operations, workspaceId);
-
-  const createRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "takos",
-        environment: "production",
-        sourceId,
-        installConfigId,
-        vars: {
-          cloudflare: "not-an-object",
-          "cloudflare.workers_subdomain": "shoutatomiyama0614",
-        },
-      }),
-    },
-  );
-  expect(createRes.status).toBe(400);
-  const body = await createRes.json();
-  expect(body.error.message).toContain("conflicts with another variable path");
+  expect(unauthorized.status).toBe(401);
+  expect(unauthorized.headers.get("allow")).toBeNull();
 });
 
 test("model e2e: GET /internal/v1/capsules/{id} returns the new shape", async () => {
@@ -620,21 +180,13 @@ test("model e2e: GET /internal/v1/capsules/{id} returns the new shape", async ()
   const sourceId = await createSource(app, workspaceId);
   const installConfigId = await seedInstallConfig(operations, workspaceId);
 
-  const createRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "api",
-        environment: "production",
-        sourceId,
-        installConfigId,
-      }),
-    },
+  const capsuleId = await createCapsule(
+    operations,
+    workspaceId,
+    sourceId,
+    installConfigId,
+    "api",
   );
-  expect(createRes.status).toBe(201);
-  const capsuleId = (await createRes.json()).capsule.id as string;
 
   const getRes = await app.request(`/internal/v1/capsules/${capsuleId}`, {
     headers: headers(),
@@ -653,21 +205,13 @@ test("model e2e: DELETE abandons an unapplied Capsule without a destroy plan", a
   const sourceId = await createSource(app, workspaceId);
   const installConfigId = await seedInstallConfig(operations, workspaceId);
 
-  const createRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "broken",
-        environment: "production",
-        sourceId,
-        installConfigId,
-      }),
-    },
+  const capsuleId = await createCapsule(
+    operations,
+    workspaceId,
+    sourceId,
+    installConfigId,
+    "broken",
   );
-  expect(createRes.status).toBe(201);
-  const capsuleId = (await createRes.json()).capsule.id as string;
 
   const deleteRes = await app.request(`/internal/v1/capsules/${capsuleId}`, {
     method: "DELETE",
@@ -706,21 +250,13 @@ test("model e2e: plan without a SourceSnapshot is a 409 source_sync_required", a
   const sourceId = await createSource(app, workspaceId);
   const installConfigId = await seedInstallConfig(operations, workspaceId);
 
-  const createRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "svc",
-        environment: "production",
-        sourceId,
-        installConfigId,
-      }),
-    },
+  const capsuleId = await createCapsule(
+    operations,
+    workspaceId,
+    sourceId,
+    installConfigId,
+    "svc",
   );
-  expect(createRes.status).toBe(201);
-  const capsuleId = (await createRes.json()).capsule.id as string;
 
   const planRes = await app.request(`/internal/v1/capsules/${capsuleId}/plan`, {
     method: "POST",
@@ -734,27 +270,40 @@ test("model e2e: plan without a SourceSnapshot is a 409 source_sync_required", a
 });
 
 async function createCapsule(
-  app: { request: (path: string, init?: RequestInit) => Promise<Response> },
+  operations: {
+    capsules: Pick<
+      CapsulesService,
+      "createCapsuleInitialAuthority" | "getInstallConfig"
+    >;
+  },
   workspaceId: string,
   sourceId: string,
   installConfigId: string,
   name: string,
 ): Promise<string> {
-  const res = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name,
-        environment: "production",
-        sourceId,
-        installConfigId,
-      }),
-    },
+  const baseConfig = await operations.capsules.getInstallConfig(
+    installConfigId,
   );
-  expect(res.status).toBe(201);
-  return (await res.json()).capsule.id as string;
+  const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+  const now = new Date().toISOString();
+  const initial = await operations.capsules.createCapsuleInitialAuthority({
+    capsuleId: `cap_${suffix}`,
+    providerBindingSetId: `pbs_${suffix}`,
+    workspaceId,
+    name,
+    environment: "production",
+    sourceId,
+    installingPrincipalId: "deploy-control-bearer",
+    installConfig: {
+      ...baseConfig,
+      id: `cfg_${suffix}`,
+      workspaceId,
+      createdAt: now,
+      updatedAt: now,
+    },
+    providerBindings: [],
+  });
+  return initial.capsule.id;
 }
 
 test("model e2e: dependency create -> list -> 409 on cycle -> delete", async () => {
@@ -763,14 +312,14 @@ test("model e2e: dependency create -> list -> 409 on cycle -> delete", async () 
   const sourceId = await createSource(app, workspaceId);
   const installConfigId = await seedInstallConfig(operations, workspaceId);
   const producer = await createCapsule(
-    app,
+    operations,
     workspaceId,
     sourceId,
     installConfigId,
     "producer",
   );
   const consumer = await createCapsule(
-    app,
+    operations,
     workspaceId,
     sourceId,
     installConfigId,
@@ -857,7 +406,7 @@ test("model e2e: a dependency to a producer in another workspace is rejected", a
   const sourceA = await createSource(app, workspaceA);
   const configA = await seedInstallConfig(operations, workspaceA);
   const consumer = await createCapsule(
-    app,
+    operations,
     workspaceA,
     sourceA,
     configA,
@@ -880,7 +429,7 @@ test("model e2e: a dependency to a producer in another workspace is rejected", a
     updatedAt: nowIso,
   });
   const foreignProducer = await createCapsule(
-    app,
+    operations,
     workspaceB,
     sourceB,
     "cfg_test00000002",

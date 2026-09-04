@@ -99,6 +99,9 @@ import type {
   BeginApplyRunResult,
   CapsuleExecutionAuthority,
   CapsuleExecutionAuthorityInput,
+  CapsuleInitialAuthorityInput,
+  CapsuleInitialAuthorityResult,
+  CapsulePlanCreationFence,
   CapsuleInstallConfigRebindInput,
   CapsuleInstallConfigRebindResult,
   ClaimCapsuleInterfaceMaterializationIntentInput,
@@ -131,6 +134,7 @@ import type {
 } from "../../core/domains/deploy-control/store.ts";
 import {
   assertSourceSyncSuccessCommit,
+  CapsulePlanCreationFenceConflictError,
   assertPlanRunPreparation,
   assertCapsuleInterfaceMaterializationIntentClaimInput,
   assertCapsuleInterfaceMaterializationIntentSettlementInput,
@@ -156,6 +160,8 @@ import {
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
   planRunPreparationExactlyMatches,
   PlanRunPreparationConflictError,
+  providerBindingSetAuthorityDigest,
+  providerBindingSetTargetsCapsule,
   runtimeSecretRetirementDispatchAttempt,
   sourceSnapshotsExactlyMatch,
   storedCapsuleCompatibilityProviderGraph,
@@ -817,12 +823,7 @@ function d1CapsuleInstallConfigRebindBlocked(
       ),
       and(
         inArray(schema.runs.type, [RUN_KIND_PLAN, "destroy_plan"]),
-        inArray(schema.runs.status, [
-          "queued",
-          "running",
-          "waiting_approval",
-          "succeeded",
-        ]),
+        inArray(schema.runs.status, ["queued", "running"]),
         sql`COALESCE(json_extract(${schema.runs.runJson}, '$.appliedApplyRunId'), '') = ''`,
         sql`COALESCE(
           CAST(json_extract(${schema.runs.runJson}, '$.capsuleExecutionAuthorityEpoch') AS INTEGER),
@@ -1098,6 +1099,16 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     await this.#ensureSchema();
     const run = input.run;
     const statements = [
+      ...(input.expectedCapsulePlanAuthority !== undefined && run.capsuleId
+        ? [
+            d1CapsulePlanCreationFenceGuardStmt(
+              this.#orm,
+              run.capsuleId,
+              run.id,
+              input.expectedCapsulePlanAuthority,
+            ),
+          ]
+        : []),
       this.#orm.insert(schema.runs).values({
         id: run.id,
         runGroupId: null,
@@ -1137,6 +1148,14 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       );
       return { status: "created", run };
     } catch (error) {
+      if (
+        input.expectedCapsulePlanAuthority !== undefined &&
+        isD1CapsuleStateGuardError(error)
+      ) {
+        throw new CapsulePlanCreationFenceConflictError(
+          run.capsuleId ?? "unknown",
+        );
+      }
       // Plain INSERTs make duplicate preparation fail the whole D1 batch. Adopt
       // only an already-complete preparation with the same immutable execution
       // identity; never fill a torn legacy row from mutable current state.
@@ -2346,6 +2365,41 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return changes(result as D1Result) > 0;
   }
 
+  async replaceUnreferencedSharedInstallConfig(
+    expected: InstallConfig,
+    replacement: InstallConfig,
+  ): Promise<boolean> {
+    if (
+      replacement.id !== expected.id ||
+      expected.workspaceId !== undefined ||
+      replacement.workspaceId !== undefined
+    ) {
+      return false;
+    }
+    await this.#ensureSchema();
+    const referenced = this.#orm
+      .select({ id: schema.capsules.id })
+      .from(schema.capsules)
+      .where(eq(schema.capsules.installConfigId, expected.id));
+    const result = await this.#orm
+      .update(schema.installConfigs)
+      .set({
+        workspaceId: null,
+        recordJson: replacement,
+        updatedAt: replacement.updatedAt,
+      })
+      .where(
+        and(
+          eq(schema.installConfigs.id, expected.id),
+          isNull(schema.installConfigs.workspaceId),
+          eq(schema.installConfigs.recordJson, expected),
+          notExists(referenced),
+        ),
+      )
+      .run();
+    return changes(result as D1Result) > 0;
+  }
+
   async getInstallConfig(id: string): Promise<InstallConfig | undefined> {
     const config = await this.#drizzleFirstJson<InstallConfig>(
       schema.installConfigs,
@@ -2477,6 +2531,167 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return normalized;
   }
 
+  async createCapsuleInitialAuthority(
+    input: CapsuleInitialAuthorityInput,
+  ): Promise<CapsuleInitialAuthorityResult> {
+    assertD1AtomicCommitBatch(this.db, "createCapsuleInitialAuthority");
+    await this.#ensureSchema();
+    const capsule = normalizeCapsuleRecord(input.capsule);
+    const binding = input.providerBindingSet;
+    if (
+      input.installConfig.id !== capsule.installConfigId ||
+      input.installConfig.workspaceId !== capsule.workspaceId ||
+      binding.workspaceId !== capsule.workspaceId ||
+      binding.capsuleId !== capsule.id ||
+      binding.environment !== capsule.environment
+    ) {
+      return { status: "conflict" };
+    }
+    const [expectedConfig, expectedCapsule, expectedBinding] =
+      await Promise.all([
+        stableJsonDigest(input.installConfig),
+        stableJsonDigest(capsule),
+        stableJsonDigest(binding),
+      ]);
+    const classifyExisting = async (): Promise<
+      CapsuleInitialAuthorityResult | undefined
+    > => {
+      const [existingConfig, existingCapsuleRow, existingBindings] =
+        await Promise.all([
+        this.getInstallConfig(input.installConfig.id),
+        this.#orm
+          .select({
+            json: schema.capsules.recordJson,
+            epoch: schema.capsules.executionAuthorityEpoch,
+          })
+          .from(schema.capsules)
+          .where(eq(schema.capsules.id, capsule.id))
+          .limit(1)
+          .get(),
+        this.#drizzleManyJson<ProviderBindingSet>(
+          schema.providerBindingSets,
+          schema.providerBindingSets.recordJson,
+          {
+            where: or(
+              eq(schema.providerBindingSets.id, binding.id),
+              and(
+                eq(schema.providerBindingSets.capsuleId, capsule.id),
+                eq(
+                  schema.providerBindingSets.environment,
+                  capsule.environment,
+                ),
+              ),
+            ),
+          },
+        ),
+      ]);
+      const existingBinding = existingBindings.find(
+        (candidate) => candidate.id === binding.id,
+      );
+      const existingBindingSlot = existingBindings.find(
+        (candidate) =>
+          candidate.capsuleId === capsule.id &&
+          candidate.environment === capsule.environment,
+      );
+      if (
+        !existingConfig &&
+        !existingCapsuleRow &&
+        !existingBinding &&
+        !existingBindingSlot
+      ) {
+        return undefined;
+      }
+      if (
+        !existingConfig ||
+        !existingCapsuleRow ||
+        !existingBinding ||
+        existingBindingSlot?.id !== existingBinding.id
+      ) {
+        return { status: "conflict" };
+      }
+      const existingCapsule = normalizeCapsuleRecord(
+        existingCapsuleRow.json as Capsule,
+      );
+      const [configDigest, capsuleDigest, bindingDigest] = await Promise.all([
+        stableJsonDigest(existingConfig),
+        stableJsonDigest(existingCapsule),
+        stableJsonDigest(existingBinding),
+      ]);
+      return existingCapsuleRow.epoch === 1 &&
+          configDigest === expectedConfig &&
+          capsuleDigest === expectedCapsule &&
+          bindingDigest === expectedBinding
+        ? { status: "replayed", capsule: existingCapsule }
+        : { status: "conflict" };
+    };
+    const findDuplicateCapsule = () =>
+      this.#orm
+        .select({ id: schema.capsules.id })
+        .from(schema.capsules)
+        .where(
+          and(
+            eq(schema.capsules.projectId, capsule.projectId),
+            eq(schema.capsules.name, capsule.name),
+            eq(schema.capsules.environment, capsule.environment),
+            ne(schema.capsules.status, "destroyed"),
+          ),
+        )
+        .limit(1)
+        .get();
+    const existing = await classifyExisting();
+    if (existing) return existing;
+    const duplicate = await findDuplicateCapsule();
+    if (duplicate) return { status: "conflict" };
+    try {
+      await this.#orm.batch([
+        this.#orm.insert(schema.installConfigs).values({
+          id: input.installConfig.id,
+          workspaceId: input.installConfig.workspaceId ?? null,
+          recordJson: input.installConfig,
+          createdAt: input.installConfig.createdAt,
+          updatedAt: input.installConfig.updatedAt,
+        }),
+        this.#orm.insert(schema.capsules).values({
+          id: capsule.id,
+          workspaceId: capsule.workspaceId,
+          projectId: capsule.projectId,
+          name: capsule.name,
+          slug: capsule.slug,
+          sourceId: capsule.sourceId,
+          installConfigId: capsule.installConfigId,
+          environment: capsule.environment,
+          currentStateVersionId: null,
+          currentStateGeneration: capsule.currentStateGeneration,
+          currentOutputId: null,
+          status: capsule.status,
+          recordJson: capsule,
+          createdAt: capsule.createdAt,
+          updatedAt: capsule.updatedAt,
+        }),
+        this.#orm.insert(schema.providerBindingSets).values({
+          id: binding.id,
+          workspaceId: binding.workspaceId,
+          capsuleId: binding.capsuleId,
+          environment: binding.environment,
+          recordJson: binding,
+          createdAt: binding.createdAt,
+          updatedAt: binding.updatedAt,
+        }),
+      ]);
+    } catch (error) {
+      // D1 has no interactive lock transaction. A concurrent identical batch
+      // can win after the absence reads and make this batch hit a uniqueness
+      // constraint. Re-read the complete authority before classifying that
+      // outcome; only an exact durable unit is a replay, a durable collision is
+      // a conflict, and an unexplained storage failure remains an error.
+      const concurrent = await classifyExisting();
+      if (concurrent) return concurrent;
+      if (await findDuplicateCapsule()) return { status: "conflict" };
+      throw error;
+    }
+    return { status: "created", capsule };
+  }
+
   async resolveCapsuleExecutionAuthority(
     workspaceId: string,
     capsuleId: string,
@@ -2591,6 +2806,43 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .get();
     if (!row) return { status: "not_found" };
     const capsule = normalizeCapsuleRecord(row.json as Capsule);
+    const bindingReplacement = input.providerBindingSetReplacement;
+    const bindingRows = bindingReplacement
+      ? await this.#orm
+          .select({
+            id: schema.providerBindingSets.id,
+            capsuleId: schema.providerBindingSets.capsuleId,
+            environment: schema.providerBindingSets.environment,
+            json: schema.providerBindingSets.recordJson,
+          })
+          .from(schema.providerBindingSets)
+          .where(
+            or(
+              and(
+                eq(schema.providerBindingSets.capsuleId, capsule.id),
+                eq(
+                  schema.providerBindingSets.environment,
+                  capsule.environment,
+                ),
+              ),
+              eq(
+                schema.providerBindingSets.id,
+                bindingReplacement.target.id,
+              ),
+            ),
+          )
+      : [];
+    const currentBindingRow = bindingRows.find(
+      (bindingRow) =>
+        bindingRow.capsuleId === capsule.id &&
+        bindingRow.environment === capsule.environment,
+    );
+    const currentBindingSet = currentBindingRow?.json as
+      | ProviderBindingSet
+      | undefined;
+    const targetBindingIdRow = bindingRows.find(
+      (bindingRow) => bindingRow.id === bindingReplacement?.target.id,
+    );
     const targetConfig = await this.getInstallConfig(
       input.targetInstallConfigId,
     );
@@ -2602,12 +2854,26 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       !exactRecoveryProofsEqual(
         targetConfig.internal?.reAdoption?.committedPostApplyRecovery,
         recoveryProof,
-      )
+      ) ||
+      (bindingReplacement !== undefined &&
+        ((await stableJsonDigest(bindingReplacement.target)) !==
+            bindingReplacement.targetDigest ||
+          !providerBindingSetTargetsCapsule(
+            bindingReplacement.target,
+            capsule,
+          ) ||
+          (targetBindingIdRow !== undefined &&
+            targetBindingIdRow !== currentBindingRow)))
     ) {
       return { status: "conflict", capsule };
     }
     if (capsule.installConfigId === input.targetInstallConfigId) {
-      return { status: "replayed", capsule };
+      return bindingReplacement === undefined ||
+          (currentBindingSet !== undefined &&
+            (await stableJsonDigest(currentBindingSet)) ===
+              bindingReplacement.targetDigest)
+        ? { status: "replayed", capsule }
+        : { status: "conflict", capsule };
     }
     const currentConfig = await this.getInstallConfig(capsule.installConfigId);
     if (
@@ -2615,6 +2881,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       capsule.installConfigId !== input.expected.installConfigId ||
       (await stableJsonDigest(currentConfig)) !==
         input.expected.installConfigDigest ||
+      (bindingReplacement !== undefined &&
+        ((currentBindingSet !== undefined &&
+            !providerBindingSetTargetsCapsule(currentBindingSet, capsule)) ||
+          (await providerBindingSetAuthorityDigest(currentBindingSet)) !==
+            bindingReplacement.expectedCurrentAuthorityDigest)) ||
       capsule.currentStateGeneration !==
         input.expected.currentStateGeneration ||
       capsule.currentStateVersionId !==
@@ -2695,11 +2966,82 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           eq(schema.installConfigs.recordJson, targetConfig),
         ),
       );
+    const bindingSetAuthorityFence = bindingReplacement === undefined
+      ? sql`true`
+      : currentBindingRow && currentBindingSet
+      ? exists(
+          this.#orm
+            .select({ id: schema.providerBindingSets.id })
+            .from(schema.providerBindingSets)
+            .where(
+              and(
+                eq(schema.providerBindingSets.id, currentBindingRow.id),
+                eq(
+                  schema.providerBindingSets.workspaceId,
+                  capsule.workspaceId,
+                ),
+                eq(schema.providerBindingSets.capsuleId, capsule.id),
+                eq(
+                  schema.providerBindingSets.environment,
+                  capsule.environment,
+                ),
+                eq(
+                  schema.providerBindingSets.recordJson,
+                  currentBindingSet,
+                ),
+              ),
+            ),
+        )
+      : notExists(
+          this.#orm
+            .select({ id: schema.providerBindingSets.id })
+            .from(schema.providerBindingSets)
+            .where(
+              and(
+                eq(schema.providerBindingSets.capsuleId, capsule.id),
+                eq(
+                  schema.providerBindingSets.environment,
+                  capsule.environment,
+                ),
+              ),
+            ),
+        );
+    const targetBindingIdAvailableFence = bindingReplacement === undefined
+      ? sql`true`
+      : currentBindingRow?.id === bindingReplacement.target.id
+      ? bindingSetAuthorityFence
+      : notExists(
+          this.#orm
+            .select({ id: schema.providerBindingSets.id })
+            .from(schema.providerBindingSets)
+            .where(
+              eq(
+                schema.providerBindingSets.id,
+                bindingReplacement.target.id,
+              ),
+            ),
+        );
     const updated = normalizeCapsuleRecord({
       ...capsule,
       installConfigId: input.targetInstallConfigId,
       updatedAt: input.updatedAt,
     });
+    // `batch()` is one isolated, ordered D1 transaction. Keep a deliberately
+    // non-Capsule record in record_json until every dependent write has run:
+    // only the batch whose conditional UPDATE changed this row can observe the
+    // claim. A losing rebind may observe byte-identical final Capsule fields
+    // (same target, epoch, and millisecond), but it can never observe another
+    // transaction's uncommitted claim or mistake the finalized row for one.
+    const rebindClaim = {
+      contract: "takosumi.d1-capsule-install-config-rebind-claim/v1",
+      capsuleId: input.capsuleId,
+      expectedInstallConfigId: input.expected.installConfigId,
+      targetInstallConfigId: input.targetInstallConfigId,
+      expectedExecutionAuthorityEpoch:
+        input.expected.executionAuthorityEpoch,
+      targetProviderBindingSetDigest:
+        bindingReplacement?.targetDigest ?? null,
+    };
     const runtimeSafetyFence = recoveryRows
       ? d1CapsuleCommittedPostApplyRecoveryFence(
           this.#orm,
@@ -2711,7 +3053,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .update(schema.capsules)
       .set({
         installConfigId: updated.installConfigId,
-        recordJson: updated,
+        recordJson: rebindClaim,
         updatedAt: updated.updatedAt,
         executionAuthorityEpoch: sql`${schema.capsules.executionAuthorityEpoch} + 1`,
       })
@@ -2743,6 +3085,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           ),
           exists(currentConfigFence),
           exists(targetConfigFence),
+          bindingSetAuthorityFence,
+          targetBindingIdAvailableFence,
           runtimeSafetyFence,
           notExists(blocking),
         ),
@@ -2757,7 +3101,24 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             schema.capsules.installConfigId,
             input.targetInstallConfigId,
           ),
-          eq(schema.capsules.recordJson, updated),
+          eq(schema.capsules.recordJson, rebindClaim),
+          eq(
+            schema.capsules.executionAuthorityEpoch,
+            input.expected.executionAuthorityEpoch + 1,
+          ),
+        ),
+      );
+    const finalizeCapsuleRebind = this.#orm
+      .update(schema.capsules)
+      .set({ recordJson: updated })
+      .where(
+        and(
+          eq(schema.capsules.id, input.capsuleId),
+          eq(
+            schema.capsules.installConfigId,
+            input.targetInstallConfigId,
+          ),
+          eq(schema.capsules.recordJson, rebindClaim),
           eq(
             schema.capsules.executionAuthorityEpoch,
             input.expected.executionAuthorityEpoch + 1,
@@ -2765,6 +3126,33 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         ),
       );
     const intentTable = schema.capsuleInterfaceMaterializationIntents;
+    const replaceBindingSet = bindingReplacement
+      ? [
+          this.#orm
+            .delete(schema.providerBindingSets)
+            .where(
+              and(
+                eq(schema.providerBindingSets.capsuleId, input.capsuleId),
+                eq(
+                  schema.providerBindingSets.environment,
+                  capsule.environment,
+                ),
+                exists(reboundCapsuleFence),
+              ),
+            ),
+          d1InsertReboundProviderBindingSetStmt(
+            this.#orm,
+            bindingReplacement.target,
+            {
+              capsuleId: input.capsuleId,
+              targetInstallConfigId: input.targetInstallConfigId,
+              rebindClaim,
+              executionAuthorityEpoch:
+                input.expected.executionAuthorityEpoch + 1,
+            },
+          ),
+        ]
+      : [];
     const retireUnresolvedIntents = this.#orm
       .update(intentTable)
       .set({
@@ -2790,7 +3178,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       );
     const [result] = await this.#orm.batch([
       capsuleRebind,
+      ...replaceBindingSet,
       retireUnresolvedIntents,
+      finalizeCapsuleRebind,
     ]);
     if (changes(result as D1Result) > 0) {
       return { status: "updated", capsule: updated };
@@ -2798,7 +3188,18 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const current = await this.getCapsule(input.capsuleId);
     if (!current) return { status: "not_found" };
     if (current.installConfigId === input.targetInstallConfigId) {
-      return { status: "replayed", capsule: current };
+      const replayBindingSet = bindingReplacement
+        ? await this.getProviderBindingSetByCapsule(
+            current.id,
+            current.environment,
+          )
+        : undefined;
+      return bindingReplacement === undefined ||
+          (replayBindingSet !== undefined &&
+            (await stableJsonDigest(replayBindingSet)) ===
+              bindingReplacement.targetDigest)
+        ? { status: "replayed", capsule: current }
+        : { status: "conflict", capsule: current };
     }
     const busy = await this.#orm
       .select({ id: schema.runs.id })
@@ -3972,33 +4373,6 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   // -- ProviderBindingSet ------------------------------------------------------
-
-  async putProviderBindingSet(
-    profile: ProviderBindingSet,
-  ): Promise<ProviderBindingSet> {
-    // One profile per (installation, environment): drop any stale row for the
-    // same pair under a different id before upserting.
-    await this.#ensureSchema();
-    await this.#orm
-      .delete(schema.providerBindingSets)
-      .where(
-        and(
-          eq(schema.providerBindingSets.capsuleId, profile.capsuleId),
-          eq(schema.providerBindingSets.environment, profile.environment),
-        ),
-      )
-      .run();
-    await this.#drizzleUpsert(schema.providerBindingSets, {
-      id: profile.id,
-      workspaceId: profile.workspaceId,
-      capsuleId: profile.capsuleId,
-      environment: profile.environment,
-      recordJson: profile,
-      createdAt: profile.createdAt,
-      updatedAt: profile.updatedAt,
-    });
-    return profile;
-  }
 
   async deleteProviderBindingSet(
     capsuleId: string,
@@ -5460,6 +5834,51 @@ function d1CapsuleStateVersionGuardStmt(
 }
 
 /**
+ * Batch guard for configuration-plan creation.  The invalid insert is
+ * selected only when both the exact Capsule fence is absent and no Plan row
+ * with this deterministic id already exists.  The latter keeps an exact
+ * replay valid after the Capsule has subsequently advanced; the former aborts
+ * the whole D1 batch before Run/sidecar rows can be published.
+ */
+function d1CapsulePlanCreationFenceGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  capsuleId: string,
+  planRunId: string,
+  expected: CapsulePlanCreationFence,
+) {
+  const expectedCapsule = orm
+    .select({ one: sql`1` })
+    .from(schema.capsules)
+    .where(
+      and(
+        eq(schema.capsules.id, capsuleId),
+        eq(schema.capsules.installConfigId, expected.installConfigId),
+        eq(
+          schema.capsules.executionAuthorityEpoch,
+          expected.executionAuthorityEpoch,
+        ),
+        eq(schema.capsules.currentStateGeneration, expected.currentStateGeneration),
+        expected.currentStateVersionId === undefined
+          ? isNull(schema.capsules.currentStateVersionId)
+          : eq(
+              schema.capsules.currentStateVersionId,
+              expected.currentStateVersionId,
+            ),
+      ),
+    );
+  const existingRun = orm
+    .select({ one: sql`1` })
+    .from(schema.runs)
+    .where(eq(schema.runs.id, planRunId));
+  return orm.insert(schema.capsules).select(
+    orm
+      .select(d1InvalidCapsuleGuardRow(capsuleId))
+      .from(sql`(select 1) as configuration_plan_guard_source`)
+      .where(and(notExists(expectedCapsule), notExists(existingRun))),
+  );
+}
+
+/**
  * Deliberately invalid Capsule row selected only when a batch guard loses.
  * Using a constant one-row source makes concurrent deletion fail closed too:
  * the NOT NULL violation aborts the batch instead of silently selecting zero
@@ -5493,7 +5912,8 @@ function assertD1AtomicCommitBatch(
     | "commitRunState"
     | "commitRestoredState"
     | "commitSourceSyncSuccess"
-    | "rebindCapsuleInstallConfig",
+    | "rebindCapsuleInstallConfig"
+    | "createCapsuleInitialAuthority",
 ): void {
   if (typeof db.batch !== "function") {
     throw new Error(`D1 ${operation} requires atomic batch support`);
@@ -5596,6 +6016,51 @@ function d1UpsertOutputStmt(
     .insert(schema.outputs)
     .values(values)
     .onConflictDoUpdate({ target: schema.outputs.id, set: values });
+}
+
+/** Inserts the target binding set only after the same batch won the rebind CAS. */
+function d1InsertReboundProviderBindingSetStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  target: ProviderBindingSet,
+  input: {
+    readonly capsuleId: string;
+    readonly targetInstallConfigId: string;
+    readonly rebindClaim: unknown;
+    readonly executionAuthorityEpoch: number;
+  },
+) {
+  const reboundCapsule = orm
+    .select({ id: schema.capsules.id })
+    .from(schema.capsules)
+    .where(
+      and(
+        eq(schema.capsules.id, input.capsuleId),
+        eq(
+          schema.capsules.installConfigId,
+          input.targetInstallConfigId,
+        ),
+        eq(schema.capsules.recordJson, input.rebindClaim),
+        eq(
+          schema.capsules.executionAuthorityEpoch,
+          input.executionAuthorityEpoch,
+        ),
+      ),
+    );
+  const candidate = orm
+    .select({
+      id: sql<string>`${target.id}`.as("id"),
+      workspaceId: sql<string>`${target.workspaceId}`.as("workspaceId"),
+      capsuleId: sql<string>`${target.capsuleId}`.as("capsuleId"),
+      environment: sql<string>`${target.environment}`.as("environment"),
+      recordJson: sql<ProviderBindingSet>`${JSON.stringify(target)}`.as(
+        "recordJson",
+      ),
+      createdAt: sql<string>`${target.createdAt}`.as("createdAt"),
+      updatedAt: sql<string>`${target.updatedAt}`.as("updatedAt"),
+    })
+    .from(sql`(select 1) as rebound_provider_binding_set`)
+    .where(exists(reboundCapsule));
+  return orm.insert(schema.providerBindingSets).select(candidate);
 }
 
 /**

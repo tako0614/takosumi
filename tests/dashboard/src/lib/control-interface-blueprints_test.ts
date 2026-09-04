@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { patchInstallConfig } from "../../../../dashboard/src/lib/control-api.ts";
+import { createCapsuleConfigurationPlan } from "../../../../dashboard/src/lib/control-api.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -7,8 +7,8 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-describe("InstallConfig Interface blueprint client", () => {
-  test("PATCHes the canonical field and preserves an explicit empty array", async () => {
+describe("Capsule Configuration Plan client", () => {
+  test("POSTs one complete deployment-intent review with an explicit empty blueprint array", async () => {
     const calls: Array<{ readonly url: string; readonly init?: RequestInit }> =
       [];
     globalThis.fetch = (async (
@@ -21,26 +21,41 @@ describe("InstallConfig Interface blueprint client", () => {
       });
       return new Response(
         JSON.stringify({
-          installConfig: {
-            id: "config_1",
-            name: "Example",
-            interfaceBlueprints: [],
+          capsule: { id: "cap_1" },
+          configurationPlan: {
+            replayed: false,
+            previousInstallConfigId: "config_1",
+            targetInstallConfigId: "config_2",
+            sourceSnapshotId: "snap_1",
+            planRunId: "plan_1",
           },
+          links: { run: "/api/v1/runs/plan_1" },
         }),
-        { status: 200, headers: { "content-type": "application/json" } },
+        { status: 201, headers: { "content-type": "application/json" } },
       );
     }) as typeof fetch;
 
-    const updated = await patchInstallConfig("config_1", {
+    const planned = await createCapsuleConfigurationPlan("cap_1", {
+      variablePatch: { set: {}, remove: [] },
+      providerBindings: [],
       interfaceBlueprints: [],
-    });
+      expected: { authorityGuard: `sha256:${"a".repeat(64)}` },
+    }, "configuration-plan-client-test");
 
-    expect(updated.interfaceBlueprints).toEqual([]);
+    expect(planned.configurationPlan.planRunId).toBe("plan_1");
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe("/api/v1/capsule-configs/config_1");
-    expect(calls[0]?.init?.method).toBe("PATCH");
+    expect(calls[0]?.url).toBe(
+      "/api/v1/capsules/cap_1/configuration-plans",
+    );
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(new Headers(calls[0]?.init?.headers).get("idempotency-key")).toBe(
+      "configuration-plan-client-test",
+    );
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      variablePatch: { set: {}, remove: [] },
+      providerBindings: [],
       interfaceBlueprints: [],
+      expected: { authorityGuard: `sha256:${"a".repeat(64)}` },
     });
   });
 
@@ -58,7 +73,9 @@ describe("InstallConfig Interface blueprint client", () => {
       )) as typeof fetch;
 
     await expect(
-      patchInstallConfig("config_1", {
+      createCapsuleConfigurationPlan("cap_1", {
+        variablePatch: { set: {}, remove: [] },
+        providerBindings: [],
         interfaceBlueprints: [
           {
             key: "",
@@ -71,7 +88,8 @@ describe("InstallConfig Interface blueprint client", () => {
             },
           },
         ],
-      }),
+        expected: { authorityGuard: `sha256:${"a".repeat(64)}` },
+      }, "configuration-plan-invalid-blueprint"),
     ).rejects.toMatchObject({
       status: 400,
       code: "invalid_request",

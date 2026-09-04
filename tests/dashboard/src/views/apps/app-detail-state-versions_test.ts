@@ -152,7 +152,11 @@ describe("Capsule detail StateVersion surface", () => {
 
   test("keeps service configuration editable from settings without exposing provider credentials", () => {
     expect(source).toContain("getInstallConfig");
-    expect(source).toContain("patchInstallConfig");
+    expect(source).toContain("createCapsuleConfigurationPlan");
+    expect(source).toContain("configurationAttempt?.requestJson === requestJson");
+    expect(source).toContain("configurationAttempt = { requestJson, idempotencyKey }");
+    expect(source).not.toContain("patchInstallConfig");
+    expect(source).not.toContain("putCapsuleProviderBindingSet");
     expect(source).toContain('t("app.config.title")');
     expect(source).toContain('t("app.config.publicUrl")');
     expect(source).not.toContain('t("app.config.oidc")');
@@ -216,17 +220,16 @@ describe("Capsule detail StateVersion surface", () => {
     }
   });
 
-  test("saved-notes are per-form and cleared when a later save fails", () => {
-    // One shared savedKind signal meant saving one form hid the other's
-    // still-true pending-deploy note, and a failed save kept the stale note.
+  test("submits one complete Configuration Plan and enters its returned Run review", () => {
     expect(source).not.toContain("savedKind");
-    expect(source).toContain("setConfigSavedNote(false);");
-    expect(source).toContain("setBindingsSavedNote(false);");
-    expect(source).toContain("<Show when={configSavedNote()}>");
-    expect(source).toContain("<Show when={bindingsSavedNote()}>");
-    // Cleared at the START of the save action so a throw leaves it cleared.
-    expect(source.indexOf("setConfigSavedNote(false);")).toBeLessThan(
-      source.indexOf("await patchInstallConfig"),
+    expect(source).not.toContain("SavedNote");
+    expect(source).toContain("const reviewConfiguration = createAction");
+    expect(source).toContain("variablePatch: {");
+    expect(source).toContain("providerBindings: providerBindings.bindings");
+    expect(source).toContain("interfaceBlueprints: parsed.value");
+    expect(source).toContain("expected: { authorityGuard: props.authorityGuard }");
+    expect(source).toContain(
+      "await props.onPlanned(result.configurationPlan.planRunId)",
     );
   });
 

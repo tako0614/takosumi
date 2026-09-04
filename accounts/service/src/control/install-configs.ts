@@ -38,11 +38,8 @@ import type { ListCredentialRecipesResponse } from "takosumi-contract/credential
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
   InstallConfig,
-  InstallConfigLifecycleAction,
-  InstallConfigVariableDefault,
   Capsule,
   OutputAllowlistEntry,
-  PolicyConfig,
   PublicInstallConfig,
   PublicCapsule,
 } from "takosumi-contract/install-configs";
@@ -121,15 +118,9 @@ import {
   connectionScopeHints,
   dependencyModeValue,
   dependencyVisibilityValue,
-  isJsonValue,
   isOutputsMapping,
-  isPlainJsonObject,
   jsonRecordValue,
   modulePathValue,
-  outputAllowlistValue,
-  installExperienceValue,
-  installConfigVariableDefaultValue,
-  variablePresentationValue,
   outputShareEntries,
   outputShareSensitivePolicy,
   parseProviderBinding,
@@ -139,7 +130,6 @@ import {
   stringRecord,
   stringRecordValue,
 } from "./parse.ts";
-import { parseInterfaceBlueprintsValue } from "./interface-blueprints.ts";
 import { defaultCapsuleOutputAllowlist } from "../../../../core/domains/capsules/default_install_config.ts";
 import { publicInstallConfigRecord } from "../../../../core/domains/capsules/public_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
@@ -158,9 +148,6 @@ export async function handleInstallConfigs(
     return await listInstallConfigs(operations, store, ctx.session, url);
   }
   if (segments.length === 2 && segments[0] === "capsule-configs") {
-    if (method !== "GET" && method !== "PATCH") {
-      return methodNotAllowed("GET, PATCH");
-    }
     const installConfigId = decodeURIComponent(segments[1] ?? "");
     const config = await operations.capsules.getInstallConfig(installConfigId);
     if (config.workspaceId !== undefined) {
@@ -175,295 +162,9 @@ export async function handleInstallConfigs(
     if (method === "GET") {
       return json({ installConfig: publicInstallConfig(config) });
     }
-    return await patchScopedInstallConfig(request, operations, config);
+    return methodNotAllowed("GET");
   }
   return undefined;
-}
-
-async function patchScopedInstallConfig(
-  request: Request,
-  operations: ControlPlaneOperations,
-  config: InstallConfig,
-): Promise<Response> {
-  const scopedWorkspaceId = config.workspaceId;
-  if (
-    !scopedWorkspaceId ||
-    config.internal?.reason !== "per_install_overrides"
-  ) {
-    return errorJson(
-      "invalid_request",
-      "only Workspace-scoped per-install Capsule configs can be patched",
-      400,
-    );
-  }
-  if (config.internal.repositoryInstallUxDigest) {
-    return errorJson(
-      "repository_install_ux_immutable",
-      "A compiled repository install configuration is immutable; change the reviewed setup inputs through a new install preflight.",
-      409,
-      request,
-    );
-  }
-  const body = await readJsonObject(request);
-  if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const variableMappingPatch = body.variableMapping;
-  const removeVariables = stringArrayValue(body.removeVariables);
-  const variablePresentationDefaults = body.variablePresentationDefaults;
-  const variablePresentationPatch =
-    body.variablePresentation === undefined
-      ? undefined
-      : variablePresentationValue(body.variablePresentation);
-  const installExperiencePatch =
-    body.installExperience === undefined
-      ? undefined
-      : installExperienceValue(body.installExperience);
-  const outputAllowlistPatch =
-    body.outputAllowlist === undefined
-      ? undefined
-      : outputAllowlistValue(body.outputAllowlist);
-  const interfaceBlueprintsResult =
-    body.interfaceBlueprints === undefined
-      ? undefined
-      : parseInterfaceBlueprintsValue(body.interfaceBlueprints);
-  const interfaceBlueprintsPatch =
-    interfaceBlueprintsResult?.ok === true
-      ? interfaceBlueprintsResult.value
-      : undefined;
-  const lifecycleActionsPatch =
-    body.lifecycleActions === undefined
-      ? undefined
-      : lifecycleActionsValue(body.lifecycleActions);
-  const lifecycleActionPolicyPatch =
-    body.lifecycleActionPolicy === undefined
-      ? undefined
-      : lifecycleActionPolicyValue(body.lifecycleActionPolicy);
-  if (
-    variableMappingPatch !== undefined &&
-    !isPlainJsonObject(variableMappingPatch)
-  ) {
-    return errorJson(
-      "invalid_request",
-      "variableMapping must be a JSON object",
-      400,
-    );
-  }
-  if (
-    variablePresentationDefaults !== undefined &&
-    !isPlainJsonObject(variablePresentationDefaults)
-  ) {
-    return errorJson(
-      "invalid_request",
-      "variablePresentationDefaults must be a JSON object",
-      400,
-    );
-  }
-  if (
-    body.variablePresentation !== undefined &&
-    variablePresentationPatch === undefined
-  ) {
-    return errorJson(
-      "invalid_request",
-      "variablePresentation must be an array of service-side variable declarations",
-      400,
-    );
-  }
-  if (
-    body.installExperience !== undefined &&
-    installExperiencePatch === undefined
-  ) {
-    return errorJson(
-      "invalid_request",
-      "installExperience must be a valid service-side projection declaration",
-      400,
-    );
-  }
-  if (body.removeVariables !== undefined && removeVariables === undefined) {
-    return errorJson(
-      "invalid_request",
-      "removeVariables must be an array of variable names",
-      400,
-    );
-  }
-  if (
-    body.outputAllowlist !== undefined &&
-    outputAllowlistPatch === undefined
-  ) {
-    return errorJson(
-      "invalid_request",
-      "outputAllowlist must be an object of { from, type, required? } entries",
-      400,
-    );
-  }
-  if (
-    interfaceBlueprintsResult !== undefined &&
-    !interfaceBlueprintsResult.ok
-  ) {
-    return errorJson("invalid_request", interfaceBlueprintsResult.message, 400);
-  }
-  if (
-    body.lifecycleActions !== undefined &&
-    lifecycleActionsPatch === undefined
-  ) {
-    return errorJson(
-      "invalid_request",
-      "lifecycleActions must be versioned command action objects",
-      400,
-    );
-  }
-  if (
-    body.lifecycleActionPolicy !== undefined &&
-    lifecycleActionPolicyPatch === undefined
-  ) {
-    return errorJson(
-      "invalid_request",
-      "lifecycleActionPolicy must explicitly allow executors and runner capabilities, or be null",
-      400,
-    );
-  }
-  const variablePresentationDefaultValues: Record<
-    string,
-    InstallConfigVariableDefault
-  > = {};
-  for (const [key, value] of Object.entries(variableMappingPatch ?? {})) {
-    if (!isJsonValue(value)) {
-      return errorJson(
-        "invalid_request",
-        `variableMapping.${key} must be a JSON value`,
-        400,
-      );
-    }
-  }
-  for (const [key, value] of Object.entries(
-    variablePresentationDefaults ?? {},
-  )) {
-    const parsed = installConfigVariableDefaultValue(value);
-    if (!parsed) {
-      return errorJson(
-        "invalid_request",
-        `variablePresentationDefaults.${key} must be a literal, capsule_name, or workspace_scoped_capsule_name default`,
-        400,
-      );
-    }
-    variablePresentationDefaultValues[key] = parsed;
-  }
-  const nextVariablePresentation = (
-    variablePresentationPatch ??
-    config.variablePresentation ??
-    []
-  ).map((input) =>
-    Object.prototype.hasOwnProperty.call(
-      variablePresentationDefaultValues,
-      input.name,
-    )
-      ? {
-          ...input,
-          defaultValue: variablePresentationDefaultValues[input.name],
-        }
-      : input,
-  );
-  const nextVariableMapping = { ...config.variableMapping };
-  for (const name of removeVariables ?? []) {
-    delete nextVariableMapping[name];
-  }
-  Object.assign(nextVariableMapping, variableMappingPatch ?? {});
-  const nextPolicy = policyWithLifecycleActionPatch(
-    config.policy,
-    lifecycleActionPolicyPatch,
-  );
-  const now = new Date().toISOString();
-  const updated = await operations.capsules.putInstallConfig({
-    ...config,
-    variableMapping: nextVariableMapping,
-    variablePresentation: nextVariablePresentation,
-    ...(installExperiencePatch
-      ? { installExperience: installExperiencePatch }
-      : {}),
-    outputAllowlist: outputAllowlistPatch ?? config.outputAllowlist,
-    interfaceBlueprints: interfaceBlueprintsPatch ?? config.interfaceBlueprints,
-    lifecycleActions: lifecycleActionsPatch ?? config.lifecycleActions,
-    policy: nextPolicy,
-    updatedAt: now,
-  });
-  return json({ installConfig: publicInstallConfig(updated) });
-}
-
-function lifecycleActionsValue(
-  value: unknown,
-): readonly InstallConfigLifecycleAction[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const actions: InstallConfigLifecycleAction[] = [];
-  for (const item of value) {
-    if (!isPlainJsonObject(item)) return undefined;
-    if (
-      item.apiVersion !== "takosumi.dev/v1alpha1" ||
-      item.kind !== "command" ||
-      typeof item.id !== "string" ||
-      (item.phase !== "post_apply" && item.phase !== "pre_destroy") ||
-      (item.cleanupFor !== undefined && typeof item.cleanupFor !== "string") ||
-      (item.executor !== "runner" && item.executor !== "operator") ||
-      !Array.isArray(item.command) ||
-      !item.command.every((part) => typeof part === "string") ||
-      typeof item.runnerCapability !== "string" ||
-      (item.workingDirectory !== undefined &&
-        typeof item.workingDirectory !== "string") ||
-      (item.timeoutSeconds !== undefined &&
-        typeof item.timeoutSeconds !== "number") ||
-      (item.useProviderCredentials !== undefined &&
-        typeof item.useProviderCredentials !== "boolean") ||
-      (item.env !== undefined && !stringRecordValue(item.env))
-    ) {
-      return undefined;
-    }
-    actions.push(item as unknown as InstallConfigLifecycleAction);
-  }
-  return actions;
-}
-
-type LifecycleActionPolicy = NonNullable<PolicyConfig["lifecycleActions"]>;
-
-function lifecycleActionPolicyValue(
-  value: unknown,
-): LifecycleActionPolicy | null | undefined {
-  if (value === null) return null;
-  if (!isPlainJsonObject(value)) return undefined;
-  if (
-    !Array.isArray(value.allowedExecutors) ||
-    !value.allowedExecutors.every(
-      (executor) => executor === "runner" || executor === "operator",
-    ) ||
-    !Array.isArray(value.allowedRunnerCapabilities) ||
-    !value.allowedRunnerCapabilities.every(
-      (capability) => typeof capability === "string",
-    ) ||
-    (value.allowProviderCredentials !== undefined &&
-      typeof value.allowProviderCredentials !== "boolean")
-  ) {
-    return undefined;
-  }
-  return value as unknown as LifecycleActionPolicy;
-}
-
-function policyWithLifecycleActionPatch(
-  policy: PolicyConfig,
-  patch: LifecycleActionPolicy | null | undefined,
-): PolicyConfig {
-  if (patch === undefined) return policy;
-  if (patch !== null) return { ...policy, lifecycleActions: patch };
-  const { lifecycleActions: _lifecycleActions, ...withoutLifecycleActions } =
-    policy;
-  return withoutLifecycleActions;
-}
-
-function stringArrayValue(value: unknown): readonly string[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) return undefined;
-  const out: string[] = [];
-  for (const item of value) {
-    if (typeof item !== "string") return undefined;
-    const trimmed = item.trim();
-    if (trimmed) out.push(trimmed);
-  }
-  return out;
 }
 
 export function publicInstallConfig(

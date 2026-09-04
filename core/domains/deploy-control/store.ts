@@ -346,6 +346,52 @@ export interface PreparePlanRunInput {
   readonly run: PlanRun;
   readonly inputs: PlanRunInputs;
   readonly dependencySnapshot?: DependencySnapshot;
+  /**
+   * Optional exact Capsule authority fence for a configuration Plan.  The
+   * store validates this in the same transaction that publishes the Run row;
+   * ordinary plan callers omit it and retain their existing behavior.
+   */
+  readonly expectedCapsulePlanAuthority?: CapsulePlanCreationFence;
+}
+
+/**
+ * Exact Capsule authority captured by the configuration-plan coordinator.
+ * `currentStateVersionId` uses `undefined` for the no-state cursor (SQL/D1
+ * adapters translate their nullable column to the same value).
+ */
+export interface CapsulePlanCreationFence {
+  readonly installConfigId: string;
+  readonly executionAuthorityEpoch: number;
+  readonly currentStateGeneration: number;
+  readonly currentStateVersionId: string | undefined;
+}
+
+/** Raised when a fenced configuration Plan lost its Capsule authority race. */
+export class CapsulePlanCreationFenceConflictError extends Error {
+  override readonly name = "CapsulePlanCreationFenceConflictError";
+
+  constructor(readonly capsuleId: string) {
+    super(
+      `Capsule ${capsuleId} changed before its fenced Plan could be persisted`,
+    );
+  }
+}
+
+/** Shared fail-closed predicate for in-memory and durable store adapters. */
+export function assertCapsulePlanCreationFence(
+  capsule: Capsule | undefined,
+  executionAuthorityEpoch: number | undefined,
+  expected: CapsulePlanCreationFence,
+): void {
+  if (
+    capsule === undefined ||
+    executionAuthorityEpoch !== expected.executionAuthorityEpoch ||
+    capsule.installConfigId !== expected.installConfigId ||
+    capsule.currentStateGeneration !== expected.currentStateGeneration ||
+    capsule.currentStateVersionId !== expected.currentStateVersionId
+  ) {
+    throw new CapsulePlanCreationFenceConflictError(capsule?.id ?? "unknown");
+  }
 }
 
 export interface PreparePlanRunResult {
@@ -421,8 +467,11 @@ export function planRunPreparationExactlyMatches(
     existingInputs === undefined &&
     !(
       existingRun.status === "failed" &&
-      candidate.run.status === "failed" &&
-      !planRunPreparationPersistsInputs(candidate.run)
+      // A runner can fail after a queued row has committed its inputs; the
+      // terminal transition then removes that sidecar. An exact replay is
+      // still safe when the immutable run identity and execution digest match
+      // even though the newly assembled candidate is queued again.
+      !planRunPreparationPersistsInputs(existingRun)
     )
   ) {
     return false;
@@ -858,9 +907,32 @@ export function capsuleLifecycleMutationAlreadyApplied(
     capsule.compatibilityStatus === input.expected.compatibilityStatus;
 }
 
+/**
+ * Complete initial deployment intent for one Capsule. InstallConfig,
+ * Capsule, binding-set (including explicit empty), and epoch 1 must appear as
+ * one store commit; no generic post-create binding writer participates.
+ */
+export interface CapsuleInitialAuthorityInput {
+  readonly installConfig: InstallConfig;
+  readonly capsule: Capsule;
+  readonly providerBindingSet: ProviderBindingSet;
+}
+
+export type CapsuleInitialAuthorityResult =
+  | { readonly status: "created" | "replayed"; readonly capsule: Capsule }
+  | { readonly status: "conflict" };
+
 export interface CapsuleInstallConfigRebindInput {
   readonly capsuleId: string;
   readonly targetInstallConfigId: string;
+  /**
+   * Optional value-free ProviderBindingSet replacement committed with the
+   * InstallConfig pointer and execution-authority epoch transition. Absence is
+   * itself authority and is therefore represented by an exact digest rather
+   * than an optional expected row.
+   */
+  readonly providerBindingSetReplacement?:
+    CapsuleProviderBindingSetReplacement;
   readonly expected: {
     readonly installConfigId: string;
     readonly installConfigDigest: string;
@@ -875,6 +947,25 @@ export interface CapsuleInstallConfigRebindInput {
       InstallConfigCommittedPostApplyRecoveryProof;
   };
   readonly updatedAt: string;
+}
+
+export interface CapsuleProviderBindingSetReplacement {
+  readonly expectedCurrentAuthorityDigest: string;
+  readonly target: ProviderBindingSet;
+  readonly targetDigest: string;
+}
+
+/**
+ * Exact authority digest for the Capsule/environment binding-set slot. The
+ * domain wrapper makes an absent row an explicit, stable CAS value.
+ */
+export async function providerBindingSetAuthorityDigest(
+  bindingSet: ProviderBindingSet | undefined,
+): Promise<string> {
+  return await stableJsonDigest({
+    contract: "takosumi.capsule-provider-binding-set-authority/v1",
+    bindingSet: bindingSet ?? null,
+  });
 }
 
 export type CapsuleInstallConfigRebindResult =
@@ -1678,6 +1769,16 @@ export interface OpenTofuControlStore {
   putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
   /** Insert-only creation for immutable derived InstallConfig rows. */
   createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean>;
+  /**
+   * Exact-row CAS for the sole mutable InstallConfig class: an unattached,
+   * Workspace-neutral operator template. The replacement is rejected in the
+   * same store statement when any Capsule references the id. Destroyed rows
+   * intentionally count because they remain durable provenance.
+   */
+  replaceUnreferencedSharedInstallConfig(
+    expected: InstallConfig,
+    replacement: InstallConfig,
+  ): Promise<boolean>;
   getInstallConfig(id: string): Promise<InstallConfig | undefined>;
   getInstallConfigsByIds(
     ids: readonly string[],
@@ -1694,6 +1795,10 @@ export interface OpenTofuControlStore {
 
   // Capsule records (active UNIQUE(project_id, name, environment)).
   putCapsule(capsule: Capsule): Promise<Capsule>;
+  /** Atomic create-only initial deployment-authority coordinator. */
+  createCapsuleInitialAuthority(
+    input: CapsuleInitialAuthorityInput,
+  ): Promise<CapsuleInitialAuthorityResult>;
   /**
    * Resolves the private execution-authority epoch for one exact
    * Workspace/Capsule pair. Destroyed Capsules and mismatched pairs are absent.
@@ -1881,11 +1986,10 @@ export interface OpenTofuControlStore {
     },
   ): Promise<CapsuleCompatibilityReport | undefined>;
 
-  // Provider Binding records, one row per
-  // (capsule, environment), with that pair as the upsert key.
-  putProviderBindingSet(
-    profile: ProviderBindingSet,
-  ): Promise<ProviderBindingSet>;
+  // Provider Binding records, one row per (capsule, environment). Creation and
+  // replacement are intentionally available only through the atomic initial
+  // authority and deployment-intent rebind operations above. A standalone
+  // writer would be a second configuration authority.
   deleteProviderBindingSet(
     capsuleId: string,
     environment: string,
@@ -2267,6 +2371,17 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         this.#dependencySnapshots.has(input.dependencySnapshot.id))
     ) {
       throw new PlanRunPreparationConflictError(input.run.id);
+    }
+    if (input.expectedCapsulePlanAuthority !== undefined) {
+      assertCapsulePlanCreationFence(
+        input.run.capsuleId
+          ? this.#capsules.get(input.run.capsuleId)
+          : undefined,
+        input.run.capsuleId
+          ? this.#capsuleExecutionAuthorityEpochs.get(input.run.capsuleId) ?? 1
+          : undefined,
+        input.expectedCapsulePlanAuthority,
+      );
     }
     // No await or externally observable callback exists between these writes.
     // Publish the queue-visible Run last so even an in-process observer cannot
@@ -2799,6 +2914,27 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(true);
   }
 
+  replaceUnreferencedSharedInstallConfig(
+    expected: InstallConfig,
+    replacement: InstallConfig,
+  ): Promise<boolean> {
+    const current = this.#installConfigs.get(expected.id);
+    if (
+      current === undefined ||
+      JSON.stringify(current) !== JSON.stringify(expected) ||
+      current.workspaceId !== undefined ||
+      replacement.id !== expected.id ||
+      replacement.workspaceId !== undefined ||
+      Array.from(this.#capsules.values()).some(
+        (capsule) => capsule.installConfigId === expected.id,
+      )
+    ) {
+      return Promise.resolve(false);
+    }
+    this.#installConfigs.set(replacement.id, replacement);
+    return Promise.resolve(true);
+  }
+
   getInstallConfig(id: string): Promise<InstallConfig | undefined> {
     return Promise.resolve(this.#installConfigs.get(id));
   }
@@ -2889,6 +3025,62 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     this.#setCapsule(capsule);
     return Promise.resolve(capsule);
+  }
+
+  createCapsuleInitialAuthority(
+    input: CapsuleInitialAuthorityInput,
+  ): Promise<CapsuleInitialAuthorityResult> {
+    const { installConfig, providerBindingSet } = input;
+    const capsule = normalizeCapsule(input.capsule);
+    const exact =
+      installConfig.id === capsule.installConfigId &&
+      installConfig.workspaceId === capsule.workspaceId &&
+      providerBindingSet.workspaceId === capsule.workspaceId &&
+      providerBindingSet.capsuleId === capsule.id &&
+      providerBindingSet.environment === capsule.environment;
+    if (!exact) return Promise.resolve({ status: "conflict" });
+
+    const existingConfig = this.#installConfigs.get(installConfig.id);
+    const existingCapsule = this.#capsules.get(capsule.id);
+    const existingBinding = this.#providerBindingSets.get(providerBindingSet.id);
+    const existingBindingSlot = memoryProviderBindingSetForCapsule(
+      this.#providerBindingSets,
+      capsule.id,
+      capsule.environment,
+    );
+    if (
+      existingConfig ||
+      existingCapsule ||
+      existingBinding ||
+      existingBindingSlot
+    ) {
+      const epoch = this.#capsuleExecutionAuthorityEpochs.get(capsule.id);
+      return Promise.resolve(
+        existingConfig &&
+          existingCapsule &&
+          existingBinding &&
+          existingBindingSlot?.id === existingBinding.id &&
+          epoch === 1 &&
+          stableStringify(existingConfig) === stableStringify(installConfig) &&
+          stableStringify(existingCapsule) === stableStringify(capsule) &&
+          stableStringify(existingBinding) === stableStringify(providerBindingSet)
+          ? { status: "replayed", capsule: existingCapsule }
+          : { status: "conflict" },
+      );
+    }
+    const duplicate = Array.from(this.#capsules.values()).some(
+      (candidate) =>
+        candidate.status !== "destroyed" &&
+        candidate.projectId === capsule.projectId &&
+        candidate.name === capsule.name &&
+        candidate.environment === capsule.environment,
+    );
+    if (duplicate) return Promise.resolve({ status: "conflict" });
+    this.#installConfigs.set(installConfig.id, installConfig);
+    this.#capsuleExecutionAuthorityEpochs.set(capsule.id, 1);
+    this.#capsules.set(capsule.id, capsule);
+    this.#providerBindingSets.set(providerBindingSet.id, providerBindingSet);
+    return Promise.resolve({ status: "created", capsule });
   }
 
   #setCapsule(capsule: Capsule): void {
@@ -3115,6 +3307,17 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const observedConfig = this.#installConfigs.get(
       observedCapsule.installConfigId,
     );
+    const bindingReplacement = input.providerBindingSetReplacement;
+    const observedBindingSet = bindingReplacement
+      ? memoryProviderBindingSetForCapsule(
+          this.#providerBindingSets,
+          observedCapsule.id,
+          observedCapsule.environment,
+        )
+      : undefined;
+    const observedTargetBindingIdRow = bindingReplacement
+      ? this.#providerBindingSets.get(bindingReplacement.target.id)
+      : undefined;
     const recoveryProof = input.expected.committedPostApplyRecovery;
     const observedSafetyCandidate = this.#capsuleRuntimeSafetyCandidate(
       input.capsuleId,
@@ -3137,6 +3340,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       observedConfigDigest,
       observedTargetDigest,
       observedRecoveryMatches,
+      observedBindingSetAuthorityDigest,
+      observedTargetBindingSetDigest,
     ] = await Promise.all([
       observedConfig ? stableJsonDigest(observedConfig) : undefined,
       observedTarget ? stableJsonDigest(observedTarget) : undefined,
@@ -3147,6 +3352,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
             observedRecoveryRows,
           )
         : false,
+      bindingReplacement
+        ? providerBindingSetAuthorityDigest(observedBindingSet)
+        : undefined,
+      bindingReplacement
+        ? stableJsonDigest(bindingReplacement.target)
+        : undefined,
     ]);
 
     // stableJsonDigest is asynchronous. Re-read the authority row after that
@@ -3155,6 +3366,16 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const capsule = this.#capsules.get(input.capsuleId);
     if (!capsule) return { status: "not_found" };
     const target = this.#installConfigs.get(input.targetInstallConfigId);
+    const currentBindingSet = bindingReplacement
+      ? memoryProviderBindingSetForCapsule(
+          this.#providerBindingSets,
+          capsule.id,
+          capsule.environment,
+        )
+      : undefined;
+    const targetBindingIdRow = bindingReplacement
+      ? this.#providerBindingSets.get(bindingReplacement.target.id)
+      : undefined;
     if (
       !observedTarget ||
       target !== observedTarget ||
@@ -3162,12 +3383,27 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       !exactRecoveryProofsEqual(
         target.internal?.reAdoption?.committedPostApplyRecovery,
         recoveryProof,
-      )
+      ) ||
+      (bindingReplacement !== undefined &&
+        (observedTargetBindingSetDigest !== bindingReplacement.targetDigest ||
+          !providerBindingSetTargetsCapsule(
+            bindingReplacement.target,
+            capsule,
+          ) ||
+          (capsule.installConfigId !== input.targetInstallConfigId &&
+            (targetBindingIdRow !== observedTargetBindingIdRow ||
+              (targetBindingIdRow !== undefined &&
+                targetBindingIdRow !== currentBindingSet)))))
     ) {
       return { status: "conflict", capsule };
     }
     if (capsule.installConfigId === input.targetInstallConfigId) {
-      return { status: "replayed", capsule };
+      return bindingReplacement === undefined ||
+          (currentBindingSet !== undefined &&
+            stableStringify(currentBindingSet) ===
+              stableStringify(bindingReplacement.target))
+        ? { status: "replayed", capsule }
+        : { status: "conflict", capsule };
     }
     const currentConfig = this.#installConfigs.get(capsule.installConfigId);
     const epoch = this.#capsuleExecutionAuthorityEpochs.get(capsule.id) ?? 1;
@@ -3177,6 +3413,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       capsule.installConfigId !== observedCapsule.installConfigId ||
       capsule.installConfigId !== input.expected.installConfigId ||
       observedConfigDigest !== input.expected.installConfigDigest ||
+      (bindingReplacement !== undefined &&
+        ((currentBindingSet !== undefined &&
+            !providerBindingSetTargetsCapsule(currentBindingSet, capsule)) ||
+          currentBindingSet !== observedBindingSet ||
+          observedBindingSetAuthorityDigest !==
+            bindingReplacement.expectedCurrentAuthorityDigest)) ||
       capsule.currentStateGeneration !==
         input.expected.currentStateGeneration ||
       capsule.currentStateVersionId !==
@@ -3244,11 +3486,28 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           ] as const]
         : []
     );
+    const replacedBindingSetIds = bindingReplacement
+      ? [...this.#providerBindingSets.entries()]
+          .filter(([, existing]) =>
+            existing.capsuleId === capsule.id &&
+            existing.environment === capsule.environment
+          )
+          .map(([id]) => id)
+      : [];
     // From the authority re-read above through these writes there is no await:
     // the epoch/config transition and retirement of every unresolved projection
     // obligation therefore form one in-memory commit boundary.
     for (const [id, intent] of supersededIntents) {
       this.#capsuleInterfaceMaterializationIntents.set(id, intent);
+    }
+    if (bindingReplacement) {
+      for (const id of replacedBindingSetIds) {
+        this.#providerBindingSets.delete(id);
+      }
+      this.#providerBindingSets.set(
+        bindingReplacement.target.id,
+        bindingReplacement.target,
+      );
     }
     this.#capsuleExecutionAuthorityEpochs.set(capsule.id, epoch + 1);
     this.#capsules.set(capsule.id, updated);
@@ -3946,24 +4205,6 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
       );
     return Promise.resolve(candidates[0]);
-  }
-
-  putProviderBindingSet(
-    profile: ProviderBindingSet,
-  ): Promise<ProviderBindingSet> {
-    // One profile per (Capsule, environment): drop a stale row under a
-    // different id for the same pair.
-    for (const [key, existing] of this.#providerBindingSets) {
-      if (
-        existing.capsuleId === profile.capsuleId &&
-        existing.environment === profile.environment &&
-        key !== profile.id
-      ) {
-        this.#providerBindingSets.delete(key);
-      }
-    }
-    this.#providerBindingSets.set(profile.id, profile);
-    return Promise.resolve(profile);
   }
 
   deleteProviderBindingSet(
@@ -4786,9 +5027,9 @@ function isDispatchableOpenTofuRunRecord(row: StoredRunRecord): boolean {
 }
 
 /**
- * A rebind may not race a write Run or invalidate a Plan that can still be
- * reviewed/applied. Terminal failed/cancelled/expired rows and consumed Plans
- * are historical evidence, not execution authority.
+ * A rebind may not race provider execution or a Plan that is still computing.
+ * Already-computed Plans are superseded by the epoch transition and cannot be
+ * applied afterward; terminal/consumed rows remain historical evidence.
  */
 export function runBlocksCapsuleInstallConfigRebind(
   row: StoredRunRecord,
@@ -4810,12 +5051,32 @@ export function runBlocksCapsuleInstallConfigRebind(
     }
     return (
       row.status === "queued" ||
-      row.status === "running" ||
-      row.status === "waiting_approval" ||
-      row.status === "succeeded"
+      row.status === "running"
     );
   }
   return false;
+}
+
+function memoryProviderBindingSetForCapsule(
+  bindingSets: ReadonlyMap<string, ProviderBindingSet>,
+  capsuleId: string,
+  environment: string,
+): ProviderBindingSet | undefined {
+  return [...bindingSets.values()].find(
+    (bindingSet) =>
+      bindingSet.capsuleId === capsuleId &&
+      bindingSet.environment === environment,
+  );
+}
+
+export function providerBindingSetTargetsCapsule(
+  bindingSet: ProviderBindingSet,
+  capsule: Capsule,
+): boolean {
+  return typeof bindingSet.id === "string" && bindingSet.id.length > 0 &&
+    bindingSet.workspaceId === capsule.workspaceId &&
+    bindingSet.capsuleId === capsule.id &&
+    bindingSet.environment === capsule.environment;
 }
 
 export function isPlanRunRecord(row: StoredRunRecord): row is PlanRun {

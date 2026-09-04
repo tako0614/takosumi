@@ -4,7 +4,10 @@ import { expect, test } from "bun:test";
 import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
 import type { ProviderConnectionMaterialization } from "takosumi-contract/connections";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
-import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import {
+  seedCapsuleModel,
+  transitionProviderBindingSetForFixture,
+} from "../../../helpers/deploy-control/model_fixture.ts";
 import {
   ConnectionsService,
   mintableConnectionIds,
@@ -76,7 +79,7 @@ test("secret ProviderConnection binding resolves to its credential row", async (
   await store.putConnection(
     connection({ id: "conn_space_cf", workspaceId: model.workspace.id }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_1",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -101,7 +104,7 @@ test("secret ProviderConnection binding resolves to its credential row", async (
 
 test("legacy stored builtin ProviderBinding fails before connection or credential resolution", async () => {
   const { store, model, service } = await setup();
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_legacy_builtin",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -131,7 +134,7 @@ test("legacy full configuration aliases normalize into explicit child and root i
   await store.putConnection(
     connection({ id: "conn_alias_cf", workspaceId: model.workspace.id }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_alias",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -165,7 +168,7 @@ test("hyphenated provider identifiers resolve as exact child and root identity",
       workspaceId: model.workspace.id,
     }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_hyphenated",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -214,7 +217,7 @@ test("legacy dotted aliases normalize hyphenated provider identifiers", async ()
       workspaceId: model.workspace.id,
     }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_hyphenated_legacy",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -243,7 +246,7 @@ test("legacy dotted aliases normalize hyphenated provider identifiers", async ()
 test("raw operator-scoped ProviderConnection never resolves into a generic Capsule runner", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(connection({ id: "conn_operator_cf" }));
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_operator",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -316,7 +319,7 @@ test("operator mode resolves a verified workspace-bindable run-issued connection
       },
     }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_operator_run_issued",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -361,7 +364,7 @@ test("Capsule binding resolution enforces InstallConfig connection scope and rec
       },
     },
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_policy_wrong_recipe",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -403,7 +406,7 @@ test("Capsule binding resolution enforces InstallConfig connection scope and rec
     },
   });
   await operatorStore.putConnection(operatorRunIssuedConnection);
-  await operatorStore.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(operatorStore, {
     id: "dp_policy_operator",
     workspaceId: operatorModel.workspace.id,
     capsuleId: operatorModel.capsule.id,
@@ -440,7 +443,7 @@ test("release-owned run settings replace a stale stored binding before the Run d
       },
     },
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_operator_run_policy",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -499,7 +502,7 @@ test("run-issued binding settings are canonical, digest-bound, and reject creden
     store,
     allowOperatorScopedProviderConnections: true,
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_operator_run_settings",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -536,7 +539,7 @@ test("run-issued binding settings are canonical, digest-bound, and reject creden
     ),
   ).not.toBe(digest);
 
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_operator_run_settings",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -568,7 +571,7 @@ test("providerConfig base_url alone never authorizes an operator managed connect
       },
     }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_operator_unprofiled",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -613,7 +616,7 @@ test("binding digest ignores verification progress but pins run-issuance authori
     },
   });
   await store.putConnection(runIssued);
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_operator_digest",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -859,7 +862,7 @@ test("release-owned operator connections are listed and resolved without durable
     durableWorkspaceListReads += 1;
     return await originalWorkspaceList(workspaceId);
   };
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_release_owned",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -902,7 +905,7 @@ test("oauth ProviderConnection binding carries the oauth materialization", async
       materialization: "oauth",
     }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_1",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -922,7 +925,7 @@ test("a ProviderConnection from another Workspace is rejected", async () => {
   await store.putConnection(
     connection({ id: "conn_other", workspaceId: "workspace_other" }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_1",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -944,12 +947,139 @@ test("required providers must have explicit ProviderConnection bindings", async 
   ).rejects.toThrow(/provider connection is required/);
 });
 
+const AWS = "registry.opentofu.org/hashicorp/aws";
+
+for (const providerFailure of [
+  "revoked connection",
+  "provider source mismatch",
+  "duplicate provider identity",
+  "missing required provider",
+  "provider policy invalid",
+] as const) {
+  test(`complete proposed provider binding validation rejects ${providerFailure}`, async () => {
+    const { store, model, service } = await setup();
+    let bindings: Parameters<
+      ConnectionsService["validateProposedProviderBindingsForRun"]
+    >[0]["bindings"] = [];
+    let requiredProviders: readonly RequiredProviderBindingIdentity[] = [];
+    let installConfigPolicy: Parameters<
+      ConnectionsService["validateProposedProviderBindingsForRun"]
+    >[0]["installConfigPolicy"];
+    let expectedMessage: RegExp;
+    let expectedReason = "provider_connection_setup_required";
+
+    if (providerFailure === "revoked connection") {
+      await store.putConnection(
+        connection({
+          id: "conn_proposed_revoked",
+          workspaceId: model.workspace.id,
+          status: "revoked",
+        }),
+      );
+      bindings = [
+        {
+          provider: CLOUDFLARE,
+          moduleLocalName: "cloudflare",
+          connectionId: "conn_proposed_revoked",
+        },
+      ];
+      requiredProviders = [requiredBinding()];
+      expectedMessage = /status revoked is not verified/;
+      expectedReason = "provider_connection_not_ready";
+    } else if (providerFailure === "provider source mismatch") {
+      await store.putConnection(
+        connection({
+          id: "conn_proposed_mismatch",
+          workspaceId: model.workspace.id,
+          provider: CLOUDFLARE,
+          providerSource: CLOUDFLARE,
+        }),
+      );
+      bindings = [
+        {
+          provider: AWS,
+          moduleLocalName: "aws",
+          connectionId: "conn_proposed_mismatch",
+        },
+      ];
+      requiredProviders = [
+        requiredBinding({ source: AWS, moduleLocalName: "aws" }),
+      ];
+      expectedMessage = /does not match binding provider/;
+    } else if (providerFailure === "duplicate provider identity") {
+      for (const id of ["conn_proposed_duplicate_a", "conn_proposed_duplicate_b"]) {
+        await store.putConnection(
+          connection({ id, workspaceId: model.workspace.id }),
+        );
+      }
+      bindings = [
+        {
+          provider: CLOUDFLARE,
+          moduleLocalName: "cloudflare",
+          connectionId: "conn_proposed_duplicate_a",
+        },
+        {
+          provider: CLOUDFLARE,
+          moduleLocalName: "cloudflare",
+          connectionId: "conn_proposed_duplicate_b",
+        },
+      ];
+      requiredProviders = [requiredBinding()];
+      expectedMessage = /duplicate provider binding identity/;
+    } else if (providerFailure === "missing required provider") {
+      requiredProviders = [requiredBinding()];
+      expectedMessage = /provider connection is required/;
+    } else {
+      await store.putConnection(
+        connection({
+          id: "conn_proposed_policy",
+          workspaceId: model.workspace.id,
+          credentialRecipe: { id: "cloudflare", authMode: "oauth" },
+        }),
+      );
+      bindings = [
+        {
+          provider: CLOUDFLARE,
+          moduleLocalName: "cloudflare",
+          connectionId: "conn_proposed_policy",
+        },
+      ];
+      requiredProviders = [requiredBinding()];
+      installConfigPolicy = {
+        providerCredentials: {
+          allowedCredentialRecipes: [
+            { id: "cloudflare", authMode: "api_token" },
+          ],
+        },
+      };
+      expectedMessage = /credential recipe cloudflare:oauth/;
+    }
+
+    let thrown: unknown;
+    try {
+      await service.validateProposedProviderBindingsForRun({
+        capsule: model.capsule,
+        bindings,
+        requiredProviders,
+        ...(installConfigPolicy ? { installConfigPolicy } : {}),
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      details: { reason: expectedReason },
+    });
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(expectedMessage);
+  });
+}
+
 test("an explicit empty requirement list resolves zero bindings", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(
     connection({ id: "conn_cf_ignored", workspaceId: model.workspace.id }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_cf_ignored",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -980,7 +1110,7 @@ test("run binding resolution selects the exact child alias tuple", async () => {
       connection({ id, workspaceId: model.workspace.id }),
     );
   }
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_cf_aliases",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -1032,7 +1162,7 @@ test("run binding resolution keeps default, two aliases, and same-source local n
       connection({ id: identity.id, workspaceId: model.workspace.id }),
     );
   }
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_cf_exact_matrix",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -1071,7 +1201,7 @@ test("one child alias binding cannot satisfy a missing sibling alias", async () 
   await store.putConnection(
     connection({ id: "conn_cf_account", workspaceId: model.workspace.id }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_cf_one_alias",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -1101,7 +1231,7 @@ test("a legacy source-only binding cannot satisfy an exact module-local name", a
   await store.putConnection(
     connection({ id: "conn_cf_legacy_default", workspaceId: model.workspace.id }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_cf_legacy_default",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -1134,7 +1264,7 @@ test("an ambiguous deprecated alias cannot satisfy an exact default tuple", asyn
   await store.putConnection(
     connection({ id: "conn_cf_legacy", workspaceId: model.workspace.id }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_cf_legacy_alias",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -1160,7 +1290,7 @@ test("run binding resolution rejects duplicate exact tuples", async () => {
   for (const id of ["conn_cf_zone_a", "conn_cf_zone_b"]) {
     await store.putConnection(connection({ id, workspaceId: model.workspace.id }));
   }
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_cf_duplicate_alias",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -1192,7 +1322,7 @@ test("run binding resolution rejects duplicate required tuples", async () => {
   await store.putConnection(
     connection({ id: "conn_cf_default", workspaceId: model.workspace.id }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_cf_default",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -1375,7 +1505,7 @@ test("a non-verified ProviderConnection fails closed before runner dispatch", as
       status: "pending",
     }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_1",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -1395,7 +1525,7 @@ test("Cloud mode still rejects pending non-managed operator connections", async 
   await store.putConnection(
     connection({ id: "conn_operator_pending_secret", status: "pending" }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_operator_pending_secret",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -1428,7 +1558,7 @@ test("ProviderConnection provider family must match the binding provider", async
       providerSource: "registry.opentofu.org/hashicorp/aws",
     }),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_1",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
@@ -1458,7 +1588,7 @@ test("a git source ProviderConnection cannot back a provider binding", async () 
     createdAt: NOW,
     updatedAt: NOW,
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_1",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,

@@ -522,7 +522,7 @@ export const ja = {
     "{provider} の利用可能な接続済みアカウントを選択してください。",
   "app.config.title": "設定値",
   "app.config.subtitle":
-    "公開名、URL、初期ログイン、サービスが使う値を変更できます。保存後、次のデプロイ確認に反映されます。",
+    "公開名、URL、初期ログイン、サービスが使う値を変更できます。送信すると一つのデプロイ確認を作り、この場では適用しません。",
   "app.config.publicUrl": "公開URL",
   "app.config.subdomain": "公開サブドメイン",
   "app.config.updatedAt": "最終更新",
@@ -543,7 +543,7 @@ export const ja = {
   "app.config.removeAria": "設定値 {name} を削除",
   "app.config.undoResetAria": "{name} のリセットを元に戻す",
   "app.config.defaultBadge": "既定値",
-  "app.config.resetPendingHint": "保存すると既定値に戻ります。",
+  "app.config.resetPendingHint": "確認対象の変更では既定値に戻ります。",
   "app.config.customName": "CUSTOM_ENV",
   "app.config.errorNameRequired": "設定名を入力してください。",
   "app.config.errorNameInvalid": "{name} に空白は使えません。",
@@ -573,9 +573,6 @@ export const ja = {
   "app.usage.subCent": "$0.01 未満",
   "app.usage.unrated": "未評価",
   "app.usage.unratedCount": "未評価の使用量記録: {n} 件",
-  "app.config.savedNeedsDeploy":
-    "保存しました。変更を反映するにはデプロイしてください。",
-  "app.config.deployChanges": "変更をデプロイ",
   "app.updateNow": "更新する",
   "app.autoUpdate.title": "自動更新",
   "app.autoUpdate.body":

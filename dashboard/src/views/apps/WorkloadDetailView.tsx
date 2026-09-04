@@ -6,8 +6,8 @@
  *
  * The friendly layer leads: open the service, check its status, then opt into
  * updates/settings when needed. All mutations still route through the same
- * control-plane actions (plan / destroy plan / rollback plan / backup /
- * ProviderBinding replacement).
+ * control-plane actions (Configuration Plan / destroy plan / rollback plan /
+ * backup).
  */
 import "../../styles/wave-a.css";
 import "../../styles/wave-b.css";
@@ -54,12 +54,13 @@ import {
   type ProviderConnection,
   createStateVersionRollbackPlan,
   createCapsuleBackup,
+  createCapsuleConfigurationPlan,
   deleteCapsule,
   extractRunId,
   getStateVersion,
   getInstallConfig,
   getCapsuleProviderBindingSet,
-  getCapsule,
+  getCapsuleConfigurationContext,
   isImmutableSourceRevision,
   getWorkspaceGraph,
   updateCapsuleSourceRevision,
@@ -72,8 +73,6 @@ import {
   getCurrentResourceInventory,
   type CapsuleCurrentResourceInventory,
   planCapsuleUpdate,
-  patchInstallConfig,
-  putCapsuleProviderBindingSet,
   setCapsuleAutoUpdate,
 } from "../../lib/control-api.ts";
 import { formatUsdMicros } from "../../lib/billing-format.ts";
@@ -158,7 +157,7 @@ function Inner() {
 
   const [capsule, { refetch: refetchCapsule }] = createResource(
     capsuleId,
-    getCapsule,
+    getCapsuleConfigurationContext,
   );
   // Last-good capsule value that NEVER throws. Reading an errored resource
   // (`capsuleData()`) throws, so a transient refetch failure — e.g. the GET that a
@@ -167,7 +166,8 @@ function Inner() {
   // this; the Switch below shows the error EmptyState only on a FIRST-load
   // failure (`!capsule.latest`) and otherwise keeps the last-good content with
   // an inline refetch-failed notice.
-  const capsuleData = () => capsule.latest;
+  const capsuleData = () => capsule.latest?.capsule;
+  const configurationAuthorityGuard = () => capsule.latest?.authorityGuard;
   const tab = (): TabId => {
     const raw = params.tab;
     const resolved =
@@ -178,7 +178,10 @@ function Inner() {
     // the strip, so a direct /danger URL falls back to overview instead of
     // rendering a dead 削除の確認 CTA. `.latest` never throws (unlike a read of
     // an errored resource).
-    if (resolved === "danger" && capsule.latest?.status === "destroyed") {
+    if (
+      resolved === "danger" &&
+      capsule.latest?.capsule.status === "destroyed"
+    ) {
       return "overview";
     }
     return resolved;
@@ -192,12 +195,14 @@ function Inner() {
     tab() === "overview" ? (workspaceId() ?? null) : null;
   const currentStateVersionId = () =>
     capsuleData()?.currentStateVersionId ?? null;
-  const [providerBindingSet, { refetch: refetchProviderBindingSet }] =
-    createResource(settingsCapsuleId, getCapsuleProviderBindingSet);
+  const [providerBindingSet] = createResource(
+    settingsCapsuleId,
+    getCapsuleProviderBindingSet,
+  );
   // Fetched on every tab (not just settings): the header shows the store
   // display name, which lives on the install config's store metadata.
   const installConfigId = () => capsuleData()?.installConfigId ?? null;
-  const [installConfig, { refetch: refetchInstallConfig }] = createResource(
+  const [installConfig] = createResource(
     installConfigId,
     getInstallConfig,
   );
@@ -288,7 +293,9 @@ function Inner() {
   const settingsInstallConfig = () =>
     installConfig.error ? undefined : installConfig();
   const settingsProviderBindings = () =>
-    providerBindingSet.error ? undefined : providerBindingSet()?.bindings;
+    providerBindingSet.error || providerBindingSet.latest === undefined
+      ? undefined
+      : (providerBindingSet()?.bindings ?? []);
   const settingsProviderConnections = () =>
     providerConnections.error ? [] : (providerConnections() ?? []);
 
@@ -853,22 +860,8 @@ function Inner() {
                       providerBindings={settingsProviderBindings()}
                       availableProviderConnections={settingsProviderConnections()}
                       capsuleId={capsuleId()}
-                      deploysHref={`/workloads/${encodeURIComponent(capsuleId())}/deploys`}
-                      onSaved={(scope) =>
-                        // Refetch ONLY the saved form's resource (+capsule for
-                        // display). Refetching the sibling's resource would flip
-                        // its reference and re-seed its editor, discarding the
-                        // user's unsaved edits there.
-                        void Promise.all([
-                          scope === "bindings"
-                            ? refetchProviderBindingSet()
-                            : Promise.resolve(),
-                          scope === "config"
-                            ? refetchInstallConfig()
-                            : Promise.resolve(),
-                          refetchCapsule(),
-                        ])
-                      }
+                      authorityGuard={configurationAuthorityGuard()}
+                      onPlanned={(planRunId) => navigate(`/runs/${planRunId}`)}
                     />
                   </Match>
                   <Match when={tab() === "danger"}>
@@ -1751,7 +1744,7 @@ function buildProviderBindings(
   return { bindings };
 }
 
-// Config-row seeding + the dirty-only save patch live in
+// Config-row seeding + the dirty-only reviewed patch live in
 // lib/capsules-ui.ts (configRowsFromInstallConfig / buildConfigVariablePatch)
 // so the write semantics are unit-testable. InstallConfig.variablePresentation
 // is the only authority for secret and advanced presentation semantics.
@@ -1850,18 +1843,13 @@ function SettingsTab(props: {
   readonly providerBindings: ProviderBindings | undefined;
   readonly availableProviderConnections: readonly ProviderConnection[];
   readonly capsuleId: string;
-  readonly deploysHref: string;
-  readonly onSaved: (scope: "bindings" | "config") => void | Promise<void>;
+  readonly authorityGuard: string | undefined;
+  readonly onPlanned: (planRunId: string) => void | Promise<void>;
 }) {
   const [rows, setRows] = createSignal<ProviderBindingRow[]>([]);
   const [variableRows, setVariableRows] = createSignal<ConfigVariableRow[]>([]);
   const [formError, setFormError] = createSignal<string | null>(null);
   const [configError, setConfigError] = createSignal<string | null>(null);
-  // One saved-note signal PER form: a shared signal meant saving one form hid
-  // the other's still-true pending-deploy note, and a later FAILED save left
-  // the stale success note above the new error.
-  const [configSavedNote, setConfigSavedNote] = createSignal(false);
-  const [bindingsSavedNote, setBindingsSavedNote] = createSignal(false);
   const [interfaceBlueprintsText, setInterfaceBlueprintsText] =
     createSignal("[]");
   const [savedInterfaceBlueprintsText, setSavedInterfaceBlueprintsText] =
@@ -1869,12 +1857,16 @@ function SettingsTab(props: {
   const [interfaceBlueprintsError, setInterfaceBlueprintsError] = createSignal<
     string | null
   >(null);
-  const [interfaceBlueprintsSavedNote, setInterfaceBlueprintsSavedNote] =
-    createSignal(false);
   // Provider-binding rows have no per-row dirty flag (unlike config rows), so
   // track binding edits explicitly for the navigation-away guard below.
   const [bindingsDirty, setBindingsDirty] = createSignal(false);
   const { confirm } = useConfirmDialog();
+  // Reuse the key only while retrying byte-identical reviewed intent. If the
+  // first response is lost after the server commits, the next click observes
+  // the canonical successor/Plan instead of minting a second authority.
+  let configurationAttempt:
+    | { readonly requestJson: string; readonly idempotencyKey: string }
+    | undefined;
 
   const interfaceBlueprintsDirty = () =>
     interfaceBlueprintsText() !== savedInterfaceBlueprintsText();
@@ -1883,7 +1875,7 @@ function SettingsTab(props: {
     const providerBindings = props.providerBindings;
     if (!providerBindings) return;
     setRows(providerBindings.map(providerBindingToRow));
-    // Reseeding from a fresh fetch (initial load or post-save refetch) is the
+    // Reseeding from a fresh fetch (initial load or a server refresh) is the
     // clean baseline — clear the dirty flag.
     setBindingsDirty(false);
   });
@@ -1933,8 +1925,8 @@ function SettingsTab(props: {
       () => props.installConfig,
       (installConfig) => {
         if (!installConfig) return;
-        // A variable save also refetches this InstallConfig. Preserve an
-        // unsaved Interface edit across that unrelated refresh; a different
+        // A server refresh may refetch this InstallConfig. Preserve an unsaved
+        // Interface edit across that unrelated refresh; a different
         // config id is always a new editing baseline.
         if (
           seededInterfaceBlueprintsConfigId === installConfig.id &&
@@ -1949,7 +1941,6 @@ function SettingsTab(props: {
         setInterfaceBlueprintsText(next);
         setSavedInterfaceBlueprintsText(next);
         setInterfaceBlueprintsError(null);
-        setInterfaceBlueprintsSavedNote(false);
       },
     ),
   );
@@ -1961,7 +1952,7 @@ function SettingsTab(props: {
     );
   };
   // User edits mark the row dirty — buildConfigVariablePatch writes ONLY dirty
-  // rows, so a no-edit save can never pin listing defaults / "" / false / null
+  // rows, so a no-edit review can never pin listing defaults / "" / false / null
   // over the module's own HCL defaults. Editing also cancels a pending リセット.
   const editVariable = (id: string, patch: Partial<ConfigVariableRow>) =>
     setVariableRows((prev) =>
@@ -1972,8 +1963,9 @@ function SettingsTab(props: {
       ),
     );
   // Store rows: リセット presents the default (visible, marked 既定値) and —
-  // when the value pre-existed in the mapping — marks remove-on-save, which
-  // stays undoable (元に戻す) until saved. Free-form rows are simply removed.
+  // when the value pre-existed in the mapping — marks removal in the reviewed
+  // transition, which stays undoable (元に戻す) until submitted. Free-form rows
+  // are simply removed.
   const removeVariable = (id: string) =>
     setVariableRows((prev) =>
       prev.map((row) => {
@@ -2016,11 +2008,14 @@ function SettingsTab(props: {
     configSummaryItems(props.installConfig),
   );
 
-  const saveBindings = createAction(async () => {
+  const reviewConfiguration = createAction(async () => {
     setFormError(null);
-    // Clear at the start so a save that FAILS never leaves the previous
-    // attempt's success note above the fresh error.
-    setBindingsSavedNote(false);
+    setConfigError(null);
+    setInterfaceBlueprintsError(null);
+    if (!props.installConfig || !props.authorityGuard) {
+      setConfigError(t("app.config.notReady"));
+      return;
+    }
     const providerBindings = buildProviderBindings(rows(), {
       providerConnections: props.availableProviderConnections,
     });
@@ -2028,34 +2023,9 @@ function SettingsTab(props: {
       setFormError(providerBindings.error);
       return;
     }
-    await putCapsuleProviderBindingSet(
-      props.capsuleId,
-      providerBindings.bindings,
-    );
-    await props.onSaved("bindings");
-    setBindingsSavedNote(true);
-  });
-  const saveVariables = createAction(async () => {
-    setConfigError(null);
-    setConfigSavedNote(false);
-    if (!props.installConfig) {
-      setConfigError(t("app.config.notReady"));
-      return;
-    }
     const patch = buildConfigVariablePatch(variableRows());
     if ("error" in patch) {
       setConfigError(patch.error);
-      return;
-    }
-    await patchInstallConfig(props.installConfig.id, patch);
-    await props.onSaved("config");
-    setConfigSavedNote(true);
-  });
-  const saveInterfaceBlueprints = createAction(async () => {
-    setInterfaceBlueprintsError(null);
-    setInterfaceBlueprintsSavedNote(false);
-    if (!props.installConfig) {
-      setInterfaceBlueprintsError(t("app.interfaces.notReady"));
       return;
     }
     const parsed = parseInterfaceBlueprintsJson(interfaceBlueprintsText());
@@ -2067,16 +2037,39 @@ function SettingsTab(props: {
       );
       return;
     }
-    const updated = await patchInstallConfig(props.installConfig.id, {
+    const request = {
+      variablePatch: {
+        set: patch.variableMapping,
+        remove: patch.removeVariables,
+      },
+      providerBindings: providerBindings.bindings,
       interfaceBlueprints: parsed.value,
-    });
-    const canonicalText = formatInterfaceBlueprintsJson(
-      updated.interfaceBlueprints,
+      expected: { authorityGuard: props.authorityGuard },
+    };
+    const requestJson = JSON.stringify(request);
+    const idempotencyKey =
+      configurationAttempt?.requestJson === requestJson
+        ? configurationAttempt.idempotencyKey
+        : crypto.randomUUID();
+    configurationAttempt = { requestJson, idempotencyKey };
+    const result = await createCapsuleConfigurationPlan(
+      props.capsuleId,
+      request,
+      idempotencyKey,
     );
-    setInterfaceBlueprintsText(canonicalText);
-    setSavedInterfaceBlueprintsText(canonicalText);
-    await props.onSaved("config");
-    setInterfaceBlueprintsSavedNote(true);
+    // Clear the leave guard before navigating to the returned review. Nothing
+    // was instant-saved: the immutable successor and Plan are one operation.
+    setBindingsDirty(false);
+    setVariableRows((current) =>
+      current.map((row) => ({
+        ...row,
+        dirty: false,
+        deleted: false,
+        resetToDefault: false,
+      })),
+    );
+    setSavedInterfaceBlueprintsText(interfaceBlueprintsText());
+    await props.onPlanned(result.configurationPlan.planRunId);
   });
 
   return (
@@ -2103,7 +2096,6 @@ function SettingsTab(props: {
                 class="wb-input-vars"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  void saveVariables.run();
                 }}
               >
                 <Show
@@ -2139,43 +2131,12 @@ function SettingsTab(props: {
                     </Button>
                   </div>
                 </details>
-                <div class="wa-form-actions">
-                  <Button
-                    variant="primary"
-                    type="submit"
-                    disabled={saveVariables.busy()}
-                    busy={saveVariables.busy()}
-                  >
-                    {saveVariables.busy()
-                      ? t("common.saving")
-                      : t("common.save")}
-                  </Button>
-                </div>
                 <Show when={configError()}>
                   {(m) => (
                     <p class="wa-error" role="alert">
                       {m()}
                     </p>
                   )}
-                </Show>
-                <Show when={saveVariables.error()}>
-                  {(m) => (
-                    <p class="wa-error" role="alert">
-                      {m()}
-                    </p>
-                  )}
-                </Show>
-                <Show when={configSavedNote()}>
-                  <div class="wa-saved-note" role="status">
-                    <span>{t("app.config.savedNeedsDeploy")}</span>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      href={props.deploysHref}
-                    >
-                      {t("app.config.deployChanges")}
-                    </Button>
-                  </div>
                 </Show>
               </form>
             </Match>
@@ -2202,7 +2163,6 @@ function SettingsTab(props: {
                 class="wb-input-vars"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void saveInterfaceBlueprints.run();
                 }}
               >
                 <FormField
@@ -2219,45 +2179,9 @@ function SettingsTab(props: {
                     onInput={(event) => {
                       setInterfaceBlueprintsText(event.currentTarget.value);
                       setInterfaceBlueprintsError(null);
-                      setInterfaceBlueprintsSavedNote(false);
-                      saveInterfaceBlueprints.clearError();
                     }}
                   />
                 </FormField>
-                <div class="wa-form-actions">
-                  <Button
-                    variant="primary"
-                    type="submit"
-                    disabled={
-                      saveInterfaceBlueprints.busy() ||
-                      !interfaceBlueprintsDirty()
-                    }
-                    busy={saveInterfaceBlueprints.busy()}
-                  >
-                    {saveInterfaceBlueprints.busy()
-                      ? t("common.saving")
-                      : t("common.save")}
-                  </Button>
-                </div>
-                <Show when={saveInterfaceBlueprints.error()}>
-                  {(message) => (
-                    <p class="wa-error" role="alert">
-                      {message()}
-                    </p>
-                  )}
-                </Show>
-                <Show when={interfaceBlueprintsSavedNote()}>
-                  <div class="wa-saved-note" role="status">
-                    <span>{t("app.config.savedNeedsDeploy")}</span>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      href={props.deploysHref}
-                    >
-                      {t("app.config.deployChanges")}
-                    </Button>
-                  </div>
-                </Show>
               </form>
             </Match>
           </Switch>
@@ -2293,7 +2217,6 @@ function SettingsTab(props: {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                void saveBindings.run();
               }}
             >
               <div class="wa-binding-grid">
@@ -2444,14 +2367,6 @@ function SettingsTab(props: {
                 >
                   {t("app.bindings.add")}
                 </Button>
-                <Button
-                  variant="primary"
-                  type="submit"
-                  disabled={saveBindings.busy()}
-                  busy={saveBindings.busy()}
-                >
-                  {saveBindings.busy() ? t("common.saving") : t("common.save")}
-                </Button>
               </div>
               <Show when={formError()}>
                 {(m) => (
@@ -2460,33 +2375,43 @@ function SettingsTab(props: {
                   </p>
                 )}
               </Show>
-              <Show when={saveBindings.error()}>
-                {(m) => (
-                  <p class="wa-error" role="alert">
-                    {m()}
-                  </p>
-                )}
-              </Show>
-              {/* Provider-binding changes, like config edits, only take effect
-                  on the next deploy — confirm the save and offer the deploy
-                  link. Separate per-form signal: saving the config form must
-                  not hide this note (and vice versa). */}
-              <Show when={bindingsSavedNote()}>
-                <div class="wa-saved-note" role="status">
-                  <span>{t("app.config.savedNeedsDeploy")}</span>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    href={props.deploysHref}
-                  >
-                    {t("app.config.deployChanges")}
-                  </Button>
-                </div>
-              </Show>
             </form>
           </details>
         </Card>
       </details>
+
+      <Card>
+        <CardHeader
+          title={t("apps.reviewChanges")}
+          subtitle={t("app.deploys.reviewSubtitle")}
+          actions={
+            <Button
+              variant="primary"
+              type="button"
+              disabled={
+                reviewConfiguration.busy() ||
+                !props.installConfig ||
+                !props.authorityGuard ||
+                props.providerBindings === undefined ||
+                !isDirty()
+              }
+              busy={reviewConfiguration.busy()}
+              onClick={() => void reviewConfiguration.run()}
+            >
+              {reviewConfiguration.busy()
+                ? t("installStore.preparingPlan")
+                : t("apps.reviewChanges")}
+            </Button>
+          }
+        />
+        <Show when={reviewConfiguration.error()}>
+          {(message) => (
+            <p class="wa-error" role="alert">
+              {message()}
+            </p>
+          )}
+        </Show>
+      </Card>
 
       <details class="wb-disclosure">
         <summary>{t("app.settings.supportDetails")}</summary>

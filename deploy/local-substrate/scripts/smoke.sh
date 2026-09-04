@@ -298,16 +298,6 @@ else
 fi
 
 echo
-echo "==> Deploy Control API (OpenTofu run ledger surface)"
-if run_script "deploy-control.api.e2e" "bash $SCRIPT_DIR/cli-smoke.sh"; then
-	echo "    PASS [deploy-control.api.e2e] plan + apply + ledger reads succeeded"
-	PASS=$((PASS + 1))
-else
-	echo "    FAIL [deploy-control.api.e2e] see scripts/cli-smoke.sh for the failure"
-	FAIL=$((FAIL + 1))
-fi
-
-echo
 echo "==> Worker-first mirrors (accounts worker + service worker on workerd + D1/R2/Queue/DO)"
 if run_script "workers.cli-smoke" "bash $SCRIPT_DIR/workers-cli-smoke.sh"; then
 	echo "    PASS [workers.cli-smoke] workers healthy via workerd + D1/R2/Queue/DO"

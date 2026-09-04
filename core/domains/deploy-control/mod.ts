@@ -119,9 +119,11 @@ import {
   CapsuleStateVersionGuardConflict,
   CapsuleStateGenerationGuardConflict,
   type OpenTofuControlStore,
+  type CapsulePlanCreationFence,
   type PlanRunInputs,
   type RuntimeSecretRetirementDispatchClaimInput,
 } from "./store.ts";
+export type { CapsulePlanCreationFence } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import {
   type ActivityRecorder,
@@ -1211,6 +1213,13 @@ export interface PlanRunInternalContext {
   readonly lifecycleActions?: InstallConfig["lifecycleActions"];
   /** The Capsule's current state generation (its latest StateVersion, or 0). */
   readonly baseStateGeneration?: number;
+  /**
+   * Exact Capsule authority fence required before this configuration Plan is
+   * inserted. Ordinary plan callers omit it; the configuration coordinator
+   * supplies it so the store can reject a late successor/state race in the
+   * same transaction as Run persistence.
+   */
+  readonly expectedCapsulePlanAuthority?: CapsulePlanCreationFence;
   /** Provider/root wiring for a Capsule plan when a wrapper is required. */
   readonly capsulePlan?: CapsulePlanContext;
   /** Optional generated-root dispatch for a plain Git OpenTofu Capsule. */
@@ -1304,6 +1313,8 @@ export interface CreateCapsulePlanInternal {
    * complete cleanup. The snapshot must belong to the Capsule's Source.
    */
   readonly sourceSnapshotId?: string;
+  /** Exact authority fence required for configuration-plan creation. */
+  readonly expectedCapsulePlanAuthority?: CapsulePlanCreationFence;
   /** Server-only exact Plan Run id used for lost-ack idempotency. */
   readonly planRunId?: string;
   /**
@@ -1801,6 +1812,12 @@ export class OpenTofuController {
     internal: CreateCapsulePlanInternal = {},
   ): Promise<PlanRunResponse> {
     return this.#runEngine.createCapsulePlan(capsuleId, context, internal);
+  }
+
+  validateCapsuleConfigurationProviderBindings(input: Parameters<
+    RunEngine["validateCapsuleConfigurationProviderBindings"]
+  >[0]): Promise<void> {
+    return this.#runEngine.validateCapsuleConfigurationProviderBindings(input);
   }
 
   createCapsuleDestroyPlan(

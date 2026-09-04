@@ -42,8 +42,8 @@ function planArtifact() {
 }
 
 /**
- * Seeds the Workspace-direct Capsule model (spec §5) plus a succeeded PlanRun
- * and a queued ApplyRun, all bound to the same Capsule (= one
+ * Seeds (or reuses) the Workspace-direct Capsule model (spec §5) plus a
+ * succeeded PlanRun and a queued ApplyRun, all bound to the same Capsule (= one
  * `capsule:{capsuleId}:{environment}` lease lane), so the apply
  * consumer takes that lease. The Capsule is seeded WITH a current
  * StateVersion so the update plan's current-StateVersion guard is well-formed and
@@ -60,14 +60,25 @@ async function seedApply(
 ): Promise<{ environment: string }> {
   const environment = ids.environment ?? "production";
   const seedStateVersionId = `state_seed_${ids.capsuleId}`;
-  const { capsule, source, snapshot } = await seedCapsuleModel(store, {
-    capsuleId: ids.capsuleId,
-    workspaceId: `ws_${ids.capsuleId}`,
-    sourceId: `src_${ids.capsuleId}`,
-    snapshotId: `snap_${ids.capsuleId}`,
-    installConfigId: `cfg_${ids.capsuleId}`,
-    environment,
-  });
+  const existingCapsule = await store.getCapsule(ids.capsuleId);
+  const seeded = existingCapsule
+    ? {
+        capsule: existingCapsule,
+        source: await store.getSource(existingCapsule.sourceId),
+        snapshot: await store.getSourceSnapshot(`snap_${ids.capsuleId}`),
+      }
+    : await seedCapsuleModel(store, {
+        capsuleId: ids.capsuleId,
+        workspaceId: `ws_${ids.capsuleId}`,
+        sourceId: `src_${ids.capsuleId}`,
+        snapshotId: `snap_${ids.capsuleId}`,
+        installConfigId: `cfg_${ids.capsuleId}`,
+        environment,
+      });
+  const { capsule, source, snapshot } = seeded;
+  if (!source || !snapshot) {
+    throw new Error(`fixture source authority is missing for ${ids.capsuleId}`);
+  }
   await store.putCapsule({
     ...capsule,
     currentStateVersionId: seedStateVersionId,

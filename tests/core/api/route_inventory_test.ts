@@ -12,6 +12,8 @@ import {
   workspaceProjectAndCapsuleRequestSchemas,
 } from "../../../core/api/openapi.ts";
 import { DEPLOY_CONTROL_ACTIVITY_ENDPOINTS } from "../../../core/api/deploy_control_activity_routes.ts";
+import { DEPLOY_CONTROL_CAPSULE_ENDPOINTS } from "../../../core/api/deploy_control_capsule_routes.ts";
+import { TAKOSUMI_WORKSPACE_CAPSULES_ROUTE } from "../../../core/api/deploy_control_route_paths.ts";
 import {
   ALWAYS_MOUNTED_ENDPOINTS,
   type ApiEndpoint,
@@ -61,6 +63,15 @@ test("all-mounted capabilities and openapi cover the same endpoint set", () => {
     [...capabilityKeys].sort(),
     [...openapiKeys].sort(),
     "capabilities and openapi must enumerate the identical endpoint set",
+  );
+});
+
+test("deploy-control Capsule collection inventory is read-only", () => {
+  assert.deepEqual(
+    DEPLOY_CONTROL_CAPSULE_ENDPOINTS.filter(
+      (endpoint) => endpoint.path === TAKOSUMI_WORKSPACE_CAPSULES_ROUTE,
+    ).map((endpoint) => endpoint.method),
+    ["GET"],
   );
 });
 
@@ -371,15 +382,12 @@ test("openapi version follows package version", () => {
   );
 });
 
-test("public Capsule schemas expose the closed sourceBuild contract", () => {
+test("public InstallConfig schema exposes the closed sourceBuild contract", () => {
   const schemas = {
     ...capsuleAndInstallConfigSchemas(),
     ...workspaceProjectAndCapsuleRequestSchemas(),
   };
   assert.deepEqual(schemas.InstallConfig.properties.sourceBuild, {
-    $ref: "#/components/schemas/SourceBuildConfig",
-  });
-  assert.deepEqual(schemas.CreateCapsuleRequest.properties.sourceBuild, {
     $ref: "#/components/schemas/SourceBuildConfig",
   });
   assert.equal(schemas.SourceBuildConfig.additionalProperties, false);

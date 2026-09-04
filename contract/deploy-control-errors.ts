@@ -5,6 +5,7 @@ export type DeployControlErrorCode =
   | "not_found"
   | "failed_precondition"
   | "resource_exhausted"
+  | "method_not_allowed"
   | "not_implemented"
   | "internal_error";
 
@@ -15,6 +16,7 @@ export type DeployControlErrorHttpStatus =
   | 404
   | 409
   | 413
+  | 405
   | 500
   | 501;
 
@@ -25,6 +27,7 @@ export const DEPLOY_CONTROL_ERROR_CODES = [
   "not_found",
   "failed_precondition",
   "resource_exhausted",
+  "method_not_allowed",
   "not_implemented",
   "internal_error",
 ] as const satisfies readonly DeployControlErrorCode[];
@@ -36,6 +39,7 @@ export const DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE = {
   not_found: 404,
   failed_precondition: 409,
   resource_exhausted: 413,
+  method_not_allowed: 405,
   not_implemented: 501,
   internal_error: 500,
 } as const satisfies Record<

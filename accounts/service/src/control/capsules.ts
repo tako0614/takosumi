@@ -121,7 +121,6 @@ import {
   publicPlanActionResponse,
   publicRun,
   requireWorkspaceAccess,
-  resolveProviderBindings,
 } from "./shared.ts";
 import {
   booleanValue,
@@ -138,7 +137,6 @@ import {
   outputShareEntries,
   outputShareSensitivePolicy,
   parseProviderBinding,
-  parseProviderBindings,
   parseLimit,
   workspaceTypeValue,
   stringRecord,
@@ -157,6 +155,7 @@ import {
   capsuleInstallConfigReAdoptionGuard,
   handleCapsuleInstallConfigReAdoption,
 } from "./install-config-re-adoptions.ts";
+import { handleCapsuleConfigurationPlans } from "./configuration-plans.ts";
 
 export async function handleCapsules(
   ctx: ControlDispatchContext,
@@ -248,6 +247,9 @@ export async function handleCapsules(
         201,
       );
     }
+    if (leaf === "configuration-plans" && segments.length === 3) {
+      return await handleCapsuleConfigurationPlans(ctx, capsule, method);
+    }
     if (leaf === "revision-plans" && segments.length === 3) {
       return await handleCapsuleRevisionPlans(ctx, capsule, method);
     }
@@ -333,10 +335,7 @@ export async function handleCapsules(
       if (method === "GET") {
         return await getCapsuleProviderBindingSet(operations, capsule);
       }
-      if (method === "PUT") {
-        return await putCapsuleProviderBindingSet(request, operations, capsule);
-      }
-      return methodNotAllowed("GET, PUT");
+      return methodNotAllowed("GET");
     }
   }
   return undefined;
@@ -556,53 +555,6 @@ async function getCapsuleProviderBindingSet(
     providerBindingSet: profile
       ? await publicProviderBindingSet(profile)
       : null,
-  });
-}
-
-async function putCapsuleProviderBindingSet(
-  request: Request,
-  operations: ControlPlaneOperations,
-  capsule: Capsule,
-): Promise<Response> {
-  if (capsule.status === "destroyed") {
-    return errorJson(
-      "invalid_request",
-      "deleted Capsules cannot update provider connections",
-      400,
-    );
-  }
-  const body = await readJsonObject(request);
-  if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const parsed = parseProviderBindings(body.bindings);
-  if (!parsed.ok) {
-    return errorJson("invalid_request", parsed.message, 400);
-  }
-  const resolved = await resolveProviderBindings(
-    operations,
-    capsule.workspaceId,
-    parsed.bindings,
-  );
-  if (!resolved.ok) {
-    return errorJson("invalid_request", resolved.message, 400);
-  }
-  const existing = await operations.capsules.getProviderBindingSetByCapsule(
-    capsule.id,
-    capsule.environment,
-  );
-  const now = new Date().toISOString();
-  const profile = await operations.capsules.putProviderBindingSet({
-    id:
-      existing?.id ??
-      `dpf_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
-    workspaceId: capsule.workspaceId,
-    capsuleId: capsule.id,
-    environment: capsule.environment,
-    bindings: resolved.bindings,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-  });
-  return json({
-    providerBindingSet: await publicProviderBindingSet(profile),
   });
 }
 

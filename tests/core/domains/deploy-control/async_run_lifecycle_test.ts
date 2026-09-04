@@ -23,6 +23,7 @@ import {
   FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   providerRequirementsForFixture,
   seedCapsuleModel,
+  transitionProviderBindingSetForFixture,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import {
   type ConnectionVault,
@@ -94,7 +95,7 @@ async function seedUpdatable(
     updatedAt: "2026-06-06T00:00:00.000Z",
     verifiedAt: "2026-06-06T00:00:00.000Z",
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: `profile_${options.capsuleId}`,
     workspaceId: capsule.workspaceId,
     capsuleId: capsule.id,

@@ -5,6 +5,7 @@ import { handleAuthenticatedControlRoute } from "../../../../accounts/service/sr
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { defaultCapsuleInstallConfig } from "../../../../core/domains/capsules/default_install_config.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { InMemoryGitInstallPlanStore } from "../../../../core/domains/install-plans/store.ts";
 import type { CapsuleCompatibilityReport } from "../../../../contract/capsules.ts";
 import type {
@@ -105,7 +106,7 @@ test("Accounts Git install plan explicitly reconciles to one reviewable canonica
       sourceSyncRunId: "ssr_one",
       sourceSnapshotId: "snap_one",
       installConfigId: expect.stringMatching(/^icfg_[0-9a-f]{16}$/u),
-      capsuleId: "cap_one",
+      capsuleId: expect.stringMatching(/^cap_[A-Za-z0-9]{16}$/u),
       planRunId: expect.stringMatching(/^plan_[A-Za-z0-9]{16}$/u),
     },
     nextAction: "review_run",
@@ -129,6 +130,147 @@ test("Accounts Git install plan explicitly reconciles to one reviewable canonica
     "tsub_foreign",
   );
   expect(denied.status).toBe(403);
+});
+
+test("reviewed preflight creates exact initial authority atomically and only returns a review Run", async () => {
+  const fixture = installFixture();
+  const preflight = fixture.seedPreflight({
+    variableDeclarations: [
+      {
+        name: "region",
+        type: "string",
+        sensitive: false,
+        hasDefault: false,
+      },
+    ],
+  });
+  const body = {
+    ...createBody({ modulePath: ".", providerBindings: [] }),
+    preflight,
+    variables: { region: "top-secret-reviewed-value" },
+    initialConfiguration: {
+      runnerProfileId: "opentofu-default",
+      outputAllowlist: {
+        endpoint: { from: "endpoint", type: "url", required: true },
+      },
+    },
+  };
+  const first = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    body,
+    { "idempotency-key": "reviewed-preflight-atomic" },
+  );
+  expect(first.status).toBe(201);
+  const firstPayload = await first.clone().json();
+  expect(firstPayload.installPlan).toMatchObject({
+    phase: "creating_capsule",
+    sourceId: preflight.sourceId,
+    sourceSnapshotId: preflight.sourceSnapshotId,
+    compatibilityCheckRunId: preflight.compatibilityCheckRunId,
+    compatibilityReportId: preflight.compatibilityReportId,
+  });
+  expect(firstPayload.installPlan.preflightInstallConfigDigest).toBeUndefined();
+  expect(JSON.stringify(firstPayload)).not.toContain("top-secret-reviewed-value");
+  const planId = firstPayload.installPlan.id as string;
+  expect(
+    (await fixture.planStore.get(planId))?.preflightInstallConfigDigest,
+  ).toMatch(/^sha256:[0-9a-f]{64}$/u);
+
+  const createdAuthority = await fixture.reconcile(planId);
+  expect(createdAuthority.status).toBe(200);
+  const planning = await createdAuthority.clone().json();
+  expect(planning.installPlan.phase).toBe("planning");
+  expect(fixture.counts).toEqual({ source: 0, sync: 0, capsule: 1, plan: 0 });
+  expect(fixture.compatibilityMutationCount).toBe(0);
+  expect(fixture.installConfigMutationCount).toBe(1);
+  const config = fixture.getInstallConfig(planning.installPlan.installConfigId);
+  expect(config).toMatchObject({
+    workspaceId: WORKSPACE.id,
+    modulePath: ".",
+    variableMapping: { region: "top-secret-reviewed-value" },
+    runnerId: "opentofu-default",
+    outputAllowlist: {
+      endpoint: { from: "endpoint", type: "url", required: true },
+    },
+    internal: {
+      genericOpenTofuSourceSnapshotId: preflight.sourceSnapshotId,
+    },
+  });
+
+  const reviewable = await fixture.reconcile(planId);
+  const reviewPayload = await reviewable.clone().json();
+  expect(reviewPayload.installPlan).toMatchObject({
+    phase: "reviewable",
+    planRunId: expect.stringMatching(/^plan_[A-Za-z0-9]{16}$/u),
+  });
+  expect(reviewPayload.nextAction).toBe("review_run");
+  expect(fixture.counts).toEqual({ source: 0, sync: 0, capsule: 1, plan: 1 });
+  expect(JSON.stringify(reviewPayload)).not.toContain("top-secret-reviewed-value");
+
+  const replay = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    body,
+    { "idempotency-key": "reviewed-preflight-atomic" },
+  );
+  expect(replay.status).toBe(200);
+  expect((await replay.json()).installPlan.id).toBe(planId);
+  expect(fixture.counts).toEqual({ source: 0, sync: 0, capsule: 1, plan: 1 });
+});
+
+test("reviewed preflight fails closed when its pinned host authority changes before atomic creation", async () => {
+  const fixture = installFixture();
+  const preflight = fixture.seedPreflight({
+    variableDeclarations: [
+      {
+        name: "region",
+        type: "string",
+        sensitive: false,
+        hasDefault: false,
+      },
+    ],
+  });
+  const body = {
+    ...createBody({ modulePath: ".", providerBindings: [] }),
+    preflight,
+    variables: { region: "ap-northeast-1" },
+  };
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    body,
+    { "idempotency-key": "reviewed-preflight-drift" },
+  );
+  expect(created.status).toBe(201);
+  const planId = (await created.json()).installPlan.id as string;
+
+  fixture.replaceInstallConfig("cfg-default-opentofu-capsule", {
+    variableMapping: { operatorChanged: true },
+  });
+  const reconciled = await fixture.reconcile(planId);
+  expect(reconciled.status).toBe(200);
+  expect((await reconciled.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: {
+      code: "install_preflight_config_identity_changed",
+    },
+  });
+  expect(fixture.counts).toEqual({ source: 0, sync: 0, capsule: 0, plan: 0 });
+  expect(fixture.installConfigMutationCount).toBe(0);
+
+  const replay = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    body,
+    { "idempotency-key": "reviewed-preflight-drift" },
+  );
+  expect(replay.status).toBe(200);
+  expect((await replay.json()).installPlan).toMatchObject({
+    id: planId,
+    phase: "failed",
+  });
+  expect(fixture.counts.capsule).toBe(0);
 });
 
 test("Git install plan rejects variable values and secret-shaped Git URLs", async () => {
@@ -403,6 +545,146 @@ test("Git install plan continues with a scanner-selected module when optional ma
   expect(reviewable?.installModulePath).toBe(".");
 });
 
+test("generic Git install materializes exact runner variable provenance", async () => {
+  const fixture = installFixture({
+    repositoryManifest: {
+      status: "invalid",
+      reason: "invalid_document",
+    },
+  });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "generic-variable-provenance" },
+  );
+  const planId = (await created.json()).installPlan.id as string;
+  await fixture.reconcile(planId); // Source
+  await fixture.reconcile(planId); // Source sync
+  fixture.succeedSourceSync();
+  for (let step = 0; step < 5; step += 1) {
+    await fixture.reconcile(planId);
+  }
+  const plan = await fixture.planStore.get(planId);
+  expect(plan?.phase).toBe("reviewable");
+  const installConfig = fixture.getInstallConfig(plan?.installConfigId!);
+  expect(installConfig?.internal).toMatchObject({
+    reason: "per_install_overrides",
+    genericOpenTofuSourceSnapshotId: "snap_one",
+  });
+  expect(
+    installConfig?.internal?.genericOpenTofuVariableContractDigest,
+  ).toBe(
+    await stableJsonDigest({
+      contract: "takosumi.generic-opentofu-variable-contract/v1",
+      modulePath: ".",
+      declarations: [],
+    }),
+  );
+});
+
+test("generic Git install fails before configuration when compatibility analysis fails", async () => {
+  const fixture = installFixture({
+    repositoryManifest: {
+      status: "invalid",
+      reason: "invalid_document",
+    },
+    compatibilityRunStatus: "failed",
+  });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "generic-failed-compatibility" },
+  );
+  const planId = (await created.json()).installPlan.id as string;
+  await fixture.reconcile(planId); // Source
+  await fixture.reconcile(planId); // Source sync
+  fixture.succeedSourceSync();
+  await fixture.reconcile(planId); // snapshot -> compiling
+  const failed = await fixture.reconcile(planId);
+
+  expect((await failed.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: {
+      code: "generic_opentofu_compatibility_analysis_failed",
+    },
+  });
+  expect(fixture.compatibilityMutationCount).toBe(1);
+  expect(fixture.installConfigMutationCount).toBe(0);
+  expect(fixture.counts.capsule).toBe(0);
+  expect(fixture.counts.plan).toBe(0);
+});
+
+test("generic Git install fails before configuration on non-canonical variable declarations", async () => {
+  const fixture = installFixture({
+    repositoryManifest: {
+      status: "invalid",
+      reason: "invalid_document",
+    },
+    compatibilityRootModuleVariableDeclarations: [
+      { name: "duplicate", type: "string", hasDefault: false },
+      { name: "duplicate", type: "string", hasDefault: true },
+    ],
+  });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "generic-invalid-declarations" },
+  );
+  const planId = (await created.json()).installPlan.id as string;
+  await fixture.reconcile(planId); // Source
+  await fixture.reconcile(planId); // Source sync
+  fixture.succeedSourceSync();
+  await fixture.reconcile(planId); // snapshot -> compiling
+  const failed = await fixture.reconcile(planId);
+
+  expect((await failed.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: {
+      code: "generic_opentofu_variable_declarations_invalid",
+    },
+  });
+  expect(fixture.compatibilityMutationCount).toBe(1);
+  expect(fixture.installConfigMutationCount).toBe(0);
+  expect(fixture.counts.capsule).toBe(0);
+  expect(fixture.counts.plan).toBe(0);
+});
+
+test("generic Git install fails before configuration when variable declarations are missing", async () => {
+  const fixture = installFixture({
+    repositoryManifest: {
+      status: "invalid",
+      reason: "invalid_document",
+    },
+    omitCompatibilityRootModuleVariableDeclarations: true,
+  });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "generic-missing-declarations" },
+  );
+  const planId = (await created.json()).installPlan.id as string;
+  await fixture.reconcile(planId); // Source
+  await fixture.reconcile(planId); // Source sync
+  fixture.succeedSourceSync();
+  await fixture.reconcile(planId); // snapshot -> compiling
+  const failed = await fixture.reconcile(planId);
+
+  expect((await failed.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: {
+      code: "generic_opentofu_variable_declarations_missing",
+    },
+  });
+  expect(fixture.compatibilityMutationCount).toBe(1);
+  expect(fixture.installConfigMutationCount).toBe(0);
+  expect(fixture.counts.capsule).toBe(0);
+  expect(fixture.counts.plan).toBe(0);
+});
+
 test("Git install plan fails closed when host policy requires an invalid manifest", async () => {
   const fixture = installFixture({
     installConfigs: [
@@ -443,6 +725,46 @@ test("Git install plan fails closed when host policy requires an invalid manifes
     diagnostic: {
       code: "repository_install_ux_manifest_api_version_required",
     },
+  });
+});
+
+test("Git install plan runs complete provider semantic preflight before initial authority", async () => {
+  const fixture = installFixture({
+    providerValidationError: new OpenTofuControllerError(
+      "failed_precondition",
+      "provider semantic preflight rejected the proposed binding set",
+      { reason: "provider_connection_setup_required" },
+    ),
+  });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "provider-preflight-before-authority" },
+  );
+  expect(created.status).toBe(201);
+  const planId = (await created.json()).installPlan.id as string;
+
+  await fixture.reconcile(planId); // Source
+  await fixture.reconcile(planId); // Source sync
+  fixture.succeedSourceSync();
+  await fixture.reconcile(planId); // snapshot -> compilation
+  await fixture.reconcile(planId); // compilation -> Capsule creation
+  const rejected = await fixture.reconcile(planId);
+  expect(rejected.status).toBe(200);
+  expect((await rejected.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: {
+      code: "provider_binding_invalid",
+      reason: "provider_connection_setup_required",
+    },
+  });
+  expect(fixture.counts).toEqual({ source: 1, sync: 1, capsule: 0, plan: 0 });
+  expect(fixture.installConfigMutationCount).toBe(0);
+  expect(fixture.authorityRows()).toEqual({
+    capsules: 0,
+    bindingSets: 0,
+    epochs: 0,
   });
 });
 
@@ -513,7 +835,7 @@ test("Git install plan preserves exact provider local and alias tuples through r
   const reviewable = await fixture.planStore.get(planId);
   expect(reviewable?.phase).toBe("reviewable");
   expect(
-    fixture.getProviderBindingSet("cap_one", "production")?.bindings,
+    fixture.getProviderBindingSet(reviewable!.capsuleId!, "production")?.bindings,
   ).toEqual([
     {
       provider,
@@ -597,7 +919,7 @@ test("Git install plan accepts hyphenated provider local and alias identities", 
   const reviewable = await fixture.planStore.get(planId);
   expect(reviewable?.phase).toBe("reviewable");
   expect(
-    fixture.getProviderBindingSet("cap_one", "production")?.bindings,
+    fixture.getProviderBindingSet(reviewable!.capsuleId!, "production")?.bindings,
   ).toEqual([
     {
       ...providerBinding,
@@ -645,8 +967,7 @@ test("lost acknowledgements recover exact Source, sync, Capsule, and Plan Run wi
     planCreationStage: "preparation",
   });
   expect(fixture.counts.capsule).toBe(1);
-  response = await fixture.reconcile(planId); // recover Capsule id
-  response = await fixture.reconcile(planId); // creating -> planning
+  response = await fixture.reconcile(planId); // recover Capsule and enter planning
 
   response = await fixture.reconcile(planId); // Plan commits, ack lost
   expect(response.status).toBe(202);
@@ -673,7 +994,7 @@ test("retryable Plan creation records only bounded structured controller diagnos
   await fixture.reconcile(planId); // Source sync
   fixture.succeedSourceSync();
   let response: Response | undefined;
-  for (let step = 0; step < 5; step += 1) {
+  for (let step = 0; step < 4; step += 1) {
     response = await fixture.reconcile(planId);
   }
   expect(response?.status).toBe(202);
@@ -741,6 +1062,9 @@ test("lost compatibility acknowledgement adopts the exact persisted Run and repo
   });
   expect(fixture.compatibilityMutationCount).toBe(1);
   expect(fixture.compatibilityEvidence()).toEqual(evidenceAfterLoss);
+  expect(fixture.installConfigMutationCount).toBe(0);
+
+  await fixture.reconcile(planId); // one atomic config/Capsule/binding transition
   expect(fixture.installConfigMutationCount).toBe(1);
 });
 
@@ -780,6 +1104,10 @@ function installFixture(
     readonly repositoryModules?: SourceSnapshot["repositoryModules"];
     readonly installConfigs?: readonly InstallConfig[];
     readonly providerConnections?: readonly ProviderConnection[];
+    readonly compatibilityRunStatus?: "succeeded" | "failed";
+    readonly compatibilityRootModuleVariableDeclarations?: CapsuleCompatibilityReport["rootModuleVariableDeclarations"];
+    readonly omitCompatibilityRootModuleVariableDeclarations?: boolean;
+    readonly providerValidationError?: OpenTofuControllerError;
   } = {},
 ) {
   const planStore = new InMemoryGitInstallPlanStore();
@@ -792,6 +1120,7 @@ function installFixture(
   const runs = new Map<string, Run>();
   const compatibilityReports = new Map<string, CapsuleCompatibilityReport>();
   const providerBindingSets = new Map<string, ProviderBindingSet>();
+  const capsuleAuthorityEpochs = new Map<string, number>();
   const installConfigs = new Map<string, InstallConfig>([
     ["cfg-default-opentofu-capsule", defaultCapsuleInstallConfig()],
     ...(options.installConfigs ?? []).map(
@@ -930,7 +1259,12 @@ function installFixture(
         dataSources: [],
         provisioners: [],
         rootModuleVariables: [],
-        rootModuleVariableDeclarations: [],
+        ...(options.omitCompatibilityRootModuleVariableDeclarations
+          ? {}
+          : {
+              rootModuleVariableDeclarations:
+                options.compatibilityRootModuleVariableDeclarations ?? [],
+            }),
         rootModuleOutputs: [],
         createdAt: now,
       };
@@ -939,7 +1273,7 @@ function installFixture(
         workspaceId: WORKSPACE.id,
         sourceId,
         type: "compatibility_check",
-        status: "succeeded",
+        status: options.compatibilityRunStatus ?? "succeeded",
         sourceSnapshotId: request.sourceSnapshotId,
         compatibilityReportId: report.id,
         createdBy: identity.createdBy,
@@ -982,6 +1316,88 @@ function installFixture(
         if (!capsule) throw new OpenTofuControllerError("not_found", "missing");
         return capsule;
       },
+      createCapsuleInitialAuthority: async (input: {
+        readonly capsuleId: string;
+        readonly workspaceId: string;
+        readonly projectId?: string;
+        readonly name: string;
+        readonly environment: string;
+        readonly sourceId: string;
+        readonly installingPrincipalId: string;
+        readonly autoUpdate?: boolean;
+        readonly installConfig: InstallConfig;
+        readonly providerBindingSetId: string;
+        readonly providerBindings: ProviderBindingSet["bindings"];
+      }) => {
+        const existing = capsules.find(
+          (candidate) => candidate.id === input.capsuleId,
+        );
+        if (existing) {
+          const existingConfig = installConfigs.get(input.installConfig.id);
+          const existingBinding = providerBindingSets.get(
+            `${input.capsuleId}:${input.environment}`,
+          );
+          const expectedBinding: ProviderBindingSet = {
+            id: input.providerBindingSetId,
+            workspaceId: input.workspaceId,
+            capsuleId: input.capsuleId,
+            environment: input.environment,
+            bindings: input.providerBindings,
+            createdAt: input.installConfig.createdAt,
+            updatedAt: input.installConfig.updatedAt,
+          };
+          if (
+            !existingConfig ||
+            !existingBinding ||
+            (await stableJsonDigest(existingConfig)) !==
+              (await stableJsonDigest(input.installConfig)) ||
+            (await stableJsonDigest(existingBinding)) !==
+              (await stableJsonDigest(expectedBinding))
+          ) {
+            throw new OpenTofuControllerError(
+              "failed_precondition",
+              "initial authority replay was not exact",
+            );
+          }
+          return { capsule: existing, replayed: true };
+        }
+        counts.capsule += 1;
+        installConfigMutationCount += 1;
+        installConfigs.set(input.installConfig.id, input.installConfig);
+        const capsule: Capsule = {
+          id: input.capsuleId,
+          workspaceId: input.workspaceId,
+          projectId: input.projectId ?? "prj_default",
+          name: input.name,
+          slug: input.name,
+          environment: input.environment,
+          sourceId: input.sourceId,
+          installConfigId: input.installConfig.id,
+          installingPrincipalId: input.installingPrincipalId,
+          currentStateGeneration: 0,
+          status: "pending",
+          ...(input.autoUpdate === true ? { autoUpdate: true } : {}),
+          createdAt: input.installConfig.createdAt,
+          updatedAt: input.installConfig.updatedAt,
+        };
+        capsules.push(capsule);
+        const providerBindingSet: ProviderBindingSet = {
+          id: input.providerBindingSetId,
+          workspaceId: input.workspaceId,
+          capsuleId: input.capsuleId,
+          environment: input.environment,
+          bindings: input.providerBindings,
+          createdAt: input.installConfig.createdAt,
+          updatedAt: input.installConfig.updatedAt,
+        };
+        providerBindingSets.set(
+          `${providerBindingSet.capsuleId}:${providerBindingSet.environment}`,
+          providerBindingSet,
+        );
+        capsuleAuthorityEpochs.set(input.capsuleId, 1);
+        lose("capsule");
+        return { capsule, replayed: false };
+      },
       createCapsule: async (input: {
         readonly workspaceId: string;
         readonly projectId?: string;
@@ -1014,19 +1430,16 @@ function installFixture(
         capsuleId: string,
         environment: string,
       ) => providerBindingSets.get(`${capsuleId}:${environment}`),
-      putProviderBindingSet: async (value: unknown) => {
-        const providerBindingSet = value as ProviderBindingSet;
-        providerBindingSets.set(
-          `${providerBindingSet.capsuleId}:${providerBindingSet.environment}`,
-          providerBindingSet,
-        );
-        return providerBindingSet;
-      },
     },
     getRun: async (id: string) => {
       const run = runs.get(id);
       if (!run) throw new OpenTofuControllerError("not_found", "missing");
       return run;
+    },
+    validateCapsuleConfigurationProviderBindings: async () => {
+      if (options.providerValidationError) {
+        throw options.providerValidationError;
+      }
     },
     createCapsulePlan: async (
       capsuleId: string,
@@ -1095,13 +1508,116 @@ function installFixture(
         )!,
       })),
     getInstallConfig: (id: string) => installConfigs.get(id),
+    replaceInstallConfig(
+      id: string,
+      patch: Partial<InstallConfig>,
+    ): void {
+      const current = installConfigs.get(id);
+      if (!current) throw new Error(`InstallConfig ${id} not found`);
+      installConfigs.set(id, {
+        ...current,
+        ...patch,
+        updatedAt: new Date(Date.parse(current.updatedAt) + 1).toISOString(),
+      });
+    },
     getProviderBindingSet: (capsuleId: string, environment: string) =>
       providerBindingSets.get(`${capsuleId}:${environment}`),
+    authorityRows: () => ({
+      capsules: capsules.length,
+      bindingSets: providerBindingSets.size,
+      epochs: capsuleAuthorityEpochs.size,
+    }),
     get approvalCalls() {
       return approvalCalls;
     },
     get applyCalls() {
       return applyCalls;
+    },
+    seedPreflight(input: {
+      readonly variableDeclarations: NonNullable<
+        CapsuleCompatibilityReport["rootModuleVariableDeclarations"]
+      >;
+    }) {
+      const now = new Date().toISOString();
+      const source: Source = {
+        id: "src_preflight",
+        workspaceId: WORKSPACE.id,
+        name: "example",
+        url: "https://github.com/takos/example",
+        defaultRef: "main",
+        defaultPath: ".",
+        status: "active",
+        autoSync: false,
+        createdAt: now,
+        updatedAt: now,
+      };
+      sources.push(source);
+      const snapshot: SourceSnapshot = {
+        id: "snap_preflight",
+        origin: "git",
+        workspaceId: WORKSPACE.id,
+        sourceId: source.id,
+        url: source.url,
+        ref: source.defaultRef,
+        resolvedCommit: "c".repeat(40),
+        path: source.defaultPath,
+        archiveRef: "source-archive/snap_preflight",
+        archiveDigest: `sha256:${"d".repeat(64)}`,
+        archiveSizeBytes: 64,
+        repositoryManifest: { status: "absent" },
+        repositoryModules: {
+          status: "ready",
+          scopePath: ".",
+          modules: [
+            {
+              path: ".",
+              providerPackages: [],
+              rootProviderRequirements: [],
+            },
+          ],
+        },
+        fetchedByRunId: "ssr_preflight",
+        fetchedAt: now,
+      };
+      snapshots.push(snapshot);
+      const report: CapsuleCompatibilityReport = {
+        id: "caprep_preflight",
+        sourceId: source.id,
+        sourceSnapshotId: snapshot.id,
+        modulePath: ".",
+        level: "ready",
+        findings: [],
+        providers: [],
+        resources: [],
+        dataSources: [],
+        provisioners: [],
+        rootModuleVariables: input.variableDeclarations.map((item) => item.name),
+        rootModuleVariableDeclarations: input.variableDeclarations,
+        rootModuleOutputs: [],
+        createdAt: now,
+      };
+      compatibilityReports.set(report.id, report);
+      const run: Run = {
+        id: "ccr_preflight",
+        workspaceId: WORKSPACE.id,
+        sourceId: source.id,
+        type: "compatibility_check",
+        status: "succeeded",
+        sourceSnapshotId: snapshot.id,
+        compatibilityReportId: report.id,
+        createdBy: WORKSPACE.ownerUserId,
+        createdAt: now,
+        startedAt: now,
+        finishedAt: now,
+      };
+      runs.set(run.id, run);
+      return {
+        sourceId: source.id,
+        sourceSnapshotId: snapshot.id,
+        compatibilityCheckRunId: run.id,
+        compatibilityReportId: report.id,
+        installConfigId: "cfg-default-opentofu-capsule",
+      };
     },
     mutationCount: () =>
       counts.source + counts.sync + counts.capsule + counts.plan,

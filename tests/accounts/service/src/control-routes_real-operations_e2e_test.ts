@@ -9,6 +9,12 @@ import {
 } from "../../../../accounts/service/src/control-routes.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
+import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
+import {
+  hasValidDerivedTargetSeal,
+  sealInstallConfigSuccessor,
+} from "../../../../accounts/service/src/control/install-config-re-adoptions.ts";
+import type { CapsuleConfigurationPlanResponse } from "takosumi-contract";
 import type {
   RepositoryInstallUxInput,
   RepositoryManifestDocument,
@@ -335,6 +341,38 @@ async function controlJson<T>(
   return (await response!.json()) as T;
 }
 
+async function createInitialAuthorityFixture(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly workspaceId: string;
+  readonly sourceId: string;
+  readonly installConfig: InstallConfig;
+  readonly name: string;
+  readonly environment?: string;
+  readonly installingPrincipalId?: string;
+}) {
+  const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+  const now = new Date().toISOString();
+  return (
+    await input.operations.capsules.createCapsuleInitialAuthority({
+      capsuleId: `cap_${suffix}`,
+      providerBindingSetId: `ipcset_${suffix}`,
+      workspaceId: input.workspaceId,
+      name: input.name,
+      environment: input.environment ?? "production",
+      sourceId: input.sourceId,
+      installingPrincipalId: input.installingPrincipalId ?? "user_test",
+      installConfig: {
+        ...input.installConfig,
+        id: `icfg_${suffix}`,
+        workspaceId: input.workspaceId,
+        createdAt: now,
+        updatedAt: now,
+      },
+      providerBindings: [],
+    })
+  ).capsule;
+}
+
 test("account Workspace inventory follows real active membership pagination", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
@@ -408,6 +446,1637 @@ test("account Workspace inventory follows real active membership pagination", as
     firstPage.workspaces.some((workspace) => workspace.id === archived.id) ||
       secondPage.workspaces.some((workspace) => workspace.id === archived.id),
   ).toBe(true);
+});
+
+test("capsule configuration Plan atomically preserves authority and replays one PlanRun", async () => {
+  const genericInputs: readonly RepositoryInstallUxInput[] = [
+    {
+      name: "public_url",
+      source: { kind: "user" },
+      type: "string",
+      required: true,
+      label: { ja: "公開URL", en: "Public URL" },
+    },
+    {
+      name: "api_token",
+      source: { kind: "user" },
+      type: "string",
+      required: true,
+      secret: true,
+      label: { ja: "APIトークン", en: "API token" },
+    },
+  ];
+  const fixture = await reAdoptionRouteFixture("configuration-plan", {
+    genericDefault: true,
+    currentVariableMapping: { api_token: "previous-secret-value" },
+    repositoryInputs: genericInputs,
+  });
+  const current = await fixture.operations.capsules.getInstallConfig(
+    fixture.seeded.capsule.installConfigId,
+  );
+  await fixture.operations.capsules.putInstallConfig({
+    ...current,
+    modulePath: "deploy/opentofu/cloudflare",
+    internal: {
+      reason: "per_install_overrides",
+      genericOpenTofuVariableContractDigest:
+        await testGenericOpenTofuVariableContractDigest(
+          genericInputs,
+          "deploy/opentofu/cloudflare",
+        ),
+      genericOpenTofuSourceSnapshotId: fixture.seeded.snapshot.id,
+    },
+  });
+  const sourceSnapshot = await fixture.operations.getSourceSnapshot(
+    fixture.seeded.snapshot.id,
+  );
+  await fixture.deployStore.putSourceSnapshot({
+    ...sourceSnapshot,
+    repositoryManifest: { status: "absent" },
+  });
+  await seedProviderConnections(fixture.deployStore, fixture.seeded.capsule);
+  const bindingSet = await fixture.operations.capsules.getProviderBindingSetByCapsule(
+    fixture.seeded.capsule.id,
+    fixture.seeded.capsule.environment,
+  );
+  if (!bindingSet) throw new Error("fixture ProviderBindingSet is missing");
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const body = {
+    variablePatch: {
+      set: {
+        public_url: "https://configured.takosumi.test",
+        api_token: "replacement-secret-value",
+      },
+      remove: [],
+    },
+    providerBindings: bindingSet.bindings,
+    interfaceBlueprints: [],
+    expected: { authorityGuard },
+  };
+  const path = `/api/v1/capsules/${fixture.seeded.capsule.id}/configuration-plans`;
+  const first = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-v1" },
+      body,
+    },
+    201,
+  );
+  expect(first.configurationPlan.replayed).toBe(false);
+  expect(JSON.stringify(first)).not.toContain("replacement-secret-value");
+  expect(first.configurationPlan.planRunId).toMatch(/^plan_[0-9a-f]{16}$/u);
+  expect(first.links.run).toBe(`/api/v1/runs/${first.configurationPlan.planRunId}`);
+  expect(first.capsule.installConfigId).toBe(
+    first.configurationPlan.targetInstallConfigId,
+  );
+  const target = await fixture.operations.capsules.getInstallConfig(
+    first.configurationPlan.targetInstallConfigId,
+  );
+  expect(target.variableMapping).toMatchObject({
+    public_url: "https://configured.takosumi.test",
+    api_token: "replacement-secret-value",
+  });
+  expect(target.internal?.reAdoption?.targetProviderBindingSet).toEqual(
+    expect.objectContaining({ bindings: bindingSet.bindings }),
+  );
+  expect(JSON.stringify(target)).not.toContain("[REDACTED]");
+  const replay = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-v1" },
+      body,
+    },
+    200,
+  );
+  expect(replay.configurationPlan.replayed).toBe(true);
+  expect(replay.configurationPlan.planRunId).toBe(
+    first.configurationPlan.planRunId,
+  );
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.id === first.configurationPlan.planRunId,
+    ),
+  ).toHaveLength(1);
+
+  const changedBody = await controlJson<{
+    readonly error: { readonly code: string };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-v1" },
+      body: {
+        ...body,
+        variablePatch: {
+          set: { public_url: "https://a-different-value.takosumi.test" },
+          remove: [],
+        },
+      },
+    },
+    409,
+  );
+  expect(changedBody.error.code).toBe("idempotency_conflict");
+
+  const changedKey = await controlJson<{
+    readonly error: { readonly code: string };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-different-key-v1" },
+      body,
+    },
+    409,
+  );
+  expect(changedKey.error.code).toBe("failed_precondition");
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(1);
+});
+
+test("completed configuration Plan replay ignores later Source deactivation", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-source-disabled-replay",
+  );
+  const first = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-source-disabled-v1" },
+      body,
+    },
+    201,
+  );
+
+  const authorityBeforeReplay = await configurationAuthoritySnapshot(fixture);
+  const source = await fixture.deployStore.getSource(
+    fixture.seeded.capsule.sourceId,
+  );
+  if (!source) throw new Error("fixture Source is missing");
+  await fixture.deployStore.putSource({
+    ...source,
+    status: "disabled",
+    updatedAt: "2026-09-04T00:00:00.001Z",
+  });
+
+  const replay = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-source-disabled-v1" },
+      body,
+    },
+    200,
+  );
+  expect(replay.configurationPlan).toMatchObject({
+    replayed: true,
+    planRunId: first.configurationPlan.planRunId,
+    targetInstallConfigId: first.configurationPlan.targetInstallConfigId,
+  });
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(
+    authorityBeforeReplay,
+  );
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(1);
+});
+
+test("capsule configuration Plan requires a successful exact compatibility declaration", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-failed-compatibility",
+  );
+  const beforeCapsule = await fixture.operations.capsules.getCapsule(
+    fixture.seeded.capsule.id,
+  );
+  const beforeConfigs = await fixture.deployStore.listInstallConfigs(
+    fixture.seeded.workspace.id,
+  );
+  fixture.runner.readCapsuleSourceFiles = () =>
+    Promise.reject(new Error("simulated compatibility failure"));
+
+  const rejected = await controlJson<{
+    readonly error: { readonly code: string; readonly details?: { reason?: string } };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: {
+        "idempotency-key": "configuration-plan-failed-compatibility-v1",
+      },
+      body,
+    },
+    409,
+  );
+  expect(rejected.error).toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "capsule_configuration_identity_conflict" },
+  });
+  expect(
+    await fixture.operations.capsules.getCapsule(fixture.seeded.capsule.id),
+  ).toEqual(beforeCapsule);
+  expect(
+    await fixture.deployStore.listInstallConfigs(fixture.seeded.workspace.id),
+  ).toEqual(beforeConfigs);
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toEqual([]);
+});
+
+for (const providerFailure of [
+  "provider source mismatch",
+  "revoked connection",
+  "duplicate provider identity",
+] as const) {
+  test(`capsule configuration Plan rejects ${providerFailure} before changing deployment authority`, async () => {
+    const { fixture, path, body } = await configurationPlanRouteFixture(
+      `configuration-plan-provider-${providerFailure.replaceAll(" ", "-")}`,
+    );
+    const binding = body.providerBindings[0];
+    if (!binding) throw new Error("fixture ProviderBinding is missing");
+    if (providerFailure === "revoked connection") {
+      const connection = await fixture.deployStore.getConnection(
+        binding.connectionId,
+      );
+      if (!connection) throw new Error("fixture ProviderConnection is missing");
+      await fixture.deployStore.putConnection({
+        ...connection,
+        status: "revoked",
+        revokedAt: "2026-09-04T00:00:00.000Z",
+        updatedAt: "2026-09-04T00:00:00.000Z",
+      });
+    }
+    const providerBindings = providerFailure === "provider source mismatch"
+      ? [{
+          ...binding,
+          provider: "registry.opentofu.org/hashicorp/aws",
+          moduleLocalName: "aws",
+        }]
+      : providerFailure === "duplicate provider identity"
+        ? [binding, { ...binding }]
+        : [binding];
+    const before = await configurationAuthoritySnapshot(fixture);
+
+    const rejected = await controlJson<{
+      readonly error: { readonly code: string; readonly details?: { reason?: string } };
+    }>(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: {
+          "idempotency-key":
+            `configuration-plan-provider-${providerFailure.replaceAll(" ", "-")}-v1`,
+        },
+        body: { ...body, providerBindings },
+      },
+      409,
+    );
+    expect(rejected.error.code).toBe("failed_precondition");
+    expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
+    expect(
+      (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+        (run) => run.type === "plan",
+      ),
+    ).toEqual([]);
+  });
+}
+
+test("capsule configuration Plan resolves installing_principal before sealing its successor", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-installing-principal",
+  );
+  const response = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: {
+        "idempotency-key": "configuration-plan-installing-principal-v1",
+      },
+      body: {
+        ...body,
+        interfaceBlueprints: [configurationInstallingPrincipalBlueprint()],
+      },
+    },
+    201,
+  );
+  const successor = await fixture.operations.capsules.getInstallConfig(
+    response.configurationPlan.targetInstallConfigId,
+  );
+  expect(successor.interfaceBlueprints?.[0]?.bindings?.[0]).toEqual({
+    key: "installer",
+    subjectRef: { kind: "Principal", id: "user_test" },
+    permissions: ["ui.open"],
+    delivery: { type: "none" },
+  });
+  expect(JSON.stringify(successor.interfaceBlueprints)).not.toContain(
+    "installing_principal",
+  );
+});
+
+test("capsule configuration Plan rejects an installing_principal placeholder without exact Capsule principal before mutation", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-missing-installing-principal",
+  );
+  const current = await fixture.operations.capsules.getCapsule(
+    fixture.seeded.capsule.id,
+  );
+  const { installingPrincipalId: _installingPrincipalId, ...withoutPrincipal } =
+    current;
+  await fixture.deployStore.putCapsule(withoutPrincipal);
+  const before = await configurationAuthoritySnapshot(fixture);
+
+  const rejected = await controlJson<{
+    readonly error: { readonly code: string; readonly details?: { reason?: string } };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: {
+        "idempotency-key":
+          "configuration-plan-missing-installing-principal-v1",
+      },
+      body: {
+        ...body,
+        expected: { authorityGuard: await readReAdoptionGuard(fixture) },
+        interfaceBlueprints: [configurationInstallingPrincipalBlueprint()],
+      },
+    },
+    409,
+  );
+  expect(rejected.error.code).toBe("failed_precondition");
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toEqual([]);
+});
+
+test("Workspace Capsule POST is retired after authorization without creating readable unmarked values", async () => {
+  const fixture = await reAdoptionRouteFixture("retired-capsule-create");
+  const path = `/api/v1/workspaces/${fixture.seeded.workspace.id}/capsules`;
+  const foreignCookie = seedSession(
+    fixture.accountStore,
+    "user_retired_capsule_create_foreign",
+  );
+  const before = await stableJsonDigest({
+    capsules: await fixture.operations.capsules.listCapsules(
+      fixture.seeded.workspace.id,
+    ),
+    installConfigs: await fixture.operations.capsules.listInstallConfigs(
+      fixture.seeded.workspace.id,
+      { includeInternal: true },
+    ),
+  });
+  const dispatch = async (cookie: string | undefined) => {
+    const built = request("POST", path, {
+      ...(cookie ? { cookie } : {}),
+      body: {
+        name: "forbidden-unmarked-value",
+        environment: "production",
+        sourceId: fixture.seeded.source.id,
+        installConfigId: fixture.seeded.installConfig.id,
+        vars: { public_secret: "must-never-become-readable" },
+      },
+    });
+    const response = await handleControlRoute({
+      request: built.request,
+      url: built.url,
+      store: fixture.accountStore,
+      operations: fixture.operations,
+    });
+    if (!response) throw new Error("retired Capsule create was not dispatched");
+    return response;
+  };
+
+  const unauthenticated = await dispatch(undefined);
+  expect(unauthenticated.status).toBe(401);
+  expect(unauthenticated.headers.get("allow")).toBeNull();
+  const unauthorized = await dispatch(foreignCookie);
+  expect(unauthorized.status).toBe(403);
+  expect(unauthorized.headers.get("allow")).toBeNull();
+  const retired = await dispatch(fixture.cookie);
+  expect(retired.status).toBe(405);
+  expect(retired.headers.get("allow")).toBe("GET");
+
+  const list = await controlJson<{ readonly capsules: readonly { id: string }[] }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "GET",
+      path,
+    },
+    200,
+  );
+  expect(list.capsules.some((capsule) => capsule.id === fixture.seeded.capsule.id)).toBe(
+    true,
+  );
+  expect(
+    await stableJsonDigest({
+      capsules: await fixture.operations.capsules.listCapsules(
+        fixture.seeded.workspace.id,
+      ),
+      installConfigs: await fixture.operations.capsules.listInstallConfigs(
+        fixture.seeded.workspace.id,
+        { includeInternal: true },
+      ),
+    }),
+  ).toBe(before);
+});
+
+test("retired public config mutations return 405 for unmarked rows after authorization and preserve authority", async () => {
+  const fixture = await reAdoptionRouteFixture("retired-public-unmarked");
+  const marked = await fixture.operations.capsules.getInstallConfig(
+    fixture.seeded.capsule.installConfigId,
+  );
+  const { internal: _internal, ...unmarked } = marked;
+  await fixture.deployStore.putInstallConfig(unmarked);
+  const shared: InstallConfig = {
+    id: "cfg_shared_retired_public_unmarked",
+    name: "shared-retired-public-unmarked",
+    variableMapping: { untouched: "shared-value" },
+    outputAllowlist: {},
+    policy: {},
+    createdAt: "2026-09-04T00:00:00.000Z",
+    updatedAt: "2026-09-04T00:00:00.000Z",
+  };
+  await fixture.deployStore.putInstallConfig(shared);
+  const beforeBinding = await fixture.operations.capsules
+    .getProviderBindingSetByCapsule(
+      fixture.seeded.capsule.id,
+      fixture.seeded.capsule.environment,
+    );
+  const before = {
+    config: await stableJsonDigest(unmarked),
+    shared: await stableJsonDigest(shared),
+    binding: beforeBinding ? await stableJsonDigest(beforeBinding) : undefined,
+    epoch: await fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(
+      fixture.seeded.capsule.id,
+    ),
+  };
+  const dispatch = async (
+    cookie: string | undefined,
+    method: "PATCH" | "PUT",
+    path: string,
+  ) => {
+    const built = request(method, path, {
+      ...(cookie ? { cookie } : {}),
+      body:
+        method === "PATCH"
+          ? { variableMapping: { changed: "must-not-persist" } }
+          : { bindings: [] },
+    });
+    const response = await handleControlRoute({
+      request: built.request,
+      url: built.url,
+      store: fixture.accountStore,
+      operations: fixture.operations,
+    });
+    if (!response) throw new Error("retired public route was not dispatched");
+    return response;
+  };
+
+  for (const configId of [unmarked.id, shared.id]) {
+    const unauthenticated = await dispatch(
+      undefined,
+      "PATCH",
+      `/api/v1/capsule-configs/${configId}`,
+    );
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthenticated.headers.get("allow")).toBeNull();
+
+    const authorized = await dispatch(
+      fixture.cookie,
+      "PATCH",
+      `/api/v1/capsule-configs/${configId}`,
+    );
+    expect(authorized.status).toBe(405);
+    expect(authorized.headers.get("allow")).toBe("GET");
+    expect((await authorized.json()).error.code).toBe("method_not_allowed");
+  }
+
+  const foreignPatch = await dispatch(
+    fixture.foreignCookie,
+    "PATCH",
+    `/api/v1/capsule-configs/${unmarked.id}`,
+  );
+  expect(foreignPatch.status).toBe(403);
+  expect(foreignPatch.headers.get("allow")).toBeNull();
+
+  const unauthenticatedPut = await dispatch(
+    undefined,
+    "PUT",
+    `/api/v1/capsules/${fixture.seeded.capsule.id}/provider-bindings`,
+  );
+  expect(unauthenticatedPut.status).toBe(401);
+  expect(unauthenticatedPut.headers.get("allow")).toBeNull();
+  const foreignPut = await dispatch(
+    fixture.foreignCookie,
+    "PUT",
+    `/api/v1/capsules/${fixture.seeded.capsule.id}/provider-bindings`,
+  );
+  expect(foreignPut.status).toBe(403);
+  expect(foreignPut.headers.get("allow")).toBeNull();
+  const authorizedPut = await dispatch(
+    fixture.cookie,
+    "PUT",
+    `/api/v1/capsules/${fixture.seeded.capsule.id}/provider-bindings`,
+  );
+  expect(authorizedPut.status).toBe(405);
+  expect(authorizedPut.headers.get("allow")).toBe("GET");
+  expect((await authorizedPut.json()).error.code).toBe("method_not_allowed");
+
+  expect(
+    await stableJsonDigest(
+      await fixture.operations.capsules.getInstallConfig(unmarked.id),
+    ),
+  ).toBe(before.config);
+  expect(
+    await stableJsonDigest(
+      await fixture.operations.capsules.getInstallConfig(shared.id),
+    ),
+  ).toBe(before.shared);
+  const afterBinding = await fixture.operations.capsules
+    .getProviderBindingSetByCapsule(
+      fixture.seeded.capsule.id,
+      fixture.seeded.capsule.environment,
+    );
+  expect(afterBinding ? await stableJsonDigest(afterBinding) : undefined).toBe(
+    before.binding,
+  );
+  expect(
+    await fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(
+      fixture.seeded.capsule.id,
+    ),
+  ).toBe(before.epoch);
+});
+
+test("Capsule config PATCH is retired for a configuration-plan-owned generic row", async () => {
+  const fixture = await reAdoptionRouteFixture(
+    "configuration-patch-authority",
+    { genericDefault: true },
+  );
+  const current = await fixture.operations.capsules.getInstallConfig(
+    fixture.seeded.capsule.installConfigId,
+  );
+  const marked = await fixture.operations.capsules.putInstallConfig({
+    ...current,
+    modulePath: "deploy/opentofu/cloudflare",
+    internal: {
+      reason: "per_install_overrides",
+      genericOpenTofuVariableContractDigest: `sha256:${"8".repeat(64)}`,
+      genericOpenTofuSourceSnapshotId: fixture.seeded.snapshot.id,
+    },
+  });
+  const [beforeDigest, beforeEpoch] = await Promise.all([
+    stableJsonDigest(marked),
+    fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(
+      fixture.seeded.capsule.id,
+    ),
+  ]);
+
+  const rejected = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly reason?: string };
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "PATCH",
+      path: `/api/v1/capsule-configs/${marked.id}`,
+      body: {
+        variableMapping: {
+          public_url: "https://bypassed-authority.takosumi.test",
+        },
+      },
+    },
+    405,
+  );
+  expect(rejected.error).toMatchObject({
+    code: "method_not_allowed",
+  });
+  expect(
+    await stableJsonDigest(
+      await fixture.operations.capsules.getInstallConfig(marked.id),
+    ),
+  ).toBe(beforeDigest);
+  expect(
+    await fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(
+      fixture.seeded.capsule.id,
+    ),
+  ).toBe(beforeEpoch);
+});
+
+test("Capsule config PATCH is retired for an immutable re-adopted successor", async () => {
+  const fixture = await reAdoptionRouteFixture(
+    "configuration-patch-readopted",
+  );
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const adopted = await controlJson<{
+    readonly installConfigReAdoption: {
+      readonly targetInstallConfigId: string;
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path:
+        `/api/v1/capsules/${fixture.seeded.capsule.id}/install-config-re-adoptions`,
+      headers: { "idempotency-key": "configuration-patch-readopted-v1" },
+      body: reAdoptionBody(fixture, authorityGuard),
+    },
+    200,
+  );
+  const adoptedTarget = await fixture.operations.capsules.getInstallConfig(
+    adopted.installConfigReAdoption.targetInstallConfigId,
+  );
+  const receipt = adoptedTarget.internal?.reAdoption;
+  if (!receipt || !adoptedTarget.internal) {
+    throw new Error("re-adoption target receipt is missing");
+  }
+  const {
+    derivedTargetDigest: _derivedTargetDigest,
+    ...receiptCore
+  } = receipt;
+  const {
+    reAdoption: _reAdoption,
+    repositoryInstallUxDigest: _repositoryInstallUxDigest,
+    sourceSnapshotId: _sourceSnapshotId,
+    ...unmarkedInternal
+  } = adoptedTarget.internal;
+  const target = await sealInstallConfigSuccessor({
+    target: { ...adoptedTarget, internal: unmarkedInternal },
+    receiptCore,
+  });
+  expect(await hasValidDerivedTargetSeal(target)).toBe(true);
+  await fixture.deployStore.putInstallConfig(target);
+  expect(target.internal?.reAdoption).toBeDefined();
+  expect(
+    target.internal?.genericOpenTofuVariableContractDigest,
+  ).toBeUndefined();
+  const [beforeDigest, beforeEpoch] = await Promise.all([
+    stableJsonDigest(target),
+    fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(
+      fixture.seeded.capsule.id,
+    ),
+  ]);
+
+  const rejected = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly reason?: string };
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "PATCH",
+      path: `/api/v1/capsule-configs/${target.id}`,
+      body: {
+        variableMapping: {
+          public_url: "https://bypassed-readoption.takosumi.test",
+        },
+      },
+    },
+    405,
+  );
+  expect(rejected.error).toMatchObject({
+    code: "method_not_allowed",
+  });
+  expect(
+    await stableJsonDigest(
+      await fixture.operations.capsules.getInstallConfig(target.id),
+    ),
+  ).toBe(beforeDigest);
+  expect(
+    await fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(
+      fixture.seeded.capsule.id,
+    ),
+  ).toBe(beforeEpoch);
+});
+
+test("retired ProviderBindings PUT cannot replace reviewed configuration-plan authority", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-binding-authority",
+  );
+  const planned = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-binding-authority-v1" },
+      body,
+    },
+    201,
+  );
+  const currentConfig = await fixture.operations.capsules.getInstallConfig(
+    planned.configurationPlan.targetInstallConfigId,
+  );
+  expect(currentConfig.internal?.reAdoption).toBeDefined();
+  const beforeBindingSet = await fixture.operations.capsules
+    .getProviderBindingSetByCapsule(
+      fixture.seeded.capsule.id,
+      fixture.seeded.capsule.environment,
+    );
+  if (!beforeBindingSet) {
+    throw new Error("configuration Plan did not retain ProviderBinding authority");
+  }
+  const [beforeBindingDigest, beforeEpoch] = await Promise.all([
+    stableJsonDigest(beforeBindingSet),
+    fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(
+      fixture.seeded.capsule.id,
+    ),
+  ]);
+
+  const rejected = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly reason?: string };
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "PUT",
+      path: `/api/v1/capsules/${fixture.seeded.capsule.id}/provider-bindings`,
+      body: { bindings: [] },
+    },
+    405,
+  );
+  expect(rejected.error).toMatchObject({
+    code: "method_not_allowed",
+  });
+  const afterBindingSet = await fixture.operations.capsules
+    .getProviderBindingSetByCapsule(
+      fixture.seeded.capsule.id,
+      fixture.seeded.capsule.environment,
+    );
+  expect(afterBindingSet).toBeDefined();
+  expect(await stableJsonDigest(afterBindingSet!)).toBe(beforeBindingDigest);
+  expect(
+    await fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(
+      fixture.seeded.capsule.id,
+    ),
+  ).toBe(beforeEpoch);
+});
+
+test("configuration Plan replay never rebinds an immutable target after later configuration or state advancement", async () => {
+  const {
+    fixture,
+    path,
+    body: configurationBody,
+  } = await configurationPlanRouteFixture(
+    "configuration-plan-late-replay",
+  );
+  const firstGuard = await readReAdoptionGuard(fixture);
+  const firstBody = {
+    ...configurationBody,
+    variablePatch: {
+      set: { public_url: "https://late-replay-first.takosumi.test" },
+      remove: [],
+    },
+    expected: { authorityGuard: firstGuard },
+  };
+  const first = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-late-first-v1" },
+      body: firstBody,
+    },
+    201,
+  );
+
+  const secondGuard = await readReAdoptionGuard(fixture);
+  const second = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-late-second-v1" },
+      body: {
+        ...firstBody,
+        variablePatch: {
+          set: { public_url: "https://late-replay-second.takosumi.test" },
+          remove: [],
+        },
+        expected: { authorityGuard: secondGuard },
+      },
+    },
+    201,
+  );
+  expect(second.capsule.installConfigId).toBe(
+    second.configurationPlan.targetInstallConfigId,
+  );
+  expect(second.configurationPlan.targetInstallConfigId).not.toBe(
+    first.configurationPlan.targetInstallConfigId,
+  );
+
+  // Simulate an Apply advancing state after the later successor. The original
+  // Plan remains the only durable completion receipt for the first key.
+  const advanced = await fixture.operations.capsules.getCapsule(
+    fixture.seeded.capsule.id,
+  );
+  await fixture.deployStore.putCapsule({
+    ...advanced,
+    currentStateGeneration: advanced.currentStateGeneration + 1,
+    status: "active",
+    updatedAt: "2026-08-26T00:00:00.000Z",
+  });
+
+  const replay = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-late-first-v1" },
+      body: firstBody,
+    },
+    200,
+  );
+  expect(replay.configurationPlan.replayed).toBe(true);
+  expect(replay.configurationPlan.planRunId).toBe(
+    first.configurationPlan.planRunId,
+  );
+  expect(replay.capsule.installConfigId).toBe(
+    second.configurationPlan.targetInstallConfigId,
+  );
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(2);
+});
+
+test("concurrent identical configuration Plan requests share one durable PlanRun", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-concurrent",
+  );
+  const call = async () => {
+    const built = request("POST", path, {
+      cookie: fixture.cookie,
+      headers: { "idempotency-key": "configuration-plan-concurrent-v1" },
+      body,
+    });
+    const response = await handleControlRoute({
+      request: built.request,
+      url: built.url,
+      store: fixture.accountStore,
+      operations: fixture.operations,
+    });
+    expect(response).toBeDefined();
+    expect(response!.headers.get("server-timing")).toContain(
+      "tk_control_dispatch",
+    );
+    return {
+      status: response!.status,
+      body: (await response!.json()) as CapsuleConfigurationPlanResponse,
+    };
+  };
+  const results = await Promise.all([call(), call()]);
+  expect(results.map((result) => result.status).sort()).toEqual([201, 201]);
+  expect(
+    results.map((result) => result.body.configurationPlan.replayed),
+  ).toEqual([false, false]);
+  expect(new Set(results.map((result) => result.body.configurationPlan.planRunId)))
+    .toHaveLength(1);
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(1);
+});
+
+test("configuration Plan authority fence aborts a target-current interleaving before Run persistence", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-atomic-fence",
+  );
+  const original = fixture.deployStore.preparePlanRun.bind(
+    fixture.deployStore,
+  );
+  const store = fixture.deployStore as unknown as {
+    preparePlanRun: typeof fixture.deployStore.preparePlanRun;
+  };
+  let interleaved = false;
+  store.preparePlanRun = async (input) => {
+    if (!interleaved && input.expectedCapsulePlanAuthority !== undefined) {
+      interleaved = true;
+      const current = await fixture.deployStore.getCapsule(
+        fixture.seeded.capsule.id,
+      );
+      if (!current) throw new Error("fixture Capsule disappeared");
+      // Rebind has already made the sealed target current by this point. A
+      // destroy/restore transition advances the durable authority epoch while
+      // preserving the target, modelling a later successor/re-adoption race
+      // immediately before the Core store's Run insert.
+      await fixture.deployStore.putCapsule({
+        ...current,
+        status: "destroyed",
+        updatedAt: "2026-08-26T00:00:00.001Z",
+      });
+      await fixture.deployStore.putCapsule({
+        ...current,
+        status: "active",
+        updatedAt: "2026-08-26T00:00:00.002Z",
+      });
+    }
+    return await original(input);
+  };
+  try {
+    const rejected = await controlJson<{
+      readonly error: {
+        readonly code: string;
+        readonly details?: { readonly reason?: string };
+      };
+    }>(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: { "idempotency-key": "configuration-plan-atomic-fence-v1" },
+        body,
+      },
+      409,
+    );
+    expect(rejected.error).toMatchObject({
+      code: "failed_precondition",
+      details: { reason: "capsule_configuration_identity_conflict" },
+    });
+  } finally {
+    store.preparePlanRun = original;
+  }
+
+  expect(interleaved).toBe(true);
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(0);
+  const current = await fixture.deployStore.getCapsule(
+    fixture.seeded.capsule.id,
+  );
+  expect(current?.installConfigId).toBe(
+    (await fixture.operations.capsules.getCapsule(fixture.seeded.capsule.id))
+      .installConfigId,
+  );
+  expect(
+    await fixture.deployStore.getCapsuleExecutionAuthorityEpoch(
+      fixture.seeded.capsule.id,
+    ),
+  ).toBe(4);
+
+  // The now-advanced target cannot poison a replay into minting a stale Plan.
+  const replayRejected = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly reason?: string };
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-atomic-fence-v1" },
+      body,
+    },
+    409,
+  );
+  expect(replayRejected.error).toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "capsule_configuration_identity_conflict" },
+  });
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(0);
+});
+
+test("configuration Plan recovers a lost acknowledgement at target creation", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-lost-target",
+  );
+  const capsules = fixture.operations.capsules as unknown as {
+    createInstallConfigIfAbsent: typeof fixture.operations.capsules.createInstallConfigIfAbsent;
+  };
+  const original = capsules.createInstallConfigIfAbsent.bind(
+    fixture.operations.capsules,
+  );
+  let loseAck = true;
+  capsules.createInstallConfigIfAbsent = async (config) => {
+    const created = await original(config);
+    if (loseAck) {
+      loseAck = false;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "simulated target persistence acknowledgement loss",
+      );
+    }
+    return created;
+  };
+  try {
+    await controlJson(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: { "idempotency-key": "configuration-plan-lost-target-v1" },
+        body,
+      },
+      409,
+    );
+  } finally {
+    capsules.createInstallConfigIfAbsent = original;
+  }
+  const recovered = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-lost-target-v1" },
+      body,
+    },
+    201,
+  );
+  expect(recovered.configurationPlan.replayed).toBe(false);
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(1);
+});
+
+test("configuration Plan revalidates provider semantics after a lost target acknowledgement", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-lost-target-provider-revalidation",
+  );
+  const binding = body.providerBindings[0];
+  if (!binding) throw new Error("fixture ProviderBinding is missing");
+  const before = await configurationAuthoritySnapshot(fixture);
+  const capsules = fixture.operations.capsules as unknown as {
+    createInstallConfigIfAbsent: typeof fixture.operations.capsules.createInstallConfigIfAbsent;
+  };
+  const original = capsules.createInstallConfigIfAbsent.bind(
+    fixture.operations.capsules,
+  );
+  let loseAck = true;
+  capsules.createInstallConfigIfAbsent = async (config) => {
+    const created = await original(config);
+    if (loseAck) {
+      loseAck = false;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "simulated target persistence acknowledgement loss",
+      );
+    }
+    return created;
+  };
+  try {
+    await controlJson(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: {
+          "idempotency-key":
+            "configuration-plan-lost-target-provider-revalidation-v1",
+        },
+        body,
+      },
+      409,
+    );
+  } finally {
+    capsules.createInstallConfigIfAbsent = original;
+  }
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
+
+  const connection = await fixture.deployStore.getConnection(
+    binding.connectionId,
+  );
+  if (!connection) throw new Error("fixture ProviderConnection is missing");
+  await fixture.deployStore.putConnection({
+    ...connection,
+    status: "revoked",
+    revokedAt: "2026-09-04T00:00:00.000Z",
+    updatedAt: "2026-09-04T00:00:00.000Z",
+  });
+
+  const rejected = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly reason?: string };
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: {
+        "idempotency-key":
+          "configuration-plan-lost-target-provider-revalidation-v1",
+      },
+      body,
+    },
+    409,
+  );
+  expect(rejected.error).toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "provider_connection_not_ready" },
+  });
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toEqual([]);
+});
+
+test("configuration Plan recovers after the atomic rebind acknowledgement is lost", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-lost-rebind",
+  );
+  const capsules = fixture.operations.capsules as unknown as {
+    rebindInstallConfig: typeof fixture.operations.capsules.rebindInstallConfig;
+  };
+  const original = capsules.rebindInstallConfig.bind(fixture.operations.capsules);
+  let loseAck = true;
+  capsules.rebindInstallConfig = async (request) => {
+    const rebound = await original(request);
+    if (loseAck) {
+      loseAck = false;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "simulated rebind acknowledgement loss",
+      );
+    }
+    return rebound;
+  };
+  try {
+    await controlJson(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: { "idempotency-key": "configuration-plan-lost-rebind-v1" },
+        body,
+      },
+      409,
+    );
+  } finally {
+    capsules.rebindInstallConfig = original;
+  }
+  const recovered = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-lost-rebind-v1" },
+      body,
+    },
+    201,
+  );
+  expect(recovered.configurationPlan.replayed).toBe(false);
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(1);
+});
+
+test("configuration Plan replays the persisted Plan after its acknowledgement is lost", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-lost-plan",
+  );
+  const original = fixture.operations.createCapsulePlan.bind(
+    fixture.operations,
+  );
+  let loseAck = true;
+  const operations = fixture.operations as unknown as {
+    createCapsulePlan: typeof fixture.operations.createCapsulePlan;
+  };
+  operations.createCapsulePlan = async (capsuleId, options) => {
+    const created = await original(capsuleId, options);
+    if (loseAck) {
+      loseAck = false;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "simulated Plan persistence acknowledgement loss",
+      );
+    }
+    return created;
+  };
+  try {
+    await controlJson(
+      {
+        operations: fixture.operations,
+        store: fixture.accountStore,
+        cookie: fixture.cookie,
+        method: "POST",
+        path,
+        headers: { "idempotency-key": "configuration-plan-lost-plan-v1" },
+        body,
+      },
+      409,
+    );
+  } finally {
+    operations.createCapsulePlan = original;
+  }
+  const source = await fixture.deployStore.getSource(
+    fixture.seeded.capsule.sourceId,
+  );
+  if (!source) throw new Error("fixture Source is missing");
+  await fixture.deployStore.putSource({
+    ...source,
+    status: "disabled",
+    updatedAt: "2026-09-04T00:00:00.001Z",
+  });
+  const authorityBeforeReplay = await configurationAuthoritySnapshot(fixture);
+  const recovered = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-lost-plan-v1" },
+      body,
+    },
+    200,
+  );
+  expect(recovered.configurationPlan.replayed).toBe(true);
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(
+    authorityBeforeReplay,
+  );
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(1);
+});
+
+test("configuration Plan refuses an unmarked generic InstallConfig before planning", async () => {
+  const fixture = await reAdoptionRouteFixture("configuration-plan-unmarked", {
+    genericDefault: true,
+  });
+  const current = await fixture.operations.capsules.getInstallConfig(
+    fixture.seeded.capsule.installConfigId,
+  );
+  await fixture.operations.capsules.putInstallConfig({
+    ...current,
+    modulePath: "deploy/opentofu/cloudflare",
+    internal: { reason: "per_install_overrides" },
+  });
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const mismatch = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly reason?: string };
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path:
+        `/api/v1/capsules/${fixture.seeded.capsule.id}/configuration-plans`,
+      headers: { "idempotency-key": "configuration-plan-unmarked-v1" },
+      body: {
+        variablePatch: { set: {}, remove: [] },
+        providerBindings: [],
+        interfaceBlueprints: [],
+        expected: { authorityGuard },
+      },
+    },
+    409,
+  );
+  expect(mismatch.error).toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "capsule_configuration_identity_conflict" },
+  });
+  expect(
+    await fixture.operations.listRuns(fixture.seeded.workspace.id),
+  ).toHaveLength(0);
+  expect(
+    (await fixture.operations.capsules.getCapsule(fixture.seeded.capsule.id))
+      .installConfigId,
+  ).toBe(current.id);
+});
+
+test("generic configuration follows an applied source revision when the declaration digest is unchanged", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-generic-source-revision",
+  );
+  const revisedSnapshot = await applyRevisedSourceSnapshot(
+    fixture,
+    "configuration-plan-generic-source-revision",
+  );
+  const beforePlanCount = (
+    await fixture.operations.listRuns(fixture.seeded.workspace.id)
+  ).filter((run) => run.type === "plan").length;
+  const response = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: {
+        "idempotency-key": "configuration-plan-generic-source-revision-v1",
+      },
+      body: {
+        ...body,
+        variablePatch: {
+          set: { public_url: "https://revision-configured.takosumi.test" },
+          remove: [],
+        },
+        expected: { authorityGuard: await readReAdoptionGuard(fixture) },
+      },
+    },
+    201,
+  );
+  const successor = await fixture.operations.capsules.getInstallConfig(
+    response.configurationPlan.targetInstallConfigId,
+  );
+  expect(response.configurationPlan.sourceSnapshotId).toBe(revisedSnapshot.id);
+  expect(successor.internal?.genericOpenTofuSourceSnapshotId).toBe(
+    revisedSnapshot.id,
+  );
+  expect(successor.internal?.genericOpenTofuVariableContractDigest).toBe(
+    (
+      await fixture.operations.capsules.getInstallConfig(
+        fixture.seeded.capsule.installConfigId,
+      )
+    ).internal?.genericOpenTofuVariableContractDigest,
+  );
+  expect(successor.variableMapping.public_url).toBe(
+    "https://revision-configured.takosumi.test",
+  );
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(beforePlanCount + 1);
+});
+
+test("generic configuration rejects an applied source revision whose declaration digest changed", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-generic-source-revision-changed",
+  );
+  fixture.runner.readCapsuleSourceFiles = (job) => {
+    fixture.runner.capsuleSourceFileJobs.push(job);
+    return Promise.resolve([
+      {
+        path: "main.tf",
+        text: `
+variable "renamed_url" { type = string }
+terraform {
+  required_providers {
+    cloudflare = { source = "cloudflare/cloudflare" }
+  }
+}
+output "launch_url" { value = var.renamed_url }
+`,
+      },
+    ]);
+  };
+  await applyRevisedSourceSnapshot(
+    fixture,
+    "configuration-plan-generic-source-revision-changed",
+  );
+  const before = await configurationAuthoritySnapshot(fixture);
+  const beforePlanCount = (
+    await fixture.operations.listRuns(fixture.seeded.workspace.id)
+  ).filter((run) => run.type === "plan").length;
+
+  const rejected = await controlJson<{
+    readonly error: { readonly code: string; readonly details?: { reason?: string } };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: {
+        "idempotency-key":
+          "configuration-plan-generic-source-revision-changed-v1",
+      },
+      body: {
+        ...body,
+        expected: { authorityGuard: await readReAdoptionGuard(fixture) },
+      },
+    },
+    409,
+  );
+  expect(rejected.error).toMatchObject({
+    code: "failed_precondition",
+    details: {
+      reason: "capsule_configuration_generic_authority_digest_mismatch",
+    },
+  });
+  expect(await configurationAuthoritySnapshot(fixture)).toEqual(before);
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(beforePlanCount);
+});
+
+test("marked generic configuration without a manifest requires and uses its exact compatibility declaration", async () => {
+  const fixture = await reAdoptionRouteFixture("configuration-plan-generic-no-manifest", {
+    genericDefault: true,
+  });
+  const current = await fixture.operations.capsules.getInstallConfig(
+    fixture.seeded.capsule.installConfigId,
+  );
+  await fixture.operations.capsules.putInstallConfig({
+    ...current,
+    modulePath: "deploy/opentofu/cloudflare",
+    internal: {
+      reason: "per_install_overrides",
+      genericOpenTofuVariableContractDigest: `sha256:${"8".repeat(64)}`,
+      genericOpenTofuSourceSnapshotId: fixture.seeded.snapshot.id,
+    },
+  });
+  const sourceSnapshot = await fixture.operations.getSourceSnapshot(
+    fixture.seeded.snapshot.id,
+  );
+  await fixture.deployStore.putSourceSnapshot({
+    ...sourceSnapshot,
+    repositoryManifest: { status: "absent" },
+  });
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  const path =
+    `/api/v1/capsules/${fixture.seeded.capsule.id}/configuration-plans`;
+  let baseBody = {
+    providerBindings: [],
+    interfaceBlueprints: [],
+    expected: { authorityGuard },
+  };
+  const contractMismatch = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly reason?: string };
+    };
+  }>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-generic-patch-v1" },
+      body: {
+        ...baseBody,
+        variablePatch: { set: {}, remove: [] },
+      },
+    },
+    409,
+  );
+  expect(contractMismatch.error).toMatchObject({
+    code: "failed_precondition",
+    details: {
+      reason: "capsule_configuration_generic_authority_digest_mismatch",
+    },
+  });
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(0);
+  expect(
+    (await fixture.operations.capsules.getCapsule(fixture.seeded.capsule.id))
+      .installConfigId,
+  ).toBe(current.id);
+
+  await fixture.operations.capsules.putInstallConfig({
+    ...current,
+    modulePath: "deploy/opentofu/cloudflare",
+    internal: {
+      reason: "per_install_overrides",
+      genericOpenTofuVariableContractDigest:
+        await testGenericOpenTofuVariableContractDigest(
+          [
+            {
+              name: "public_url",
+              source: { kind: "user" },
+              type: "string",
+              required: true,
+              label: { ja: "公開URL", en: "Public URL" },
+            },
+          ],
+          "deploy/opentofu/cloudflare",
+        ),
+      genericOpenTofuSourceSnapshotId: fixture.seeded.snapshot.id,
+    },
+  });
+  baseBody = {
+    ...baseBody,
+    expected: { authorityGuard: await readReAdoptionGuard(fixture) },
+  };
+  const planned = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: fixture.operations,
+      store: fixture.accountStore,
+      cookie: fixture.cookie,
+      method: "POST",
+      path,
+      headers: { "idempotency-key": "configuration-plan-generic-empty-v1" },
+      body: {
+        ...baseBody,
+        variablePatch: {
+          set: { public_url: "https://configured.takosumi.test" },
+          remove: [],
+        },
+      },
+    },
+    201,
+  );
+  expect(planned.configurationPlan.replayed).toBe(false);
+  expect(planned.configurationPlan.planRunId).toMatch(/^plan_[0-9a-f]{16}$/u);
+  expect(
+    (
+      await fixture.operations.capsules.getInstallConfig(
+        planned.configurationPlan.targetInstallConfigId,
+      )
+    ).variableMapping.public_url,
+  ).toBe("https://configured.takosumi.test");
+  expect(
+    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
+      (run) => run.type === "plan",
+    ),
+  ).toHaveLength(1);
 });
 
 function storeEligibleInstallConfig(url: string) {
@@ -912,100 +2581,6 @@ test("repository preflight resolves the sole indexed module before exact compati
   expect(derivedInstallConfig.sourceBuild).toBeUndefined();
   expect(derivedInstallConfig.lifecycleActions).toBeUndefined();
 
-  const createdFromDerivedConfig = await controlJson<{
-    readonly capsule: { readonly id: string; readonly installConfigId: string };
-  }>(
-    {
-      operations,
-      store: accountStore,
-      cookie,
-      method: "POST",
-      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
-      body: {
-        name: "repo-default-derived-create",
-        environment: "production",
-        sourceId: seeded.source.id,
-        installConfigId: derivedInstallConfig.id,
-      },
-    },
-    201,
-  );
-  const createdFromDerivedInstallConfig =
-    await operations.capsules.getInstallConfig(
-      createdFromDerivedConfig.capsule.installConfigId,
-    );
-  expect(createdFromDerivedInstallConfig.modulePath).toBe(
-    "deploy/takoform",
-  );
-
-  const whitespaceDerivedConfig = await operations.capsules.putInstallConfig({
-    ...derivedInstallConfig,
-    id: "icfg_repo_default_whitespace",
-    name: "repo-default-whitespace",
-    modulePath: " deploy/takoform ",
-  });
-  const whitespaceModuleOverride = await controlJson<{
-    readonly error: {
-      readonly code: string;
-      readonly details?: { readonly diagnosticCode?: string };
-    };
-  }>(
-    {
-      operations,
-      store: accountStore,
-      cookie,
-      method: "POST",
-      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
-      body: {
-        name: "repo-default-whitespace-override",
-        environment: "production",
-        sourceId: seeded.source.id,
-        installConfigId: whitespaceDerivedConfig.id,
-        modulePath: "deploy/takoform",
-      },
-    },
-    400,
-  );
-  expect(whitespaceModuleOverride.error).toMatchObject({
-    code: "repository_install_ux_invalid",
-    details: {
-      diagnosticCode: "repository_install_ux_module_path_mismatch",
-    },
-  });
-
-  const emptyDerivedConfig = await operations.capsules.putInstallConfig({
-    ...derivedInstallConfig,
-    id: "icfg_repo_default_empty",
-    name: "repo-default-empty",
-    modulePath: "",
-  });
-  const emptyDerivedModule = await controlJson<{
-    readonly error: {
-      readonly code: string;
-      readonly details?: { readonly diagnosticCode?: string };
-    };
-  }>(
-    {
-      operations,
-      store: accountStore,
-      cookie,
-      method: "POST",
-      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
-      body: {
-        name: "repo-default-empty-module",
-        environment: "production",
-        sourceId: seeded.source.id,
-        installConfigId: emptyDerivedConfig.id,
-      },
-    },
-    400,
-  );
-  expect(emptyDerivedModule.error).toMatchObject({
-    code: "repository_install_ux_invalid",
-    details: {
-      diagnosticCode: "repository_install_ux_module_path_missing",
-    },
-  });
 
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
@@ -1163,41 +2738,6 @@ test("repository preflight resolves the sole indexed module before exact compati
   );
   expect(runner.capsuleSourceFileJobs[3]?.modulePath).toBe("deploy/manual");
 
-  const manual = await seedCapsuleModel(deployStore, {
-    workspaceId: "ws_manual_module_create",
-    sourceId: "src_manual_module_create",
-    capsuleId: "cap_manual_module_seed",
-    installConfigId: "icfg_manual_module_base",
-    sourceUrl: "https://git.example.com/example/manual-module.git",
-    installConfig: { modulePath: "." },
-  });
-  await deployStore.putSourceSnapshot({
-    ...manual.snapshot,
-    repositoryModules: repositoryModules(["deploy/manual"]),
-  });
-  const manualCreated = await controlJson<{
-    readonly capsule: { readonly id: string; readonly installConfigId: string };
-  }>(
-    {
-      operations,
-      store: accountStore,
-      cookie,
-      method: "POST",
-      path: `/api/v1/workspaces/${manual.workspace.id}/capsules`,
-      body: {
-        name: "manual-module-selection",
-        environment: "production",
-        sourceId: manual.source.id,
-        installConfigId: manual.installConfig.id,
-        modulePath: "deploy/manual",
-      },
-    },
-    201,
-  );
-  const manualConfig = await operations.capsules.getInstallConfig(
-    manualCreated.capsule.installConfigId,
-  );
-  expect(manualConfig.modulePath).toBe("deploy/manual");
 });
 
 test("the repository module index owns module choice over historical Store profile rows", async () => {
@@ -1643,6 +3183,8 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
     workspaceId: "ws_install_modules_other",
     sourceId: "src_install_modules_other",
     snapshotId: "snap_install_modules_other",
+    installConfigId: "cfg_install_modules_other",
+    capsuleId: "cap_install_modules_other",
   });
   await controlJson(
     {
@@ -1692,6 +3234,8 @@ test("SourceSnapshot install module projection is bounded, ordered, and Workspac
     workspaceId: "ws_install_modules_absent",
     sourceId: "src_install_modules_absent",
     snapshotId: "snap_install_modules_absent",
+    installConfigId: "cfg_install_modules_absent",
+    capsuleId: "cap_install_modules_absent",
   });
   const absentProjection = await controlJson<{
     readonly status: "invalid";
@@ -2115,33 +3659,15 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
     preview.repositoryInstallUx.installConfigId,
   );
   expect(reviewedConfig.sourceBuild).toEqual(reviewedSourceBuild);
-  const adoptionOnlyConfig = await operations.capsules.putInstallConfig({
-    ...reviewedConfig,
-    id: "icfg_repo_source_build_adoption_only",
-    name: "source-build-adoption-only",
-    sourceBuild: undefined,
+  const created = await createInitialAuthorityFixture({
+    operations,
+    workspaceId: seeded.workspace.id,
+    sourceId: seeded.source.id,
+    installConfig: reviewedConfig,
+    name: "source-build-pin",
   });
-
-  const created = await controlJson<{
-    readonly capsule: { readonly id: string; readonly installConfigId: string };
-  }>(
-    {
-      operations,
-      store: accountStore,
-      cookie,
-      method: "POST",
-      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
-      body: {
-        name: "source-build-pin",
-        environment: "production",
-        sourceId: seeded.source.id,
-        installConfigId: adoptionOnlyConfig.id,
-      },
-    },
-    201,
-  );
   const capsuleConfig = await operations.capsules.getInstallConfig(
-    created.capsule.installConfigId,
+    created.installConfigId,
   );
   expect(capsuleConfig.sourceBuild).toEqual(reviewedSourceBuild);
 
@@ -2161,7 +3687,7 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
       store: accountStore,
       cookie,
       method: "POST",
-      path: `/api/v1/capsules/${created.capsule.id}/plan`,
+      path: `/api/v1/capsules/${created.id}/plan`,
     },
     201,
   );
@@ -2184,7 +3710,7 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
   expect(runner.applyJobs[0]?.sourceBuild).toEqual(reviewedSourceBuild);
 });
 
-test("a Workspace session cannot grant itself operator lifecycle actions through the Capsule config patch", async () => {
+test("a Workspace session cannot mutate lifecycle actions through the retired Capsule config PATCH", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
@@ -2209,10 +3735,8 @@ test("a Workspace session cannot grant itself operator lifecycle actions through
     },
   });
 
-  // PATCH /api/v1/capsule-configs/:id is gated only by active Workspace
-  // membership, and an `operator` action is executed by the operator's own
-  // release-activation webhook. Widening the policy in the same patch that
-  // installs the action must not be self-authorizing.
+  // Existing Capsule deployment intent changes only through Configuration Plan
+  // or re-adoption; the retired PATCH must stop before parsing this payload.
   const built = request(
     "PATCH",
     `/api/v1/capsule-configs/${seeded.installConfig.id}`,
@@ -2244,7 +3768,8 @@ test("a Workspace session cannot grant itself operator lifecycle actions through
     operations,
   });
 
-  expect(response?.status).toEqual(403);
+  expect(response?.status).toEqual(405);
+  expect(response?.headers.get("allow")).toBe("GET");
   const stored = await operations.capsules.getInstallConfig(
     seeded.installConfig.id,
   );
@@ -2252,7 +3777,7 @@ test("a Workspace session cannot grant itself operator lifecycle actions through
   expect(stored.policy.lifecycleActions?.allowedExecutors).toEqual(["runner"]);
 });
 
-test("a Capsule config patch may drop public_endpoint metadata without host reservation authority", async () => {
+test("retired Capsule config PATCH cannot drop public_endpoint metadata", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
@@ -2280,9 +3805,9 @@ test("a Capsule config patch may drop public_endpoint metadata without host rese
     },
   });
 
-  // Endpoint/DNS ownership is ordinary Git OpenTofu/provider work. The
-  // presentation projection grants no hostname reservation authority, so its
-  // removal is an ordinary config patch.
+  const before = await operations.capsules.getInstallConfig(
+    seeded.installConfig.id,
+  );
   const built = request(
     "PATCH",
     `/api/v1/capsule-configs/${seeded.installConfig.id}`,
@@ -2301,14 +3826,12 @@ test("a Capsule config patch may drop public_endpoint metadata without host rese
     operations,
   });
 
-  expect(response?.status).toEqual(200);
+  expect(response?.status).toEqual(405);
+  expect(response?.headers.get("allow")).toBe("GET");
   const stored = await operations.capsules.getInstallConfig(
     seeded.installConfig.id,
   );
-  expect(stored.installExperience?.projections).toBeUndefined();
-  expect(stored.variableMapping.app_url).toBe(
-    "https://victim.app.takosumi.test",
-  );
+  expect(stored).toEqual(before);
 });
 
 test("account session control routes execute plan and apply through the real OpenTofu controller", async () => {
@@ -2433,7 +3956,7 @@ test("account session control routes execute plan and apply through the real Ope
         variableMapping: { unreviewed_value: "must-not-be-adopted" },
       },
     },
-    409,
+    405,
   );
   expect(
     (await operations.capsules.getInstallConfig(previewConfig.id))
@@ -2731,130 +4254,16 @@ test("authenticated repository Interface review persists exact proposals and app
     },
   ]);
 
-  const moduleOverride = await controlJson<{
-    readonly error: {
-      readonly code: string;
-      readonly details?: { readonly diagnosticCode?: string };
-    };
-  }>(
-    {
-      operations,
-      store: accountStore,
-      cookie,
-      method: "POST",
-      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
-      body: {
-        name: "repo-interface-module-override",
-        environment: "production",
-        sourceId: seeded.source.id,
-        installConfigId: previewConfig.id,
-        modulePath: "deploy/override",
-      },
-    },
-    400,
-  );
-  expect(moduleOverride.error).toMatchObject({
-    code: "repository_install_ux_invalid",
-    details: {
-      diagnosticCode: "repository_install_ux_module_path_mismatch",
-    },
-  });
-  expect(
-    (await operations.capsules.listCapsules(seeded.workspace.id)).some(
-      (entry) => entry.name === "repo-interface-module-override",
-    ),
-  ).toBe(false);
-
-  const matchingModule = await controlJson<{
-    readonly capsule: { readonly id: string; readonly installConfigId: string };
-  }>(
-    {
-      operations,
-      store: accountStore,
-      cookie,
-      method: "POST",
-      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
-      body: {
-        name: "repo-interface-module-match",
-        environment: "production",
-        sourceId: seeded.source.id,
-        installConfigId: previewConfig.id,
-        modulePath: ".",
-      },
-    },
-    201,
-  );
-  const matchingConfig = await operations.capsules.getInstallConfig(
-    matchingModule.capsule.installConfigId,
-  );
-  expect(matchingConfig.modulePath).toBe(previewConfig.modulePath);
-
-  const otherCookie = seedSession(accountStore, "user_other");
-  await operations.members.upsertMember({
+  const created = await createInitialAuthorityFixture({
+    operations,
     workspaceId: seeded.workspace.id,
-    accountId: "user_other",
-    roles: ["admin"],
-    status: "active",
-    actor: {
-      actorAccountId: "user_test",
-      roles: ["owner"],
-      requestId: "req_repo_interface_other_member",
-    },
+    sourceId: seeded.source.id,
+    installConfig: previewConfig,
+    name: "repo-interface",
   });
-  const principalConflict = await controlJson<{
-    readonly error: {
-      readonly code: string;
-      readonly details?: { readonly diagnosticCode?: string };
-    };
-  }>(
-    {
-      operations,
-      store: accountStore,
-      cookie: otherCookie,
-      method: "POST",
-      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
-      body: {
-        name: "repo-interface-other-installer",
-        environment: "production",
-        sourceId: seeded.source.id,
-        installConfigId: previewConfig.id,
-      },
-    },
-    400,
-  );
-  expect(principalConflict.error).toMatchObject({
-    code: "repository_install_ux_invalid",
-    details: {
-      diagnosticCode: "repository_install_ux_interface_blueprint_conflict",
-    },
-  });
-  expect(
-    (await operations.capsules.listCapsules(seeded.workspace.id)).some(
-      (entry) => entry.name === "repo-interface-other-installer",
-    ),
-  ).toBe(false);
-
-  const created = await controlJson<{
-    readonly capsule: { readonly id: string; readonly installConfigId: string };
-  }>(
-    {
-      operations,
-      store: accountStore,
-      cookie,
-      method: "POST",
-      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
-      body: {
-        name: "repo-interface",
-        environment: "production",
-        sourceId: seeded.source.id,
-        installConfigId: previewConfig.id,
-      },
-    },
-    201,
-  );
-  expect(created.capsule.installConfigId).not.toBe(previewConfig.id);
+  expect(created.installConfigId).not.toBe(previewConfig.id);
   const scopedConfig = await operations.capsules.getInstallConfig(
-    created.capsule.installConfigId,
+    created.installConfigId,
   );
   expect(scopedConfig.workspaceId).toBe(seeded.workspace.id);
   expect(scopedConfig.outputAllowlist).toEqual(previewConfig.outputAllowlist);
@@ -2873,7 +4282,7 @@ test("authenticated repository Interface review persists exact proposals and app
     '"options"',
   );
 
-  const capsule = await operations.capsules.getCapsule(created.capsule.id);
+  const capsule = await operations.capsules.getCapsule(created.id);
   await seedProviderConnections(deployStore, capsule);
   const plan = await controlJson<{
     readonly run: { readonly id: string; readonly status: string };
@@ -2974,51 +4383,6 @@ test("authenticated repository Interface review persists exact proposals and app
     await operations.interfaces.listBindings(unbound!.metadata.id),
   ).toEqual([]);
 
-  await operations.capsules.putInstallConfig({
-    ...seeded.installConfig,
-    id: "icfg_repo_interface_conflict",
-    interfaceBlueprints: [
-      {
-        ...previewConfig.interfaceBlueprints![0]!,
-        spec: {
-          ...previewConfig.interfaceBlueprints![0]!.spec,
-          document: { launcher: false },
-        },
-      },
-    ],
-  });
-  const conflict = await controlJson<{
-    readonly error: {
-      readonly code: string;
-      readonly details?: { readonly diagnosticCode?: string };
-    };
-  }>(
-    {
-      operations,
-      store: accountStore,
-      cookie,
-      method: "POST",
-      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
-      body: {
-        name: "repo-interface-conflict",
-        environment: "production",
-        sourceId: seeded.source.id,
-        installConfigId: "icfg_repo_interface_conflict",
-      },
-    },
-    400,
-  );
-  expect(conflict.error).toMatchObject({
-    code: "repository_install_ux_invalid",
-    details: {
-      diagnosticCode: "repository_install_ux_interface_blueprint_conflict",
-    },
-  });
-  expect(
-    (await operations.capsules.listCapsules(seeded.workspace.id)).some(
-      (entry) => entry.name === "repo-interface-conflict",
-    ),
-  ).toBe(false);
 });
 
 const TAKOS_PUBLIC_ORIGIN =
@@ -3040,6 +4404,7 @@ async function reAdoptionRouteFixture(
     readonly genericDefault?: boolean;
     readonly baseVariableMapping?: Readonly<Record<string, JsonValue>>;
     readonly currentVariableMapping?: Readonly<Record<string, unknown>>;
+    readonly currentInstallConfig?: Partial<InstallConfig>;
     readonly repositoryInputs?: readonly RepositoryInstallUxInput[];
   } = {},
 ) {
@@ -3172,7 +4537,9 @@ output "launch_url" { value = var.public_url }
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
     opentofuRunner: runner,
+    opentofuConnectionVault: fakeProviderVault() as never,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     operatorInstallConfigs: options.genericDefault ? [] : [baseInstallConfig],
   });
   const snapshotId = `snap_re_adoption_${suffix}`;
@@ -3197,6 +4564,7 @@ output "launch_url" { value = var.public_url }
         ...options.currentVariableMapping,
       },
       installExperience: baseInstallConfig.installExperience,
+      ...options.currentInstallConfig,
     },
   });
   await deployStore.putCapsule({
@@ -3254,6 +4622,168 @@ async function readReAdoptionGuard(
     200,
   );
   return response.installConfigReAdoption.authorityGuard;
+}
+
+async function configurationPlanRouteFixture(suffix: string) {
+  const genericInputs: readonly RepositoryInstallUxInput[] = [
+    {
+      name: "public_url",
+      source: { kind: "user" },
+      type: "string",
+      required: true,
+      label: { ja: "公開URL", en: "Public URL" },
+    },
+  ];
+  const fixture = await reAdoptionRouteFixture(suffix, {
+    genericDefault: true,
+    repositoryInputs: genericInputs,
+    currentInstallConfig: {
+      modulePath: "deploy/opentofu/cloudflare",
+      internal: {
+        reason: "per_install_overrides",
+        genericOpenTofuVariableContractDigest:
+          await testGenericOpenTofuVariableContractDigest(
+            genericInputs,
+            "deploy/opentofu/cloudflare",
+          ),
+        genericOpenTofuSourceSnapshotId: `snap_re_adoption_${suffix}`,
+      },
+    },
+  });
+  const snapshot = await fixture.operations.getSourceSnapshot(
+    fixture.seeded.snapshot.id,
+  );
+  await fixture.deployStore.putSourceSnapshot({
+    ...snapshot,
+    repositoryManifest: { status: "absent" },
+  });
+  await seedProviderConnections(fixture.deployStore, fixture.seeded.capsule);
+  const bindingSet = await fixture.operations.capsules.getProviderBindingSetByCapsule(
+    fixture.seeded.capsule.id,
+    fixture.seeded.capsule.environment,
+  );
+  if (!bindingSet) throw new Error("fixture ProviderBindingSet is missing");
+  const authorityGuard = await readReAdoptionGuard(fixture);
+  return {
+    fixture,
+    path:
+      `/api/v1/capsules/${fixture.seeded.capsule.id}/configuration-plans`,
+    body: {
+      variablePatch: {
+        set: { public_url: "https://configured.takosumi.test" },
+        remove: [],
+      },
+      providerBindings: bindingSet.bindings,
+      interfaceBlueprints: [],
+      expected: { authorityGuard },
+    },
+  };
+}
+
+async function configurationAuthoritySnapshot(
+  fixture: Awaited<ReturnType<typeof reAdoptionRouteFixture>>,
+) {
+  const capsule = await fixture.operations.capsules.getCapsule(
+    fixture.seeded.capsule.id,
+  );
+  const bindingSet = await fixture.operations.capsules
+    .getProviderBindingSetByCapsule(capsule.id, capsule.environment);
+  return {
+    capsuleDigest: await stableJsonDigest(capsule),
+    installConfigId: capsule.installConfigId,
+    providerBindingSetDigest: bindingSet
+      ? await stableJsonDigest(bindingSet)
+      : undefined,
+    executionAuthorityEpoch:
+      await fixture.operations.capsules.getCapsuleExecutionAuthorityEpoch(
+        capsule.id,
+      ),
+  };
+}
+
+function configurationInstallingPrincipalBlueprint() {
+  return {
+    key: "launcher",
+    name: "example.launcher",
+    spec: {
+      type: "interface.ui.surface",
+      version: "1",
+      document: { launcher: true },
+      inputs: {
+        url: { source: "literal", value: "https://example.test" },
+      },
+      access: { visibility: "workspace" },
+    },
+    bindings: [
+      {
+        key: "installer",
+        subject: { source: "installing_principal" },
+        permissions: ["ui.open"],
+        delivery: { type: "none" },
+      },
+    ],
+  } as const;
+}
+
+async function applyRevisedSourceSnapshot(
+  fixture: Awaited<ReturnType<typeof reAdoptionRouteFixture>>,
+  suffix: string,
+): Promise<SourceSnapshot> {
+  const original = await fixture.operations.getSourceSnapshot(
+    fixture.seeded.snapshot.id,
+  );
+  const revised: SourceSnapshot = {
+    ...original,
+    id: `snap_revised_${suffix}`,
+    resolvedCommit: "b".repeat(40),
+    archiveRef:
+      `workspaces/${original.workspaceId}/sources/${original.sourceId}/snapshots/snap_revised_${suffix}/source.tar.zst`,
+    fetchedAt: "2026-09-04T00:00:00.000Z",
+  };
+  await fixture.deployStore.putSourceSnapshot(revised);
+  const planned = await fixture.operations.createCapsulePlan(
+    fixture.seeded.capsule.id,
+    {
+      sourceSnapshotId: revised.id,
+      actor: "source-revision-regression",
+    },
+  );
+  expect(planned.planRun.sourceSnapshotId).toBe(revised.id);
+  if (!planned.planRun.planDigest) {
+    throw new Error(`source revision Plan did not complete: ${JSON.stringify(planned.planRun)}`);
+  }
+  const applied = await fixture.operations.createApplyRun({
+    planRunId: planned.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planned.planRun),
+  });
+  expect(applied.applyRun.status).toBe("succeeded");
+  expect(applied.capsule?.currentStateGeneration).toBe(1);
+  expect(
+    (await fixture.operations.getCapsuleAdoptedSourceRevision(
+      fixture.seeded.capsule.id,
+    ))?.sourceSnapshotId,
+  ).toBe(revised.id);
+  return revised;
+}
+
+async function testGenericOpenTofuVariableContractDigest(
+  inputs: readonly RepositoryInstallUxInput[],
+  modulePath: string,
+): Promise<string> {
+  return await stableJsonDigest({
+    contract: "takosumi.generic-opentofu-variable-contract/v1",
+    modulePath,
+    declarations: inputs
+      .map((input) => ({
+        name: input.name,
+        type: input.type ?? "string",
+        hasDefault:
+          input.source.kind === "module_default" || input.required === false,
+      }))
+      .sort((left, right) =>
+        left.name < right.name ? -1 : left.name > right.name ? 1 : 0
+      ),
+  });
 }
 
 function reAdoptionBody(

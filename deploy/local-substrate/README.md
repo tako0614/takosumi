@@ -31,7 +31,7 @@ rehearsal が provider-free in-process smoke runner に落ちない。
 
 該当 product を local-substrate の service として直起動する運用は扱わない。OpenTofu module repo は deploy control run ledger の入力として扱い、個別 product の runtime smoke は各 product repo 側で実行する。
 
-## Current smoke coverage (30 smoke-script checks)
+## Current smoke coverage (29 smoke-script checks)
 
 `scripts/smoke.sh` のチェック一覧 — 「smoke green = Takosumi だけで動かして deploy しても 99% 動く」を目標に、 honest pass のみを数える。各 script header に詳細を置く。
 Accounts Worker unit sentinel: worker_test.ts (issuer policy, provider-neutral login configuration, and fail-closed durable bindings).
@@ -44,7 +44,6 @@ Accounts Worker unit sentinel: worker_test.ts (issuer policy, provider-neutral l
 | tenant             |    1 | `tenant.isolation` (cross-subject installation read must fail)                                      |
 | docs               |    1 | `docs.link-check` (one-hop link audit across takosumi.test/docs + accounts)                         |
 | passkey            |    1 | `passkey.e2e` (register + authenticate with virtual P-256)                                          |
-| deploy control API |    1 | `deploy-control.api.e2e` (Capsule, Run, StateVersion, Output ledger path)                           |
 | workers            |    1 | `workers.cli-smoke` (service Worker health + capabilities + D1 semantics)                           |
 | route-registrar    |    1 | `registrar.alive` (service → Caddy admin sync via internal network)                                 |
 | object store       |    1 | `minio.roundtrip` (mb → put → get → sha256 round-trip)                                              |
@@ -54,6 +53,9 @@ Accounts Worker unit sentinel: worker_test.ts (issuer policy, provider-neutral l
 | mailpit            |    1 | `mailpit` (SMTP catcher reachable + probe email delivered)                                          |
 
 加えて repo 側の unit / worker / browser-evidence self-test は root の quality gate で実行する。公開面 / egress の companion gate として `scripts/prove-no-public-leak.sh` も用意している。
+Capsule の exact-provenance install、Plan / Apply、ledger evidence は account-plane の
+authority を使う root `bun run smoke:platform-control-plane -- ...` が正本であり、
+local-only internal bearer を使う重複 smoke は持たない。
 
 CI workflow は ecosystem-root の `.github/workflows/local-substrate-smoke.yml` を参照。現在は `smoke` job が submodule checkout 経由で takosumi を揃え、 ca-install.sh の sudo run + Pebble root の NSS install を含めた smoke chain を毎 PR で再現する。Playwright dashboard job は現時点では未実装で、signed-in browser UX は `capture:takosumi-browser-ux-evidence` / `check:takosumi-browser-ux-evidence` の operator evidence として扱う。
 

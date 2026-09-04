@@ -42,6 +42,7 @@ import {
   type SeedCapsuleModelOptions,
   seedCapsuleModel,
   seedProviderConnections,
+  transitionInstallConfigForFixture,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
@@ -661,8 +662,9 @@ test("sensitive published_output injects only through explicit share resolver an
   const store = new InMemoryOpenTofuControlStore();
   const runner = sensitiveOutputRunner();
   const { consumer } = await seedCrossSpaceGraph(store, "preview");
-  const producerConfig = await store.getInstallConfig("cfg_producer");
-  await store.putInstallConfig({ ...producerConfig!, outputAllowlist: {} });
+  await transitionInstallConfigForFixture(store, "cap_producer1", {
+    outputAllowlist: {},
+  });
   const share = await store.getOutputShare("oshare_1");
   await store.putOutputShare({
     ...share!,
@@ -740,8 +742,9 @@ test("sensitive published_output fails closed when no value sealer is configured
   const store = new InMemoryOpenTofuControlStore();
   const runner = sensitiveOutputRunner();
   const { consumer } = await seedCrossSpaceGraph(store, "preview");
-  const producerConfig = await store.getInstallConfig("cfg_producer");
-  await store.putInstallConfig({ ...producerConfig!, outputAllowlist: {} });
+  await transitionInstallConfigForFixture(store, "cap_producer1", {
+    outputAllowlist: {},
+  });
   const share = await store.getOutputShare("oshare_1");
   await store.putOutputShare({
     ...share!,
@@ -774,8 +777,9 @@ test("tampered sealed dependency values fail the apply closed", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = sensitiveOutputRunner();
   const { consumer } = await seedCrossSpaceGraph(store, "preview");
-  const producerConfig = await store.getInstallConfig("cfg_producer");
-  await store.putInstallConfig({ ...producerConfig!, outputAllowlist: {} });
+  await transitionInstallConfigForFixture(store, "cap_producer1", {
+    outputAllowlist: {},
+  });
   const share = await store.getOutputShare("oshare_1");
   await store.putOutputShare({
     ...share!,
@@ -842,8 +846,9 @@ test("tampered sealed runs_inputs sidecar fails the apply closed", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = sensitiveOutputRunner();
   const { consumer } = await seedCrossSpaceGraph(store, "preview");
-  const producerConfig = await store.getInstallConfig("cfg_producer");
-  await store.putInstallConfig({ ...producerConfig!, outputAllowlist: {} });
+  await transitionInstallConfigForFixture(store, "cap_producer1", {
+    outputAllowlist: {},
+  });
   const share = await store.getOutputShare("oshare_1");
   await store.putOutputShare({
     ...share!,
@@ -905,8 +910,9 @@ test("sensitive published_output fails closed when controller has no resolver", 
   const store = new InMemoryOpenTofuControlStore();
   const runner = sensitiveOutputRunner();
   const { consumer } = await seedCrossSpaceGraph(store, "preview");
-  const producerConfig = await store.getInstallConfig("cfg_producer");
-  await store.putInstallConfig({ ...producerConfig!, outputAllowlist: {} });
+  await transitionInstallConfigForFixture(store, "cap_producer1", {
+    outputAllowlist: {},
+  });
   const share = await store.getOutputShare("oshare_1");
   await store.putOutputShare({
     ...share!,

@@ -20,7 +20,11 @@ import type {
   RepositoryRuntimeRequirement,
 } from "./repository-manifest.ts";
 import type { JsonValue } from "./types.ts";
-import type { ConnectionScopeKind } from "./connections.ts";
+import type {
+  ConnectionScopeKind,
+  ProviderBindings,
+  ProviderBindingSet,
+} from "./connections.ts";
 import type { CapsuleStatus, PublicCapsule } from "./capsules.ts";
 
 export type { Capsule, PublicCapsule, CapsuleStatus } from "./capsules.ts";
@@ -795,9 +799,34 @@ export interface InstallConfig {
   /** Internal service-side config rows are addressable by id but not selectable. */
   readonly internal?: {
     readonly reason: "per_install_overrides";
+    /**
+     * Value-free digest of the exact runner-reported variable declaration set
+     * used by a generic Git install. It grants no repository-manifest
+     * capability; it marks every stored variable value write-only because the
+     * compatibility report cannot yet prove HCL `sensitive` metadata.
+     */
+    readonly genericOpenTofuVariableContractDigest?: string;
+    /**
+     * Exact SourceSnapshot used to compile the generic OpenTofu variable
+     * contract. This is deliberately distinct from the repository-manifest
+     * `sourceSnapshotId`/`repositoryInstallUxDigest` provenance pair below:
+     * generic OpenTofu installs have no repository manifest authority.
+     */
+    readonly genericOpenTofuSourceSnapshotId?: string;
     /** Immutable proposal provenance; never selectable through public APIs. */
     readonly sourceSnapshotId?: string;
     readonly repositoryInstallUxDigest?: string;
+    /** Immutable operator-only self-host import receipt. */
+    readonly migrationRestore?: {
+      readonly bundleDigest: string;
+      readonly migrationId: string;
+      readonly idempotencyKeyHash: string;
+      readonly requestDigest: string;
+      readonly sourceSnapshotId: string;
+      readonly compatibilityCheckRunId: string;
+      readonly compatibilityReportId: string;
+      readonly actorSubject: string;
+    };
     /** Value-free authority/audit receipt for an explicit Capsule re-adoption. */
     readonly reAdoption?: {
       readonly capsuleId: string;
@@ -811,6 +840,19 @@ export interface InstallConfig {
       readonly previousStateGeneration: number;
       readonly previousStateVersionId?: string;
       readonly previousExecutionAuthorityEpoch: number;
+      /**
+       * Exact value-free ProviderBindingSet slot authority observed with the
+       * current InstallConfig. Optional only for rows sealed before deployment
+       * intent rebinding was introduced.
+       */
+      readonly previousProviderBindingSetAuthorityDigest?: string;
+      /**
+       * Exact value-free successor row resolved before the insert-only config
+       * write. It lets a lost-ack retry finish the same atomic transition
+       * without consulting mutable Provider Connection presentation again.
+       */
+      readonly targetProviderBindingSet?: ProviderBindingSet;
+      readonly targetProviderBindingSetDigest?: string;
       readonly authorityGuard: string;
       /**
        * Present only when the GET-issued authority snapshot proved the exact
@@ -821,7 +863,10 @@ export interface InstallConfig {
         InstallConfigCommittedPostApplyRecoveryProof;
       /** Digest sealing the exact derived target before this seal field. */
       readonly derivedTargetDigest: string;
+      /** Exact predecessor/base row used to derive this immutable successor. */
       readonly baseInstallConfigId: string;
+      /** Digest of that exact predecessor/base row when sealed. */
+      readonly baseInstallConfigDigest?: string;
       readonly sourceSnapshotId: string;
     };
   };
@@ -865,6 +910,41 @@ export interface InstallConfig {
   readonly runtimeBindingMaterialization?: InstallConfigRuntimeBindingMaterialization;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+/**
+ * Closed request for one reviewed Capsule configuration Plan.
+ *
+ * The variable patch is authorized only against the immutable source authority
+ * selected by the service; provider bindings and interface blueprints are
+ * value-free declarations. The authority guard is an opaque CAS token issued
+ * by the Capsule read route and must be echoed unchanged.
+ */
+export interface CapsuleConfigurationPlanRequest {
+  readonly variablePatch: {
+    readonly set: Readonly<Record<string, JsonValue>>;
+    readonly remove: readonly string[];
+  };
+  readonly providerBindings: ProviderBindings;
+  readonly interfaceBlueprints: NonNullable<InstallConfig["interfaceBlueprints"]>;
+  readonly expected: {
+    readonly authorityGuard: string;
+  };
+}
+
+/** Value-free response for one immutable Capsule configuration Plan operation. */
+export interface CapsuleConfigurationPlanResponse {
+  readonly capsule: PublicCapsule;
+  readonly configurationPlan: {
+    readonly replayed: boolean;
+    readonly previousInstallConfigId: string;
+    readonly targetInstallConfigId: string;
+    readonly sourceSnapshotId: string;
+    readonly planRunId: string;
+  };
+  readonly links: {
+    readonly run: string;
+  };
 }
 
 /** Public InstallConfig projection returned by `/api` and dashboard session routes. */

@@ -26,6 +26,7 @@ import {
   FIXTURE_STATE_DIGEST,
   fixtureExecutionEvidence,
   seedCapsuleModel,
+  transitionProviderBindingSetForFixture,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { InstallConfig } from "takosumi-contract/install-configs";
@@ -234,7 +235,7 @@ test("AWS module + verified Workspace binding mints only its declared provider",
     installConfig,
   });
   const { vault, aws, cloudflare } = await makeVault(store);
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "bindings_aws_generic_e2e",
     workspaceId: WORKSPACE_ID,
     capsuleId: seeded.capsule.id,

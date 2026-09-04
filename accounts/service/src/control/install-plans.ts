@@ -5,6 +5,7 @@ import type {
   GitInstallPlanProviderBindingRequest,
   GitInstallPlanResponse,
   GitInstallPlanSourceRequest,
+  JsonValue,
 } from "takosumi-contract";
 import {
   normalizeInstallConfigSourceUrl,
@@ -12,6 +13,7 @@ import {
   type InstallConfig,
 } from "takosumi-contract/install-configs";
 import type { ProviderBindings } from "takosumi-contract/connections";
+import { resolveCapsuleInterfaceBlueprintInstallingPrincipal } from "takosumi-contract/interfaces";
 import {
   isOpenTofuBuiltinProviderSource,
   isOpenTofuIdentifier,
@@ -19,6 +21,7 @@ import {
 } from "takosumi-contract/provider-env-rules";
 import {
   normalizeCompatibilityReportModulePath,
+  type CapsuleRootModuleVariableDeclaration,
   type CapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { Run } from "takosumi-contract/runs";
@@ -42,6 +45,7 @@ import {
 import { evaluateSourceUrl } from "../../../../core/domains/sources/url-policy.ts";
 import type { InstallPlanCompatibilityCheckRequest } from "../../../../core/domains/sources/mod.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
+import { defaultProjectId } from "../../../../core/domains/projects/mod.ts";
 import {
   errorJson,
   json,
@@ -49,7 +53,18 @@ import {
   readJsonObject,
   stringValue,
 } from "../http-helpers.ts";
-import { modulePathValue } from "./parse.ts";
+import {
+  installConfigStoreValue,
+  jsonRecordValue,
+  modulePathValue,
+  outputAllowlistValue,
+  sourceBuildValue,
+} from "./parse.ts";
+import {
+  genericOpenTofuVariableContractDigest,
+  genericOpenTofuVariableDeclarationsAreCanonical as declarationsAreCanonical,
+} from "./generic-opentofu-variable-contract.ts";
+import { parseInterfaceBlueprintsValue } from "./interface-blueprints.ts";
 import {
   previewRepoOwnedInstallConfig,
   resolveRepoOwnedInstallModulePath,
@@ -65,7 +80,6 @@ import {
 
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
 const MAX_SOURCE_INVENTORY = 500;
-const MAX_CAPSULE_INVENTORY = 500;
 const MAX_DIAGNOSTIC_CODE = 64;
 const MAX_DIAGNOSTIC_MESSAGE = 256;
 const MAX_DIAGNOSTIC_REASON = 128;
@@ -96,10 +110,49 @@ export async function handleWorkspaceInstallPlans(
   if (!parsed) {
     return errorJson(
       "invalid_request",
-      "The install plan must contain only a normalized Git Source, Capsule name/environment, and safe option references. Variable values are not accepted.",
+      "The install plan must contain only a normalized Git Source, Capsule name/environment, and safe option references. Variable values are not accepted without an exact reviewed preflight.",
       400,
       ctx.request,
     );
+  }
+  let preflightAuthority:
+    | {
+        readonly installConfigDigest: string;
+        readonly baseInstallConfigId: string;
+        readonly baseInstallConfigDigest: string;
+      }
+    | undefined;
+  if (parsed.preflight) {
+    const base = await resolveStoreBaseInstallConfig(ctx.operations);
+    if (!base.ok) {
+      return errorJson(
+        "invalid_request",
+        base.diagnostic.message,
+        409,
+        ctx.request,
+        {},
+        { reason: base.diagnostic.code },
+      );
+    }
+    const reviewed = await ctx.operations.capsules.getInstallConfig(
+      parsed.preflight.installConfigId,
+    );
+    if (
+      reviewed.workspaceId !== undefined &&
+      reviewed.workspaceId !== workspaceId
+    ) {
+      return errorJson(
+        "invalid_request",
+        "The reviewed InstallConfig is unavailable to this Workspace.",
+        400,
+        ctx.request,
+      );
+    }
+    preflightAuthority = {
+      installConfigDigest: await stableJsonDigest(reviewed),
+      baseInstallConfigId: base.installConfig.id,
+      baseInstallConfigDigest: await stableJsonDigest(base.installConfig),
+    };
   }
   const requestDigest = await stableJsonDigest(parsed);
   const idempotencyKeyHash = await stableJsonDigest(key);
@@ -115,7 +168,26 @@ export async function handleWorkspaceInstallPlans(
     source: parsed.source,
     capsule: parsed.capsule,
     options: parsed.options ?? {},
-    phase: "syncing_source",
+    ...(parsed.preflight
+      ? {
+          preflight: parsed.preflight,
+          sourceId: parsed.preflight.sourceId,
+          sourceSnapshotId: parsed.preflight.sourceSnapshotId,
+          installConfigBaseId: preflightAuthority!.baseInstallConfigId,
+          installConfigBaseDigest:
+            preflightAuthority!.baseInstallConfigDigest,
+          preflightInstallConfigDigest:
+            preflightAuthority!.installConfigDigest,
+          compatibilityCheckRunId:
+            parsed.preflight.compatibilityCheckRunId,
+          compatibilityReportId: parsed.preflight.compatibilityReportId,
+        }
+      : {}),
+    ...(parsed.variables ? { initialVariables: parsed.variables } : {}),
+    ...(parsed.initialConfiguration
+      ? { initialConfiguration: parsed.initialConfiguration }
+      : {}),
+    phase: parsed.preflight ? "creating_capsule" : "syncing_source",
     generation: 0,
     createdAt: now,
     updatedAt: now,
@@ -459,6 +531,65 @@ async function prepareInstallCompilation(
     // Even a plain Git repository must execute the exact scanner-selected
     // root; never let a missing InstallConfig.modulePath fall back to
     // Source.defaultPath.
+    const installConfigBaseDigest = await stableJsonDigest(base.installConfig);
+    const evidence = await installPlanCompatibilityEvidence({
+      plan,
+      source,
+      snapshot,
+      installConfigBaseId: base.installConfig.id,
+      installConfigBaseDigest,
+      modulePath: moduleSelection.modulePath,
+      rootProviderRequirements: moduleSelection.rootProviderRequirements,
+    });
+    const compatibilityRequest: InstallPlanCompatibilityCheckRequest = {
+      sourceSnapshotId: snapshot.id,
+      modulePath: moduleSelection.modulePath,
+      installConfigId: base.installConfig.id,
+      installPlanIdentity: {
+        runId: evidence.runId,
+        reportId: evidence.reportId,
+        createdBy: evidence.createdBy,
+      },
+    };
+    const compatibility = await operations.createSourceCompatibilityCheck(
+      source.id,
+      compatibilityRequest,
+    );
+    assertCompatibilityEvidenceMatches({
+      compatibility,
+      plan,
+      source,
+      snapshot,
+      modulePath: moduleSelection.modulePath,
+      evidence,
+    });
+    if (compatibility.run?.status !== "succeeded") {
+      return failedPlan(plan, {
+        code: "generic_opentofu_compatibility_analysis_failed",
+        message:
+          "The generic OpenTofu compatibility analysis did not complete successfully.",
+      });
+    }
+    const declarations = compatibility.report.rootModuleVariableDeclarations;
+    if (declarations === undefined) {
+      return failedPlan(plan, {
+        code: "generic_opentofu_variable_declarations_missing",
+        message:
+          "The generic OpenTofu compatibility analysis did not return variable declarations.",
+      });
+    }
+    if (!declarationsAreCanonical(declarations)) {
+      return failedPlan(plan, {
+        code: "generic_opentofu_variable_declarations_invalid",
+        message:
+          "The generic OpenTofu compatibility analysis returned non-canonical variable declarations.",
+      });
+    }
+    const genericVariableContractDigest =
+      await genericOpenTofuVariableContractDigest({
+        declarations,
+        modulePath: moduleSelection.modulePath,
+      });
     const installConfig = await materializeSelectedModuleInstallConfig({
       operations,
       plan,
@@ -467,6 +598,8 @@ async function prepareInstallCompilation(
       baseConfig: base.installConfig,
       modulePath: moduleSelection.modulePath,
       rootProviderRequirements: moduleSelection.rootProviderRequirements,
+      genericVariableContractDigest,
+      persist: false,
     });
     if (!installConfig.ok) {
       return failedPlan(plan, installConfig.diagnostic);
@@ -474,8 +607,11 @@ async function prepareInstallCompilation(
     return progressed(plan, {
       installConfigId: installConfig.installConfig.id,
       installConfigBaseId: base.installConfig.id,
-      installConfigBaseDigest: await stableJsonDigest(base.installConfig),
+      installConfigBaseDigest,
       installModulePath: moduleSelection.modulePath,
+      compatibilityRequestDigest: evidence.requestDigest,
+      compatibilityCheckRunId: evidence.runId,
+      compatibilityReportId: evidence.reportId,
       phase: "creating_capsule",
     });
   }
@@ -585,6 +721,8 @@ async function analyzeAndCompileInstall(
     workspaceId: plan.workspaceId,
     installingPrincipalId: plan.createdBy,
     compatibilityReport: compatibility.report,
+    identityScope: plan.id,
+    persist: false,
   });
   if (preview.status === "invalid") {
     return failedPlan(plan, preview.diagnostic);
@@ -606,77 +744,498 @@ async function createCapsule(
   ctx: ControlDispatchContext,
 ): Promise<StoredGitInstallPlan> {
   const operations = ctx.operations;
-  let capsule: Capsule | undefined;
-  if (plan.capsuleId) {
-    capsule = await operations.capsules.getCapsule(plan.capsuleId);
-    assertCapsuleMatches(capsule, plan);
-  } else {
-    const page = await operations.capsules.listCapsulesPage(plan.workspaceId, {
-      limit: MAX_CAPSULE_INVENTORY,
-    });
-    const matches = page.items.filter((candidate) =>
-      capsuleMatchesPlan(candidate, plan),
+  const source = (await operations.getSource(plan.sourceId!)).source;
+  if (!sourceMatchesPlan(source, plan) || source.status !== "active") {
+    throw permanent(
+      "source_identity_changed",
+      "The canonical Source no longer matches this immutable install plan.",
     );
-    if (matches.length > 1) {
-      throw permanent(
-        "capsule_identity_ambiguous",
-        "More than one Capsule matches the immutable install plan.",
-      );
-    }
-    capsule = matches[0];
-    if (!capsule) {
-      if (page.nextCursor) {
-        throw permanent(
-          "capsule_inventory_incomplete",
-          "The bounded Capsule inventory cannot prove that creating another Capsule is safe.",
-        );
-      }
-      capsule = await operations.capsules.createCapsule({
-        workspaceId: plan.workspaceId,
-        name: plan.capsule.name,
-        environment: plan.capsule.environment,
-        sourceId: plan.sourceId!,
-        installConfigId: plan.installConfigId!,
-        installingPrincipalId: plan.createdBy,
-      });
-    }
-    return progressed(plan, { capsuleId: capsule.id });
   }
-
-  const requestedBindings = requestedProviderBindings(plan);
-  if (requestedBindings.length > 0) {
-    const resolved = await resolveProviderBindings(
-      operations,
-      plan.workspaceId,
-      requestedBindings,
+  const snapshot = await sourceSnapshotById(
+    operations,
+    source.id,
+    plan.sourceSnapshotId!,
+  );
+  if (!snapshotMatchesPlan(snapshot, plan)) {
+    throw permanent(
+      "source_snapshot_scope_mismatch",
+      "The SourceSnapshot no longer matches this immutable install plan.",
     );
-    if (!resolved.ok) {
+  }
+  const compatibility = await exactSuccessfulCompatibility(
+    plan,
+    operations,
+    source,
+    snapshot,
+  );
+  const materializedInstallConfig = plan.preflight
+    ? await materializePreflightInitialInstallConfig({
+        plan,
+        operations,
+        source,
+        snapshot,
+        compatibilityReport: compatibility.report,
+      })
+    : await materializeCoordinatorInitialInstallConfig({
+        plan,
+        operations,
+        source,
+        snapshot,
+        compatibilityReport: compatibility.report,
+      });
+  const configuredInstallConfig = await applyInitialConfiguration(
+    plan,
+    materializedInstallConfig,
+  );
+  // The install-plan creation timestamp is part of the immutable coordinator
+  // record. Re-materializing after an atomic commit acknowledgement is lost
+  // must therefore reproduce the exact InstallConfig bytes accepted by the
+  // create-only store CAS, rather than minting a new wall-clock timestamp.
+  const installConfig: InstallConfig = {
+    ...configuredInstallConfig,
+    createdAt: plan.createdAt,
+    updatedAt: plan.createdAt,
+  };
+  const requestedBindings = requestedProviderBindings(plan);
+  const resolved = await resolveProviderBindings(
+    operations,
+    plan.workspaceId,
+    requestedBindings,
+  );
+  if (!resolved.ok) {
+    return failedPlan(plan, {
+      code: "provider_binding_invalid",
+      message: "A referenced Provider Connection is unavailable to this Workspace.",
+    });
+  }
+  const capsuleId = deterministicInitialCapsuleId(plan.id);
+  const candidateCapsule: Capsule = {
+    id: capsuleId,
+    workspaceId: plan.workspaceId,
+    projectId: defaultProjectId(plan.workspaceId),
+    name: plan.capsule.name,
+    slug: plan.capsule.name,
+    environment: plan.capsule.environment,
+    sourceId: source.id,
+    installConfigId: installConfig.id,
+    installingPrincipalId: plan.createdBy,
+    currentStateGeneration: 0,
+    status: "pending",
+    createdAt: installConfig.createdAt,
+    updatedAt: installConfig.updatedAt,
+  };
+  try {
+    await operations.validateCapsuleConfigurationProviderBindings({
+      capsule: candidateCapsule,
+      installConfig,
+      compatibilityReport: compatibility.report,
+      providerBindings: resolved.bindings,
+    });
+  } catch (error) {
+    if (error instanceof OpenTofuControllerError) {
       return failedPlan(plan, {
         code: "provider_binding_invalid",
-        message: "A referenced Provider Connection is unavailable to this Workspace.",
+        message:
+          "The complete provider semantic preflight failed before initial authority was committed.",
+        controllerCode: error.code,
+        ...(structuredErrorReason(error)
+          ? { reason: structuredErrorReason(error) }
+          : {}),
       });
     }
-    const existing = await operations.capsules.getProviderBindingSetByCapsule(
-      capsule.id,
-      capsule.environment,
+    throw error;
+  }
+  const created = await operations.capsules.createCapsuleInitialAuthority({
+    capsuleId,
+    workspaceId: plan.workspaceId,
+    name: plan.capsule.name,
+    environment: plan.capsule.environment,
+    sourceId: source.id,
+    installingPrincipalId: plan.createdBy,
+    installConfig,
+    providerBindingSetId: deterministicInitialBindingSetId(plan.id),
+    providerBindings: resolved.bindings,
+  });
+  const completedPlan = {
+    ...plan,
+    installConfigId: installConfig.id,
+    capsuleId: created.capsule.id,
+  };
+  assertCapsuleMatches(created.capsule, completedPlan);
+  return progressed(completedPlan, {
+    initialVariables: undefined,
+    initialConfiguration: undefined,
+    phase: "planning",
+  });
+}
+
+async function exactSuccessfulCompatibility(
+  plan: StoredGitInstallPlan,
+  operations: ControlPlaneOperations,
+  source: Source,
+  snapshot: SourceSnapshot,
+): Promise<CapsuleCompatibilityReportResponse> {
+  if (!plan.compatibilityCheckRunId || !plan.compatibilityReportId) {
+    throw permanent(
+      "compatibility_evidence_missing",
+      "The install plan has no exact compatibility declaration.",
     );
-    if (!existing || !sameProviderBindings(existing.bindings, resolved.bindings)) {
-      const now = new Date().toISOString();
-      await operations.capsules.putProviderBindingSet({
-        id:
-          existing?.id ??
-          `dpf_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
-        workspaceId: plan.workspaceId,
-        capsuleId: capsule.id,
-        environment: capsule.environment,
-        bindings: resolved.bindings,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
-      });
-      return progressed(plan, {});
+  }
+  const [response, run] = await Promise.all([
+    operations.getCompatibilityReport(plan.compatibilityReportId),
+    operations.getRun(plan.compatibilityCheckRunId),
+  ]);
+  const report = response.report;
+  if (
+    run.id !== plan.compatibilityCheckRunId ||
+    run.type !== "compatibility_check" ||
+    run.status !== "succeeded" ||
+    run.workspaceId !== plan.workspaceId ||
+    run.sourceId !== source.id ||
+    run.sourceSnapshotId !== snapshot.id ||
+    run.compatibilityReportId !== report.id ||
+    report.id !== plan.compatibilityReportId ||
+    report.sourceId !== source.id ||
+    report.sourceSnapshotId !== snapshot.id ||
+    report.capsuleId !== undefined ||
+    report.level !== "ready" ||
+    normalizeCompatibilityReportModulePath(report.modulePath) !==
+      normalizeCompatibilityReportModulePath(
+        plan.installModulePath ?? plan.options.modulePath,
+      )
+  ) {
+    throw permanent(
+      "compatibility_evidence_identity_conflict",
+      "The compatibility declaration is not a successful exact preflight for this install.",
+    );
+  }
+  return { ...response, run };
+}
+
+async function materializePreflightInitialInstallConfig(input: {
+  readonly plan: StoredGitInstallPlan;
+  readonly operations: ControlPlaneOperations;
+  readonly source: Source;
+  readonly snapshot: SourceSnapshot;
+  readonly compatibilityReport: CapsuleCompatibilityReportResponse["report"];
+}): Promise<InstallConfig> {
+  if (
+    !input.plan.preflightInstallConfigDigest ||
+    !input.plan.installConfigBaseId ||
+    !input.plan.installConfigBaseDigest
+  ) {
+    throw permanent(
+      "install_preflight_config_authority_missing",
+      "The install plan did not pin its reviewed InstallConfig authority.",
+    );
+  }
+  const [reviewed, baseConfig] = await Promise.all([
+    input.operations.capsules.getInstallConfig(
+      input.plan.preflight!.installConfigId,
+    ),
+    input.operations.capsules.getInstallConfig(
+      input.plan.installConfigBaseId,
+    ),
+  ]);
+  if (
+    (reviewed.workspaceId !== undefined &&
+      reviewed.workspaceId !== input.plan.workspaceId) ||
+    (await stableJsonDigest(reviewed)) !==
+      input.plan.preflightInstallConfigDigest ||
+    (await stableJsonDigest(baseConfig)) !== input.plan.installConfigBaseDigest
+  ) {
+    throw permanent(
+      "install_preflight_config_identity_changed",
+      "The exact reviewed InstallConfig authority changed after preflight.",
+    );
+  }
+  const selection = resolveRepoOwnedInstallModulePath({
+    sourceSnapshot: input.snapshot,
+    modulePath: input.plan.options.modulePath,
+  });
+  if (!selection.ok) {
+    throw permanent(selection.diagnostic.code, selection.diagnostic.message);
+  }
+  const manifest = input.snapshot.repositoryManifest;
+  if (manifest?.status === "present") {
+    if (
+      reviewed.internal?.sourceSnapshotId !== input.snapshot.id ||
+      reviewed.internal.repositoryInstallUxDigest !== manifest.digest ||
+      normalizeCompatibilityReportModulePath(reviewed.modulePath) !==
+        normalizeCompatibilityReportModulePath(selection.modulePath)
+    ) {
+      throw permanent(
+        "install_preflight_config_identity_changed",
+        "The reviewed repository InstallConfig is not bound to the exact preflight snapshot.",
+      );
+    }
+    const baseline = await previewRepoOwnedInstallConfig({
+      operations: input.operations,
+      source: input.source,
+      sourceSnapshot: input.snapshot,
+      baseConfig,
+      modulePath: selection.modulePath,
+      capsuleName: input.plan.capsule.name,
+      workspaceId: input.plan.workspaceId,
+      installingPrincipalId: input.plan.createdBy,
+      compatibilityReport: input.compatibilityReport,
+      persist: false,
+    });
+    if (
+      baseline.status !== "accepted" ||
+      (await stableJsonDigest(stripInstallConfigTimestamps(reviewed))) !==
+        (await stableJsonDigest(
+          stripInstallConfigTimestamps(baseline.installConfig),
+        ))
+    ) {
+      throw permanent(
+        "install_preflight_config_identity_changed",
+        "The reviewed repository InstallConfig no longer matches its pinned base authority.",
+      );
+    }
+    const preview = await previewRepoOwnedInstallConfig({
+      operations: input.operations,
+      source: input.source,
+      sourceSnapshot: input.snapshot,
+      baseConfig,
+      modulePath: selection.modulePath,
+      capsuleName: input.plan.capsule.name,
+      workspaceId: input.plan.workspaceId,
+      installingPrincipalId: input.plan.createdBy,
+      compatibilityReport: input.compatibilityReport,
+      reviewedVariables: input.plan.initialVariables ?? {},
+      requireReviewedValues: true,
+      identityScope: input.plan.id,
+      persist: false,
+    });
+    if (preview.status !== "accepted") {
+      throw permanent(
+        preview.status === "invalid"
+          ? preview.diagnostic.code
+          : "repository_install_manifest_unavailable",
+        preview.status === "invalid"
+          ? preview.diagnostic.message
+          : "The exact repository install declaration is unavailable.",
+      );
+    }
+    return preview.installConfig;
+  }
+  const declarations = input.compatibilityReport.rootModuleVariableDeclarations;
+  if (!declarations || !declarationsAreCanonical(declarations)) {
+    throw permanent(
+      "generic_opentofu_variable_declarations_missing",
+      "The successful compatibility declaration has no canonical variable contract.",
+    );
+  }
+  assertReviewedVariablesMatchDeclarations(
+    input.plan.initialVariables ?? {},
+    baseConfig.variableMapping,
+    declarations,
+  );
+  if (reviewed.id !== baseConfig.id) {
+    throw permanent(
+      "install_preflight_config_identity_changed",
+      "A generic install must pin the exact generic host base configuration.",
+    );
+  }
+  const genericVariableContractDigest =
+    await genericOpenTofuVariableContractDigest({
+      declarations,
+      modulePath: selection.modulePath,
+    });
+  const materialized = await materializeSelectedModuleInstallConfig({
+    operations: input.operations,
+    plan: input.plan,
+    source: input.source,
+    snapshot: input.snapshot,
+    baseConfig,
+    modulePath: selection.modulePath,
+    rootProviderRequirements: selection.rootProviderRequirements,
+    genericVariableContractDigest,
+    reviewedVariables: input.plan.initialVariables ?? {},
+    persist: false,
+  });
+  if (!materialized.ok) {
+    throw permanent(materialized.diagnostic.code, materialized.diagnostic.message);
+  }
+  return materialized.installConfig;
+}
+
+function assertReviewedVariablesMatchDeclarations(
+  reviewed: Readonly<Record<string, JsonValue>>,
+  base: InstallConfig["variableMapping"],
+  declarations: readonly CapsuleRootModuleVariableDeclaration[],
+): void {
+  const byName = new Map(declarations.map((item) => [item.name, item]));
+  for (const [name, value] of Object.entries(reviewed)) {
+    const declaration = byName.get(name);
+    const typeMatches = declaration &&
+      (declaration.type === "unknown" ||
+        declaration.type === "json" ||
+        (declaration.type === "string" && typeof value === "string") ||
+        (declaration.type === "number" && typeof value === "number") ||
+        (declaration.type === "boolean" && typeof value === "boolean"));
+    if (!typeMatches) {
+      throw permanent(
+        "generic_opentofu_variable_invalid",
+        "A reviewed variable is absent from or incompatible with the exact runner declaration.",
+      );
     }
   }
-  return progressed(plan, { phase: "planning" });
+  for (const declaration of declarations) {
+    if (
+      !declaration.hasDefault &&
+      !Object.prototype.hasOwnProperty.call(reviewed, declaration.name) &&
+      !Object.prototype.hasOwnProperty.call(base, declaration.name)
+    ) {
+      throw permanent(
+        "generic_opentofu_required_variable_missing",
+        "A required variable from the exact runner declaration was not reviewed.",
+      );
+    }
+  }
+}
+
+async function materializeCoordinatorInitialInstallConfig(input: {
+  readonly plan: StoredGitInstallPlan;
+  readonly operations: ControlPlaneOperations;
+  readonly source: Source;
+  readonly snapshot: SourceSnapshot;
+  readonly compatibilityReport: CapsuleCompatibilityReportResponse["report"];
+}): Promise<InstallConfig> {
+  const base = await resolveStoreBaseInstallConfig(input.operations);
+  if (!base.ok) throw permanent(base.diagnostic.code, base.diagnostic.message);
+  const baseDigest = await stableJsonDigest(base.installConfig);
+  const selection = resolveRepoOwnedInstallModulePath({
+    sourceSnapshot: input.snapshot,
+    modulePath: input.plan.options.modulePath,
+  });
+  if (!selection.ok) {
+    throw permanent(selection.diagnostic.code, selection.diagnostic.message);
+  }
+  if (
+    input.plan.installConfigBaseId !== base.installConfig.id ||
+    input.plan.installConfigBaseDigest !== baseDigest ||
+    normalizeCompatibilityReportModulePath(input.plan.installModulePath) !==
+      normalizeCompatibilityReportModulePath(selection.modulePath)
+  ) {
+    throw permanent(
+      "install_compilation_identity_changed",
+      "The exact host policy or repository module changed after review preparation.",
+    );
+  }
+  if (input.snapshot.repositoryManifest?.status === "present") {
+    const preview = await previewRepoOwnedInstallConfig({
+      operations: input.operations,
+      source: input.source,
+      sourceSnapshot: input.snapshot,
+      baseConfig: base.installConfig,
+      modulePath: selection.modulePath,
+      capsuleName: input.plan.capsule.name,
+      workspaceId: input.plan.workspaceId,
+      installingPrincipalId: input.plan.createdBy,
+      compatibilityReport: input.compatibilityReport,
+      identityScope: input.plan.id,
+      persist: false,
+    });
+    if (preview.status !== "accepted") {
+      throw permanent(
+        preview.status === "invalid"
+          ? preview.diagnostic.code
+          : "repository_install_manifest_unavailable",
+        preview.status === "invalid"
+          ? preview.diagnostic.message
+          : "The exact repository install declaration is unavailable.",
+      );
+    }
+    return preview.installConfig;
+  }
+  const declarations = input.compatibilityReport.rootModuleVariableDeclarations;
+  if (!declarations || !declarationsAreCanonical(declarations)) {
+    throw permanent(
+      "generic_opentofu_variable_declarations_missing",
+      "The successful compatibility declaration has no canonical variable contract.",
+    );
+  }
+  const genericVariableContractDigest =
+    await genericOpenTofuVariableContractDigest({
+      declarations,
+      modulePath: selection.modulePath,
+    });
+  const materialized = await materializeSelectedModuleInstallConfig({
+    operations: input.operations,
+    plan: input.plan,
+    source: input.source,
+    snapshot: input.snapshot,
+    baseConfig: base.installConfig,
+    modulePath: selection.modulePath,
+    rootProviderRequirements: selection.rootProviderRequirements,
+    genericVariableContractDigest,
+    persist: false,
+  });
+  if (!materialized.ok) {
+    throw permanent(materialized.diagnostic.code, materialized.diagnostic.message);
+  }
+  return materialized.installConfig;
+}
+
+async function applyInitialConfiguration(
+  plan: StoredGitInstallPlan,
+  config: InstallConfig,
+): Promise<InstallConfig> {
+  const requested = plan.initialConfiguration;
+  if (!requested) return config;
+  const {
+    id: _id,
+    createdAt: _createdAt,
+    updatedAt: _updatedAt,
+    ...material
+  } = config;
+  const nextMaterial: Omit<InstallConfig, "id" | "createdAt" | "updatedAt"> = {
+    ...material,
+    ...(requested.runnerProfileId
+      ? { runnerId: requested.runnerProfileId }
+      : {}),
+    ...(requested.outputAllowlist !== undefined
+      ? { outputAllowlist: requested.outputAllowlist }
+      : {}),
+    ...(requested.interfaceBlueprints !== undefined
+      ? {
+          interfaceBlueprints:
+            resolveCapsuleInterfaceBlueprintInstallingPrincipal(
+              requested.interfaceBlueprints,
+              plan.createdBy,
+            ),
+        }
+      : {}),
+    ...(requested.store !== undefined ? { store: requested.store } : {}),
+    ...(requested.sourceBuild !== undefined
+      ? { sourceBuild: requested.sourceBuild }
+      : {}),
+  };
+  const digest = await stableJsonDigest({
+    kind: "git_install_initial_configuration_v1",
+    installPlanId: plan.id,
+    sourceSnapshotId: plan.sourceSnapshotId,
+    config: nextMaterial,
+  });
+  const now = new Date().toISOString();
+  return {
+    id: `icfg_${digest.replace(/^sha256:/u, "").slice(0, 16)}`,
+    ...nextMaterial,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function deterministicInitialCapsuleId(planId: string): string {
+  const suffix = planId.replace(/[^A-Za-z0-9]/gu, "").slice(-16);
+  return `cap_${suffix.padStart(16, "0")}`;
+}
+
+function deterministicInitialBindingSetId(planId: string): string {
+  const suffix = planId.replace(/[^A-Za-z0-9]/gu, "").slice(-16);
+  return `dpf_${suffix.padStart(16, "0")}`;
 }
 
 async function createOrObservePlanRun(
@@ -724,7 +1283,16 @@ async function createOrObservePlanRun(
 function parseCreateRequest(
   body: Record<string, unknown>,
 ): CreateGitInstallPlanRequest | undefined {
-  if (!hasOnlyKeys(body, ["source", "capsule", "options"])) return undefined;
+  if (
+    !hasOnlyKeys(body, [
+      "source",
+      "capsule",
+      "options",
+      "preflight",
+      "variables",
+      "initialConfiguration",
+    ])
+  ) return undefined;
   if (!isRecord(body.source) || !isRecord(body.capsule)) return undefined;
   if (
     !hasOnlyKeys(body.source, ["name", "url", "ref", "path", "authConnectionId"]) ||
@@ -799,6 +1367,132 @@ function parseCreateRequest(
       ...(providerBindings !== undefined ? { providerBindings } : {}),
     };
   }
+  let preflight: CreateGitInstallPlanRequest["preflight"];
+  if (body.preflight !== undefined) {
+    if (
+      !isRecord(body.preflight) ||
+      !hasOnlyKeys(body.preflight, [
+        "sourceId",
+        "sourceSnapshotId",
+        "compatibilityCheckRunId",
+        "compatibilityReportId",
+        "installConfigId",
+      ])
+    ) {
+      return undefined;
+    }
+    const sourceId = authorityId(body.preflight.sourceId, "src");
+    const sourceSnapshotId = authorityId(
+      body.preflight.sourceSnapshotId,
+      "snap",
+    );
+    const compatibilityCheckRunId = authorityId(
+      body.preflight.compatibilityCheckRunId,
+      "ccr",
+    );
+    const compatibilityReportId = authorityId(
+      body.preflight.compatibilityReportId,
+      "caprep",
+    );
+    const installConfigId = authorityId(
+      body.preflight.installConfigId,
+      "(?:cfg|icfg)",
+    );
+    if (
+      !sourceId ||
+      !sourceSnapshotId ||
+      !compatibilityCheckRunId ||
+      !compatibilityReportId ||
+      !installConfigId ||
+      options.modulePath === undefined
+    ) {
+      return undefined;
+    }
+    preflight = {
+      sourceId,
+      sourceSnapshotId,
+      compatibilityCheckRunId,
+      compatibilityReportId,
+      installConfigId,
+    };
+  }
+  let variables: Readonly<Record<string, JsonValue>> | undefined;
+  if (body.variables !== undefined) {
+    const parsedVariables = jsonRecordValue(body.variables);
+    if (
+      !parsedVariables ||
+      Object.keys(parsedVariables).length > 256 ||
+      Object.keys(parsedVariables).some(
+        (name) => !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name),
+      ) ||
+      new TextEncoder().encode(JSON.stringify(parsedVariables)).byteLength >
+        256 * 1024
+    ) {
+      return undefined;
+    }
+    variables = parsedVariables;
+  }
+  let initialConfiguration: CreateGitInstallPlanRequest["initialConfiguration"];
+  if (body.initialConfiguration !== undefined) {
+    if (
+      !isRecord(body.initialConfiguration) ||
+      !hasOnlyKeys(body.initialConfiguration, [
+        "runnerProfileId",
+        "outputAllowlist",
+        "interfaceBlueprints",
+        "store",
+        "sourceBuild",
+      ])
+    ) {
+      return undefined;
+    }
+    const runnerProfileId =
+      body.initialConfiguration.runnerProfileId === undefined
+        ? undefined
+        : boundedPlainString(
+            body.initialConfiguration.runnerProfileId,
+            128,
+          );
+    const outputAllowlist = outputAllowlistValue(
+      body.initialConfiguration.outputAllowlist,
+    );
+    const interfaceBlueprintsResult =
+      body.initialConfiguration.interfaceBlueprints === undefined
+        ? undefined
+        : parseInterfaceBlueprintsValue(
+            body.initialConfiguration.interfaceBlueprints,
+          );
+    const store = installConfigStoreValue(body.initialConfiguration.store);
+    const sourceBuild = sourceBuildValue(
+      body.initialConfiguration.sourceBuild,
+    );
+    if (
+      (body.initialConfiguration.runnerProfileId !== undefined &&
+        !runnerProfileId) ||
+      (body.initialConfiguration.outputAllowlist !== undefined &&
+        outputAllowlist === undefined) ||
+      (interfaceBlueprintsResult !== undefined &&
+        !interfaceBlueprintsResult.ok) ||
+      (body.initialConfiguration.store !== undefined && store === undefined) ||
+      (body.initialConfiguration.sourceBuild !== undefined &&
+        sourceBuild === undefined)
+    ) {
+      return undefined;
+    }
+    initialConfiguration = {
+      ...(runnerProfileId ? { runnerProfileId } : {}),
+      ...(outputAllowlist !== undefined ? { outputAllowlist } : {}),
+      ...(interfaceBlueprintsResult?.ok
+        ? { interfaceBlueprints: interfaceBlueprintsResult.value }
+        : {}),
+      ...(store !== undefined ? { store } : {}),
+      ...(sourceBuild !== undefined ? { sourceBuild } : {}),
+    };
+  }
+  if (
+    (variables !== undefined || initialConfiguration !== undefined) &&
+    !preflight
+  ) return undefined;
   return {
     source,
     capsule: {
@@ -806,7 +1500,18 @@ function parseCreateRequest(
       environment,
     },
     options,
+    ...(preflight ? { preflight } : {}),
+    ...(variables ? { variables } : {}),
+    ...(initialConfiguration ? { initialConfiguration } : {}),
   };
+}
+
+function authorityId(value: unknown, prefix: string): string | undefined {
+  const candidate = boundedPlainString(value, 132);
+  return candidate && new RegExp(`^${prefix}[-_][0-9A-Za-z-]{3,120}$`, "u")
+      .test(candidate)
+    ? candidate
+    : undefined;
 }
 
 function sourceUrlIsSafeToPersist(value: string): boolean {
@@ -836,8 +1541,10 @@ interface InstallPlanCompatibilityEvidence {
  * Materialize the scanner-selected module for a plain Git install. Generic
  * InstallConfig rows intentionally do not carry a module path, so without a
  * scoped row Core would infer Source.defaultPath at Plan time. The generated
- * row is deterministic and strips Store/source-selector presentation fields;
- * it carries no provider authority beyond the immutable module choice.
+ * row is deterministic and strips Store/source-selector presentation fields.
+ * When compatibility analysis produced a terminal runner variable contract,
+ * the exact declaration digest and SourceSnapshot id are retained as
+ * value-free provenance; no provider or variable values become authority.
  */
 async function materializeSelectedModuleInstallConfig(input: {
   readonly operations: ControlPlaneOperations;
@@ -847,6 +1554,10 @@ async function materializeSelectedModuleInstallConfig(input: {
   readonly baseConfig: InstallConfig;
   readonly modulePath: string;
   readonly rootProviderRequirements: readonly RepositoryModuleRootProviderRequirement[];
+  /** Digest of the exact runner-discovered generic variable declarations. */
+  readonly genericVariableContractDigest: string;
+  readonly reviewedVariables?: InstallConfig["variableMapping"];
+  readonly persist?: boolean;
 }): Promise<
   | { readonly ok: true; readonly installConfig: InstallConfig }
   | { readonly ok: false; readonly diagnostic: GitInstallPlanDiagnostic }
@@ -855,7 +1566,11 @@ async function materializeSelectedModuleInstallConfig(input: {
   if (
     baseModulePath !== undefined &&
     (baseModulePath === "" ? "." : baseModulePath) === input.modulePath &&
-    input.baseConfig.workspaceId === input.plan.workspaceId
+    input.baseConfig.workspaceId === input.plan.workspaceId &&
+    input.baseConfig.internal?.genericOpenTofuVariableContractDigest ===
+      input.genericVariableContractDigest &&
+    input.baseConfig.internal?.genericOpenTofuSourceSnapshotId ===
+      input.snapshot.id
   ) {
     return { ok: true, installConfig: input.baseConfig };
   }
@@ -878,11 +1593,21 @@ async function materializeSelectedModuleInstallConfig(input: {
     ...baseMaterial,
     workspaceId: input.plan.workspaceId,
     name: `${input.plan.capsule.name}-repository-install`,
-    internal: { reason: "per_install_overrides" },
+    internal: {
+      reason: "per_install_overrides",
+      genericOpenTofuVariableContractDigest:
+        input.genericVariableContractDigest,
+      genericOpenTofuSourceSnapshotId: input.snapshot.id,
+    },
     modulePath: input.modulePath,
+    variableMapping: {
+      ...baseMaterial.variableMapping,
+      ...(input.reviewedVariables ?? {}),
+    },
   };
   const digest = await stableJsonDigest({
     kind: "git-install-module-config-v1",
+    initialAuthorityId: input.plan.id,
     sourceId: input.source.id,
     sourceSnapshotId: input.snapshot.id,
     baseInstallConfigId: input.baseConfig.id,
@@ -921,7 +1646,15 @@ async function materializeSelectedModuleInstallConfig(input: {
       throw error;
     }
   }
-  const stored = await input.operations.capsules.putInstallConfig(expected);
+  if (input.persist === false) {
+    return { ok: true, installConfig: expected };
+  }
+  const created = await input.operations.capsules.createInstallConfigIfAbsent(
+    expected,
+  );
+  const stored = created
+    ? expected
+    : await input.operations.capsules.getInstallConfig(expected.id);
   if (
     (await stableJsonDigest(stripInstallConfigTimestamps(stored))) !==
     (await stableJsonDigest(stripInstallConfigTimestamps(expected)))
@@ -1117,7 +1850,10 @@ function requestedProviderBindings(
     provider: binding.provider,
     moduleLocalName: binding.moduleLocalName,
     ...(binding.childAlias !== undefined
-      ? { childAlias: binding.childAlias, rootAlias: binding.childAlias }
+      ? { childAlias: binding.childAlias }
+      : {}),
+    ...(binding.rootAlias !== undefined || binding.childAlias !== undefined
+      ? { rootAlias: binding.rootAlias ?? binding.childAlias }
       : {}),
     connectionId: binding.connectionId,
   }));
@@ -1334,6 +2070,7 @@ function providerBindingRequests(
         "provider",
         "moduleLocalName",
         "childAlias",
+        "rootAlias",
         "connectionId",
       ])
     ) {
@@ -1346,6 +2083,10 @@ function providerBindingRequests(
         ? undefined
         : boundedPlainString(item.childAlias, 128);
     const connectionId = connectionReference(item.connectionId);
+    const rootAlias =
+      item.rootAlias === undefined
+        ? undefined
+        : boundedPlainString(item.rootAlias, 128);
     if (
       !provider ||
       item.provider !== provider ||
@@ -1359,6 +2100,10 @@ function providerBindingRequests(
         (childAlias === undefined ||
           item.childAlias !== childAlias ||
           !isOpenTofuIdentifier(childAlias))) ||
+      (item.rootAlias !== undefined &&
+        (rootAlias === undefined ||
+          item.rootAlias !== rootAlias ||
+          !isOpenTofuIdentifier(rootAlias))) ||
       !connectionId ||
       item.connectionId !== connectionId
     ) {
@@ -1377,6 +2122,7 @@ function providerBindingRequests(
       provider,
       moduleLocalName,
       ...(childAlias !== undefined ? { childAlias } : {}),
+      ...(rootAlias !== undefined ? { rootAlias } : {}),
       connectionId,
     });
   }
@@ -1392,6 +2138,7 @@ function compareProviderBindingRequest(
     compareString(left.provider, right.provider) ||
     compareString(left.moduleLocalName, right.moduleLocalName) ||
     compareString(left.childAlias ?? "", right.childAlias ?? "") ||
+    compareString(left.rootAlias ?? "", right.rootAlias ?? "") ||
     compareString(left.connectionId, right.connectionId)
   );
 }

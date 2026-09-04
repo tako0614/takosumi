@@ -326,11 +326,51 @@ export class ConnectionsService {
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     const bindings = await this.#validatedProviderBindings(capsule);
     const policy = await this.#policyForCapsule(capsule);
-    const resolved = await Promise.all(
-      bindings.map((binding) => this.#resolveBinding(capsule, binding, policy)),
+    return await this.#resolveBindings(capsule, bindings, policy);
+  }
+
+  /**
+   * Validates a complete proposed ProviderBinding set without reading or
+   * changing the Capsule's current binding row. Configuration planning calls
+   * this before its immutable-successor CAS so connection scope, provider
+   * source, credential policy/readiness, and exact provider identity cannot
+   * fail only after deployment authority has moved.
+   */
+  async validateProposedProviderBindingsForRun(input: {
+    readonly capsule: Capsule;
+    readonly bindings: ProviderBindings;
+    readonly requiredProviders: readonly RequiredProviderBindingIdentity[];
+    readonly installConfigPolicy?: PolicyConfig;
+  }): Promise<void> {
+    const bindings = validateCapsuleProviderBindings(
+      input.bindings,
+      "proposed capsule provider bindings",
     );
-    assertUniqueProviderBindingIdentities(resolved);
-    return resolved;
+    const builtinBinding = bindings.find((binding) =>
+      isOpenTofuBuiltinProviderSource(binding.provider)
+    );
+    if (builtinBinding) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `proposed ProviderBinding cannot target OpenTofu builtin runtime capability ${normalizeProviderSourceAddress(builtinBinding.provider)}`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+      );
+    }
+    const workspace = await this.#store.getWorkspace(input.capsule.workspaceId);
+    const policy = mergePolicyConfigs(
+      workspace?.policy,
+      input.installConfigPolicy,
+    );
+    const resolved = await this.#resolveBindings(
+      input.capsule,
+      bindings,
+      policy,
+    );
+    this.#selectResolvedProviderBindingsForRun(
+      resolved,
+      input.requiredProviders,
+      false,
+    );
   }
 
   async #validatedProviderBindings(capsule: Capsule): Promise<ProviderBindings> {
@@ -395,6 +435,31 @@ export class ConnectionsService {
       return [];
     }
     const explicit = await this.resolveProviderBindings(capsule);
+    return this.#selectResolvedProviderBindingsForRun(
+      explicit,
+      required,
+      allowLegacySourceOnlyDefault,
+    );
+  }
+
+  async #resolveBindings(
+    capsule: Pick<Capsule, "workspaceId">,
+    bindings: ProviderBindings,
+    policy: PolicyConfig | undefined,
+  ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
+    const resolved = await Promise.all(
+      bindings.map((binding) => this.#resolveBinding(capsule, binding, policy)),
+    );
+    assertUniqueProviderBindingIdentities(resolved);
+    return resolved;
+  }
+
+  #selectResolvedProviderBindingsForRun(
+    explicit: readonly ResolvedCapsuleProviderBinding[],
+    requiredProviders: readonly RequiredProviderBindingIdentity[],
+    allowLegacySourceOnlyDefault: boolean,
+  ): readonly ResolvedCapsuleProviderBinding[] {
+    const required = validateRequiredProviderBindingIdentities(requiredProviders);
     const ambiguous = explicit.find(
       (entry) =>
         entry.alias !== undefined &&

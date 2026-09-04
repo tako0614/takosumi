@@ -31,6 +31,7 @@ import {
   fixtureStateCommit,
   providerRequirementsForFixture,
   seedCapsuleModel,
+  transitionProviderBindingSetForFixture,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 
 const ACTIVE_TEST_RUNNER_PROFILE = {
@@ -159,7 +160,7 @@ async function seedProviderConnections(
   for (const { connection } of bindings) {
     await store.putConnection(connection);
   }
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: `ipcset_seed_${capsule.id}`,
     workspaceId: capsule.workspaceId,
     capsuleId: capsule.id,
@@ -455,7 +456,7 @@ test("legacy stored builtin ProviderBinding cannot become a new Capsule Plan req
     createdAt: now,
     updatedAt: now,
   } as const;
-  await store.putProviderBindingSet(bindingSet);
+  await transitionProviderBindingSetForFixture(store, bindingSet);
   let credentialMintCalls = 0;
   let runnerPlanCalls = 0;
   const providerVault = fakeProviderVault({
@@ -1788,7 +1789,7 @@ test("generic-env providers run on an ordinary runner profile when the provider 
     updatedAt: "2026-06-06T00:00:00.000Z",
     verifiedAt: "2026-06-06T00:00:00.000Z",
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_vercel",
     workspaceId: "workspace_test",
     capsuleId,
@@ -1880,7 +1881,7 @@ test("generic-env provider policy uses the profile's explicitly registered execu
     updatedAt: "2026-06-06T00:00:00.000Z",
     verifiedAt: "2026-06-06T00:00:00.000Z",
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_vercel",
     workspaceId: "workspace_test",
     capsuleId,

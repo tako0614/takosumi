@@ -8,9 +8,12 @@
  * InstallProfile lanes model is retired; `environment` is a column on the
  * Capsule (UNIQUE(project_id, name, environment)).
  *
- * This service owns Capsule creation + lookup and InstallConfig /
- * ProviderBindingSet record passthroughs with validation. No secret material
- * flows through it; bindings reference ProviderConnection ids only.
+ * This service owns Capsule creation + lookup and immutable InstallConfig /
+ * ProviderBindingSet authority transitions. No secret material flows through
+ * it; bindings reference ProviderConnection ids only. There is intentionally
+ * no standalone ProviderBindingSet writer: creation is atomic with the initial
+ * Capsule authority, and later replacement is atomic with configuration
+ * re-adoption.
  */
 
 import type { Capsule, CapsuleStatus } from "takosumi-contract/capsules";
@@ -37,11 +40,16 @@ import { validateResourceMigrationDeclaration } from "../deploy-control/resource
 import type {
   CapsuleInstallConfigRebindInput,
   CapsuleInstallConfigRebindResult,
+  CapsuleInitialAuthorityResult,
+  CapsuleProviderBindingSetReplacement,
   CapsuleLifecycleMutation,
   CapsuleListPageParams,
   OpenTofuControlStore,
 } from "../deploy-control/store.ts";
-import { capsuleLifecycleExpected } from "../deploy-control/store.ts";
+import {
+  capsuleLifecycleExpected,
+  providerBindingSetTargetsCapsule,
+} from "../deploy-control/store.ts";
 import {
   type IdempotentActivityRecorder,
   type ActivityRecorder,
@@ -64,6 +72,7 @@ import { parseInstallConfigPatchV1 } from "./install_config_patch.ts";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { deriveCommittedPostApplyRecoveryProof } from "../deploy-control/committed_post_apply_recovery.ts";
 import { isOpenTofuBuiltinProviderSource } from "takosumi-contract/provider-env-rules";
+import { validateCapsuleProviderBindings } from "../connections/mod.ts";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -87,6 +96,20 @@ export interface CreateCapsuleRequest {
   readonly autoUpdate?: boolean;
 }
 
+/** Internal coordinator input; never accepted by the generic Capsule route. */
+export interface CreateCapsuleInitialAuthorityRequest
+  extends Omit<CreateCapsuleRequest, "installConfigId"> {
+  readonly capsuleId: string;
+  readonly installConfig: InstallConfig;
+  readonly providerBindingSetId: string;
+  readonly providerBindings: ProviderBindingSet["bindings"];
+}
+
+export interface CreateCapsuleInitialAuthorityResponse {
+  readonly capsule: Capsule;
+  readonly replayed: boolean;
+}
+
 export interface RebindCapsuleInstallConfigRequest {
   readonly capsuleId: string;
   readonly targetInstallConfigId: string;
@@ -94,12 +117,84 @@ export interface RebindCapsuleInstallConfigRequest {
   readonly actorSubject: string;
   readonly reason: string;
   readonly requestDigest: string;
+  readonly providerBindingSetReplacement?:
+    CapsuleProviderBindingSetReplacement;
 }
 
 export interface RebindCapsuleInstallConfigResponse {
   readonly capsule: Capsule;
   readonly replayed: boolean;
   readonly targetInstallConfigDigest: string;
+  readonly targetProviderBindingSetDigest?: string;
+}
+
+function validateProviderBindingSetForCapsule(
+  profile: ProviderBindingSet,
+  capsule: Capsule,
+): ProviderBindingSet {
+  requireNonEmptyString(profile.id, "providerBindingSet.id");
+  requireNonEmptyString(
+    profile.capsuleId,
+    "providerBindingSet.capsuleId",
+  );
+  requireNonEmptyString(
+    profile.environment,
+    "providerBindingSet.environment",
+  );
+  requireNonEmptyString(
+    profile.createdAt,
+    "providerBindingSet.createdAt",
+  );
+  requireNonEmptyString(
+    profile.updatedAt,
+    "providerBindingSet.updatedAt",
+  );
+  if (!providerBindingSetTargetsCapsule(profile, capsule)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "provider binding set scope does not match Capsule authority",
+    );
+  }
+  const bindings = validateCapsuleProviderBindings(
+    profile.bindings,
+    "providerBindingSet.bindings",
+  );
+  if (
+    bindings.some((binding) =>
+      isOpenTofuBuiltinProviderSource(binding.provider)
+    )
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "OpenTofu builtin providers cannot have ProviderBindings",
+    );
+  }
+  return { ...profile, bindings };
+}
+
+async function validatedProviderBindingSetReplacement(
+  replacement: CapsuleProviderBindingSetReplacement,
+  capsule: Capsule,
+): Promise<CapsuleProviderBindingSetReplacement> {
+  requireNonEmptyString(
+    replacement.expectedCurrentAuthorityDigest,
+    "providerBindingSetReplacement.expectedCurrentAuthorityDigest",
+  );
+  requireNonEmptyString(
+    replacement.targetDigest,
+    "providerBindingSetReplacement.targetDigest",
+  );
+  const target = validateProviderBindingSetForCapsule(
+    replacement.target,
+    capsule,
+  );
+  if ((await stableJsonDigest(target)) !== replacement.targetDigest) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "target ProviderBindingSet digest does not match its exact value-free row",
+    );
+  }
+  return { ...replacement, target };
 }
 
 /** Stable reason returned when an in-flight Capsule lifecycle holds its lease. */
@@ -112,6 +207,13 @@ export const CAPSULE_RUNTIME_STATE_PRESENT_REASON =
 /** Stable reason returned when an immutable repository-derived InstallConfig is patched. */
 export const REPOSITORY_INSTALL_UX_IMMUTABLE_REASON =
   "repository_install_ux_immutable";
+
+/** Stable reason returned when a reviewed generic OpenTofu config is patched. */
+export const GENERIC_INSTALL_CONFIGURATION_IMMUTABLE_REASON =
+  "generic_install_configuration_immutable";
+
+/** Stable reason when an internal PATCH targets anything but a free template. */
+export const INSTALL_CONFIG_IN_USE_REASON = "install_config_in_use";
 
 /**
  * Host-owned admission shared by every Capsule lifecycle transition that can
@@ -315,6 +417,172 @@ export class CapsulesService {
     return created;
   }
 
+  /**
+   * Creates the complete initial deployment authority in one store commit.
+   * This seam is intentionally create-only and accepts no existing Capsule;
+   * all later deployment-intent changes use Configuration Plan/re-adoption.
+   */
+  async createCapsuleInitialAuthority(
+    request: CreateCapsuleInitialAuthorityRequest,
+  ): Promise<CreateCapsuleInitialAuthorityResponse> {
+    requireNonEmptyString(request.capsuleId, "capsuleId");
+    requireNonEmptyString(request.providerBindingSetId, "providerBindingSetId");
+    requireNonEmptyString(request.workspaceId, "workspaceId");
+    requireNonEmptyString(request.name, "name");
+    requireNonEmptyString(request.environment, "environment");
+    requireNonEmptyString(request.sourceId, "sourceId");
+    requireNonEmptyString(
+      request.installingPrincipalId,
+      "installingPrincipalId",
+    );
+    if (!CAPSULE_NAME_PATTERN.test(request.name)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `name ${request.name} must match ${CAPSULE_NAME_PATTERN.source}`,
+      );
+    }
+    const workspace = await this.#store.getWorkspace(request.workspaceId);
+    if (!workspace) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "workspace does not exist",
+      );
+    }
+    const project = request.projectId
+      ? await this.#projects.getProject(request.projectId)
+      : await this.#projects.ensureDefaultProject(request.workspaceId);
+    if (project.workspaceId !== request.workspaceId) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "project is not available to this workspace",
+      );
+    }
+    const source = await this.#store.getSource(request.sourceId);
+    if (!source || source.workspaceId !== request.workspaceId) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "source is not available to this workspace",
+      );
+    }
+    const config = request.installConfig;
+    if (config.workspaceId !== request.workspaceId) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "initial InstallConfig must belong to the Capsule Workspace",
+      );
+    }
+    validateInstallConfigInternal(config);
+    if (config.sourceSelector) {
+      validateInstallConfigSourceSelector(config.sourceSelector);
+      if (
+        !installConfigSourceCoordinateMatches(config.sourceSelector, {
+          url: source.url,
+          path: source.defaultPath,
+        })
+      ) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          "source does not match the initial InstallConfig source selector",
+          { reason: "install_config_source_mismatch" },
+        );
+      }
+    }
+    if (config.sourceBuild) validateSourceBuild(config.sourceBuild);
+    validateLifecycleActions(config);
+    materializeInstallContextVariables(config.installContextVariableMapping, {
+      workspaceId: request.workspaceId,
+      capsuleId: request.capsuleId,
+    });
+    validateCapsuleInterfaceBlueprints(config.interfaceBlueprints ?? []);
+    validateCapsuleRequiredInterfaces(config.requiredInterfaces ?? []);
+    if (
+      capsuleInterfaceBlueprintsNeedInstallingPrincipal(
+        config.interfaceBlueprints,
+      )
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "initial InstallConfig contains an unresolved installing Principal binding placeholder",
+      );
+    }
+    const nowIso = config.createdAt;
+    requireNonEmptyString(nowIso, "installConfig.createdAt");
+    if (config.updatedAt !== nowIso) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "initial InstallConfig timestamps must identify one atomic transition",
+      );
+    }
+    const capsule: Capsule = {
+      id: request.capsuleId,
+      workspaceId: request.workspaceId,
+      projectId: project.id,
+      name: request.name,
+      slug: request.name,
+      sourceId: request.sourceId,
+      installConfigId: config.id,
+      installingPrincipalId: request.installingPrincipalId,
+      environment: request.environment,
+      currentStateGeneration: 0,
+      status: "pending",
+      ...(request.autoUpdate === true ? { autoUpdate: true } : {}),
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    const providerBindingSet = validateProviderBindingSetForCapsule(
+      {
+        id: request.providerBindingSetId,
+        workspaceId: request.workspaceId,
+        capsuleId: request.capsuleId,
+        environment: request.environment,
+        bindings: request.providerBindings,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      },
+      capsule,
+    );
+    const result: CapsuleInitialAuthorityResult =
+      await this.#store.createCapsuleInitialAuthority({
+        installConfig: config,
+        capsule,
+        providerBindingSet,
+      });
+    if (result.status === "conflict") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Capsule initial deployment authority conflicts with existing state",
+        { reason: "capsule_initial_authority_conflict" },
+      );
+    }
+    const activity = {
+      workspaceId: result.capsule.workspaceId,
+      action: "capsule.created",
+      targetType: "capsule",
+      targetId: result.capsule.id,
+      metadata: {
+        name: result.capsule.name,
+        environment: result.capsule.environment,
+        projectId: result.capsule.projectId,
+        sourceId: result.capsule.sourceId,
+        origin: "git",
+        initialAuthority: true,
+      },
+    } as const;
+    if (this.#activity.recordIdempotent) {
+      await this.#activity.recordIdempotent(
+        `activity_capsule_initial_authority_${result.capsule.id}`,
+        result.capsule.createdAt,
+        activity,
+      );
+    } else if (result.status === "created") {
+      await this.#activity.record(activity);
+    }
+    return {
+      capsule: result.capsule,
+      replayed: result.status === "replayed",
+    };
+  }
+
   async getCapsule(id: string): Promise<Capsule> {
     return await this.#requireCapsule(id);
   }
@@ -360,10 +628,20 @@ export class CapsulesService {
       );
     }
     const targetInstallConfigDigest = await stableJsonDigest(target);
+    const providerBindingSetReplacement = request.providerBindingSetReplacement;
+    const validatedBindingReplacement = providerBindingSetReplacement
+      ? await validatedProviderBindingSetReplacement(
+          providerBindingSetReplacement,
+          before,
+        )
+      : undefined;
     const rebind = async (): Promise<CapsuleInstallConfigRebindResult> =>
       await this.#store.rebindCapsuleInstallConfig({
         capsuleId: request.capsuleId,
         targetInstallConfigId: target.id,
+        ...(validatedBindingReplacement
+          ? { providerBindingSetReplacement: validatedBindingReplacement }
+          : {}),
         expected: {
           ...request.expected,
           targetInstallConfigDigest,
@@ -372,12 +650,23 @@ export class CapsulesService {
       });
     const admission = this.#capsuleLifecycleAdmission;
     const operationDigest = await stableJsonDigest({
-      operation: "capsule_install_config_rebind_v1",
+      operation: validatedBindingReplacement
+        ? "capsule_deployment_intent_rebind_v1"
+        : "capsule_install_config_rebind_v1",
       capsuleId: request.capsuleId,
       targetInstallConfigId: target.id,
       targetInstallConfigDigest,
       requestDigest: request.requestDigest,
       expected: request.expected,
+      ...(validatedBindingReplacement
+        ? {
+            providerBindingSetReplacement: {
+              expectedCurrentAuthorityDigest:
+                validatedBindingReplacement.expectedCurrentAuthorityDigest,
+              targetDigest: validatedBindingReplacement.targetDigest,
+            },
+          }
+        : {}),
     });
     const result = admission
       ? await admission(
@@ -398,7 +687,7 @@ export class CapsulesService {
     if (result.status === "busy") {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "Capsule has an active or reviewable Run",
+        "Capsule has an active Run",
         { reason: "capsule_install_config_rebind_busy" },
       );
     }
@@ -422,6 +711,14 @@ export class CapsulesService {
         targetInstallConfigId: target.id,
         targetInstallConfigDigest,
         requestDigest: request.requestDigest,
+        ...(validatedBindingReplacement
+          ? {
+              previousProviderBindingSetAuthorityDigest:
+                validatedBindingReplacement.expectedCurrentAuthorityDigest,
+              targetProviderBindingSetDigest:
+                validatedBindingReplacement.targetDigest,
+            }
+          : {}),
       },
     } as const;
     if (this.#activity.recordIdempotent) {
@@ -437,6 +734,12 @@ export class CapsulesService {
       capsule: result.capsule,
       replayed: result.status === "replayed",
       targetInstallConfigDigest,
+      ...(validatedBindingReplacement
+        ? {
+            targetProviderBindingSetDigest:
+              validatedBindingReplacement.targetDigest,
+          }
+        : {}),
     };
   }
 
@@ -552,6 +855,7 @@ export class CapsulesService {
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
     requireNonEmptyString(config.id, "id");
     requireNonEmptyString(config.name, "name");
+    validateInstallConfigInternal(config);
     if (config.sourceSelector) {
       validateInstallConfigSourceSelector(config.sourceSelector);
     }
@@ -576,11 +880,10 @@ export class CapsulesService {
       // `policy.lifecycleActions` and install the actions it just authorized in
       // one call — including `executor: "operator"` commands, which the release
       // activator hands to the operator webhook with the operator bearer token.
-      // Both patch entrances reach this method (the deploy-control PATCH and the
-      // Workspace-session PATCH /api/v1/capsule-configs/:id), so the stored
-      // policy is the ceiling here: an update may narrow it, never widen it.
-      // Shared operator-owned configs (no workspaceId) are unaffected — only an
-      // unrestricted operator can patch those.
+      // Keep the stored policy as the ceiling for every internal
+      // Workspace-owned update: a replacement may narrow it, never widen it.
+      // The public Capsule-config PATCH is retired; the remaining operator
+      // template PATCH accepts only unattached configs without workspaceId.
       const stored = await this.#store.getInstallConfig(config.id);
       if (stored) assertLifecycleActionsNotEscalated(stored, config);
     }
@@ -592,6 +895,7 @@ export class CapsulesService {
   async createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean> {
     requireNonEmptyString(config.id, "id");
     requireNonEmptyString(config.name, "name");
+    validateInstallConfigInternal(config);
     if (config.sourceSelector) {
       validateInstallConfigSourceSelector(config.sourceSelector);
     }
@@ -671,29 +975,27 @@ export class CapsulesService {
   ): Promise<InstallConfig> {
     const patch = parseInstallConfigPatchV1(value);
     const current = await this.getInstallConfig(id);
-    if (
+    const genericOpenTofuConfig =
+      current.internal?.genericOpenTofuVariableContractDigest !== undefined ||
+      current.internal?.genericOpenTofuSourceSnapshotId !== undefined;
+    const repositoryConfig =
       current.internal?.repositoryInstallUxDigest !== undefined ||
+      current.internal?.sourceSnapshotId !== undefined;
+    if (
+      current.workspaceId !== undefined ||
+      genericOpenTofuConfig ||
+      repositoryConfig ||
+      current.internal?.migrationRestore !== undefined ||
       current.internal?.reAdoption !== undefined
     ) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "A compiled repository install configuration is immutable; change the reviewed setup inputs through a new install preflight.",
-        { reason: REPOSITORY_INSTALL_UX_IMMUTABLE_REASON },
-      );
-    }
-    if (
-      current.workspaceId !== undefined &&
-      capsuleInterfaceBlueprintsNeedInstallingPrincipal(
-        patch.interfaceBlueprints,
-      )
-    ) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "installing Principal binding placeholders can be patched only on a shared pre-install config",
+        "Only an unattached Workspace-neutral InstallConfig template may be patched.",
+        { reason: INSTALL_CONFIG_IN_USE_REASON },
       );
     }
     const nextPolicy = patchPolicy(current.policy, patch);
-    return await this.putInstallConfig({
+    const replacement: InstallConfig = {
       ...current,
       ...(hasOwn(patch, "variableMapping")
         ? { variableMapping: patch.variableMapping! }
@@ -715,7 +1017,41 @@ export class CapsulesService {
         : {}),
       policy: nextPolicy,
       updatedAt: this.#now().toISOString(),
-    });
+    };
+    validateInstallConfigInternal(replacement);
+    if (replacement.sourceSelector) {
+      validateInstallConfigSourceSelector(replacement.sourceSelector);
+    }
+    if (replacement.sourceBuild) validateSourceBuild(replacement.sourceBuild);
+    validateLifecycleActions(replacement);
+    materializeInstallContextVariables(
+      replacement.installContextVariableMapping,
+      {
+        workspaceId: "workspace-validation",
+        capsuleId: "capsule-validation",
+      },
+    );
+    validateCapsuleInterfaceBlueprints(replacement.interfaceBlueprints ?? []);
+    validateCapsuleRequiredInterfaces(replacement.requiredInterfaces ?? []);
+    if (
+      !(await this.#store.replaceUnreferencedSharedInstallConfig(
+        current,
+        replacement,
+      ))
+    ) {
+      if (!(await this.#store.getInstallConfig(id))) {
+        throw new OpenTofuControllerError(
+          "not_found",
+          `install config ${id} not found`,
+        );
+      }
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Only an unattached Workspace-neutral InstallConfig template may be patched.",
+        { reason: INSTALL_CONFIG_IN_USE_REASON },
+      );
+    }
+    return replacement;
   }
 
   async getInstallConfig(id: string): Promise<InstallConfig> {
@@ -820,41 +1156,6 @@ export class CapsulesService {
       ),
     );
     return pageFromProbe(candidates.flat().sort(compareInstallConfigs), limit);
-  }
-
-  // --- Capsule provider env binding record ----------------------------------
-
-  async putProviderBindingSet(
-    profile: ProviderBindingSet,
-  ): Promise<ProviderBindingSet> {
-    requireNonEmptyString(profile.id, "id");
-    const profileCapsuleId = profile.capsuleId;
-    requireNonEmptyString(profileCapsuleId, "capsuleId");
-    requireNonEmptyString(profile.environment, "environment");
-    const capsule = await this.#requireCapsule(profileCapsuleId);
-    if (capsule.workspaceId !== profile.workspaceId) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "provider env binding set workspace does not match capsule workspace",
-      );
-    }
-    if (capsule.status === "destroyed") {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `capsule ${profileCapsuleId} is deleted`,
-      );
-    }
-    if (
-      profile.bindings.some((binding) =>
-        isOpenTofuBuiltinProviderSource(binding.provider),
-      )
-    ) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "OpenTofu builtin providers cannot have ProviderBindings",
-      );
-    }
-    return await this.#store.putProviderBindingSet(profile);
   }
 
   async getProviderBindingSetByCapsule(
@@ -1065,6 +1366,121 @@ function assertSafeInstallConfigPath(value: string, field: string): void {
       `${field} must be a safe relative path inside the SourceSnapshot`,
     );
   }
+}
+
+const INSTALL_CONFIG_DIGEST = /^sha256:[0-9a-f]{64}$/u;
+
+/**
+ * Validate private provenance markers at the InstallConfig write boundary.
+ *
+ * Generic OpenTofu compilation has no repository-manifest authority. Its
+ * source snapshot and variable-contract digest are therefore one inseparable
+ * pair, and the selected module path must already be canonical. Repository
+ * manifest markers remain a historical compatibility shape; they are checked
+ * by their consuming flows rather than tightened here, but a generic row may
+ * never carry either marker.
+ */
+function validateInstallConfigInternal(config: InstallConfig): void {
+  const internal = config.internal;
+  if (!internal) return;
+
+  const restore = internal.migrationRestore;
+  if (restore) {
+    if (
+      !INSTALL_CONFIG_DIGEST.test(restore.bundleDigest) ||
+      !INSTALL_CONFIG_DIGEST.test(restore.idempotencyKeyHash) ||
+      !INSTALL_CONFIG_DIGEST.test(restore.requestDigest) ||
+      !restore.migrationId ||
+      !restore.sourceSnapshotId ||
+      !restore.compatibilityCheckRunId ||
+      !restore.compatibilityReportId ||
+      !restore.actorSubject ||
+      internal.genericOpenTofuVariableContractDigest !== undefined ||
+      internal.genericOpenTofuSourceSnapshotId !== undefined ||
+      internal.sourceSnapshotId !== undefined ||
+      internal.repositoryInstallUxDigest !== undefined ||
+      internal.reAdoption !== undefined
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "migration restore provenance must be complete and exclusive",
+      );
+    }
+  }
+
+  const hasGenericDigest =
+    internal.genericOpenTofuVariableContractDigest !== undefined;
+  const hasGenericSnapshot =
+    internal.genericOpenTofuSourceSnapshotId !== undefined;
+  if (!hasGenericDigest && !hasGenericSnapshot) return;
+
+  if (!hasGenericDigest || !hasGenericSnapshot) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "generic OpenTofu provenance requires both a variable-contract digest and SourceSnapshot id",
+    );
+  }
+  if (
+    internal.sourceSnapshotId !== undefined ||
+    internal.repositoryInstallUxDigest !== undefined
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "generic OpenTofu provenance cannot be mixed with repository-manifest provenance",
+    );
+  }
+  if (
+    typeof internal.genericOpenTofuVariableContractDigest !== "string" ||
+    !INSTALL_CONFIG_DIGEST.test(internal.genericOpenTofuVariableContractDigest)
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "genericOpenTofuVariableContractDigest must be sha256:<lowercase hex>",
+    );
+  }
+  if (
+    typeof internal.genericOpenTofuSourceSnapshotId !== "string" ||
+    internal.genericOpenTofuSourceSnapshotId.trim() !==
+      internal.genericOpenTofuSourceSnapshotId ||
+    internal.genericOpenTofuSourceSnapshotId.length === 0 ||
+    internal.genericOpenTofuSourceSnapshotId.length > 256 ||
+    /[\u0000-\u001f\u007f]/u.test(internal.genericOpenTofuSourceSnapshotId)
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "genericOpenTofuSourceSnapshotId must be a bounded SourceSnapshot id",
+    );
+  }
+  if (
+    typeof config.modulePath !== "string" ||
+    !isCanonicalInstallConfigModulePath(config.modulePath)
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "generic OpenTofu provenance requires a canonical safe modulePath",
+    );
+  }
+}
+
+/** Match the source-sync module index's canonical directory spelling. */
+function isCanonicalInstallConfigModulePath(value: string): boolean {
+  if (
+    value.length === 0 ||
+    value.trim() !== value ||
+    value.length > 1_024 ||
+    value.startsWith("/") ||
+    value.startsWith("./") ||
+    value.endsWith("/") ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    /^[A-Za-z]:/u.test(value)
+  ) {
+    return false;
+  }
+  if (value === ".") return true;
+  return !value
+    .split("/")
+    .some((segment) => segment.length === 0 || segment === "." || segment === "..");
 }
 
 function validateInstallConfigSourceSelector(

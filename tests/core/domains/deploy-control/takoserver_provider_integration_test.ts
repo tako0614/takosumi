@@ -33,6 +33,7 @@ import {
   FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   fixtureExecutionEvidence,
   seedCapsuleModel,
+  transitionProviderBindingSetForFixture,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
 
@@ -365,7 +366,7 @@ async function seedTakoserverRunModel(
     createdAt: NOW,
   });
   const { vault, connection } = await makeVault(store);
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: `ipcset_${options.capsuleId}`,
     workspaceId: WORKSPACE_ID,
     capsuleId: seeded.capsule.id,

@@ -28,6 +28,8 @@ export type {
   BackupConfig,
   CapsuleInstallConfigReAdoptionResponse,
   CapsuleInstallConfigReAdoptionResult,
+  CapsuleConfigurationPlanRequest,
+  CapsuleConfigurationPlanResponse,
   CreateCapsuleInstallConfigReAdoptionRequest,
   InstallConfigLifecycleAction,
   InstallConfigLifecycleCommandAction,

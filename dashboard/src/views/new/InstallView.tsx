@@ -37,20 +37,17 @@ import {
   ControlApiError,
   ControlApiIndeterminateError,
   SourceCreateIndeterminateError,
-  createCapsule,
+  createReviewableGitInstallPlan,
   createWorkspace,
   extractRunId,
   getInstallConfig,
   listConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
   listSourceSnapshotInstallModules,
-  planCapsule,
   prepareCapsuleSourceSnapshot,
-  putCapsuleProviderBindingSet,
   type CapsuleCompatibilityResult,
   type InstallConfig,
   type PolicyConfig,
-  type ProviderBindings,
   type ProviderConnection,
   type SourceCreateReconciliationToken,
 } from "../../lib/control-api.ts";
@@ -258,6 +255,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   >({});
   const [capsuleId, setCapsuleId] = createSignal<string>();
   const [planRunId, setPlanRunId] = createSignal<string>();
+  const [installPlanIdempotencyKey, setInstallPlanIdempotencyKey] =
+    createSignal(crypto.randomUUID());
   const [error, setError] = createSignal<string>();
   const [busy, setBusy] = createSignal(false);
   const [preparationStage, setPreparationStage] =
@@ -701,6 +700,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setCapsuleId(undefined);
     setPlanRunId(undefined);
     setInterfaceUrl(undefined);
+    setInstallPlanIdempotencyKey(crypto.randomUUID());
   };
 
   const resetPreparedSource = (options?: {
@@ -1235,17 +1235,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     void prepareInstall();
   };
 
-  const providerBindings = (
-    rows: readonly ProviderConnectionRow[],
-  ): ProviderBindings =>
-    rows.map((row) => ({
-      provider: row.provider,
-      moduleLocalName: row.moduleLocalName,
-      ...(row.childAlias ? { childAlias: row.childAlias } : {}),
-      ...(row.rootAlias ? { rootAlias: row.rootAlias } : {}),
-      connectionId: row.connectionId,
-    }));
-
   const preparePlan = async (
     workspace = workspaceId(),
     checked = compatibility(),
@@ -1286,46 +1275,74 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setError(undefined);
     try {
       if (!workspaceIsCurrent(workspace)) return;
-      let currentCapsuleId = capsuleId();
-      if (!currentCapsuleId) {
-        const capsule = await createCapsule({
-          workspaceId: workspace,
-          name: name().trim(),
-          environment: "production",
-          sourceId: sourceId() ?? checked.sourceId!,
-          installConfigId: config.id,
-          // The scanned module path is the same for Store and direct Git. Do
-          // not let Source.defaultPath silently switch the root during create.
-          modulePath: modulePath().trim(),
-          ...(vars ? { vars } : {}),
-          ...(Object.keys(config.outputAllowlist).length > 0
-            ? { outputAllowlist: config.outputAllowlist }
-            : {}),
-        });
-        if (!workspaceIsCurrent(workspace)) return;
-        currentCapsuleId = capsule.id;
-        setCapsuleId(capsule.id);
-        clearCapsuleListCache(workspace);
-        clearCurrentStateVersionCache(workspace);
-        clearDashboardOverviewCache(workspace);
+      const exactSourceId = sourceId() ?? checked.sourceId;
+      const exactSnapshotId = sourceSnapshotId() ?? checked.sourceSnapshotId;
+      if (
+        !exactSourceId ||
+        !exactSnapshotId ||
+        !checked.reportId ||
+        !checked.compatibilityCheckRunId
+      ) {
+        throw new ControlApiError(
+          409,
+          "install_preflight_evidence_missing",
+          "The exact successful install preflight is unavailable.",
+        );
       }
-      await putCapsuleProviderBindingSet(
-        currentCapsuleId,
-        providerBindings(rows),
+      const response = await createReviewableGitInstallPlan(
+        workspace,
+        {
+          source: {
+            name: name().trim(),
+            url: gitUrl().trim(),
+            ref: gitRef().trim() || "HEAD",
+            path: sourcePath(),
+            ...(sourceAuthConnectionId()
+              ? { authConnectionId: sourceAuthConnectionId() }
+              : {}),
+          },
+          capsule: { name: name().trim(), environment: "production" },
+          options: {
+            modulePath: modulePath().trim(),
+            providerBindings: rows.map((row) => ({
+              provider: row.provider,
+              moduleLocalName: row.moduleLocalName,
+              ...(row.childAlias ? { childAlias: row.childAlias } : {}),
+              ...(row.rootAlias ? { rootAlias: row.rootAlias } : {}),
+              connectionId: row.connectionId,
+            })),
+          },
+          preflight: {
+            sourceId: exactSourceId,
+            sourceSnapshotId: exactSnapshotId,
+            compatibilityCheckRunId: checked.compatibilityCheckRunId,
+            compatibilityReportId: checked.reportId,
+            installConfigId: config.id,
+          },
+          ...(vars ? { variables: vars } : {}),
+        },
+        { idempotencyKey: installPlanIdempotencyKey() },
       );
       if (!workspaceIsCurrent(workspace)) return;
-      const envelope = await planCapsule(currentCapsuleId, {
-        ...(checked.reportId
-          ? { compatibilityReportId: checked.reportId }
-          : {}),
-        timeoutMs: 30_000,
-      });
-      if (!workspaceIsCurrent(workspace)) return;
-      const runId = extractRunId(envelope);
-      if (!runId) throw new Error(t("installStore.planMissing"));
+      const currentCapsuleId = response.installPlan.capsuleId;
+      const runId = response.installPlan.planRunId;
+      if (!currentCapsuleId || !runId) {
+        throw new Error(t("installStore.planMissing"));
+      }
+      setCapsuleId(currentCapsuleId);
+      clearCapsuleListCache(workspace);
+      clearCurrentStateVersionCache(workspace);
+      clearDashboardOverviewCache(workspace);
       setPlanRunId(runId);
       setPhase("review");
     } catch (cause) {
+      if (
+        cause instanceof ControlApiError &&
+        cause.status > 0 &&
+        cause.status < 500
+      ) {
+        setInstallPlanIdempotencyKey(crypto.randomUUID());
+      }
       setError(friendlyError(cause, t).message);
       setPhase(storeEntry() ? "setup" : "configure");
     } finally {
@@ -1385,6 +1402,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setProviderRows([]);
     setCapsuleId(undefined);
     setPlanRunId(undefined);
+    setInstallPlanIdempotencyKey(crypto.randomUUID());
     setStoreValues({});
     setStoreInputTouched({});
     setStoreFeatureSelections({});

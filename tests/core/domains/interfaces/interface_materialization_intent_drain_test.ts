@@ -339,10 +339,16 @@ test("exact intent drain cannot claim an older due row across stores", async () 
     const olderSeed = await seedCapsuleModel(store, {
       workspaceId: `workspace_intent_exact_older_${label}`,
       capsuleId: `capsule_intent_exact_older_${label}`,
+      sourceId: `source_intent_exact_older_${label}`,
+      snapshotId: `snapshot_intent_exact_older_${label}`,
+      installConfigId: `config_intent_exact_older_${label}`,
     });
     const targetSeed = await seedCapsuleModel(store, {
       workspaceId: `workspace_intent_exact_target_${label}`,
       capsuleId: `capsule_intent_exact_target_${label}`,
+      sourceId: `source_intent_exact_target_${label}`,
+      snapshotId: `snapshot_intent_exact_target_${label}`,
+      installConfigId: `config_intent_exact_target_${label}`,
     });
     const older = await commitPendingIntent(
       store,
@@ -402,6 +408,9 @@ test("exact intent drain no-ops ineligible rows and reclaims only its expired ro
     const delayedSeed = await seedCapsuleModel(store, {
       workspaceId: `workspace_intent_exact_delayed_${label}`,
       capsuleId: `capsule_intent_exact_delayed_${label}`,
+      sourceId: `source_intent_exact_delayed_${label}`,
+      snapshotId: `snapshot_intent_exact_delayed_${label}`,
+      installConfigId: `config_intent_exact_delayed_${label}`,
     });
     const delayed = await commitPendingIntent(
       store,
@@ -434,6 +443,9 @@ test("exact intent drain no-ops ineligible rows and reclaims only its expired ro
     const leasedSeed = await seedCapsuleModel(store, {
       workspaceId: `workspace_intent_exact_leased_${label}`,
       capsuleId: `capsule_intent_exact_leased_${label}`,
+      sourceId: `source_intent_exact_leased_${label}`,
+      snapshotId: `snapshot_intent_exact_leased_${label}`,
+      installConfigId: `config_intent_exact_leased_${label}`,
     });
     const leased = await commitPendingIntent(
       store,
@@ -989,6 +1001,9 @@ test("completed and dead-letter terminal outcomes are durable across stores", as
       const { capsule } = await seedCapsuleModel(store, {
         workspaceId: `workspace_intent_terminal_${label}_${outcomeKind}`,
         capsuleId: `capsule_intent_terminal_${label}_${outcomeKind}`,
+        sourceId: `source_intent_terminal_${label}_${outcomeKind}`,
+        snapshotId: `snapshot_intent_terminal_${label}_${outcomeKind}`,
+        installConfigId: `config_intent_terminal_${label}_${outcomeKind}`,
       });
       const intent = await commitPendingIntent(
         store,

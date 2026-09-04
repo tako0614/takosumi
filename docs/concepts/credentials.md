@@ -128,12 +128,26 @@ ProviderBinding は provider source に加えて、子 module の `moduleLocalNa
 `primary.archive` を root の `primary.production` に割り当てられます。source の末尾から
 local name を推測したり、一つの alias を両側へ暗黙に流用したりしません。
 
+既存 Capsule の割り当て変更は direct PUT ではなく、現在の完全な選択を一つの
+Configuration Plan として review します。まず Capsule GET の `authorityGuard` と現在の
+ProviderBindingSet を読み、変更後の完全な binding / Interface 選択を body に含めます。
+
 ```bash
-curl -X PUT "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/provider-bindings" \
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" > capsule.json
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/provider-bindings" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" > bindings.json
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/configuration-plans" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \
+  -H "idempotency-key: $CONFIGURATION_CHANGE_ID" \
   -H 'content-type: application/json' \
-  -d @bindings.json
+  -d @configuration-plan.json
 ```
+
+`configuration-plan.json` は `variablePatch`、変更後の完全な `providerBindings` と
+`interfaceBlueprints`、Capsule GET が返した `expected.authorityGuard` を含みます。応答の
+`planRunId` を確認・承認してから apply してください。public ProviderBinding PUT は全 row で
+`405` (`Allow: GET`) です。
 
 ## Interface のトークンは別の仕組みです
 

@@ -17,6 +17,7 @@ import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import type { Run } from "takosumi-contract/runs";
 import type { OpenTofuRunner } from "../../../core/domains/deploy-control/mod.ts";
+import type { CapsulesService } from "../../../core/domains/capsules/mod.ts";
 import { applyExpectedGuardFromPlanRun } from "../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import type { OpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
@@ -96,9 +97,7 @@ function runner(value: {
 async function seedCapsule(
   store: OpenTofuControlStore,
   operations: {
-    capsules: {
-      putInstallConfig: (config: InstallConfig) => Promise<InstallConfig>;
-    };
+    capsules: Pick<CapsulesService, "createCapsuleInitialAuthority">;
   },
   app: { request: (path: string, init?: RequestInit) => Promise<Response> },
   workspaceId: string,
@@ -138,26 +137,19 @@ async function seedCapsule(
     createdAt: nowIso,
     updatedAt: nowIso,
   };
-  await operations.capsules.putInstallConfig(config);
-
-  const installRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name,
-        environment: "preview",
-        sourceId,
-        installConfigId: config.id,
-      }),
-    },
-  );
-  expect(installRes.status).toBe(201);
-  const capsuleId = (await installRes.json()).capsule.id as string;
-  const capsule = await store.getCapsule(capsuleId);
-  expect(capsule).toBeDefined();
-  await seedProviderConnections(store, capsule!);
+  const capsuleId = `cap_${name}00000001`;
+  const initial = await operations.capsules.createCapsuleInitialAuthority({
+    capsuleId,
+    providerBindingSetId: `ipcset_${name}00000001`,
+    workspaceId,
+    name,
+    environment: "preview",
+    sourceId,
+    installingPrincipalId: "deploy-control-bearer",
+    installConfig: config,
+    providerBindings: [],
+  });
+  await seedProviderConnections(store, initial.capsule);
 
   const snapshot: SourceSnapshot = {
     id: `snap_${name}00001`,

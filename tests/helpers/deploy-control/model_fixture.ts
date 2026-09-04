@@ -11,6 +11,7 @@ import type {
   InstallConfig,
   ProviderConnection,
 } from "@takosumi/internal/deploy-control-api";
+import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type { Project } from "takosumi-contract/projects";
 import type { CapsuleProviderRequirement } from "takosumi-contract/capsules";
 import { normalizeProviderSourceAddress } from "takosumi-contract/provider-env-rules";
@@ -20,10 +21,15 @@ import {
   CredentialBundle,
   PhaseMintBundle,
 } from "../../../core/adapters/vault/mod.ts";
-import type {
-  OpenTofuControlStore,
-  StoredSource,
+import {
+  providerBindingSetAuthorityDigest,
+  type OpenTofuControlStore,
+  type StoredSource,
 } from "../../../core/domains/deploy-control/store.ts";
+import {
+  stableJsonDigest,
+  stableStringify,
+} from "../../../core/adapters/source/digest.ts";
 import type {
   OpenTofuApplyJob,
   OpenTofuDestroyJob,
@@ -33,6 +39,23 @@ import {
   type RunExecutionCommit,
   type RunExecutionEvidence,
 } from "takosumi-contract/runs";
+
+/*
+ * This module is test-only. ProviderBindingSet fixture changes deliberately go
+ * through the same atomic initial-authority or exact rebind CAS as production;
+ * tests that need a later binding set therefore also create an immutable
+ * InstallConfig successor and advance the Capsule epoch.
+ */
+type CapsuleStore = Pick<
+  OpenTofuControlStore,
+  | "createInstallConfigIfAbsent"
+  | "createCapsuleInitialAuthority"
+  | "getCapsule"
+  | "getCapsuleExecutionAuthorityEpoch"
+  | "getInstallConfig"
+  | "getProviderBindingSetByCapsule"
+  | "rebindCapsuleInstallConfig"
+>;
 
 export interface SeededCapsuleModel {
   readonly workspace: Workspace;
@@ -57,6 +80,8 @@ export interface SeedCapsuleModelOptions {
   readonly withoutSnapshot?: boolean;
   /** Extra InstallConfig fields (e.g. templateBinding for template runs). */
   readonly installConfig?: Partial<InstallConfig>;
+  /** Provider identities committed with the Capsule's initial authority. */
+  readonly requiredProviders?: readonly string[];
 }
 
 export interface SeedProviderConnectionOptions {
@@ -255,6 +280,7 @@ export async function seedCapsuleModel(
 ): Promise<SeededCapsuleModel> {
   const now = "2026-06-06T00:00:00.000Z";
   const workspaceId = options.workspaceId ?? "workspace_test";
+  const capsuleId = options.capsuleId ?? "cap_fixture";
   const sourceId = options.sourceId ?? "src_fixture";
   const environment = options.environment ?? "production";
   const name = options.name ?? "app";
@@ -311,6 +337,7 @@ export async function seedCapsuleModel(
   }
   const installConfig: InstallConfig = {
     id: options.installConfigId ?? "cfg_fixture",
+    workspaceId,
     name: `${name}-config`,
     variableMapping: {},
     outputAllowlist: {
@@ -320,10 +347,10 @@ export async function seedCapsuleModel(
     createdAt: now,
     updatedAt: now,
     ...options.installConfig,
+    workspaceId,
   };
-  await store.putInstallConfig(installConfig);
   const capsule: Capsule = {
-    id: options.capsuleId ?? "cap_fixture",
+    id: capsuleId,
     workspaceId,
     projectId: project.id,
     name,
@@ -336,7 +363,26 @@ export async function seedCapsuleModel(
     createdAt: now,
     updatedAt: now,
   };
-  await store.putCapsule(capsule);
+  const providerBindingSet: ProviderBindingSet = {
+    id: `ipcset_fixture_${sanitizeId(capsule.id)}_${sanitizeId(environment)}`,
+    workspaceId,
+    capsuleId: capsule.id,
+    environment,
+    bindings: providerBindingsForFixture(
+      capsule,
+      options.requiredProviders ?? [],
+    ),
+    createdAt: now,
+    updatedAt: now,
+  };
+  const initial = await store.createCapsuleInitialAuthority({
+    installConfig,
+    capsule,
+    providerBindingSet,
+  });
+  if (initial.status === "conflict") {
+    throw new Error(`fixture initial authority conflicted for ${capsule.id}`);
+  }
   return { workspace, project, source, snapshot, installConfig, capsule };
 }
 
@@ -351,15 +397,7 @@ export async function seedProviderConnections(
   if (requiredProviders.length === 0) return;
   const materialization = options.materialization ?? "secret";
   const now = "2026-06-06T00:00:00.000Z";
-  const bindings = requiredProviders.map((provider) => {
-    const shortName = providerShortName(provider);
-    return {
-      provider,
-      moduleLocalName: shortName,
-      rootAlias: "main",
-      connectionId: `conn_fixture_${sanitizeId(capsule.workspaceId)}_${shortName}`,
-    } as const;
-  });
+  const bindings = providerBindingsForFixture(capsule, requiredProviders);
   for (const provider of requiredProviders) {
     const shortName = providerShortName(provider);
     const connectionId = `conn_fixture_${sanitizeId(capsule.workspaceId)}_${shortName}`;
@@ -386,7 +424,7 @@ export async function seedProviderConnections(
     };
     await store.putConnection(connection);
   }
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: `ipcset_fixture_${sanitizeId(capsule.id)}_${sanitizeId(
       capsule.environment,
     )}`,
@@ -397,6 +435,156 @@ export async function seedProviderConnections(
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
+}
+
+function providerBindingsForFixture(
+  capsule: Pick<Capsule, "workspaceId">,
+  requiredProviders: readonly string[],
+): ProviderBindingSet["bindings"] {
+  return requiredProviders.map((provider) => {
+    const shortName = providerShortName(provider);
+    return {
+      provider,
+      moduleLocalName: shortName,
+      rootAlias: "main",
+      connectionId: `conn_fixture_${sanitizeId(capsule.workspaceId)}_${shortName}`,
+    } as const;
+  });
+}
+
+/**
+ * Test-only binding transition through the real immutable-successor CAS. This
+ * intentionally cannot alter a binding set behind an existing Plan's back.
+ */
+export async function transitionProviderBindingSetForFixture(
+  store: CapsuleStore,
+  target: ProviderBindingSet,
+): Promise<Capsule> {
+  const capsule = await store.getCapsule(target.capsuleId);
+  if (
+    !capsule ||
+    capsule.workspaceId !== target.workspaceId ||
+    capsule.environment !== target.environment
+  ) {
+    throw new Error("fixture ProviderBindingSet does not target one exact Capsule");
+  }
+  const currentBindingSet = await store.getProviderBindingSetByCapsule(
+    capsule.id,
+    capsule.environment,
+  );
+  if (stableStringify(currentBindingSet) === stableStringify(target)) {
+    return capsule;
+  }
+  const currentConfig = await store.getInstallConfig(capsule.installConfigId);
+  const executionAuthorityEpoch =
+    await store.getCapsuleExecutionAuthorityEpoch(capsule.id);
+  if (!currentConfig || executionAuthorityEpoch === undefined) {
+    throw new Error("fixture Capsule deployment authority is incomplete");
+  }
+  const successorDigest = await stableJsonDigest({
+    previousInstallConfigId: currentConfig.id,
+    providerBindingSet: target,
+  });
+  const successor: InstallConfig = {
+    ...currentConfig,
+    id: `icfg_fixture_${successorDigest.replace(/^sha256:/u, "").slice(0, 24)}`,
+    workspaceId: capsule.workspaceId,
+    createdAt: target.updatedAt,
+    updatedAt: target.updatedAt,
+  };
+  const created = await store.createInstallConfigIfAbsent(successor);
+  if (!created) {
+    const existing = await store.getInstallConfig(successor.id);
+    if (stableStringify(existing) !== stableStringify(successor)) {
+      throw new Error("fixture InstallConfig successor identity conflicted");
+    }
+  }
+  const result = await store.rebindCapsuleInstallConfig({
+    capsuleId: capsule.id,
+    targetInstallConfigId: successor.id,
+    providerBindingSetReplacement: {
+      expectedCurrentAuthorityDigest: await providerBindingSetAuthorityDigest(
+        currentBindingSet,
+      ),
+      target,
+      targetDigest: await stableJsonDigest(target),
+    },
+    expected: {
+      installConfigId: currentConfig.id,
+      installConfigDigest: await stableJsonDigest(currentConfig),
+      targetInstallConfigDigest: await stableJsonDigest(successor),
+      currentStateGeneration: capsule.currentStateGeneration,
+      currentStateVersionId: capsule.currentStateVersionId,
+      status: capsule.status,
+      executionAuthorityEpoch,
+    },
+    updatedAt: target.updatedAt,
+  });
+  if (result.status !== "updated" && result.status !== "replayed") {
+    throw new Error(`fixture ProviderBindingSet rebind failed: ${result.status}`);
+  }
+  return result.capsule;
+}
+
+/**
+ * Test-only InstallConfig transition through the immutable-successor CAS. It is
+ * intentionally distinct from template fixture creation: once a Capsule owns
+ * a config, even test setup must advance that Capsule's authority epoch.
+ */
+export async function transitionInstallConfigForFixture(
+  store: CapsuleStore,
+  capsuleId: string,
+  patch: Partial<InstallConfig>,
+  updatedAt = "2026-06-06T00:00:00.000Z",
+): Promise<{ readonly capsule: Capsule; readonly installConfig: InstallConfig }> {
+  if (patch.id !== undefined || patch.workspaceId !== undefined) {
+    throw new Error("fixture InstallConfig patch cannot replace authority identity");
+  }
+  const capsule = await store.getCapsule(capsuleId);
+  if (!capsule) throw new Error(`fixture Capsule ${capsuleId} does not exist`);
+  const currentConfig = await store.getInstallConfig(capsule.installConfigId);
+  const executionAuthorityEpoch =
+    await store.getCapsuleExecutionAuthorityEpoch(capsule.id);
+  if (!currentConfig || executionAuthorityEpoch === undefined) {
+    throw new Error("fixture Capsule deployment authority is incomplete");
+  }
+  const successorDigest = await stableJsonDigest({
+    previousInstallConfigId: currentConfig.id,
+    patch,
+  });
+  const successor: InstallConfig = {
+    ...currentConfig,
+    ...patch,
+    id: `icfg_fixture_${successorDigest.replace(/^sha256:/u, "").slice(0, 24)}`,
+    workspaceId: capsule.workspaceId,
+    createdAt: updatedAt,
+    updatedAt,
+  };
+  const created = await store.createInstallConfigIfAbsent(successor);
+  if (!created) {
+    const existing = await store.getInstallConfig(successor.id);
+    if (stableStringify(existing) !== stableStringify(successor)) {
+      throw new Error("fixture InstallConfig successor identity conflicted");
+    }
+  }
+  const result = await store.rebindCapsuleInstallConfig({
+    capsuleId: capsule.id,
+    targetInstallConfigId: successor.id,
+    expected: {
+      installConfigId: currentConfig.id,
+      installConfigDigest: await stableJsonDigest(currentConfig),
+      targetInstallConfigDigest: await stableJsonDigest(successor),
+      currentStateGeneration: capsule.currentStateGeneration,
+      currentStateVersionId: capsule.currentStateVersionId,
+      status: capsule.status,
+      executionAuthorityEpoch,
+    },
+    updatedAt,
+  });
+  if (result.status !== "updated" && result.status !== "replayed") {
+    throw new Error(`fixture InstallConfig rebind failed: ${result.status}`);
+  }
+  return { capsule: result.capsule, installConfig: successor };
 }
 
 function providerShortName(provider: string): string {

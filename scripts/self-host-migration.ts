@@ -30,6 +30,7 @@ const EXPORT_KIND = "takosumi.self-host-migration-export@v1" as const;
 const APPLY_KIND = "takosumi.self-host-migration-apply-result@v1" as const;
 const LOGIN_KIND = "takosumi.self-host-migration-login@v1" as const;
 const SAMPLE_KIND = "takosumi.self-host-migration-sample@v1" as const;
+const RESTORE_KIND = "takosumi.capsule-configuration-restore@v1" as const;
 const REDACTED = "[REDACTED]";
 const TERMINAL = new Set(["succeeded", "failed", "cancelled", "expired"]);
 
@@ -178,12 +179,16 @@ class Api {
     method: string,
     path: string,
     body?: unknown,
+    options: { readonly idempotencyKey?: string } = {},
   ): Promise<Record<string, unknown>> {
     const headers = new Headers({
       accept: "application/json",
       authorization: `Bearer ${this.token}`,
     });
     if (body !== undefined) headers.set("content-type", "application/json");
+    if (options.idempotencyKey) {
+      headers.set("idempotency-key", options.idempotencyKey);
+    }
     const init = {
       method,
       headers,
@@ -216,6 +221,10 @@ class Api {
 
   post(path: string, body: unknown = {}) {
     return this.request("POST", path, body);
+  }
+
+  postIdempotent(path: string, body: unknown, idempotencyKey: string) {
+    return this.request("POST", path, body, { idempotencyKey });
   }
 
   patch(path: string, body: unknown) {
@@ -419,6 +428,16 @@ async function apiFrom(options: Options, prefix = ""): Promise<Api> {
   return new Api(base, token, ca);
 }
 
+async function targetOperatorApiFrom(options: Options): Promise<Api> {
+  const base = required(options, "target-issuer");
+  const tokenFile = required(options, "target-operator-token-file");
+  const token = (await readFile(resolve(tokenFile), "utf8")).trim();
+  if (!token) fail(`${tokenFile} is empty`);
+  const caFile = optional(options, "target-ca-file");
+  const ca = caFile ? await readFile(resolve(caFile), "utf8") : undefined;
+  return new Api(base, token, ca);
+}
+
 async function exportBundle(options: Options): Promise<ExportEvidence> {
   const api = await apiFrom(options, "source");
   const workspaceId = required(options, "workspace-id");
@@ -579,6 +598,7 @@ function stable(value: Json): string {
 
 async function importBundle(options: Options) {
   const api = await apiFrom(options, "target");
+  const operatorApi = await targetOperatorApiFrom(options);
   const archiveFile = required(options, "archive-file");
   const identityFile = required(options, "identity-file");
   const proofDirectory = required(options, "proof-directory");
@@ -669,72 +689,111 @@ async function importBundle(options: Options) {
     fail("target SourceSnapshot commit/path does not match the applied source");
   }
 
-  const capsuleBody = await api.post(
-    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/capsules`,
-    {
-      name: `${string(sourceCapsule.name, "capsule.name")}${suffix}`,
-      environment: string(sourceCapsule.environment, "capsule.environment"),
-      sourceId,
-      installConfigId:
-        optional(options, "target-install-config-id") ??
-        "cfg-default-opentofu-capsule",
-      runnerProfileId:
-        optional(options, "runner-profile-id") ?? "opentofu-default",
-      vars: variables,
-      outputAllowlist: sourceConfig.outputAllowlist ?? {},
-      ...(sourceConfig.modulePath === undefined
-        ? {}
-        : { modulePath: sourceConfig.modulePath }),
-      ...(sourceConfig.sourceBuild === undefined
-        ? {}
-        : { sourceBuild: sourceConfig.sourceBuild }),
-      ...(interfaceBlueprints === undefined ? {} : { interfaceBlueprints }),
-      ...(sourceConfig.store === undefined
-        ? {}
-        : { store: sourceConfig.store }),
-      autoUpdate: sourceCapsule.autoUpdate === true,
-    },
-  );
-  const capsule = object(capsuleBody.capsule, "created capsule");
-  const capsuleId = string(capsule.id, "created capsule.id");
-  const targetInstallConfigId = string(
-    capsule.installConfigId,
-    "created capsule.installConfigId",
-  );
   const sourcePolicy = object(
     sourceConfig.policy ?? {},
     "installConfig.policy",
   );
-  await api.patch(
-    `/api/v1/capsule-configs/${encodeURIComponent(targetInstallConfigId)}`,
+  const compatibilityBody = await api.post(
+    `/api/v1/sources/${encodeURIComponent(sourceId)}/compatibility-check`,
     {
-      ...(sourceConfig.variablePresentation === undefined
+      sourceSnapshotId: targetSnapshotId,
+      installConfigId:
+        optional(options, "target-install-config-id") ??
+        "cfg-default-opentofu-capsule",
+      ...(sourceConfig.modulePath === undefined
         ? {}
-        : { variablePresentation: sourceConfig.variablePresentation }),
-      ...(sourceConfig.installExperience === undefined
-        ? {}
-        : { installExperience: sourceConfig.installExperience }),
-      outputAllowlist: sourceConfig.outputAllowlist ?? {},
-      ...(interfaceBlueprints === undefined ? {} : { interfaceBlueprints }),
-      ...(sourceConfig.lifecycleActions === undefined
-        ? {}
-        : { lifecycleActions: sourceConfig.lifecycleActions }),
-      ...(sourcePolicy.lifecycleActions === undefined
-        ? {}
-        : { lifecycleActionPolicy: sourcePolicy.lifecycleActions }),
+        : { modulePath: sourceConfig.modulePath }),
     },
   );
-  const planBody = await api.post(
-    `/api/v1/capsules/${encodeURIComponent(capsuleId)}/plan`,
+  const compatibilityReport = object(
+    compatibilityBody.report,
+    "target compatibility report",
   );
-  let planRun = object(planBody.run, "plan run");
-  const planRunId = string(planRun.id, "plan run.id");
-  if (
-    !TERMINAL.has(String(planRun.status)) &&
-    planRun.status !== "waiting_approval"
-  ) {
-    planRun = await waitRun(api, planRunId);
+  let compatibilityRun = object(
+    compatibilityBody.run,
+    "target compatibility run",
+  );
+  const compatibilityRunId = string(
+    compatibilityRun.id,
+    "target compatibility run.id",
+  );
+  if (!TERMINAL.has(String(compatibilityRun.status))) {
+    compatibilityRun = await waitRun(api, compatibilityRunId);
   }
+  const compatibilityReportId = string(
+    compatibilityReport.id,
+    "target compatibility report.id",
+  );
+  if (
+    compatibilityReport.level !== "ready" ||
+    compatibilityReport.sourceId !== sourceId ||
+    compatibilityReport.sourceSnapshotId !== targetSnapshotId ||
+    compatibilityRun.type !== "compatibility_check" ||
+    compatibilityRun.status !== "succeeded" ||
+    compatibilityRun.sourceSnapshotId !== targetSnapshotId ||
+    compatibilityRun.compatibilityReportId !== compatibilityReportId
+  ) {
+    fail(
+      "target compatibility check did not return one exact successful declaration",
+    );
+  }
+
+  const restoreBody = await operatorApi.postIdempotent(
+    "/internal/v1/capsule-configuration-restores",
+    {
+      kind: RESTORE_KIND,
+      bundleDigest: archiveDigest,
+      migrationId,
+      workspaceId,
+      sourceId,
+      sourceSnapshotId: targetSnapshotId,
+      compatibilityCheckRunId: compatibilityRunId,
+      compatibilityReportId,
+      capsule: {
+        name: `${string(sourceCapsule.name, "capsule.name")}${suffix}`,
+        environment: string(sourceCapsule.environment, "capsule.environment"),
+        autoUpdate: sourceCapsule.autoUpdate === true,
+      },
+      configuration: {
+        variableMapping: variables,
+        ...(sourceConfig.variablePresentation === undefined
+          ? {}
+          : { variablePresentation: sourceConfig.variablePresentation }),
+        ...(sourceConfig.installExperience === undefined
+          ? {}
+          : { installExperience: sourceConfig.installExperience }),
+        outputAllowlist: sourceConfig.outputAllowlist ?? {},
+        policy: sourcePolicy,
+        ...(sourceConfig.modulePath === undefined
+          ? {}
+          : { modulePath: sourceConfig.modulePath }),
+        ...(sourceConfig.sourceBuild === undefined
+          ? {}
+          : { sourceBuild: sourceConfig.sourceBuild }),
+        ...(sourceConfig.lifecycleActions === undefined
+          ? {}
+          : { lifecycleActions: sourceConfig.lifecycleActions }),
+        runnerId:
+          optional(options, "runner-profile-id") ?? "opentofu-default",
+        ...(interfaceBlueprints === undefined ? {} : { interfaceBlueprints }),
+        ...(sourceConfig.store === undefined
+          ? {}
+          : { store: sourceConfig.store }),
+      },
+      providerBindings: [],
+    },
+    migrationId,
+  );
+  const restore = object(restoreBody.restore, "configuration restore");
+  const capsuleId = string(
+    restore.capsuleId,
+    "configuration restore.capsuleId",
+  );
+  const planRunId = string(
+    restore.planRunId,
+    "configuration restore.planRunId",
+  );
+  let planRun = await waitRun(api, planRunId);
   if (planRun.status === "waiting_approval") {
     await api.post(`/api/v1/runs/${encodeURIComponent(planRunId)}/approve`, {
       reason: "self-host migration rehearsal",
@@ -938,6 +997,10 @@ async function seedFixture(options: Options) {
   const api = await apiFrom(options);
   const who = await session(api);
   const suffix = optional(options, "name-suffix") ?? Date.now().toString(36);
+  const gitUrl = required(options, "git-url");
+  const gitRef = required(options, "git-ref");
+  const modulePath =
+    optional(options, "module-path") ?? "opentofu-modules/core/module";
   const workspaceBody = await api.post("/api/v1/workspaces", {
     handle: `migration-${suffix}`.slice(0, 39),
     displayName: `Migration rehearsal ${suffix}`,
@@ -950,10 +1013,9 @@ async function seedFixture(options: Options) {
   const sourceBody = await api.post("/api/v1/sources", {
     workspaceId,
     name: "provider-free-fixture",
-    url: required(options, "git-url"),
-    defaultRef: required(options, "git-ref"),
-    defaultPath:
-      optional(options, "module-path") ?? "opentofu-modules/core/module",
+    url: gitUrl,
+    defaultRef: gitRef,
+    defaultPath: modulePath,
     autoSync: false,
   });
   const sourceId = string(
@@ -974,47 +1036,107 @@ async function seedFixture(options: Options) {
       `fixture source sync failed with status ${String(terminalSync.status)}`,
     );
   }
+  const sourceSnapshotId = string(
+    terminalSync.snapshotId,
+    "fixture source sync snapshotId",
+  );
   const baseDomain =
     optional(options, "base-domain") ?? "migration-fixture.example.test";
-  const capsuleBody = await api.post(
-    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/capsules`,
+  const compatibilityBody = await api.post(
+    `/api/v1/sources/${encodeURIComponent(sourceId)}/compatibility-check`,
     {
-      name: "provider-free-fixture",
-      environment: "preview",
-      sourceId,
-      installConfigId: "cfg-default-opentofu-capsule",
-      runnerProfileId:
-        optional(options, "runner-profile-id") ?? "opentofu-default",
-      vars: { base_domain: baseDomain },
-      outputAllowlist: {
-        base_domain: {
-          from: "base_domain",
-          type: "hostname",
-          required: true,
-        },
-        public_origin: {
-          from: "public_origin",
-          type: "url",
-          required: true,
+      sourceSnapshotId,
+      modulePath,
+      capsuleName: "provider-free-fixture",
+      compileInstallUx: true,
+    },
+  );
+  const compatibilityRun = object(
+    compatibilityBody.run,
+    "fixture compatibility run",
+  );
+  const compatibilityReport = object(
+    compatibilityBody.report,
+    "fixture compatibility report",
+  );
+  const repositoryInstallUx = object(
+    compatibilityBody.repositoryInstallUx,
+    "fixture repository install UX",
+  );
+  if (
+    compatibilityRun.status !== "succeeded" ||
+    compatibilityReport.level !== "ready" ||
+    repositoryInstallUx.status !== "accepted"
+  ) {
+    fail("fixture compatibility preflight did not produce exact ready authority");
+  }
+  const installPlanBody = await api.postIdempotent(
+    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/install-plans`,
+    {
+      source: {
+        name: "provider-free-fixture",
+        url: gitUrl,
+        ref: gitRef,
+        path: modulePath,
+      },
+      capsule: {
+        name: "provider-free-fixture",
+        environment: "preview",
+      },
+      options: { modulePath, providerBindings: [] },
+      preflight: {
+        sourceId,
+        sourceSnapshotId,
+        compatibilityCheckRunId: string(
+          compatibilityRun.id,
+          "fixture compatibility run.id",
+        ),
+        compatibilityReportId: string(
+          compatibilityReport.id,
+          "fixture compatibility report.id",
+        ),
+        installConfigId: string(
+          repositoryInstallUx.installConfigId,
+          "fixture repository install UX installConfigId",
+        ),
+      },
+      variables: { base_domain: baseDomain },
+      initialConfiguration: {
+        runnerProfileId:
+          optional(options, "runner-profile-id") ?? "opentofu-default",
+        outputAllowlist: {
+          base_domain: {
+            from: "base_domain",
+            type: "hostname",
+            required: true,
+          },
+          public_origin: {
+            from: "public_origin",
+            type: "url",
+            required: true,
+          },
         },
       },
     },
+    `migration-fixture-${suffix}`,
   );
-  const capsuleId = string(
-    object(capsuleBody.capsule, "created capsule").id,
-    "created capsule.id",
-  );
-  const planBody = await api.post(
-    `/api/v1/capsules/${encodeURIComponent(capsuleId)}/plan`,
-  );
-  let planRun = object(planBody.run, "plan run");
-  const planRunId = string(planRun.id, "plan run.id");
-  if (
-    !TERMINAL.has(String(planRun.status)) &&
-    planRun.status !== "waiting_approval"
-  ) {
-    planRun = await waitRun(api, planRunId);
+  let installPlan = object(installPlanBody.installPlan, "fixture install plan");
+  const installPlanId = string(installPlan.id, "fixture install plan.id");
+  for (let step = 0; installPlan.phase !== "reviewable" && step < 4; step += 1) {
+    if (installPlan.phase === "failed") {
+      fail("fixture install plan failed before reaching Run review");
+    }
+    const reconciled = await api.post(
+      `/api/v1/install-plans/${encodeURIComponent(installPlanId)}/reconcile`,
+    );
+    installPlan = object(reconciled.installPlan, "reconciled fixture install plan");
   }
+  if (installPlan.phase !== "reviewable") {
+    fail("fixture install plan did not reach Run review within the bounded reconciliation loop");
+  }
+  const capsuleId = string(installPlan.capsuleId, "fixture install plan.capsuleId");
+  const planRunId = string(installPlan.planRunId, "fixture install plan.planRunId");
+  let planRun = await waitRun(api, planRunId);
   if (planRun.status === "waiting_approval") {
     await api.post(`/api/v1/runs/${encodeURIComponent(planRunId)}/approve`, {
       reason: "synthetic self-host migration fixture",
@@ -1099,6 +1221,8 @@ async function selfTest() {
   let targetSessionCreatedAt = Date.now() - 60_000;
   let targetSnapshotPath = "modules/service";
   let targetWorkspacePolicy: Json = {};
+  let restoreRequestCount = 0;
+  let publicConfigurationMutationAttemptCount = 0;
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -1106,7 +1230,9 @@ async function selfTest() {
       const token = request.headers
         .get("authorization")
         ?.replace("Bearer ", "");
-      const target = token === "target-token" || token === "post-target-token";
+      const operator = token === "target-operator-token";
+      const target =
+        operator || token === "target-token" || token === "post-target-token";
       const path = url.pathname;
       if (path === "/api/v1/account/session/me") {
         return response({
@@ -1270,35 +1396,90 @@ async function selfTest() {
         }
         if (
           request.method === "POST" &&
-          path === "/api/v1/workspaces/ws_target/capsules"
+          path === "/api/v1/sources/src_target/compatibility-check"
         ) {
-          const body = object(await request.json(), "capsule request");
-          const vars = object(body.vars, "capsule vars");
-          if (vars.token !== "target-secret") {
+          const body = object(await request.json(), "compatibility request");
+          if (body.sourceSnapshotId !== "snap_target") {
             return response(
-              {
-                error: { message: "target secret was not explicitly rebound" },
-              },
+              { error: { message: "compatibility snapshot was not exact" } },
               400,
             );
           }
           return response(
-            { capsule: { id: "cap_target", installConfigId: "cfg_target" } },
+            {
+              report: {
+                id: "caprep_target",
+                sourceId: "src_target",
+                sourceSnapshotId: "snap_target",
+                modulePath: ".",
+                level: "ready",
+              },
+              run: {
+                id: "ccr_target",
+                workspaceId: "ws_target",
+                sourceId: "src_target",
+                sourceSnapshotId: "snap_target",
+                compatibilityReportId: "caprep_target",
+                type: "compatibility_check",
+                status: "succeeded",
+              },
+            },
             201,
           );
         }
         if (
-          request.method === "PATCH" &&
-          path === "/api/v1/capsule-configs/cfg_target"
+          path === "/api/v1/workspaces/ws_target/capsules" ||
+          path === "/api/v1/capsule-configs/cfg_target" ||
+          path === "/api/v1/capsules/cap_target/plan"
         ) {
-          return response({ installConfig: { id: "cfg_target" } });
+          publicConfigurationMutationAttemptCount += 1;
+          return response({ error: { message: "retired public mutation" } }, 405);
         }
         if (
           request.method === "POST" &&
-          path === "/api/v1/capsules/cap_target/plan"
+          path === "/internal/v1/capsule-configuration-restores"
         ) {
+          if (!operator) {
+            return response({ error: { message: "operator token required" } }, 403);
+          }
+          const body = object(await request.json(), "configuration restore");
+          const configuration = object(
+            body.configuration,
+            "configuration restore.configuration",
+          );
+          const vars = object(
+            configuration.variableMapping,
+            "configuration restore.variableMapping",
+          );
+          if (
+            request.headers.get("idempotency-key") !== body.migrationId ||
+            body.kind !== RESTORE_KIND ||
+            typeof body.bundleDigest !== "string" ||
+            !body.bundleDigest.startsWith("sha256:") ||
+            body.sourceSnapshotId !== "snap_target" ||
+            body.compatibilityCheckRunId !== "ccr_target" ||
+            body.compatibilityReportId !== "caprep_target" ||
+            vars.token !== "target-secret" ||
+            !Array.isArray(body.providerBindings) ||
+            body.providerBindings.length !== 0
+          ) {
+            return response(
+              { error: { message: "restore authority was not exact" } },
+              400,
+            );
+          }
+          restoreRequestCount += 1;
           return response(
-            { run: { id: "run_plan", status: "succeeded" } },
+            {
+              restore: {
+                kind: RESTORE_KIND,
+                capsuleId: "cap_target",
+                installConfigId: "cfg_target",
+                planRunId: "run_plan",
+                replayed: false,
+              },
+              links: { run: "/api/v1/runs/run_plan" },
+            },
             201,
           );
         }
@@ -1356,6 +1537,10 @@ async function selfTest() {
     const recipientFile = resolve(directory, "recipient.txt");
     const sourceTokenFile = resolve(directory, "source-token.txt");
     const targetTokenFile = resolve(directory, "target-token.txt");
+    const targetOperatorTokenFile = resolve(
+      directory,
+      "target-operator-token.txt",
+    );
     const postTargetTokenFile = resolve(directory, "post-target-token.txt");
     const targetVariablesFile = resolve(directory, "target-variables.json");
     const archiveFile = resolve(directory, "migration.age");
@@ -1364,6 +1549,7 @@ async function selfTest() {
     await Promise.all([
       writePrivate(sourceTokenFile, "source-token\n"),
       writePrivate(targetTokenFile, "target-token\n"),
+      writePrivate(targetOperatorTokenFile, "target-operator-token\n"),
       writeJson(targetVariablesFile, { token: "target-secret" }),
     ]);
     const generated = await keygen({
@@ -1385,6 +1571,7 @@ async function selfTest() {
       await importBundle({
         "target-issuer": base,
         "target-token-file": targetTokenFile,
+        "target-operator-token-file": targetOperatorTokenFile,
         "archive-file": archiveFile,
         "identity-file": identityFile,
         "proof-directory": resolve(directory, "missing-secret-proofs"),
@@ -1429,6 +1616,7 @@ async function selfTest() {
     const imported = await importBundle({
       "target-issuer": base,
       "target-token-file": targetTokenFile,
+      "target-operator-token-file": targetOperatorTokenFile,
       "archive-file": archiveFile,
       "identity-file": identityFile,
       "expected-archive-digest": exported.archiveDigest,
@@ -1439,12 +1627,21 @@ async function selfTest() {
     });
     if (imported.sampleEvidence.status !== "passed")
       fail("sample proof did not pass");
+    if (
+      restoreRequestCount !== 1 ||
+      publicConfigurationMutationAttemptCount !== 0
+    ) {
+      fail(
+        "self-test expected exactly one operator restore and no public configuration mutation",
+      );
+    }
     const applyEvidenceFile = proofPath(proofDirectory, "migration-apply");
     let staleLoginFailed = false;
     try {
       await verifyPostMigrationLogin({
         "target-issuer": base,
         "target-token-file": targetTokenFile,
+        "target-operator-token-file": targetOperatorTokenFile,
         "migration-apply-result-file": applyEvidenceFile,
         "login-evidence-file": proofPath(proofDirectory, "stale-login"),
       });
@@ -1472,6 +1669,7 @@ async function selfTest() {
       await importBundle({
         "target-issuer": base,
         "target-token-file": targetTokenFile,
+        "target-operator-token-file": targetOperatorTokenFile,
         "archive-file": archiveFile,
         "identity-file": identityFile,
         "expected-archive-digest": exported.archiveDigest,
@@ -1496,6 +1694,7 @@ async function selfTest() {
       await importBundle({
         "target-issuer": base,
         "target-token-file": targetTokenFile,
+        "target-operator-token-file": targetOperatorTokenFile,
         "archive-file": archiveFile,
         "identity-file": identityFile,
         "expected-archive-digest": exported.archiveDigest,
@@ -1524,7 +1723,7 @@ function usage(): never {
   bun scripts/self-host-migration.ts seal-file --source-file FILE --age-recipient AGE1... --archive-file FILE
   bun scripts/self-host-migration.ts seed-fixture --issuer URL --token-file FILE --git-url URL --git-ref COMMIT [--ca-file FILE --out-file FILE]
   bun scripts/self-host-migration.ts export --source-issuer URL --source-token-file FILE --workspace-id ID --capsule-id ID --age-recipient AGE1... --archive-file FILE --export-evidence-file FILE [--source-ca-file FILE] [--export-id ID]
-  bun scripts/self-host-migration.ts import --target-issuer URL --target-token-file FILE --archive-file FILE --identity-file FILE --proof-directory DIR [--target-ca-file FILE] [--target-variables-file FILE] [--target-interface-blueprints-file FILE] [--expected-archive-digest SHA256] [--migration-id ID]
+  bun scripts/self-host-migration.ts import --target-issuer URL --target-token-file FILE --target-operator-token-file FILE --archive-file FILE --identity-file FILE --proof-directory DIR [--target-ca-file FILE] [--target-variables-file FILE] [--target-interface-blueprints-file FILE] [--expected-archive-digest SHA256] [--migration-id ID]
   bun scripts/self-host-migration.ts verify-login --target-issuer URL --target-token-file FILE --migration-apply-result-file FILE --login-evidence-file FILE [--target-ca-file FILE]
   bun scripts/self-host-migration.ts self-test`);
 }

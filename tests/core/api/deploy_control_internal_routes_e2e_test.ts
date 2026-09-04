@@ -296,10 +296,9 @@ test("Core exposes no Credential Recipes when the host installs no catalog", asy
 
 /**
  * Stands up a service over a known in-memory store, then walks the new
- * Workspace-direct Capsule model end-to-end through the internal routes:
- *   POST /internal/v1/workspaces -> POST /internal/v1/sources -> seed InstallConfig (operations
- *   facade) -> POST /internal/v1/workspaces/:id/capsules -> seed a SourceSnapshot for
- *   the source (so the Capsule plan does not 409 source_sync_required).
+ * Workspace-direct Capsule model end-to-end through the internal routes plus
+ * the test-only initial-authority fixture seam. The retired generic Capsule
+ * POST is deliberately not used.
  *
  * Returns the wired app plus the seeded ids so the caller can drive the
  * Capsule-driven plan / approve / apply roundtrip.
@@ -445,23 +444,7 @@ async function seedCapsuleViaRoutes(
     createdAt: nowIso,
     updatedAt: nowIso,
   };
-  await operations.capsules.putInstallConfig(config);
-
-  const installRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name: "web",
-        environment: options.environment ?? "production",
-        sourceId,
-        installConfigId: config.id,
-      }),
-    },
-  );
-  expect(installRes.status).toBe(201);
-  const capsuleId = (await installRes.json()).capsule.id as string;
+  const capsuleId = "cap_e2e000001";
 
   // After the credential-model collapse the Provider ProviderConnection row IS the
   // resolver record (the former separate ProviderEnv projection is gone), so the
@@ -487,12 +470,16 @@ async function seedCapsuleViaRoutes(
     updatedAt: nowIso,
   };
   await store.putConnection(providerConnection);
-  await operations.capsules.putProviderBindingSet({
-    id: "ipcset_e2ecloudflare0001",
-    workspaceId,
+  await operations.capsules.createCapsuleInitialAuthority({
     capsuleId,
+    providerBindingSetId: "ipcset_e2ecloudflare0001",
+    workspaceId,
+    name: "web",
     environment: options.environment ?? "production",
-    bindings: [
+    sourceId,
+    installingPrincipalId: "deploy-control-bearer",
+    installConfig: config,
+    providerBindings: [
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
         moduleLocalName: "cloudflare",
@@ -500,8 +487,6 @@ async function seedCapsuleViaRoutes(
         connectionId: providerConnection.id,
       },
     ],
-    createdAt: nowIso,
-    updatedAt: nowIso,
   });
 
   // Seed the SourceSnapshot directly so the Capsule-driven plan resolves a

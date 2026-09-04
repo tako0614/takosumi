@@ -870,10 +870,16 @@ test("exact intent drain continues past one claim without consuming another inte
     const olderSeed = await seedCapsuleModel(store, {
       workspaceId: `workspace_intent_exact_loop_older_${label}`,
       capsuleId: `capsule_intent_exact_loop_older_${label}`,
+      sourceId: `source_intent_exact_loop_older_${label}`,
+      snapshotId: `snapshot_intent_exact_loop_older_${label}`,
+      installConfigId: `config_intent_exact_loop_older_${label}`,
     });
     const targetSeed = await seedCapsuleModel(store, {
       workspaceId: `workspace_intent_exact_loop_target_${label}`,
       capsuleId: `capsule_intent_exact_loop_target_${label}`,
+      sourceId: `source_intent_exact_loop_target_${label}`,
+      snapshotId: `snapshot_intent_exact_loop_target_${label}`,
+      installConfigId: `config_intent_exact_loop_target_${label}`,
     });
     const older = await commitApplyIntent(
       store,
@@ -1014,10 +1020,16 @@ test("a progress checkpoint rotates behind already-due intents across stores", a
     const firstSeed = await seedCapsuleModel(store, {
       workspaceId: `workspace_intent_fair_first_${label}`,
       capsuleId: `capsule_intent_fair_first_${label}`,
+      sourceId: `source_intent_fair_first_${label}`,
+      snapshotId: `snapshot_intent_fair_first_${label}`,
+      installConfigId: `config_intent_fair_first_${label}`,
     });
     const secondSeed = await seedCapsuleModel(store, {
       workspaceId: `workspace_intent_fair_second_${label}`,
       capsuleId: `capsule_intent_fair_second_${label}`,
+      sourceId: `source_intent_fair_second_${label}`,
+      snapshotId: `snapshot_intent_fair_second_${label}`,
+      installConfigId: `config_intent_fair_second_${label}`,
     });
     const first = await commitApplyIntent(
       store,

@@ -233,6 +233,19 @@ export const ALLOWED_KEYS: Record<
     "lifecycleActions",
     "lifecycleActionPolicy",
   ]),
+  capsuleConfigurationRestore: new Set([
+    "kind",
+    "bundleDigest",
+    "migrationId",
+    "workspaceId",
+    "sourceId",
+    "sourceSnapshotId",
+    "compatibilityCheckRunId",
+    "compatibilityReportId",
+    "capsule",
+    "configuration",
+    "providerBindings",
+  ]),
   capsulePlan: new Set(["runnerId", "compatibilityReportId"]),
   capsuleDestroyPlan: new Set(["runnerId", "recoverySourceSnapshotId"]),
   runApprove: new Set(["reason"]),
@@ -270,6 +283,7 @@ export type DeployControlRouteName =
   | "capsuleCreate"
   | "capsulePatch"
   | "installConfigPatch"
+  | "capsuleConfigurationRestore"
   | "capsulePlan"
   | "capsuleDestroyPlan"
   | "runApprove"
