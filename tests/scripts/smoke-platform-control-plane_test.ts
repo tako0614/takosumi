@@ -12,10 +12,13 @@ import { join } from "node:path";
 import { expect, test } from "bun:test";
 import {
   CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS,
+  MAX_PUBLIC_URL_RESPONSE_BYTES,
   PLATFORM_CONTROL_PLANE_SMOKE_KIND,
+  PUBLIC_URL_REQUEST_TIMEOUT_MS,
   assertInterfaceMaterialization,
   assertInterfacesRetired,
   assertSmokeSerializationSafe,
+  assertConfiguredPublicUrls,
   capsuleFromLedgerResponse,
   canonicalRunEventSequenceFromActivity,
   createdCapsuleFromCreateResponse,
@@ -37,6 +40,15 @@ import {
   smokeCloudflareProviderConnectionMatch,
   smokeWorkspaceCloudflareConnectionBody,
   assertServiceIdentityResponse,
+  fetchPinnedInterfaceBearerResource,
+  fetchPinnedControlPlaneRequest,
+  fetchBoundedCloudflareApi,
+  fetchPublicUrlCheckWithRetry,
+  probeServiceIdentity,
+  publicCheckUrl,
+  verifyInterfaceEndpointRetired,
+  verifyConfiguredPublicUrlsDestroyed,
+  verifyPublicWorkerUrlGone,
 } from "../../scripts/smoke-platform-control-plane.ts";
 
 test("platform smoke preserves the original pre-apply failure when a projected runtime URL is configured", async () => {
@@ -82,6 +94,1530 @@ test("Cloudflare public URL verification allows bounded edge propagation", () =>
   expect(CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS).toBe(180_000);
 });
 
+const PUBLIC_URL_CHECK_FIXTURE = {
+  name: "health",
+  output: "launch_url",
+  path: "/healthz",
+  expectedStatus: 200,
+  bodyIncludes: ["ok"],
+  destroyExpectation: { kind: "http-404" },
+} as const;
+
+const PUBLIC_DNS_ANSWER = [{ address: "93.184.216.34", family: 4 }] as const;
+const resolvePublicDns = async () => PUBLIC_DNS_ANSWER;
+
+type FixtureFetch = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
+function pinnedControlPlaneFixture(fetcher: FixtureFetch) {
+  return {
+    controlPlaneResolver: resolvePublicDns,
+    controlPlaneConnector: async (request: {
+      readonly servername: string;
+      readonly method: string;
+      readonly path: string;
+      readonly headers: Readonly<Record<string, string>>;
+      readonly body?: Uint8Array;
+      readonly signal: AbortSignal;
+    }) => {
+      const body = request.body === undefined
+        ? undefined
+        : request.headers["content-type"] === "application/json"
+          ? new TextDecoder().decode(request.body)
+          : request.body as unknown as BodyInit;
+      return await fetcher(
+        `https://${request.servername}${request.path}`,
+        {
+          method: request.method,
+          headers: request.headers,
+          ...(body === undefined ? {} : { body }),
+          signal: request.signal,
+          redirect: "error",
+        },
+      );
+    },
+  };
+}
+
+test("control-plane transport rejects unsafe resolution before exposing bearer or provider secrets", async () => {
+  const bearer = "session-bearer-fixture";
+  const cloudflareToken = "cloudflare-provider-token-fixture";
+  for (const [hostname, answers] of [
+    ["localtest.me", [{ address: "::1", family: 6 }]],
+    ["control.selfhosted.dev", [{ address: "10.0.0.8", family: 4 }]],
+    [
+      "control.selfhosted.dev",
+      [
+        { address: "93.184.216.34", family: 4 },
+        { address: "fd00::8", family: 6 },
+      ],
+    ],
+    [
+      "control.selfhosted.dev",
+      [{ address: "::ffff:192.168.1.8", family: 6 }],
+    ],
+  ] as const) {
+    const requests: unknown[] = [];
+    await expect(
+      fetchPinnedControlPlaneRequest(
+        {
+          baseUrl: `https://${hostname}`,
+          token: bearer,
+          method: "POST",
+          path: "/api/v1/connections",
+          body: { env: { CLOUDFLARE_API_TOKEN: cloudflareToken } },
+        },
+        {
+          resolver: async () => answers,
+          connector: async (request) => {
+            requests.push(request);
+            return Response.json({ ok: true });
+          },
+        },
+      ),
+    ).rejects.toThrow("non-public address");
+    expect(requests).toHaveLength(0);
+  }
+});
+
+test("control-plane DNS failures are fail-closed and redact resolver diagnostics", async () => {
+  let connectorCalls = 0;
+  let message = "";
+  try {
+    await fetchPinnedControlPlaneRequest(
+      {
+        baseUrl: "https://control.selfhosted.dev",
+        token: "session-bearer-fixture",
+        path: "/api/v1/workspaces",
+      },
+      {
+        resolver: async () => {
+          throw new Error("lookup leaked.private.internal EAI_AGAIN");
+        },
+        connector: async () => {
+          connectorCalls += 1;
+          return Response.json({ ok: true });
+        },
+      },
+    );
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  expect(message).toContain("DNS resolution failed");
+  expect(message).not.toContain("leaked.private.internal");
+  expect(connectorCalls).toBe(0);
+
+  await expect(
+    fetchPinnedControlPlaneRequest(
+      {
+        baseUrl: "https://control.selfhosted.dev",
+        token: "session-bearer-fixture",
+        path: "/api/v1/workspaces",
+        timeoutMs: 10,
+      },
+      {
+        resolver: async () => await new Promise(() => {}),
+        connector: async () => {
+          connectorCalls += 1;
+          return Response.json({ ok: true });
+        },
+      },
+    ),
+  ).rejects.toThrow("DNS resolution failed");
+  expect(connectorCalls).toBe(0);
+});
+
+test("control-plane transport pins one deterministic address and preserves method, Host, SNI, bearer, and body", async () => {
+  let resolverCalls = 0;
+  const requests: Array<{
+    readonly address: string;
+    readonly family: number;
+    readonly servername: string;
+    readonly method: string;
+    readonly path: string;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly body?: Uint8Array;
+  }> = [];
+  const result = await fetchPinnedControlPlaneRequest(
+    {
+      baseUrl: "https://Control.SelfHosted.dev",
+      token: "session-bearer-fixture",
+      method: "POST",
+      path: "/api/v1/connections?mode=create",
+      body: { env: { CLOUDFLARE_API_TOKEN: "provider-token-fixture" } },
+    },
+    {
+      resolver: async () => {
+        resolverCalls += 1;
+        return resolverCalls === 1
+          ? [
+              { address: "2606:4700:4700::1111", family: 6 },
+              { address: "93.184.216.35", family: 4 },
+              { address: "93.184.216.34", family: 4 },
+            ]
+          : [{ address: "127.0.0.1", family: 4 }];
+      },
+      connector: async (request) => {
+        requests.push(request);
+        return Response.json({ ok: true });
+      },
+    },
+  );
+  expect(result.response.status).toBe(200);
+  expect(resolverCalls).toBe(1);
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({
+    address: "93.184.216.34",
+    family: 4,
+    servername: "control.selfhosted.dev",
+    method: "POST",
+    path: "/api/v1/connections?mode=create",
+    headers: {
+      accept: "application/json",
+      authorization: "Bearer session-bearer-fixture",
+      "content-type": "application/json",
+      host: "control.selfhosted.dev",
+    },
+  });
+  expect(JSON.parse(new TextDecoder().decode(requests[0]!.body))).toEqual({
+    env: { CLOUDFLARE_API_TOKEN: "provider-token-fixture" },
+  });
+  expect(requests.some((request) => request.address === "127.0.0.1")).toBe(
+    false,
+  );
+});
+
+test("control-plane transport refuses redirects without replaying credentials", async () => {
+  const requests: unknown[] = [];
+  await expect(
+    fetchPinnedControlPlaneRequest(
+      {
+        baseUrl: "https://control.selfhosted.dev",
+        token: "session-bearer-fixture",
+        path: "/api/v1/workspaces",
+      },
+      {
+        resolver: resolvePublicDns,
+        connector: async (request) => {
+          requests.push(request);
+          return new Response("redirect", {
+            status: 302,
+            headers: { location: "https://127.0.0.1/private" },
+          });
+        },
+      },
+    ),
+  ).rejects.toThrow("rejected a redirect response");
+  expect(requests).toHaveLength(1);
+});
+
+test("control-plane transport bounds request time and body bytes", async () => {
+  let aborted = false;
+  await expect(
+    fetchPinnedControlPlaneRequest(
+      {
+        baseUrl: "https://control.selfhosted.dev",
+        token: "session-bearer-fixture",
+        path: "/api/v1/workspaces",
+        timeoutMs: 10,
+      },
+      {
+        resolver: resolvePublicDns,
+        connector: async ({ signal }) =>
+          await new Promise<Response>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                aborted = true;
+                reject(new DOMException("secret transport detail", "AbortError"));
+              },
+              { once: true },
+            );
+          }),
+      },
+    ),
+  ).rejects.toThrow("did not return within 10ms");
+  expect(aborted).toBe(true);
+
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(MAX_PUBLIC_URL_RESPONSE_BYTES));
+      controller.enqueue(new Uint8Array(1));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  await expect(
+    fetchPinnedControlPlaneRequest(
+      {
+        baseUrl: "https://control.selfhosted.dev",
+        token: "session-bearer-fixture",
+        path: "/api/v1/workspaces",
+      },
+      {
+        resolver: resolvePublicDns,
+        connector: async () => new Response(stream, { status: 200 }),
+      },
+    ),
+  ).rejects.toThrow("response body exceeded the maximum size");
+  expect(cancelled).toBe(true);
+
+  let oversizedRequestCalls = 0;
+  await expect(
+    fetchPinnedControlPlaneRequest(
+      {
+        baseUrl: "https://control.selfhosted.dev",
+        token: "session-bearer-fixture",
+        path: "/api/v1/workspaces",
+        method: "POST",
+        binary: new Uint8Array(4 * 1024 * 1024 + 1),
+      },
+      {
+        resolver: resolvePublicDns,
+        connector: async () => {
+          oversizedRequestCalls += 1;
+          return new Response(null, { status: 204 });
+        },
+      },
+    ),
+  ).rejects.toThrow("request body is oversized");
+  expect(oversizedRequestCalls).toBe(0);
+
+});
+
+test("control-plane transport cancels a late non-cooperative connector response", async () => {
+  let resolveConnector: ((response: Response) => void) | undefined;
+  const connection = new Promise<Response>((resolve) => {
+    resolveConnector = resolve;
+  });
+  let observeCancellation: ((cancelled: boolean) => void) | undefined;
+  const cancellation = new Promise<boolean>((resolve) => {
+    observeCancellation = resolve;
+  });
+  const request = fetchPinnedControlPlaneRequest(
+    {
+      baseUrl: "https://control.selfhosted.dev",
+      token: "session-bearer-fixture",
+      path: "/api/v1/workspaces",
+      timeoutMs: 10,
+    },
+    {
+      resolver: resolvePublicDns,
+      connector: async () => await connection,
+    },
+  );
+
+  await expect(request).rejects.toThrow("did not return within 10ms");
+  resolveConnector!(new Response(new ReadableStream<Uint8Array>({
+    cancel() {
+      observeCancellation!(true);
+    },
+  }), { status: 200 }));
+  await expect(Promise.race([
+    cancellation,
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
+  ])).resolves.toBe(true);
+});
+
+test("control-plane transport bounds a never-settling response read and cancel", async () => {
+  let cancelStarted = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("partial"));
+    },
+    cancel() {
+      cancelStarted = true;
+      return new Promise<void>(() => {});
+    },
+  });
+  const request = fetchPinnedControlPlaneRequest(
+    {
+      baseUrl: "https://control.selfhosted.dev",
+      token: "session-bearer-fixture",
+      path: "/api/v1/workspaces",
+      timeoutMs: 20,
+    },
+    {
+      resolver: resolvePublicDns,
+      connector: async () => new Response(stream, { status: 200 }),
+    },
+  );
+  const outcome = await Promise.race([
+    request.then(() => "resolved", (error) => error),
+    new Promise<"test-deadline">((resolve) =>
+      setTimeout(() => resolve("test-deadline"), 100)
+    ),
+  ]);
+
+  expect(outcome).toBeInstanceOf(Error);
+  expect((outcome as Error).message).toContain("did not return within 20ms");
+  expect(cancelStarted).toBe(true);
+});
+
+test("control-plane URL validation does not serialize userinfo", async () => {
+  const secret = "userinfo-secret-fixture";
+  let resolverCalls = 0;
+  let connectorCalls = 0;
+  let message = "";
+  try {
+    await fetchPinnedControlPlaneRequest(
+      {
+        baseUrl: `https://operator:${secret}@control.selfhosted.dev`,
+        token: "session-bearer-fixture",
+        path: "/api/v1/workspaces",
+      },
+      {
+        resolver: async () => {
+          resolverCalls += 1;
+          return PUBLIC_DNS_ANSWER;
+        },
+        connector: async () => {
+          connectorCalls += 1;
+          return Response.json({ ok: true });
+        },
+      },
+    );
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  expect(message).toContain("canonical public HTTPS origin");
+  expect(message).not.toContain(secret);
+  expect(resolverCalls).toBe(0);
+  expect(connectorCalls).toBe(0);
+});
+
+test("service identity probe validates every DNS answer and pins the original authority", async () => {
+  let connectorCalls = 0;
+  await expect(probeServiceIdentity(
+    {
+      url: "https://control.selfhosted.dev",
+      expectedServiceIdentity: {
+        headerName: "x-release-revision",
+        value: "release-fixture",
+      },
+    },
+    {
+      resolver: async () => [
+        { address: "93.184.216.34", family: 4 },
+        { address: "127.0.0.1", family: 4 },
+      ],
+      connector: async () => {
+        connectorCalls += 1;
+        return new Response(null, { status: 200 });
+      },
+    },
+  )).rejects.toThrow("resolved to a non-public address");
+  expect(connectorCalls).toBe(0);
+
+  let resolverCalls = 0;
+  const requests: Array<{
+    readonly address: string;
+    readonly servername: string;
+    readonly method: string;
+    readonly path: string;
+    readonly headers: Readonly<Record<string, string>>;
+  }> = [];
+  await expect(probeServiceIdentity(
+    {
+      url: "https://control.selfhosted.dev",
+      expectedServiceIdentity: {
+        headerName: "x-release-revision",
+        value: "release-fixture",
+      },
+    },
+    {
+      resolver: async () => {
+        resolverCalls += 1;
+        return resolverCalls === 1
+          ? [
+              { address: "93.184.216.35", family: 4 },
+              { address: "93.184.216.34", family: 4 },
+            ]
+          : [{ address: "127.0.0.1", family: 4 }];
+      },
+      connector: async (request) => {
+        requests.push(request);
+        return new Response("identity response", {
+          status: 200,
+          headers: { "x-release-revision": "release-fixture" },
+        });
+      },
+    },
+  )).resolves.toBeUndefined();
+  expect(resolverCalls).toBe(1);
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({
+    address: "93.184.216.34",
+    servername: "control.selfhosted.dev",
+    method: "GET",
+    path: "/",
+    headers: {
+      accept: "text/html,application/json",
+      host: "control.selfhosted.dev",
+    },
+  });
+  expect(requests[0]!.headers.authorization).toBeUndefined();
+});
+
+test("Interface retirement accepts only explicit 404 and fails closed on transport ambiguity", async () => {
+  const endpoint = "https://interface-runtime.takos.jp/";
+  const retry = {
+    maxAttempts: 2,
+    requestTimeoutMs: 10,
+    sleep: async () => {},
+  } as const;
+  let dnsAttempts = 0;
+  await expect(verifyInterfaceEndpointRetired(endpoint, {
+    ...retry,
+    resolver: async () => {
+      dnsAttempts += 1;
+      throw new Error("private resolver detail");
+    },
+    connector: async () => new Response("gone", { status: 404 }),
+  })).rejects.toThrow("retirement is inconclusive");
+  expect(dnsAttempts).toBe(1);
+
+  await expect(verifyInterfaceEndpointRetired(endpoint, {
+    ...retry,
+    resolver: resolvePublicDns,
+    connector: async () => {
+      throw new Error("TLS private certificate detail");
+    },
+  })).rejects.toThrow("retirement is inconclusive");
+
+  let timeoutAborted = false;
+  await expect(verifyInterfaceEndpointRetired(endpoint, {
+    ...retry,
+    resolver: resolvePublicDns,
+    connector: async ({ signal }) => await new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        timeoutAborted = true;
+        reject(new DOMException("timed out", "AbortError"));
+      }, { once: true });
+    }),
+  })).rejects.toThrow("retirement is inconclusive");
+  expect(timeoutAborted).toBe(true);
+
+  let oversizedCancelled = false;
+  await expect(verifyInterfaceEndpointRetired(endpoint, {
+    ...retry,
+    resolver: resolvePublicDns,
+    connector: async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_PUBLIC_URL_RESPONSE_BYTES));
+        controller.enqueue(new Uint8Array(1));
+      },
+      cancel() {
+        oversizedCancelled = true;
+      },
+    }), { status: 500 }),
+  })).rejects.toThrow("retirement is inconclusive");
+  expect(oversizedCancelled).toBe(true);
+
+  for (const status of [200, 401, 410, 500]) {
+    await expect(verifyInterfaceEndpointRetired(endpoint, {
+      ...retry,
+      resolver: resolvePublicDns,
+      connector: async () => new Response("not a contract absence", { status }),
+    })).rejects.toThrow("did not return contract 404");
+  }
+  await expect(verifyInterfaceEndpointRetired(endpoint, {
+    ...retry,
+    resolver: resolvePublicDns,
+    connector: async () => new Response("gone", { status: 404 }),
+  })).resolves.toBe(true);
+});
+
+test("Interface retirement retries only the original validated address", async () => {
+  let resolverCalls = 0;
+  const requests: Array<{ readonly address: string; readonly servername: string }> = [];
+  await expect(verifyInterfaceEndpointRetired(
+    "https://interface-runtime.takos.jp/",
+    {
+      maxAttempts: 2,
+      requestTimeoutMs: 10,
+      sleep: async () => {},
+      resolver: async () => {
+        resolverCalls += 1;
+        return resolverCalls === 1
+          ? [
+              { address: "93.184.216.35", family: 4 },
+              { address: "93.184.216.34", family: 4 },
+            ]
+          : [{ address: "127.0.0.1", family: 4 }];
+      },
+      connector: async (request) => {
+        requests.push(request);
+        return new Response("gone", {
+          status: requests.length === 1 ? 503 : 404,
+        });
+      },
+    },
+  )).resolves.toBe(true);
+  expect(resolverCalls).toBe(1);
+  expect(requests).toHaveLength(2);
+  expect(requests.every((request) =>
+    request.address === "93.184.216.34" &&
+    request.servername === "interface-runtime.takos.jp"
+  )).toBe(true);
+});
+
+test("Worker URL cleanup accepts only explicit 404 and fails closed on transport ambiguity", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      cloudflareConnectionMode: "guided",
+      cloudflareAccountId: "acc_test",
+      cloudflareWorkersSubdomain: "workers-subdomain",
+      verificationMode: "cloudflare-worker",
+      outputAllowlistJson: JSON.stringify({
+        launch_url: { from: "launch_url", type: "url", required: true },
+      }),
+      runtimePublicUrlOutput: "launch_url",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+  const outputs = { launch_url: "https://worker-runtime.takos.jp" };
+  const retry = {
+    maxAttempts: 2,
+    requestTimeoutMs: 10,
+    sleep: async () => {},
+  } as const;
+  let dnsAttempts = 0;
+  await expect(verifyPublicWorkerUrlGone(options, outputs, {
+    ...retry,
+    resolver: async () => {
+      dnsAttempts += 1;
+      throw new Error("private resolver detail");
+    },
+    connector: async () => new Response("gone", { status: 404 }),
+  })).rejects.toThrow("retirement is inconclusive");
+  expect(dnsAttempts).toBe(1);
+
+  await expect(verifyPublicWorkerUrlGone(options, outputs, {
+    ...retry,
+    resolver: resolvePublicDns,
+    connector: async () => {
+      throw new Error("TLS private certificate detail");
+    },
+  })).rejects.toThrow("retirement is inconclusive");
+
+  let timeoutAborted = false;
+  await expect(verifyPublicWorkerUrlGone(options, outputs, {
+    ...retry,
+    resolver: resolvePublicDns,
+    connector: async ({ signal }) => await new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        timeoutAborted = true;
+        reject(new DOMException("timed out", "AbortError"));
+      }, { once: true });
+    }),
+  })).rejects.toThrow("retirement is inconclusive");
+  expect(timeoutAborted).toBe(true);
+
+  let oversizedCancelled = false;
+  await expect(verifyPublicWorkerUrlGone(options, outputs, {
+    ...retry,
+    resolver: resolvePublicDns,
+    connector: async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_PUBLIC_URL_RESPONSE_BYTES));
+        controller.enqueue(new Uint8Array(1));
+      },
+      cancel() {
+        oversizedCancelled = true;
+      },
+    }), { status: 500 }),
+  })).rejects.toThrow("retirement is inconclusive");
+  expect(oversizedCancelled).toBe(true);
+
+  for (const status of [200, 401, 410, 500]) {
+    await expect(verifyPublicWorkerUrlGone(options, outputs, {
+      ...retry,
+      resolver: resolvePublicDns,
+      connector: async () => new Response("not a contract absence", { status }),
+    })).rejects.toThrow("did not return contract 404");
+  }
+  await expect(verifyPublicWorkerUrlGone(options, outputs, {
+    ...retry,
+    resolver: resolvePublicDns,
+    connector: async () => new Response("gone", { status: 404 }),
+  })).resolves.toBeUndefined();
+});
+
+test("Worker URL cleanup retries only the original validated address", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      cloudflareConnectionMode: "guided",
+      cloudflareAccountId: "acc_test",
+      cloudflareWorkersSubdomain: "workers-subdomain",
+      verificationMode: "cloudflare-worker",
+      outputAllowlistJson: JSON.stringify({
+        launch_url: { from: "launch_url", type: "url", required: true },
+      }),
+      runtimePublicUrlOutput: "launch_url",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+  let resolverCalls = 0;
+  const requests: Array<{ readonly address: string; readonly servername: string }> = [];
+  await expect(verifyPublicWorkerUrlGone(
+    options,
+    { launch_url: "https://worker-runtime.takos.jp" },
+    {
+      maxAttempts: 2,
+      requestTimeoutMs: 10,
+      sleep: async () => {},
+      resolver: async () => {
+        resolverCalls += 1;
+        return resolverCalls === 1
+          ? [
+              { address: "93.184.216.35", family: 4 },
+              { address: "93.184.216.34", family: 4 },
+            ]
+          : [{ address: "127.0.0.1", family: 4 }];
+      },
+      connector: async (request) => {
+        requests.push(request);
+        return new Response("gone", {
+          status: requests.length === 1 ? 503 : 404,
+        });
+      },
+    },
+  )).resolves.toBeUndefined();
+  expect(resolverCalls).toBe(1);
+  expect(requests).toHaveLength(2);
+  expect(requests.every((request) =>
+    request.address === "93.184.216.34" &&
+    request.servername === "worker-runtime.takos.jp"
+  )).toBe(true);
+});
+
+test("fixed Cloudflare API transport rejects redirects and never replays its bearer", async () => {
+  const requests: Array<{ readonly url: string; readonly init?: RequestInit }> = [];
+  await expect(
+    fetchBoundedCloudflareApi(
+      "/client/v4/accounts/account-fixture/workers/scripts",
+      "cloudflare-api-token-fixture",
+      {
+        fetcher: async (input, init) => {
+          requests.push({ url: String(input), init });
+          return new Response("redirect", {
+            status: 302,
+            headers: { location: "https://127.0.0.1/private" },
+          });
+        },
+      },
+    ),
+  ).rejects.toThrow("rejected a redirect response");
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.url).toBe(
+    "https://api.cloudflare.com/client/v4/accounts/account-fixture/workers/scripts",
+  );
+  expect(requests[0]?.init?.redirect).toBe("error");
+  expect(new Headers(requests[0]?.init?.headers).get("authorization")).toBe(
+    "Bearer cloudflare-api-token-fixture",
+  );
+});
+
+test("fixed Cloudflare API transport aborts stalls and cancels oversized bodies", async () => {
+  let aborted = false;
+  await expect(
+    fetchBoundedCloudflareApi(
+      "/client/v4/accounts/account-fixture/workers/scripts",
+      "cloudflare-api-token-fixture",
+      {
+        timeoutMs: 10,
+        fetcher: async (_input, init) =>
+          await new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                aborted = true;
+                reject(new Error("credential-bearing transport stalled"));
+              },
+              { once: true },
+            );
+          }),
+      },
+    ),
+  ).rejects.toThrow("request timed out");
+  expect(aborted).toBe(true);
+
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(MAX_PUBLIC_URL_RESPONSE_BYTES));
+      controller.enqueue(new Uint8Array(1));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  await expect(
+    fetchBoundedCloudflareApi(
+      "/client/v4/accounts/account-fixture/workers/scripts",
+      "cloudflare-api-token-fixture",
+      {
+        fetcher: async () => new Response(stream, { status: 200 }),
+      },
+    ),
+  ).rejects.toThrow("response body exceeded the maximum size");
+  expect(cancelled).toBe(true);
+
+  let unusedBodyCancelled = false;
+  const unusedBody = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("unused Worker body"));
+    },
+    cancel() {
+      unusedBodyCancelled = true;
+    },
+  });
+  const scriptReadback = await fetchBoundedCloudflareApi(
+    "/client/v4/accounts/account-fixture/workers/scripts/worker-fixture",
+    "cloudflare-api-token-fixture",
+    {
+      readBody: false,
+      fetcher: async () => new Response(unusedBody, { status: 200 }),
+    },
+  );
+  expect(scriptReadback.body).toBe("");
+  expect(unusedBodyCancelled).toBe(true);
+});
+
+test("fixed Cloudflare transport cancels a late non-cooperative fetch response", async () => {
+  let resolveFetcher: ((response: Response) => void) | undefined;
+  const fetchResult = new Promise<Response>((resolve) => {
+    resolveFetcher = resolve;
+  });
+  let observeCancellation: ((cancelled: boolean) => void) | undefined;
+  const cancellation = new Promise<boolean>((resolve) => {
+    observeCancellation = resolve;
+  });
+  const request = fetchBoundedCloudflareApi(
+    "/client/v4/accounts/account-fixture/workers/scripts",
+    "cloudflare-api-token-fixture",
+    {
+      timeoutMs: 10,
+      fetcher: async () => await fetchResult,
+    },
+  );
+
+  await expect(request).rejects.toThrow("request timed out");
+  resolveFetcher!(new Response(new ReadableStream<Uint8Array>({
+    cancel() {
+      observeCancellation!(true);
+    },
+  }), { status: 200 }));
+  await expect(Promise.race([
+    cancellation,
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
+  ])).resolves.toBe(true);
+});
+
+test("fixed Cloudflare transport does not wait for a never-settling body cancel", async () => {
+  let cancelStarted = false;
+  const response = {
+    status: 200,
+    headers: new Headers(),
+    body: {
+      cancel() {
+        cancelStarted = true;
+        return new Promise<void>(() => {});
+      },
+    },
+  } as unknown as Response;
+  const request = fetchBoundedCloudflareApi(
+    "/client/v4/accounts/account-fixture/workers/scripts/worker-fixture",
+    "cloudflare-api-token-fixture",
+    {
+      readBody: false,
+      timeoutMs: 20,
+      fetcher: async () => response,
+    },
+  );
+  const outcome = await Promise.race([
+    request,
+    new Promise<"test-deadline">((resolve) =>
+      setTimeout(() => resolve("test-deadline"), 100)
+    ),
+  ]);
+
+  expect(outcome).not.toBe("test-deadline");
+  expect((outcome as { readonly body: string }).body).toBe("");
+  expect(cancelStarted).toBe(true);
+});
+
+test("fixed Cloudflare transport bounds a never-settling read and cancel", async () => {
+  let cancelStarted = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("partial"));
+    },
+    cancel() {
+      cancelStarted = true;
+      return new Promise<void>(() => {});
+    },
+  });
+  const request = fetchBoundedCloudflareApi(
+    "/client/v4/accounts/account-fixture/workers/scripts",
+    "cloudflare-api-token-fixture",
+    {
+      timeoutMs: 20,
+      fetcher: async () => new Response(stream, { status: 200 }),
+    },
+  );
+  const outcome = await Promise.race([
+    request.then(() => "resolved", (error) => error),
+    new Promise<"test-deadline">((resolve) =>
+      setTimeout(() => resolve("test-deadline"), 100)
+    ),
+  ]);
+
+  expect(outcome).toBeInstanceOf(Error);
+  expect((outcome as Error).message).toContain("request timed out");
+  expect(cancelStarted).toBe(true);
+});
+
+test("Cloudflare transport failure reaches the normal redacted smoke finalization", async () => {
+  const cloudflareToken = "cloudflare-finalization-secret-fixture";
+  const options = await resolveOptions(
+    {
+      url: "https://control.selfhosted.dev",
+      workspace: "ws_test",
+      cloudflareConnectionMode: "none",
+      cloudflareResourcePreflight: "workers",
+      cloudflareAccountId: "account-fixture",
+      cloudflareWorkersSubdomain: "workers-fixture",
+      verificationMode: "opentofu",
+      noInterfaceProof: true,
+      sourceGitUrl: "https://git.selfhosted.dev/takosumi/smoke.git",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-finalization-secret-fixture",
+      CLOUDFLARE_API_TOKEN: cloudflareToken,
+    },
+  );
+  const originalFetch = globalThis.fetch;
+  let cloudflareCalls = 0;
+  let cleanupCalls = 0;
+  globalThis.fetch = (async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "control.selfhosted.dev") {
+      cleanupCalls += 1;
+      return Response.json({ capsules: [] });
+    }
+    cloudflareCalls += 1;
+    return new Response("redirected secret response", {
+      status: 302,
+      headers: { location: "https://127.0.0.1/private" },
+    });
+  }) as typeof fetch;
+  try {
+    const result = await runPlatformControlPlaneSmoke(
+      options,
+      pinnedControlPlaneFixture(async (input, init) =>
+        await globalThis.fetch(input, init)
+      ),
+    );
+    expect(result.status).toBe("failed");
+    expect(result.completedSteps).not.toContain("cloudflareResourcePreflight");
+    expect(result.capsuleId).toBeUndefined();
+    expect(result.error).toContain("Cloudflare API rejected a redirect response");
+    expect(result.error).not.toContain(cloudflareToken);
+    expect(result.nextAction).toContain("Update the operator Cloudflare API token");
+    expect(cloudflareCalls).toBe(1);
+    expect(cleanupCalls).toBe(1);
+    expect(() => assertSmokeSerializationSafe(result, options)).not.toThrow();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("public URL checks require a canonical HTTPS origin with a public hostname", () => {
+  expect(publicCheckUrl("https://Public.Takos.JP", PUBLIC_URL_CHECK_FIXTURE)).toBe(
+    "https://public.takos.jp/healthz",
+  );
+  for (const value of [
+    "http://public.takos.jp",
+    "https://public.takos.jp:443",
+    "https://user:pass@public.takos.jp",
+    "https://public.takos.jp/base",
+    "https://public.takos.jp?token=secret",
+    "https://public.takos.jp/#fragment",
+    "https://127.0.0.1",
+    "https://[::1]",
+    "https://service.corp",
+    "https://service.lan",
+    "https://service.example",
+    "https://service.onion",
+    "https://service.home",
+    "https://single-label",
+  ]) {
+    expect(() => publicCheckUrl(value, PUBLIC_URL_CHECK_FIXTURE)).toThrow();
+  }
+  expect(() => publicCheckUrl(
+    "https://public.takos.jp",
+    { ...PUBLIC_URL_CHECK_FIXTURE, path: "/health?token=secret" },
+  )).toThrow("path is invalid");
+});
+
+test("public URL checks reject redirects without following them", async () => {
+  await expect(fetchPublicUrlCheckWithRetry(
+    "https://public.takos.jp/healthz",
+    PUBLIC_URL_CHECK_FIXTURE,
+    {
+      maxAttempts: 1,
+      sleep: async () => undefined,
+      resolver: resolvePublicDns,
+      connector: async () => new Response("redirect", {
+        status: 302,
+        headers: { location: "https://other.takos.jp/secret" },
+      }),
+    },
+  )).rejects.toThrow("rejected a redirect response");
+});
+
+test("public URL checks abort stalled requests at the bounded deadline", async () => {
+  let aborted = false;
+  await expect(fetchPublicUrlCheckWithRetry(
+    "https://public.takos.jp/healthz",
+    PUBLIC_URL_CHECK_FIXTURE,
+    {
+      maxAttempts: 1,
+      requestTimeoutMs: 10,
+      sleep: async () => undefined,
+      resolver: resolvePublicDns,
+      connector: async ({ signal }) => await new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          aborted = true;
+          reject(new DOMException("aborted", "AbortError"));
+        }, { once: true });
+      }),
+    },
+  )).rejects.toThrow("timed out");
+  expect(aborted).toBe(true);
+});
+
+test("public URL checks cancel a late non-cooperative connector response", async () => {
+  let resolveConnector: ((response: Response) => void) | undefined;
+  const connection = new Promise<Response>((resolve) => {
+    resolveConnector = resolve;
+  });
+  let observeCancellation: ((cancelled: boolean) => void) | undefined;
+  const cancellation = new Promise<boolean>((resolve) => {
+    observeCancellation = resolve;
+  });
+  const request = fetchPublicUrlCheckWithRetry(
+    "https://public.takos.jp/healthz",
+    PUBLIC_URL_CHECK_FIXTURE,
+    {
+      maxAttempts: 1,
+      requestTimeoutMs: 10,
+      resolver: resolvePublicDns,
+      connector: async () => await connection,
+    },
+  );
+
+  await expect(request).rejects.toThrow("timed out");
+  resolveConnector!(new Response(new ReadableStream<Uint8Array>({
+    cancel() {
+      observeCancellation!(true);
+    },
+  }), { status: 200 }));
+  await expect(Promise.race([
+    cancellation,
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
+  ])).resolves.toBe(true);
+});
+
+test("public URL retry uses one deadline even when retry sleep never settles", async () => {
+  const request = fetchPublicUrlCheckWithRetry(
+    "https://public.takos.jp/healthz",
+    PUBLIC_URL_CHECK_FIXTURE,
+    {
+      maxAttempts: 4,
+      requestTimeoutMs: 10,
+      resolver: resolvePublicDns,
+      connector: async () => new Response("not ready", { status: 503 }),
+      sleep: async () => await new Promise<void>(() => {}),
+    },
+  );
+  const outcome = await Promise.race([
+    request.then(() => "resolved", (error) => error),
+    new Promise<"test-deadline">((resolve) =>
+      setTimeout(() => resolve("test-deadline"), 100)
+    ),
+  ]);
+
+  expect(outcome).toBeInstanceOf(Error);
+  expect((outcome as Error).message).toContain("timed out");
+});
+
+test("public URL DNS and connection share one absolute deadline", async () => {
+  const request = fetchPublicUrlCheckWithRetry(
+    "https://public.takos.jp/healthz",
+    PUBLIC_URL_CHECK_FIXTURE,
+    {
+      maxAttempts: 1,
+      requestTimeoutMs: 70,
+      resolver: async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 60));
+        return PUBLIC_DNS_ANSWER;
+      },
+      connector: async () => await new Promise<Response>(() => {}),
+    },
+  );
+  const outcome = await Promise.race([
+    request.then(() => "resolved", (error) => error),
+    new Promise<"test-deadline">((resolve) =>
+      setTimeout(() => resolve("test-deadline"), 110)
+    ),
+  ]);
+
+  expect(outcome).toBeInstanceOf(Error);
+  expect((outcome as Error).message).toContain("timed out");
+});
+
+test("public URL checks cancel a response stream that stalls while reading", async () => {
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("ok"));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  await expect(fetchPublicUrlCheckWithRetry(
+    "https://public.takos.jp/healthz",
+    PUBLIC_URL_CHECK_FIXTURE,
+    {
+      maxAttempts: 1,
+      requestTimeoutMs: 10,
+      sleep: async () => undefined,
+      resolver: resolvePublicDns,
+      connector: async () => new Response(stream, { status: 200 }),
+    },
+  )).rejects.toThrow("timed out");
+  expect(cancelled).toBe(true);
+});
+
+test("public URL checks bound a never-settling response read and cancel", async () => {
+  let cancelStarted = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("partial"));
+    },
+    cancel() {
+      cancelStarted = true;
+      return new Promise<void>(() => {});
+    },
+  });
+  const request = fetchPublicUrlCheckWithRetry(
+    "https://public.takos.jp/healthz",
+    PUBLIC_URL_CHECK_FIXTURE,
+    {
+      maxAttempts: 1,
+      requestTimeoutMs: 20,
+      resolver: resolvePublicDns,
+      connector: async () => new Response(stream, { status: 200 }),
+    },
+  );
+  const outcome = await Promise.race([
+    request.then(() => "resolved", (error) => error),
+    new Promise<"test-deadline">((resolve) =>
+      setTimeout(() => resolve("test-deadline"), 100)
+    ),
+  ]);
+
+  expect(outcome).toBeInstanceOf(Error);
+  expect((outcome as Error).message).toContain("timed out");
+  expect(cancelStarted).toBe(true);
+});
+
+test("public URL checks cancel an oversized streamed response before retaining it", async () => {
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(MAX_PUBLIC_URL_RESPONSE_BYTES));
+      controller.enqueue(new Uint8Array(1));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  await expect(fetchPublicUrlCheckWithRetry(
+    "https://public.takos.jp/healthz",
+    PUBLIC_URL_CHECK_FIXTURE,
+    {
+      maxAttempts: 1,
+      sleep: async () => undefined,
+      resolver: resolvePublicDns,
+      connector: async () => new Response(stream, { status: 200 }),
+    },
+  )).rejects.toThrow("response body exceeded the maximum size");
+  expect(cancelled).toBe(true);
+});
+
+test("public URL origin validation runs before the first network request", async () => {
+  let calls = 0;
+  await expect(assertConfiguredPublicUrls(
+    { publicUrlChecks: [PUBLIC_URL_CHECK_FIXTURE] } as never,
+    { launch_url: "https://service.corp" },
+    {
+      resolver: async () => {
+        calls += 1;
+        return PUBLIC_DNS_ANSWER;
+      },
+      connector: async () => new Response("ok", { status: 200 }),
+    },
+  )).rejects.toThrow("public non-reserved HTTPS hostname");
+  expect(calls).toBe(0);
+});
+
+test("configured public URL checks share one authority pin for the same output origin", async () => {
+  let resolverCalls = 0;
+  const requests: Array<{
+    readonly address: string;
+    readonly servername: string;
+    readonly path: string;
+  }> = [];
+  const checks = [
+    PUBLIC_URL_CHECK_FIXTURE,
+    {
+      ...PUBLIC_URL_CHECK_FIXTURE,
+      name: "ready",
+      path: "/readyz",
+    },
+  ] as const;
+  const results = await assertConfiguredPublicUrls(
+    { publicUrlChecks: checks } as never,
+    { launch_url: "https://public.takos.jp" },
+    {
+      maxAttempts: 1,
+      resolver: async () => {
+        resolverCalls += 1;
+        return resolverCalls === 1
+          ? [
+              { address: "93.184.216.35", family: 4 as const },
+              { address: "93.184.216.34", family: 4 as const },
+            ]
+          : [
+              { address: "93.184.216.37", family: 4 as const },
+              { address: "93.184.216.36", family: 4 as const },
+            ];
+      },
+      connector: async (request) => {
+        requests.push(request);
+        return new Response("ok", { status: 200 });
+      },
+    },
+  );
+
+  expect(results).toHaveLength(2);
+  expect(resolverCalls).toBe(1);
+  expect(requests.map((request) => request.path)).toEqual([
+    "/healthz",
+    "/readyz",
+  ]);
+  expect(requests.every((request) =>
+    request.address === "93.184.216.34" &&
+    request.servername === "public.takos.jp"
+  )).toBe(true);
+});
+
+test("configured public URL absence reuses the exact Apply-side authority pin", async () => {
+  let resolverCalls = 0;
+  let destroyed = false;
+  const requests: Array<{
+    readonly address: string;
+    readonly servername: string;
+    readonly path: string;
+  }> = [];
+  const dependencies = {
+    maxAttempts: 1,
+    sleep: async () => {},
+    resolver: async () => {
+      resolverCalls += 1;
+      return resolverCalls === 1
+        ? [
+            { address: "93.184.216.35", family: 4 as const },
+            { address: "93.184.216.34", family: 4 as const },
+          ]
+        : [
+            { address: "93.184.216.37", family: 4 as const },
+            { address: "93.184.216.36", family: 4 as const },
+          ];
+    },
+    connector: async (request: typeof requests[number] & { readonly signal: AbortSignal }) => {
+      requests.push(request);
+      return new Response(destroyed ? "gone" : "ok", {
+        status: destroyed ? 404 : 200,
+      });
+    },
+  } as const;
+  const applied = await assertConfiguredPublicUrls(
+    { publicUrlChecks: [PUBLIC_URL_CHECK_FIXTURE] } as never,
+    { launch_url: "https://public.takos.jp" },
+    dependencies,
+  );
+  destroyed = true;
+  const absent = await verifyConfiguredPublicUrlsDestroyed(
+    applied,
+    dependencies,
+  );
+
+  expect(absent).toEqual([
+    {
+      name: "health",
+      output: "launch_url",
+      url: "https://public.takos.jp/healthz",
+      expectation: { kind: "http-404" },
+      applyStatus: "passed",
+      status: "passed",
+      observedStatus: 404,
+    },
+  ]);
+  expect(resolverCalls).toBe(1);
+  expect(requests).toHaveLength(2);
+  expect(requests.every((request) =>
+    request.address === "93.184.216.34" &&
+    request.servername === "public.takos.jp" &&
+    request.path === "/healthz"
+  )).toBe(true);
+});
+
+test("public URL checks reject localtest.me and every non-global DNS answer before connecting", async () => {
+  const cases = [
+    ["localtest.me", [{ address: "::1", family: 6 }]],
+    ["public.takos.jp", [{ address: "10.0.0.8", family: 4 }]],
+    ["public.takos.jp", [{ address: "169.254.10.8", family: 4 }]],
+    ["public.takos.jp", [{ address: "192.0.2.8", family: 4 }]],
+    ["public.takos.jp", [{ address: "224.0.0.8", family: 4 }]],
+    ["public.takos.jp", [{ address: "240.0.0.8", family: 4 }]],
+    ["public.takos.jp", [{ address: "fc00::8", family: 6 }]],
+    ["public.takos.jp", [{ address: "fe80::8", family: 6 }]],
+    ["public.takos.jp", [{ address: "ff02::8", family: 6 }]],
+    ["public.takos.jp", [{ address: "2001:db8::8", family: 6 }]],
+    ["public.takos.jp", [{ address: "2410::8", family: 6 }]],
+    ["public.takos.jp", [{ address: "3000::8", family: 6 }]],
+    ["public.takos.jp", [{ address: "::ffff:10.0.0.8", family: 6 }]],
+  ] as const;
+  for (const [hostname, answers] of cases) {
+    let connectorCalls = 0;
+    await expect(fetchPublicUrlCheckWithRetry(
+      `https://${hostname}/healthz`,
+      PUBLIC_URL_CHECK_FIXTURE,
+      {
+        maxAttempts: 1,
+        resolver: async () => answers,
+        connector: async () => {
+          connectorCalls += 1;
+          return new Response("ok", { status: 200 });
+        },
+      },
+    )).rejects.toThrow("non-public address");
+    expect(connectorCalls).toBe(0);
+  }
+});
+
+test("public URL checks reject mixed public and private DNS answers", async () => {
+  let connectorCalls = 0;
+  await expect(fetchPublicUrlCheckWithRetry(
+    "https://public.takos.jp/healthz",
+    PUBLIC_URL_CHECK_FIXTURE,
+    {
+      maxAttempts: 1,
+      resolver: async () => [
+        { address: "93.184.216.34", family: 4 },
+        { address: "192.168.1.9", family: 4 },
+      ],
+      connector: async () => {
+        connectorCalls += 1;
+        return new Response("ok", { status: 200 });
+      },
+    },
+  )).rejects.toThrow("non-public address");
+  expect(connectorCalls).toBe(0);
+});
+
+test("public URL checks resolve once and connect only to the deterministic pinned answer with original SNI and Host", async () => {
+  let resolverCalls = 0;
+  const requests: Array<{
+    readonly address: string;
+    readonly family: number;
+    readonly servername: string;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly path: string;
+    readonly signal: AbortSignal;
+  }> = [];
+  const result = await fetchPublicUrlCheckWithRetry(
+    "https://public.takos.jp/healthz",
+    PUBLIC_URL_CHECK_FIXTURE,
+    {
+      maxAttempts: 1,
+      resolver: async () => {
+        resolverCalls += 1;
+        return resolverCalls === 1
+          ? [
+              { address: "2606:4700:4700::1111", family: 6 },
+              { address: "93.184.216.35", family: 4 },
+              { address: "93.184.216.34", family: 4 },
+            ]
+          : [{ address: "127.0.0.1", family: 4 }];
+      },
+      connector: async (request) => {
+        requests.push(request);
+        return new Response("ok", { status: 200 });
+      },
+    },
+  );
+  expect(result.response.status).toBe(200);
+  expect(resolverCalls).toBe(1);
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({
+    address: "93.184.216.34",
+    family: 4,
+    servername: "public.takos.jp",
+    headers: {
+      accept: "text/html,*/*",
+      host: "public.takos.jp",
+    },
+    path: "/healthz",
+  });
+  expect(requests[0]?.signal).toBeInstanceOf(AbortSignal);
+});
+
+test("public URL DNS errors are fail-closed and redact resolver diagnostics", async () => {
+  let connectorCalls = 0;
+  const promise = fetchPublicUrlCheckWithRetry(
+    "https://public.takos.jp/healthz",
+    PUBLIC_URL_CHECK_FIXTURE,
+    {
+      maxAttempts: 1,
+      resolver: async () => {
+        throw new Error("lookup leaked.private.internal EAI_AGAIN");
+      },
+      connector: async () => {
+        connectorCalls += 1;
+        return new Response("ok", { status: 200 });
+      },
+    },
+  );
+  await expect(promise).rejects.toThrow("DNS resolution failed");
+  await expect(promise).rejects.not.toThrow("leaked.private.internal");
+  expect(connectorCalls).toBe(0);
+});
+
+test("Interface bearer transport validates every DNS answer before exposing Authorization", async () => {
+  const bearer = "issued-interface-bearer";
+  for (const answers of [
+    [{ address: "10.0.0.8", family: 4 }],
+    [
+      { address: "93.184.216.34", family: 4 },
+      { address: "fd00::8", family: 6 },
+    ],
+    [{ address: "::ffff:192.168.1.8", family: 6 }],
+  ] as const) {
+    const requests: unknown[] = [];
+    await expect(fetchPinnedInterfaceBearerResource(
+      "https://oauth-resource.takos.jp/mcp",
+      bearer,
+      {
+        resolver: async () => answers,
+        connector: async (request) => {
+          requests.push(request);
+          return Response.json({ ok: true });
+        },
+      },
+    )).rejects.toThrow("non-public address");
+    expect(requests).toHaveLength(0);
+  }
+});
+
+test("Interface bearer transport pins one validated answer across a rebinding attempt", async () => {
+  const bearer = "issued-interface-bearer";
+  let resolverCalls = 0;
+  const requests: Array<{
+    readonly address: string;
+    readonly family: number;
+    readonly servername: string;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly path: string;
+  }> = [];
+  const result = await fetchPinnedInterfaceBearerResource(
+    "https://oauth-resource.takos.jp/mcp",
+    bearer,
+    {
+      resolver: async () => {
+        resolverCalls += 1;
+        return resolverCalls === 1
+          ? [
+              { address: "2606:4700:4700::1111", family: 6 },
+              { address: "93.184.216.35", family: 4 },
+              { address: "93.184.216.34", family: 4 },
+            ]
+          : [{ address: "127.0.0.1", family: 4 }];
+      },
+      connector: async (request) => {
+        requests.push(request);
+        return Response.json({ ok: true });
+      },
+    },
+  );
+  expect(result.response.status).toBe(200);
+  expect(resolverCalls).toBe(1);
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({
+    address: "93.184.216.34",
+    family: 4,
+    servername: "oauth-resource.takos.jp",
+    path: "/mcp",
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${bearer}`,
+      host: "oauth-resource.takos.jp",
+    },
+  });
+  expect(requests.some((request) => request.address === "127.0.0.1")).toBe(false);
+});
+
+test("Interface bearer transport refuses redirects without replaying the bearer", async () => {
+  const requests: unknown[] = [];
+  await expect(fetchPinnedInterfaceBearerResource(
+    "https://oauth-resource.takos.jp/mcp",
+    "issued-interface-bearer",
+    {
+      resolver: resolvePublicDns,
+      connector: async (request) => {
+        requests.push(request);
+        return new Response("redirect", {
+          status: 302,
+          headers: { location: "https://127.0.0.1/private" },
+        });
+      },
+    },
+  )).rejects.toThrow("rejected a redirect response");
+  expect(requests).toHaveLength(1);
+});
+
 test("platform smoke materializes and retires the Plan-pinned Interface through public routes", async () => {
   const options = await resolveOptions(
     {
@@ -104,7 +1640,7 @@ test("platform smoke materializes and retires the Plan-pinned Interface through 
   const blueprint = options.interfaceBlueprints?.[0];
   expect(blueprint).toBeDefined();
   const outputDigest = `sha256:${"a".repeat(64)}`;
-  const workerUrl = "https://worker.example.test";
+  const workerUrl = "https://worker.takos.jp";
   const iface = {
     apiVersion: "takosumi.dev/v1alpha1",
     kind: "Interface",
@@ -185,6 +1721,39 @@ test("platform smoke materializes and retires the Plan-pinned Interface through 
   } as const;
   const originalFetch = globalThis.fetch;
   let retired = false;
+  let retirementTransportUnavailable = false;
+  let publicResolverCalls = 0;
+  const publicProbeRequests: Array<{
+    readonly address: string;
+    readonly servername: string;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly path: string;
+  }> = [];
+  const publicProbeDependencies = {
+    ...pinnedControlPlaneFixture(
+      async (input, init) => await globalThis.fetch(input, init),
+    ),
+    resolver: async () => {
+      publicResolverCalls += 1;
+      return publicResolverCalls === 1
+        ? [
+            { address: "93.184.216.35", family: 4 as const },
+            { address: "93.184.216.34", family: 4 as const },
+          ]
+        : [
+            { address: "93.184.216.37", family: 4 as const },
+            { address: "93.184.216.36", family: 4 as const },
+          ];
+    },
+    connector: async (request: typeof publicProbeRequests[number] & { readonly signal: AbortSignal }) => {
+      publicProbeRequests.push(request);
+      if (retired && retirementTransportUnavailable) {
+        throw new Error("retirement transport unavailable");
+      }
+      return retired ? new Response("gone", { status: 404 }) : Response.json({ ok: true });
+    },
+    maxAttempts: 1,
+  };
   globalThis.fetch = (async (input) => {
     const url = new URL(String(input));
     if (url.pathname === "/api/v1/interfaces") {
@@ -199,9 +1768,6 @@ test("platform smoke materializes and retires the Plan-pinned Interface through 
     if (url.pathname === "/api/v1/interfaces/if_fixture/bindings/ib_fixture") {
       return Response.json(retired ? { ...binding, status: { ...binding.status, phase: "Revoked" } } : binding);
     }
-    if (url.href === `${workerUrl}/`) {
-      return retired ? new Response("gone", { status: 404 }) : Response.json({ ok: true });
-    }
     throw new Error(`unexpected Interface fixture request: ${url}`);
   }) as typeof fetch;
   try {
@@ -209,14 +1775,33 @@ test("platform smoke materializes and retires the Plan-pinned Interface through 
       workspaceId: "ws_test",
       capsuleId: "cap_fixture",
       stateVersionLedger: ledger,
-    });
+    }, publicProbeDependencies);
     expect(context.records).toHaveLength(1);
     expect(context.records[0]!.interface.metadata.id).toBe("if_fixture");
     expect(context.records[0]!.bindings[0]!.metadata.id).toBe("ib_fixture");
     retired = true;
-    const retiredContext = await assertInterfacesRetired(options, context);
+    retirementTransportUnavailable = true;
+    await expect(assertInterfacesRetired(
+      options,
+      context,
+      publicProbeDependencies,
+    )).rejects.toThrow("retirement is inconclusive");
+    retirementTransportUnavailable = false;
+    const retiredContext = await assertInterfacesRetired(
+      options,
+      context,
+      publicProbeDependencies,
+    );
     expect(retiredContext.records[0]!.interface.status.phase).toBe("Retired");
     expect(retiredContext.records[0]!.bindings[0]!.status.phase).toBe("Revoked");
+    expect(publicResolverCalls).toBe(1);
+    expect(publicProbeRequests).toHaveLength(3);
+    expect(publicProbeRequests.every((request) =>
+      request.address === "93.184.216.34" &&
+      request.servername === "worker.takos.jp" &&
+      request.headers.host === "worker.takos.jp" &&
+      request.path === "/"
+    )).toBe(true);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -290,7 +1875,7 @@ test("platform smoke optionally proves an OAuth Interface grant and post-destroy
   } as const;
   const blueprint = options.interfaceBlueprints![0]!;
   const outputDigest = `sha256:${"c".repeat(64)}`;
-  const resource = "https://oauth-resource.example.test/";
+  const resource = "https://oauth-resource.takos.jp/";
   const iface = {
     apiVersion: "takosumi.dev/v1alpha1",
     kind: "Interface",
@@ -368,12 +1953,63 @@ test("platform smoke optionally proves an OAuth Interface grant and post-destroy
   } as const;
   const originalFetch = globalThis.fetch;
   let retired = false;
-  const mismatchedResource = "https://oauth-resource-mismatch.example.test/";
+  const mismatchedResource = "https://oauth-resource-mismatch.takos.jp/";
   let tokenResource = mismatchedResource;
   let mismatchedResourceFetches = 0;
   let reflectIssuedToken = false;
   let denyTransportUnavailable = false;
-  globalThis.fetch = (async (input, init) => {
+  let controlPlaneTokenRequests = 0;
+  let publicResolverCalls = 0;
+  const publicProbeRequests: Array<{
+    readonly address: string;
+    readonly servername: string;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly path: string;
+  }> = [];
+  const publicProbeDependencies = {
+    ...pinnedControlPlaneFixture(
+      async (input, init) => await globalThis.fetch(input, init),
+    ),
+    resolver: async () => {
+      publicResolverCalls += 1;
+      return publicResolverCalls === 1
+        ? [
+            { address: "93.184.216.35", family: 4 as const },
+            { address: "93.184.216.34", family: 4 as const },
+          ]
+        : [
+            { address: "93.184.216.37", family: 4 as const },
+            { address: "93.184.216.36", family: 4 as const },
+          ];
+    },
+    connector: async (request: typeof publicProbeRequests[number] & { readonly signal: AbortSignal }) => {
+      publicProbeRequests.push(request);
+      const authorization = request.headers.authorization;
+      if (request.servername === "oauth-resource-mismatch.takos.jp") {
+        mismatchedResourceFetches += 1;
+      }
+      if (authorization === undefined) {
+        return retired
+          ? new Response("gone", { status: 404 })
+          : Response.json({ ok: true });
+      }
+      if (authorization !== `Bearer ${issuedToken}`) {
+        throw new Error("unexpected Interface bearer");
+      }
+      if (retired && denyTransportUnavailable) {
+        throw new Error(`retired resource transport unavailable ${issuedToken}`);
+      }
+      if (reflectIssuedToken) {
+        return new Response(`reflected credential ${issuedToken}`, {
+          status: 500,
+        });
+      }
+      return retired
+        ? new Response("denied", { status: 401 })
+        : Response.json({ ok: true });
+    },
+  };
+  globalThis.fetch = (async (input) => {
     const requestUrl = new URL(String(input));
     const requestPath = requestUrl.pathname;
     if (requestPath === "/api/v1/interfaces") {
@@ -393,6 +2029,7 @@ test("platform smoke optionally proves an OAuth Interface grant and post-destroy
       return Response.json(retired ? { ...binding, status: { ...binding.status, phase: "Revoked" } } : binding);
     }
     if (requestPath === "/api/v1/interfaces/if_oauth_fixture/token") {
+      controlPlaneTokenRequests += 1;
       if (retired) return new Response("denied", { status: 403 });
       return Response.json({
         access_token: issuedToken,
@@ -403,28 +2040,6 @@ test("platform smoke optionally proves an OAuth Interface grant and post-destroy
         resource: tokenResource,
       });
     }
-    if (requestUrl.href === mismatchedResource) {
-      mismatchedResourceFetches += 1;
-      return Response.json({ ok: true });
-    }
-    if (requestUrl.href === resource) {
-      const authorization = new Headers(init?.headers).get("authorization");
-      if (
-        retired &&
-        denyTransportUnavailable &&
-        authorization === `Bearer ${issuedToken}`
-      ) {
-        throw new Error("retired resource transport unavailable");
-      }
-      if (reflectIssuedToken && authorization === `Bearer ${issuedToken}`) {
-        return new Response(`reflected credential ${issuedToken}`, {
-          status: 500,
-        });
-      }
-      return retired || authorization !== `Bearer ${issuedToken}`
-        ? new Response("denied", { status: 401 })
-        : Response.json({ ok: true });
-    }
     throw new Error(`unexpected OAuth Interface fixture request: ${requestUrl}`);
   }) as typeof fetch;
   try {
@@ -433,7 +2048,7 @@ test("platform smoke optionally proves an OAuth Interface grant and post-destroy
         workspaceId: "ws_test",
         capsuleId: "cap_oauth_fixture",
         stateVersionLedger: ledger,
-      }),
+      }, publicProbeDependencies),
     ).rejects.toThrow(/canonical Interface resource/u);
     expect(mismatchedResourceFetches).toBe(0);
 
@@ -445,7 +2060,7 @@ test("platform smoke optionally proves an OAuth Interface grant and post-destroy
         workspaceId: "ws_test",
         capsuleId: "cap_oauth_fixture",
         stateVersionLedger: ledger,
-      });
+      }, publicProbeDependencies);
     } catch (error) {
       reflectedFailure = error instanceof Error ? error.message : String(error);
     }
@@ -453,22 +2068,58 @@ test("platform smoke optionally proves an OAuth Interface grant and post-destroy
     expect(reflectedFailure).not.toContain(issuedToken);
     reflectIssuedToken = false;
 
+    publicResolverCalls = 0;
+    const lifecycleRequestStart = publicProbeRequests.length;
     const context = await assertInterfaceMaterialization(options, {
       workspaceId: "ws_test",
       capsuleId: "cap_oauth_fixture",
       stateVersionLedger: ledger,
-    });
+    }, publicProbeDependencies);
     expect(context.records[0]!.issuedToken?.token).toBe(issuedToken);
     expect(context.records[0]!.issuedToken?.permission).toBe("mcp.invoke");
     retired = true;
     denyTransportUnavailable = true;
-    await expect(assertInterfacesRetired(options, context)).rejects.toThrow(
-      "retired resource transport unavailable",
+    let deniedTransportFailure = "";
+    try {
+      await assertInterfacesRetired(
+        options,
+        context,
+        publicProbeDependencies,
+      );
+    } catch (error) {
+      deniedTransportFailure = error instanceof Error
+        ? error.message
+        : String(error);
+    }
+    expect(deniedTransportFailure).toContain(
+      "Interface bearer resource request failed",
     );
+    expect(deniedTransportFailure).not.toContain(issuedToken);
     denyTransportUnavailable = false;
-    const retiredContext = await assertInterfacesRetired(options, context);
+    const retiredContext = await assertInterfacesRetired(
+      options,
+      context,
+      publicProbeDependencies,
+    );
     expect(retiredContext.records[0]!.tokenRevoked).toBe(true);
     expect(retiredContext.records[0]!.tokenUseDenied).toBe(true);
+    expect(publicResolverCalls).toBe(1);
+    expect(publicProbeRequests).toHaveLength(6);
+    expect(publicProbeRequests.slice(lifecycleRequestStart).every((request) =>
+      request.address === "93.184.216.34"
+    )).toBe(true);
+    const bearerRequests = publicProbeRequests.filter(
+      (request) => request.headers.authorization !== undefined,
+    );
+    expect(bearerRequests).toHaveLength(4);
+    expect(bearerRequests.every((request) =>
+      request.address === "93.184.216.34" &&
+      request.servername === "oauth-resource.takos.jp" &&
+      request.headers.host === "oauth-resource.takos.jp" &&
+      request.headers.authorization === `Bearer ${issuedToken}` &&
+      request.path === "/"
+    )).toBe(true);
+    expect(controlPlaneTokenRequests).toBe(5);
     const evidence = interfaceMaterializationEvidence(
       retiredContext.records[0]!,
     );
@@ -1561,7 +3212,7 @@ test("platform control-plane smoke does not infer operator environment from URL"
   const explicit = await resolveOptions(
     {
       dryRun: true,
-      url: "https://operator.example.test",
+      url: "https://operator.selfhosted.dev",
       workspace: "@smoke-production",
       environment: "production",
       cloudflareAccountId: "account",
@@ -1573,6 +3224,44 @@ test("platform control-plane smoke does not infer operator environment from URL"
     },
   );
   expect(explicit.environment).toBe("production");
+});
+
+test("platform control-plane URL is one canonical public HTTPS authority", async () => {
+  const common = {
+    dryRun: true,
+    workspace: "ws_test",
+    cloudflareConnectionMode: "none",
+    verificationMode: "opentofu",
+  } as const;
+  const environment = {
+    TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token-fixture",
+  };
+  const canonical = await resolveOptions(
+    { ...common, url: "https://Control.SelfHosted.dev/" },
+    environment,
+  );
+  expect(canonical.url).toBe("https://control.selfhosted.dev");
+
+  for (const url of [
+    "http://control.selfhosted.dev",
+    "https://operator:secret@control.selfhosted.dev",
+    "https://control.selfhosted.dev:443",
+    "https://control.selfhosted.dev/api",
+    "https://control.selfhosted.dev/.",
+    "https://control.selfhosted.dev/a/..",
+    " https://control.selfhosted.dev ",
+    "https://control.\nselfhosted.dev",
+    "https://control.selfhosted.dev?tenant=other",
+    "https://control.selfhosted.dev?",
+    "https://control.selfhosted.dev#other",
+    "https://control.selfhosted.dev#",
+    "https://127.0.0.1",
+    "https://[::1]",
+  ]) {
+    await expect(resolveOptions({ ...common, url }, environment)).rejects.toThrow(
+      "--url must be an absolute HTTPS origin",
+    );
+  }
 });
 
 test("platform control-plane smoke never infers auth authority from token prefixes", async () => {
@@ -1821,6 +3510,7 @@ test("platform control-plane smoke can require public URL checks for generic Ope
           path: "/healthz",
           expectedStatus: 204,
           bodyIncludes: ["ok"],
+          destroyExpectation: { kind: "http-404" },
         },
       ]),
     },
@@ -1838,6 +3528,7 @@ test("platform control-plane smoke can require public URL checks for generic Ope
       path: "/healthz",
       expectedStatus: 204,
       bodyIncludes: ["ok"],
+      destroyExpectation: { kind: "http-404" },
     },
   ]);
   expect(result.steps).toEqual([
@@ -1863,9 +3554,118 @@ test("platform control-plane smoke can require public URL checks for generic Ope
       ok: true,
       bodyIncludes: ["ok"],
       bodyDigest: `sha256:${"0".repeat(64)}`,
+      destroyExpectation: { kind: "http-404" },
+    },
+  ]);
+  expect(result.publicUrlDestroyChecks).toEqual([
+    {
+      name: "launch",
+      output: "launch_url",
+      url: "https://example.invalid/healthz",
+      expectation: { kind: "http-404" },
+      applyStatus: "planned",
+      status: "planned",
     },
   ]);
   expect(result.inputs.publicUrlCheckNames).toEqual(["launch"]);
+  expect(result.inputs.publicUrlDestroyExpectations).toEqual([
+    {
+      name: "launch",
+      expectation: { kind: "http-404" },
+    },
+  ]);
+});
+
+test("configured public URL checks require an explicit post-Destroy contract", async () => {
+  const args = {
+    dryRun: true,
+    url: "https://app-staging.takosumi.com",
+    workspace: "@scratch",
+    cloudflareConnectionMode: "none",
+    verificationMode: "opentofu",
+    outputAllowlistJson: JSON.stringify({
+      launch_url: { from: "launch_url", type: "url", required: true },
+    }),
+  } as const;
+  const environment = {
+    TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+  };
+
+  await expect(resolveOptions({
+    ...args,
+    publicUrlChecksJson: JSON.stringify([
+      { name: "launch", output: "launch_url", path: "/healthz" },
+    ]),
+  }, environment)).rejects.toThrow(
+    "destroyExpectation must explicitly select http-404 or not-verifiable",
+  );
+  await expect(resolveOptions({
+    ...args,
+    publicUrlChecksJson: JSON.stringify([
+      {
+        name: "launch",
+        output: "launch_url",
+        path: "/healthz",
+        destroyExpectation: { kind: "not-verifiable" },
+      },
+    ]),
+  }, environment)).rejects.toThrow(
+    "not-verifiable destroyExpectation requires a bounded reason",
+  );
+});
+
+test("configured public URL lifecycle checks require a distinct Apply presence status", async () => {
+  const args = {
+    dryRun: true,
+    url: "https://app-staging.takosumi.com",
+    workspace: "@scratch",
+    cloudflareConnectionMode: "none",
+    verificationMode: "opentofu",
+    outputAllowlistJson: JSON.stringify({
+      launch_url: { from: "launch_url", type: "url", required: true },
+    }),
+  } as const;
+  const environment = {
+    TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+  };
+
+  for (const expectedStatus of [404, 410]) {
+    await expect(resolveOptions({
+      ...args,
+      publicUrlChecksJson: JSON.stringify([
+        {
+          name: "launch",
+          output: "launch_url",
+          path: "/healthz",
+          expectedStatus,
+          destroyExpectation: { kind: "http-404" },
+        },
+      ]),
+    }, environment)).rejects.toThrow(
+      "expectedStatus must prove presence and cannot be 404 or 410",
+    );
+  }
+
+  let connectorCalls = 0;
+  await expect(assertConfiguredPublicUrls(
+    {
+      publicUrlChecks: [{
+        ...PUBLIC_URL_CHECK_FIXTURE,
+        expectedStatus: 404,
+      }],
+    } as never,
+    { launch_url: "https://public.takos.jp" },
+    {
+      resolver: resolvePublicDns,
+      connector: async () => {
+        connectorCalls += 1;
+        return new Response("always absent", { status: 404 });
+      },
+    },
+  )).rejects.toThrow(
+    "expectedStatus must prove presence and cannot be 404 or 410",
+  );
+  expect(connectorCalls).toBe(0);
 });
 
 test("platform control-plane smoke only reads provider verification Outputs through explicit projection names", async () => {
@@ -2023,6 +3823,7 @@ test("platform control-plane smoke uses configured public checks for app Workers
           path: "/health",
           expectedStatus: 200,
           bodyIncludes: ['"status":"ok"'],
+          destroyExpectation: { kind: "http-404" },
         },
       ]),
     },
@@ -2046,6 +3847,7 @@ test("platform control-plane smoke uses configured public checks for app Workers
       ok: true,
       bodyIncludes: ['"status":"ok"'],
       bodyDigest: `sha256:${"0".repeat(64)}`,
+      destroyExpectation: { kind: "http-404" },
     },
   ]);
 });
@@ -2072,6 +3874,10 @@ test("platform control-plane smoke does not infer Cloudflare resource verificati
           path: "/health",
           expectedStatus: 200,
           bodyIncludes: ['"status":"ok"'],
+          destroyExpectation: {
+            kind: "not-verifiable",
+            reason: "the stable routing origin outlives this Capsule",
+          },
         },
       ]),
     },
@@ -2101,6 +3907,29 @@ test("platform control-plane smoke does not infer Cloudflare resource verificati
   expect(result.workerUrl).toBe("");
   expect(result.runtimeVerified).toBe(false);
   expect(result.publicUrlVerified).toBe(true);
+  expect(result.destroyVerified).toBe(false);
+  expect(result.inputs.publicUrlDestroyExpectations).toEqual([
+    {
+      name: "health",
+      expectation: {
+        kind: "not-verifiable",
+        reason: "the stable routing origin outlives this Capsule",
+      },
+    },
+  ]);
+  expect(result.publicUrlDestroyChecks).toEqual([
+    {
+      name: "health",
+      output: "url",
+      url: "https://example.invalid/health",
+      expectation: {
+        kind: "not-verifiable",
+        reason: "the stable routing origin outlives this Capsule",
+      },
+      applyStatus: "planned",
+      status: "not_claimed",
+    },
+  ]);
 });
 
 test("platform control-plane smoke cleanup only marks failed pending upload remnants", () => {
@@ -2139,6 +3968,917 @@ test("platform control-plane smoke cleanup only marks failed pending upload remn
   ).toBe(false);
 });
 
+async function runConfiguredPublicUrlLifecycleFixture(
+  destroyExpectation:
+    | { readonly kind: "http-404" }
+    | { readonly kind: "not-verifiable"; readonly reason: string },
+  behavior: {
+    readonly failReadyCheckBeforeDestroy?: boolean;
+    readonly failHealthCheckAfterDestroy?: boolean;
+    readonly invalidReadyOutput?: boolean;
+    readonly applyFails?: boolean;
+    readonly applyPollNeverTerminal?: boolean;
+    readonly destroyPlanFails?: boolean;
+    readonly destroyApplyFails?: boolean;
+    readonly applyAcknowledgement?: "transport-loss" | "timeout";
+    readonly reconcileApply?: boolean;
+    readonly ambiguousApplyReconciliation?: boolean;
+    readonly temporaryConnection?: boolean;
+  } = {},
+) {
+  const appName = "takosumi-configured-public-url-lifecycle";
+  const workspaceId = "ws_configuredpublicurl";
+  const capsuleId = "cap_configured_public_url";
+  const sourceId = "src_configured_public_url";
+  const sourceSnapshotId = "snap_configured_public_url";
+  const stateVersionId = "state_configured_public_url";
+  const outputId = "out_configured_public_url";
+  const rawConnectionId = "conn_configured_public_url";
+  const providerConnectionId = "pcn_configured_public_url";
+  const runs = {
+    sync: {
+      id: "run_sync_configured_public_url",
+      status: "succeeded",
+      type: "source_sync",
+      sourceSnapshotId,
+    },
+    planWaiting: {
+      id: "run_plan_configured_public_url",
+      status: "waiting_approval",
+      type: "plan",
+    },
+    planSucceeded: {
+      id: "run_plan_configured_public_url",
+      status: "succeeded",
+      type: "plan",
+    },
+    applySucceeded: {
+      id: "run_apply_configured_public_url",
+      workspaceId,
+      capsuleId,
+      planRunId: "run_plan_configured_public_url",
+      status: "succeeded",
+      type: "apply",
+    },
+    applyFailed: {
+      id: "run_apply_failed_configured_public_url",
+      workspaceId,
+      capsuleId,
+      planRunId: "run_plan_configured_public_url",
+      status: "failed",
+      type: "apply",
+    },
+    applyRunning: {
+      id: "run_apply_configured_public_url",
+      workspaceId,
+      capsuleId,
+      planRunId: "run_plan_configured_public_url",
+      status: "running",
+      type: "apply",
+    },
+    destroyPlan: {
+      id: "run_destroy_plan_configured_public_url",
+      status: "waiting_approval",
+      type: "destroy",
+    },
+    destroyApply: {
+      id: "run_destroy_apply_configured_public_url",
+      status: "succeeded",
+      type: "destroy",
+    },
+    destroyApplyFailed: {
+      id: "run_destroy_apply_configured_public_url",
+      status: "failed",
+      type: "destroy",
+    },
+  } as const;
+  const options = await resolveOptions(
+    {
+      url: "https://app-staging.takosumi.com",
+      workspace: workspaceId,
+      appName,
+      sourceGitUrl: "https://git.example.test/configured-public-url.git",
+      cloudflareConnectionMode: behavior.temporaryConnection
+        ? "guided"
+        : "none",
+      ...(behavior.temporaryConnection
+        ? {
+            cloudflareAccountId: "account-configured-public-url",
+            cloudflareWorkersSubdomain: "workers.example.test",
+          }
+        : {}),
+      verificationMode: "opentofu",
+      noInterfaceProof: true,
+      outputAllowlistJson: JSON.stringify({
+        launch_url: { from: "launch_url", type: "url", required: true },
+        ready_url: { from: "ready_url", type: "url", required: true },
+      }),
+      publicUrlChecksJson: JSON.stringify([
+        {
+          name: "health",
+          output: "launch_url",
+          path: "/healthz",
+          expectedStatus: 200,
+          bodyIncludes: ["ok"],
+          destroyExpectation,
+        },
+        {
+          name: "ready",
+          output: "ready_url",
+          path: "/readyz",
+          expectedStatus: 200,
+          bodyIncludes: ["ok"],
+          destroyExpectation,
+        },
+      ]),
+      timeoutSeconds: "1",
+      deployTimeoutSeconds: "1",
+      pollIntervalMs: behavior.applyPollNeverTerminal ? "100" : "1",
+      expectedServiceIdentityHeader: "x-release-revision",
+      expectedServiceIdentity: "release-configured-public-url",
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      ...(behavior.temporaryConnection
+        ? { CLOUDFLARE_API_TOKEN: "cloudflare-token" }
+        : {}),
+    },
+  );
+  let destroyed = false;
+  let controlPlaneResolverCalls = 0;
+  let publicResolverCalls = 0;
+  const controlPlaneRequests: Array<{
+    readonly address: string;
+    readonly servername: string;
+    readonly method: string;
+    readonly path: string;
+  }> = [];
+  const publicRequests: Array<{
+    readonly address: string;
+    readonly servername: string;
+    readonly path: string;
+  }> = [];
+
+  const result = await runPlatformControlPlaneSmoke(options, {
+    controlPlaneResolver: async () => {
+      controlPlaneResolverCalls += 1;
+      return controlPlaneResolverCalls === 1
+        ? [
+            { address: "93.184.216.35", family: 4 as const },
+            { address: "93.184.216.34", family: 4 as const },
+          ]
+        : [
+            { address: "93.184.216.37", family: 4 as const },
+            { address: "93.184.216.36", family: 4 as const },
+          ];
+    },
+    resolver: async () => {
+      publicResolverCalls += 1;
+      return [
+        { address: "93.184.216.37", family: 4 as const },
+        { address: "93.184.216.36", family: 4 as const },
+      ];
+    },
+    connector: async (request) => {
+      publicRequests.push(request);
+      if (
+        !destroyed &&
+        behavior.failReadyCheckBeforeDestroy === true &&
+        request.path === "/readyz"
+      ) {
+        return new Response("not ready", { status: 503 });
+      }
+      if (
+        destroyed &&
+        behavior.failHealthCheckAfterDestroy === true &&
+        request.path === "/healthz"
+      ) {
+        return new Response("still here", { status: 503 });
+      }
+      return new Response(destroyed ? "gone" : "ok", {
+        status: destroyed ? 404 : 200,
+      });
+    },
+    sleep: async () => {},
+    maxAttempts: 1,
+    ...(behavior.applyAcknowledgement === "timeout"
+      ? { requestTimeoutMs: 20 }
+      : {}),
+    controlPlaneConnector: async (request) => {
+      controlPlaneRequests.push(request);
+      const path = new URL(request.path, options.url).pathname;
+      const method = request.method;
+      if (method === "GET" && path === "/") {
+        return new Response("identity", {
+          status: 200,
+          headers: { "x-release-revision": "release-configured-public-url" },
+        });
+      }
+      if (method === "POST" && path === "/api/v1/connections") {
+        return Response.json({ connection: { id: rawConnectionId } });
+      }
+      if (
+        method === "POST" &&
+        path === `/api/v1/connections/${rawConnectionId}/test`
+      ) {
+        return Response.json({ status: "verified" });
+      }
+      if (method === "GET" && path === "/api/v1/provider-connections") {
+        return Response.json({
+          providerConnections: [{
+            id: providerConnectionId,
+            providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+            displayName: `Layer-2 smoke ${appName}`,
+          }],
+        });
+      }
+      if (method === "POST" && path === "/api/v1/sources") {
+        return Response.json({ source: { id: sourceId } });
+      }
+      if (method === "POST" && path === `/api/v1/sources/${sourceId}/sync`) {
+        return Response.json({ run: runs.sync });
+      }
+      if (method === "GET" && path === `/api/v1/runs/${runs.sync.id}`) {
+        return Response.json({ run: runs.sync });
+      }
+      if (method === "GET" && path === `/api/v1/sources/${sourceId}/snapshots`) {
+        return Response.json({
+          snapshots: [{
+            id: sourceSnapshotId,
+            resolvedCommit: "a".repeat(40),
+            archiveRef: "r2://fixture/source.tar.zst",
+            archiveDigest: `sha256:${"b".repeat(64)}`,
+            archiveSizeBytes: 1,
+            fetchedByRunId: runs.sync.id,
+          }],
+        });
+      }
+      if (method === "GET" && path === "/api/v1/capsule-configs") {
+        return Response.json({
+          installConfigs: [{ id: "cfg_configured_public_url", workspaceId }],
+        });
+      }
+      if (method === "POST" && path === `/api/v1/workspaces/${workspaceId}/capsules`) {
+        return Response.json({ capsule: { id: capsuleId, name: appName } });
+      }
+      if (method === "POST" && path === `/api/v1/sources/${sourceId}/compatibility-check`) {
+        return Response.json({
+          report: {
+            id: "compat_configured_public_url",
+            rootProviderRequirements: behavior.temporaryConnection
+              ? [{
+                  source: "registry.opentofu.org/cloudflare/cloudflare",
+                  moduleLocalName: "cloudflare",
+                }]
+              : [],
+          },
+        });
+      }
+      if (
+        method === "PUT" &&
+        path === `/api/v1/capsules/${capsuleId}/provider-bindings`
+      ) {
+        return Response.json({});
+      }
+      if (method === "POST" && path === `/api/v1/capsules/${capsuleId}/plan`) {
+        return Response.json({ run: runs.planWaiting });
+      }
+      if (method === "GET" && path === `/api/v1/runs/${runs.planWaiting.id}`) {
+        return Response.json({ run: runs.planWaiting });
+      }
+      if (method === "POST" && path === `/api/v1/runs/${runs.planWaiting.id}/approve`) {
+        return Response.json({ run: runs.planSucceeded });
+      }
+      if (method === "POST" && path === `/api/v1/runs/${runs.planWaiting.id}/apply`) {
+        if (behavior.applyAcknowledgement === "timeout") {
+          return await new Promise<Response>(() => {});
+        }
+        if (behavior.applyAcknowledgement === "transport-loss") {
+          throw new Error("fixture process lost the Apply acknowledgement");
+        }
+        return Response.json({
+          run: behavior.applyPollNeverTerminal
+            ? runs.applyRunning
+            : behavior.applyFails
+              ? runs.applyFailed
+              : runs.applySucceeded,
+        });
+      }
+      if (
+        method === "GET" &&
+        path === `/api/v1/workspaces/${workspaceId}/runs`
+      ) {
+        return Response.json({
+          runs: behavior.reconcileApply === false
+            ? []
+            : [
+                {
+                  ...runs.applySucceeded,
+                  workspaceId,
+                  capsuleId,
+                  planRunId: runs.planSucceeded.id,
+                },
+                ...(behavior.ambiguousApplyReconciliation
+                  ? [{
+                      ...runs.applySucceeded,
+                      id: "run_apply_duplicate_configured_public_url",
+                      workspaceId,
+                      capsuleId,
+                      planRunId: runs.planSucceeded.id,
+                    }]
+                  : []),
+              ],
+        });
+      }
+      if (method === "GET" && path === `/api/v1/runs/${runs.applySucceeded.id}`) {
+        return Response.json({
+          run: behavior.applyPollNeverTerminal
+            ? runs.applyRunning
+            : runs.applySucceeded,
+        });
+      }
+      if (
+        behavior.applyPollNeverTerminal &&
+        method === "POST" &&
+        path === `/api/v1/runs/${runs.applyRunning.id}/cancel`
+      ) {
+        return Response.json({ run: runs.applyRunning });
+      }
+      if (method === "GET" && path === `/api/v1/runs/${runs.applyFailed.id}`) {
+        return Response.json({ run: runs.applyFailed });
+      }
+      if (method === "GET" && path === `/api/v1/capsules/${capsuleId}`) {
+        return Response.json({
+          capsule: {
+            id: capsuleId,
+            workspaceId,
+            status: "active",
+            currentStateVersionId: stateVersionId,
+            currentStateGeneration: 1,
+          },
+        });
+      }
+      if (method === "GET" && path === `/api/v1/capsules/${capsuleId}/state-versions`) {
+        return Response.json({
+          stateVersions: [{
+            id: stateVersionId,
+            workspaceId,
+            capsuleId,
+            environment: options.environment,
+            createdByRunId: runs.applySucceeded.id,
+            generation: 1,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }],
+        });
+      }
+      if (method === "GET" && path === `/api/v1/capsules/${capsuleId}/outputs`) {
+        return Response.json({
+          output: {
+            id: outputId,
+            workspaceId,
+            capsuleId,
+            stateGeneration: 1,
+            publicOutputs: {
+              launch_url: options.url,
+              ready_url: behavior.invalidReadyOutput
+                ? "http://private.invalid"
+                : options.url,
+            },
+            outputDigest: `sha256:${"c".repeat(64)}`,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+        });
+      }
+      if (method === "POST" && path === `/api/v1/capsules/${capsuleId}/destroy-plan`) {
+        if (behavior.destroyPlanFails) {
+          throw new Error("fixture destroy plan failed before URL verification");
+        }
+        return Response.json({ run: runs.destroyPlan });
+      }
+      if (method === "GET" && path === `/api/v1/runs/${runs.destroyPlan.id}`) {
+        return Response.json({ run: runs.destroyPlan });
+      }
+      if (method === "POST" && path === `/api/v1/runs/${runs.destroyPlan.id}/approve`) {
+        return Response.json({});
+      }
+      if (method === "POST" && path === `/api/v1/runs/${runs.destroyPlan.id}/apply`) {
+        destroyed = !behavior.destroyApplyFails;
+        return Response.json({
+          run: behavior.destroyApplyFails
+            ? runs.destroyApplyFailed
+            : runs.destroyApply,
+        });
+      }
+      if (method === "GET" && path === `/api/v1/runs/${runs.destroyApply.id}`) {
+        return Response.json({
+          run: behavior.destroyApplyFails
+            ? runs.destroyApplyFailed
+            : runs.destroyApply,
+        });
+      }
+      if (
+        method === "POST" &&
+        path === `/api/v1/connections/${rawConnectionId}/revoke`
+      ) {
+        return Response.json({});
+      }
+      if (method === "PATCH" && path === `/api/v1/capsules/${capsuleId}`) {
+        throw new Error("indeterminate Apply must retain the Capsule for recovery");
+      }
+      throw new Error(`unexpected lifecycle request ${method} ${request.path}`);
+    },
+  });
+  return {
+    result,
+    controlPlaneResolverCalls,
+    publicResolverCalls,
+    controlPlaneRequests,
+    publicRequests,
+    rawConnectionId,
+    providerConnectionId,
+    runs,
+  };
+}
+
+test("generic OpenTofu smoke verifies every configured URL absent after Destroy", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture({
+    kind: "http-404",
+  });
+
+  expect(fixture.result.error).toBeUndefined();
+  expect(fixture.result.status).toBe("passed");
+  expect(fixture.result.destroyVerified).toBe(true);
+  expect(fixture.result.publicUrlDestroyChecks).toEqual([
+    {
+      name: "health",
+      output: "launch_url",
+      url: "https://app-staging.takosumi.com/healthz",
+      expectation: { kind: "http-404" },
+      applyStatus: "passed",
+      status: "passed",
+      observedStatus: 404,
+    },
+    {
+      name: "ready",
+      output: "ready_url",
+      url: "https://app-staging.takosumi.com/readyz",
+      expectation: { kind: "http-404" },
+      applyStatus: "passed",
+      status: "passed",
+      observedStatus: 404,
+    },
+  ]);
+  expect(fixture.controlPlaneResolverCalls).toBe(1);
+  expect(fixture.publicResolverCalls).toBe(0);
+  expect(fixture.controlPlaneRequests.length).toBeGreaterThan(10);
+  expect(fixture.publicRequests).toHaveLength(4);
+  expect([
+    ...fixture.controlPlaneRequests,
+    ...fixture.publicRequests,
+  ].every((request) =>
+    request.address === "93.184.216.34" &&
+    request.servername === "app-staging.takosumi.com"
+  )).toBe(true);
+});
+
+test("generic OpenTofu cleanup checks every registered URL and does not claim a failed Apply probe", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture(
+    { kind: "http-404" },
+    { failReadyCheckBeforeDestroy: true },
+  );
+
+  expect(fixture.result.status).toBe("failed");
+  expect(fixture.result.publicUrlVerified).toBe(false);
+  expect(fixture.result.publicUrlChecks?.map((check) => check.name)).toEqual([
+    "health",
+  ]);
+  expect(fixture.result.publicUrlDestroyChecks).toEqual([
+    {
+      name: "health",
+      output: "launch_url",
+      url: "https://app-staging.takosumi.com/healthz",
+      expectation: { kind: "http-404" },
+      status: "passed",
+      applyStatus: "passed",
+      observedStatus: 404,
+    },
+    {
+      name: "ready",
+      output: "ready_url",
+      url: "https://app-staging.takosumi.com/readyz",
+      expectation: { kind: "http-404" },
+      status: "inconclusive",
+      applyStatus: "unverified",
+      observedStatus: 404,
+      error:
+        "Apply existence proof was not established: public URL check ready returned HTTP 503; expected 200",
+    },
+  ]);
+  expect(fixture.result.destroyVerified).toBe(false);
+  expect(fixture.result.completedSteps).not.toContain("destroy");
+  expect(fixture.publicRequests.map((request) => request.path)).toEqual([
+    "/healthz",
+    "/readyz",
+    "/healthz",
+    "/readyz",
+  ]);
+  expect(fixture.controlPlaneResolverCalls).toBe(1);
+  expect(fixture.publicResolverCalls).toBe(0);
+  expect(fixture.publicRequests.every((request) =>
+    request.address === "93.184.216.34" &&
+    request.servername === "app-staging.takosumi.com"
+  )).toBe(true);
+});
+
+test("generic OpenTofu Destroy verification records every URL after one absence check fails", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture(
+    { kind: "http-404" },
+    { failHealthCheckAfterDestroy: true },
+  );
+
+  expect(fixture.result.status).toBe("failed");
+  expect(fixture.result.destroyVerified).toBe(false);
+  expect(fixture.result.publicUrlDestroyChecks).toEqual([
+    expect.objectContaining({
+      name: "health",
+      applyStatus: "passed",
+      status: "inconclusive",
+    }),
+    expect.objectContaining({
+      name: "ready",
+      applyStatus: "passed",
+      status: "passed",
+      observedStatus: 404,
+    }),
+  ]);
+  expect(fixture.publicRequests.map((request) => request.path)).toEqual([
+    "/healthz",
+    "/readyz",
+    "/healthz",
+    "/readyz",
+  ]);
+});
+
+test("generic OpenTofu registers every configured URL before probing and fails closed on an invalid applied URL", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture(
+    { kind: "http-404" },
+    { invalidReadyOutput: true },
+  );
+
+  expect(fixture.result.status).toBe("failed");
+  expect(fixture.result.publicUrlChecks).toBeUndefined();
+  expect(fixture.result.publicUrlDestroyChecks).toEqual([
+    {
+      name: "health",
+      output: "launch_url",
+      url: "https://app-staging.takosumi.com/healthz",
+      expectation: { kind: "http-404" },
+      status: "inconclusive",
+      applyStatus: "unverified",
+      observedStatus: 404,
+      error:
+        "Apply existence proof was not established: URL checks were not started because at least one configured applied URL was invalid",
+    },
+    {
+      name: "ready",
+      output: "ready_url",
+      expectation: { kind: "http-404" },
+      status: "inconclusive",
+      applyStatus: "unverified",
+      error:
+        "public URL check ready URL output must be an absolute HTTPS URL without credentials, port, query, or fragment",
+    },
+  ]);
+  expect(fixture.result.destroyVerified).toBe(false);
+  expect(fixture.result.completedSteps).not.toContain("destroy");
+  expect(fixture.publicRequests.map((request) => request.path)).toEqual([
+    "/healthz",
+  ]);
+});
+
+test("generic OpenTofu cleanup keeps every configured URL explicitly unresolved when Apply fails before Outputs", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture(
+    { kind: "http-404" },
+    { applyFails: true },
+  );
+
+  expect(fixture.result.status).toBe("failed");
+  expect(fixture.result.error).toContain(
+    `apply run ${fixture.runs.applyFailed.id} ended as failed`,
+  );
+  expect(fixture.result.publicUrlChecks).toBeUndefined();
+  expect(fixture.result.publicUrlDestroyChecks).toEqual([
+    {
+      name: "health",
+      output: "launch_url",
+      expectation: { kind: "http-404" },
+      applyStatus: "unverified",
+      status: "inconclusive",
+      error: "Output ledger did not expose publicOutputs for URL checks",
+    },
+    {
+      name: "ready",
+      output: "ready_url",
+      expectation: { kind: "http-404" },
+      applyStatus: "unverified",
+      status: "inconclusive",
+      error: "Output ledger did not expose publicOutputs for URL checks",
+    },
+  ]);
+  expect(fixture.result.destroyVerified).toBe(false);
+  expect(fixture.result.completedSteps).not.toContain("destroy");
+  expect(fixture.publicRequests).toHaveLength(0);
+});
+
+test("generic OpenTofu cleanup materializes every configured URL when Destroy planning fails", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture(
+    { kind: "http-404" },
+    { destroyPlanFails: true, temporaryConnection: true },
+  );
+
+  expect(fixture.result.status).toBe("failed");
+  expect(fixture.result.destroyVerified).toBe(false);
+  expect(fixture.result.publicUrlDestroyChecks).toEqual([
+    expect.objectContaining({
+      name: "health",
+      output: "launch_url",
+      url: "https://app-staging.takosumi.com/healthz",
+      expectation: { kind: "http-404" },
+      applyStatus: "passed",
+      status: "inconclusive",
+    }),
+    expect.objectContaining({
+      name: "ready",
+      output: "ready_url",
+      url: "https://app-staging.takosumi.com/readyz",
+      expectation: { kind: "http-404" },
+      applyStatus: "passed",
+      status: "inconclusive",
+    }),
+  ]);
+  expect(fixture.result.publicUrlDestroyChecks?.every((check) =>
+    check.error?.includes("Destroy absence verification was not completed")
+  )).toBe(true);
+  expect(fixture.result.failureCleanup).toMatchObject({
+    attempted: true,
+    destroyAttempted: true,
+    destroyApplyAttempted: false,
+    destroySucceeded: false,
+    destroyVerification: {
+      status: "inconclusive",
+      publicUrlDestroyChecks: fixture.result.publicUrlDestroyChecks,
+    },
+  });
+  expect(fixture.result.connectionRevoked).toBe(false);
+});
+
+test("generic OpenTofu cleanup materializes every configured URL when Destroy apply fails", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture(
+    { kind: "http-404" },
+    { destroyApplyFails: true, temporaryConnection: true },
+  );
+
+  expect(fixture.result.status).toBe("failed");
+  expect(fixture.result.destroyVerified).toBe(false);
+  expect(fixture.result.publicUrlDestroyChecks).toHaveLength(2);
+  expect(fixture.result.publicUrlDestroyChecks?.every((check) =>
+    check.status === "inconclusive" &&
+    check.applyStatus === "passed" &&
+    check.error?.includes("Destroy absence verification was not completed")
+  )).toBe(true);
+  expect(fixture.result.failureCleanup).toMatchObject({
+    attempted: true,
+    destroyAttempted: true,
+    destroyApplyAttempted: true,
+    destroySucceeded: false,
+    destroyVerification: {
+      status: "inconclusive",
+      publicUrlDestroyChecks: fixture.result.publicUrlDestroyChecks,
+    },
+  });
+  expect(fixture.result.connectionRevoked).toBe(false);
+});
+
+test("platform smoke retains recovery authority and URL evidence when Apply cancellation stays non-terminal", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture(
+    { kind: "http-404" },
+    { applyPollNeverTerminal: true, temporaryConnection: true },
+  );
+
+  expect(fixture.result.status).toBe("failed");
+  expect(fixture.result.timedOutRunId).toBe(fixture.runs.applyRunning.id);
+  expect(fixture.result.runCancellationStatus).toBe("failed");
+  expect(fixture.result.runCancellationError).toContain(
+    "cancel returned non-terminal status running",
+  );
+  expect(fixture.result.destroyPlanRunId).toBeUndefined();
+  expect(fixture.result.destroyApplyRunId).toBeUndefined();
+  expect(fixture.result.destroyVerified).toBe(false);
+  expect(fixture.result.publicUrlDestroyChecks).toEqual([
+    expect.objectContaining({
+      name: "health",
+      output: "launch_url",
+      applyStatus: "unverified",
+      status: "inconclusive",
+    }),
+    expect.objectContaining({
+      name: "ready",
+      output: "ready_url",
+      applyStatus: "unverified",
+      status: "inconclusive",
+    }),
+  ]);
+  expect(fixture.result.failureCleanup).toMatchObject({
+    attempted: true,
+    destroyAttempted: false,
+    retainedForOperatorRecovery: true,
+    destroyVerification: {
+      status: "inconclusive",
+      publicUrlDestroyChecks: fixture.result.publicUrlDestroyChecks,
+    },
+  });
+  expect(fixture.result.failureCleanup).not.toHaveProperty("destroySucceeded");
+  expect(fixture.result.connectionRevoked).toBe(false);
+  expect(fixture.result.connectionRevokeSkippedReason).toContain(
+    "terminal ownership",
+  );
+  expect(fixture.controlPlaneRequests.some((request) =>
+    request.method === "POST" && request.path.endsWith("/destroy-plan")
+  )).toBe(false);
+  expect(fixture.controlPlaneRequests.some((request) =>
+    request.method === "POST" &&
+    request.path === `/api/v1/connections/${fixture.rawConnectionId}/revoke`
+  )).toBe(false);
+});
+
+test("platform smoke reconciles the exact ApplyRun after process loss drops the POST acknowledgement", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture(
+    { kind: "http-404" },
+    {
+      applyAcknowledgement: "transport-loss",
+      temporaryConnection: true,
+    },
+  );
+
+  expect(fixture.result.status).toBe("passed");
+  expect(fixture.result.applyRunId).toBe(fixture.runs.applySucceeded.id);
+  expect(fixture.result.destroyVerified).toBe(true);
+  expect(fixture.result.connectionRevoked).toBe(true);
+  expect(fixture.controlPlaneRequests.filter((request) =>
+    request.method === "POST" &&
+    request.path ===
+      `/api/v1/runs/${fixture.runs.planSucceeded.id}/apply`
+  )).toHaveLength(1);
+  expect(fixture.controlPlaneRequests.filter((request) =>
+    request.method === "GET" &&
+    request.path ===
+      "/api/v1/workspaces/ws_configuredpublicurl/runs?limit=500"
+  )).toHaveLength(1);
+  expect(fixture.controlPlaneRequests.filter((request) =>
+    request.method === "POST" &&
+    request.path ===
+      `/api/v1/connections/${fixture.rawConnectionId}/revoke`
+  )).toHaveLength(1);
+});
+
+test("platform smoke reconciles Apply after a non-cooperative POST exceeds its response deadline", async () => {
+  const smoke = runConfiguredPublicUrlLifecycleFixture(
+    { kind: "http-404" },
+    {
+      applyAcknowledgement: "timeout",
+      temporaryConnection: true,
+    },
+  );
+  const outcome = await Promise.race([
+    smoke,
+    new Promise<"test-deadline">((resolve) =>
+      setTimeout(() => resolve("test-deadline"), 500)
+    ),
+  ]);
+
+  expect(outcome).not.toBe("test-deadline");
+  const fixture = outcome as Awaited<typeof smoke>;
+  expect(fixture.result.status).toBe("passed");
+  expect(fixture.result.applyRunId).toBe(fixture.runs.applySucceeded.id);
+  expect(fixture.result.destroyVerified).toBe(true);
+  expect(fixture.result.connectionRevoked).toBe(true);
+  expect(fixture.controlPlaneRequests.filter((request) =>
+    request.method === "POST" &&
+    request.path ===
+      `/api/v1/runs/${fixture.runs.planSucceeded.id}/apply`
+  )).toHaveLength(1);
+  expect(fixture.controlPlaneRequests.filter((request) =>
+    request.method === "GET" &&
+    request.path ===
+      "/api/v1/workspaces/ws_configuredpublicurl/runs?limit=500"
+  )).toHaveLength(1);
+});
+
+test("platform smoke retains recovery authority when a lost Apply acknowledgement cannot be reconciled", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture(
+    { kind: "http-404" },
+    {
+      applyAcknowledgement: "transport-loss",
+      reconcileApply: false,
+      temporaryConnection: true,
+    },
+  );
+
+  expect(fixture.result.status).toBe("failed");
+  expect(fixture.result.error).toContain(
+    "Apply POST acknowledgement was lost and no exact ApplyRun could be reconciled",
+  );
+  expect(fixture.result.applyRunId).toBeUndefined();
+  expect(fixture.result.destroyPlanRunId).toBeUndefined();
+  expect(fixture.result.destroyApplyRunId).toBeUndefined();
+  expect(fixture.result.destroyVerified).toBe(false);
+  expect(fixture.result.connectionRevoked).toBe(false);
+  expect(fixture.result.connectionRevokeSkippedReason).toContain(
+    "retaining the ProviderConnection for operator recovery",
+  );
+  expect(fixture.result.nextAction).toContain(
+    fixture.runs.planSucceeded.id,
+  );
+  expect(fixture.controlPlaneRequests.some((request) =>
+    request.method === "POST" &&
+    request.path.endsWith("/destroy-plan")
+  )).toBe(false);
+  expect(fixture.controlPlaneRequests.some((request) =>
+    request.method === "PATCH" &&
+    request.path.includes("/capsules/")
+  )).toBe(false);
+  expect(fixture.controlPlaneRequests.some((request) =>
+    request.method === "POST" &&
+    request.path ===
+      `/api/v1/connections/${fixture.rawConnectionId}/revoke`
+  )).toBe(false);
+});
+
+test("platform smoke refuses to guess between multiple Plan-linked ApplyRuns", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture(
+    { kind: "http-404" },
+    {
+      applyAcknowledgement: "transport-loss",
+      ambiguousApplyReconciliation: true,
+      temporaryConnection: true,
+    },
+  );
+
+  expect(fixture.result.status).toBe("failed");
+  expect(fixture.result.error).toContain(
+    "Workspace Run authority returned multiple exact matches",
+  );
+  expect(fixture.result.applyRunId).toBeUndefined();
+  expect(fixture.result.destroyVerified).toBe(false);
+  expect(fixture.result.connectionRevoked).toBe(false);
+  expect(fixture.controlPlaneRequests.some((request) =>
+    request.method === "POST" &&
+    request.path.endsWith("/destroy-plan")
+  )).toBe(false);
+  expect(fixture.controlPlaneRequests.some((request) =>
+    request.method === "POST" &&
+    request.path ===
+      `/api/v1/connections/${fixture.rawConnectionId}/revoke`
+  )).toBe(false);
+});
+
+test("generic OpenTofu smoke does not claim Destroy when URL absence is not verifiable", async () => {
+  const fixture = await runConfiguredPublicUrlLifecycleFixture({
+    kind: "not-verifiable",
+    reason: "the stable routing origin outlives this Capsule",
+  });
+
+  expect(fixture.result.status).toBe("failed");
+  expect(fixture.result.destroyVerified).toBe(false);
+  expect(fixture.result.completedSteps).not.toContain("destroy");
+  expect(fixture.result.publicUrlDestroyChecks).toEqual([
+    {
+      name: "health",
+      output: "launch_url",
+      url: "https://app-staging.takosumi.com/healthz",
+      expectation: {
+        kind: "not-verifiable",
+        reason: "the stable routing origin outlives this Capsule",
+      },
+      applyStatus: "passed",
+      status: "not_claimed",
+    },
+    {
+      name: "ready",
+      output: "ready_url",
+      url: "https://app-staging.takosumi.com/readyz",
+      expectation: {
+        kind: "not-verifiable",
+        reason: "the stable routing origin outlives this Capsule",
+      },
+      applyStatus: "passed",
+      status: "not_claimed",
+    },
+  ]);
+  expect(fixture.result.error).toContain("has no valid absence contract");
+  expect(fixture.publicRequests).toHaveLength(2);
+});
+
 test("platform smoke keeps a successfully destroyed Capsule terminal when post-destroy Worker verification lacks Outputs", async () => {
   const appName = "takosumi-destroy-output-fixture";
   const rawConnectionId = "conn_destroy_output_fixture";
@@ -2165,6 +4905,9 @@ test("platform smoke keeps a successfully destroyed Capsule terminal when post-d
     },
     applyFailed: {
       id: "run_apply_destroy_output_fixture",
+      workspaceId: "ws_destroyoutput",
+      capsuleId,
+      planRunId: "run_plan_destroy_output_fixture",
       status: "failed",
       type: "apply",
     },
@@ -2197,6 +4940,16 @@ test("platform smoke keeps a successfully destroyed Capsule terminal when post-d
           type: "string",
         },
       }),
+      publicUrlChecksJson: JSON.stringify([
+        {
+          name: "launch",
+          output: "launch_url",
+          path: "/healthz",
+          expectedStatus: 200,
+          bodyIncludes: ["ok"],
+          destroyExpectation: { kind: "http-404" },
+        },
+      ]),
       timeoutSeconds: "1",
       deployTimeoutSeconds: "1",
       pollIntervalMs: "1",
@@ -2213,6 +4966,11 @@ test("platform smoke keeps a successfully destroyed Capsule terminal when post-d
     readonly method: string;
     readonly url: string;
     readonly body?: string;
+  }> = [];
+  let controlPlaneResolverCalls = 0;
+  const pinnedControlPlaneRequests: Array<{
+    readonly address: string;
+    readonly servername: string;
   }> = [];
   globalThis.fetch = (async (input, init) => {
     const requestUrl = new URL(String(input));
@@ -2387,15 +5145,45 @@ test("platform smoke keeps a successfully destroyed Capsule terminal when post-d
     throw new Error(`unexpected Takosumi fixture request: ${method} ${requestUrl}`);
   }) as typeof fetch;
   try {
-    const result = await runPlatformControlPlaneSmoke(options);
+    const fixtureTransport = pinnedControlPlaneFixture(
+      async (input, init) => await globalThis.fetch(input, init),
+    );
+    const result = await runPlatformControlPlaneSmoke(
+      options,
+      {
+        ...fixtureTransport,
+        controlPlaneResolver: async () => {
+          controlPlaneResolverCalls += 1;
+          return controlPlaneResolverCalls === 1
+            ? [
+                { address: "93.184.216.35", family: 4 as const },
+                { address: "93.184.216.34", family: 4 as const },
+              ]
+            : [
+                { address: "93.184.216.37", family: 4 as const },
+                { address: "93.184.216.36", family: 4 as const },
+              ];
+        },
+        controlPlaneConnector: async (request) => {
+          pinnedControlPlaneRequests.push(request);
+          return await fixtureTransport.controlPlaneConnector(request);
+        },
+      },
+    );
     expect(result.status).toBe("failed");
     expect(result.error).toContain("apply run run_apply_destroy_output_fixture ended as failed");
     expect(result.capsuleId).toBe(capsuleId);
     expect(result.applyRunId).toBe(runRecords.applyFailed.id);
     expect(result.destroyPlanRunId).toBe(runRecords.destroyPlanWaitingApproval.id);
     expect(result.destroyApplyRunId).toBe(runRecords.destroySucceeded.id);
-    expect(result.destroyVerified).toBe(true);
+    expect(result.destroyVerified).toBe(false);
     expect(result.connectionRevoked).toBe(true);
+    expect(controlPlaneResolverCalls).toBe(1);
+    expect(pinnedControlPlaneRequests.length).toBeGreaterThan(10);
+    expect(pinnedControlPlaneRequests.every((request) =>
+      request.address === "93.184.216.34" &&
+      request.servername === "app-staging.takosumi.com"
+    )).toBe(true);
     expect(result.connectionRevokeSkippedReason).toBeUndefined();
     expect(result.failureCleanup).toMatchObject({
       attempted: true,
@@ -2413,6 +5201,17 @@ test("platform smoke keeps a successfully destroyed Capsule terminal when post-d
     expect(result.failureCleanup?.error).toContain(
       'Cloudflare Worker name output "service_runtime_name" is missing',
     );
+    expect(result.publicUrlDestroyChecks).toEqual([
+      expect.objectContaining({
+        name: "launch",
+        output: "launch_url",
+        expectation: { kind: "http-404" },
+        applyStatus: "unverified",
+        status: "inconclusive",
+      }),
+    ]);
+    expect(result.failureCleanup?.destroyVerification?.publicUrlDestroyChecks)
+      .toEqual(result.publicUrlDestroyChecks);
     expect(
       requests.some(
         (request) =>
@@ -2460,6 +5259,9 @@ test("platform smoke does not retry or directly delete after a failed destroy ap
     },
     applySucceeded: {
       id: "run_apply_destroy_failure_fixture",
+      workspaceId: "ws_destroyfailure",
+      capsuleId,
+      planRunId: "run_plan_destroy_failure_fixture",
       status: "succeeded",
       type: "apply",
     },
@@ -2716,7 +5518,12 @@ test("platform smoke does not retry or directly delete after a failed destroy ap
     throw new Error(`unexpected Takosumi fixture request: ${method} ${requestUrl}`);
   }) as typeof fetch;
   try {
-    const result = await runPlatformControlPlaneSmoke(options);
+    const result = await runPlatformControlPlaneSmoke(
+      options,
+      pinnedControlPlaneFixture(
+        async (input, init) => await globalThis.fetch(input, init),
+      ),
+    );
     expect(result.status).toBe("failed");
     expect(result.error).toContain(
       `destroy apply run ${runRecords.destroyFailed.id} ended as failed`,
@@ -2789,7 +5596,8 @@ test("platform smoke does not retry or directly delete after a failed destroy ap
 type DestroyApplyReconciliationCase =
   | "mismatched"
   | "cancelled"
-  | "already_terminal";
+  | "already_terminal"
+  | "succeeded";
 
 async function runDestroyApplyReconciliationFixture(
   reconciliation: DestroyApplyReconciliationCase,
@@ -2800,6 +5608,7 @@ async function runDestroyApplyReconciliationFixture(
   const sourceSnapshotId = `snap_destroy_apply_${reconciliation}_fixture`;
   const stateVersionId = `state_destroy_apply_${reconciliation}_fixture`;
   const outputId = `out_destroy_apply_${reconciliation}_fixture`;
+  const workspaceId = `ws_destroyapply${reconciliation.replaceAll("_", "")}`;
   const destroyPlanRunId = `run_destroy_plan_${reconciliation}_fixture`;
   const destroyApplyRunId = `run_destroy_apply_${reconciliation}_fixture`;
   const staleRunId = `run_destroy_apply_stale_${reconciliation}_fixture`;
@@ -2822,6 +5631,9 @@ async function runDestroyApplyReconciliationFixture(
     },
     applySucceeded: {
       id: `run_apply_${reconciliation}_fixture`,
+      workspaceId,
+      capsuleId,
+      planRunId: `run_plan_${reconciliation}_fixture`,
       status: "succeeded",
       type: "apply",
     },
@@ -2839,9 +5651,13 @@ async function runDestroyApplyReconciliationFixture(
     },
     destroyApplyTerminal: {
       id: destroyApplyRunId,
-      status: reconciliation === "already_terminal" ? "failed" : "cancelled",
+      status: reconciliation === "succeeded"
+        ? "succeeded"
+        : reconciliation === "already_terminal"
+          ? "failed"
+          : "cancelled",
       type: "destroy",
-      policyStatus: "deny",
+      ...(reconciliation === "succeeded" ? {} : { policyStatus: "deny" }),
       createdAt: "2026-01-01T00:00:00.000Z",
       startedAt: "2026-01-01T00:00:02.000Z",
       finishedAt: "2026-01-01T00:00:03.000Z",
@@ -2858,13 +5674,42 @@ async function runDestroyApplyReconciliationFixture(
   const options = await resolveOptions(
     {
       url: "https://app-staging.takosumi.com",
-      workspace: `ws_destroyapply${reconciliation.replaceAll("_", "")}`,
+      workspace: workspaceId,
       appName,
       sourceGitUrl: `https://git.example.test/${reconciliation}.git`,
       cloudflareConnectionMode: "none",
       verificationMode: "opentofu",
       noInterfaceProof: true,
-      outputAllowlistJson: JSON.stringify({}),
+      outputAllowlistJson: JSON.stringify(
+        reconciliation === "succeeded"
+          ? {
+              launch_url: { from: "launch_url", type: "url", required: true },
+              ready_url: { from: "ready_url", type: "url", required: true },
+            }
+          : {},
+      ),
+      ...(reconciliation === "succeeded"
+        ? {
+            publicUrlChecksJson: JSON.stringify([
+              {
+                name: "health",
+                output: "launch_url",
+                path: "/healthz",
+                expectedStatus: 200,
+                bodyIncludes: ["ok"],
+                destroyExpectation: { kind: "http-404" },
+              },
+              {
+                name: "ready",
+                output: "ready_url",
+                path: "/readyz",
+                expectedStatus: 200,
+                bodyIncludes: ["ok"],
+                destroyExpectation: { kind: "http-404" },
+              },
+            ]),
+          }
+        : {}),
       timeoutSeconds: "1",
       deployTimeoutSeconds: "1",
       pollIntervalMs: "2000",
@@ -2882,7 +5727,9 @@ async function runDestroyApplyReconciliationFixture(
     readonly url: string;
     readonly body?: string;
   }> = [];
+  const publicRequests: Array<{ readonly path: string }> = [];
   let destroyApplyPolls = 0;
+  let destroyTerminalReconciled = false;
   globalThis.fetch = (async (input, init) => {
     const requestUrl = new URL(String(input));
     const method = init?.method ?? "GET";
@@ -2999,7 +5846,12 @@ async function runDestroyApplyReconciliationFixture(
           workspaceId: options.workspace,
           capsuleId,
           stateGeneration: 1,
-          publicOutputs: {},
+          publicOutputs: reconciliation === "succeeded"
+            ? {
+                launch_url: options.url,
+                ready_url: options.url,
+              }
+            : {},
           outputDigest: `sha256:${"c".repeat(64)}`,
           createdAt: "2026-01-01T00:00:00.000Z",
         },
@@ -3037,7 +5889,11 @@ async function runDestroyApplyReconciliationFixture(
       if (destroyApplyPolls === 1) {
         return Response.json({ run: runRecords.destroyApplyRunning });
       }
-      if (reconciliation === "already_terminal") {
+      if (
+        reconciliation === "already_terminal" ||
+        reconciliation === "succeeded"
+      ) {
+        destroyTerminalReconciled = true;
         return Response.json({ run: runRecords.destroyApplyTerminal });
       }
       return Response.json({ run: runRecords.destroyApplyRunning });
@@ -3052,8 +5908,25 @@ async function runDestroyApplyReconciliationFixture(
     throw new Error(`unexpected Takosumi fixture request: ${method} ${requestUrl}`);
   }) as typeof fetch;
   try {
-    const result = await runPlatformControlPlaneSmoke(options);
-    return { result, requests, runRecords };
+    const controlPlane = pinnedControlPlaneFixture(
+      async (input, init) => await globalThis.fetch(input, init),
+    );
+    const result = await runPlatformControlPlaneSmoke(
+      options,
+      {
+        ...controlPlane,
+        resolver: resolvePublicDns,
+        connector: async (request) => {
+          publicRequests.push({ path: request.path });
+          return new Response(destroyTerminalReconciled ? "gone" : "ok", {
+            status: destroyTerminalReconciled ? 404 : 200,
+          });
+        },
+        maxAttempts: 1,
+        sleep: async () => {},
+      },
+    );
+    return { result, requests, publicRequests, runRecords };
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -3112,3 +5985,51 @@ test.each([
     });
   },
 );
+
+test("platform smoke verifies every public URL after a timed-out Destroy reconciles succeeded", async () => {
+  const { result, publicRequests, runRecords } =
+    await runDestroyApplyReconciliationFixture("succeeded");
+
+  expect(result.status).toBe("failed");
+  expect(result.timedOutRunId).toBe(runRecords.destroyApplyRunning.id);
+  expect(result.runCancellationStatus).toBe("already_terminal");
+  expect(result.destroyApplyRunId).toBe(runRecords.destroyApplyTerminal.id);
+  expect(result.publicUrlDestroyChecks).toEqual([
+    {
+      name: "health",
+      output: "launch_url",
+      url: "https://app-staging.takosumi.com/healthz",
+      expectation: { kind: "http-404" },
+      applyStatus: "passed",
+      status: "passed",
+      observedStatus: 404,
+    },
+    {
+      name: "ready",
+      output: "ready_url",
+      url: "https://app-staging.takosumi.com/readyz",
+      expectation: { kind: "http-404" },
+      applyStatus: "passed",
+      status: "passed",
+      observedStatus: 404,
+    },
+  ]);
+  expect(result.failureCleanup).toMatchObject({
+    attempted: true,
+    destroyAttempted: true,
+    destroyApplyAttempted: true,
+    destroyApplyRunId: runRecords.destroyApplyTerminal.id,
+    destroySucceeded: true,
+    destroyVerification: {
+      status: "passed",
+      publicUrlDestroyChecks: result.publicUrlDestroyChecks,
+    },
+  });
+  expect(result.destroyVerified).toBe(true);
+  expect(publicRequests.map((request) => request.path)).toEqual([
+    "/healthz",
+    "/readyz",
+    "/healthz",
+    "/readyz",
+  ]);
+});
