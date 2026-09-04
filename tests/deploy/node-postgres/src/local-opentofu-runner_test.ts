@@ -216,16 +216,26 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
     const generationOneRef = "artifact:local-state:1";
     const rawOutputRef = `artifact:local-output:${createApplyId}`;
     const createApplyRun = localApplyRun(createApplyId, createPlanId, "create");
+    const createApplyPlanRun = {
+      ...createPlanRun,
+      planDigest: createPlan.planDigest,
+      planArtifact: createPlan.planArtifact,
+    };
     const applyJob = {
       applyRun: createApplyRun,
-      planRun: createPlanRun,
+      planRun: createApplyPlanRun,
       planArtifact: createPlan.planArtifact,
       runnerProfile: profile,
+      executionEvidenceAuthority: testExecutionEvidenceAuthority(),
       generatedRoot,
       sourceArchive,
       outputAllowlist: { message: { from: "message" } },
       stateScope: stateScope(1, generationOneRef),
       rawOutputRef,
+      executionEvidenceCommit: {
+        stateVersionId: generationOneRef,
+        outputId: `output:${createApplyId}`,
+      },
     };
     let firstApplyError: unknown;
     try {
@@ -299,14 +309,19 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
     expect(
       await runner.apply({
         applyRun: createApplyRun,
-        planRun: createPlanRun,
+        planRun: createApplyPlanRun,
         planArtifact: createPlan.planArtifact,
         runnerProfile: profile,
+        executionEvidenceAuthority: testExecutionEvidenceAuthority(),
         generatedRoot,
         sourceArchive,
         outputAllowlist: { message: { from: "message" } },
         stateScope: stateScope(1, generationOneRef),
         rawOutputRef,
+        executionEvidenceCommit: {
+          stateVersionId: generationOneRef,
+          outputId: `output:${createApplyId}`,
+        },
       }),
     ).toEqual(applied);
     expect(
@@ -336,15 +351,25 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
       destroyPlanId,
       "destroy",
     );
+    const destroyApplyPlanRun = {
+      ...destroyPlanRun,
+      planDigest: destroyPlan.planDigest,
+      planArtifact: destroyPlan.planArtifact,
+    };
     const destroyed = await runner.destroy!({
       applyRun: destroyApplyRun,
-      planRun: destroyPlanRun,
+      planRun: destroyApplyPlanRun,
       planArtifact: destroyPlan.planArtifact,
       runnerProfile: profile,
+      executionEvidenceAuthority: testExecutionEvidenceAuthority(),
       generatedRoot,
       sourceArchive,
       priorState,
       stateScope: stateScope(2, generationTwoRef, priorState),
+      executionEvidenceCommit: {
+        destroyed: true,
+        stateVersionId: generationTwoRef,
+      },
     });
     expect(destroyed.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
 
@@ -352,13 +377,18 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
     expect(
       await runner.destroy!({
         applyRun: destroyApplyRun,
-        planRun: destroyPlanRun,
+        planRun: destroyApplyPlanRun,
         planArtifact: destroyPlan.planArtifact,
         runnerProfile: profile,
+        executionEvidenceAuthority: testExecutionEvidenceAuthority(),
         generatedRoot,
         sourceArchive,
         priorState,
         stateScope: stateScope(2, generationTwoRef, priorState),
+        executionEvidenceCommit: {
+          destroyed: true,
+          stateVersionId: generationTwoRef,
+        },
       }),
     ).toEqual(destroyed);
 
@@ -376,6 +406,10 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
         sourceArchive,
         priorState,
         stateScope: stateScope(2, generationTwoRef, priorState),
+        executionEvidenceCommit: {
+          destroyed: true,
+          stateVersionId: generationTwoRef,
+        },
       }),
     ).rejects.toThrow(`already owned by ApplyRun ${destroyApplyId}`);
   } finally {
@@ -405,6 +439,14 @@ function localPlanRun(id: string, operation: "create" | "destroy") {
     createdAt: 1,
     updatedAt: 1,
   };
+}
+
+function testExecutionEvidenceAuthority() {
+  return {
+    controllerArtifact: { digest: `sha256:${"a".repeat(64)}`, immutable: true },
+    runnerArtifact: { digest: `sha256:${"b".repeat(64)}`, immutable: true },
+    executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
+  } as const;
 }
 
 function localApplyRun(

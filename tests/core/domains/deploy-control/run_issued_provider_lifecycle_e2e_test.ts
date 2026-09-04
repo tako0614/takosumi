@@ -31,7 +31,9 @@ import {
   verifyRunCredentialToken,
 } from "../../../../core/shared/run_credential_tokens.ts";
 import {
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   FIXTURE_STATE_DIGEST,
+  fixtureExecutionEvidence,
   seedCapsuleModel,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 
@@ -210,6 +212,7 @@ test("generic run-issued credentials reach plan, apply, and destroy runner dispa
     vault,
     credentialRecipes: [RUN_ISSUED_RECIPE],
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     newId: (prefix) => `${prefix}_e2e_${++nextId}`,
     now: () => now++,
   });
@@ -324,6 +327,7 @@ function recordingRunner(): RecordingRunner {
     attested: true,
     attestationMethod: "forced_filesystem_mirror_init" as const,
     mirrorPath: `/opt/opentofu/provider-mirror/${PROVIDER}`,
+    installedDigest: `sha256:${"e".repeat(64)}`,
   }];
   return {
     planJobs,
@@ -356,11 +360,16 @@ function recordingRunner(): RecordingRunner {
         stateDigest: FIXTURE_STATE_DIGEST,
         providerInstallation,
         rawOutputRef: job.rawOutputRef,
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
       };
     },
     destroy: async (job) => {
       destroyJobs.push(job);
-      return { stateDigest: FIXTURE_STATE_DIGEST, providerInstallation };
+      return {
+        stateDigest: FIXTURE_STATE_DIGEST,
+        providerInstallation,
+        executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+      };
     },
   };
 }
@@ -374,11 +383,11 @@ function runnerProfile(): RunnerProfile {
     lifecycle: { state: "active" },
     availability: { state: "available" },
     allowedProviders: [PROVIDER],
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     requireProviderBindings: true,
     stateBackend: { kind: "operator-managed", ref: "r2://state" },
-    stateLock: { kind: "native" },
     networkPolicy: { mode: "operator-managed" },
-    secretExposure: {
+    secretExposurePolicy: {
       providerCredentials: "runner-only",
       tenantWorkerOperatorSecrets: "forbidden",
       redactLogs: true,

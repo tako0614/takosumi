@@ -62,6 +62,15 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly RUNNER?: DurableObjectNamespace;
   /** Operator control-plane bearer for deploy-control routes mounted by hosts. */
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
+  /**
+   * Immutable release digests used to prove terminal OpenTofu mutations. These
+   * are intentionally plain Worker vars rather than a mutable version id or a
+   * label; the composing release tool injects them from its sealed entry bytes
+   * and pinned runner image. A partial set is invalid and fails closed.
+   */
+  readonly TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST?: string;
+  readonly TAKOSUMI_RUNNER_ARTIFACT_DIGEST?: string;
+  readonly TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST?: string;
   /** Dedicated HMAC secret for generic, route-scoped run credentials. */
   readonly TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET?: string;
   /** Optional Operator/Cloud commercial billing extension (Seam B). */
@@ -200,6 +209,16 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
 export interface RunnerHostComposition {
   readonly profiles: readonly import("@takosumi/internal/deploy-control-api").RunnerProfile[];
   readonly executors?: import("../../core/domains/deploy-control/mod.ts").OpenTofuRunnerExecutorRegistry;
+  /**
+   * Immutable release identities for newly terminal runner mutations. This is
+   * host code, not a text/JSON setting; omitting it deliberately makes the
+   * execution path fail closed rather than minting an identity from labels or
+   * a mutable Worker version.
+   */
+  readonly executionEvidenceAuthority?: Pick<
+    import("@takosumi/internal/deploy-control-api").RunExecutionAuthority,
+    "controllerArtifact" | "runnerArtifact" | "executorArtifact"
+  >;
 }
 
 export type OpenTofuRunAction =

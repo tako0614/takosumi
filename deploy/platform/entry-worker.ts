@@ -1,7 +1,6 @@
 import platformWorker, {
   CoordinationObject,
   LocalSubstrateOpenTofuRunnerProxyObject,
-  OpenTofuRunOwnerObject,
   OpenTofuRunnerObject,
   type CloudflareWorkerEnv,
   type PlatformExecutionContext,
@@ -10,7 +9,10 @@ import {
   type PlatformWorkerVersionMetadata,
   withPlatformWorkerVersion,
 } from "./version_metadata_response.ts";
-import { composeTakoserverHostedWorkerEnv } from "./takoserver_hosted_worker.ts";
+import {
+  composeTakoserverHostedWorkerEnv,
+  OpenTofuRunOwnerObject,
+} from "./takoserver_hosted_worker.ts";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import {
   createCloudflareTakosumiRuntimeBindingMaterializer,

@@ -969,6 +969,43 @@ test("plan JSON, strict mirror, and installation evidence omit OpenTofu builtins
   }
 });
 
+test("direct provider installation evidence is attested from the installed artifact", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-direct-provider-evidence-"));
+  const moduleDir = join(root, "module");
+  const provider = "registry.opentofu.org/hashicorp/local";
+  const installedPath = join(
+    moduleDir,
+    ".terraform",
+    "providers",
+    ...provider.split("/"),
+  );
+  const previousMirror = Bun.env.OPENTOFU_PROVIDER_MIRROR;
+  try {
+    await mkdir(installedPath, { recursive: true });
+    await writeFile(join(installedPath, "terraform-provider-local_v2.0.0"), "provider");
+    Bun.env.OPENTOFU_PROVIDER_MIRROR = join(root, "empty-mirror");
+
+    const evidence = await providerInstallationEvidence(moduleDir, [provider]);
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]).toMatchObject({
+      provider,
+      mirrored: false,
+      installationMethod: "direct",
+      attested: true,
+      attestationMethod: "runner_observed_installed_artifact",
+      installedPath,
+      installedDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    });
+  } finally {
+    if (previousMirror === undefined) {
+      delete Bun.env.OPENTOFU_PROVIDER_MIRROR;
+    } else {
+      Bun.env.OPENTOFU_PROVIDER_MIRROR = previousMirror;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("provider plugin cache can be shared by runner container env", async () => {
   const root = await mkdtemp(join(tmpdir(), "takosumi-cache-root-"));
   const sharedCache = join(root, "shared-provider-cache");

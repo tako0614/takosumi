@@ -28,7 +28,9 @@ import {
   FIXTURE_AWS_PROVIDER,
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   fakeProviderVault,
+  fixtureExecutionEvidence,
   fixtureStateCommit,
   seedCapsuleModel,
   seedProviderConnections,
@@ -350,8 +352,31 @@ class ProofRunner implements OpenTofuRunner {
     return Promise.resolve(fixtureStateCommit({
       outputs: this.#outputEnvelope,
       rawOutputRef: job.rawOutputRef,
+      providerInstallation: providerInstallationEvidenceFor(
+        job.planRun.requiredProviders,
+      ),
+      executionEvidence: fixtureExecutionEvidence(job, "apply", {
+        providerArtifacts: fixtureProviderArtifacts(
+          job.planRun.requiredProviders,
+        ),
+      }),
     }));
   }
+}
+
+function fixtureProviderArtifacts(providers: readonly string[]) {
+  return providerInstallationEvidenceFor(providers)
+    .filter((installation) => installation.installedDigest !== undefined)
+    .map((installation) => ({
+      source: installation.provider,
+      digest: installation.installedDigest! as `sha256:${string}`,
+      attested: true as const,
+    }))
+    .sort((left, right) =>
+      left.source === right.source
+        ? left.digest.localeCompare(right.digest)
+        : left.source.localeCompare(right.source),
+    );
 }
 
 function projectProofOutputs(
@@ -453,6 +478,7 @@ function runnerProfileForInput(
     name: "Fixture Cloudflare Container runner",
     substrate: "cloudflare-containers",
     executorId: DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     lifecycle: { state: "active" },
     availability: { state: "available" },
     stateBackend: {
@@ -506,6 +532,7 @@ function providerInstallationEvidenceFor(providers: readonly string[]) {
         attested: true,
         attestationMethod: "forced_filesystem_mirror_init" as const,
         mirrorPath: `/opt/opentofu/provider-mirror/${provider}`,
+        installedDigest: `sha256:${"e".repeat(64)}`,
       },
     ];
   });

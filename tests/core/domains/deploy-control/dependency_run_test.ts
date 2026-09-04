@@ -37,6 +37,8 @@ import {
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+  fixtureExecutionEvidence,
   type SeedCapsuleModelOptions,
   seedCapsuleModel,
   seedProviderConnections,
@@ -111,6 +113,8 @@ function recordingRunner(): RecordingRunner {
         stateDigest:
           "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
         rawOutputRef: job.rawOutputRef,
+        providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
       });
     },
     destroy: () => Promise.resolve({}),
@@ -130,6 +134,8 @@ function sensitiveOutputRunner(): RecordingRunner {
         stateDigest:
           "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
         rawOutputRef: job.rawOutputRef,
+        providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
       });
     },
   };
@@ -201,6 +207,7 @@ function controllerWith(
     runner,
     vault: fakeProviderVault() as never,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: sequenceNow(1),
     newId: deterministicIds(),
     ...(options.sensitiveOutputResolver

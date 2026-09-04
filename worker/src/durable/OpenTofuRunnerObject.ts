@@ -24,10 +24,16 @@ import {
 } from "../../../core/shared/run_credential_tokens.ts";
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 import { redactString } from "takosumi-contract/redaction";
+import {
+  assertRunExecutionEvidence,
+  RUN_EXECUTION_EVIDENCE_CONTRACT,
+  type RunExecutionEvidence,
+} from "takosumi-contract/runs";
 
 const DEFAULT_PLAN_ARTIFACT_BUCKET = "takos-artifacts";
 const PLAN_ARTIFACT_CONTENT_TYPE = "application/vnd.opentofu.plan";
 const STATE_ARTIFACT_CONTENT_TYPE = "application/json";
+const EXECUTION_EVIDENCE_CONTENT_TYPE = "application/json";
 const SOURCE_ARCHIVE_CONTENT_TYPE = "application/zstd";
 const DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
 // At-rest content type for AES-GCM ciphertext blobs (state/plan .enc objects).
@@ -374,6 +380,9 @@ interface RunnerMutationDispatchRecord {
   readonly action: RunnerMutationAction;
   /** SHA-256 over immutable inputs and stable credential authority claims. */
   readonly semanticDigest: string;
+  /** Stable acknowledgement version/fence for replayed execution evidence. */
+  readonly version: number;
+  readonly fence: number;
   /**
    * `preparing` is provably before provider dispatch; `orphaned` means a
    * target existed before this request had durable dispatch authority.
@@ -1026,6 +1035,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         kind: "takosumi.runner-mutation-dispatch@v2",
         action,
         semanticDigest,
+        version: 1,
+        fence: 1,
         phase: "preparing",
         redispatchBlocked: true,
       };
@@ -1658,6 +1669,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         return await this.#persistStateToR2State(
           runId,
           applyRunId!,
+          envelope.request,
           stateScope,
           url,
           runnerResponse,
@@ -1672,6 +1684,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           runId,
           stateKeys,
           url,
+          envelope.request,
+          envelope.action,
+          await readJsonObject(
+            runnerResponse.clone(),
+            this.#artifactLimits.runnerResponse,
+          ),
           mutationDispatch!,
         );
         if (indeterminate) return indeterminate;
@@ -2055,9 +2073,135 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   // (8-digit), then best-effort project current.json AFTER the state object. The
   // DO returns the recorded digest in the run payload so the controller can
   // update its ledger; generation arithmetic stays with the controller.
+  async #persistExecutionEvidenceObject(
+    bucket: R2Bucket,
+    ref: string,
+    applyRunId: string,
+    action: "apply" | "destroy",
+    evidence: RunExecutionEvidence,
+  ): Promise<{ readonly ref: string; readonly digest: string }> {
+    assertSafeArtifactObjectKey(ref, "execution evidence");
+    const body = new TextEncoder().encode(JSON.stringify(evidence));
+    // Evidence is value-free but provider lists can be large; bound the body
+    // independently of R2 custom-metadata's 8 KiB ceiling.
+    assertArtifactSize(
+      "runner_response",
+      this.#artifactLimits.runnerResponse,
+      body.byteLength,
+    );
+    const digest = await digestBytes(body);
+    const options: R2PutOptions = {
+      httpMetadata: { contentType: EXECUTION_EVIDENCE_CONTENT_TYPE },
+      customMetadata: {
+        "takosumi-evidence-format": RUN_EXECUTION_EVIDENCE_CONTRACT,
+        "takosumi-evidence-run-id": applyRunId,
+        "takosumi-evidence-action": action,
+        "takosumi-evidence-digest": digest,
+      },
+      onlyIf: { etagDoesNotMatch: "*" },
+    };
+    try {
+      await putR2ObjectWithRetry(
+        bucket,
+        ref,
+        body,
+        options,
+        "execution evidence",
+      );
+    } catch (error) {
+      if (
+        !(error instanceof R2ConditionalPutConflictError) &&
+        !(error instanceof RunnerArtifactRelayInfrastructureError)
+      ) {
+        throw error;
+      }
+      // A lost conditional-PUT acknowledgement is safe only after reading the
+      // immutable body and matching both the fixed metadata and exact digest.
+      await this.#readExecutionEvidenceObject(
+        bucket,
+        ref,
+        applyRunId,
+        action,
+        digest,
+      );
+    }
+    return { ref, digest };
+  }
+
+  async #readPersistedExecutionEvidence(
+    stateObject: R2Object,
+    bucket: R2Bucket,
+    applyRunId: string,
+    action: "apply" | "destroy",
+  ): Promise<RunExecutionEvidence | undefined> {
+    const metadata = stateObject.customMetadata;
+    const ref = metadata?.["takosumi-execution-evidence-ref"];
+    const digest = metadata?.["takosumi-execution-evidence-digest"];
+    if (!ref || !digest) {
+      // Rows written before the separate evidence object was introduced may
+      // still carry the old JSON metadata. Read it for historical replay only;
+      // all new writes use the immutable body/ref pair above.
+      return parsePersistedExecutionEvidence(
+        metadata?.["takosumi-execution-evidence"],
+      );
+    }
+    if (!/^sha256:[0-9a-f]{64}$/u.test(digest)) {
+      throw new Error("completed mutation target has an invalid evidence digest");
+    }
+    return await this.#readExecutionEvidenceObject(
+      bucket,
+      ref,
+      applyRunId,
+      action,
+      digest,
+    );
+  }
+
+  async #readExecutionEvidenceObject(
+    bucket: R2Bucket,
+    ref: string,
+    applyRunId: string,
+    action: "apply" | "destroy",
+    expectedDigest: string,
+  ): Promise<RunExecutionEvidence> {
+    assertSafeArtifactObjectKey(ref, "execution evidence");
+    const object = await bucket.get(ref);
+    if (!object) throw new Error("completed mutation evidence object is missing");
+    const metadata = object.customMetadata;
+    if (
+      metadata?.["takosumi-evidence-format"] !== RUN_EXECUTION_EVIDENCE_CONTRACT ||
+      metadata?.["takosumi-evidence-run-id"] !== applyRunId ||
+      metadata?.["takosumi-evidence-action"] !== action ||
+      metadata?.["takosumi-evidence-digest"] !== expectedDigest
+    ) {
+      throw new Error("completed mutation evidence object authority mismatch");
+    }
+    const bytes = await readBoundedR2ObjectBytes(
+      object,
+      "runner_response",
+      this.#artifactLimits.runnerResponse,
+    );
+    const actualDigest = await digestBytes(bytes);
+    if (actualDigest !== expectedDigest) {
+      throw new Error("completed mutation evidence object digest mismatch");
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    } catch {
+      throw new Error("completed mutation evidence object is not valid JSON");
+    }
+    const evidence = assertRunExecutionEvidence(parsed);
+    if (evidence.runId !== applyRunId || evidence.action !== action) {
+      throw new Error("completed mutation evidence object identity mismatch");
+    }
+    return evidence;
+  }
+
   async #persistStateToR2State(
     containerRunId: string,
     applyRunId: string,
+    requestPayload: unknown,
     scope: StateScope,
     baseUrl: URL,
     runnerResponse: Response,
@@ -2116,15 +2260,37 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       runnerResponse,
       this.#artifactLimits.runnerResponse,
     );
+    // Build the immutable, value-free receipt before publishing the state
+    // object. The request carries the host-pinned authority and Core-allocated
+    // state/output coordinate; the container contributes only attested provider
+    // package identities. Persisting the receipt beside the state makes a
+    // replay after a lost response byte-identical and prevents a second
+    // provider dispatch from manufacturing a fresh acknowledgement.
+    const executionEvidence = mutationExecutionEvidenceFromRunnerPayload(
+      requestPayload,
+      payload,
+      action,
+      mutationDispatch,
+      providerExecutionFailed
+        ? "provider_failed_state_persisted"
+        : "committed",
+    );
+    const bucket = this.#r2State();
+    assertStateRefForScope(scope);
+    const objectKey = scope.stateRef;
+    const evidenceArtifact = await this.#persistExecutionEvidenceObject(
+      bucket,
+      executionEvidenceObjectKey(objectKey),
+      applyRunId,
+      action,
+      executionEvidence,
+    );
     // Validate and encrypt outputs before the first durable write. A size-limit
     // failure must not leave a new state generation or current.json behind.
     const preparedRawOutputs =
       action === "apply" && !providerExecutionFailed
         ? await this.#prepareRawOutputs(rawOutputRef!, payload)
         : undefined;
-    const bucket = this.#r2State();
-    assertStateRefForScope(scope);
-    const objectKey = scope.stateRef;
     const persistedRawOutputRef = preparedRawOutputs
       ? await this.#persistPreparedRawOutputs(applyRunId, preparedRawOutputs)
       : undefined;
@@ -2162,6 +2328,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
                     : {}),
                 }
               : {}),
+            "takosumi-execution-evidence-ref": evidenceArtifact.ref,
+            "takosumi-execution-evidence-digest": evidenceArtifact.digest,
           },
           onlyIf: { etagDoesNotMatch: "*" },
         },
@@ -2197,16 +2365,20 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     };
     return jsonResponse(
       providerExecutionFailed
-        ? failedProviderExecutionPayload(
-            payload,
-            action,
-            "persisted",
-            persistedState,
-          )
+        ? {
+            ...failedProviderExecutionPayload(
+              payload,
+              action,
+              "persisted",
+              persistedState,
+            ),
+            executionEvidence,
+          }
         : {
             ...payload,
             ...(action === "apply" ? { outputs: payload.outputs ?? {} } : {}),
             state: persistedState,
+            executionEvidence,
             ...(persistedRawOutputRef
               ? { rawOutputRef: persistedRawOutputRef }
               : {}),
@@ -2341,6 +2513,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       object.customMetadata?.["takosumi-raw-output-ref"];
     const providerExecutionFailed =
       object.customMetadata?.["takosumi-provider-execution"] === "failed";
+    const executionEvidence = await this.#readPersistedExecutionEvidence(
+      object,
+      bucket,
+      applyRunId,
+      action,
+    );
     if (action === "destroy" && recordedRawOutputRef) {
       throw new Error(
         "completed destroy target unexpectedly records raw output authority",
@@ -2388,21 +2566,24 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     };
     if (providerExecutionFailed) {
       return jsonResponse(
-        failedProviderExecutionPayload(
-          {
-            status: "failed",
-            exitCode: 1,
-            ...(object.customMetadata?.["takosumi-provider-error-code"]
-              ? {
-                  errorCode:
-                    object.customMetadata["takosumi-provider-error-code"],
-                }
-              : {}),
-          },
-          action,
-          "persisted",
-          state,
-        ),
+        {
+          ...failedProviderExecutionPayload(
+            {
+              status: "failed",
+              exitCode: 1,
+              ...(object.customMetadata?.["takosumi-provider-error-code"]
+                ? {
+                    errorCode:
+                      object.customMetadata["takosumi-provider-error-code"],
+                  }
+                : {}),
+            },
+            action,
+            "persisted",
+            state,
+          ),
+          ...(executionEvidence ? { executionEvidence } : {}),
+        },
         500,
       );
     }
@@ -2411,6 +2592,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         status: "succeeded",
         exitCode: 0,
         state,
+        ...(executionEvidence ? { executionEvidence } : {}),
         ...(rawOutputs
           ? { outputs: rawOutputs.outputs, rawOutputRef: rawOutputs.ref }
           : {}),
@@ -3068,6 +3250,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     keys: readonly string[],
     baseUrl: URL,
+    requestPayload: unknown,
+    action: "apply" | "destroy",
+    runnerPayload: Record<string, unknown>,
     mutationDispatch: RunnerMutationDispatchRecord,
   ): Promise<Response | undefined> {
     let response: Response;
@@ -3096,10 +3281,25 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       return await this.#recordMutationIndeterminate(mutationDispatch, error);
     }
     const sealed = await this.#stateCrypto().seal(bytes);
+    const executionEvidence = mutationExecutionEvidenceFromRunnerPayload(
+      requestPayload,
+      runnerPayload,
+      action,
+      mutationDispatch,
+      "committed",
+    );
     for (const key of keys) {
+      const encryptedStateKey = encryptedKey(key);
+      const evidenceArtifact = await this.#persistExecutionEvidenceObject(
+        this.env.R2_ARTIFACTS,
+        executionEvidenceObjectKey(encryptedStateKey),
+        runId,
+        action,
+        executionEvidence,
+      );
       await putR2ObjectWithRetry(
         this.env.R2_ARTIFACTS,
-        encryptedKey(key),
+        encryptedStateKey,
         sealed.ciphertext,
         {
           httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
@@ -3108,12 +3308,21 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             "takosumi-content-digest": sealed.contentDigest,
             "takosumi-ciphertext-length": String(sealed.ciphertextLength),
             "takosumi-encryption-format": sealed.format,
+            "takosumi-execution-evidence-ref": evidenceArtifact.ref,
+            "takosumi-execution-evidence-digest": evidenceArtifact.digest,
           },
         },
         "state artifact",
       );
     }
-    return undefined;
+    // Legacy R2_ARTIFACTS state paths are still supported for historical
+    // requests, but new successful mutations must carry the same receipt as
+    // the environment-scoped R2_STATE path. Return the enriched payload so the
+    // controller can enforce the evidence before publishing a terminal Run.
+    return jsonResponse(
+      { ...runnerPayload, executionEvidence },
+      200,
+    );
   }
 
   #planArtifactBucket(): string {
@@ -3690,6 +3899,16 @@ function stateScopePrefix(scope: StateScope): string {
 
 function currentStateKey(scope: StateScope): string {
   return `${stateScopePrefix(scope)}/current.json`;
+}
+
+/** Deterministic sibling object for the immutable value-free mutation receipt. */
+function executionEvidenceObjectKey(stateRef: string): string {
+  if (!stateRef.endsWith(".tfstate.enc")) {
+    throw new Error("state ref must name an encrypted tfstate object");
+  }
+  const ref = `${stateRef}.execution-evidence.json`;
+  assertSafeArtifactObjectKey(ref, "execution evidence");
+  return ref;
 }
 
 function logicalStateScopeKey(scope: StateScope): string {
@@ -4883,12 +5102,21 @@ function parseRunnerMutationDispatchRecord(
   if (!isRecord(value)) return undefined;
   const action = stringField(value, "action");
   const semanticDigest = stringField(value, "semanticDigest");
+  // Records written before execution-evidence v1 had no receipt counters;
+  // their durable phase still fences redispatch, so read them with the first
+  // stable counter rather than silently dropping authority.
+  const version = value.version === undefined ? 1 : value.version;
+  const fence = value.fence === undefined ? 1 : value.fence;
   const phase = stringField(value, "phase");
   if (
     value.kind !== "takosumi.runner-mutation-dispatch@v2" ||
     !isRunnerMutationAction(action) ||
     !semanticDigest ||
     !/^sha256:[0-9a-f]{64}$/u.test(semanticDigest) ||
+    !Number.isSafeInteger(version) ||
+    (version as number) < 1 ||
+    !Number.isSafeInteger(fence) ||
+    (fence as number) < 1 ||
     (phase !== "preparing" &&
       phase !== "dispatched" &&
       phase !== "indeterminate" &&
@@ -4901,9 +5129,197 @@ function parseRunnerMutationDispatchRecord(
     kind: "takosumi.runner-mutation-dispatch@v2",
     action,
     semanticDigest,
+    version: version as number,
+    fence: fence as number,
     phase,
     redispatchBlocked: true,
   };
+}
+
+/**
+ * Build the terminal mutation receipt at the runner boundary. The only
+ * mutable input consulted here is the container's provider installation
+ * observation; all controller/runner/executor and plan identities come from
+ * the exact request that was admitted by Core. Missing authority is a hard
+ * failure, never a synthesized label or digest.
+ */
+function mutationExecutionEvidenceFromRunnerPayload(
+  requestPayload: unknown,
+  payload: Record<string, unknown>,
+  action: "apply" | "destroy",
+  mutationDispatch: RunnerMutationDispatchRecord,
+  outcome: "committed" | "provider_failed_state_persisted",
+): RunExecutionEvidence {
+  const applyRun = recordField(requestPayload, "applyRun");
+  const planRun = recordField(requestPayload, "planRun");
+  const planArtifact = recordField(requestPayload, "planArtifact");
+  const runnerProfile = recordField(requestPayload, "runnerProfile");
+  const rawAuthority = recordField(
+    requestPayload,
+    "executionEvidenceAuthority",
+  );
+  const runId = applyRun && stringField(applyRun, "id");
+  const planRunId = planRun && stringField(planRun, "id");
+  const runnerProfileId = runnerProfile && stringField(runnerProfile, "id");
+  const executorId = runnerProfile && stringField(runnerProfile, "executorId");
+  const planDigest = planRun && stringField(planRun, "planDigest");
+  const artifactDigest = planArtifact && stringField(planArtifact, "digest");
+  if (
+    !runId ||
+    !planRunId ||
+    !runnerProfileId ||
+    !executorId ||
+    !isSha256Digest(planDigest) ||
+    !isSha256Digest(artifactDigest)
+  ) {
+    throw new Error(
+      `runner ${action} response lacks immutable run/plan evidence inputs`,
+    );
+  }
+  const controllerArtifact = rawAuthority
+    ? recordField(rawAuthority, "controllerArtifact")
+    : undefined;
+  const runnerArtifact = rawAuthority
+    ? recordField(rawAuthority, "runnerArtifact")
+    : undefined;
+  const executorArtifact = rawAuthority
+    ? recordField(rawAuthority, "executorArtifact")
+    : undefined;
+  if (!controllerArtifact || !runnerArtifact || !executorArtifact) {
+    throw new Error(
+      `runner ${action} ${runId} lacks immutable execution evidence authority`,
+    );
+  }
+  const providerArtifacts = providerArtifactsFromRunnerPayload(payload, planRun);
+  const rawCommit = recordField(
+    requestPayload,
+    "executionEvidenceCommit",
+  );
+  const commit = executionEvidenceCommitForRunner(
+    rawCommit,
+    action,
+    outcome,
+    runId,
+  );
+  return assertRunExecutionEvidence({
+    format: RUN_EXECUTION_EVIDENCE_CONTRACT,
+    runId,
+    planRunId,
+    action,
+    outcome,
+    authority: {
+      controllerArtifact,
+      runnerArtifact,
+      runnerProfileId,
+      executorId,
+      executorArtifact,
+      providerArtifacts,
+    },
+    plan: { digest: planDigest, artifactDigest },
+    commit,
+    receipt: {
+      operationId: runId,
+      version: mutationDispatch.version,
+      fence: mutationDispatch.fence,
+    },
+    committedAt: new Date().toISOString(),
+  });
+}
+
+function providerArtifactsFromRunnerPayload(
+  payload: Record<string, unknown>,
+  planRun: Record<string, unknown>,
+): readonly {
+  readonly source: string;
+  readonly digest: `sha256:${string}`;
+  readonly attested: true;
+}[] {
+  const requiredProviders = Array.isArray(planRun.requiredProviders)
+    ? planRun.requiredProviders.filter(
+        (provider): provider is string =>
+          typeof provider === "string" && provider.length > 0,
+      )
+    : [];
+  const installations = payload.providerInstallation;
+  if (!Array.isArray(installations)) {
+    if (requiredProviders.length > 0) {
+      throw new Error(
+        "runner mutation response lacks provider installation evidence",
+      );
+    }
+    return [];
+  }
+  const artifacts = installations.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`runner provider installation ${index} is invalid`);
+    }
+    const source = stringField(entry, "provider");
+    const digest = stringField(entry, "installedDigest");
+    if (!source || entry.attested !== true || !isSha256Digest(digest)) {
+      throw new Error(
+        `runner provider installation ${index} lacks immutable attested digest`,
+      );
+    }
+    return {
+      source,
+      digest,
+      attested: true as const,
+    };
+  });
+  for (const requiredProvider of requiredProviders) {
+    if (!artifacts.some((artifact) => artifact.source === requiredProvider)) {
+      throw new Error(
+        `runner mutation response lacks provider artifact ${requiredProvider}`,
+      );
+    }
+  }
+  return artifacts.sort((left, right) =>
+    left.source === right.source
+      ? left.digest.localeCompare(right.digest)
+      : left.source.localeCompare(right.source),
+  );
+}
+
+function executionEvidenceCommitForRunner(
+  rawCommit: Record<string, unknown> | undefined,
+  action: "apply" | "destroy",
+  outcome: "committed" | "provider_failed_state_persisted",
+  runId: string,
+): Record<string, unknown> {
+  const stateVersionId = rawCommit && stringField(rawCommit, "stateVersionId");
+  if (!stateVersionId) {
+    throw new Error(
+      `runner ${action} ${runId} lacks Core-allocated execution state coordinate`,
+    );
+  }
+  if (outcome === "provider_failed_state_persisted") {
+    return { stateVersionId };
+  }
+  if (action === "destroy") {
+    return { destroyed: true, stateVersionId };
+  }
+  const outputId = rawCommit && stringField(rawCommit, "outputId");
+  if (!outputId) {
+    throw new Error(
+      `runner apply ${runId} lacks Core-allocated execution output coordinate`,
+    );
+  }
+  return { stateVersionId, outputId };
+}
+
+function parsePersistedExecutionEvidence(
+  value: string | undefined,
+): RunExecutionEvidence | undefined {
+  if (!value) return undefined;
+  try {
+    return assertRunExecutionEvidence(JSON.parse(value) as unknown);
+  } catch {
+    throw new Error("persisted runner execution evidence is invalid");
+  }
+}
+
+function isSha256Digest(value: string | undefined): value is `sha256:${string}` {
+  return value !== undefined && /^sha256:[0-9a-f]{64}$/u.test(value);
 }
 
 function parseRunnerRestoreClaim(

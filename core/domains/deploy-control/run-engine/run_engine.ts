@@ -33,6 +33,9 @@ import type {
   PolicyDecision,
   ProviderConnection,
   RunDiagnostic,
+  RunExecutionAuthority,
+  RunExecutionCommit,
+  RunExecutionEvidence,
   RunStatus,
   RunnerProfile,
   RunnerSecretExposurePolicy,
@@ -60,7 +63,7 @@ import {
 } from "takosumi-contract/install-configs";
 import type { Output } from "takosumi-contract/outputs";
 import type { StateVersion } from "takosumi-contract/state-versions";
-import type { Run } from "takosumi-contract/runs";
+import { assertRunExecutionEvidence, type Run } from "takosumi-contract/runs";
 import type {
   Source,
   SourceSnapshot,
@@ -242,6 +245,7 @@ import {
   moduleDispatchFromInputs,
   withRunEnvironmentEvidence,
 } from "../mod.ts";
+import { executionEvidenceAuthoritiesEqual } from "../runner_profiles.ts";
 
 interface RuntimeSecretRetirementIntent {
   readonly workspaceId: string;
@@ -1152,6 +1156,104 @@ async function stateVersionIdForApplyRun(applyRunId: string): Promise<string> {
   return `state_${digest.slice("sha256:".length)}`;
 }
 
+async function outputIdForApplyRun(applyRunId: string): Promise<string> {
+  // One ApplyRun owns at most one Output. Keep this coordinate deterministic
+  // across a lost acknowledgement so a retry cannot manufacture a new output
+  // id that disagrees with the runner's durable execution evidence.
+  const digest = await stableJsonDigest({
+    kind: "takosumi.output-id@v1",
+    applyRunId,
+  });
+  return `out_${digest.slice("sha256:".length)}`;
+}
+
+function sameRunExecutionCommit(
+  left: RunExecutionCommit,
+  right: RunExecutionCommit,
+): boolean {
+  if ("destroyed" in left || "destroyed" in right) {
+    return (
+      "destroyed" in left &&
+      "destroyed" in right &&
+      left.destroyed === true &&
+      right.destroyed === true &&
+      left.stateVersionId === right.stateVersionId
+    );
+  }
+  if ("outputId" in left || "outputId" in right) {
+    return (
+      "outputId" in left &&
+      "outputId" in right &&
+      left.stateVersionId === right.stateVersionId &&
+      left.outputId === right.outputId
+    );
+  }
+  return left.stateVersionId === right.stateVersionId;
+}
+
+/**
+ * The runner's installation report and the value-free evidence must describe
+ * the exact same provider package set.  Source addresses are canonicalized so
+ * a bare `namespace/type` and its fully-qualified registry spelling compare
+ * identically; duplicate rows are retained so aliased instances cannot be
+ * collapsed into one attestation.  The installed digest is the immutable
+ * package identity (and therefore carries the exact resolved version).
+ */
+function executionProviderArtifactsMatch(
+  requiredProviders: readonly string[],
+  installation:
+    | readonly {
+        readonly provider: string;
+        readonly attested?: boolean;
+        readonly installedDigest?: string;
+      }[]
+    | undefined,
+  evidence: RunExecutionEvidence["authority"]["providerArtifacts"],
+): boolean {
+  const required = requiredProviders
+    .filter((provider) => !isOpenTofuBuiltinProviderSource(provider))
+    .map(canonicalProviderAddress)
+    .sort();
+  const installed = (installation ?? [])
+    .filter((entry) => !isOpenTofuBuiltinProviderSource(entry.provider))
+    .map((entry) => ({
+      source: canonicalProviderAddress(entry.provider),
+      digest: entry.installedDigest,
+      attested: entry.attested === true,
+    }))
+    .sort((left, right) =>
+      left.source === right.source
+        ? (left.digest ?? "").localeCompare(right.digest ?? "")
+        : left.source.localeCompare(right.source),
+    );
+  const attested = evidence
+    .map((entry) => ({
+      source: canonicalProviderAddress(entry.source),
+      digest: entry.digest,
+    }))
+    .sort((left, right) =>
+      left.source === right.source
+        ? left.digest.localeCompare(right.digest)
+        : left.source.localeCompare(right.source),
+    );
+  if (
+    required.length !== installed.length ||
+    required.length !== attested.length
+  ) {
+    return false;
+  }
+  if (required.some((source, index) => source !== installed[index]?.source)) {
+    return false;
+  }
+  return attested.every(
+    (entry, index) =>
+      entry.source === installed[index]?.source &&
+      entry.digest === installed[index]?.digest &&
+      installed[index]?.attested === true &&
+      /^sha256:[0-9a-f]{64}$/u.test(entry.digest),
+  );
+}
+
 function assertPinnedLifecycleRunnerCapabilities(
   actions: InstallConfig["lifecycleActions"],
   runnerProfile: RunnerProfile,
@@ -1219,6 +1321,11 @@ export interface RunEngineDependencies {
   readonly allowOperatorScopedProviderConnections: boolean;
   readonly operatorProviderConnections: readonly ProviderConnection[];
   readonly runnerProfiles: readonly RunnerProfile[];
+  /** Host-pinned immutable execution artifacts for new mutations. */
+  readonly executionEvidenceAuthority?: Pick<
+    RunExecutionAuthority,
+    "controllerArtifact" | "runnerArtifact" | "executorArtifact"
+  >;
   readonly seededProfiles: Promise<void>;
   readonly runQuery: RunQueryService;
   readonly billing: BillingService;
@@ -1255,6 +1362,10 @@ export class RunEngine {
   readonly #allowOperatorScopedProviderConnections: boolean;
   readonly #operatorProviderConnections: readonly ProviderConnection[];
   readonly #runnerProfilesById: ReadonlyMap<string, RunnerProfile>;
+  readonly #executionEvidenceAuthority?: Pick<
+    RunExecutionAuthority,
+    "controllerArtifact" | "runnerArtifact" | "executorArtifact"
+  >;
   readonly #seededProfiles: Promise<void>;
   readonly #runQuery: RunQueryService;
   readonly #billing: BillingService;
@@ -1306,6 +1417,7 @@ export class RunEngine {
     this.#runnerProfilesById = new Map(
       deps.runnerProfiles.map((profile) => [profile.id, profile]),
     );
+    this.#executionEvidenceAuthority = deps.executionEvidenceAuthority;
     this.#seededProfiles = deps.seededProfiles;
     this.#runQuery = deps.runQuery;
     this.#billing = deps.billing;
@@ -5392,6 +5504,7 @@ export class RunEngine {
     readonly outputAllowlist?: RunModuleDispatch["outputAllowlist"];
     readonly stateGeneration: number;
     readonly now: number;
+    readonly outputId?: string;
   }): Promise<Output> {
     const rawArtifactRef = input.result.rawOutputRef;
     if (
@@ -5418,7 +5531,7 @@ export class RunEngine {
       publicOutputs,
     });
     const snapshot: Output = {
-      id: this.#newId("out"),
+      id: input.outputId ?? this.#newId("out"),
       workspaceId: input.capsule.workspaceId,
       capsuleId: input.capsule.id,
       stateGeneration: input.stateGeneration,
@@ -7663,6 +7776,7 @@ export class RunEngine {
         envDispatch,
         persistGeneration,
         providerInstallationPolicy,
+        executionEvidenceCommit,
       } = await this.#withRunRenewal(
         "apply",
         runningWithEnv,
@@ -7725,6 +7839,7 @@ export class RunEngine {
         envDispatch,
         dispatch,
         now,
+        executionEvidenceCommit,
       });
       const stateVersion = await this.#buildStateVersion({
         envDispatch,
@@ -7744,12 +7859,14 @@ export class RunEngine {
       const providerApplied = this.#buildCompletedApplyRun({
         running: runningWithEnv,
         applyRun,
+        planRun,
         profile,
         capsule: projected.capsule,
         stateVersionId: stateVersion.id,
         outputId: projected.output.id,
         outputCount: Object.keys(projected.output.publicOutputs).length,
         result,
+        executionEvidenceCommit,
         providerInstallationPolicy,
         startedAt,
         now,
@@ -8080,6 +8197,115 @@ export class RunEngine {
    * provider-capsule mirror policy, then runs `runner.apply` with the minted
    * credentials (dispatch-only — never persisted).
    */
+  #executionEvidenceAuthorityFor(
+    profile: RunnerProfile,
+  ): Pick<
+    RunExecutionAuthority,
+    "controllerArtifact" | "runnerArtifact" | "executorArtifact"
+  > {
+    const globalAuthority = this.#executionEvidenceAuthority;
+    const profileAuthority = profile.executionEvidenceAuthority;
+    if (
+      globalAuthority &&
+      profileAuthority &&
+      !executionEvidenceAuthoritiesEqual(globalAuthority, profileAuthority)
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `runner profile ${profile.id} execution evidence authority conflicts with the global authority`,
+        { reason: "execution_evidence_authority_conflict" },
+      );
+    }
+    const authority = globalAuthority ?? profileAuthority;
+    if (!authority) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `runner profile ${profile.id} has no immutable execution evidence authority`,
+        { reason: "execution_evidence_authority_unavailable" },
+      );
+    }
+    return authority;
+  }
+
+  #requireExecutionEvidence(input: {
+    readonly result: OpenTofuApplyResult | OpenTofuDestroyResult;
+    readonly applyRun: ApplyRun;
+    readonly planRun: PlanRun;
+    readonly profile: RunnerProfile;
+    readonly action: "apply" | "destroy";
+    readonly outcome: "committed" | "provider_failed_state_persisted";
+    readonly commit: RunExecutionCommit;
+  }): RunExecutionEvidence {
+    // Reject OpenTofu's builtin runtime capability before comparing the
+    // provider set.  The audit helper is the single source of this
+    // fail-closed rule; invoking it without a policy only performs validation
+    // (the returned audit event is persisted by the caller after evidence is
+    // accepted).
+    providerInstallationAuditEvents(
+      input.applyRun.id,
+      input.action,
+      0,
+      input.result.providerInstallation,
+      undefined,
+    );
+    const evidence = input.result.executionEvidence;
+    if (!evidence) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `runner did not return execution evidence for ${input.action} run ${input.applyRun.id}`,
+        { reason: "execution_evidence_missing" },
+      );
+    }
+    const parsed = assertRunExecutionEvidence(evidence);
+    const authority = this.#executionEvidenceAuthorityFor(input.profile);
+    if (
+      parsed.runId !== input.applyRun.id ||
+      parsed.planRunId !== input.planRun.id ||
+      parsed.action !== input.action ||
+      parsed.outcome !== input.outcome ||
+      parsed.receipt.operationId !== input.applyRun.id ||
+      parsed.authority.runnerProfileId !== input.profile.id ||
+      parsed.authority.executorId !== input.profile.executorId ||
+      parsed.plan.digest !== input.planRun.planDigest ||
+      parsed.plan.artifactDigest !== input.planRun.planArtifact?.digest ||
+      parsed.authority.controllerArtifact.digest !==
+        authority.controllerArtifact.digest ||
+      parsed.authority.runnerArtifact.digest !== authority.runnerArtifact.digest ||
+      parsed.authority.executorArtifact.digest !==
+        authority.executorArtifact.digest ||
+      parsed.authority.controllerArtifact.immutable !== true ||
+      parsed.authority.runnerArtifact.immutable !== true ||
+      parsed.authority.executorArtifact.immutable !== true
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `runner returned execution evidence that does not match ${input.action} run ${input.applyRun.id}`,
+        { reason: "execution_evidence_mismatch" },
+      );
+    }
+    if (
+      !executionProviderArtifactsMatch(
+        input.planRun.requiredProviders,
+        input.result.providerInstallation,
+        parsed.authority.providerArtifacts,
+      )
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `runner returned provider artifacts that do not match the reviewed installation for ${input.action} run ${input.applyRun.id}`,
+        { reason: "execution_evidence_provider_mismatch" },
+      );
+    }
+    if (!sameRunExecutionCommit(parsed.commit, input.commit)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `runner returned execution evidence with the wrong commit coordinate for ${input.applyRun.id}`,
+        { reason: "execution_evidence_commit_mismatch" },
+      );
+    }
+    return parsed;
+  }
+
   async #dispatchApply(input: {
     readonly running: ApplyRun;
     readonly planRun: PlanRun;
@@ -8094,6 +8320,7 @@ export class RunEngine {
     envDispatch: RunExecutionDispatch;
     persistGeneration: number;
     providerInstallationPolicy: { requireMirror: boolean } | undefined;
+    executionEvidenceCommit: RunExecutionCommit;
   }> {
     const { running, planRun, profile, dispatch, credentials } = input;
     // Narrowed by #assertApplyPreconditions; re-checked here for the type guard.
@@ -8117,6 +8344,15 @@ export class RunEngine {
       running,
       verifiedDispatch,
     );
+    const executionEvidenceAuthority =
+      this.#executionEvidenceAuthorityFor(profile);
+    const executionEvidenceStateVersionId = await stateVersionIdForApplyRun(
+      running.id,
+    );
+    const executionEvidenceCommit: RunExecutionCommit = {
+      stateVersionId: executionEvidenceStateVersionId,
+      outputId: await outputIdForApplyRun(running.id),
+    };
     const envDispatch: RunExecutionDispatch = {
       ...verifiedDispatch,
       rawOutputRef,
@@ -8151,6 +8387,8 @@ export class RunEngine {
           ? { stateScope: envDispatch.stateScope }
           : {}),
         rawOutputRef,
+        executionEvidenceAuthority,
+        executionEvidenceCommit,
         ...(envDispatch.stateAdoption
           ? { stateAdoption: envDispatch.stateAdoption }
           : {}),
@@ -8177,6 +8415,7 @@ export class RunEngine {
         envDispatch,
         persistGeneration,
         providerInstallationPolicy,
+        executionEvidenceCommit,
       };
     }
     if (result.rawOutputRef !== rawOutputRef) {
@@ -8190,6 +8429,7 @@ export class RunEngine {
       envDispatch,
       persistGeneration,
       providerInstallationPolicy,
+      executionEvidenceCommit,
     };
   }
 
@@ -8207,13 +8447,22 @@ export class RunEngine {
     readonly envDispatch: RunExecutionDispatch;
     readonly dispatch: RunModuleDispatch;
     readonly now: number;
+    readonly executionEvidenceCommit: RunExecutionCommit;
   }): Promise<{
     capsule: Capsule;
     nextStateGeneration: number;
     previousOutput: Output | undefined;
     output: Output;
   }> {
-    const { planRun, applyRun, result, envDispatch, dispatch, now } = input;
+    const {
+      planRun,
+      applyRun,
+      result,
+      envDispatch,
+      dispatch,
+      now,
+      executionEvidenceCommit,
+    } = input;
     // A Capsule keeps its broader non-secret Workspace capture separate from the
     // explicitly allowlisted public Output projection.
     const publicOutputs = this.#projectApplyOutputs(planRun, result, dispatch);
@@ -8246,6 +8495,10 @@ export class RunEngine {
         : {}),
       stateGeneration: nextStateGeneration,
       now,
+      outputId:
+        "outputId" in executionEvidenceCommit
+          ? executionEvidenceCommit.outputId
+          : undefined,
     });
     return {
       capsule,
@@ -8387,6 +8640,21 @@ export class RunEngine {
         `failed provider ${action} returned state without a durable Capsule state scope`,
       );
     }
+    // A retained provider-failure state is still a terminal mutation. Require
+    // the same immutable receipt/authority proof as a successful mutation
+    // before advancing any Core ledger pointer; without it the external state
+    // could not be tied to this exact failed ApplyRun and PlanRun.
+    const executionEvidence = stateVersion
+      ? this.#requireExecutionEvidence({
+          result: input.result,
+          applyRun: input.running,
+          planRun: input.planRun,
+          profile: input.profile,
+          action,
+          outcome: "provider_failed_state_persisted",
+          commit: { stateVersionId: stateVersion.id },
+        })
+      : undefined;
     const nextStateGeneration = stateVersion
       ? input.persistGeneration
       : capsule.currentStateGeneration;
@@ -8399,6 +8667,7 @@ export class RunEngine {
       capsuleId: capsule.id,
       ...(stateVersion ? { stateVersionId: stateVersion.id } : {}),
       outputId: undefined,
+      ...(executionEvidence ? { executionEvidence } : {}),
       status: "failed",
       stateLock:
         stateLock ??
@@ -9206,12 +9475,14 @@ export class RunEngine {
   #buildCompletedApplyRun(input: {
     readonly running: ApplyRun;
     readonly applyRun: ApplyRun;
+    readonly planRun: PlanRun;
     readonly profile: RunnerProfile;
     readonly capsule: Capsule;
     readonly stateVersionId: string;
     readonly outputId: string;
     readonly outputCount: number;
     readonly result: OpenTofuApplyResult;
+    readonly executionEvidenceCommit: RunExecutionCommit;
     readonly providerInstallationPolicy: { requireMirror: boolean } | undefined;
     readonly startedAt: number;
     readonly now: number;
@@ -9225,6 +9496,15 @@ export class RunEngine {
       capsuleId: capsule.id,
       stateVersionId,
       outputId,
+      executionEvidence: this.#requireExecutionEvidence({
+        result,
+        applyRun: running,
+        planRun: input.planRun,
+        profile,
+        action: "apply",
+        outcome: "committed",
+        commit: input.executionEvidenceCommit,
+      }),
       status: "succeeded",
       stateLock:
         result.stateLock ??
@@ -9557,6 +9837,12 @@ export class RunEngine {
       planPolicy?.providerInstallation?.requireMirror === true
         ? { requireMirror: true }
         : undefined;
+    const executionEvidenceAuthority =
+      this.#executionEvidenceAuthorityFor(profile);
+    const executionEvidenceCommit: RunExecutionCommit = {
+      destroyed: true,
+      stateVersionId: await stateVersionIdForApplyRun(running.id),
+    };
     let runnerDispatched = false;
     let effectiveRunning = running;
     let ledgerCommitted = false;
@@ -9673,6 +9959,8 @@ export class RunEngine {
               planArtifact: planRun.planArtifact!,
               capsule,
               runnerProfile: profile,
+              executionEvidenceAuthority,
+              executionEvidenceCommit,
               ...(providerInstallationPolicy
                 ? { providerInstallationPolicy }
                 : {}),
@@ -9788,6 +10076,15 @@ export class RunEngine {
         this.#withPendingApplyBillingCapture({
           ...effectiveRunning,
           stateVersionId: stateVersion.id,
+          executionEvidence: this.#requireExecutionEvidence({
+            result,
+            applyRun: effectiveRunning,
+            planRun,
+            profile,
+            action: "destroy",
+            outcome: "committed",
+            commit: executionEvidenceCommit,
+          }),
           status: "succeeded",
           stateLock: stateLockEvidence(
             profile.stateBackend,

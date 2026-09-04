@@ -81,6 +81,18 @@ export type PlatformContainerState = Readonly<{
   }>;
 }>;
 
+export type PlatformExecutionEvidenceReleasePins = Readonly<{
+  readonly controllerArtifactDigest: `sha256:${string}`;
+  readonly runnerArtifactDigest: `sha256:${string}`;
+  readonly executorArtifactDigest: `sha256:${string}`;
+}>;
+
+const EXECUTION_EVIDENCE_DIGEST_ENV_NAMES = [
+  "TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST",
+  "TAKOSUMI_RUNNER_ARTIFACT_DIGEST",
+  "TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST",
+] as const;
+
 export function dashboardAssetTreeSeal(
   root: string,
   runtime: DashboardAssetSealRuntime = {},
@@ -610,6 +622,132 @@ export function injectPlatformSourcePaths(
   )}\nmain = ${JSON.stringify(entry.replaceAll("\\", "/"))}${withAssets.slice(
     name.index! + name[0].length,
   )}`;
+}
+
+/**
+ * Bind terminal-mutation evidence to the exact release closure. The first two
+ * identities intentionally share the SHA-256 of the sealed Worker entry
+ * bytes; the executor identity is the immutable OCI digest of the runner image
+ * declared by the realized config. No labels, mutable tags, or Worker Version
+ * UUIDs are accepted here.
+ */
+export function platformExecutionEvidenceReleasePins(
+  sealedEntrypointBytes: Uint8Array,
+  runnerImage: string,
+): PlatformExecutionEvidenceReleasePins {
+  if (
+    sealedEntrypointBytes.byteLength === 0 ||
+    !RUNNER_IMAGE.test(runnerImage)
+  ) {
+    throw new Error(
+      "platform_worker_release_execution_evidence_authority_invalid",
+    );
+  }
+  const executorArtifactDigest = runnerImage.slice(
+    runnerImage.lastIndexOf("@") + 1,
+  );
+  if (!SHA256.test(executorArtifactDigest)) {
+    throw new Error(
+      "platform_worker_release_execution_evidence_authority_invalid",
+    );
+  }
+  const sealedEntrypointDigest = digest(
+    sealedEntrypointBytes,
+  ) as `sha256:${string}`;
+  return {
+    controllerArtifactDigest: sealedEntrypointDigest,
+    runnerArtifactDigest: sealedEntrypointDigest,
+    executorArtifactDigest: executorArtifactDigest as `sha256:${string}`,
+  };
+}
+
+/**
+ * Add release-tool evidence pins to a private projected config. A realized
+ * operator config may not hand-author these identities: doing so would let a
+ * mutable claim outlive the closure that is actually uploaded.
+ */
+export function injectPlatformExecutionEvidencePins(
+  source: string,
+  pins: PlatformExecutionEvidenceReleasePins,
+): string {
+  for (const name of EXECUTION_EVIDENCE_DIGEST_ENV_NAMES) {
+    if (new RegExp(`^${name}\\s*=`, "mu").test(source)) {
+      throw new Error(
+        "platform_worker_release_execution_evidence_authority_input_invalid",
+      );
+    }
+  }
+  const values = [
+    pins.controllerArtifactDigest,
+    pins.runnerArtifactDigest,
+    pins.executorArtifactDigest,
+  ] as const;
+  const lines = EXECUTION_EVIDENCE_DIGEST_ENV_NAMES.map((name, index) => {
+    const digestValue = values[index]!;
+    if (!SHA256.test(digestValue)) {
+      throw new Error(
+        "platform_worker_release_execution_evidence_authority_invalid",
+      );
+    }
+    return `${name} = ${JSON.stringify(digestValue)}`;
+  }).join("\n");
+  const varsHeading = /^\[vars\]\s*$/mu.exec(source);
+  if (!varsHeading) {
+    return `${source.trimEnd()}\n\n[vars]\n${lines}\n`;
+  }
+  const insertAt = varsHeading.index! + varsHeading[0].length;
+  return `${source.slice(0, insertAt)}\n${lines}${source.slice(insertAt)}`;
+}
+
+function runnerImageForExecutionEvidence(source: string): string | undefined {
+  if (!/^\[\[containers\]\]\s*$/mu.test(source)) return undefined;
+  return platformRunnerImageRange(source).image;
+}
+
+function executionEvidencePinsPresent(source: string): boolean {
+  return EXECUTION_EVIDENCE_DIGEST_ENV_NAMES.every((name) =>
+    new RegExp(`^${name}\\s*=`, "mu").test(source),
+  );
+}
+
+function expectedPlatformSealedConfigSource(input: Readonly<{
+  readonly source: string;
+  readonly originalConfigPath: string;
+  readonly sealedConfigPath: string;
+  readonly sealedEntrypointPath: string;
+  readonly sealedAssetsPath: string;
+  readonly uploadEntrypointPath: string;
+  readonly hasExecutionEvidencePins: boolean;
+}>): string {
+  if (!input.hasExecutionEvidencePins) {
+    return platformSealedConfigProjection(
+      input.source,
+      input.originalConfigPath,
+      input.sealedConfigPath,
+      input.sealedEntrypointPath,
+      input.sealedAssetsPath,
+    );
+  }
+  const runnerImage = runnerImageForExecutionEvidence(input.source);
+  if (!runnerImage) {
+    throw new Error(
+      "platform_worker_release_execution_evidence_authority_invalid",
+    );
+  }
+  const pins = platformExecutionEvidenceReleasePins(
+    readStablePhysicalBytes(
+      input.uploadEntrypointPath,
+      "platform_worker_release_execution_evidence_authority_invalid",
+    ),
+    runnerImage,
+  );
+  return platformSealedConfigProjection(
+    injectPlatformExecutionEvidencePins(input.source, pins),
+    input.originalConfigPath,
+    input.sealedConfigPath,
+    input.sealedEntrypointPath,
+    input.sealedAssetsPath,
+  );
 }
 
 /** Project exactly one OpenTofuRunnerObject image literal for reviewed restore. */
@@ -2918,7 +3056,7 @@ export async function createPlatformDeployClosure(
     dashboardPath,
     dashboardAssets,
   );
-  const sealedSource = platformSealedConfigProjection(
+  let sealedSource = platformSealedConfigProjection(
     configSource,
     originalConfigPath,
     configPath,
@@ -2939,11 +3077,17 @@ export async function createPlatformDeployClosure(
   let dryRunConfig: PlatformDryRunConfig | undefined;
   let dashboardFrozen = false;
   let dashboardIdentity: PhysicalTreeIdentitySeal | undefined;
-  let closureIdentity: PhysicalDirectoryPathCustodySeal | undefined;
+  // Seal every existing directory from the declared custody root through the
+  // closure parent before Wrangler gets to observe the closure.  The closure
+  // directory itself is intentionally excluded: pinning a runner image may
+  // replace its already-created dry-run child, which legitimately updates the
+  // closure directory mtime.  Descendant content is independently sealed
+  // below, while this ancestor seal still detects a closure/parent swap.
+  let closureAncestorIdentity: PhysicalDirectoryPathCustodySeal | undefined;
   const assertClosureCustody = (): void => {
-    if (closureIdentity === undefined) return;
+    if (closureAncestorIdentity === undefined) return;
     assertPhysicalDirectoryPathUnchanged(
-      closureIdentity,
+      closureAncestorIdentity,
       "platform_worker_release_closure_custody_drift",
     );
   };
@@ -2951,48 +3095,125 @@ export async function createPlatformDeployClosure(
   let retainDryRun = false;
   try {
     try {
-      dryRunConfig = createPlatformDryRunConfigForPaths(
-        configSource,
-        originalConfigPath,
-        join(sourcePath, "deploy/platform/entry-worker.ts"),
-        dashboardPath,
-      );
       dashboardFrozen = true;
       freezePhysicalTree(dashboardPath);
       dashboardIdentity = physicalTreeIdentitySeal(dashboardPath);
-      // The source and dashboard seals cover every descendant Wrangler reads;
-      // retain the closure root identity as their path-resolving ancestor.
-      // Writes inside the pre-created dry-run directory do not change it.
-      closureIdentity = physicalDirectoryPathCustodySeal(
-        runtime.pathCustodyRoot,
-        closurePath,
-      );
       const command = runtime.command ?? requiredCommand;
-      const guardedCommand: PlatformReleaseCommand = async (
-        argv,
-        stdin,
-        cwd,
-        environment,
-      ) => {
-        assertClosureCustody();
-        dryRunConfig!.assertUnchanged();
-        try {
-          return await command(argv, stdin, cwd, environment);
-        } finally {
+      const runDryRun = async (
+        source: string,
+      ): Promise<DashboardAssetSeal> => {
+        dryRunConfig = createPlatformDryRunConfigForPaths(
+          source,
+          originalConfigPath,
+          join(sourcePath, "deploy/platform/entry-worker.ts"),
+          dashboardPath,
+        );
+        const guardedCommand: PlatformReleaseCommand = async (
+          argv,
+          stdin,
+          cwd,
+          environment,
+        ) => {
+          assertClosureCustody();
+          dryRunConfig!.assertUnchanged();
           try {
-            dryRunConfig!.assertUnchanged();
+            return await command(argv, stdin, cwd, environment);
           } finally {
-            assertClosureCustody();
+            try {
+              dryRunConfig!.assertUnchanged();
+            } finally {
+              assertClosureCustody();
+            }
           }
+        };
+        try {
+          return await buildDryRunSeal(
+            dryRunConfig.path,
+            dryRunPath,
+            true,
+            guardedCommand,
+            repositoryRoot,
+          );
+        } finally {
+          dryRunConfig.dispose();
+          dryRunConfig = undefined;
         }
       };
-      dryRun = await buildDryRunSeal(
-        dryRunConfig.path,
-        dryRunPath,
-        true,
-        guardedCommand,
-        repositoryRoot,
+
+      // Seal the path-resolving ancestors before the first Wrangler call. The
+      // closure itself is not included because the authority pinning pass may
+      // replace its existing dry-run child between the two calls.
+      closureAncestorIdentity = declaredPathCustodyDirectories(
+        runtime.pathCustodyRoot,
+        closurePath,
+      )
+        .slice(0, -1)
+        .map((path) => ({
+          path,
+          identity: privatePhysicalDirectoryIdentitySeal(path),
+        }));
+      assertClosureCustody();
+
+      // First seal the exact entry bytes without any runtime authority vars.
+      // The release pins are derived from these bytes, then the projected
+      // config is rebuilt with the pins before the retained closure is sealed.
+      dryRun = await runDryRun(configSource);
+      const entryCandidates = dryRun.entries.filter(
+        (entry) => !entry.path.includes("/") && entry.path.endsWith(".js"),
       );
+      if (entryCandidates.length !== 1) {
+        throw new Error("platform_worker_release_dry_run_entrypoint_invalid");
+      }
+      const initialEntrypointPath = join(
+        dryRunPath,
+        entryCandidates[0]!.path,
+      );
+      const runnerImage = runnerImageForExecutionEvidence(configSource);
+      if (runnerImage !== undefined) {
+        const pins = platformExecutionEvidenceReleasePins(
+          readStablePhysicalBytes(
+            initialEntrypointPath,
+            "platform_worker_release_execution_evidence_authority_invalid",
+          ),
+          runnerImage,
+        );
+        const configWithPins = injectPlatformExecutionEvidencePins(
+          configSource,
+          pins,
+        );
+        sealedSource = platformSealedConfigProjection(
+          configWithPins,
+          originalConfigPath,
+          configPath,
+          join(sourcePath, "deploy/platform/entry-worker.ts"),
+          dashboardPath,
+        );
+        rewritePrivate(configPath, new TextEncoder().encode(sealedSource));
+        rmSync(dryRunPath, { recursive: true, force: true });
+        mkdirSync(dryRunPath, { mode: 0o700 });
+        dryRun = await runDryRun(configWithPins);
+        const finalEntryCandidates = dryRun.entries.filter(
+          (entry) => !entry.path.includes("/") && entry.path.endsWith(".js"),
+        );
+        if (finalEntryCandidates.length !== 1) {
+          throw new Error(
+            "platform_worker_release_dry_run_entrypoint_invalid",
+          );
+        }
+        const finalEntrypointBytes = readStablePhysicalBytes(
+          join(dryRunPath, finalEntryCandidates[0]!.path),
+          "platform_worker_release_execution_evidence_authority_invalid",
+        );
+        if (digest(finalEntrypointBytes) !== pins.controllerArtifactDigest) {
+          throw new Error(
+            "platform_worker_release_execution_evidence_authority_drift",
+          );
+        }
+      }
+
+      // The source and dashboard seals cover every descendant Wrangler reads;
+      // the ancestor seal catches path substitution while allowing the
+      // pinning pass to rebuild the existing dry-run child.
       assertClosureCustody();
       dependencies.assertUnchanged();
       assertPhysicalTreeUnchanged(
@@ -3311,44 +3532,58 @@ async function assertPlanClosure(plan: PlatformReleasePlan): Promise<void> {
   if (digest(config) !== plan.configSha256) {
     throw new Error("platform_worker_release_config_drift");
   }
-  const expectedSealedSource = platformSealedConfigProjection(
-    configSource,
-    plan.configPath,
-    plan.sealedConfigPath,
-    join(plan.closurePath, "source/deploy/platform/entry-worker.ts"),
-    join(plan.closurePath, "dashboard"),
-  );
   const sealedConfig = readStablePhysicalBytes(
     plan.sealedConfigPath,
     "platform_worker_release_sealed_config_invalid",
   );
+  const sealedConfigSource = new TextDecoder("utf-8", { fatal: true }).decode(
+    sealedConfig,
+  );
+  const expectedSealedSource = expectedPlatformSealedConfigSource({
+    source: configSource,
+    originalConfigPath: plan.configPath,
+    sealedConfigPath: plan.sealedConfigPath,
+    sealedEntrypointPath: join(
+      plan.closurePath,
+      "source/deploy/platform/entry-worker.ts",
+    ),
+    sealedAssetsPath: join(plan.closurePath, "dashboard"),
+    uploadEntrypointPath: plan.uploadEntrypointPath,
+    hasExecutionEvidencePins: executionEvidencePinsPresent(sealedConfigSource),
+  });
   if (
     digest(sealedConfig) !== plan.sealedConfigSha256 ||
-    new TextDecoder("utf-8", { fatal: true }).decode(sealedConfig) !==
-      expectedSealedSource ||
+    sealedConfigSource !== expectedSealedSource ||
     JSON.stringify(dashboardAssetTreeSeal(plan.closurePath)) !==
       JSON.stringify(plan.closure)
   ) {
     throw new Error("platform_worker_release_sealed_closure_drift");
   }
-  const expectedRestoreSource = platformSealedConfigProjection(
-    platformRestoreConfigProjection(
-      configSource,
-      plan.predecessorContainer.image,
-    ),
-    plan.configPath,
-    plan.restoreSealedConfigPath,
-    join(plan.restoreClosurePath, "source/deploy/platform/entry-worker.ts"),
-    join(plan.restoreClosurePath, "dashboard"),
-  );
   const restoreConfig = readStablePhysicalBytes(
     plan.restoreSealedConfigPath,
     "platform_worker_release_restore_closure_invalid",
   );
+  const restoreConfigSource = new TextDecoder("utf-8", {
+    fatal: true,
+  }).decode(restoreConfig);
+  const expectedRestoreSource = expectedPlatformSealedConfigSource({
+    source: platformRestoreConfigProjection(
+      configSource,
+      plan.predecessorContainer.image,
+    ),
+    originalConfigPath: plan.configPath,
+    sealedConfigPath: plan.restoreSealedConfigPath,
+    sealedEntrypointPath: join(
+      plan.restoreClosurePath,
+      "source/deploy/platform/entry-worker.ts",
+    ),
+    sealedAssetsPath: join(plan.restoreClosurePath, "dashboard"),
+    uploadEntrypointPath: plan.restoreUploadEntrypointPath,
+    hasExecutionEvidencePins: executionEvidencePinsPresent(restoreConfigSource),
+  });
   if (
     digest(restoreConfig) !== plan.restoreSealedConfigSha256 ||
-    new TextDecoder("utf-8", { fatal: true }).decode(restoreConfig) !==
-      expectedRestoreSource ||
+    restoreConfigSource !== expectedRestoreSource ||
     JSON.stringify(dashboardAssetTreeSeal(plan.restoreClosurePath)) !==
       JSON.stringify(plan.restoreClosure)
   ) {
@@ -5192,6 +5427,38 @@ function writePrivate(path: string, bytes: Uint8Array): void {
   } finally {
     closeSync(parent);
   }
+}
+
+/** Rewrite a previously-created private file without replacing its inode. */
+function rewritePrivate(path: string, bytes: Uint8Array): void {
+  assertPrivateFile(path);
+  const pathBefore = lstatSync(path, { bigint: true });
+  const descriptor = openSync(
+    path,
+    constants.O_WRONLY | constants.O_TRUNC | constants.O_NOFOLLOW,
+  );
+  try {
+    const opened = fstatSync(descriptor, { bigint: true });
+    if (!sameInodeIdentity(pathBefore, opened)) {
+      throw new Error("platform_worker_release_private_file_invalid");
+    }
+    fchmodSync(descriptor, 0o600);
+    writeFileSync(descriptor, bytes);
+    fsyncSync(descriptor);
+    const after = fstatSync(descriptor, { bigint: true });
+    const pathAfter = lstatSync(path, { bigint: true });
+    if (
+      !sameInodeIdentity(pathBefore, after) ||
+      !sameInodeIdentity(pathBefore, pathAfter) ||
+      (pathAfter.mode & 0o777n) !== 0o600n ||
+      realpathSync(path) !== path
+    ) {
+      throw new Error("platform_worker_release_private_file_invalid");
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+  syncDirectory(dirname(path));
 }
 
 async function requiredCommand(

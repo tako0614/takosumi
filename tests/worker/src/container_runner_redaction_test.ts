@@ -70,6 +70,7 @@ test("container runner returns provider installation attestation from plan resul
           attestationMethod: "forced_filesystem_mirror_init",
           mirrorPath:
             "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
+          installedDigest: `sha256:${"e".repeat(64)}`,
           cliConfigDigest: PLAN_DIGEST,
           installedPath:
             "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
@@ -554,6 +555,7 @@ test("container runner returns provider installation attestation from apply and 
       attestationMethod: "forced_filesystem_mirror_init",
       mirrorPath:
         "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
+      installedDigest: `sha256:${"e".repeat(64)}`,
       cliConfigDigest: PLAN_DIGEST,
     },
   ];

@@ -183,6 +183,308 @@ export interface RunServiceDataRestoreResult {
   readonly restoredCount?: number;
 }
 
+/** Immutable artifact identity carried by a terminal mutation receipt. */
+export interface RunExecutionArtifactIdentity {
+  /** Content-addressed digest of the artifact; labels and mutable refs are not accepted. */
+  readonly digest: `sha256:${string}`;
+  /** A literal assertion that the digest names an immutable artifact. */
+  readonly immutable: true;
+}
+
+/** Provider package identity observed by the runner, sorted by source then digest. */
+export interface RunExecutionProviderArtifact {
+  readonly source: string;
+  readonly digest: `sha256:${string}`;
+  readonly attested: true;
+}
+
+/** Controller, runner, and executor authority pinned for one mutation. */
+export interface RunExecutionAuthority {
+  readonly controllerArtifact: RunExecutionArtifactIdentity;
+  readonly runnerArtifact: RunExecutionArtifactIdentity;
+  readonly runnerProfileId: string;
+  readonly executorId: string;
+  readonly executorArtifact: RunExecutionArtifactIdentity;
+  readonly providerArtifacts: readonly RunExecutionProviderArtifact[];
+}
+
+/** State/output coordinate committed by a mutation. */
+export type RunExecutionCommit =
+  | {
+      readonly stateVersionId: string;
+      readonly outputId: string;
+    }
+  | {
+      /** A provider failure retained state but did not produce an Output. */
+      readonly stateVersionId: string;
+    }
+  | {
+      readonly stateVersionId?: string;
+      readonly destroyed: true;
+    };
+
+/** Durable acknowledgement fence for one runner operation. */
+export interface RunExecutionReceipt {
+  /** Must equal the ApplyRun id. */
+  readonly operationId: string;
+  readonly version: number;
+  readonly fence: number;
+}
+
+/**
+ * Closed, value-free evidence for one OpenTofu apply/destroy operation.
+ * Raw state, output values, credentials, diagnostics, and URLs deliberately do
+ * not fit this shape.
+ */
+export interface RunExecutionEvidence {
+  readonly format: typeof RUN_EXECUTION_EVIDENCE_CONTRACT;
+  readonly runId: string;
+  readonly planRunId: string;
+  readonly action: "apply" | "destroy";
+  readonly outcome: "committed" | "provider_failed_state_persisted";
+  readonly authority: RunExecutionAuthority;
+  readonly plan: {
+    readonly digest: `sha256:${string}`;
+    readonly artifactDigest: `sha256:${string}`;
+  };
+  readonly commit: RunExecutionCommit;
+  readonly receipt: RunExecutionReceipt;
+  readonly committedAt: string;
+}
+
+export const RUN_EXECUTION_EVIDENCE_CONTRACT =
+  "takosumi.run-execution-evidence/v1" as const;
+
+/** Runtime validation at the Core/runner boundary. Returns the same object. */
+export function assertRunExecutionEvidence(
+  value: unknown,
+): RunExecutionEvidence {
+  const record = exactEvidenceRecord(value, [
+    "format",
+    "runId",
+    "planRunId",
+    "action",
+    "outcome",
+    "authority",
+    "plan",
+    "commit",
+    "receipt",
+    "committedAt",
+  ]);
+  if (record.format !== RUN_EXECUTION_EVIDENCE_CONTRACT) {
+    throw new TypeError("run execution evidence format is invalid");
+  }
+  const runId = evidenceToken(record.runId, "runId");
+  const planRunId = evidenceToken(record.planRunId, "planRunId");
+  if (record.action !== "apply" && record.action !== "destroy") {
+    throw new TypeError("run execution evidence action is invalid");
+  }
+  if (
+    record.outcome !== "committed" &&
+    record.outcome !== "provider_failed_state_persisted"
+  ) {
+    throw new TypeError("run execution evidence outcome is invalid");
+  }
+  const authority = assertRunExecutionAuthority(record.authority);
+  const planRecord = exactEvidenceRecord(record.plan, [
+    "digest",
+    "artifactDigest",
+  ]);
+  const plan = {
+    digest: evidenceDigest(planRecord.digest, "plan.digest"),
+    artifactDigest: evidenceDigest(
+      planRecord.artifactDigest,
+      "plan.artifactDigest",
+    ),
+  } as const;
+  const commit = assertRunExecutionCommit(record.commit);
+  const receiptRecord = exactEvidenceRecord(record.receipt, [
+    "operationId",
+    "version",
+    "fence",
+  ]);
+  const receipt = {
+    operationId: evidenceToken(receiptRecord.operationId, "receipt.operationId"),
+    version: evidencePositiveInteger(receiptRecord.version, "receipt.version"),
+    fence: evidencePositiveInteger(receiptRecord.fence, "receipt.fence"),
+  } as const;
+  const committedAt = evidenceTimestamp(record.committedAt);
+  return {
+    format: RUN_EXECUTION_EVIDENCE_CONTRACT,
+    runId,
+    planRunId,
+    action: record.action,
+    outcome: record.outcome,
+    authority,
+    plan,
+    commit,
+    receipt,
+    committedAt,
+  };
+}
+
+function assertRunExecutionAuthority(value: unknown): RunExecutionAuthority {
+  const record = exactEvidenceRecord(value, [
+    "controllerArtifact",
+    "runnerArtifact",
+    "runnerProfileId",
+    "executorId",
+    "executorArtifact",
+    "providerArtifacts",
+  ]);
+  const providerArtifacts = record.providerArtifacts;
+  if (!Array.isArray(providerArtifacts)) {
+    throw new TypeError("run execution provider artifacts are invalid");
+  }
+  const parsed = providerArtifacts.map((entry, index) => {
+    const provider = exactEvidenceRecord(entry, ["source", "digest", "attested"]);
+    if (provider.attested !== true) {
+      throw new TypeError(`provider artifact ${index} is not attested`);
+    }
+    return {
+      source: evidenceToken(provider.source, `providerArtifacts[${index}].source`),
+      digest: evidenceDigest(
+        provider.digest,
+        `providerArtifacts[${index}].digest`,
+      ),
+      attested: true as const,
+    };
+  });
+  for (let index = 1; index < parsed.length; index += 1) {
+    const previous = parsed[index - 1]!;
+    const current = parsed[index]!;
+    if (
+      previous.source > current.source ||
+      (previous.source === current.source && previous.digest > current.digest)
+    ) {
+      throw new TypeError("run execution provider artifacts must be sorted");
+    }
+  }
+  return {
+    controllerArtifact: assertRunExecutionArtifact(
+      record.controllerArtifact,
+      "authority.controllerArtifact",
+    ),
+    runnerArtifact: assertRunExecutionArtifact(
+      record.runnerArtifact,
+      "authority.runnerArtifact",
+    ),
+    runnerProfileId: evidenceToken(
+      record.runnerProfileId,
+      "authority.runnerProfileId",
+    ),
+    executorId: evidenceToken(record.executorId, "authority.executorId"),
+    executorArtifact: assertRunExecutionArtifact(
+      record.executorArtifact,
+      "authority.executorArtifact",
+    ),
+    providerArtifacts: parsed,
+  };
+}
+
+function assertRunExecutionArtifact(
+  value: unknown,
+  label: string,
+): RunExecutionArtifactIdentity {
+  const record = exactEvidenceRecord(value, ["digest", "immutable"]);
+  if (record.immutable !== true) {
+    throw new TypeError(`${label} must be immutable`);
+  }
+  return {
+    digest: evidenceDigest(record.digest, `${label}.digest`),
+    immutable: true,
+  };
+}
+
+function assertRunExecutionCommit(value: unknown): RunExecutionCommit {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+  if (!record) throw new TypeError("run execution commit is invalid");
+  if (record.destroyed === true) {
+    const keys = Object.keys(record).sort().join(",");
+    if (keys !== "destroyed" && keys !== "destroyed,stateVersionId") {
+      throw new TypeError("destroy commit keys are invalid");
+    }
+    if (
+      record.stateVersionId !== undefined &&
+      typeof record.stateVersionId !== "string"
+    ) {
+      throw new TypeError("destroy commit stateVersionId is invalid");
+    }
+    return {
+      destroyed: true,
+      ...(record.stateVersionId !== undefined
+        ? { stateVersionId: evidenceToken(record.stateVersionId, "commit.stateVersionId") }
+        : {}),
+    };
+  }
+  const keys = Object.keys(record).sort().join(",");
+  if (keys === "stateVersionId") {
+    return {
+      stateVersionId: evidenceToken(record.stateVersionId, "commit.stateVersionId"),
+    };
+  }
+  const exact = exactEvidenceRecord(record, ["stateVersionId", "outputId"]);
+  return {
+    stateVersionId: evidenceToken(exact.stateVersionId, "commit.stateVersionId"),
+    outputId: evidenceToken(exact.outputId, "commit.outputId"),
+  };
+}
+
+function exactEvidenceRecord(
+  value: unknown,
+  keys: readonly string[],
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("run execution evidence object is invalid");
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).sort().join(",") !== [...keys].sort().join(",")) {
+    throw new TypeError("run execution evidence object keys are invalid");
+  }
+  return record;
+}
+
+function evidenceToken(value: unknown, label: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 256 ||
+    !value.trim() ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new TypeError(`${label} is invalid`);
+  }
+  return value;
+}
+
+function evidenceDigest(value: unknown, label: string): `sha256:${string}` {
+  if (
+    typeof value !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/u.test(value)
+  ) {
+    throw new TypeError(`${label} must be a sha256 digest`);
+  }
+  return value as `sha256:${string}`;
+}
+
+function evidencePositiveInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) {
+    throw new TypeError(`${label} must be a positive integer`);
+  }
+  return Number(value);
+}
+
+function evidenceTimestamp(value: unknown): string {
+  const timestamp = evidenceToken(value, "committedAt");
+  const parsed = new Date(timestamp);
+  if (!Number.isFinite(parsed.valueOf()) || parsed.toISOString() !== timestamp) {
+    throw new TypeError("committedAt must be a canonical UTC timestamp");
+  }
+  return timestamp;
+}
+
 export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
@@ -224,6 +526,8 @@ export interface Run {
   readonly providerResolutions?: readonly ProviderResolution[];
   readonly runEnvironmentEvidenceDigest?: string;
   readonly redactionProfileId?: string;
+  /** Value-free durable runner receipt for newly terminal mutations. */
+  readonly executionEvidence?: RunExecutionEvidence;
   /** True when the reviewed plan carried a human approval/destructive gate. */
   readonly requiresApproval?: boolean;
   readonly backupId?: string;

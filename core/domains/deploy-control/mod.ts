@@ -60,6 +60,10 @@ import type {
   RunnerStateLockEvidence,
   RunDiagnostic,
   RunStatus,
+  RunExecutionArtifactIdentity,
+  RunExecutionAuthority,
+  RunExecutionCommit,
+  RunExecutionEvidence,
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type {
@@ -125,9 +129,11 @@ import {
   type RecordActivityInput,
 } from "../activity/mod.ts";
 import {
+  assertRunnerProfileCatalog,
   createDefaultRunnerProfiles,
   DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
   DEFAULT_OPENTOFU_RUNNER_PROFILE_ID,
+  executionEvidenceAuthoritiesEqual,
 } from "./runner_profiles.ts";
 import { evaluatePolicy } from "./policy.ts";
 import {
@@ -286,10 +292,18 @@ export {
   SOURCE_REF_NOT_FOUND_REASON,
   type OpenTofuControllerErrorCode,
 } from "./errors.ts";
+export type {
+  RunExecutionArtifactIdentity,
+  RunExecutionAuthority,
+  RunExecutionCommit,
+  RunExecutionEvidence,
+} from "takosumi-contract/runs";
 export {
+  assertRunnerProfileCatalog,
   createDefaultRunnerProfiles,
   DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
   DEFAULT_OPENTOFU_RUNNER_PROFILE_ID,
+  executionEvidenceAuthoritiesEqual,
   parseEnabledRunnerProfileIds,
   resolveEnabledRunnerProfiles,
 } from "./runner_profiles.ts";
@@ -464,6 +478,13 @@ export interface OpenTofuApplyJob
   readonly planRun: PlanRun;
   readonly planArtifact: OpenTofuPlanArtifact;
   readonly runnerProfile: RunnerProfile;
+  /** Immutable controller/runner/executor authority supplied by composition. */
+  readonly executionEvidenceAuthority?: Pick<
+    RunExecutionAuthority,
+    "controllerArtifact" | "runnerArtifact" | "executorArtifact"
+  >;
+  /** Core-allocated immutable state/output coordinate for the runner receipt. */
+  readonly executionEvidenceCommit?: RunExecutionCommit;
   readonly providerInstallationPolicy?: {
     readonly requireMirror: boolean;
   };
@@ -478,6 +499,13 @@ export interface OpenTofuDestroyJob
   /** Present only for Capsule subjects; Resource runs have no backing Capsule. */
   readonly capsule?: Capsule;
   readonly runnerProfile: RunnerProfile;
+  /** Immutable controller/runner/executor authority supplied by composition. */
+  readonly executionEvidenceAuthority?: Pick<
+    RunExecutionAuthority,
+    "controllerArtifact" | "runnerArtifact" | "executorArtifact"
+  >;
+  /** Core-allocated immutable state/destroy coordinate for the runner receipt. */
+  readonly executionEvidenceCommit?: RunExecutionCommit;
   readonly providerInstallationPolicy?: {
     readonly requireMirror: boolean;
   };
@@ -508,7 +536,9 @@ export interface ProviderInstallationEvidence {
   readonly installationMethod: "filesystem_mirror" | "direct" | "unknown";
   readonly mirrorPath?: string;
   readonly attested?: boolean;
-  readonly attestationMethod?: "forced_filesystem_mirror_init";
+  readonly attestationMethod?:
+    | "forced_filesystem_mirror_init"
+    | "runner_observed_installed_artifact";
   readonly cliConfigDigest?: string;
   readonly installedPath?: string;
   readonly installedDigest?: string;
@@ -539,6 +569,8 @@ export interface OpenTofuApplyResult {
    * its job or the run fails before ledger pointers are published.
    */
   readonly rawOutputRef?: string;
+  /** Runner-persisted, value-free mutation receipt; replay is byte-identical. */
+  readonly executionEvidence?: RunExecutionEvidence;
 }
 
 export interface OpenTofuProviderExecutionFailure {
@@ -677,6 +709,8 @@ export interface OpenTofuDestroyResult {
   readonly providerExecutionFailure?: OpenTofuProviderExecutionFailure;
   /** Digest of the persisted post-destroy state, echoed by the runner. */
   readonly stateDigest?: string;
+  /** Runner-persisted, value-free mutation receipt; replay is byte-identical. */
+  readonly executionEvidence?: RunExecutionEvidence;
 }
 
 export interface OpenTofuRestoreJob {
@@ -987,6 +1021,15 @@ export interface OpenTofuControllerDependencies {
   /** Immutable release-owned connections used without runtime DB reconciliation. */
   readonly operatorProviderConnections?: readonly ProviderConnection[];
   readonly runnerProfiles?: readonly RunnerProfile[];
+  /**
+   * Host-pinned immutable controller/runner/executor artifacts. The controller
+   * refuses to terminalize a newly successful mutation unless this authority
+   * is present and the runner returns the exact same identities.
+   */
+  readonly executionEvidenceAuthority?: Pick<
+    RunExecutionAuthority,
+    "controllerArtifact" | "runnerArtifact" | "executorArtifact"
+  >;
   readonly defaultRunnerProfileId?: string;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => number;
@@ -1531,6 +1574,36 @@ export class OpenTofuController {
     });
     const runnerProfiles =
       dependencies.runnerProfiles ?? createDefaultRunnerProfiles(this.#now());
+    // Validate the complete catalog synchronously before the async seed starts.
+    // A malformed production composition must not partially write runner
+    // profiles and only fail when a later Run happens to select one.
+    assertRunnerProfileCatalog(runnerProfiles, { rejectUnknownKeys: true });
+    if (dependencies.executionEvidenceAuthority) {
+      for (const profile of runnerProfiles) {
+        const profileAuthority = profile.executionEvidenceAuthority;
+        if (
+          profileAuthority &&
+          !executionEvidenceAuthoritiesEqual(
+            profileAuthority,
+            dependencies.executionEvidenceAuthority,
+          )
+        ) {
+          throw new Error(
+            `runner profile ${profile.id} execution evidence authority conflicts with controller authority`,
+          );
+        }
+      }
+    }
+    if (
+      dependencies.defaultRunnerProfileId !== undefined &&
+      !runnerProfiles.some(
+        (profile) => profile.id === dependencies.defaultRunnerProfileId,
+      )
+    ) {
+      throw new Error(
+        `unknown default runner profile id ${dependencies.defaultRunnerProfileId}`,
+      );
+    }
     this.#configuredRunnerProfileIds = new Set(
       runnerProfiles.map((profile) => profile.id),
     );
@@ -1558,6 +1631,9 @@ export class OpenTofuController {
         dependencies.operatorProviderConnections ?? [],
       runnerProfiles,
       seededProfiles: this.#seededProfiles,
+      ...(dependencies.executionEvidenceAuthority
+        ? { executionEvidenceAuthority: dependencies.executionEvidenceAuthority }
+        : {}),
       runQuery: this.#runQuery,
       billing: this.#billing,
       drift: this.#drift,

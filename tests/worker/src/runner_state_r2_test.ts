@@ -51,6 +51,18 @@ const LEGACY_ADOPTION_PREFIX =
   "spaces/spc_1/installations/cap_legacy_edge_api/envs/resource-shape/states";
 const LEGACY_ADOPTION_KEY = `${LEGACY_ADOPTION_PREFIX}/00000007.tfstate.enc`;
 
+// Runner-state tests exercise the durable R2 relay directly rather than the
+// Core controller. Keep their mutation envelopes explicit so the relay can
+// produce the same closed execution receipt that production composition
+// supplies. These are test-only immutable identities; no production lane may
+// derive authority from this fixture.
+const FIXTURE_EXECUTION_EVIDENCE_AUTHORITY = {
+  controllerArtifact: { digest: `sha256:${"a".repeat(64)}`, immutable: true },
+  runnerArtifact: { digest: `sha256:${"b".repeat(64)}`, immutable: true },
+  executorArtifact: { digest: `sha256:${"c".repeat(64)}`, immutable: true },
+} as const;
+const FIXTURE_PROVIDER_ARTIFACT_DIGEST = `sha256:${"d".repeat(64)}`;
+
 function legacyStateAdoption(digest: string) {
   return {
     kind: "legacy_backing_capsule_state",
@@ -227,6 +239,21 @@ test("apply with a Resource stateScope persists under the Resource R2_STATE pref
   assert.equal(stateField.generation, 2);
   assert.equal(stateField.stateRef, RESOURCE_NEXT_STATE_KEY);
   assert.equal(stateField.digest, current.digest);
+
+  const evidenceRef = `${RESOURCE_NEXT_STATE_KEY}.execution-evidence.json`;
+  const stateMetadata = state.metadata(RESOURCE_NEXT_STATE_KEY)!;
+  assert.equal(stateMetadata["takosumi-execution-evidence-ref"], evidenceRef);
+  assert.match(
+    stateMetadata["takosumi-execution-evidence-digest"] ?? "",
+    /^sha256:[0-9a-f]{64}$/u,
+  );
+  assert.equal(stateMetadata["takosumi-execution-evidence"], undefined);
+  const evidenceObject = state.body(evidenceRef);
+  assert.ok(evidenceObject);
+  const evidencePayload = JSON.parse(
+    new TextDecoder().decode(evidenceObject!),
+  ) as Record<string, unknown>;
+  assert.equal(evidencePayload.format, "takosumi.run-execution-evidence/v1");
 });
 
 test("oversized chunked state with a forged Content-Length fails with no partial persistence", async () => {
@@ -1033,6 +1060,102 @@ test("apply redelivery adopts the exact ApplyRun artifacts after R2 responses ar
     applyRunId,
   );
   assert.equal(state.listCalls.length, 0);
+});
+
+test("large provider evidence is stored in an immutable body, not state metadata", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await artifacts.put(
+    "opentofu-plan-runs/plan_1/tfplan.enc",
+    sealedPlan.ciphertext,
+  );
+  const providers = Array.from(
+    { length: 160 },
+    (_, index) => `registry.opentofu.org/example/provider-${index}`,
+  );
+  const applyRunId = "apply_many_providers";
+  const targetStateRef = `${STATE_PREFIX}/00000001.tfstate.enc`;
+  let providerPosts = 0;
+  const runner = runnerWithContainer(artifacts, state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        providerPosts += 1;
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      if (request.method === "GET" && path.endsWith("/artifacts/tfstate")) {
+        return new Response(NEW_STATE_BYTES);
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+  const requestBody = JSON.stringify({
+    kind: "takosumi.opentofu-run@v1",
+    action: "apply",
+    runId: "plan_1",
+    request: {
+      applyRun: { id: applyRunId },
+      planRun: {
+        id: "plan_1",
+        planDigest: PLAN_DIGEST,
+        requiredProviders: providers,
+      },
+      stateScope: { ...SCOPE, generation: 1, stateRef: targetStateRef },
+      rawOutputRef: RAW_OUTPUT_REF.replace(
+        "/runs/plan_1/",
+        `/runs/${applyRunId}/`,
+      ),
+      planArtifact: {
+        kind: "object-storage",
+        ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+        digest: PLAN_DIGEST,
+      },
+    },
+  });
+
+  const first = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: requestBody,
+    }),
+  );
+  assert.equal(first.status, 200);
+  assert.equal(providerPosts, 1);
+  const metadata = state.metadata(targetStateRef)!;
+  const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata));
+  assert.ok(metadataBytes.byteLength < 8_192);
+  assert.equal(metadata["takosumi-execution-evidence"], undefined);
+  const evidenceRef = metadata["takosumi-execution-evidence-ref"];
+  assert.equal(evidenceRef, `${targetStateRef}.execution-evidence.json`);
+  const evidenceBody = state.body(evidenceRef!);
+  assert.ok(evidenceBody && evidenceBody.byteLength > 8_192);
+  const parsed = JSON.parse(new TextDecoder().decode(evidenceBody!)) as {
+    authority: { providerArtifacts: readonly unknown[] };
+  };
+  assert.equal(parsed.authority.providerArtifacts.length, providers.length);
+
+  const replay = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: requestBody,
+    }),
+  );
+  assert.equal(replay.status, 200);
+  assert.equal(providerPosts, 1);
+  const replayPayload = (await replay.json()) as {
+    executionEvidence: unknown;
+  };
+  assert.deepEqual(
+    replayPayload.executionEvidence,
+    JSON.parse(new TextDecoder().decode(evidenceBody!)),
+  );
 });
 
 test("failed provider apply encrypts partial state and same-run replay stays failed without provider re-execution", async () => {
@@ -2840,12 +2963,165 @@ function runnerWithContainer(
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
     ...envOverrides,
   } as CloudflareWorkerEnv);
+  const originalFetch = runner.fetch.bind(runner);
+  Object.defineProperty(runner, "fetch", {
+    value: async (request: Request) => {
+      const url = new URL(request.url);
+      if (request.method !== "POST" || !/^\/runs\/[^/]+$/.test(url.pathname)) {
+        return await originalFetch(request);
+      }
+      const envelope = (await request.clone().json()) as Record<
+        string,
+        unknown
+      >;
+      if (envelope.action !== "apply" && envelope.action !== "destroy") {
+        return await originalFetch(request);
+      }
+      const runId = url.pathname.slice("/runs/".length);
+      const payload = envelope.request;
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        return await originalFetch(request);
+      }
+      const mutation = payload as Record<string, unknown>;
+      const applyRun =
+        mutation.applyRun &&
+        typeof mutation.applyRun === "object" &&
+        !Array.isArray(mutation.applyRun)
+          ? (mutation.applyRun as Record<string, unknown>)
+          : {};
+      const planArtifact =
+        mutation.planArtifact &&
+        typeof mutation.planArtifact === "object" &&
+        !Array.isArray(mutation.planArtifact)
+          ? (mutation.planArtifact as Record<string, unknown>)
+          : {};
+      const planRun =
+        mutation.planRun &&
+        typeof mutation.planRun === "object" &&
+        !Array.isArray(mutation.planRun)
+          ? (mutation.planRun as Record<string, unknown>)
+          : {};
+      const runnerProfile =
+        mutation.runnerProfile &&
+        typeof mutation.runnerProfile === "object" &&
+        !Array.isArray(mutation.runnerProfile)
+          ? (mutation.runnerProfile as Record<string, unknown>)
+          : {};
+      const planDigest =
+        typeof planArtifact.digest === "string"
+          ? planArtifact.digest
+          : PLAN_DIGEST;
+      const executionRunId =
+        typeof applyRun.id === "string" ? applyRun.id : runId;
+      envelope.request = {
+        ...mutation,
+        applyRun: { ...applyRun, id: executionRunId },
+        planRun: {
+          ...planRun,
+          id: typeof planRun.id === "string" ? planRun.id : runId,
+          planDigest:
+            typeof planRun.planDigest === "string"
+              ? planRun.planDigest
+              : planDigest,
+          runnerProfileId:
+            typeof planRun.runnerProfileId === "string"
+              ? planRun.runnerProfileId
+              : "opentofu-default",
+          requiredProviders: Array.isArray(planRun.requiredProviders)
+            ? planRun.requiredProviders
+            : [],
+        },
+        runnerProfile: {
+          ...runnerProfile,
+          id:
+            typeof runnerProfile.id === "string"
+              ? runnerProfile.id
+              : "opentofu-default",
+          executorId:
+            typeof runnerProfile.executorId === "string"
+              ? runnerProfile.executorId
+              : "opentofu.default",
+          stateBackend: runnerProfile.stateBackend ?? {
+            kind: "operator-managed",
+            ref: "state://takosumi/opentofu-default",
+          },
+        },
+        executionEvidenceAuthority:
+          mutation.executionEvidenceAuthority ??
+          FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+        executionEvidenceCommit: mutation.executionEvidenceCommit ??
+          (envelope.action === "apply"
+            ? {
+                stateVersionId: `state_${executionRunId}`,
+                outputId: `output_${executionRunId}`,
+              }
+            : {
+                stateVersionId: `state_${executionRunId}`,
+                destroyed: true,
+              }),
+      };
+      const rewritten = new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: JSON.stringify(envelope),
+        signal: request.signal,
+      });
+      return await originalFetch(rewritten);
+    },
+    configurable: true,
+  });
   Object.defineProperty(runner, "containerFetch", {
-    value(request: Request, _port?: number) {
+    value: async (request: Request, _port?: number) => {
       if (new URL(request.url).pathname === "/healthz") {
         return Response.json({ ok: true });
       }
-      return container.containerFetch(request);
+      const response = await container.containerFetch(request);
+      // The container fixtures predate the execution-evidence response field.
+      // Add an explicit test provider identity to successful mutation replies
+      // so the relay can prove the provider artifact without weakening its
+      // production parser.
+      if (
+        request.method === "POST" &&
+        /^\/runs\/[^/]+$/.test(new URL(request.url).pathname) &&
+        (response.ok || response.status >= 500)
+      ) {
+        const payload = await response.clone().json().catch(() => undefined);
+        if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+          const body = payload as Record<string, unknown>;
+          const requestEnvelope = await request.clone().json().catch(() => ({}));
+          const mutation =
+            requestEnvelope &&
+            typeof requestEnvelope === "object" &&
+            !Array.isArray(requestEnvelope) &&
+            (requestEnvelope as Record<string, unknown>).request;
+          const planRun =
+            mutation &&
+            typeof mutation === "object" &&
+            !Array.isArray(mutation) &&
+            (mutation as Record<string, unknown>).planRun;
+          const providers =
+            planRun &&
+            typeof planRun === "object" &&
+            !Array.isArray(planRun) &&
+            Array.isArray((planRun as Record<string, unknown>).requiredProviders)
+              ? ((planRun as Record<string, unknown>)
+                  .requiredProviders as unknown[])
+              : [];
+          if (!Array.isArray(body.providerInstallation)) {
+            body.providerInstallation = providers
+              .filter((provider): provider is string => typeof provider === "string")
+              .map((provider) => ({
+                provider,
+                mirrored: false,
+                installationMethod: "direct",
+                attested: true,
+                installedDigest: FIXTURE_PROVIDER_ARTIFACT_DIGEST,
+              }));
+          }
+          return Response.json(body, { status: response.status });
+        }
+      }
+      return response;
     },
   });
   return runner;

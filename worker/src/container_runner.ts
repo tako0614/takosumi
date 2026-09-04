@@ -33,6 +33,10 @@ import {
 } from "../../core/domains/deploy-control/mod.ts";
 import type { CloudflareWorkerEnv, OpenTofuRunAction } from "./bindings.ts";
 import { redactString } from "takosumi-contract/redaction";
+import {
+  assertRunExecutionEvidence,
+  type RunExecutionEvidence,
+} from "takosumi-contract/runs";
 import { normalizePlanResourceScope } from "takosumi-contract";
 import {
   canonicalProviderSource,
@@ -189,6 +193,12 @@ export class CloudflareContainerOpenTofuRunner
       }
       return {
         providerExecutionFailure,
+        ...(executionEvidenceFromContainerResult(result)
+          ? {
+              executionEvidence:
+                executionEvidenceFromContainerResult(result),
+            }
+          : {}),
         ...(stateDigest ? { stateDigest } : {}),
         ...(providerInstallationFromContainerResult(result)
           ? {
@@ -213,6 +223,9 @@ export class CloudflareContainerOpenTofuRunner
         : {}),
       ...(stringFromRecord(result, "rawOutputRef")
         ? { rawOutputRef: stringFromRecord(result, "rawOutputRef") }
+        : {}),
+      ...(executionEvidenceFromContainerResult(result)
+        ? { executionEvidence: executionEvidenceFromContainerResult(result) }
         : {}),
       ...(providerInstallationFromContainerResult(result)
         ? {
@@ -252,6 +265,12 @@ export class CloudflareContainerOpenTofuRunner
       }
       return {
         providerExecutionFailure,
+        ...(executionEvidenceFromContainerResult(result)
+          ? {
+              executionEvidence:
+                executionEvidenceFromContainerResult(result),
+            }
+          : {}),
         ...(stateDigest ? { stateDigest } : {}),
         ...(providerInstallationFromContainerResult(result)
           ? {
@@ -271,6 +290,9 @@ export class CloudflareContainerOpenTofuRunner
             providerInstallation:
               providerInstallationFromContainerResult(result),
           }
+        : {}),
+      ...(executionEvidenceFromContainerResult(result)
+        ? { executionEvidence: executionEvidenceFromContainerResult(result) }
         : {}),
       diagnostics: diagnosticsFromContainerResult(result),
     };
@@ -1406,6 +1428,12 @@ function providerInstallationFromContainerResult(
         ...(stringFromRecord(entry, "attestationMethod") ===
         "forced_filesystem_mirror_init"
           ? { attestationMethod: "forced_filesystem_mirror_init" as const }
+          : stringFromRecord(entry, "attestationMethod") ===
+              "runner_observed_installed_artifact"
+            ? {
+                attestationMethod:
+                  "runner_observed_installed_artifact" as const,
+              }
           : {}),
         ...(stringFromRecord(entry, "cliConfigDigest")
           ? { cliConfigDigest: stringFromRecord(entry, "cliConfigDigest") }
@@ -1420,6 +1448,14 @@ function providerInstallationFromContainerResult(
     ];
   });
   return rows.length > 0 ? rows : undefined;
+}
+
+function executionEvidenceFromContainerResult(
+  result: Record<string, unknown>,
+): RunExecutionEvidence | undefined {
+  const value = result.executionEvidence;
+  if (value === undefined) return undefined;
+  return assertRunExecutionEvidence(value);
 }
 
 function stringArrayFromRecord(

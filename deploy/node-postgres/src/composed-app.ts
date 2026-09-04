@@ -88,6 +88,8 @@ export interface ComposedAppInput {
   readonly opentofuRunner?: CreateTakosumiServiceArg["opentofuRunner"];
   readonly opentofuRunnerExecutors?: CreateTakosumiServiceArg["opentofuRunnerExecutors"];
   readonly runnerProfiles?: CreateTakosumiServiceArg["runnerProfiles"];
+  /** Host-pinned immutable identities for terminal mutation evidence. */
+  readonly executionEvidenceAuthority?: CreateTakosumiServiceArg["executionEvidenceAuthority"];
   readonly defaultRunnerProfileId?: CreateTakosumiServiceArg["defaultRunnerProfileId"];
   /**
    * Shared Capsule lifecycle coordinator. The single-process Bun composition
@@ -181,6 +183,9 @@ export async function buildComposedApp(
       ? { opentofuRunnerExecutors: input.opentofuRunnerExecutors }
       : {}),
     ...(input.runnerProfiles ? { runnerProfiles: input.runnerProfiles } : {}),
+    ...(input.executionEvidenceAuthority
+      ? { executionEvidenceAuthority: input.executionEvidenceAuthority }
+      : {}),
     capsuleCoordination,
     ...(input.defaultRunnerProfileId
       ? { defaultRunnerProfileId: input.defaultRunnerProfileId }
