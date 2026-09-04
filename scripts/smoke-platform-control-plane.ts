@@ -12,9 +12,14 @@
  */
 
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
+import { lookup as lookupDns } from "node:dns/promises";
+import { request as requestHttps } from "node:https";
+import { isIP } from "node:net";
 import process from "node:process";
+import { Readable } from "node:stream";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
@@ -39,6 +44,9 @@ import {
 export const PLATFORM_CONTROL_PLANE_SMOKE_KIND =
   "takosumi.platform-control-plane-smoke@v3" as const;
 export const CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS = 180_000;
+export const PUBLIC_URL_REQUEST_TIMEOUT_MS = 30_000;
+export const MAX_PUBLIC_URL_RESPONSE_BYTES = 512 * 1024;
+const RESPONSE_BODY_CANCEL_TIMEOUT_MS = 50;
 
 const TAKOSUMI_ROOT = resolve(import.meta.dir, "..");
 const DEFAULT_CAPSULE_DIR = resolve(
@@ -52,6 +60,7 @@ const DEFAULT_PROVIDERLESS_CAPSULE_DIR = resolve(
 const DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID = "opentofu-default";
 const DEFAULT_DEPLOY_TIMEOUT_SECONDS = 300;
 const PRIVATE_INPUT_MAX_BYTES = 64 * 1024;
+const CONTROL_PLANE_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
 const HTTP_HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
 const SERVICE_IDENTITY_MAX_BYTES = 1024;
 const API_PREFIX = "/api/v1";
@@ -65,69 +74,15 @@ const MAX_SMOKE_INTERFACE_TOKEN_BYTES = 16 * 1024;
 const HELLO_WORKER_INTERFACE_TYPE = "mcp.server";
 const HELLO_WORKER_INTERFACE_VERSION = "2025-11-25";
 const HELLO_WORKER_INTERFACE_PERMISSION = "mcp.invoke";
-const NODE_HTTP_TRANSPORT_SCRIPT = String.raw`
-const chunks = [];
-function finish(payload) {
-  process.stdout.write(JSON.stringify(payload), () => process.exit(0));
-}
-process.stdin.on("data", (chunk) => chunks.push(chunk));
-process.stdin.on("end", async () => {
-  try {
-    const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    const headers = { ...(input.headers ?? {}) };
-    const token = process.env.TAKOSUMI_SMOKE_HTTP_TOKEN;
-    if (token) headers.authorization = "Bearer " + token;
-    const controller =
-      typeof input.timeoutMs === "number" && input.timeoutMs > 0
-        ? new AbortController()
-        : undefined;
-    const timeout =
-      controller !== undefined
-        ? setTimeout(() => controller.abort(), input.timeoutMs)
-        : undefined;
-    const init = {
-      method: input.method,
-      headers,
-      ...(controller ? { signal: controller.signal } : {}),
-    };
-    if (typeof input.binaryBase64 === "string") {
-      init.body = Buffer.from(input.binaryBase64, "base64");
-    } else if (typeof input.bodyText === "string") {
-      init.body = input.bodyText;
-    }
-    try {
-      const response = await fetch(input.url, init);
-      const bodyText = await response.text();
-      finish({
-        ok: true,
-        status: response.status,
-        bodyText,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const name = error instanceof Error ? error.name : "Error";
-      finish({
-        ok: false,
-        name,
-        message,
-        timeout:
-          controller?.signal.aborted === true ||
-          name === "AbortError" ||
-          name === "TimeoutError",
-      });
-    } finally {
-      if (timeout) clearTimeout(timeout);
-    }
-  } catch (error) {
-    finish({
-      ok: false,
-      name: error instanceof Error ? error.name : "Error",
-      message: error instanceof Error ? error.message : String(error),
-      timeout: false,
-    });
-  }
-});
-`;
+const interfaceTransportScope = Symbol("takosumi.interface-transport-scope");
+const publicUrlTransportScope = Symbol("takosumi.public-url-transport-scope");
+const publicUrlLifecycleScope = Symbol("takosumi.public-url-lifecycle-scope");
+const publicUrlCheckProgress = new WeakMap<
+  object,
+  ConfiguredPublicUrlProgress
+>();
+const controlPlaneTransportContext =
+  new AsyncLocalStorage<ControlPlaneTransportDependencies>();
 const TERMINAL_RUN_STATUSES = new Set([
   "succeeded",
   "failed",
@@ -163,14 +118,23 @@ type SmokeOutputAllowlist = Readonly<
     }
   >
 >;
-type PublicUrlCheck = {
+export type PublicUrlCheck = {
   readonly name: string;
   readonly output: string;
   readonly path: string;
   readonly expectedStatus: number;
   readonly bodyIncludes: readonly string[];
+  readonly destroyExpectation: PublicUrlDestroyExpectation;
 };
-type PublicUrlCheckResult = {
+
+export type PublicUrlDestroyExpectation =
+  | { readonly kind: "http-404" }
+  | {
+      readonly kind: "not-verifiable";
+      readonly reason: string;
+    };
+
+export type PublicUrlCheckResult = {
   readonly name: string;
   readonly output: string;
   readonly url: string;
@@ -178,6 +142,30 @@ type PublicUrlCheckResult = {
   readonly ok: true;
   readonly bodyIncludes: readonly string[];
   readonly bodyDigest: string;
+  readonly destroyExpectation: PublicUrlDestroyExpectation;
+};
+
+export type PublicUrlDestroyCheckResult = {
+  readonly name: string;
+  readonly output: string;
+  readonly url?: string;
+  readonly expectation: PublicUrlDestroyExpectation;
+  readonly applyStatus: "planned" | "passed" | "unverified";
+  readonly status: "planned" | "passed" | "not_claimed" | "inconclusive";
+  readonly observedStatus?: number;
+  readonly error?: string;
+};
+
+type RegisteredPublicUrlCheck = {
+  readonly check: PublicUrlCheck;
+  readonly url?: string;
+  applyResult?: PublicUrlCheckResult;
+  applyError?: string;
+};
+
+type ConfiguredPublicUrlProgress = {
+  readonly registrations: readonly RegisteredPublicUrlCheck[];
+  readonly results: readonly PublicUrlCheckResult[];
 };
 type CapsuleFunctionalProbeResult = {
   readonly kind: "takosumi.capsule-functional-probe@v1";
@@ -359,6 +347,7 @@ export interface PlatformControlPlaneSmokeResult {
   readonly releaseActivation?: ReleaseActivationVerificationResult;
   readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
   readonly publicUrlChecks?: readonly PublicUrlCheckResult[];
+  readonly publicUrlDestroyChecks?: readonly PublicUrlDestroyCheckResult[];
   readonly functionalProbe?: CapsuleFunctionalProbeEvidence;
   readonly capsuleGateStatus: SmokeCheckStatus;
   readonly policyStatus: SmokeCheckStatus;
@@ -395,6 +384,10 @@ export interface PlatformControlPlaneSmokeResult {
     readonly varsDigest: string;
     readonly outputAllowlistNames: readonly string[];
     readonly publicUrlCheckNames: readonly string[];
+    readonly publicUrlDestroyExpectations: readonly {
+      readonly name: string;
+      readonly expectation: PublicUrlDestroyExpectation;
+    }[];
     readonly cloudflareWorkerNameOutput?: string;
     readonly runtimePublicUrlOutput?: string;
     readonly functionalProbeScriptDigest?: string;
@@ -494,25 +487,6 @@ interface RequestOptions {
   readonly binary?: Uint8Array;
   readonly allowEmpty?: boolean;
   readonly timeoutMs?: number;
-  readonly transport?: "native" | "node";
-}
-
-interface NodeHttpTransportInput {
-  readonly url: string;
-  readonly method: string;
-  readonly headers: Readonly<Record<string, string>>;
-  readonly bodyText?: string;
-  readonly binaryBase64?: string;
-  readonly timeoutMs?: number;
-}
-
-interface NodeHttpTransportResult {
-  readonly ok: boolean;
-  readonly status?: number;
-  readonly bodyText?: string;
-  readonly name?: string;
-  readonly message?: string;
-  readonly timeout?: boolean;
 }
 
 class RequestTimeoutError extends Error {
@@ -526,10 +500,111 @@ class RequestTimeoutError extends Error {
   }
 }
 
+class RequestResponseTooLargeError extends Error {
+  constructor(readonly method: string, readonly path: string) {
+    super(`${method} ${path} response body exceeded the maximum size`);
+    this.name = "RequestResponseTooLargeError";
+  }
+}
+
+class RequestRedirectError extends Error {
+  constructor(readonly method: string, readonly path: string) {
+    super(`${method} ${path} rejected a redirect response`);
+    this.name = "RequestRedirectError";
+  }
+}
+
+class RequestTransportError extends Error {
+  constructor(readonly method: string, readonly path: string) {
+    super(`${method} ${path} request failed`);
+    this.name = "RequestTransportError";
+  }
+}
+
+class CloudflareApiTimeoutError extends Error {
+  constructor() {
+    super("Cloudflare API request timed out");
+    this.name = "CloudflareApiTimeoutError";
+  }
+}
+
+class CloudflareApiRedirectError extends Error {
+  constructor() {
+    super("Cloudflare API rejected a redirect response");
+    this.name = "CloudflareApiRedirectError";
+  }
+}
+
+class CloudflareApiResponseTooLargeError extends Error {
+  constructor() {
+    super("Cloudflare API response body exceeded the maximum size");
+    this.name = "CloudflareApiResponseTooLargeError";
+  }
+}
+
+class CloudflareApiRequestError extends Error {
+  constructor() {
+    super("Cloudflare API request failed");
+    this.name = "CloudflareApiRequestError";
+  }
+}
+
+class PublicUrlCheckTimeoutError extends Error {
+  constructor(name: string) {
+    super(`public URL check ${name} request timed out`);
+    this.name = "TimeoutError";
+  }
+}
+
+class PublicUrlResponseTooLargeError extends Error {
+  constructor(name: string) {
+    super(`public URL check ${name} response body exceeded the maximum size`);
+    this.name = "ResponseTooLargeError";
+  }
+}
+
+class PublicUrlDnsResolutionError extends Error {
+  constructor(label: string) {
+    super(`${label} DNS resolution failed`);
+    this.name = "DnsResolutionError";
+  }
+}
+
+class PublicUrlNonPublicAddressError extends Error {
+  constructor(label: string) {
+    super(`${label} resolved to a non-public address`);
+    this.name = "NonPublicAddressError";
+  }
+}
+
+class InterfaceBearerRedirectError extends Error {
+  constructor() {
+    super("Interface bearer resource rejected a redirect response");
+    this.name = "InterfaceBearerRedirectError";
+  }
+}
+
 class RunPollTimeoutError extends Error {
   constructor(readonly runId: string) {
     super(`run ${runId} did not reach a terminal state`);
     this.name = "RunPollTimeoutError";
+  }
+}
+
+class ApplyStartIndeterminateError extends Error {
+  constructor(
+    readonly planRunId: string,
+    readonly reason: "run_authority_unavailable" | "no_exact_run" | "ambiguous_exact_runs",
+  ) {
+    const detail = reason === "run_authority_unavailable"
+      ? "the Workspace Run authority could not be read"
+      : reason === "ambiguous_exact_runs"
+        ? "the Workspace Run authority returned multiple exact matches"
+        : "the Workspace Run authority returned no exact match";
+    super(
+      `Apply POST acknowledgement was lost and no exact ApplyRun could be reconciled for plan ${planRunId}: ${detail}`,
+    );
+    this.name = "ApplyStartIndeterminateError";
   }
 }
 
@@ -543,13 +618,6 @@ class CloudflareResourcePreflightError extends Error {
   }
 }
 
-class InterfaceEndpointStillReachableError extends Error {
-  constructor(readonly resource: string, readonly status: number) {
-    super(`Interface public endpoint remained reachable after destroy`);
-    this.name = "InterfaceEndpointStillReachableError";
-  }
-}
-
 class InterfaceTokenUseStillAuthorizedError extends Error {
   constructor(readonly resource: string, readonly status: number) {
     super(`retired Interface resource remained authorized after destroy`);
@@ -559,6 +627,9 @@ class InterfaceTokenUseStillAuthorizedError extends Error {
 
 interface RunRecord {
   readonly id: string;
+  readonly workspaceId?: string;
+  readonly capsuleId?: string;
+  readonly planRunId?: string;
   readonly status: string;
   readonly type: string;
   readonly sourceSnapshotId?: string;
@@ -761,6 +832,7 @@ interface FailureCleanupResult {
   readonly cloudflareWorkerGone: boolean;
   readonly capsuleMarkedError: boolean;
   readonly destroyAttempted?: boolean;
+  readonly retainedForOperatorRecovery?: true;
   readonly destroyApplyAttempted?: boolean;
   readonly destroyPlanRunId?: string;
   readonly destroyApplyRunId?: string;
@@ -773,6 +845,7 @@ interface FailureCleanupResult {
 interface SmokeDestroyVerification {
   readonly status: "passed" | "inconclusive";
   readonly cloudflareWorkerGone: boolean;
+  readonly publicUrlDestroyChecks?: readonly PublicUrlDestroyCheckResult[];
   readonly error?: string;
 }
 
@@ -837,10 +910,16 @@ export async function resolveOptions(
       "--backup-restore-rehearsal is unavailable: the control export has no manifest-bound restore importer",
     );
   }
-  const url = args.url ?? env.TAKOSUMI_PLATFORM_URL;
-  if (!url) {
+  const rawUrl = args.url ?? env.TAKOSUMI_PLATFORM_URL;
+  if (!rawUrl) {
     throw new Error("--url or TAKOSUMI_PLATFORM_URL is required");
   }
+  // Canonicalize the selected authority before reading any authentication or
+  // provider material. DNS is deliberately resolved later, once for the
+  // canonical authority and retained for the complete smoke lifecycle, so no
+  // secret-bearing bytes can leave on an unsafe or subsequently changed
+  // answer.
+  const url = normalizeBaseUrl(rawUrl);
   const workspace = args.workspace ?? env.TAKOSUMI_SMOKE_WORKSPACE;
   if (!workspace) {
     throw new Error("--workspace or TAKOSUMI_SMOKE_WORKSPACE is required");
@@ -1211,7 +1290,7 @@ export async function resolveOptions(
       env.TAKOSUMI_SMOKE_REQUIRE_RELEASE_ACTIVATION,
   );
   return {
-    url: normalizeBaseUrl(url),
+    url,
     accountSessionToken: accountSessionToken.value,
     accountSessionTokenSource: accountSessionToken.source,
     accountAuthTokenKind,
@@ -1295,12 +1374,27 @@ export function dryRunResult(
   options: PlatformControlPlaneSmokeOptions,
 ): PlatformControlPlaneSmokeResult {
   assertBackupRestoreRehearsalUnavailable(options);
+  for (const check of options.publicUrlChecks) {
+    assertPublicUrlLifecycleContract(check);
+  }
   const generatedAt = new Date().toISOString();
   const steps = requiredSteps(options);
   const dryRunInterfaces = dryRunInterfaceEvidence(options);
   const dryRunRunEvents = dryRunInterfaces
     ? dryRunCanonicalRunEventSequence()
     : undefined;
+  const publicUrlDestroyChecks: readonly PublicUrlDestroyCheckResult[] =
+    options.publicUrlChecks.map((check) => ({
+      name: check.name,
+      output: check.output,
+      url: dryRunPublicUrl(check),
+      expectation: check.destroyExpectation,
+      applyStatus: "planned" as const,
+      status:
+        check.destroyExpectation.kind === "http-404"
+          ? "planned" as const
+          : "not_claimed" as const,
+    }));
   return {
     kind: PLATFORM_CONTROL_PLANE_SMOKE_KIND,
     status: "dry_run",
@@ -1349,7 +1443,9 @@ export function dryRunResult(
       options.verificationMode === "cloudflare-worker" ||
       options.publicUrlChecks.length > 0,
     stateVersionLedgerVerified: true,
-    destroyVerified: true,
+    destroyVerified: publicUrlDestroyChecks.every(
+      (check) => check.status === "planned",
+    ),
     ...(options.cloudflareResourcePreflight !== "none"
       ? {
           cloudflareResourcePreflight: {
@@ -1392,7 +1488,9 @@ export function dryRunResult(
             ok: true as const,
             bodyIncludes: check.bodyIncludes,
             bodyDigest: `sha256:${"0".repeat(64)}`,
+            destroyExpectation: check.destroyExpectation,
           })),
+          publicUrlDestroyChecks,
         }
       : {}),
     ...(options.functionalProbeScript
@@ -1597,8 +1695,21 @@ function smokeRunTiming(name: string, run: RunRecord): SmokeRunTiming {
 
 export async function runPlatformControlPlaneSmoke(
   options: PlatformControlPlaneSmokeOptions,
+  dependencies: PublicUrlFetchDependencies = {},
+): Promise<PlatformControlPlaneSmokeResult> {
+  return await controlPlaneTransportContext.run(
+    controlPlaneDependencies(dependencies),
+    async () => await runPlatformControlPlaneSmokeInternal(options),
+  );
+}
+
+async function runPlatformControlPlaneSmokeInternal(
+  options: PlatformControlPlaneSmokeOptions,
 ): Promise<PlatformControlPlaneSmokeResult> {
   assertBackupRestoreRehearsalUnavailable(options);
+  for (const check of options.publicUrlChecks) {
+    assertPublicUrlLifecycleContract(check);
+  }
   const startedAtMs = Date.now();
   const startedAt = new Date(startedAtMs).toISOString();
   let workspaceId = options.workspace;
@@ -1640,6 +1751,8 @@ export async function runPlatformControlPlaneSmoke(
   let capsuleId: string | undefined;
   let planRunId: string | undefined;
   let applyRunId: string | undefined;
+  let applyStartAttempted = false;
+  let applyTerminalOwnershipEstablished = false;
   let destroyAttempted = false;
   let destroyProgress: DestroySmokeCapsuleProgress | undefined;
   let destroyPlanRunId: string | undefined;
@@ -1659,6 +1772,14 @@ export async function runPlatformControlPlaneSmoke(
     | undefined;
   let releaseActivation: ReleaseActivationVerificationResult | undefined;
   let publicUrlChecks: readonly PublicUrlCheckResult[] | undefined;
+  let publicUrlLifecycleChecks:
+    | readonly RegisteredPublicUrlCheck[]
+    | undefined = options.publicUrlChecks.length > 0
+      ? registerConfiguredPublicUrls(options.publicUrlChecks, undefined)
+      : undefined;
+  let publicUrlDestroyChecks:
+    | readonly PublicUrlDestroyCheckResult[]
+    | undefined;
   let functionalProbe: CapsuleFunctionalProbeEvidence | undefined;
   let capsuleGateStatus: SmokeCheckStatus = "not_reached";
   let policyStatus: SmokeCheckStatus = "not_reached";
@@ -1826,19 +1947,23 @@ export async function runPlatformControlPlaneSmoke(
     runTimings.push(smokeRunTiming("plan", completedPlan));
     completeStep("plan");
     beginStep("apply");
-    const applyRun =
-      deploy.applyRun ??
-      (
-        await requestJson<{ readonly run: RunRecord }>({
-          baseUrl: options.url,
-          token: options.accountSessionToken,
-          method: "POST",
-          path: `${API_PREFIX}/runs/${encodeURIComponent(planRunId)}/apply`,
-          body: {},
-        })
-      ).run;
+    let applyRun: RunRecord;
+    if (deploy.applyRun) {
+      applyRun = deploy.applyRun;
+    } else {
+      // Record mutation intent before crossing the POST boundary. If its
+      // acknowledgement is lost, the exact Plan-linked ApplyRun must be
+      // recovered before any cleanup or credential revocation decision.
+      applyStartAttempted = true;
+      applyRun = await startApplyRunWithReconciliation(options, {
+        workspaceId,
+        capsuleId,
+        planRunId,
+      });
+    }
     applyRunId = applyRun.id;
     const completedApply = await pollRun(options, applyRunId);
+    applyTerminalOwnershipEstablished = true;
     policyStatus = publicPolicyStatus(completedApply);
     assertRunSucceeded(completedApply, "apply");
     runTimings.push(smokeRunTiming("apply", completedApply));
@@ -1852,6 +1977,12 @@ export async function runPlatformControlPlaneSmoke(
       capsuleId,
       applyRunId,
     });
+    if (options.publicUrlChecks.length > 0) {
+      publicUrlLifecycleChecks = registerConfiguredPublicUrls(
+        options.publicUrlChecks,
+        stateVersionLedger.publicOutputs,
+      );
+    }
     if (options.verificationMode === "opentofu") {
       completeStep("opentofuApplyVerified");
     }
@@ -1880,6 +2011,9 @@ export async function runPlatformControlPlaneSmoke(
           options,
           stateVersionLedger.publicOutputs,
         );
+        publicUrlLifecycleChecks = configuredPublicUrlRegistrations(
+          publicUrlChecks,
+        );
       } else {
         await assertPublicWorkerUrl(options, stateVersionLedger.publicOutputs);
       }
@@ -1893,6 +2027,9 @@ export async function runPlatformControlPlaneSmoke(
       publicUrlChecks = await assertConfiguredPublicUrls(
         options,
         stateVersionLedger.publicOutputs,
+      );
+      publicUrlLifecycleChecks = configuredPublicUrlRegistrations(
+        publicUrlChecks,
       );
       completeStep("publicUrlVerified");
     }
@@ -1932,16 +2069,19 @@ export async function runPlatformControlPlaneSmoke(
       reason: "Layer-2 platform-control-plane smoke cleanup",
       verifyCloudflareWorkerGone: shouldVerifyCloudflareWorker(options),
       publicOutputs: stateVersionLedger.publicOutputs,
+      publicUrlLifecycleChecks,
     }, destroyProgress);
     recordDestroyProgress(destroyProgress);
+    publicUrlDestroyChecks =
+      destroyResult.destroyVerification?.publicUrlDestroyChecks;
     functionalProbe = finalizeFunctionalProbeCleanup(functionalProbe);
-    completeStep("destroy");
     if (destroyResult.destroyVerification?.status === "inconclusive") {
       failureCleanup = destroyFailureCleanupResult(destroyResult);
       throw new Error(
-        `destroy completed but external Worker verification was inconclusive: ${destroyResult.destroyVerification.error ?? "unknown verification error"}`,
+        `destroy completed but external public-resource verification was inconclusive: ${destroyResult.destroyVerification.error ?? "unknown verification error"}`,
       );
     }
+    completeStep("destroy");
 
     if (interfaceMaterializationContext) {
       beginStep("interfaceRetiredVerified");
@@ -2033,6 +2173,7 @@ export async function runPlatformControlPlaneSmoke(
       releaseActivation,
       cloudflareResourcePreflight,
       publicUrlChecks,
+      publicUrlDestroyChecks,
       functionalProbe,
       capsuleGateStatus: "passed",
       policyStatus: policyStatus === "denied" ? failPolicy() : "passed",
@@ -2051,6 +2192,15 @@ export async function runPlatformControlPlaneSmoke(
       inputs: publicInputSummary(options),
     };
   } catch (error) {
+    if (isWeakMapKey(error)) {
+      const progress = publicUrlCheckProgress.get(error);
+      if (progress) {
+        publicUrlLifecycleChecks = progress.registrations;
+        if (progress.results.length > 0) {
+          publicUrlChecks = progress.results;
+        }
+      }
+    }
     if (error instanceof RunPollTimeoutError) {
       timedOutRunId = error.runId;
       const cancellation = await cancelRunAfterPollTimeout(
@@ -2061,14 +2211,37 @@ export async function runPlatformControlPlaneSmoke(
       runCancellationError = cancellation.error;
       if (cancellation.run) {
         recordReconciledRun(error.runId, cancellation.run);
+        if (
+          error.runId === applyRunId &&
+          TERMINAL_RUN_STATUSES.has(cancellation.run.status)
+        ) {
+          applyTerminalOwnershipEstablished = true;
+        }
       }
       if (cancellation.status === "failed") {
         connectionRevokeSkippedReason =
           "run did not reach a terminal state and cancel did not confirm terminal ownership";
       }
     }
+    if (applyStartAttempted && !applyRunId) {
+      connectionRevokeSkippedReason =
+        "Apply POST acknowledgement was lost without an exact ApplyRun; retaining the ProviderConnection for operator recovery and preserving the Capsule authority";
+    }
     recordDestroyProgress(destroyProgress);
-    if (capsuleId && applyRunId && !destroyAttempted) {
+    const retainedApplyCleanupReason = applyStartAttempted && !applyRunId
+      ? "Apply POST acknowledgement was lost without an exact ApplyRun; Destroy was not started because mutation ownership is indeterminate"
+      : applyRunId && !applyTerminalOwnershipEstablished
+        ? `Apply run ${applyRunId} did not establish terminal ownership; Destroy was not started and recovery authority was retained`
+        : undefined;
+    if (retainedApplyCleanupReason) {
+      connectionRevokeSkippedReason ??= retainedApplyCleanupReason;
+      failureCleanup = retainedFailureCleanupResult(
+        publicUrlLifecycleChecks,
+        retainedApplyCleanupReason,
+      );
+      publicUrlDestroyChecks =
+        failureCleanup.destroyVerification?.publicUrlDestroyChecks;
+    } else if (capsuleId && applyRunId && !destroyAttempted) {
       beginStep("destroy");
       destroyAttempted = true;
       const verifyCloudflareWorkerGone = shouldVerifyCloudflareWorker(options);
@@ -2080,10 +2253,15 @@ export async function runPlatformControlPlaneSmoke(
             "Layer-2 platform-control-plane smoke cleanup after verification failure",
           verifyCloudflareWorkerGone,
           publicOutputs: stateVersionLedger?.publicOutputs,
+          publicUrlLifecycleChecks,
         }, destroyProgress);
         recordDestroyProgress(destroyProgress);
+        publicUrlDestroyChecks =
+          destroyResult.destroyVerification?.publicUrlDestroyChecks;
         functionalProbe = finalizeFunctionalProbeCleanup(functionalProbe);
-        completeStep("destroy");
+        if (destroyResult.destroyVerification?.status !== "inconclusive") {
+          completeStep("destroy");
+        }
         failureCleanup = destroyFailureCleanupResult(destroyResult);
       } catch (destroyError) {
         recordDestroyProgress(destroyProgress);
@@ -2092,13 +2270,48 @@ export async function runPlatformControlPlaneSmoke(
         failureCleanup = failedDestroyCleanupResult(
           destroyProgress,
           destroyError,
+          publicUrlLifecycleChecks,
         );
+        publicUrlDestroyChecks =
+          failureCleanup.destroyVerification?.publicUrlDestroyChecks;
       }
-    } else if (!applyRunId && !destroyAttempted) {
+    } else if (!applyRunId && !destroyAttempted && !applyStartAttempted) {
       await markPendingSmokeCapsuleError(options, {
         workspaceId,
         capsuleId,
       }).catch(() => undefined);
+    } else if (
+      destroyAttempted &&
+      !failureCleanup &&
+      destroyProgress?.destroyPlanRun &&
+      destroyProgress.destroyApplyRun?.status === "succeeded" &&
+      destroyProgress.destroyApplyRun.policyStatus !== "deny"
+    ) {
+      let destroyVerification: SmokeDestroyVerification | undefined;
+      try {
+        destroyVerification = await verifyDestroyedSmokeCapsule(options, {
+          verifyCloudflareWorkerGone: shouldVerifyCloudflareWorker(options),
+          publicOutputs: stateVersionLedger?.publicOutputs,
+          publicUrlLifecycleChecks,
+        });
+      } catch (verificationError) {
+        destroyVerification = inconclusiveDestroyVerification(
+          publicUrlLifecycleChecks,
+          verificationError,
+        );
+      }
+      const destroyResult: DestroySmokeCapsuleResult = {
+        destroyPlanRun: destroyProgress.destroyPlanRun,
+        destroyApplyRun: destroyProgress.destroyApplyRun,
+        ...(destroyVerification ? { destroyVerification } : {}),
+      };
+      publicUrlDestroyChecks =
+        destroyVerification?.publicUrlDestroyChecks;
+      functionalProbe = finalizeFunctionalProbeCleanup(functionalProbe);
+      failureCleanup = destroyFailureCleanupResult(destroyResult);
+      if (destroyVerification?.status !== "inconclusive") {
+        completeStep("destroy");
+      }
     } else if (
       destroyAttempted &&
       !failureCleanup &&
@@ -2110,7 +2323,10 @@ export async function runPlatformControlPlaneSmoke(
       failureCleanup = failedDestroyCleanupResult(
         destroyProgress,
         error,
+        publicUrlLifecycleChecks,
       );
+      publicUrlDestroyChecks =
+        failureCleanup.destroyVerification?.publicUrlDestroyChecks;
     }
     failure = error;
   } finally {
@@ -2152,6 +2368,7 @@ export async function runPlatformControlPlaneSmoke(
     releaseActivation,
     cloudflareResourcePreflight,
     publicUrlChecks,
+    publicUrlDestroyChecks,
     functionalProbe,
     capsuleGateStatus,
     policyStatus,
@@ -2168,6 +2385,86 @@ export async function runPlatformControlPlaneSmoke(
       ) ?? [],
     error: failure,
   });
+}
+
+async function startApplyRunWithReconciliation(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly planRunId: string;
+  },
+): Promise<RunRecord> {
+  try {
+    const response = await requestJson<{ readonly run?: RunRecord }>({
+      baseUrl: options.url,
+      token: options.accountSessionToken,
+      method: "POST",
+      path: `${API_PREFIX}/runs/${encodeURIComponent(input.planRunId)}/apply`,
+      body: {},
+    });
+    if (isExactApplyRun(response.run, input)) {
+      return response.run;
+    }
+    // A malformed or truncated success response is also a lost
+    // acknowledgement: the server may already own a live mutation.
+  } catch {
+    // Reconcile below through the public Workspace Run authority. Never retry
+    // this mutation POST because a concurrent queued Apply may already exist.
+  }
+
+  let response: { readonly runs?: readonly unknown[] };
+  try {
+    response = await requestJson<{ readonly runs?: readonly unknown[] }>({
+      baseUrl: options.url,
+      token: options.accountSessionToken,
+      path: `${API_PREFIX}/workspaces/${encodeURIComponent(
+        input.workspaceId,
+      )}/runs?limit=500`,
+    });
+  } catch {
+    throw new ApplyStartIndeterminateError(
+      input.planRunId,
+      "run_authority_unavailable",
+    );
+  }
+  if (!Array.isArray(response.runs)) {
+    throw new ApplyStartIndeterminateError(
+      input.planRunId,
+      "run_authority_unavailable",
+    );
+  }
+  const matches = response.runs.filter(
+    (candidate): candidate is RunRecord => isExactApplyRun(candidate, input),
+  );
+  if (matches.length === 0) {
+    throw new ApplyStartIndeterminateError(input.planRunId, "no_exact_run");
+  }
+  if (matches.length !== 1) {
+    throw new ApplyStartIndeterminateError(
+      input.planRunId,
+      "ambiguous_exact_runs",
+    );
+  }
+  return matches[0]!;
+}
+
+function isExactApplyRun(
+  candidate: unknown,
+  input: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly planRunId: string;
+  },
+): candidate is RunRecord {
+  return isRecord(candidate) &&
+    typeof candidate.id === "string" &&
+    candidate.id.length > 0 &&
+    typeof candidate.status === "string" &&
+    candidate.workspaceId === input.workspaceId &&
+    candidate.capsuleId === input.capsuleId &&
+    candidate.planRunId === input.planRunId &&
+    candidate.type === "apply";
 }
 
 export function failedResult(
@@ -2199,6 +2496,7 @@ export function failedResult(
     readonly releaseActivation?: ReleaseActivationVerificationResult;
     readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
     readonly publicUrlChecks?: readonly PublicUrlCheckResult[];
+    readonly publicUrlDestroyChecks?: readonly PublicUrlDestroyCheckResult[];
     readonly functionalProbe?: CapsuleFunctionalProbeEvidence;
     readonly capsuleGateStatus: SmokeCheckStatus;
     readonly policyStatus: SmokeCheckStatus;
@@ -2269,6 +2567,7 @@ export function failedResult(
     releaseActivation: input.releaseActivation,
     cloudflareResourcePreflight: input.cloudflareResourcePreflight,
     publicUrlChecks: input.publicUrlChecks,
+    publicUrlDestroyChecks: input.publicUrlDestroyChecks,
     functionalProbe: input.functionalProbe,
     capsuleGateStatus: input.capsuleGateStatus,
     policyStatus: input.policyStatus,
@@ -2340,6 +2639,9 @@ function failedNextAction(input: {
 }): string {
   if (input.error instanceof CloudflareResourcePreflightError) {
     return "Update the operator Cloudflare API token so it can read and create the Cloudflare account resources required by the Capsule, or use a non-resource-creating Capsule smoke before rerunning this apply.";
+  }
+  if (input.error instanceof ApplyStartIndeterminateError) {
+    return `The Apply POST for plan ${input.error.planRunId} became indeterminate. Keep the recorded Capsule and ProviderConnection, reconcile the exact Plan-linked ApplyRun from the Workspace Run ledger, then cancel or destroy it before revoking recovery credentials.`;
   }
   if (
     input.error instanceof RequestTimeoutError &&
@@ -2552,6 +2854,122 @@ async function verifyConnection(
   }
 }
 
+export async function fetchBoundedCloudflareApi(
+  path: string,
+  token: string,
+  dependencies: {
+    readonly fetcher?: typeof fetch;
+    readonly timeoutMs?: number;
+    readonly readBody?: boolean;
+  } = {},
+): Promise<{ readonly response: Response; readonly body: string }> {
+  if (
+    !path.startsWith("/client/v4/") ||
+    path.startsWith("//") ||
+    /[#\0\r\n]/u.test(path)
+  ) {
+    throw new Error("Cloudflare API path is invalid");
+  }
+  if (
+    !token ||
+    new TextEncoder().encode(token).byteLength > PRIVATE_INPUT_MAX_BYTES ||
+    /[\0\r\n]/u.test(token)
+  ) {
+    throw new Error("Cloudflare API token is invalid");
+  }
+  const timeoutMs = dependencies.timeoutMs ?? PUBLIC_URL_REQUEST_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+    throw new Error("Cloudflare API request timeout must be a positive integer");
+  }
+  const deadline = createAbsoluteRequestDeadline(
+    timeoutMs,
+    "Cloudflare API request",
+  );
+  const controller = new AbortController();
+  let timedOut = false;
+  let response: Response | undefined;
+  const request = Promise.resolve().then(() =>
+    (dependencies.fetcher ?? fetch)(`https://api.cloudflare.com${path}`, {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/json",
+      },
+      redirect: "error",
+      signal: controller.signal,
+    }),
+  );
+  request.catch(() => undefined);
+  const guardedRequest = new Promise<Response>((resolveResponse, rejectResponse) => {
+    request.then(
+      (candidate) => {
+        if (timedOut || remainingDeadlineMs(deadline) <= 0) {
+          timedOut = true;
+          controller.abort();
+          void cancelPublicResponseBody(candidate).catch(() => undefined);
+          return;
+        }
+        resolveResponse(candidate);
+      },
+      rejectResponse,
+    );
+  });
+  guardedRequest.catch(() => undefined);
+  const markTimedOut = (): void => {
+    timedOut = true;
+    controller.abort();
+  };
+  try {
+    response = await waitWithinDeadline(
+      guardedRequest,
+      deadline,
+      () => new CloudflareApiTimeoutError(),
+      markTimedOut,
+    );
+    if (response.status >= 300 && response.status < 400) {
+      await cancelPublicResponseBody(response, deadline);
+      throw new CloudflareApiRedirectError();
+    }
+    if (dependencies.readBody === false) {
+      void cancelPublicResponseBody(response, deadline).catch(() => undefined);
+      return { response, body: "" };
+    }
+    const bodyRead = readBoundedPublicResponse(
+      response,
+      {
+        name: "Cloudflare API",
+        output: "cloudflare-api",
+        path,
+        expectedStatus: 200,
+        bodyIncludes: [],
+        destroyExpectation: { kind: "not-verifiable", reason: "Cloudflare API request" },
+      },
+      controller.signal,
+      deadline,
+    );
+    bodyRead.catch(() => undefined);
+    return {
+      response,
+      body: await waitWithinDeadline(
+        bodyRead,
+        deadline,
+        () => new CloudflareApiTimeoutError(),
+        markTimedOut,
+      ),
+    };
+  } catch (error) {
+    await cancelPublicResponseBody(response, deadline);
+    if (timedOut || error instanceof CloudflareApiTimeoutError) {
+      throw new CloudflareApiTimeoutError();
+    }
+    if (error instanceof PublicUrlResponseTooLargeError) {
+      throw new CloudflareApiResponseTooLargeError();
+    }
+    if (error instanceof CloudflareApiRedirectError) throw error;
+    throw new CloudflareApiRequestError();
+  }
+}
+
 async function assertCloudflareResourcePreflight(
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<CloudflareResourcePreflightResult> {
@@ -2563,19 +2981,16 @@ async function assertCloudflareResourcePreflight(
   );
   for (const check of checks) {
     const path = check.path(options.cloudflareAccountId);
-    const response = await fetch(`https://api.cloudflare.com${path}`, {
-      method: "GET",
-      headers: {
-        authorization: `Bearer ${options.cloudflareApiToken}`,
-        "content-type": "application/json",
-      },
-    }).catch((error) => {
+    const request = await fetchBoundedCloudflareApi(
+      path,
+      options.cloudflareApiToken,
+    ).catch((error) => {
       throw new CloudflareResourcePreflightError(
         "request_failed",
         `cloudflare resource preflight request failed: ${check.label}: ${errorMessage(error)}`,
       );
     });
-    const bodyText = await response.text();
+    const { response, body: bodyText } = request;
     const body = parseResponseBody(
       bodyText,
       `cloudflare resource preflight ${check.id}`,
@@ -3242,6 +3657,7 @@ async function destroySmokeCapsule(
     readonly reason: string;
     readonly verifyCloudflareWorkerGone: boolean;
     readonly publicOutputs?: Readonly<Record<string, unknown>>;
+    readonly publicUrlLifecycleChecks?: readonly RegisteredPublicUrlCheck[];
   },
   progress: DestroySmokeCapsuleProgress,
 ): Promise<DestroySmokeCapsuleResult> {
@@ -3285,30 +3701,81 @@ async function destroySmokeCapsule(
   const completedDestroy = await pollRun(options, destroyApply.run.id);
   progress.destroyApplyRun = completedDestroy;
   assertRunSucceeded(completedDestroy, "destroy apply");
-  let destroyVerification: SmokeDestroyVerification | undefined;
-  if (input.verifyCloudflareWorkerGone) {
-    let cloudflareWorkerGone = false;
-    try {
-      await assertCloudflareWorkerGone(options, input.publicOutputs);
-      cloudflareWorkerGone = true;
-      await assertPublicWorkerUrlGone(options, input.publicOutputs);
-      destroyVerification = {
-        status: "passed",
-        cloudflareWorkerGone,
-      };
-    } catch (error) {
-      destroyVerification = {
-        status: "inconclusive",
-        cloudflareWorkerGone,
-        error: errorMessage(error),
-      };
-    }
-  }
+  const destroyVerification = await verifyDestroyedSmokeCapsule(
+    options,
+    input,
+  );
   return {
     destroyPlanRun: reviewedDestroyPlan,
     destroyApplyRun: completedDestroy,
     ...(destroyVerification ? { destroyVerification } : {}),
   };
+}
+
+async function verifyDestroyedSmokeCapsule(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly verifyCloudflareWorkerGone: boolean;
+    readonly publicOutputs?: Readonly<Record<string, unknown>>;
+    readonly publicUrlLifecycleChecks?: readonly RegisteredPublicUrlCheck[];
+  },
+): Promise<SmokeDestroyVerification | undefined> {
+  let destroyVerification: SmokeDestroyVerification | undefined;
+  if (
+    input.verifyCloudflareWorkerGone ||
+    (input.publicUrlLifecycleChecks?.length ?? 0) > 0
+  ) {
+    let cloudflareWorkerGone = false;
+    const verificationErrors: string[] = [];
+    if (input.verifyCloudflareWorkerGone) {
+      try {
+        await assertCloudflareWorkerGone(options, input.publicOutputs);
+        cloudflareWorkerGone = true;
+      } catch (error) {
+        verificationErrors.push(errorMessage(error));
+      }
+      try {
+        await verifyPublicWorkerUrlGone(options, input.publicOutputs);
+      } catch (error) {
+        verificationErrors.push(errorMessage(error));
+      }
+    }
+    let publicUrlDestroyChecks: readonly PublicUrlDestroyCheckResult[] | undefined;
+    if (input.publicUrlLifecycleChecks?.length) {
+      try {
+        publicUrlDestroyChecks = await verifyRegisteredPublicUrlsDestroyed(
+          input.publicUrlLifecycleChecks,
+        );
+      } catch (error) {
+        publicUrlDestroyChecks = materializeInconclusivePublicUrlDestroyChecks(
+          input.publicUrlLifecycleChecks,
+          error,
+        );
+      }
+      for (const check of publicUrlDestroyChecks) {
+        if (check.status === "passed") continue;
+        verificationErrors.push(
+          check.status === "not_claimed"
+            ? `public URL check ${check.name} has no valid absence contract: ${check.expectation.kind === "not-verifiable" ? check.expectation.reason : "not claimed"}`
+            : check.error ??
+              `public URL check ${check.name} absence is inconclusive`,
+        );
+      }
+    }
+    destroyVerification = verificationErrors.length > 0
+      ? {
+          status: "inconclusive",
+          cloudflareWorkerGone,
+          ...(publicUrlDestroyChecks ? { publicUrlDestroyChecks } : {}),
+          error: verificationErrors.join("; "),
+        }
+      : {
+          status: "passed",
+          cloudflareWorkerGone,
+          ...(publicUrlDestroyChecks ? { publicUrlDestroyChecks } : {}),
+        };
+  }
+  return destroyVerification;
 }
 
 function destroyFailureCleanupResult(
@@ -3320,6 +3787,7 @@ function destroyFailureCleanupResult(
     cloudflareWorkerGone: verification?.cloudflareWorkerGone ?? false,
     capsuleMarkedError: false,
     destroyAttempted: true,
+    destroyApplyAttempted: true,
     destroyPlanRunId: destroyResult.destroyPlanRun.id,
     destroyApplyRunId: destroyResult.destroyApplyRun.id,
     destroySucceeded: true,
@@ -3331,7 +3799,12 @@ function destroyFailureCleanupResult(
 function failedDestroyCleanupResult(
   progress: DestroySmokeCapsuleProgress | undefined,
   error: unknown,
+  publicUrlLifecycleChecks?: readonly RegisteredPublicUrlCheck[],
 ): FailureCleanupResult {
+  const destroyVerification = inconclusiveDestroyVerification(
+    publicUrlLifecycleChecks,
+    error,
+  );
   return {
     attempted: true,
     cloudflareWorkerGone: false,
@@ -3348,7 +3821,66 @@ function failedDestroyCleanupResult(
       : {}),
     destroySucceeded: false,
     destroyError: errorMessage(error),
+    destroyVerification,
+    error: destroyVerification.error,
   };
+}
+
+function retainedFailureCleanupResult(
+  publicUrlLifecycleChecks: readonly RegisteredPublicUrlCheck[] | undefined,
+  reason: string,
+): FailureCleanupResult {
+  const destroyVerification = inconclusiveDestroyVerification(
+    publicUrlLifecycleChecks,
+    reason,
+  );
+  return {
+    attempted: true,
+    cloudflareWorkerGone: false,
+    capsuleMarkedError: false,
+    destroyAttempted: false,
+    retainedForOperatorRecovery: true,
+    destroyVerification,
+    error: destroyVerification.error,
+  };
+}
+
+function inconclusiveDestroyVerification(
+  publicUrlLifecycleChecks: readonly RegisteredPublicUrlCheck[] | undefined,
+  error: unknown,
+): SmokeDestroyVerification {
+  const publicUrlDestroyChecks = publicUrlLifecycleChecks?.length
+    ? materializeInconclusivePublicUrlDestroyChecks(
+        publicUrlLifecycleChecks,
+        error,
+      )
+    : undefined;
+  return {
+    status: "inconclusive",
+    cloudflareWorkerGone: false,
+    ...(publicUrlDestroyChecks ? { publicUrlDestroyChecks } : {}),
+    error: errorMessage(error),
+  };
+}
+
+function materializeInconclusivePublicUrlDestroyChecks(
+  registrations: readonly RegisteredPublicUrlCheck[],
+  error: unknown,
+): readonly PublicUrlDestroyCheckResult[] {
+  const reason = `Destroy absence verification was not completed: ${errorMessage(error)}`;
+  return registrations.map(({ check, url, applyResult, applyError }) => ({
+    name: check.name,
+    output: check.output,
+    ...(url ? { url } : {}),
+    expectation: check.destroyExpectation,
+    applyStatus: applyResult ? "passed" as const : "unverified" as const,
+    status: check.destroyExpectation.kind === "not-verifiable"
+      ? "not_claimed" as const
+      : "inconclusive" as const,
+    error: !applyResult && applyError
+      ? `${reason}; Apply existence proof was not established: ${applyError}`
+      : reason,
+  }));
 }
 
 export function shouldMarkPendingSmokeCapsuleError(
@@ -3495,13 +4027,31 @@ async function assertCloudflareWorkerExists(
   publicOutputs?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
   const workerName = cloudflareWorkerName(options, publicOutputs);
-  const deadline = Date.now() + 60_000;
+  const deadline = createAbsoluteRequestDeadline(
+    60_000,
+    "Cloudflare Worker existence check",
+  );
   let lastStatus = 0;
-  while (Date.now() <= deadline) {
-    const response = await cloudflareScriptRequest(options, "GET", workerName);
+  while (remainingDeadlineMs(deadline) > 0) {
+    const response = await cloudflareScriptRequest(
+      options,
+      workerName,
+      Math.min(
+        PUBLIC_URL_REQUEST_TIMEOUT_MS,
+        Math.max(1, remainingDeadlineMs(deadline)),
+      ),
+    );
     lastStatus = response.status;
     if (response.status === 200) return;
-    await sleep(2_000);
+    try {
+      await waitWithinDeadline(
+        sleep(Math.min(2_000, remainingDeadlineMs(deadline))),
+        deadline,
+        () => new CloudflareApiTimeoutError(),
+      );
+    } catch {
+      break;
+    }
   }
   throw new Error(
     `Cloudflare Worker ${workerName} was not readable after apply (last HTTP ${lastStatus})`,
@@ -3594,34 +4144,91 @@ function isCurrentTakosumiHelloPage(body: string): boolean {
 async function assertPublicWorkerUrl(
   options: PlatformControlPlaneSmokeOptions,
   publicOutputs?: Readonly<Record<string, unknown>>,
+  dependencies: Pick<PublicUrlFetchDependencies, "resolver" | "connector"> = {},
 ): Promise<void> {
-  const url = publicRuntimeUrl(options, publicOutputs);
+  const url = strictPublicUrl(
+    publicRuntimeUrl(options, publicOutputs),
+    "Cloudflare Worker public URL",
+  );
+  const transport = publicTransportDependencies(dependencies);
+  const resolver = transport.resolver ?? resolveAllDnsAddresses;
+  const connector = transport.connector ?? connectPinnedHttps;
+  const sleepForRetry = transport.sleep ?? sleep;
+  let target: ResolvedDnsAddress | undefined;
+  const check = publicWorkerProbeCheck(url);
   // The Cloudflare script API may become readable before the workers.dev edge
   // hostname has converged. Keep the probe fail-closed, but allow the public
   // data plane a bounded propagation window observed in real release drills.
-  const deadline = Date.now() + CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS;
+  const deadline = createAbsoluteRequestDeadline(
+    CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS,
+    "Cloudflare Worker public URL",
+  );
   let lastStatus = 0;
   let lastBody = "";
-  while (Date.now() <= deadline) {
+  while (remainingDeadlineMs(deadline) > 0) {
     try {
-      const response = await fetch(url, {
-        headers: { accept: "text/html" },
-      });
+      target ??= await resolvePinnedPublicTarget(
+        url.hostname,
+        resolver,
+        "Cloudflare Worker public URL",
+        CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS,
+        deadline,
+      );
+      const { response, body } = await fetchPublicCheckAttempt(
+        url,
+        check,
+        target,
+        connector,
+        CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS,
+        undefined,
+        "GET",
+        undefined,
+        deadline,
+      );
       lastStatus = response.status;
-      lastBody = await response.text();
+      lastBody = body;
       if (response.ok && isCurrentTakosumiHelloPage(lastBody)) {
         return;
       }
     } catch (error) {
-      lastBody = error instanceof Error ? error.message : String(error);
+      if (
+        error instanceof PublicUrlNonPublicAddressError ||
+        error instanceof PublicUrlDnsResolutionError
+      ) {
+        throw error;
+      }
+      lastBody = error instanceof PublicUrlDnsResolutionError
+        ? error.message
+        : "public URL request failed";
     }
-    await sleep(2_000);
+    const retrySleep = Promise.resolve().then(() => sleepForRetry(2_000));
+    retrySleep.catch(() => undefined);
+    try {
+      await waitWithinDeadline(
+        retrySleep,
+        deadline,
+        () => new PublicUrlCheckTimeoutError(check.name),
+      );
+    } catch {
+      break;
+    }
   }
   throw new Error(
     `Cloudflare Worker public URL did not return the expected Takosumi page (last HTTP ${lastStatus}, body ${JSON.stringify(
-      lastBody.slice(0, 120),
+      redactResponseSnippet(lastBody),
     )})`,
   );
+}
+
+function publicWorkerProbeCheck(url: URL): PublicUrlCheck {
+  return {
+    name: "cloudflare-worker-runtime",
+    output: "runtime_url",
+    path: url.pathname,
+    expectedStatus: 200,
+    bodyIncludes: [],
+    destroyExpectation: { kind: "http-404" },
+  };
 }
 
 function dryRunPublicUrl(check: PublicUrlCheck): string {
@@ -3629,93 +4236,1144 @@ function dryRunPublicUrl(check: PublicUrlCheck): string {
   return `https://example.invalid${path}`;
 }
 
-async function assertConfiguredPublicUrls(
-  options: PlatformControlPlaneSmokeOptions,
-  publicOutputs: Readonly<Record<string, unknown>> | undefined,
-): Promise<readonly PublicUrlCheckResult[]> {
-  if (!publicOutputs) {
-    throw new Error(
-      "Output ledger did not expose publicOutputs for URL checks",
-    );
-  }
-  const results: PublicUrlCheckResult[] = [];
-  for (const check of options.publicUrlChecks) {
-    const rawUrl = publicOutputs[check.output];
-    if (typeof rawUrl !== "string" || !rawUrl.trim()) {
-      throw new Error(
-        `public URL check ${check.name} expected string output ${check.output}`,
-      );
-    }
-    const url = publicCheckUrl(rawUrl, check);
-    const { response, body } = await fetchPublicUrlCheckWithRetry(url, check);
-    results.push({
-      name: check.name,
-      output: check.output,
-      url,
-      status: response.status,
-      ok: true,
-      bodyIncludes: check.bodyIncludes,
-      bodyDigest: sha256(body),
-    });
-  }
-  return results;
+type ResolvedDnsAddress = {
+  readonly address: string;
+  readonly family: 4 | 6;
+};
+
+type PinnedHttpsRequest = {
+  readonly address: string;
+  readonly family: 4 | 6;
+  readonly servername: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly method: string;
+  readonly path: string;
+  readonly body?: Uint8Array;
+  readonly signal: AbortSignal;
+};
+
+interface ControlPlaneTransportDependencies {
+  readonly resolver?: (hostname: string) => Promise<readonly ResolvedDnsAddress[]>;
+  readonly connector?: (request: PinnedHttpsRequest) => Promise<Response>;
+  /** Unit-test seam for bounded control-plane request recovery. */
+  readonly requestTimeoutMs?: number;
+  readonly authorityScope?: PinnedAuthorityScope;
+  readonly publicResolver?: PublicUrlFetchDependencies["resolver"];
+  readonly publicConnector?: PublicUrlFetchDependencies["connector"];
+  readonly publicSleep?: PublicUrlFetchDependencies["sleep"];
+  readonly publicMaxAttempts?: PublicUrlFetchDependencies["maxAttempts"];
+  readonly publicRequestTimeoutMs?: PublicUrlFetchDependencies["requestTimeoutMs"];
 }
 
-async function fetchPublicUrlCheckWithRetry(
-  url: string,
-  check: PublicUrlCheck,
-): Promise<{ readonly response: Response; readonly body: string }> {
-  let lastError: Error | undefined;
-  for (let attempt = 0; attempt < 16; attempt += 1) {
-    const response = await fetch(url, {
-      headers: { accept: "text/html,*/*" },
-    });
-    const body = await response.text();
-    if (response.status === check.expectedStatus) {
-      const missing = check.bodyIncludes.find(
-        (marker) => !body.includes(marker),
-      );
-      if (!missing) return { response, body };
-      lastError = new Error(
-        `public URL check ${check.name} response did not include marker ${JSON.stringify(
-          missing,
-        )}: ${redactResponseSnippet(body)}`,
-      );
-    } else {
-      lastError = new Error(
-        `public URL check ${check.name} returned HTTP ${response.status}; expected ${check.expectedStatus}`,
+interface PublicUrlFetchDependencies {
+  readonly resolver?: (hostname: string) => Promise<readonly ResolvedDnsAddress[]>;
+  readonly connector?: (request: PinnedHttpsRequest) => Promise<Response>;
+  /** Explicit unit-test seam for the dynamic Takosumi control-plane authority. */
+  readonly controlPlaneResolver?: ControlPlaneTransportDependencies["resolver"];
+  /** Explicit unit-test seam; the CLI production path never supplies this. */
+  readonly controlPlaneConnector?: ControlPlaneTransportDependencies["connector"];
+  readonly sleep?: (milliseconds: number) => Promise<void>;
+  readonly maxAttempts?: number;
+  readonly requestTimeoutMs?: number;
+  readonly authorityScope?: PinnedAuthorityScope;
+}
+
+interface PinnedAuthorityScope {
+  readonly targets: Map<string, Promise<ResolvedDnsAddress>>;
+}
+
+type AbsoluteRequestDeadline = {
+  readonly expiresAt: number;
+  readonly timeoutMs: number;
+};
+
+function createAbsoluteRequestDeadline(
+  timeoutMs: number,
+  label: string,
+): AbsoluteRequestDeadline {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+    throw new Error(`${label} timeout must be a positive integer`);
+  }
+  return {
+    expiresAt: Date.now() + timeoutMs,
+    timeoutMs,
+  };
+}
+
+function remainingDeadlineMs(deadline: AbsoluteRequestDeadline): number {
+  return Math.max(0, deadline.expiresAt - Date.now());
+}
+
+async function waitWithinDeadline<T>(
+  operation: Promise<T>,
+  deadline: AbsoluteRequestDeadline,
+  timeoutError: () => Error,
+  onTimeout?: () => void,
+): Promise<T> {
+  const remaining = remainingDeadlineMs(deadline);
+  if (remaining <= 0) {
+    onTimeout?.();
+    throw timeoutError();
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timerExpired = false;
+  try {
+    let value: T;
+    try {
+      value = await Promise.race([
+        operation,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            timerExpired = true;
+            onTimeout?.();
+            reject(timeoutError());
+          }, remaining);
+        }),
+      ]);
+    } catch (error) {
+      if (!timerExpired && Date.now() > deadline.expiresAt) {
+        onTimeout?.();
+        throw timeoutError();
+      }
+      throw error;
+    }
+    if (Date.now() > deadline.expiresAt) {
+      onTimeout?.();
+      throw timeoutError();
+    }
+    return value;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+type SmokeHttpsDependencies = Pick<
+  PublicUrlFetchDependencies,
+  | "resolver"
+  | "connector"
+  | "controlPlaneResolver"
+  | "controlPlaneConnector"
+  | "sleep"
+  | "maxAttempts"
+  | "requestTimeoutMs"
+  | "authorityScope"
+>;
+
+function controlPlaneDependencies(
+  dependencies: PublicUrlFetchDependencies = {},
+): ControlPlaneTransportDependencies {
+  const inherited = controlPlaneTransportContext.getStore();
+  return {
+    resolver:
+      dependencies.controlPlaneResolver ??
+      inherited?.resolver,
+    connector:
+      dependencies.controlPlaneConnector ??
+      inherited?.connector,
+    requestTimeoutMs:
+      dependencies.requestTimeoutMs ??
+      inherited?.requestTimeoutMs,
+    authorityScope:
+      dependencies.authorityScope ??
+      inherited?.authorityScope ??
+      { targets: new Map() },
+    publicResolver:
+      dependencies.resolver ??
+      inherited?.publicResolver,
+    publicConnector:
+      dependencies.connector ??
+      inherited?.publicConnector,
+    publicSleep:
+      dependencies.sleep ??
+      inherited?.publicSleep,
+    publicMaxAttempts:
+      dependencies.maxAttempts ??
+      inherited?.publicMaxAttempts,
+    publicRequestTimeoutMs:
+      dependencies.requestTimeoutMs ??
+      inherited?.publicRequestTimeoutMs,
+  };
+}
+
+function publicTransportDependencies(
+  dependencies: PublicUrlFetchDependencies = {},
+): PublicUrlFetchDependencies {
+  const inherited = controlPlaneTransportContext.getStore();
+  return {
+    resolver: dependencies.resolver ?? inherited?.publicResolver,
+    connector: dependencies.connector ?? inherited?.publicConnector,
+    sleep: dependencies.sleep ?? inherited?.publicSleep,
+    maxAttempts:
+      dependencies.maxAttempts ?? inherited?.publicMaxAttempts,
+    requestTimeoutMs:
+      dependencies.requestTimeoutMs ?? inherited?.publicRequestTimeoutMs,
+    authorityScope:
+      dependencies.authorityScope ?? inherited?.authorityScope,
+  };
+}
+
+export async function assertConfiguredPublicUrls(
+  options: PlatformControlPlaneSmokeOptions,
+  publicOutputs: Readonly<Record<string, unknown>> | undefined,
+  dependencies: PublicUrlFetchDependencies = {},
+): Promise<readonly PublicUrlCheckResult[]> {
+  const transport = controlPlaneDependencies(dependencies);
+  const results: PublicUrlCheckResult[] = [];
+  const registrations = registerConfiguredPublicUrls(
+    options.publicUrlChecks,
+    publicOutputs,
+  );
+  Object.defineProperty(results, publicUrlTransportScope, {
+    configurable: false,
+    enumerable: false,
+    value: transport.authorityScope,
+    writable: false,
+  });
+  Object.defineProperty(results, publicUrlLifecycleScope, {
+    configurable: false,
+    enumerable: false,
+    value: registrations,
+    writable: false,
+  });
+  Object.defineProperty(registrations, publicUrlTransportScope, {
+    configurable: false,
+    enumerable: false,
+    value: transport.authorityScope,
+    writable: false,
+  });
+  try {
+    const invalid = registrations.find((registration) => !registration.url);
+    if (invalid) {
+      for (const registration of registrations) {
+        registration.applyError ??=
+          "URL checks were not started because at least one configured applied URL was invalid";
+      }
+      throw new Error(
+        invalid.applyError ??
+          `public URL check ${invalid.check.name} applied URL is invalid`,
       );
     }
-    await sleep(Math.min(5_000, 500 + attempt * 500));
+    await controlPlaneTransportContext.run(
+      transport,
+      async () =>
+        await assertConfiguredPublicUrlsInternal(
+          registrations,
+          dependencies,
+          results,
+        ),
+    );
+    return results;
+  } catch (error) {
+    // Preserve the complete configured lifecycle set, including URLs whose
+    // Apply proof failed or could not be resolved. Cleanup must never infer
+    // that an omitted check is safe to claim as destroyed.
+    if (isWeakMapKey(error)) {
+      publicUrlCheckProgress.set(error, { registrations, results });
+    }
+    throw error;
+  }
+}
+
+function registerConfiguredPublicUrls(
+  checks: readonly PublicUrlCheck[],
+  publicOutputs: Readonly<Record<string, unknown>> | undefined,
+): RegisteredPublicUrlCheck[] {
+  return checks.map((check) => {
+    try {
+      assertPublicUrlLifecycleContract(check);
+      if (!publicOutputs) {
+        throw new Error(
+          "Output ledger did not expose publicOutputs for URL checks",
+        );
+      }
+      const rawUrl = publicOutputs[check.output];
+      if (typeof rawUrl !== "string" || !rawUrl.trim()) {
+        throw new Error(
+          `public URL check ${check.name} expected string output ${check.output}`,
+        );
+      }
+      return { check, url: publicCheckUrl(rawUrl, check) };
+    } catch (error) {
+      return { check, applyError: publicErrorMessage(error) };
+    }
+  });
+}
+
+async function assertConfiguredPublicUrlsInternal(
+  registrations: readonly RegisteredPublicUrlCheck[],
+  dependencies: PublicUrlFetchDependencies,
+  results: PublicUrlCheckResult[],
+): Promise<void> {
+  const transport = publicTransportDependencies(dependencies);
+  for (let index = 0; index < registrations.length; index += 1) {
+    const registration = registrations[index]!;
+    const { check, url } = registration;
+    if (!url) {
+      throw new Error(
+        registration.applyError ??
+          `public URL check ${check.name} applied URL is invalid`,
+      );
+    }
+    try {
+      const { response, body } = await fetchPublicUrlCheckWithRetry(
+        url,
+        check,
+        transport,
+      );
+      const result: PublicUrlCheckResult = {
+        name: check.name,
+        output: check.output,
+        url,
+        status: response.status,
+        ok: true,
+        bodyIncludes: check.bodyIncludes,
+        bodyDigest: sha256(body),
+        destroyExpectation: check.destroyExpectation,
+      };
+      registration.applyResult = result;
+      results.push(result);
+    } catch (error) {
+      registration.applyError = publicErrorMessage(error);
+      for (const unattempted of registrations.slice(index + 1)) {
+        unattempted.applyError ??=
+          "Apply existence proof was not attempted because an earlier configured URL check failed";
+      }
+      throw error;
+    }
+  }
+}
+
+export async function verifyConfiguredPublicUrlsDestroyed(
+  appliedChecks: readonly PublicUrlCheckResult[],
+  dependencies: Pick<
+    PublicUrlFetchDependencies,
+    | "resolver"
+    | "connector"
+    | "sleep"
+    | "maxAttempts"
+    | "requestTimeoutMs"
+    | "authorityScope"
+  > = {},
+): Promise<readonly PublicUrlDestroyCheckResult[]> {
+  const registrations = configuredPublicUrlRegistrations(appliedChecks);
+  const retainedAuthorityScope = (
+    appliedChecks as readonly PublicUrlCheckResult[] & {
+      readonly [publicUrlTransportScope]?: PinnedAuthorityScope;
+    }
+  )[publicUrlTransportScope];
+  if (!(publicUrlTransportScope in registrations)) {
+    Object.defineProperty(registrations, publicUrlTransportScope, {
+      configurable: false,
+      enumerable: false,
+      value: retainedAuthorityScope ?? dependencies.authorityScope,
+      writable: false,
+    });
+  }
+  return await verifyRegisteredPublicUrlsDestroyed(
+    registrations,
+    {
+      ...dependencies,
+      authorityScope:
+        retainedAuthorityScope ?? dependencies.authorityScope,
+    },
+  );
+}
+
+function configuredPublicUrlRegistrations(
+  appliedChecks: readonly PublicUrlCheckResult[],
+): RegisteredPublicUrlCheck[] {
+  const retained = (
+    appliedChecks as readonly PublicUrlCheckResult[] & {
+      readonly [publicUrlLifecycleScope]?: readonly RegisteredPublicUrlCheck[];
+    }
+  )[publicUrlLifecycleScope];
+  if (retained) return retained as RegisteredPublicUrlCheck[];
+  return appliedChecks.map((applyResult) => ({
+    check: {
+      name: applyResult.name,
+      output: applyResult.output,
+      path: new URL(applyResult.url).pathname,
+      expectedStatus: applyResult.status,
+      bodyIncludes: applyResult.bodyIncludes,
+      destroyExpectation: applyResult.destroyExpectation,
+    },
+    url: applyResult.url,
+    applyResult,
+  }));
+}
+
+async function verifyRegisteredPublicUrlsDestroyed(
+  registrations: readonly RegisteredPublicUrlCheck[],
+  dependencies: Pick<
+    PublicUrlFetchDependencies,
+    | "resolver"
+    | "connector"
+    | "sleep"
+    | "maxAttempts"
+    | "requestTimeoutMs"
+    | "authorityScope"
+  > = {},
+): Promise<readonly PublicUrlDestroyCheckResult[]> {
+  const retainedAuthorityScope = (
+    registrations as readonly RegisteredPublicUrlCheck[] & {
+      readonly [publicUrlTransportScope]?: PinnedAuthorityScope;
+    }
+  )[publicUrlTransportScope];
+  const transport = controlPlaneDependencies({
+    ...dependencies,
+    authorityScope:
+      retainedAuthorityScope ?? dependencies.authorityScope,
+  });
+  return await controlPlaneTransportContext.run(
+    transport,
+    async () => {
+      // An Apply proof owns its authority pin. A caller may tune the retry
+      // transport for Destroy, but cannot replace that retained DNS decision.
+      const publicDependencies = publicTransportDependencies({
+        ...dependencies,
+        authorityScope: transport.authorityScope,
+      });
+      const results: PublicUrlDestroyCheckResult[] = [];
+      for (const registration of registrations) {
+        const { check, url: appliedUrl, applyResult, applyError } = registration;
+        const applyStatus = applyResult ? "passed" as const : "unverified" as const;
+        const shared = {
+          name: check.name,
+          output: check.output,
+          ...(appliedUrl ? { url: appliedUrl } : {}),
+          expectation: check.destroyExpectation,
+          applyStatus,
+        };
+        if (check.destroyExpectation.kind === "not-verifiable") {
+          results.push({
+            ...shared,
+            status: "not_claimed",
+            ...(applyError ? { error: applyError } : {}),
+          });
+          continue;
+        }
+        if (!appliedUrl) {
+          results.push({
+            ...shared,
+            status: "inconclusive",
+            error:
+              applyError ??
+              `public URL check ${check.name} applied URL was unresolved`,
+          });
+          continue;
+        }
+        try {
+          const url = strictPublicUrl(
+            appliedUrl,
+            `public URL check ${check.name} applied URL`,
+          );
+          const observedStatus = await verifyPinnedPublicRetirement(
+            url,
+            check,
+            `public URL check ${check.name}`,
+            publicDependencies,
+            { maxAttempts: 16, deadlineMs: 120_000 },
+          );
+          results.push({
+            ...shared,
+            status: applyResult ? "passed" : "inconclusive",
+            observedStatus,
+            ...(!applyResult
+              ? {
+                  error:
+                    `Apply existence proof was not established: ${
+                      applyError ?? "the configured URL check was not completed"
+                    }`,
+                }
+              : {}),
+          });
+        } catch (error) {
+          results.push({
+            ...shared,
+            status: "inconclusive",
+            error: publicErrorMessage(error),
+          });
+        }
+      }
+      return results;
+    },
+  );
+}
+
+export async function fetchPublicUrlCheckWithRetry(
+  url: string,
+  check: PublicUrlCheck,
+  dependencies: PublicUrlFetchDependencies = {},
+): Promise<{ readonly response: Response; readonly body: string }> {
+  const requestUrl = validatePublicCheckRequestUrl(url, check);
+  const resolver = dependencies.resolver ?? resolveAllDnsAddresses;
+  const connector = dependencies.connector ?? connectPinnedHttps;
+  const sleepForRetry = dependencies.sleep ?? sleep;
+  const maxAttempts = dependencies.maxAttempts ?? 16;
+  const requestTimeoutMs = dependencies.requestTimeoutMs ?? PUBLIC_URL_REQUEST_TIMEOUT_MS;
+  if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error("public URL check max attempts must be a positive integer");
+  }
+  const deadline = createAbsoluteRequestDeadline(
+    requestTimeoutMs,
+    `public URL check ${check.name}`,
+  );
+  const parsedRequestUrl = new URL(requestUrl);
+  let target: ResolvedDnsAddress | undefined;
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      target ??= await resolvePinnedPublicTarget(
+        parsedRequestUrl.hostname,
+        resolver,
+        `public URL check ${check.name}`,
+        requestTimeoutMs,
+        deadline,
+      );
+      const { response, body } = await fetchPublicCheckAttempt(
+        parsedRequestUrl,
+        check,
+        target,
+        connector,
+        requestTimeoutMs,
+        undefined,
+        "GET",
+        undefined,
+        deadline,
+      );
+      if (response.status >= 300 && response.status < 400) {
+        lastError = new Error(
+          `public URL check ${check.name} rejected a redirect response`,
+        );
+      } else if (response.status === check.expectedStatus) {
+        const missing = check.bodyIncludes.find(
+          (marker) => !body.includes(marker),
+        );
+        if (!missing) return { response, body };
+        lastError = new Error(
+          `public URL check ${check.name} response did not include marker ${JSON.stringify(
+            missing,
+          )}`,
+        );
+      } else {
+        lastError = new Error(
+          `public URL check ${check.name} returned HTTP ${response.status}; expected ${check.expectedStatus}`,
+        );
+      }
+    } catch (error) {
+      if (
+        error instanceof PublicUrlNonPublicAddressError ||
+        error instanceof PublicUrlDnsResolutionError
+      ) {
+        throw error;
+      }
+      lastError =
+        error instanceof PublicUrlDnsResolutionError
+          ? error
+          : error instanceof PublicUrlCheckTimeoutError
+          ? error
+          : error instanceof PublicUrlResponseTooLargeError
+            ? error
+            : new Error(`public URL check ${check.name} request failed`);
+      if (error instanceof PublicUrlResponseTooLargeError) throw error;
+    }
+    if (attempt + 1 < maxAttempts) {
+      const retrySleep = Promise.resolve().then(() =>
+        sleepForRetry(Math.min(5_000, 500 + attempt * 500)),
+      );
+      retrySleep.catch(() => undefined);
+      await waitWithinDeadline(
+        retrySleep,
+        deadline,
+        () => new PublicUrlCheckTimeoutError(check.name),
+      );
+    }
   }
   throw lastError ?? new Error(`public URL check ${check.name} failed`);
 }
 
-function publicCheckUrl(rawUrl: string, check: PublicUrlCheck): string {
-  const url = new URL(rawUrl);
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error(
-      `public URL check ${check.name} requires http(s) URL output`,
+async function fetchPublicCheckAttempt(
+  url: URL,
+  check: PublicUrlCheck,
+  target: ResolvedDnsAddress,
+  connector: (request: PinnedHttpsRequest) => Promise<Response>,
+  requestTimeoutMs: number,
+  requestHeaders: Readonly<Record<string, string>> = {
+    accept: "text/html,*/*",
+  },
+  method = "GET",
+  requestBody?: Uint8Array,
+  deadline = createAbsoluteRequestDeadline(
+    requestTimeoutMs,
+    "public URL request",
+  ),
+): Promise<{ readonly response: Response; readonly body: string }> {
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1) {
+    throw new Error("public URL request timeout must be a positive integer");
+  }
+  const controller = new AbortController();
+  let timedOut = false;
+  let response: Response | undefined;
+  const request = Promise.resolve().then(() =>
+    connector({
+      ...target,
+      servername: url.hostname,
+      headers: {
+        ...requestHeaders,
+        host: url.hostname,
+      },
+      method,
+      path: `${url.pathname}${url.search}`,
+      ...(requestBody === undefined ? {} : { body: requestBody }),
+      signal: controller.signal,
+    }),
+  );
+  request.catch(() => undefined);
+  const guardedRequest = new Promise<Response>((resolveResponse, rejectResponse) => {
+    request.then(
+      (candidate) => {
+        if (timedOut || remainingDeadlineMs(deadline) <= 0) {
+          timedOut = true;
+          controller.abort();
+          void cancelPublicResponseBody(candidate).catch(() => undefined);
+          return;
+        }
+        resolveResponse(candidate);
+      },
+      rejectResponse,
+    );
+  });
+  guardedRequest.catch(() => undefined);
+  const markTimedOut = (): void => {
+    timedOut = true;
+    controller.abort();
+  };
+  try {
+    response = await waitWithinDeadline(
+      guardedRequest,
+      deadline,
+      () => new PublicUrlCheckTimeoutError(check.name),
+      markTimedOut,
+    );
+    const bodyRead = readBoundedPublicResponse(
+      response,
+      check,
+      controller.signal,
+      deadline,
+    );
+    bodyRead.catch(() => undefined);
+    const body = await waitWithinDeadline(
+      bodyRead,
+      deadline,
+      () => new PublicUrlCheckTimeoutError(check.name),
+      markTimedOut,
+    );
+    return { response, body };
+  } catch (error) {
+    await cancelPublicResponseBody(response, deadline);
+    if (timedOut || error instanceof PublicUrlCheckTimeoutError) {
+      throw new PublicUrlCheckTimeoutError(check.name);
+    }
+    throw error;
+  }
+}
+
+export async function fetchPinnedInterfaceBearerResource(
+  urlValue: string,
+  bearer: string,
+  dependencies: Pick<PublicUrlFetchDependencies, "resolver" | "connector"> = {},
+): Promise<{ readonly response: Response; readonly body: string }> {
+  if (
+    !bearer ||
+    new TextEncoder().encode(bearer).byteLength > MAX_SMOKE_INTERFACE_TOKEN_BYTES ||
+    /[\0\r\n]/u.test(bearer)
+  ) {
+    throw new Error("Interface bearer is invalid");
+  }
+  const url = strictPublicUrl(urlValue, "Interface bearer resource");
+  const transport = publicTransportDependencies(dependencies);
+  const deadline = createAbsoluteRequestDeadline(
+    PUBLIC_URL_REQUEST_TIMEOUT_MS,
+    "Interface bearer resource",
+  );
+  const target = await resolvePinnedPublicTarget(
+    url.hostname,
+    transport.resolver ?? resolveAllDnsAddresses,
+    "Interface bearer resource",
+    PUBLIC_URL_REQUEST_TIMEOUT_MS,
+    deadline,
+  );
+  try {
+    const result = await fetchPublicCheckAttempt(
+      url,
+      interfacePublicEndpointCheck(url),
+      target,
+      transport.connector ?? connectPinnedHttps,
+      PUBLIC_URL_REQUEST_TIMEOUT_MS,
+      {
+        accept: "application/json",
+        "cache-control": "no-store",
+        authorization: `Bearer ${bearer}`,
+      },
+      "GET",
+      undefined,
+      deadline,
+    );
+    if (result.response.status >= 300 && result.response.status < 400) {
+      throw new InterfaceBearerRedirectError();
+    }
+    return result;
+  } catch (error) {
+    if (
+      error instanceof PublicUrlNonPublicAddressError ||
+      error instanceof PublicUrlDnsResolutionError ||
+      error instanceof PublicUrlCheckTimeoutError ||
+      error instanceof PublicUrlResponseTooLargeError ||
+      error instanceof InterfaceBearerRedirectError
+    ) {
+      throw error;
+    }
+    throw new Error("Interface bearer resource request failed");
+  }
+}
+
+async function resolveAllDnsAddresses(
+  hostname: string,
+): Promise<readonly ResolvedDnsAddress[]> {
+  const answers = await lookupDns(hostname, { all: true, verbatim: true });
+  return answers.map((answer) => {
+    if (answer.family !== 4 && answer.family !== 6) {
+      throw new Error("DNS returned an unsupported address family");
+    }
+    return { address: answer.address, family: answer.family };
+  });
+}
+
+async function resolvePinnedPublicTarget(
+  hostname: string,
+  resolver: (hostname: string) => Promise<readonly ResolvedDnsAddress[]>,
+  label: string,
+  timeoutMs = PUBLIC_URL_REQUEST_TIMEOUT_MS,
+  deadline = createAbsoluteRequestDeadline(timeoutMs, `${label} DNS`),
+): Promise<ResolvedDnsAddress> {
+  const authorityScope =
+    controlPlaneTransportContext.getStore()?.authorityScope;
+  const authorityKey = `https://${hostname.toLowerCase().replace(/\.$/u, "")}`;
+  let target = authorityScope?.targets.get(authorityKey);
+  if (!target) {
+    target = resolvePinnedPublicTargetUncached(hostname, resolver, label);
+    target.catch(() => undefined);
+    authorityScope?.targets.set(authorityKey, target);
+  }
+  return await waitWithinDeadline(
+    target,
+    deadline,
+    () => new PublicUrlDnsResolutionError(label),
+  );
+}
+
+async function resolvePinnedPublicTargetUncached(
+  hostname: string,
+  resolver: (hostname: string) => Promise<readonly ResolvedDnsAddress[]>,
+  label: string,
+): Promise<ResolvedDnsAddress> {
+  let answers: readonly ResolvedDnsAddress[];
+  const resolution = Promise.resolve().then(() => resolver(hostname));
+  resolution.catch(() => undefined);
+  try {
+    answers = await resolution;
+  } catch (error) {
+    if (error instanceof PublicUrlNonPublicAddressError) throw error;
+    throw new PublicUrlDnsResolutionError(label);
+  }
+  if (!Array.isArray(answers) || answers.length === 0) {
+    throw new PublicUrlDnsResolutionError(label);
+  }
+  const unique = new Map<string, ResolvedDnsAddress>();
+  for (const answer of answers) {
+    if (
+      !answer ||
+      typeof answer.address !== "string" ||
+      (answer.family !== 4 && answer.family !== 6) ||
+      isIP(answer.address) !== answer.family ||
+      !isGloballyRoutableIp(answer.address)
+    ) {
+      throw new PublicUrlNonPublicAddressError(label);
+    }
+    const bytes = ipAddressBytes(answer.address);
+    if (!bytes) {
+      throw new PublicUrlNonPublicAddressError(label);
+    }
+    const key = `${answer.family}:${bytesToHex(bytes)}`;
+    if (!unique.has(key)) {
+      unique.set(key, {
+        address: answer.address.toLowerCase(),
+        family: answer.family,
+      });
+    }
+  }
+  // Fail closed if any answer is unsafe, then select one target: the
+  // bytewise-lowest IPv4 answer (or IPv6 when no IPv4 answer exists). Retries
+  // reuse that target; there is no address failover or second DNS lookup for
+  // this authority anywhere in the owning smoke lifecycle.
+  return [...unique.entries()]
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)[0]![1];
+}
+
+function isGloballyRoutableIp(address: string): boolean {
+  const bytes = ipAddressBytes(address);
+  if (!bytes) return false;
+  if (bytes.length === 4) return isGloballyRoutableIpv4(bytes);
+  return isGloballyRoutableIpv6(bytes);
+}
+
+function isGloballyRoutableIpv4(bytes: Uint8Array): boolean {
+  const [first, second, third, fourth] = bytes;
+  if (first === 0 || first === 10 || first === 127) return false;
+  if (first === 100 && second! >= 64 && second! <= 127) return false;
+  if (first === 169 && second === 254) return false;
+  if (first === 172 && second! >= 16 && second! <= 31) return false;
+  if (first === 192 && second === 0 && third === 0) {
+    return fourth === 9 || fourth === 10;
+  }
+  if (first === 192 && second === 0 && third === 2) return false;
+  if (first === 192 && second === 88 && third === 99) return false;
+  if (first === 192 && second === 168) return false;
+  if (first === 198 && (second === 18 || second === 19)) return false;
+  if (first === 198 && second === 51 && third === 100) return false;
+  if (first === 203 && second === 0 && third === 113) return false;
+  return first! < 224;
+}
+
+function isGloballyRoutableIpv6(bytes: Uint8Array): boolean {
+  if (
+    bytes.slice(0, 10).every((byte) => byte === 0) &&
+    bytes[10] === 0xff &&
+    bytes[11] === 0xff
+  ) {
+    return false;
+  }
+  const first = (bytes[0]! << 8) | bytes[1]!;
+  const second = (bytes[2]! << 8) | bytes[3]!;
+  if (first === 0x2001) {
+    return (
+      (second >= 0x0200 && second <= 0x0fff && second !== 0x0db8) ||
+      (second >= 0x1200 && second <= 0x3fff) ||
+      (second >= 0x4000 && second <= 0x4dff) ||
+      (second >= 0x5000 && second <= 0x5fff) ||
+      (second >= 0x8000 && second <= 0xbfff)
     );
   }
-  if (url.username || url.password) {
+  if (first === 0x2003) return (second & 0xc000) === 0;
+  if ((first & 0xfff0) === 0x2400) return true;
+  if ((first & 0xfff0) === 0x2600) return true;
+  if (first === 0x2610) return (second & 0xfe00) === 0;
+  if (first === 0x2620) return (second & 0xfe00) === 0;
+  if ((first & 0xfff0) === 0x2630) return true;
+  if ((first & 0xfff0) === 0x2800) return true;
+  if ((first & 0xffe0) === 0x2a00) return true;
+  return (first & 0xfff0) === 0x2c00;
+}
+
+function ipAddressBytes(address: string): Uint8Array | undefined {
+  const family = isIP(address);
+  if (family === 4) {
+    const parts = address.split(".").map(Number);
+    return parts.length === 4 ? Uint8Array.from(parts) : undefined;
+  }
+  if (family !== 6 || address.includes("%")) return undefined;
+  let value = address.toLowerCase();
+  const ipv4Tail = value.match(/(?:^|:)(\d+\.\d+\.\d+\.\d+)$/u)?.[1];
+  if (ipv4Tail) {
+    const ipv4 = ipAddressBytes(ipv4Tail);
+    if (!ipv4 || ipv4.length !== 4) return undefined;
+    value = `${value.slice(0, -ipv4Tail.length)}${((ipv4[0]! << 8) | ipv4[1]!).toString(16)}:${((ipv4[2]! << 8) | ipv4[3]!).toString(16)}`;
+  }
+  const halves = value.split("::");
+  if (halves.length > 2) return undefined;
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const missing = 8 - left.length - right.length;
+  if ((halves.length === 1 && missing !== 0) || (halves.length === 2 && missing < 1)) {
+    return undefined;
+  }
+  const words = [
+    ...left,
+    ...Array.from({ length: missing }, () => "0"),
+    ...right,
+  ].map((part) => Number.parseInt(part, 16));
+  if (words.length !== 8 || words.some((word) => !Number.isInteger(word) || word < 0 || word > 0xffff)) {
+    return undefined;
+  }
+  const bytes = new Uint8Array(16);
+  for (const [index, word] of words.entries()) {
+    bytes[index * 2] = word >> 8;
+    bytes[index * 2 + 1] = word & 0xff;
+  }
+  return bytes;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function connectPinnedHttps(request: PinnedHttpsRequest): Promise<Response> {
+  return await new Promise<Response>((resolveResponse, rejectResponse) => {
+    try {
+      const clientRequest = requestHttps(
+        {
+          protocol: "https:",
+          hostname: request.address,
+          family: request.family,
+          port: 443,
+          method: request.method,
+          path: request.path,
+          servername: request.servername,
+          rejectUnauthorized: true,
+          agent: false,
+          headers: request.headers,
+          signal: request.signal,
+        },
+        (incoming) => {
+          const status = incoming.statusCode;
+          if (!status || status < 200 || status > 599) {
+            incoming.destroy();
+            rejectResponse(new Error("pinned HTTPS response status was invalid"));
+            return;
+          }
+          const headers = new Headers();
+          for (let index = 0; index < incoming.rawHeaders.length; index += 2) {
+            headers.append(incoming.rawHeaders[index]!, incoming.rawHeaders[index + 1]!);
+          }
+          const body = status === 204 || status === 205 || status === 304
+            ? null
+            : Readable.toWeb(incoming) as unknown as BodyInit;
+          if (body === null) incoming.destroy();
+          resolveResponse(new Response(body, {
+            status,
+            statusText: incoming.statusMessage,
+            headers,
+          }));
+        },
+      );
+      clientRequest.once("error", rejectResponse);
+      clientRequest.end(request.body);
+    } catch (error) {
+      rejectResponse(error);
+    }
+  });
+}
+
+async function readBoundedPublicResponse(
+  response: Response,
+  check: PublicUrlCheck,
+  signal?: AbortSignal,
+  deadline?: AbsoluteRequestDeadline,
+): Promise<string> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null && /^\d+$/u.test(contentLength)) {
+    const declaredBytes = Number(contentLength);
+    if (declaredBytes > MAX_PUBLIC_URL_RESPONSE_BYTES) {
+      await cancelPublicResponseBody(response, deadline);
+      throw new PublicUrlResponseTooLargeError(check.name);
+    }
+  }
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > MAX_PUBLIC_URL_RESPONSE_BYTES) {
+      throw new PublicUrlResponseTooLargeError(check.name);
+    }
+    return new TextDecoder().decode(bytes);
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  const cancelOnAbort = (): void => {
+    void cancelPublicReader(reader, deadline).catch(() => undefined);
+  };
+  signal?.addEventListener("abort", cancelOnAbort, { once: true });
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      const chunk = next.value instanceof Uint8Array
+        ? next.value
+        : new Uint8Array(next.value);
+      totalBytes += chunk.byteLength;
+      if (totalBytes > MAX_PUBLIC_URL_RESPONSE_BYTES) {
+        await cancelPublicReader(reader, deadline);
+        throw new PublicUrlResponseTooLargeError(check.name);
+      }
+      chunks.push(chunk);
+    }
+  } catch (error) {
+    await cancelPublicReader(reader, deadline);
+    throw error;
+  } finally {
+    signal?.removeEventListener("abort", cancelOnAbort);
+    try {
+      reader.releaseLock();
+    } catch {
+      // A timed-out read may retain its lock until its best-effort cancel settles.
+    }
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+async function cancelPublicReader(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  deadline?: AbsoluteRequestDeadline,
+): Promise<void> {
+  let cancellation: Promise<unknown>;
+  try {
+    cancellation = Promise.resolve().then(() => reader.cancel());
+  } catch {
+    return;
+  }
+  cancellation.catch(() => undefined);
+  await waitForBoundedCancellation(cancellation, deadline);
+}
+
+async function cancelPublicResponseBody(
+  response: Response | undefined,
+  deadline?: AbsoluteRequestDeadline,
+): Promise<void> {
+  if (!response?.body) return;
+  let cancellation: Promise<unknown>;
+  try {
+    cancellation = Promise.resolve().then(() => response.body!.cancel());
+  } catch {
+    return;
+  }
+  cancellation.catch(() => undefined);
+  await waitForBoundedCancellation(cancellation, deadline);
+}
+
+async function waitForBoundedCancellation(
+  cancellation: Promise<unknown>,
+  deadline?: AbsoluteRequestDeadline,
+): Promise<void> {
+  const available = deadline
+    ? remainingDeadlineMs(deadline)
+    : RESPONSE_BODY_CANCEL_TIMEOUT_MS;
+  const waitMs = Math.min(RESPONSE_BODY_CANCEL_TIMEOUT_MS, available);
+  if (waitMs <= 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      cancellation,
+      new Promise<void>((resolveTimeout) => {
+        timer = setTimeout(resolveTimeout, waitMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+export function publicCheckUrl(rawUrl: string, check: PublicUrlCheck): string {
+  const url = strictPublicUrl(rawUrl, `public URL check ${check.name} URL output`);
+  if (url.pathname !== "/") {
     throw new Error(
-      `public URL check ${check.name} URL output must not contain credentials`,
+      `public URL check ${check.name} URL output must be an HTTPS origin without a path`,
     );
   }
-  if (url.search) {
-    throw new Error(
-      `public URL check ${check.name} URL output must not contain a query string`,
-    );
-  }
-  if (check.path !== "/") {
-    url.pathname = `${url.pathname.replace(/\/+$/u, "")}/${check.path.replace(
-      /^\/+/u,
-      "",
-    )}`;
-  }
-  url.hash = "";
+  url.pathname = publicCheckPath(check);
   return url.toString();
+}
+
+function validatePublicCheckRequestUrl(urlValue: string, check: PublicUrlCheck): string {
+  const url = strictPublicUrl(urlValue, `public URL check ${check.name} request`);
+  if (url.pathname !== publicCheckPath(check)) {
+    throw new Error(`public URL check ${check.name} request path is invalid`);
+  }
+  return url.toString();
+}
+
+function strictPublicUrl(value: string, label: string): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${label} must be an absolute HTTPS origin`);
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.port ||
+    hasExplicitUrlPort(value) ||
+    /[?#]/u.test(value) ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error(
+      `${label} must be an absolute HTTPS URL without credentials, port, query, or fragment`,
+    );
+  }
+  assertPublicHostname(url.hostname, label);
+  url.hostname = url.hostname.toLowerCase().replace(/\.$/u, "");
+  return url;
+}
+
+function publicCheckPath(check: PublicUrlCheck): string {
+  if (
+    !check.path.startsWith("/") ||
+    check.path.startsWith("//") ||
+    /[?#\0\r\n]/u.test(check.path)
+  ) {
+    throw new Error(`public URL check ${check.name} path is invalid`);
+  }
+  return check.path;
+}
+
+function hasExplicitUrlPort(value: string): boolean {
+  const authority = value.match(/^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#\\]*)/u)?.[1];
+  if (!authority) return false;
+  const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
+  if (hostPort.startsWith("[")) return hostPort.includes("]:");
+  return hostPort.includes(":");
+}
+
+function assertPublicHostname(hostname: string, label: string): void {
+  const host = hostname
+    .toLowerCase()
+    .replace(/^\[/u, "")
+    .replace(/\]$/u, "")
+    .replace(/\.$/u, "");
+  const reservedSuffixes = [
+    "alt",
+    "corp",
+    "example",
+    "home",
+    "home.arpa",
+    "internal",
+    "invalid",
+    "lan",
+    "local",
+    "localhost",
+    "onion",
+    "test",
+  ];
+  const reservedDomains = ["example.com", "example.net", "example.org"];
+  const labels = host.split(".");
+  if (
+    !host ||
+    host.length > 253 ||
+    labels.length < 2 ||
+    labels.some((part) => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(part)) ||
+    isIP(host) !== 0 ||
+    reservedSuffixes.some((suffix) => host === suffix || host.endsWith(`.${suffix}`)) ||
+    reservedDomains.some((domain) => host === domain || host.endsWith(`.${domain}`))
+  ) {
+    throw new Error(`${label} must identify a public non-reserved HTTPS hostname`);
+  }
 }
 
 async function assertStateVersionLedger(
@@ -3902,11 +5560,36 @@ export interface InterfaceMaterializationContext {
  */
 export async function assertInterfaceMaterialization(
   options: PlatformControlPlaneSmokeOptions,
+  input: Parameters<typeof assertInterfaceMaterializationInternal>[1],
+  publicProbeDependencies: SmokeHttpsDependencies = {},
+): Promise<InterfaceMaterializationContext> {
+  const transport = controlPlaneDependencies(publicProbeDependencies);
+  const result = await controlPlaneTransportContext.run(
+    transport,
+    async () =>
+      await assertInterfaceMaterializationInternal(
+        options,
+        input,
+        publicProbeDependencies,
+      ),
+  );
+  Object.defineProperty(result, interfaceTransportScope, {
+    configurable: false,
+    enumerable: false,
+    value: transport.authorityScope,
+    writable: false,
+  });
+  return result;
+}
+
+async function assertInterfaceMaterializationInternal(
+  options: PlatformControlPlaneSmokeOptions,
   input: {
     readonly workspaceId: string;
     readonly capsuleId: string;
     readonly stateVersionLedger: StateVersionLedgerVerificationResult;
   },
+  publicProbeDependencies: SmokeHttpsDependencies,
 ): Promise<InterfaceMaterializationContext> {
   const blueprints = options.interfaceBlueprints ?? [];
   if (blueprints.length === 0) {
@@ -3975,7 +5658,10 @@ export async function assertInterfaceMaterialization(
             binding.status.phase !== "Revoked",
         );
         const endpointUse = noneBinding && record.endpointUrl
-          ? await assertInterfaceEndpointUse(record.endpointUrl)
+          ? await assertInterfaceEndpointUse(
+              record.endpointUrl,
+              publicProbeDependencies,
+            )
           : "skipped" as const;
         const issuedToken =
           options.interfaceTokenProofRequested === true
@@ -3983,6 +5669,7 @@ export async function assertInterfaceMaterialization(
                 options,
                 record.interface,
                 record.bindings,
+                publicProbeDependencies,
               )
             : undefined;
         verifiedRecords.push({
@@ -4247,19 +5934,77 @@ function interfaceEndpointUrl(iface: Interface): string | undefined {
   }
 }
 
-async function assertInterfaceEndpointUse(url: string): Promise<"passed"> {
-  const response = await fetch(url, { headers: { accept: "text/html,application/json" } });
-  const body = await response.text();
+async function assertInterfaceEndpointUse(
+  urlValue: string,
+  dependencies: Pick<PublicUrlFetchDependencies, "resolver" | "connector">,
+): Promise<"passed"> {
+  const url = strictPublicUrl(urlValue, "Interface public endpoint");
+  const transport = publicTransportDependencies(dependencies);
+  const check = interfacePublicEndpointCheck(url);
+  const deadline = createAbsoluteRequestDeadline(
+    PUBLIC_URL_REQUEST_TIMEOUT_MS,
+    "Interface public endpoint",
+  );
+  const target = await resolvePinnedPublicTarget(
+    url.hostname,
+    transport.resolver ?? resolveAllDnsAddresses,
+    "Interface public endpoint",
+    PUBLIC_URL_REQUEST_TIMEOUT_MS,
+    deadline,
+  );
+  let response: Response;
+  let body: string;
+  try {
+    ({ response, body } = await fetchPublicCheckAttempt(
+      url,
+      check,
+      target,
+      transport.connector ?? connectPinnedHttps,
+      PUBLIC_URL_REQUEST_TIMEOUT_MS,
+      undefined,
+      "GET",
+      undefined,
+      deadline,
+    ));
+  } catch (error) {
+    if (
+      error instanceof PublicUrlNonPublicAddressError ||
+      error instanceof PublicUrlDnsResolutionError ||
+      error instanceof PublicUrlCheckTimeoutError ||
+      error instanceof PublicUrlResponseTooLargeError
+    ) {
+      throw error;
+    }
+    throw new Error("Interface public endpoint request failed");
+  }
+  if (response.status >= 300 && response.status < 400) {
+    throw new Error("Interface public endpoint rejected a redirect response");
+  }
   if (!response.ok) {
     throw new Error(`Interface public endpoint returned HTTP ${response.status}: ${redactResponseSnippet(body)}`);
   }
   return "passed";
 }
 
+function interfacePublicEndpointCheck(url: URL): PublicUrlCheck {
+  return {
+    name: "interface-public-endpoint",
+    output: "interface_resource",
+    path: `${url.pathname}${url.search}`,
+    expectedStatus: 200,
+    bodyIncludes: [],
+    destroyExpectation: { kind: "http-404" },
+  };
+}
+
 async function issueInterfaceTokenProof(
   options: PlatformControlPlaneSmokeOptions,
   iface: Interface,
   bindings: readonly InterfaceBinding[],
+  publicProbeDependencies: Pick<
+    PublicUrlFetchDependencies,
+    "resolver" | "connector"
+  >,
 ): Promise<NonNullable<InterfaceMaterializationRecord["issuedToken"]>> {
   const runtimeToken = options.interfaceRuntimeToken;
   if (!runtimeToken) {
@@ -4275,6 +6020,9 @@ async function issueInterfaceTokenProof(
   }
   const permission = binding.spec.permissions[0];
   if (!permission) throw new Error(`InterfaceBinding ${binding.metadata.id} has no permission`);
+  // `options.url` is the operator-selected Takosumi control-plane authority.
+  // Keep that authenticated transport distinct from the output-derived
+  // Interface resource, which must pass DNS validation and address pinning.
   const issued = await requestJson<{
     readonly access_token?: unknown;
     readonly token_type?: unknown;
@@ -4290,6 +6038,9 @@ async function issueInterfaceTokenProof(
   if (
     typeof issued.access_token !== "string" ||
     issued.access_token.length === 0 ||
+    new TextEncoder().encode(issued.access_token).byteLength >
+      MAX_SMOKE_INTERFACE_TOKEN_BYTES ||
+    /[\0\r\n]/u.test(issued.access_token) ||
     issued.access_token === runtimeToken ||
     issued.token_type !== "Bearer" ||
     typeof issued.expires_in !== "number" ||
@@ -4308,10 +6059,12 @@ async function issueInterfaceTokenProof(
       `Interface token endpoint resource did not match the canonical Interface resource for ${iface.metadata.id}`,
     );
   }
-  const response = await fetch(resource, {
-    headers: { authorization: `Bearer ${issued.access_token}`, accept: "application/json" },
-  });
-  const responseBody = await response.text();
+  const { response, body: responseBody } =
+    await fetchPinnedInterfaceBearerResource(
+      resource,
+      issued.access_token,
+      publicProbeDependencies,
+    );
   if (!response.ok) {
     throw new Error(`Interface token could not use ${resource} (HTTP ${response.status}): ${redactResponseSnippet(responseBody, [issued.access_token])}`);
   }
@@ -4387,6 +6140,38 @@ export function interfaceMaterializationEvidence(
 export async function assertInterfacesRetired(
   options: PlatformControlPlaneSmokeOptions,
   context: InterfaceMaterializationContext,
+  publicProbeDependencies: SmokeHttpsDependencies = {},
+): Promise<InterfaceMaterializationContext> {
+  const retainedAuthorityScope = (
+    context as InterfaceMaterializationContext & {
+      readonly [interfaceTransportScope]?: PinnedAuthorityScope;
+    }
+  )[interfaceTransportScope];
+  const transport = controlPlaneDependencies({
+    ...publicProbeDependencies,
+    authorityScope:
+      retainedAuthorityScope ?? publicProbeDependencies.authorityScope,
+  });
+  return await controlPlaneTransportContext.run(
+    transport,
+    async () =>
+      await assertInterfacesRetiredInternal(
+        options,
+        context,
+        {
+          ...publicProbeDependencies,
+          // The materialization proof owns the public/control authority pins.
+          // Retirement may not replace them with a fresh DNS scope.
+          authorityScope: transport.authorityScope,
+        },
+      ),
+  );
+}
+
+async function assertInterfacesRetiredInternal(
+  options: PlatformControlPlaneSmokeOptions,
+  context: InterfaceMaterializationContext,
+  publicProbeDependencies: SmokeHttpsDependencies,
 ): Promise<InterfaceMaterializationContext> {
   const records: InterfaceMaterializationRecord[] = [];
   for (const record of context.records) {
@@ -4505,7 +6290,10 @@ export async function assertInterfacesRetired(
     }
     let endpointRetired: boolean | undefined;
     if (record.endpointUrl) {
-      endpointRetired = await assertInterfaceEndpointRetired(record.endpointUrl);
+      endpointRetired = await verifyInterfaceEndpointRetired(
+        record.endpointUrl,
+        publicProbeDependencies,
+      );
     }
     let tokenRevoked: boolean | undefined;
     let tokenUseDenied: boolean | undefined;
@@ -4516,7 +6304,11 @@ export async function assertInterfacesRetired(
         throw new Error("Interface token was issued but runtime token is unavailable for revocation proof");
       }
       tokenRevoked = await assertInterfaceTokenDenied(options, iface.metadata.id, runtimeToken, tokenProof.permission);
-      tokenUseDenied = await assertInterfaceUseDenied(tokenProof.resource, tokenProof.token);
+      tokenUseDenied = await assertInterfaceUseDenied(
+        tokenProof.resource,
+        tokenProof.token,
+        publicProbeDependencies,
+      );
     }
     records.push({
       ...record,
@@ -4541,20 +6333,106 @@ export async function assertInterfacesRetired(
   return { records };
 }
 
-async function assertInterfaceEndpointRetired(url: string): Promise<boolean> {
-  try {
-    const response = await fetch(url, {
-      headers: { accept: "text/html,application/json" },
-    });
-    await response.body?.cancel().catch(() => undefined);
-    if (response.ok) {
-      throw new InterfaceEndpointStillReachableError(url, response.status);
-    }
-    return true;
-  } catch (error) {
-    if (error instanceof InterfaceEndpointStillReachableError) throw error;
-    return true;
+export async function verifyInterfaceEndpointRetired(
+  urlValue: string,
+  dependencies: Pick<
+    PublicUrlFetchDependencies,
+    "resolver" | "connector" | "sleep" | "maxAttempts" | "requestTimeoutMs"
+  >,
+): Promise<boolean> {
+  const url = strictPublicUrl(urlValue, "Interface public endpoint");
+  await verifyPinnedPublicRetirement(
+    url,
+    interfacePublicEndpointCheck(url),
+    "Interface public endpoint",
+    dependencies,
+    { maxAttempts: 4, deadlineMs: 120_000 },
+  );
+  return true;
+}
+
+async function verifyPinnedPublicRetirement(
+  url: URL,
+  check: PublicUrlCheck,
+  label: string,
+  dependencies: Pick<
+    PublicUrlFetchDependencies,
+    "resolver" | "connector" | "sleep" | "maxAttempts" | "requestTimeoutMs"
+  >,
+  defaults: {
+    readonly maxAttempts: number;
+    readonly deadlineMs: number;
+  },
+): Promise<404> {
+  const transport = publicTransportDependencies(dependencies);
+  const resolver = transport.resolver ?? resolveAllDnsAddresses;
+  const connector = transport.connector ?? connectPinnedHttps;
+  const sleepForRetry = transport.sleep ?? sleep;
+  const maxAttempts = transport.maxAttempts ?? defaults.maxAttempts;
+  const requestTimeoutMs = transport.requestTimeoutMs ?? defaults.deadlineMs;
+  if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error(`${label} retirement max attempts must be a positive integer`);
   }
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1) {
+    throw new Error(`${label} retirement timeout must be a positive integer`);
+  }
+  const deadline = createAbsoluteRequestDeadline(
+    requestTimeoutMs,
+    `${label} retirement`,
+  );
+  let target: ResolvedDnsAddress | undefined;
+  let lastStatus: number | undefined;
+  let lastFailure: "http" | "transport" = "transport";
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      target ??= await resolvePinnedPublicTarget(
+        url.hostname,
+        resolver,
+        label,
+        requestTimeoutMs,
+        deadline,
+      );
+      const { response } = await fetchPublicCheckAttempt(
+        url,
+        check,
+        target,
+        connector,
+        requestTimeoutMs,
+        undefined,
+        "GET",
+        undefined,
+        deadline,
+      );
+      lastStatus = response.status;
+      lastFailure = "http";
+      if (response.status === 404) return 404;
+    } catch (error) {
+      if (error instanceof PublicUrlNonPublicAddressError) throw error;
+      lastFailure = "transport";
+      if (error instanceof PublicUrlDnsResolutionError) break;
+    }
+    if (attempt + 1 >= maxAttempts || remainingDeadlineMs(deadline) <= 0) break;
+    const retrySleep = Promise.resolve().then(() =>
+      sleepForRetry(Math.min(2_000, remainingDeadlineMs(deadline))),
+    );
+    retrySleep.catch(() => undefined);
+    try {
+      await waitWithinDeadline(
+        retrySleep,
+        deadline,
+        () => new PublicUrlCheckTimeoutError(check.name),
+      );
+    } catch {
+      lastFailure = "transport";
+      break;
+    }
+  }
+  if (lastFailure === "http" && lastStatus !== undefined) {
+    throw new Error(
+      `${label} did not return contract 404 after bounded retry (last HTTP ${lastStatus})`,
+    );
+  }
+  throw new Error(`${label} retirement is inconclusive after bounded retry`);
 }
 
 async function assertInterfaceTokenDenied(
@@ -4563,19 +6441,13 @@ async function assertInterfaceTokenDenied(
   runtimeToken: string,
   permission: string,
 ): Promise<boolean> {
-  const response = await fetch(
-    `${options.url}${API_PREFIX}/interfaces/${encodeURIComponent(interfaceId)}/token`,
-    {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-        authorization: `Bearer ${runtimeToken}`,
-      },
-      body: JSON.stringify({ permission }),
-    },
-  );
-  await response.body?.cancel().catch(() => undefined);
+  const { response } = await fetchPinnedControlPlaneRequest({
+    baseUrl: options.url,
+    token: runtimeToken,
+    method: "POST",
+    path: `${API_PREFIX}/interfaces/${encodeURIComponent(interfaceId)}/token`,
+    body: { permission },
+  });
   if (![401, 403, 404].includes(response.status)) {
     throw new Error(
       `retired Interface ${interfaceId} token endpoint returned HTTP ${response.status}`,
@@ -4587,14 +6459,16 @@ async function assertInterfaceTokenDenied(
 async function assertInterfaceUseDenied(
   resource: string,
   token: string,
+  publicProbeDependencies: Pick<
+    PublicUrlFetchDependencies,
+    "resolver" | "connector"
+  >,
 ): Promise<boolean> {
-  const response = await fetch(resource, {
-    headers: {
-      accept: "application/json",
-      authorization: `Bearer ${token}`,
-    },
-  });
-  await response.body?.cancel().catch(() => undefined);
+  const { response } = await fetchPinnedInterfaceBearerResource(
+    resource,
+    token,
+    publicProbeDependencies,
+  );
   if (![401, 403, 404].includes(response.status)) {
     throw new InterfaceTokenUseStillAuthorizedError(resource, response.status);
   }
@@ -4870,70 +6744,72 @@ async function assertCloudflareWorkerGone(
   publicOutputs?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
   const workerName = cloudflareWorkerName(options, publicOutputs);
-  const deadline = Date.now() + 60_000;
+  const deadline = createAbsoluteRequestDeadline(
+    60_000,
+    "Cloudflare Worker absence check",
+  );
   let lastStatus = 0;
-  while (Date.now() <= deadline) {
-    const response = await cloudflareScriptRequest(options, "GET", workerName);
+  while (remainingDeadlineMs(deadline) > 0) {
+    const response = await cloudflareScriptRequest(
+      options,
+      workerName,
+      Math.min(
+        PUBLIC_URL_REQUEST_TIMEOUT_MS,
+        Math.max(1, remainingDeadlineMs(deadline)),
+      ),
+    );
     lastStatus = response.status;
     if (response.status === 404) return;
-    await sleep(2_000);
+    try {
+      await waitWithinDeadline(
+        sleep(Math.min(2_000, remainingDeadlineMs(deadline))),
+        deadline,
+        () => new CloudflareApiTimeoutError(),
+      );
+    } catch {
+      break;
+    }
   }
   throw new Error(
     `Cloudflare Worker ${workerName} still existed after destroy (last HTTP ${lastStatus})`,
   );
 }
 
-async function assertPublicWorkerUrlGone(
+export async function verifyPublicWorkerUrlGone(
   options: PlatformControlPlaneSmokeOptions,
   publicOutputs?: Readonly<Record<string, unknown>>,
+  dependencies: Pick<
+    PublicUrlFetchDependencies,
+    "resolver" | "connector" | "sleep" | "maxAttempts" | "requestTimeoutMs"
+  > = {},
 ): Promise<void> {
-  const url = publicRuntimeUrl(options, publicOutputs);
-  const deadline = Date.now() + 120_000;
-  let lastStatus = 0;
-  let lastBody = "";
-  while (Date.now() <= deadline) {
-    try {
-      const response = await fetch(url, {
-        headers: { accept: "text/html" },
-      });
-      lastStatus = response.status;
-      lastBody = await response.text();
-      if (
-        response.status === 404 ||
-        !(response.ok && isCurrentTakosumiHelloPage(lastBody))
-      ) {
-        return;
-      }
-    } catch (error) {
-      lastBody = error instanceof Error ? error.message : String(error);
-      return;
-    }
-    await sleep(2_000);
-  }
-  throw new Error(
-    `Cloudflare Worker public URL still served the Takosumi page after destroy (last HTTP ${lastStatus}, body ${JSON.stringify(
-      lastBody.slice(0, 120),
-    )})`,
+  const url = strictPublicUrl(
+    publicRuntimeUrl(options, publicOutputs),
+    "Cloudflare Worker public URL",
+  );
+  const check = publicWorkerProbeCheck(url);
+  await verifyPinnedPublicRetirement(
+    url,
+    check,
+    "Cloudflare Worker public URL",
+    dependencies,
+    { maxAttempts: 60, deadlineMs: 120_000 },
   );
 }
 
 async function cloudflareScriptRequest(
   options: PlatformControlPlaneSmokeOptions,
-  method: "GET",
   workerName = options.appName,
+  timeoutMs = PUBLIC_URL_REQUEST_TIMEOUT_MS,
 ): Promise<Response> {
-  return await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(
+  const { response } = await fetchBoundedCloudflareApi(
+    `/client/v4/accounts/${encodeURIComponent(
       options.cloudflareAccountId,
     )}/workers/scripts/${encodeURIComponent(workerName)}`,
-    {
-      method,
-      headers: {
-        authorization: `Bearer ${options.cloudflareApiToken}`,
-        accept: "application/json",
-      },
-    },
+    options.cloudflareApiToken,
+    { readBody: false, timeoutMs },
   );
+  return response;
 }
 
 async function revokeConnection(
@@ -4958,136 +6834,16 @@ async function revokeConnection(
 }
 
 async function requestJson<T = unknown>(options: RequestOptions): Promise<T> {
-  if (shouldUseNodeHttpTransport(options)) {
-    return await requestJsonWithNodeTransport<T>(options);
+  const method = options.method ?? "GET";
+  const { response, body: text } =
+    await fetchPinnedControlPlaneRequest(options);
+  if (!response.ok) {
+    throw new Error(`${method} ${options.path} failed (${response.status})`);
   }
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    authorization: `Bearer ${options.token}`,
-  };
-  const init: RequestInit = { method: options.method ?? "GET", headers };
-  const controller =
-    options.timeoutMs && options.timeoutMs > 0
-      ? new AbortController()
-      : undefined;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  if (controller) {
-    init.signal = controller.signal;
-    timeout = setTimeout(() => controller.abort(), options.timeoutMs);
-  }
-  if (options.binary !== undefined) {
-    headers["content-type"] = "application/zstd";
-    init.body = options.binary as unknown as BodyInit;
-  } else if (options.body !== undefined) {
-    headers["content-type"] = "application/json";
-    init.body = JSON.stringify(options.body);
-  }
-  let response: Response;
-  try {
-    response = await fetch(`${options.baseUrl}${options.path}`, init);
-  } catch (error) {
-    if (
-      controller?.signal.aborted ||
-      (options.timeoutMs !== undefined && isFetchTimeoutError(error))
-    ) {
-      throw new RequestTimeoutError(
-        options.method ?? "GET",
-        options.path,
-        options.timeoutMs ?? 0,
-      );
-    }
-    throw error;
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
-  const text = await response.text();
   const body = parseResponseBody(
     text,
-    `${options.method ?? "GET"} ${options.path}`,
+    `${method} ${options.path}`,
   );
-  if (!response.ok) {
-    throw new Error(
-      `${options.method ?? "GET"} ${options.path} failed (${response.status}): ${apiErrorMessage(
-        body,
-        `HTTP ${response.status}`,
-      )}`,
-    );
-  }
-  if (body === undefined) {
-    if (options.allowEmpty) return {} as T;
-    throw new Error(
-      `${options.method ?? "GET"} ${options.path} returned empty response`,
-    );
-  }
-  return body as T;
-}
-
-function shouldUseNodeHttpTransport(options: RequestOptions): boolean {
-  if (options.transport === "native") return false;
-  if (options.transport === "node") return true;
-  return process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT === "node";
-}
-
-async function requestJsonWithNodeTransport<T = unknown>(
-  options: RequestOptions,
-): Promise<T> {
-  const method = options.method ?? "GET";
-  const headers: Record<string, string> = { accept: "application/json" };
-  const input: NodeHttpTransportInput = {
-    url: `${options.baseUrl}${options.path}`,
-    method,
-    headers,
-    ...(options.timeoutMs !== undefined
-      ? { timeoutMs: options.timeoutMs }
-      : {}),
-  };
-  let transportInput: NodeHttpTransportInput;
-  if (options.binary !== undefined) {
-    transportInput = {
-      ...input,
-      headers: { ...headers, "content-type": "application/zstd" },
-      binaryBase64: Buffer.from(options.binary).toString("base64"),
-    };
-  } else if (options.body !== undefined) {
-    transportInput = {
-      ...input,
-      headers: { ...headers, "content-type": "application/json" },
-      bodyText: JSON.stringify(options.body),
-    };
-  } else {
-    transportInput = input;
-  }
-  const result = await runNodeHttpTransport(
-    transportInput,
-    options.token,
-    method,
-    options.path,
-  );
-  if (!result.ok) {
-    if (result.timeout) {
-      throw new RequestTimeoutError(
-        method,
-        options.path,
-        options.timeoutMs ?? 0,
-      );
-    }
-    throw new Error(
-      `${method} ${options.path} failed in node HTTP transport: ${publicErrorMessage(
-        result.message ?? result.name ?? "unknown error",
-      )}`,
-    );
-  }
-  const text = result.bodyText ?? "";
-  const body = parseResponseBody(text, `${method} ${options.path}`);
-  const status = result.status ?? 0;
-  if (status < 200 || status >= 300) {
-    throw new Error(
-      `${method} ${options.path} failed (${status}): ${apiErrorMessage(
-        body,
-        `HTTP ${status}`,
-      )}`,
-    );
-  }
   if (body === undefined) {
     if (options.allowEmpty) return {} as T;
     throw new Error(`${method} ${options.path} returned empty response`);
@@ -5095,80 +6851,134 @@ async function requestJsonWithNodeTransport<T = unknown>(
   return body as T;
 }
 
-async function runNodeHttpTransport(
-  input: NodeHttpTransportInput,
-  token: string,
-  method: string,
-  path: string,
-): Promise<NodeHttpTransportResult> {
-  const nodeBinary = process.env.TAKOSUMI_NODE_BINARY ?? "node";
-  const child = spawn(nodeBinary, ["-e", NODE_HTTP_TRANSPORT_SCRIPT], {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: nodeHttpTransportEnv(token),
-  });
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+export async function fetchPinnedControlPlaneRequest(
+  options: RequestOptions,
+  dependencies: ControlPlaneTransportDependencies =
+    controlPlaneTransportContext.getStore() ?? {},
+): Promise<{ readonly response: Response; readonly body: string }> {
+  const method = options.method ?? "GET";
+  if (!/^[A-Z]+$/u.test(method)) {
+    throw new Error("Takosumi control-plane request method is invalid");
+  }
+  if (
+    !options.token ||
+    new TextEncoder().encode(options.token).byteLength > PRIVATE_INPUT_MAX_BYTES ||
+    /[\0\r\n]/u.test(options.token)
+  ) {
+    throw new Error("Takosumi control-plane bearer is invalid");
+  }
+  if (options.binary !== undefined && options.body !== undefined) {
+    throw new Error("Takosumi control-plane request body is ambiguous");
+  }
   const timeoutMs =
-    input.timeoutMs !== undefined && input.timeoutMs > 0
-      ? input.timeoutMs + 5_000
-      : undefined;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const exitCode = await new Promise<number>((resolvePromise, reject) => {
-    child.on("error", reject);
-    child.on("close", (code) => resolvePromise(code ?? 1));
-    if (timeoutMs !== undefined) {
-      timeout = setTimeout(() => {
-        child.kill("SIGKILL");
-        reject(new RequestTimeoutError(method, path, input.timeoutMs ?? 0));
-      }, timeoutMs);
+    options.timeoutMs ?? dependencies.requestTimeoutMs ??
+      PUBLIC_URL_REQUEST_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+    throw new Error("Takosumi control-plane request timeout must be a positive integer");
+  }
+  const deadline = createAbsoluteRequestDeadline(
+    timeoutMs,
+    "Takosumi control-plane request",
+  );
+  const url = controlPlaneRequestUrl(options.baseUrl, options.path);
+  const target = await resolvePinnedPublicTarget(
+    url.hostname,
+    dependencies.resolver ?? resolveAllDnsAddresses,
+    "Takosumi control-plane origin",
+    timeoutMs,
+    deadline,
+  );
+  let requestBody: Uint8Array | undefined;
+  let contentType: string | undefined;
+  if (options.binary !== undefined) {
+    requestBody = options.binary;
+    contentType = "application/zstd";
+  } else if (options.body !== undefined) {
+    const serialized = JSON.stringify(options.body);
+    if (serialized === undefined) {
+      throw new Error("Takosumi control-plane JSON body is invalid");
     }
-    child.stdin.end(`${JSON.stringify(input)}\n`);
-  }).finally(() => {
-    if (timeout) clearTimeout(timeout);
-  });
-  const stderrText = Buffer.concat(stderr).toString("utf8").trim();
-  if (exitCode !== 0) {
-    throw new Error(
-      `${method} ${path} node HTTP transport exited ${exitCode}: ${redactResponseSnippet(
-        stderrText,
-      )}`,
-    );
+    requestBody = new TextEncoder().encode(serialized);
+    contentType = "application/json";
   }
-  const raw = Buffer.concat(stdout).toString("utf8");
+  if (
+    requestBody !== undefined &&
+    requestBody.byteLength > CONTROL_PLANE_REQUEST_MAX_BYTES
+  ) {
+    throw new Error("Takosumi control-plane request body is oversized");
+  }
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    authorization: `Bearer ${options.token}`,
+    ...(contentType === undefined ? {} : { "content-type": contentType }),
+    ...(requestBody === undefined
+      ? {}
+      : { "content-length": String(requestBody.byteLength) }),
+  };
+  let result: { readonly response: Response; readonly body: string };
   try {
-    return parseJsonRecord(
-      raw,
-      "node HTTP transport result",
-    ) as unknown as NodeHttpTransportResult;
-  } catch (error) {
-    throw new Error(
-      `${method} ${path} node HTTP transport returned invalid result: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+    result = await fetchPublicCheckAttempt(
+      url,
+      {
+        name: "Takosumi control-plane",
+        output: "control-plane",
+        path: `${url.pathname}${url.search}`,
+        expectedStatus: 200,
+        bodyIncludes: [],
+        destroyExpectation: { kind: "not-verifiable", reason: "control-plane request" },
+      },
+      target,
+      dependencies.connector ?? connectPinnedHttps,
+      timeoutMs,
+      headers,
+      method,
+      requestBody,
+      deadline,
     );
+  } catch (error) {
+    if (
+      error instanceof PublicUrlDnsResolutionError ||
+      error instanceof PublicUrlNonPublicAddressError
+    ) {
+      throw error;
+    }
+    if (error instanceof PublicUrlCheckTimeoutError) {
+      throw new RequestTimeoutError(
+        method,
+        options.path,
+        timeoutMs,
+      );
+    }
+    if (error instanceof PublicUrlResponseTooLargeError) {
+      throw new RequestResponseTooLargeError(method, options.path);
+    }
+    throw new RequestTransportError(method, options.path);
   }
+  if (result.response.status >= 300 && result.response.status < 400) {
+    throw new RequestRedirectError(method, options.path);
+  }
+  return result;
 }
 
-function nodeHttpTransportEnv(token: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { TAKOSUMI_SMOKE_HTTP_TOKEN: token };
-  for (const name of [
-    "PATH",
-    "NODE_EXTRA_CA_CERTS",
-    "SSL_CERT_FILE",
-    "SSL_CERT_DIR",
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "NO_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "no_proxy",
-  ] as const) {
-    const value = process.env[name];
-    if (value !== undefined) env[name] = value;
+function controlPlaneRequestUrl(baseUrl: string, path: string): URL {
+  try {
+    const base = strictPublicUrl(baseUrl, "Takosumi control-plane base URL");
+    if (base.pathname !== "/") throw new Error("base URL has a path");
+    if (
+      !path.startsWith("/") ||
+      path.startsWith("//") ||
+      /[#\0\r\n]/u.test(path)
+    ) {
+      throw new Error("request path is invalid");
+    }
+    const url = new URL(path, `${base.origin}/`);
+    if (url.origin !== base.origin) throw new Error("request origin changed");
+    return url;
+  } catch {
+    throw new Error(
+      "Takosumi control-plane request requires one canonical public HTTPS origin and a relative API path",
+    );
   }
-  return env;
 }
 
 function isFetchTimeoutError(error: unknown): boolean {
@@ -5182,18 +6992,12 @@ function parseResponseBody(text: string, label: string): unknown {
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
       return JSON.parse(trimmed);
-    } catch (error) {
-      throw new Error(
-        `${label} returned invalid JSON: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+    } catch {
+      throw new Error(`${label} returned invalid JSON`);
     }
   }
   return {
-    message: `${label} returned non-JSON response: ${redactResponseSnippet(
-      trimmed,
-    )}`,
+    message: `${label} returned non-JSON response`,
   };
 }
 
@@ -5405,20 +7209,65 @@ function parseExpectedServiceIdentity(
   return { headerName, value };
 }
 
-async function probeServiceIdentity(
+export async function probeServiceIdentity(
   options: Pick<
     PlatformControlPlaneSmokeOptions,
     "url" | "expectedServiceIdentity"
   >,
+  dependencies: ControlPlaneTransportDependencies =
+    controlPlaneTransportContext.getStore() ?? {},
 ): Promise<void> {
   const expectation = options.expectedServiceIdentity;
   if (!expectation) return;
-  const response = await fetch(options.url, {
-    method: "GET",
-    headers: { accept: "text/html,application/json" },
-    redirect: "manual",
-  });
-  await response.body?.cancel().catch(() => undefined);
+  const url = strictPublicUrl(options.url, "Takosumi service identity origin");
+  if (url.pathname !== "/") {
+    throw new Error("Takosumi service identity origin must not include a path");
+  }
+  const deadline = createAbsoluteRequestDeadline(
+    PUBLIC_URL_REQUEST_TIMEOUT_MS,
+    "Takosumi service identity origin",
+  );
+  const target = await resolvePinnedPublicTarget(
+    url.hostname,
+    dependencies.resolver ?? resolveAllDnsAddresses,
+    "Takosumi service identity origin",
+    PUBLIC_URL_REQUEST_TIMEOUT_MS,
+    deadline,
+  );
+  let response: Response;
+  try {
+    ({ response } = await fetchPublicCheckAttempt(
+      url,
+      {
+        name: "Takosumi service identity",
+        output: "control-plane",
+        path: "/",
+        expectedStatus: 200,
+        bodyIncludes: [],
+        destroyExpectation: { kind: "not-verifiable", reason: "service identity request" },
+      },
+      target,
+      dependencies.connector ?? connectPinnedHttps,
+      PUBLIC_URL_REQUEST_TIMEOUT_MS,
+      { accept: "text/html,application/json" },
+      "GET",
+      undefined,
+      deadline,
+    ));
+  } catch (error) {
+    if (
+      error instanceof PublicUrlDnsResolutionError ||
+      error instanceof PublicUrlNonPublicAddressError ||
+      error instanceof PublicUrlCheckTimeoutError ||
+      error instanceof PublicUrlResponseTooLargeError
+    ) {
+      throw error;
+    }
+    throw new Error("Takosumi service identity request failed");
+  }
+  if (response.status >= 300 && response.status < 400) {
+    throw new Error("Takosumi service identity request rejected a redirect response");
+  }
   assertServiceIdentityResponse(response.headers, expectation);
 }
 
@@ -5514,11 +7363,22 @@ function parseFunctionalProbeEnvNames(
 }
 
 function normalizeBaseUrl(value: string): string {
-  const url = new URL(value);
-  url.pathname = url.pathname.replace(/\/+$/g, "");
-  url.search = "";
-  url.hash = "";
-  return url.toString().replace(/\/$/, "");
+  try {
+    if (
+      value !== value.trim() ||
+      /[\u0000-\u0020\u007f]/u.test(value) ||
+      !/^https:\/\/[^/?#\\]+\/?$/iu.test(value)
+    ) {
+      throw new Error("non-authority URL syntax");
+    }
+    const url = strictPublicUrl(value, "--url");
+    if (url.pathname !== "/") throw new Error("non-origin path");
+    return url.origin;
+  } catch {
+    throw new Error(
+      "--url must be an absolute HTTPS origin with a public hostname and without credentials, port, path, query, or fragment",
+    );
+  }
 }
 
 function parseCloudflareConnectionMode(
@@ -6281,7 +8141,7 @@ function parsePublicUrlCheck(
     throw new Error(`public URL checks[${index}].name is invalid`);
   }
   const path = stringField(value, "path") ?? "/";
-  if (!path.startsWith("/") || /[\0\r\n]/u.test(path)) {
+  if (!path.startsWith("/") || path.startsWith("//") || /[?#\0\r\n]/u.test(path)) {
     throw new Error(`public URL checks[${index}].path must start with /`);
   }
   const expectedStatus = numberField(value, "expectedStatus") ?? 200;
@@ -6295,13 +8155,65 @@ function parsePublicUrlCheck(
     );
   }
   const bodyIncludes = stringArrayField(value, "bodyIncludes");
-  return {
+  const destroyExpectation = parsePublicUrlDestroyExpectation(value, index);
+  const check = {
     name,
     output,
     path,
     expectedStatus,
     bodyIncludes,
+    destroyExpectation,
   };
+  assertPublicUrlLifecycleContract(
+    check,
+    `public URL checks[${index}]`,
+  );
+  return check;
+}
+
+function assertPublicUrlLifecycleContract(
+  check: PublicUrlCheck,
+  label = `public URL check ${check.name}`,
+): void {
+  if (
+    check.destroyExpectation.kind === "http-404" &&
+    (check.expectedStatus === 404 || check.expectedStatus === 410)
+  ) {
+    throw new Error(
+      `${label}.expectedStatus must prove presence and cannot be 404 or 410 when destroyExpectation is http-404`,
+    );
+  }
+}
+
+function parsePublicUrlDestroyExpectation(
+  value: Readonly<Record<string, unknown>>,
+  index: number,
+): PublicUrlDestroyExpectation {
+  const expectation = value.destroyExpectation;
+  if (!isRecord(expectation)) {
+    throw new Error(
+      `public URL checks[${index}].destroyExpectation must explicitly select http-404 or not-verifiable`,
+    );
+  }
+  if (expectation.kind === "http-404") {
+    return { kind: "http-404" };
+  }
+  if (expectation.kind === "not-verifiable") {
+    const reason = stringField(expectation, "reason");
+    if (
+      !reason ||
+      new TextEncoder().encode(reason).byteLength > 240 ||
+      /[\0\r\n]/u.test(reason)
+    ) {
+      throw new Error(
+        `public URL checks[${index}] not-verifiable destroyExpectation requires a bounded reason`,
+      );
+    }
+    return { kind: "not-verifiable", reason };
+  }
+  throw new Error(
+    `public URL checks[${index}].destroyExpectation must explicitly select http-404 or not-verifiable`,
+  );
 }
 
 function stringField(
@@ -6395,6 +8307,10 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly varsDigest: string;
   readonly outputAllowlistNames: readonly string[];
   readonly publicUrlCheckNames: readonly string[];
+  readonly publicUrlDestroyExpectations: readonly {
+    readonly name: string;
+    readonly expectation: PublicUrlDestroyExpectation;
+  }[];
   readonly cloudflareWorkerNameOutput?: string;
   readonly runtimePublicUrlOutput?: string;
   readonly functionalProbeScriptDigest?: string;
@@ -6447,6 +8363,10 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
     varsDigest: digestJson(options.vars),
     outputAllowlistNames: Object.keys(options.outputAllowlist).sort(),
     publicUrlCheckNames: options.publicUrlChecks.map((check) => check.name),
+    publicUrlDestroyExpectations: options.publicUrlChecks.map((check) => ({
+      name: check.name,
+      expectation: check.destroyExpectation,
+    })),
     ...(options.cloudflareWorkerNameOutput
       ? { cloudflareWorkerNameOutput: options.cloudflareWorkerNameOutput }
       : {}),
@@ -6676,6 +8596,11 @@ function finalizeFunctionalProbeCleanup(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isWeakMapKey(value: unknown): value is object {
+  return value !== null &&
+    (typeof value === "object" || typeof value === "function");
 }
 
 function requiredSteps(
@@ -7468,8 +9393,26 @@ async function runSelfTest(): Promise<void> {
     throw new Error("self-test deploy timeout failed result shape is wrong");
   }
   const originalFetch = globalThis.fetch;
-  const originalSmokeTransport = process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT;
-  delete process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT;
+  const selfTestControlPlaneTransport: ControlPlaneTransportDependencies = {
+    resolver: async () => [{ address: "93.184.216.34", family: 4 }],
+    connector: async (request) => {
+      const body = request.body === undefined
+        ? undefined
+        : request.headers["content-type"] === "application/json"
+          ? new TextDecoder().decode(request.body)
+          : request.body as unknown as BodyInit;
+      return await globalThis.fetch(
+        `https://${request.servername}${request.path}`,
+        {
+          method: request.method,
+          headers: request.headers,
+          ...(body === undefined ? {} : { body }),
+          signal: request.signal,
+          redirect: "error",
+        },
+      );
+    },
+  };
   const workspaceResolveCalls: string[] = [];
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
@@ -7502,11 +9445,14 @@ async function runSelfTest(): Promise<void> {
     throw new Error(`unexpected self-test workspace request: ${url}`);
   }) as typeof fetch;
   try {
-    const resolved = await resolveWorkspaceId({
-      ...options,
-      workspace: "@existing-workspace",
-      ensureWorkspace: true,
-    });
+    const resolved = await controlPlaneTransportContext.run(
+      selfTestControlPlaneTransport,
+      async () => await resolveWorkspaceId({
+        ...options,
+        workspace: "@existing-workspace",
+        ensureWorkspace: true,
+      }),
+    );
     if (resolved !== "ws_existing") {
       throw new Error("self-test did not resolve existing Workspace id");
     }
@@ -7515,11 +9461,6 @@ async function runSelfTest(): Promise<void> {
     }
   } finally {
     globalThis.fetch = originalFetch;
-    if (originalSmokeTransport === undefined) {
-      delete process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT;
-    } else {
-      process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT = originalSmokeTransport;
-    }
   }
   globalThis.fetch = (async (input) => {
     const url = String(input);
@@ -7541,21 +9482,19 @@ async function runSelfTest(): Promise<void> {
     throw new Error(`unexpected self-test workspace create request: ${url}`);
   }) as typeof fetch;
   try {
-    const created = await resolveWorkspaceId({
-      ...options,
-      workspace: "@created-workspace",
-      ensureWorkspace: true,
-    });
+    const created = await controlPlaneTransportContext.run(
+      selfTestControlPlaneTransport,
+      async () => await resolveWorkspaceId({
+        ...options,
+        workspace: "@created-workspace",
+        ensureWorkspace: true,
+      }),
+    );
     if (created !== "ws_created") {
       throw new Error("self-test did not accept workspace create response");
     }
   } finally {
     globalThis.fetch = originalFetch;
-    if (originalSmokeTransport === undefined) {
-      delete process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT;
-    } else {
-      process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT = originalSmokeTransport;
-    }
   }
   const timeoutOptions = await resolveOptions(
     {
@@ -7590,41 +9529,20 @@ async function runSelfTest(): Promise<void> {
       );
     })) as typeof fetch;
   try {
-    await requestJson({
-      baseUrl: "https://app-staging.takosumi.com",
-      token: "redacted",
-      method: "POST",
-      path: `${API_PREFIX}/capsules/cap_selftest/plan`,
-      timeoutMs: 1,
-      body: {},
-    });
+    await controlPlaneTransportContext.run(
+      selfTestControlPlaneTransport,
+      async () => await requestJson({
+        baseUrl: "https://app-staging.takosumi.com",
+        token: "redacted",
+        method: "POST",
+        path: `${API_PREFIX}/capsules/cap_selftest/plan`,
+        timeoutMs: 1,
+        body: {},
+      }),
+    );
     throw new Error("self-test requestJson timeout did not fire");
   } catch (error) {
     if (!(error instanceof RequestTimeoutError)) {
-      throw error;
-    }
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-  globalThis.fetch = (async () => {
-    throw new DOMException("synthetic transport timeout", "TimeoutError");
-  }) as typeof fetch;
-  try {
-    await requestJson({
-      baseUrl: "https://app-staging.takosumi.com",
-      token: "redacted",
-      method: "POST",
-      path: `${API_PREFIX}/capsules/cap_selftest/plan`,
-      timeoutMs: 1,
-      body: {},
-      transport: "native",
-    });
-    throw new Error("self-test requestJson runtime timeout did not fire");
-  } catch (error) {
-    if (
-      !(error instanceof RequestTimeoutError) ||
-      error.path !== `${API_PREFIX}/capsules/cap_selftest/plan`
-    ) {
       throw error;
     }
   } finally {
@@ -7686,7 +9604,7 @@ Options:
   --no-default-vars                               do not merge smoke default variables into --vars-json
   --output-allowlist-json <json>                  explicit output projection object; defaults only to the selected bundled smoke fixture's exact ordinary Output names
   --output-allowlist-json-file <path>             read output projection object from a JSON file
-  --public-url-checks-json <json>                 optional array of {output,path,expectedStatus,bodyIncludes[]} checks against allowlisted public URL outputs
+  --public-url-checks-json <json>                 optional array of {output,path,expectedStatus,bodyIncludes[],destroyExpectation:{kind:"http-404"}|{kind:"not-verifiable",reason}} checks against allowlisted public URL outputs
   --public-url-checks-json-file <path>            read public URL checks from a JSON file
   --cloudflare-worker-name-output <name>          optional explicit projected Output name for Cloudflare script verification; otherwise --app-name is authoritative
   --runtime-public-url-output <name>              optional explicit projected URL Output name; otherwise the Cloudflare reference URL is derived from --app-name
