@@ -1,5 +1,6 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -25,6 +26,7 @@ import {
   appendPlatformMutationFence,
   appendPlatformRestoreFence,
   buildDryRunSeal,
+  completeRelease,
   createPlatformDeployClosure,
   createPlatformDryRunConfig,
   createPlatformUploadCustody,
@@ -48,7 +50,11 @@ import {
   readPlatformMutationFence,
   readPlatformRestoreFence,
   selectRecoveredVersion,
+  withPlatformForwardContainerPreflight,
   withPlatformUploadCustody,
+  type PlatformContainerState,
+  type PlatformReleaseCommand,
+  type PlatformReleasePlan,
 } from "../../scripts/platform-worker-release.ts";
 
 const roots: string[] = [];
@@ -225,6 +231,150 @@ async function runActualWrangler(
     throw new Error(`Wrangler rejected projected config:\n${stderr}`);
   }
   return { exitCode: result.exitCode, stdout, stderr };
+}
+
+function testDigest(value: string | Uint8Array): string {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function forwardExecuteFixture(prefix: string): Readonly<{
+  root: string;
+  planPath: string;
+  evidencePath: string;
+  configSource: string;
+  plan: PlatformReleasePlan;
+}> {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  roots.push(root);
+  chmodSync(root, 0o700);
+  const configSource = [
+    'name = "takosumi-staging"',
+    "[vars]",
+    'TAKOSUMI_ENVIRONMENT = "staging"',
+    "[[containers]]",
+    'class_name = "OpenTofuRunnerObject"',
+    `image = ${JSON.stringify(FORWARD_RUNNER_IMAGE)}`,
+    "max_instances = 1",
+    "",
+  ].join("\n");
+  const createClosure = (name: string) => {
+    const path = join(root, name);
+    mkdirSync(join(path, "dry-run"), { recursive: true });
+    writeFileSync(join(path, "wrangler.toml"), configSource);
+    writeFileSync(join(path, "dry-run/index.js"), "export default {};\n");
+    return {
+      path,
+      configPath: join(path, "wrangler.toml"),
+      uploadEntrypointPath: join(path, "dry-run/index.js"),
+      closure: dashboardAssetTreeSeal(path),
+      dryRun: dashboardAssetTreeSeal(join(path, "dry-run")),
+    };
+  };
+  const forward = createClosure("forward-closure");
+  const restore = createClosure("restore-closure");
+  const operatorConfigPath = join(root, "wrangler.staging.toml");
+  writeFileSync(operatorConfigPath, configSource, { mode: 0o600 });
+  const predecessorContainer: PlatformContainerState = {
+    id: "planned-application-id",
+    name: "takosumi-staging-opentofurunnerobject",
+    state: "ready",
+    image: FORWARD_RUNNER_IMAGE,
+    version: 85,
+    hasActiveRollout: false,
+    health: { failed: 0, starting: 0, scheduling: 0, errorCount: 0 },
+  };
+  const identity = {
+    kind: "takosumi.platform-worker-release-plan@v5" as const,
+    createdAt: "2026-09-04T00:00:00.000Z",
+    environment: "staging" as const,
+    sourceCommit: gitCommand(
+      ["rev-parse", "HEAD"],
+      resolve(import.meta.dir, "../.."),
+    ),
+    releaseNonce: "a".repeat(32),
+    configPath: operatorConfigPath,
+    configSha256: testDigest(readFileSync(operatorConfigPath)),
+    closurePath: forward.path,
+    closure: forward.closure,
+    sealedConfigPath: forward.configPath,
+    sealedConfigSha256: testDigest(readFileSync(forward.configPath)),
+    uploadEntrypointPath: forward.uploadEntrypointPath,
+    checkpointPath: join(root, "release.checkpoint.jsonl"),
+    restoreClosurePath: restore.path,
+    restoreClosure: restore.closure,
+    restoreSealedConfigPath: restore.configPath,
+    restoreSealedConfigSha256: testDigest(readFileSync(restore.configPath)),
+    restoreUploadEntrypointPath: restore.uploadEntrypointPath,
+    restoreDryRun: restore.dryRun,
+    dashboardAssets: forward.dryRun,
+    dryRun: forward.dryRun,
+    secretNamesSha256: testDigest("[]"),
+    predecessorVersionId: PREVIOUS,
+    predecessorContainer,
+  };
+  const identityDigest = testDigest(JSON.stringify(identity)).slice(
+    "sha256:".length,
+  );
+  const subject = {
+    ...identity,
+    releaseTag: `tks-stg-${identityDigest.slice(0, 48)}`,
+  };
+  const plan: PlatformReleasePlan = {
+    ...subject,
+    confirmation: testDigest(JSON.stringify(subject)),
+  };
+  const planPath = join(root, "release-plan.json");
+  writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+  return {
+    root,
+    planPath,
+    evidencePath: join(root, "release-evidence.json"),
+    configSource,
+    plan,
+  };
+}
+
+function commandConfig(argv: readonly string[]): string {
+  const index = argv.indexOf("--config");
+  if (index < 0 || argv[index + 1] === undefined) {
+    throw new Error("test command omitted --config");
+  }
+  return argv[index + 1]!;
+}
+
+function successfulCommand(stdout: string): Readonly<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  return { exitCode: 0, stdout, stderr: "" };
+}
+
+function observedPlatformUploadCustody(
+  fixture: ReturnType<typeof forwardExecuteFixture>,
+  events: string[],
+): typeof createPlatformUploadCustody {
+  return (closurePath, expected, uploadEntrypointPath, parentPath) => {
+    const custody = createPlatformUploadCustody(
+      closurePath,
+      expected,
+      uploadEntrypointPath,
+      parentPath,
+    );
+    return {
+      ...custody,
+      assertUnchanged: () => {
+        custody.assertUnchanged();
+        const fence = readPlatformMutationFence(
+          fixture.planPath,
+          fixture.plan.confirmation,
+        );
+        events.push(
+          `custody-scan:${fence?.outcome ?? "not-started"}:${custody.configPath}`,
+        );
+      },
+    };
+  };
 }
 
 afterEach(() => {
@@ -1350,6 +1500,552 @@ test("the sole platform mutation is tagged strict deploy with immediate Containe
     "immediate",
     "--strict",
   ]);
+});
+
+test("forward upload refuses predecessor Container drift after review and every earlier fence without provider mutation", async () => {
+  const predecessor = {
+    id: "application-id",
+    name: "takosumi-staging-opentofurunnerobject",
+    state: "ready",
+    image: FORWARD_RUNNER_IMAGE,
+    version: 85,
+    hasActiveRollout: false,
+    health: { failed: 0, starting: 0, scheduling: 0, errorCount: 0 },
+  } as const;
+  const cases = [
+    {
+      label: "deleted",
+      read: async () => {
+        throw new Error("platform_worker_release_container_list_invalid");
+      },
+      expected: "platform_worker_release_container_list_invalid",
+    },
+    {
+      label: "recreated",
+      read: async () => ({ ...predecessor, id: "replacement-application-id" }),
+      expected: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "image",
+      read: async () => ({ ...predecessor, image: RESTORE_RUNNER_IMAGE }),
+      expected: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "version",
+      read: async () => ({ ...predecessor, version: 86 }),
+      expected: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "readiness",
+      read: async () => ({ ...predecessor, state: "deploying" }),
+      expected: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "rollout",
+      read: async () => ({ ...predecessor, hasActiveRollout: true }),
+      expected: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "failed health",
+      read: async () => ({
+        ...predecessor,
+        health: { ...predecessor.health, failed: 1 },
+      }),
+      expected: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "starting health",
+      read: async () => ({
+        ...predecessor,
+        health: { ...predecessor.health, starting: 1 },
+      }),
+      expected: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "scheduling health",
+      read: async () => ({
+        ...predecessor,
+        health: { ...predecessor.health, scheduling: 1 },
+      }),
+      expected: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "health errors",
+      read: async () => ({
+        ...predecessor,
+        health: { ...predecessor.health, errorCount: 1 },
+      }),
+      expected: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "ambiguous",
+      read: async () => {
+        throw new Error("platform_worker_release_container_list_invalid");
+      },
+      expected: "platform_worker_release_container_list_invalid",
+    },
+    {
+      label: "malformed",
+      read: async () => {
+        throw new Error("platform_worker_release_container_detail_invalid");
+      },
+      expected: "platform_worker_release_container_detail_invalid",
+    },
+    {
+      label: "unavailable",
+      read: async () => {
+        throw new Error("provider unavailable");
+      },
+      expected: "provider unavailable",
+    },
+  ] as const;
+
+  for (const scenario of cases) {
+    const events = [
+      "plan-reviewed",
+      "closure-rechecked",
+      "secret-names-rechecked",
+      "worker-predecessor-rechecked",
+      "mutation-fence-fsynced",
+      "upload-custody-resealed",
+    ];
+    const providerMutations = {
+      upload: 0,
+      migration: 0,
+      secret: 0,
+      traffic: 0,
+    };
+    await expect(
+      withPlatformForwardContainerPreflight(
+        predecessor,
+        async () => {
+          events.push("container-preflight-readback");
+          return scenario.read();
+        },
+        async () => {
+          events.push("strict-forward-upload");
+          providerMutations.upload += 1;
+          providerMutations.migration += 1;
+          providerMutations.secret += 1;
+          providerMutations.traffic += 1;
+          return DEPLOYED;
+        },
+      ),
+    ).rejects.toThrow(scenario.expected);
+    expect(events, scenario.label).toEqual([
+      "plan-reviewed",
+      "closure-rechecked",
+      "secret-names-rechecked",
+      "worker-predecessor-rechecked",
+      "mutation-fence-fsynced",
+      "upload-custody-resealed",
+      "container-preflight-readback",
+    ]);
+    expect(providerMutations, scenario.label).toEqual({
+      upload: 0,
+      migration: 0,
+      secret: 0,
+      traffic: 0,
+    });
+  }
+});
+
+test("forward upload follows the exact planned predecessor Container readback with no intervening step", async () => {
+  const predecessor = {
+    id: "application-id",
+    name: "takosumi-staging-opentofurunnerobject",
+    state: "ready",
+    image: FORWARD_RUNNER_IMAGE,
+    version: 85,
+    hasActiveRollout: false,
+    health: { failed: 0, starting: 0, scheduling: 0, errorCount: 0 },
+  } as const;
+  const events: string[] = [];
+
+  await expect(
+    withPlatformForwardContainerPreflight(
+      predecessor,
+      async () => {
+        events.push("container-preflight-readback");
+        return predecessor;
+      },
+      async () => {
+        events.push("strict-forward-upload");
+        return DEPLOYED;
+      },
+    ),
+  ).resolves.toBe(DEPLOYED);
+  expect(events).toEqual([
+    "container-preflight-readback",
+    "strict-forward-upload",
+  ]);
+});
+
+type ForwardExecuteScenario =
+  | Readonly<{ kind: "state"; current: PlatformContainerState }>
+  | Readonly<{
+      kind:
+        | "missing"
+        | "ambiguous"
+        | "malformed-list"
+        | "malformed-detail"
+        | "unavailable";
+    }>;
+
+function forwardExecuteCommand(
+  fixture: ReturnType<typeof forwardExecuteFixture>,
+  scenario: ForwardExecuteScenario,
+  events: string[],
+  providerMutations: {
+    upload: number;
+    migration: number;
+    secret: number;
+    traffic: number;
+  },
+): PlatformReleaseCommand {
+  let workerConfig: string | null = null;
+  let containerConfig: string | null = null;
+  const assertFreshUploadCustody = (config: string): void => {
+    const firstPath = relative(fixture.root, config).split("/")[0];
+    if (
+      firstPath === undefined ||
+      !firstPath.startsWith(".takosumi-platform-upload-") ||
+      config === workerConfig ||
+      readFileSync(config, "utf8") !== fixture.configSource ||
+      !readFileSync(config, "utf8").includes(
+        'TAKOSUMI_ENVIRONMENT = "staging"',
+      )
+    ) {
+      throw new Error("production_path_container_preflight_custody_invalid");
+    }
+  };
+  const assertUnknownFence = (): void => {
+    const fence = readPlatformMutationFence(
+      fixture.planPath,
+      fixture.plan.confirmation,
+    );
+    if (fence?.outcome !== "unknown" || fence.versionId !== null) {
+      throw new Error("production_path_container_preflight_before_fence");
+    }
+  };
+  const summary = (state: PlatformContainerState) => ({
+    id: state.id,
+    name: state.name,
+    state: state.state,
+    image: state.image,
+    version: state.version,
+  });
+  const detail = (state: PlatformContainerState) => ({
+    id: state.id,
+    name: state.name,
+    state: state.state,
+    version: state.version,
+    configuration: { image: state.image },
+    active_rollout_id: state.hasActiveRollout ? "active-rollout" : null,
+    health: {
+      instances: {
+        failed: state.health.failed,
+        starting: state.health.starting,
+        scheduling: state.health.scheduling,
+      },
+      errors: Array.from({ length: state.health.errorCount }, () => ({
+        code: "fixture-error",
+      })),
+    },
+  });
+
+  return async (argv) => {
+    if (argv[1] === "deployments" && argv[2] === "status") {
+      workerConfig = commandConfig(argv);
+      events.push(`worker-predecessor:${workerConfig}`);
+      if (
+        readPlatformMutationFence(
+          fixture.planPath,
+          fixture.plan.confirmation,
+        ) !== null
+      ) {
+        throw new Error("production_path_worker_preflight_after_fence");
+      }
+      return successfulCommand(
+        JSON.stringify({
+          id: "deployment-id",
+          versions: [
+            { version_id: fixture.plan.predecessorVersionId, percentage: 100 },
+          ],
+        }),
+      );
+    }
+    if (argv[1] === "containers" && argv[2] === "list") {
+      containerConfig = commandConfig(argv);
+      events.push(`container-list:${containerConfig}`);
+      assertUnknownFence();
+      assertFreshUploadCustody(containerConfig);
+      if (scenario.kind === "unavailable") {
+        throw new Error("container provider unavailable");
+      }
+      if (scenario.kind === "malformed-list") {
+        return successfulCommand("{");
+      }
+      if (scenario.kind === "missing") return successfulCommand("[]");
+      const current =
+        scenario.kind === "state"
+          ? scenario.current
+          : fixture.plan.predecessorContainer;
+      const summaries = [summary(current)];
+      if (scenario.kind === "ambiguous") {
+        summaries.push(
+          summary({
+            ...fixture.plan.predecessorContainer,
+            id: "ambiguous-application-id",
+          }),
+        );
+      }
+      return successfulCommand(JSON.stringify(summaries));
+    }
+    if (argv[1] === "containers" && argv[2] === "info") {
+      const config = commandConfig(argv);
+      events.push(`container-info:${config}`);
+      assertUnknownFence();
+      if (containerConfig === null || config !== containerConfig) {
+        throw new Error("production_path_container_preflight_config_changed");
+      }
+      assertFreshUploadCustody(config);
+      if (scenario.kind === "malformed-detail") {
+        return successfulCommand("{}");
+      }
+      const current =
+        scenario.kind === "state"
+          ? scenario.current
+          : fixture.plan.predecessorContainer;
+      return successfulCommand(JSON.stringify(detail(current)));
+    }
+    if (argv[1] === "deploy") {
+      const config = commandConfig(argv);
+      events.push(`forward-upload:${config}`);
+      assertUnknownFence();
+      if (
+        containerConfig === null ||
+        config !== containerConfig ||
+        !events.at(-2)?.startsWith("container-info:")
+      ) {
+        throw new Error("production_path_upload_not_after_container_preflight");
+      }
+      providerMutations.upload += 1;
+      providerMutations.migration += 1;
+      providerMutations.secret += 1;
+      providerMutations.traffic += 1;
+      throw new Error("synthetic forward upload boundary");
+    }
+    throw new Error(`unexpected production-path command: ${argv.slice(1).join(" ")}`);
+  };
+}
+
+test("real completeRelease refuses late predecessor Container drift with zero provider mutation", async () => {
+  const scenarios: readonly Readonly<{
+    label: string;
+    scenario: (predecessor: PlatformContainerState) => ForwardExecuteScenario;
+    diagnostic: string;
+  }>[] = [
+    {
+      label: "recreated identity",
+      scenario: (predecessor) => ({
+        kind: "state",
+        current: {
+          ...predecessor,
+          id: "recreated-application-id",
+        },
+      }),
+      diagnostic: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "image drift",
+      scenario: (predecessor) => ({
+        kind: "state",
+        current: { ...predecessor, image: RESTORE_RUNNER_IMAGE },
+      }),
+      diagnostic: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "version drift",
+      scenario: (predecessor) => ({
+        kind: "state",
+        current: { ...predecessor, version: 86 },
+      }),
+      diagnostic: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "readiness drift",
+      scenario: (predecessor) => ({
+        kind: "state",
+        current: { ...predecessor, state: "deploying" },
+      }),
+      diagnostic: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "rollout drift",
+      scenario: (predecessor) => ({
+        kind: "state",
+        current: { ...predecessor, hasActiveRollout: true },
+      }),
+      diagnostic: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "health drift",
+      scenario: (predecessor) => ({
+        kind: "state",
+        current: {
+          ...predecessor,
+          health: { ...predecessor.health, failed: 1 },
+        },
+      }),
+      diagnostic: "platform_worker_release_predecessor_container_drift",
+    },
+    {
+      label: "missing",
+      scenario: () => ({ kind: "missing" }),
+      diagnostic: "platform_worker_release_container_list_invalid",
+    },
+    {
+      label: "ambiguous",
+      scenario: () => ({ kind: "ambiguous" }),
+      diagnostic: "platform_worker_release_container_list_invalid",
+    },
+    {
+      label: "malformed list",
+      scenario: () => ({ kind: "malformed-list" }),
+      diagnostic: "platform_worker_release_container_list_invalid",
+    },
+    {
+      label: "malformed detail",
+      scenario: () => ({ kind: "malformed-detail" }),
+      diagnostic: "platform_worker_release_container_detail_invalid",
+    },
+    {
+      label: "unavailable",
+      scenario: () => ({ kind: "unavailable" }),
+      diagnostic: "container provider unavailable",
+    },
+  ];
+
+  for (const item of scenarios) {
+    const fixture = forwardExecuteFixture(
+      `takosumi-platform-execute-${item.label.replaceAll(" ", "-")}-`,
+    );
+    const scenario = item.scenario(fixture.plan.predecessorContainer);
+    const events: string[] = [];
+    const providerMutations = {
+      upload: 0,
+      migration: 0,
+      secret: 0,
+      traffic: 0,
+    };
+    await expect(
+      completeRelease(
+        {
+          action: "execute",
+          plan: fixture.planPath,
+          confirmation: fixture.plan.confirmation,
+          reviewer: "operator:test-reviewer",
+          evidence: fixture.evidencePath,
+        },
+        fixture.plan,
+        true,
+        undefined,
+        forwardExecuteCommand(fixture, scenario, events, providerMutations),
+        observedPlatformUploadCustody(fixture, events),
+      ),
+    ).rejects.toThrow("platform_worker_release_incomplete");
+    expect(providerMutations, item.label).toEqual({
+      upload: 0,
+      migration: 0,
+      secret: 0,
+      traffic: 0,
+    });
+    const evidence = JSON.parse(readFileSync(fixture.evidencePath, "utf8"));
+    expect(evidence.mutationOutcome, item.label).toBe("unknown");
+    expect(evidence.diagnostic.message, item.label).toBe(item.diagnostic);
+    const workerConfig = events[0]!.slice("worker-predecessor:".length);
+    const containerListIndex = events.findIndex((event) =>
+      event.startsWith("container-list:"),
+    );
+    const containerConfig = events[containerListIndex]!.slice(
+      "container-list:".length,
+    );
+    expect(events.slice(0, containerListIndex), item.label).toEqual([
+      `worker-predecessor:${workerConfig}`,
+      `custody-scan:not-started:${workerConfig}`,
+      `custody-scan:unknown:${containerConfig}`,
+    ]);
+    expect(events.at(-1), item.label).toBe(
+      `custody-scan:unknown:${containerConfig}`,
+    );
+    expect(
+      events.some((event) => event.startsWith("forward-upload:")),
+      item.label,
+    ).toBeFalse();
+  }
+});
+
+test("real completeRelease performs the final Container read on fresh custody immediately before its sole upload", async () => {
+  const fixture = forwardExecuteFixture(
+    "takosumi-platform-execute-production-path-",
+  );
+  const events: string[] = [];
+  const providerMutations = {
+    upload: 0,
+    migration: 0,
+    secret: 0,
+    traffic: 0,
+  };
+  await expect(
+    completeRelease(
+      {
+        action: "execute",
+        plan: fixture.planPath,
+        confirmation: fixture.plan.confirmation,
+        reviewer: "operator:test-reviewer",
+        evidence: fixture.evidencePath,
+      },
+      fixture.plan,
+      true,
+      undefined,
+      forwardExecuteCommand(
+        fixture,
+        { kind: "state", current: fixture.plan.predecessorContainer },
+        events,
+        providerMutations,
+      ),
+      observedPlatformUploadCustody(fixture, events),
+    ),
+  ).rejects.toThrow("platform_worker_release_incomplete");
+  expect(providerMutations).toEqual({
+    upload: 1,
+    migration: 1,
+    secret: 1,
+    traffic: 1,
+  });
+  expect(events).toHaveLength(7);
+  const workerConfig = events[0]!.slice("worker-predecessor:".length);
+  const containerListConfig = events[3]!.slice("container-list:".length);
+  const containerInfoConfig = events[4]!.slice("container-info:".length);
+  const uploadConfig = events[5]!.slice("forward-upload:".length);
+  expect(workerConfig).not.toBe(containerListConfig);
+  expect(containerInfoConfig).toBe(containerListConfig);
+  expect(uploadConfig).toBe(containerListConfig);
+  expect(events).toEqual([
+    `worker-predecessor:${workerConfig}`,
+    `custody-scan:not-started:${workerConfig}`,
+    `custody-scan:unknown:${containerListConfig}`,
+    `container-list:${containerListConfig}`,
+    `container-info:${containerListConfig}`,
+    `forward-upload:${containerListConfig}`,
+    `custody-scan:unknown:${containerListConfig}`,
+  ]);
+  expect(
+    readPlatformMutationFence(fixture.planPath, fixture.plan.confirmation),
+  ).toEqual({ outcome: "unknown", versionId: null });
+  const evidence = JSON.parse(readFileSync(fixture.evidencePath, "utf8"));
+  expect(evidence.diagnostic.message).toBe("synthetic forward upload boundary");
 });
 
 test("serving deployment must be the emitted UUID alone at 100 percent", () => {

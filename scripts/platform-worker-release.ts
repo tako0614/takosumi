@@ -1691,7 +1691,7 @@ export function platformDashboardBuildEnvironment(
   };
 }
 
-interface PlatformReleasePlan {
+export interface PlatformReleasePlan {
   readonly kind: "takosumi.platform-worker-release-plan@v5";
   readonly createdAt: string;
   readonly environment: PlatformEnvironment;
@@ -3197,8 +3197,36 @@ function assertPlatformUploadCustody(
 async function requiredPlatformUploadMutation(
   custody: Readonly<{ assertUnchanged: () => void }>,
   argv: readonly string[],
+  command: PlatformReleaseCommand = requiredCommand,
 ): Promise<CommandResult> {
-  return withPlatformUploadCustody(custody, () => requiredCommand(argv));
+  return withPlatformUploadCustody(custody, () => command(argv));
+}
+
+async function requiredPlatformForwardUploadMutation(
+  custody: Readonly<{
+    configPath: string;
+    assertUnchanged: () => void;
+  }>,
+  argv: readonly string[],
+  environment: PlatformEnvironment,
+  predecessor: PlatformContainerState,
+  command: PlatformReleaseCommand = requiredCommand,
+): Promise<CommandResult> {
+  // Finish the recursive local closure check before the final authoritative
+  // Container read. Reusing the generic upload wrapper here would put that
+  // filesystem work between the provider readback and the deploy command.
+  custody.assertUnchanged();
+  try {
+    return await withPlatformForwardContainerPreflight(
+      predecessor,
+      () => readPlatformContainer(custody.configPath, environment, command),
+      () => command(argv),
+    );
+  } finally {
+    // Preserve the post-attempt custody proof for both acknowledged and
+    // ambiguous command outcomes.
+    custody.assertUnchanged();
+  }
 }
 
 export async function withPlatformUploadCustody<T>(
@@ -3338,11 +3366,14 @@ async function assertPlanClosure(plan: PlatformReleasePlan): Promise<void> {
   }
 }
 
-async function completeRelease(
+export async function completeRelease(
   options: Extract<Options, { action: "execute" | "recover" }>,
   plan: PlatformReleasePlan,
   allowMutation: boolean,
   recoverySourceCommit?: string,
+  command: PlatformReleaseCommand = requiredCommand,
+  uploadCustodyFactory: typeof createPlatformUploadCustody =
+    createPlatformUploadCustody,
 ): Promise<void> {
   let fence = readPlatformMutationFence(options.plan, plan.confirmation);
   let mutationOutcome: "not-started" | "unknown" | "accepted" =
@@ -3350,7 +3381,7 @@ async function completeRelease(
   let lostAcknowledgement = false;
   let custody: ReturnType<typeof createPlatformUploadCustody> | null = null;
   const takeUploadCustody = () =>
-    createPlatformUploadCustody(
+    uploadCustodyFactory(
       plan.closurePath,
       plan.closure,
       plan.uploadEntrypointPath,
@@ -3363,7 +3394,7 @@ async function completeRelease(
         throw new Error("platform_worker_release_recovery_not_started");
       }
       if (
-        (await readServingVersion(custody.configPath)) !==
+        (await readServingVersion(custody.configPath, command)) !==
         plan.predecessorVersionId
       ) {
         throw new Error("platform_worker_release_predecessor_drift");
@@ -3382,7 +3413,7 @@ async function completeRelease(
       );
       mutationOutcome = "unknown";
       custody = takeUploadCustody();
-      const deployed = await requiredPlatformUploadMutation(
+      const deployed = await requiredPlatformForwardUploadMutation(
         custody,
         platformWorkerDeployArguments(
           custody.configPath,
@@ -3390,6 +3421,9 @@ async function completeRelease(
           platformReleaseMessage(plan),
           custody.uploadEntrypointPath,
         ),
+        plan.environment,
+        plan.predecessorContainer,
+        command,
       );
       const deployedVersionId = parseDeployedVersion(
         `${deployed.stdout}\n${deployed.stderr}`,
@@ -3405,7 +3439,7 @@ async function completeRelease(
 
     let deployedVersionId: string;
     if (fence.outcome === "unknown") {
-      const versions = await requiredCommand([
+      const versions = await command([
         WRANGLER,
         "versions",
         "list",
@@ -3433,18 +3467,21 @@ async function completeRelease(
       custody.configPath,
       deployedVersionId,
       plan.predecessorVersionId,
+      command,
     );
     await verifyPublishedVersion(
       custody.configPath,
       deployedVersionId,
       plan.releaseTag,
       platformReleaseMessage(plan),
+      command,
     );
     await verifyPublicReadback(plan.environment, deployedVersionId);
     const deployedContainer = await waitForPlatformContainer(
       custody.configPath,
       plan.environment,
       configuredRunnerImage(custody.configPath),
+      command,
     );
     custody.assertUnchanged();
     const evidence = {
@@ -4274,8 +4311,9 @@ async function verifyPublishedVersion(
   versionId: string,
   releaseTag: string,
   releaseMessage: string,
+  command: PlatformReleaseCommand = requiredCommand,
 ): Promise<void> {
-  const version = await requiredCommand([
+  const version = await command([
     WRANGLER,
     "versions",
     "view",
@@ -4309,8 +4347,11 @@ async function verifyPublishedVersion(
   );
 }
 
-async function readServingVersion(config: string): Promise<string> {
-  const result = await requiredCommand([
+async function readServingVersion(
+  config: string,
+  command: PlatformReleaseCommand = requiredCommand,
+): Promise<string> {
+  const result = await command([
     WRANGLER,
     "deployments",
     "status",
@@ -4338,9 +4379,10 @@ function configuredRunnerImage(configPath: string): string {
 async function readPlatformContainer(
   configPath: string,
   environment: PlatformEnvironment,
+  command: PlatformReleaseCommand = requiredCommand,
 ): Promise<PlatformContainerState> {
   const expectedName = `${platformTargetForEnvironment(environment).workerName}-opentofurunnerobject`;
-  const list = await requiredCommand([
+  const list = await command([
     WRANGLER,
     "containers",
     "list",
@@ -4371,7 +4413,7 @@ async function readPlatformContainer(
     throw new Error("platform_worker_release_container_list_invalid");
   }
   const summary = matching[0];
-  const info = await requiredCommand([
+  const info = await command([
     WRANGLER,
     "containers",
     "info",
@@ -4491,6 +4533,36 @@ function assertPlatformContainerComplete(
   }
 }
 
+/**
+ * Bind the sole forward upload to the exact Container closure captured in the
+ * reviewed plan. This one-shot authoritative read belongs after every earlier
+ * execute fence and immediately before the upload callback: an unavailable or
+ * ambiguous provider read throws before the callback can observe mutation.
+ */
+export async function withPlatformForwardContainerPreflight<T>(
+  predecessor: PlatformContainerState,
+  readCurrent: () => Promise<PlatformContainerState>,
+  upload: () => Promise<T>,
+): Promise<T> {
+  assertPlatformContainerComplete(predecessor);
+  const current = await readCurrent();
+  if (
+    current.id !== predecessor.id ||
+    current.name !== predecessor.name ||
+    current.state !== predecessor.state ||
+    current.image !== predecessor.image ||
+    current.version !== predecessor.version ||
+    current.hasActiveRollout !== predecessor.hasActiveRollout ||
+    current.health.failed !== predecessor.health.failed ||
+    current.health.starting !== predecessor.health.starting ||
+    current.health.scheduling !== predecessor.health.scheduling ||
+    current.health.errorCount !== predecessor.health.errorCount
+  ) {
+    throw new Error("platform_worker_release_predecessor_container_drift");
+  }
+  return upload();
+}
+
 export function assertPlatformRestoreCandidate(
   state: PlatformContainerState,
   predecessor: PlatformContainerState,
@@ -4514,10 +4586,11 @@ async function waitForPlatformContainer(
   configPath: string,
   environment: PlatformEnvironment,
   expectedImage: string,
+  command: PlatformReleaseCommand = requiredCommand,
 ): Promise<PlatformContainerState> {
   return waitForPlatformContainerReadback(
     expectedImage,
-    () => readPlatformContainer(configPath, environment),
+    () => readPlatformContainer(configPath, environment, command),
   );
 }
 
@@ -4547,9 +4620,10 @@ async function waitForExactServingVersion(
   config: string,
   expectedVersionId: string,
   predecessorVersionId: string,
+  command: PlatformReleaseCommand = requiredCommand,
 ): Promise<void> {
   for (let attempt = 1; attempt <= 8; attempt += 1) {
-    const result = await requiredCommand([
+    const result = await command([
       WRANGLER,
       "deployments",
       "status",
