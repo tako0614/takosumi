@@ -22,11 +22,15 @@ import {
   parseRunnerImageReleaseArgs,
   runRunnerImageRelease,
 } from "../../scripts/runner-image-release.ts";
-import { dashboardAssetTreeSeal } from "../../scripts/platform-worker-release.ts";
+import {
+  dashboardAssetTreeSeal,
+  injectPlatformSourcePaths,
+} from "../../scripts/platform-worker-release.ts";
 
 const roots: string[] = [];
 const COMMIT = "a".repeat(40);
 const RECONCILER_COMMIT = "9".repeat(40);
+const REPOSITORY = "https://github.com/tako0614/takosumi.git";
 const PREVIOUS =
   `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${"c".repeat(64)}`;
 const NEXT =
@@ -56,7 +60,7 @@ type Fixture = ReturnType<typeof fixture>;
 
 function fixture(
   image = PREVIOUS,
-  main = "deploy/platform/entry-worker.ts",
+  main?: string,
   workerName = "takosumi-staging",
 ) {
   const directory = mkdtempSync(join(tmpdir(), "takosumi-runner-release-"));
@@ -83,10 +87,13 @@ function fixture(
     workerName,
   );
   writeFileSync(config, configSource);
+  const sourcePin = join(operator, "wrangler.source.json");
+  writeSourcePin(sourcePin, COMMIT);
   return {
     repository,
     operator,
     config,
+    sourcePin,
     configSource,
     evidence: join(operator, "runner-release.jsonl"),
     state: join(operator, "runner-publication-state.jsonl"),
@@ -99,15 +106,21 @@ function realizedConfig(
   repository: string,
   operator: string,
   image: string,
-  main = "deploy/platform/entry-worker.ts",
+  main?: string,
   workerName = "takosumi-staging",
 ): string {
   return [
     `name = ${JSON.stringify(workerName)}`,
-    `main = ${JSON.stringify(relative(operator, join(repository, main)))}`,
+    ...(main
+      ? [`main = ${JSON.stringify(relative(operator, join(repository, main)))}`]
+      : []),
     "",
     "[assets]",
-    `directory = ${JSON.stringify(relative(operator, join(repository, "dashboard", "dist")))}`,
+    ...(main
+      ? [
+          `directory = ${JSON.stringify(relative(operator, join(repository, "dashboard", "dist")))}`,
+        ]
+      : []),
     "",
     "[[containers]]",
     'class_name = "OpenTofuRunnerObject"',
@@ -120,6 +133,17 @@ function realizedConfig(
     'new_sqlite_classes = ["OpenTofuRunnerObject"]',
     "",
   ].join("\n");
+}
+
+function writeSourcePin(path: string, commit: string): void {
+  writeFileSync(
+    path,
+    `${JSON.stringify({
+      kind: "takosumi.platform-release-source@v1",
+      repository: REPOSITORY,
+      commit,
+    })}\n`,
+  );
 }
 
 function gitFor(
@@ -155,6 +179,7 @@ function gitFor(
     }
     if (gitArgs[0] === "status") return "";
     if (gitArgs.join(" ") === "branch --show-current") return branch;
+    if (gitArgs.join(" ") === "remote get-url origin") return REPOSITORY;
     // The shared production-routine lineage predicate
     // (scripts/lib/deploy-lineage.ts) speaks these; the release's own checks
     // speak the ones below. Both run through this one seam.
@@ -637,7 +662,7 @@ test("staging rejects an unpushed or divergent current branch", async () => {
 });
 
 test("production rejects a feature branch and accepts only pushed main", async () => {
-  const input = fixture(PREVIOUS, "deploy/platform/entry-worker.ts", "takosumi");
+  const input = fixture(PREVIOUS, undefined, "takosumi");
   await expect(
     runRunnerImageRelease(buildOptions(input, "production"), {
       repositoryRoot: input.repository,
@@ -686,14 +711,91 @@ test("release refuses dirty, detached, and absent origin refs", async () => {
   ).rejects.toThrow("pushed origin/fix/TASK-0032-runner-image");
 });
 
-test("release rejects a realized config whose main is not this checkout entry worker", async () => {
-  const input = fixture(PREVIOUS, "wrong-worker.ts");
+test("release rejects either source path in the realized config", async () => {
+  const input = fixture();
+  for (const source of [
+    input.configSource.replace(
+      'name = "takosumi-staging"',
+      `name = "takosumi-staging"\nmain = ${JSON.stringify(join(input.repository, "deploy/platform/entry-worker.ts"))}`,
+    ),
+    input.configSource.replace(
+      'name = "takosumi-staging"',
+      `name = "takosumi-staging"\n"main" = ${JSON.stringify(join(input.repository, "deploy/platform/entry-worker.ts"))}`,
+    ),
+    input.configSource.replace(
+      "[assets]",
+      `[assets]\ndirectory = ${JSON.stringify(join(input.repository, "dashboard/dist"))}`,
+    ),
+    input.configSource.replace(
+      "[assets]",
+      `[assets]\n"directory" = ${JSON.stringify(join(input.repository, "dashboard/dist"))}`,
+    ),
+    input.configSource.replace(
+      "[assets]",
+      `assets.directory = ${JSON.stringify(join(input.repository, "dashboard/dist"))}`,
+    ),
+  ]) {
+    writeFileSync(input.config, source);
+    await expect(
+      runRunnerImageRelease(buildOptions(input), {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+      }),
+    ).rejects.toThrow("platform_worker_release_config_declares_source_path");
+  }
+});
+
+test("release dry-run requires an assets table for its derived projection", async () => {
+  const input = fixture();
+  writeFileSync(input.config, input.configSource.replace("[assets]\n", ""));
   await expect(
     runRunnerImageRelease(buildOptions(input), {
       repositoryRoot: input.repository,
       git: gitFor("fix/TASK-0032-runner-image"),
     }),
-  ).rejects.toThrow("main must resolve exactly");
+  ).rejects.toThrow("platform_worker_release_sealed_config_invalid");
+});
+
+test("release shares the exact repository/commit pin and reserves its inode from outputs", async () => {
+  const input = fixture();
+  writeSourcePin(input.sourcePin, "8".repeat(40));
+  await expect(
+    runRunnerImageRelease(buildOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+    }),
+  ).rejects.toThrow("platform_worker_release_source_pin_mismatch");
+
+  writeSourcePin(input.sourcePin, COMMIT);
+  await expect(
+    runRunnerImageRelease(
+      { ...buildOptions(input), evidence: input.sourcePin },
+      {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+      },
+    ),
+  ).rejects.toThrow("runner_image_release_path_alias");
+
+  const alias = join(input.operator, "source-pin-alias.json");
+  linkSync(input.sourcePin, alias);
+  await expect(
+    runRunnerImageRelease(buildOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+    }),
+  ).rejects.toThrow("platform_worker_release_source_pin_invalid");
+
+  rmSync(alias);
+  const physicalPin = join(input.operator, "physical-source-pin.json");
+  renameSync(input.sourcePin, physicalPin);
+  symlinkSync(physicalPin, input.sourcePin);
+  await expect(
+    runRunnerImageRelease(buildOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+    }),
+  ).rejects.toThrow("platform_worker_release_source_pin_invalid");
 });
 
 test("public CLI exposes build and read-only verify, never activate", () => {
@@ -1098,6 +1200,7 @@ test("initial journal adoption refuses an explicit descriptor without binding or
 
 test("a pushed descendant tool reconciles the exact archived attempt under the journal lock", async () => {
   const input = fixture();
+  writeSourcePin(input.sourcePin, RECONCILER_COMMIT);
   const attempt = publicationAttempt(input);
   writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
   writeFileSync(
@@ -1217,6 +1320,7 @@ test("historical reconciliation rejects untrusted current or attempt Git history
 
   for (const scenario of cases) {
     const input = fixture();
+    writeSourcePin(input.sourcePin, RECONCILER_COMMIT);
     const attempt = publicationAttempt(input, {
       ...(scenario.attemptBranch ? { branch: scenario.attemptBranch } : {}),
     });
@@ -1248,6 +1352,7 @@ test("historical reconciliation rejects untrusted current or attempt Git history
 test("historical reconciliation requires the archived Dockerfile and full source seal", async () => {
   for (const mismatch of ["dockerfile", "context"] as const) {
     const input = fixture();
+    writeSourcePin(input.sourcePin, RECONCILER_COMMIT);
     const attempt = publicationAttempt(input);
     writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
     let readbacks = 0;
@@ -1287,6 +1392,7 @@ test("historical reconciliation requires the archived Dockerfile and full source
 
 test("historical reconciliation archives with replace objects disabled and keeps archive failure unresolved", async () => {
   const input = fixture();
+  writeSourcePin(input.sourcePin, RECONCILER_COMMIT);
   const attempt = publicationAttempt(input);
   writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
   let archiveCalls = 0;
@@ -1331,6 +1437,7 @@ test("historical reconciliation keeps config path, bytes, previous image, and tr
     `registry.cloudflare.com/${"c".repeat(32)}/takosumi-runner:${TRANSPORT_TAG}`;
   for (const drift of ["path", "bytes", "previous-image", "transport"] as const) {
     const input = fixture();
+    writeSourcePin(input.sourcePin, RECONCILER_COMMIT);
     const attempt = publicationAttempt(input, {
       ...(drift === "path"
         ? { configPath: join(input.operator, "other-wrangler.toml") }
@@ -1373,6 +1480,7 @@ test("historical reconciliation keeps config path, bytes, previous image, and tr
 
 test("historical reconciliation revalidates external config bytes after archive materialization", async () => {
   const input = fixture();
+  writeSourcePin(input.sourcePin, RECONCILER_COMMIT);
   const attempt = publicationAttempt(input);
   writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
   let readbacks = 0;
@@ -1407,6 +1515,7 @@ test("historical reconciliation revalidates external config bytes after archive 
 
 test("historical reconciliation leaves the attempt unresolved when the remote descriptor differs", async () => {
   const input = fixture();
+  writeSourcePin(input.sourcePin, RECONCILER_COMMIT);
   const attempt = publicationAttempt(input);
   writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
   await expect(
@@ -1444,6 +1553,7 @@ test("historical reconciliation leaves the attempt unresolved when the remote de
 
 test("a recovered historical build verifies activation on the trusted reconciler commit", async () => {
   const input = fixture();
+  writeSourcePin(input.sourcePin, RECONCILER_COMMIT);
   const attempt = publicationAttempt(input);
   writePrivate(input.state, `${JSON.stringify(attempt)}\n`);
   writeFileSync(
@@ -1500,6 +1610,7 @@ test("a recovered historical build verifies activation on the trusted reconciler
 
 test("legacy reconciliation proves the recorded Docker Id through the exact local tag before remote readback", async () => {
   const input = fixture();
+  writeSourcePin(input.sourcePin, RECONCILER_COMMIT);
   const journalRoot = join(input.operator, "publication-locator");
   const coordination = publicationCoordinationPaths(journalRoot);
   const attempt = publicationAttempt(input, { localDescriptorDigest: null });
@@ -1586,6 +1697,7 @@ test("legacy reconciliation stays unresolved when the exact local tag is absent 
   ];
   for (const identity of identities) {
     const input = fixture();
+    writeSourcePin(input.sourcePin, RECONCILER_COMMIT);
     const journalRoot = join(input.operator, "publication-locator");
     const coordination = publicationCoordinationPaths(journalRoot);
     const attempt = publicationAttempt(input, { localDescriptorDigest: null });
@@ -2267,10 +2379,12 @@ test("read-only reconciliation can prove an exact recorded transport tag absent"
 test("build publishes linux amd64 with generated transport identity and records remote digest", async () => {
   const input = fixture();
   const calls: string[][] = [];
+  let pushedConfig = "";
   const record = await runRunnerImageRelease(buildOptions(input, "staging", true), {
     ...buildRuntime(input, async (_executable, args) => {
       if (args[0] === "buildx") return { exitCode: 0, stdout: "", stderr: "" };
       if (args[1] === "containers" && args[2] === "push") {
+        pushedConfig = readFileSync(args[args.indexOf("--config") + 1]!, "utf8");
         return { exitCode: 0, stdout: `Pushed image: ${TRANSPORT_REF}\n`, stderr: "" };
       }
       if (args[0] === "manifest") {
@@ -2311,6 +2425,13 @@ test("build publishes linux amd64 with generated transport identity and records 
     },
   });
   expect(calls.some((args) => args.includes("linux/amd64"))).toBeTrue();
+  expect(pushedConfig).toBe(
+    injectPlatformSourcePaths(
+      input.configSource,
+      join(input.repository, "deploy/platform/entry-worker.ts"),
+      join(input.repository, "dashboard/dist"),
+    ),
+  );
   expect(calls.some((args) => args.some((value) => value.endsWith("/runner/Dockerfile")))).toBeTrue();
   expect(calls.some((args) => args[0] === "cosign" && args[1] === "verify-blob")).toBeTrue();
   expect(
@@ -2517,10 +2638,15 @@ test("verify consumes exact platform evidence and performs no Worker mutation", 
     application: { name: APPLICATION_NAME, image: NEXT, state: "ready" },
   });
   expect(runtime.calls.some((args) => args[1] === "deploy")).toBeFalse();
+  const projectedConfig = injectPlatformSourcePaths(
+    input.configSource,
+    join(input.repository, "deploy/platform/entry-worker.ts"),
+    join(input.repository, "dashboard/dist"),
+  );
   expect(sealedConfigSources).toEqual([
-    input.configSource,
-    input.configSource,
-    input.configSource,
+    projectedConfig,
+    projectedConfig,
+    projectedConfig,
   ]);
   expect(statSync(input.evidence).mode & 0o777).toBe(0o600);
 });

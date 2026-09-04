@@ -26,9 +26,26 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 
 import { lineageVerdict } from "./lib/deploy-lineage.ts";
 import {
+  assertPlatformReleaseConfigPathless,
+  assertPlatformReleaseSourcePinMatchesCheckout,
+  injectPlatformSourcePaths,
+  readPlatformReleaseSourcePin,
+  resolvePlatformReleaseSourceAuthority,
+  type PlatformReleaseSourcePin,
+} from "./lib/platform-release-source.ts";
+import {
   PLATFORM_BINDINGS,
   platformBindingNames,
 } from "../deploy/accounts-cloudflare/src/bindings-check.ts";
+
+export {
+  injectPlatformSourcePaths,
+  parsePlatformReleaseSourcePin,
+  platformReleaseSourcePinPath,
+  readPlatformReleaseSourcePin,
+  sameGitRemote,
+} from "./lib/platform-release-source.ts";
+export type { PlatformReleaseSourcePin } from "./lib/platform-release-source.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const WRANGLER = resolve(ROOT, "node_modules/.bin/wrangler");
@@ -289,96 +306,6 @@ export function platformWorkerDeployArguments(
 }
 
 /**
- * The realized config names the identity of a source, never a path into one.
- *
- * WHY. The production realized config used to carry
- * `main = "../../.release/TASK-0041-takosumi-production/..."` — a separate
- * clone on one machine, not listed by `git worktree list`, named after a task
- * id the ledger has never contained. Staging pointed at a different tree
- * entirely, so the two environments could no longer be released from one
- * checkout, and neither config could say WHICH COMMIT it meant. The tree was
- * re-materializable — that commit is an ancestor of origin/main — but nothing
- * in the config recorded which one it was.
- *
- * So the config declares no source path at all. A sibling
- * `<config>.source.json` names `{ repository, commit }`, the release refuses to
- * run from a checkout that is not exactly that commit of that repository, and
- * the tool injects `main` and the asset directory itself: into the immutable
- * `git archive` snapshot for the sealed bytes, and into the pinned checkout for
- * read-only provider queries.
- */
-export interface PlatformReleaseSourcePin {
-  readonly kind: "takosumi.platform-release-source@v1";
-  readonly repository: string;
-  readonly commit: string;
-}
-
-/** `platform/wrangler.staging.toml` → `platform/wrangler.staging.source.json`. */
-export function platformReleaseSourcePinPath(configPath: string): string {
-  if (!configPath.endsWith(".toml")) {
-    throw new Error("platform_worker_release_config_invalid");
-  }
-  return `${configPath.slice(0, -".toml".length)}.source.json`;
-}
-
-export function parsePlatformReleaseSourcePin(
-  text: string,
-): PlatformReleaseSourcePin {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error("platform_worker_release_source_pin_invalid");
-  }
-  if (
-    !record(parsed) ||
-    parsed.kind !== "takosumi.platform-release-source@v1" ||
-    typeof parsed.repository !== "string" ||
-    parsed.repository.length === 0 ||
-    typeof parsed.commit !== "string" ||
-    !COMMIT.test(parsed.commit) ||
-    Object.keys(parsed).sort().join(",") !== "commit,kind,repository"
-  ) {
-    throw new Error("platform_worker_release_source_pin_invalid");
-  }
-  return {
-    kind: "takosumi.platform-release-source@v1",
-    repository: parsed.repository,
-    commit: parsed.commit,
-  };
-}
-
-/** Two spellings of one Git remote are one remote. */
-export function sameGitRemote(left: string, right: string): boolean {
-  const normalize = (value: string) =>
-    value
-      .trim()
-      .replace(/^git\+/u, "")
-      .replace(/\.git$/u, "")
-      .replace(/\/+$/u, "")
-      .replace(/^git@([^:]+):/u, "https://$1/")
-      .replace(/^ssh:\/\/git@/u, "https://")
-      .toLowerCase();
-  return normalize(left) === normalize(right);
-}
-
-/** Read and validate the realized config's source pin. */
-export function readPlatformReleaseSourcePin(
-  configPath: string,
-): PlatformReleaseSourcePin {
-  const pinPath = platformReleaseSourcePinPath(configPath);
-  assertReadableConfig(pinPath);
-  return parsePlatformReleaseSourcePin(
-    new TextDecoder("utf-8", { fatal: true }).decode(
-      readStablePhysicalBytes(
-        pinPath,
-        "platform_worker_release_source_pin_invalid",
-      ),
-    ),
-  );
-}
-
-/**
  * Refuse to release from a checkout that is not the pinned source.
  *
  * This is what makes `ROOT` derive from the pinned commit rather than from
@@ -389,14 +316,10 @@ export function readPlatformReleaseSourcePin(
 export function assertPinnedSourceRoot(pin: PlatformReleaseSourcePin): void {
   const head = git(["rev-parse", "HEAD"]).trim();
   const origin = git(["remote", "get-url", "origin"]).trim();
-  if (!sameGitRemote(origin, pin.repository) || head !== pin.commit) {
-    throw new Error(
-      `platform_worker_release_source_pin_mismatch: this checkout is ${origin} at ${head}, ` +
-        `the realized config pins ${pin.repository} at ${pin.commit}. ` +
-        `Materialize it with: bun run deploy -- <surface> materialize-source ` +
-        `--config <config> --into <empty directory>`,
-    );
-  }
+  assertPlatformReleaseSourcePinMatchesCheckout(pin, {
+    repository: origin,
+    commit: head,
+  });
 }
 
 /**
@@ -583,45 +506,6 @@ export function platformSealedConfigProjection(
     throw new Error("platform_worker_release_sealed_config_invalid");
   }
   return injectPlatformSourcePaths(source, entry, assets);
-}
-
-/**
- * Insert the source paths the realized config deliberately does not carry.
- *
- * Insertion, not substitution: a realized config that already names a `main`
- * or an asset directory is refused upstream by `assertConfigTargetsSource`, so
- * finding one here means the config was edited between the check and the
- * projection.
- */
-export function injectPlatformSourcePaths(
-  source: string,
-  entry: string,
-  assets: string,
-): string {
-  if (
-    /^\s*main\s*=/mu.test(source) ||
-    /^\s*directory\s*=/mu.test(source)
-  ) {
-    throw new Error("platform_worker_release_sealed_config_invalid");
-  }
-  const nameLine = /^name\s*=\s*"[^"]+"\s*$/mu.exec(source);
-  const assetsHeading = /^\[assets\]\s*$/mu.exec(source);
-  if (!nameLine || !assetsHeading) {
-    throw new Error("platform_worker_release_sealed_config_invalid");
-  }
-  const withAssets = `${source.slice(
-    0,
-    assetsHeading.index! + assetsHeading[0].length,
-  )}\ndirectory = ${JSON.stringify(assets.replaceAll("\\", "/"))}${source.slice(
-    assetsHeading.index! + assetsHeading[0].length,
-  )}`;
-  const name = /^name\s*=\s*"[^"]+"\s*$/mu.exec(withAssets)!;
-  return `${withAssets.slice(
-    0,
-    name.index! + name[0].length,
-  )}\nmain = ${JSON.stringify(entry.replaceAll("\\", "/"))}${withAssets.slice(
-    name.index! + name[0].length,
-  )}`;
 }
 
 /**
@@ -1858,6 +1742,82 @@ export interface PlatformReleasePlan {
   readonly confirmation: string;
 }
 
+export type PlatformReleasePlanIdentity = Omit<
+  PlatformReleasePlan,
+  "releaseTag" | "confirmation"
+>;
+
+/**
+ * Produce the exact immutable plan envelope written by the production planner.
+ * Keeping tag and confirmation derivation here lets composition tests consume
+ * production output instead of restating the runner-visible identity fields.
+ */
+export function createPlatformReleasePlan(
+  identity: PlatformReleasePlanIdentity,
+): PlatformReleasePlan {
+  const subject = {
+    ...identity,
+    releaseTag: platformReleaseTag(identity),
+  };
+  return {
+    ...subject,
+    confirmation: digest(new TextEncoder().encode(JSON.stringify(subject))),
+  };
+}
+
+export type PlatformReadyEvidenceInput = Readonly<{
+  plan: PlatformReleasePlan;
+  completedAt: string;
+  deployedVersionId: string;
+  deployedContainer: PlatformContainerState;
+  reviewer: string;
+  lostAcknowledgement: boolean;
+  recoverySourceCommit?: string;
+}>;
+
+/** The exact ready-evidence envelope written after production readback. */
+export function createPlatformReadyEvidence(
+  input: PlatformReadyEvidenceInput,
+) {
+  const { plan } = input;
+  return {
+    kind: "takosumi.platform-worker-release-evidence@v2",
+    status: "ready",
+    completedAt: input.completedAt,
+    environment: plan.environment,
+    sourceCommit: plan.sourceCommit,
+    ...(input.recoverySourceCommit &&
+    input.recoverySourceCommit !== plan.sourceCommit
+      ? { recoverySourceCommit: input.recoverySourceCommit }
+      : {}),
+    configPath: plan.configPath,
+    configSha256: plan.configSha256,
+    sealedConfigSha256: plan.sealedConfigSha256,
+    closureSha256: plan.closure.digest,
+    dashboardAssetsSha256: plan.dashboardAssets.digest,
+    dryRunSha256: plan.dryRun.digest,
+    secretNamesSha256: plan.secretNamesSha256,
+    predecessorVersionId: plan.predecessorVersionId,
+    predecessorContainer: plan.predecessorContainer,
+    deployedVersionId: input.deployedVersionId,
+    deployedContainer: input.deployedContainer,
+    releaseTag: plan.releaseTag,
+    planConfirmation: plan.confirmation,
+    reviewer: input.reviewer,
+    lostAcknowledgement: input.lostAcknowledgement,
+    reversal: {
+      surface:
+        plan.environment === "staging"
+          ? "takosumi-platform-staging"
+          : "takosumi-platform",
+      action: "restore",
+      planConfirmation: plan.confirmation,
+      predecessorVersionId: plan.predecessorVersionId,
+      predecessorContainer: plan.predecessorContainer,
+    },
+  } as const;
+}
+
 type Options =
   | {
       readonly action: "plan";
@@ -2047,16 +2007,21 @@ async function plan(
   // The config names a commit; this checkout has to BE that commit. Everything
   // below — the dashboard build, the git archive, the injected paths — is then
   // derived from the pinned identity rather than from wherever this script sits.
-  const sourcePin = readPlatformReleaseSourcePin(options.config);
-  assertPinnedSourceRoot(sourcePin);
+  const sourceAuthority = resolvePlatformReleaseSourceAuthority({
+    configPath: options.config,
+    configSource,
+    repositoryRoot: ROOT,
+    checkoutRepository: git(["remote", "get-url", "origin"]).trim(),
+    checkoutCommit: git(["rev-parse", "HEAD"]).trim(),
+  });
   const dashboardAssets = await buildDeterministicDashboard(environment);
-  const sourceCommit = git(["rev-parse", "HEAD"]).trim();
+  const sourceCommit = sourceAuthority.pin.commit;
   // Provider reads need a runnable config, and the realized one deliberately
   // is not: project the pinned source paths into a transient private copy.
   const operatorConfig = createPlatformDryRunConfig(
     configSource,
     options.config,
-    ROOT,
+    sourceAuthority.repositoryRoot,
   );
   let predecessorVersionId: string;
   let predecessorContainer: PlatformContainerState;
@@ -2101,7 +2066,7 @@ async function plan(
   const secrets = await readSecretNames(sealed.configPath);
   await assertCleanAndPushed();
 
-  const identity = {
+  const releasePlan = createPlatformReleasePlan({
     kind: "takosumi.platform-worker-release-plan@v5" as const,
     createdAt: new Date().toISOString(),
     environment,
@@ -2128,15 +2093,7 @@ async function plan(
     ),
     predecessorVersionId,
     predecessorContainer,
-  };
-  const subject = {
-    ...identity,
-    releaseTag: platformReleaseTag(identity),
-  };
-  const releasePlan: PlatformReleasePlan = {
-    ...subject,
-    confirmation: digest(new TextEncoder().encode(JSON.stringify(subject))),
-  };
+  });
   writePrivate(
     options.planOut,
     new TextEncoder().encode(`${JSON.stringify(releasePlan, null, 2)}\n`),
@@ -3719,41 +3676,15 @@ export async function completeRelease(
       command,
     );
     custody.assertUnchanged();
-    const evidence = {
-      kind: "takosumi.platform-worker-release-evidence@v2",
-      status: "ready",
+    const evidence = createPlatformReadyEvidence({
+      plan,
       completedAt: new Date().toISOString(),
-      environment: plan.environment,
-      sourceCommit: plan.sourceCommit,
-      ...(recoverySourceCommit && recoverySourceCommit !== plan.sourceCommit
-        ? { recoverySourceCommit }
-        : {}),
-      configPath: plan.configPath,
-      configSha256: plan.configSha256,
-      sealedConfigSha256: plan.sealedConfigSha256,
-      closureSha256: plan.closure.digest,
-      dashboardAssetsSha256: plan.dashboardAssets.digest,
-      dryRunSha256: plan.dryRun.digest,
-      secretNamesSha256: plan.secretNamesSha256,
-      predecessorVersionId: plan.predecessorVersionId,
-      predecessorContainer: plan.predecessorContainer,
       deployedVersionId,
       deployedContainer,
-      releaseTag: plan.releaseTag,
-      planConfirmation: plan.confirmation,
       reviewer: options.reviewer,
       lostAcknowledgement,
-      reversal: {
-        surface:
-          plan.environment === "staging"
-            ? "takosumi-platform-staging"
-            : "takosumi-platform",
-        action: "restore",
-        planConfirmation: plan.confirmation,
-        predecessorVersionId: plan.predecessorVersionId,
-        predecessorContainer: plan.predecessorContainer,
-      },
-    } as const;
+      ...(recoverySourceCommit ? { recoverySourceCommit } : {}),
+    });
     writePrivate(
       options.evidence,
       new TextEncoder().encode(`${JSON.stringify(evidence, null, 2)}\n`),
@@ -4936,9 +4867,7 @@ export function assertConfigTargetsSource(
   // directory are injected by this tool from the commit the config's source pin
   // names; a config that states them instead names a directory on one machine
   // and cannot say which commit it meant.
-  if (/^\s*main\s*=/mu.test(source) || /^\s*directory\s*=/mu.test(source)) {
-    throw new Error("platform_worker_release_config_declares_source_path");
-  }
+  assertPlatformReleaseConfigPathless(source);
   const name = /^name\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
   const configuredEnvironment =
     /^TAKOSUMI_ENVIRONMENT\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];

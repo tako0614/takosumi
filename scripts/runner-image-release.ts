@@ -21,6 +21,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 
 import { dashboardAssetTreeSeal } from "./platform-worker-release.ts";
 import { lineageVerdict } from "./lib/deploy-lineage.ts";
+import {
+  injectPlatformSourcePaths,
+  resolvePlatformReleaseSourceAuthority,
+  type PlatformReleaseSourceAuthority,
+} from "./lib/platform-release-source.ts";
 
 export type RunnerImageReleaseCommand = "build" | "reconcile" | "verify";
 export type RunnerImageReleaseEnvironment = "staging" | "production";
@@ -49,10 +54,12 @@ type RepositoryIdentity = Readonly<{
   branch: string;
   commit: string;
   remoteCommit: string;
+  remoteRepository: string;
 }>;
 
 type ReleaseContext = Readonly<{
   repository: RepositoryIdentity;
+  releaseSource: PlatformReleaseSourceAuthority;
   config: Readonly<{
     path: string;
     source: string;
@@ -513,6 +520,7 @@ export async function runRunnerImageRelease(
       );
   await assertRunnerImageReleasePathGraph({
     config: context.config.path,
+    sourcePin: context.releaseSource.pinPath,
     evidence: options.evidence,
     ...(options.state ? { state: options.state } : {}),
     ...(options.buildEvidence ? { buildEvidence: options.buildEvidence } : {}),
@@ -699,7 +707,7 @@ async function buildRunnerImage(
       buildContext,
     } = materialized;
     const sealedConfig = join(workspace, "wrangler.toml");
-    await writeFile(sealedConfig, context.config.source, {
+    await writeFile(sealedConfig, runnerWranglerConfigSource(context), {
       encoding: "utf8",
       mode: 0o600,
       flag: "wx",
@@ -1765,7 +1773,7 @@ async function verifyRunnerImage(
     );
     await chmod(workspace, 0o700);
     const sealedConfig = join(workspace, "wrangler.toml");
-    await writeFile(sealedConfig, context.config.source, {
+    await writeFile(sealedConfig, runnerWranglerConfigSource(context), {
       encoding: "utf8",
       mode: 0o600,
       flag: "wx",
@@ -1867,28 +1875,30 @@ async function inspectContext(
   if (workerName !== WORKER_NAMES[options.environment]) {
     throw new Error("realized config worker name does not match environment");
   }
-  const main = configSource.match(/^main\s*=\s*"([^"]+)"\s*$/mu)?.[1];
-  if (!main) throw new Error("realized config has no Worker entrypoint");
-  const mainPath = await realpath(resolve(configPath, "..", main));
-  const expectedMain = await canonicalFile(
-    resolve(repositoryRoot, "deploy/platform/entry-worker.ts"),
+  const releaseSource = resolvePlatformReleaseSourceAuthority({
+    configPath,
+    configSource,
+    repositoryRoot,
+    checkoutRepository: repository.remoteRepository,
+    checkoutCommit: repository.commit,
+  });
+  const entryWorkerPath = await canonicalFile(
+    releaseSource.entryWorkerPath,
     "Worker entrypoint",
   );
-  if (mainPath !== expectedMain) {
+  if (entryWorkerPath !== releaseSource.entryWorkerPath) {
     throw new Error(
-      "realized config main must resolve exactly to this repository's deploy/platform/entry-worker.ts",
+      "pinned release source entrypoint must resolve exactly inside its checkout",
     );
   }
-  const assets =
-    configSource.match(/^directory\s*=\s*"([^"]+)"\s*$/mu)?.[1] ?? "";
-  if (
-    !assets ||
-    resolve(configPath, "..", assets) !== resolve(repositoryRoot, "dashboard/dist")
-  ) {
-    throw new Error(
-      "realized config assets must resolve exactly to this repository's dashboard/dist",
-    );
-  }
+  // Dry-run is a release preflight too: prove now that Wrangler can receive
+  // the derived path projection, before any build materialization or local
+  // Docker work occurs on an executing build.
+  injectPlatformSourcePaths(
+    configSource,
+    releaseSource.entryWorkerPath,
+    releaseSource.dashboardAssetsPath,
+  );
   const imageSpan = uniqueRunnerImageSpan(configSource);
   if (!DIGEST_IMAGE.test(imageSpan.image)) {
     throw new Error("realized runner image must be an immutable registry digest");
@@ -1899,6 +1909,7 @@ async function inspectContext(
   );
   return {
     repository,
+    releaseSource,
     config: {
       path: configPath,
       source: configSource,
@@ -1911,6 +1922,19 @@ async function inspectContext(
       await readStablePhysicalFile(dockerfilePath, "runner Dockerfile"),
     ),
   };
+}
+
+/**
+ * Wrangler receives an ephemeral projection of the identity-only realized
+ * config. Both paths come from the exact repository/commit source authority;
+ * the realized bytes retained in evidence remain pathless and unchanged.
+ */
+function runnerWranglerConfigSource(context: ReleaseContext): string {
+  return injectPlatformSourcePaths(
+    context.config.source,
+    context.releaseSource.entryWorkerPath,
+    context.releaseSource.dashboardAssetsPath,
+  );
 }
 
 async function repositoryIdentity(
@@ -1962,7 +1986,9 @@ async function repositoryIdentity(
   const commit = (await git(root, ["rev-parse", "HEAD"])).trim();
   let originCommit = "";
   let remoteCommit = "";
+  let remoteRepository = "";
   try {
+    remoteRepository = (await git(root, ["remote", "get-url", "origin"])).trim();
     originCommit = (await git(root, ["rev-parse", `origin/${branch}`])).trim();
     remoteCommit = (
       await git(root, [
@@ -1977,12 +2003,13 @@ async function repositoryIdentity(
   }
   if (
     !/^[0-9a-f]{40}$/u.test(commit) ||
+    !remoteRepository ||
     commit !== originCommit ||
     commit !== remoteCommit
   ) {
     throw new Error(`${root} must equal pushed origin/${branch}`);
   }
-  return { root, branch, commit, remoteCommit };
+  return { root, branch, commit, remoteCommit, remoteRepository };
 }
 
 async function readRunnerApplication(
@@ -2844,6 +2871,7 @@ type PublicationJournal = Readonly<{
 
 type RunnerImageReleasePathGraph = Readonly<{
   config: string;
+  sourcePin: string;
   evidence: string;
   state?: string;
   buildEvidence?: string;
@@ -2856,6 +2884,7 @@ async function assertRunnerImageReleasePathGraph(
 ): Promise<void> {
   const requested = [
     { label: "config", path: graph.config, callerOwned: true },
+    { label: "source-pin", path: graph.sourcePin, callerOwned: true },
     { label: "evidence", path: graph.evidence, callerOwned: true },
     ...(graph.state
       ? [{ label: "state", path: graph.state, callerOwned: true }]

@@ -212,8 +212,35 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
   expect(() =>
     assertConfigTargetsSource(
       source("takosumi-hosted").replace(
+        'name = "takosumi"',
+        `name = "takosumi"\n"main" = "${resolve(root, "deploy/platform/worker.ts")}"`,
+      ),
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_declares_source_path");
+  expect(() =>
+    assertConfigTargetsSource(
+      source("takosumi-hosted").replace(
         "[assets]",
         `[assets]\ndirectory = "${resolve(root, "dashboard/dist")}"`,
+      ),
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_declares_source_path");
+  expect(() =>
+    assertConfigTargetsSource(
+      source("takosumi-hosted").replace(
+        "[assets]",
+        `[assets]\n"directory" = "${resolve(root, "dashboard/dist")}"`,
+      ),
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_declares_source_path");
+  expect(() =>
+    assertConfigTargetsSource(
+      source("takosumi-hosted").replace(
+        "[assets]",
+        `assets.directory = "${resolve(root, "dashboard/dist")}"`,
       ),
       "production",
     ),

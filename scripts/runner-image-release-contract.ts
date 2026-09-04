@@ -17,6 +17,7 @@ export const RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE = {
   covers: [
     "runner/Dockerfile",
     "runner",
+    "scripts/lib/platform-release-source.ts",
     "scripts/runner-image-release.ts",
   ],
   triggers: ["authority", "published-identity"],
@@ -25,7 +26,7 @@ export const RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE = {
   requiresEnv: ["CLOUDFLARE_ACCOUNT_ID"],
   obligations: {
     provenance:
-      "build, reconciliation, and verification refuse dirty or detached source; staging requires HEAD to equal both local and freshly read remote origin/current-branch while production additionally requires main; build materializes the immutable Git commit in an external sealed context, verifies the Dockerfile-pinned OpenTofu artifact through its upstream Sigstore identity, and binds the exact image-only activation transform plus publication journal to the remotely read content digest; reconciliation accepts only a no-replace-object historical attempt commit that is an ancestor of the trusted current tool and fresh remote tip, then re-materializes and seals that exact commit; verification consumes exact ready platform-release evidence and binds recovered records to their explicit reconciledBy tool identity",
+      "build, reconciliation, and verification require an identity-only realized config with no main or assets directory plus its stable single-link sibling source pin, and require that exact Git repository and commit to be the clean attached pushed checkout; staging requires HEAD to equal both local and freshly read remote origin/current-branch while production additionally requires main; runner paths are derived only in an ephemeral projection from that pinned checkout while the pathless config bytes remain the evidence identity; build materializes the immutable Git commit in an external sealed context, verifies the Dockerfile-pinned OpenTofu artifact through its upstream Sigstore identity, and binds the exact image-only activation transform plus publication journal to the remotely read content digest; reconciliation accepts only a no-replace-object historical attempt commit that is an ancestor of the trusted current tool and fresh remote tip, then re-materializes and seals that exact commit; verification consumes exact ready platform-release evidence and binds recovered records to their explicit reconciledBy tool identity",
     "post-conditions":
       "build records the local Docker image ID and an explicit Descriptor digest with exact supported manifest media type and linux/amd64 platform, accepts only Docker's unambiguous remote Descriptor.platform linux/amd64 shape, and requires exact local/remote descriptor-digest equality before recording that immutable descriptor digest as the sole consumer identity and the actual config digest as evidence; a legacy attempt without the explicit descriptor field additionally requires the exact recorded local tag to remain present with both Docker Id and Descriptor equal to the legacy value; verification requires the platform evidence Worker Version to be exactly serving at 100 percent and the exact environment Container application to be healthy on that digest",
     reversal:

@@ -57,6 +57,13 @@ itself: into the immutable `git archive` snapshot for the bytes that get
 uploaded, and into a transient private projection for read-only provider
 queries.
 
+The runner image release consumes this same source-pin authority and pathless
+config. It derives its entry-worker and dashboard paths from the same exact
+pinned checkout without adding them to the realized bytes. A runner build's
+expected image-only config SHA can therefore be the exact config identity later
+sealed by platform plan/execute and consumed by runner verify; operators do not
+maintain a runner-only config variant.
+
 Why: a path names a directory on one machine. The production realized config
 carried `main = "../../.release/TASK-0041-takosumi-production/..."` — a second
 clone, absent from `git worktree list`, named after a task id the ledger has

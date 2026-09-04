@@ -18,6 +18,10 @@ test("runner image release has one Takosumi-owned entrypoint, focused check, and
     join(ROOT, "scripts/runner-image-release.ts"),
     "utf8",
   );
+  const sourceAuthority = readFileSync(
+    join(ROOT, "scripts/lib/platform-release-source.ts"),
+    "utf8",
+  );
   const portableGate = readFileSync(
     join(ROOT, "scripts/check-portable-gate.ts"),
     "utf8",
@@ -49,6 +53,9 @@ test("runner image release has one Takosumi-owned entrypoint, focused check, and
   expect(packageJson.scripts?.["check:runner-image-release"]).toContain(
     "runner_image_release_test.ts",
   );
+  expect(packageJson.scripts?.["check:runner-image-release"]).toContain(
+    "release_config_composition_test.ts",
+  );
   expect(packageJson.scripts?.test).toContain("bun test");
   expect(packageJson.scripts?.test).toContain("./tests");
   expect(portableGate).toContain('phase("tests", ["bun", "run", "test"])');
@@ -59,9 +66,10 @@ test("runner image release has one Takosumi-owned entrypoint, focused check, and
   expect(deploySource.match(/\.\/runner-image-release\.ts/gu)).toHaveLength(1);
   expect(deploySource).not.toContain("takosumi-cloud");
   expect(releaseSource).toContain('resolve(repositoryRoot, "runner/Dockerfile")');
-  expect(releaseSource).toContain(
-    'resolve(repositoryRoot, "deploy/platform/entry-worker.ts")',
-  );
+  expect(releaseSource).toContain("resolvePlatformReleaseSourceAuthority");
+  expect(sourceAuthority).toContain('"deploy/platform/entry-worker.ts"');
+  expect(sourceAuthority).toContain('"dashboard/dist"');
+  expect(sourceAuthority).toContain("O_NOFOLLOW");
   expect(releaseSource).toContain('"cosign"');
   expect(releaseSource).toContain('"publication-started"');
   expect(releaseSource).toContain('"reconciled-absent"');

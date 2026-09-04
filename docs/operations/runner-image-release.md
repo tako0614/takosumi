@@ -28,10 +28,22 @@ current feature branch only when `HEAD` equals both local
 `origin/main`. The evidence records the branch and commit.
 
 The external Wrangler config must use exactly `takosumi-staging` or `takosumi`
-for the selected environment. Its `main` resolves exactly to this checkout's
-`deploy/platform/entry-worker.ts`, its asset directory resolves exactly to this
-checkout's `dashboard/dist`, and it contains exactly one
-`OpenTofuRunnerObject` image pinned by immutable registry digest.
+for the selected environment and contain exactly one `OpenTofuRunnerObject`
+image pinned by immutable registry digest. It is the same identity-only
+realized config accepted by the platform release: it declares neither `main`
+nor an `[assets] directory`. Its stable, physical, single-link sibling
+`<config>.source.json` names the exact Git repository and commit, and both
+runner and platform surfaces refuse a checkout that does not have that exact
+identity. The source-pin shape and materialization procedure are documented in
+[platform-worker-deploy.md](./platform-worker-deploy.md#the-realized-config-names-a-source-identity-not-a-path).
+
+The runner derives `deploy/platform/entry-worker.ts` and `dashboard/dist` only
+from that exact pinned checkout and injects them into a private ephemeral
+Wrangler projection. The realized config bytes remain pathless and are the
+sole config SHA bound into build, platform-plan, platform-ready, and runner
+verification evidence. Consequently one config can flow through runner build,
+an image-literal-only pin replacement, platform plan/execute, and runner verify
+without changing its source authority or inventing a second config identity.
 
 Publication state, plans, checkpoints, and evidence are absolute, physical,
 single-link files in operator-private directories outside every Git worktree,
@@ -39,11 +51,12 @@ and use exact mode `0600`. `takosumi-private` owns their policy and realized
 pin, but these runtime files are not written inside that checkout. Records
 contain bounded, redacted diagnostics and digest fields, never secrets.
 Before any evidence or coordination file is opened, the runner CLI canonicalizes
-existing and future paths and requires the realized config, publication state,
-terminal evidence, build/platform input evidence, deterministic locator, lock,
-and reserved pending-lock namespace to be pairwise distinct. Canonical path and
-physical inode equality both fail closed, so a symlinked parent or hardlink
-cannot turn append-only JSON output into config or coordination corruption.
+existing and future paths and requires the realized config, its sibling source
+pin, publication state, terminal evidence, build/platform input evidence,
+deterministic locator, lock, and reserved pending-lock namespace to be pairwise
+distinct. Canonical path and physical inode equality both fail closed, so a
+symlinked parent or hardlink cannot turn config, source authority, or append-only
+JSON output into config or coordination corruption.
 
 ## 1. Publish an immutable image
 
@@ -59,9 +72,10 @@ bun run deploy -- takosumi-runner-image build \
   --execute
 ```
 
-Build materializes the exact pushed Git commit into an external physical build
-context, copies the already-validated config into the same private custody, and
-builds that sealed source for `linux/amd64`. Before Docker runs it downloads the
+Build materializes the exact pushed and source-pinned Git commit into an external
+physical build context, copies the already-validated pathless config into the
+same private custody, projects runner paths from the pinned clean checkout, and
+builds the sealed source for `linux/amd64`. Before Docker runs it downloads the
 OpenTofu checksum, certificate, and signature named by the sealed Dockerfile,
 verifies the checksum file with Cosign against OpenTofu's release workflow OIDC
 identity and issuer, and requires the pinned linux/amd64 archive checksum to be
@@ -239,8 +253,10 @@ bun run check:runner-image-release
 bun run deploy -- --contract
 ```
 
-The focused check covers pushed-branch policy, exact entrypoint and image-only
-config binding, collision-resistant transport publication, immutable digest
-readback, complete asset and dry-run authority fences, emitted/serving Version
-identity, durable recovery, and exact Container application health. The same
-tests run once in the portable repository gate through the global test phase.
+The focused check covers the one-config runner/platform composition, shared
+source-pin authority, pushed-branch policy, exact derived entrypoint and
+image-only config binding, collision-resistant transport publication,
+immutable digest readback, complete asset and dry-run authority fences,
+emitted/serving Version identity, durable recovery, and exact Container
+application health. The same tests run once in the portable repository gate
+through the global test phase.

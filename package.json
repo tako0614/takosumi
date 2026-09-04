@@ -46,7 +46,7 @@
     "test:dashboard-browser-harness": "bun test tests/dashboard/e2e/harness_test.ts",
     "test:critical-journeys": "bun scripts/run-critical-journeys.ts",
     "test:scripts": "bun test ./tests/scripts",
-    "check:runner-image-release": "bun test tests/scripts/runner_image_release_test.ts tests/scripts/runner_image_release_authority_test.ts tests/scripts/platform_worker_release_test.ts tests/scripts/platform_worker_release_authority_test.ts tests/scripts/runner_image_release_boundary_test.ts tests/scripts/deploy_entrypoint_boundary_test.ts",
+    "check:runner-image-release": "bun test tests/scripts/release_config_composition_test.ts tests/scripts/runner_image_release_test.ts tests/scripts/runner_image_release_authority_test.ts tests/scripts/platform_worker_release_test.ts tests/scripts/platform_worker_release_authority_test.ts tests/scripts/runner_image_release_boundary_test.ts tests/scripts/deploy_entrypoint_boundary_test.ts",
     "audit:public-sites": "(cd docs && npm audit --audit-level=moderate) && (cd website && npm audit --audit-level=moderate)",
     "schema-validators:assets": "bun scripts/build-schema-validators.ts",
     "schema-validators:check": "bun scripts/build-schema-validators.ts --check",
