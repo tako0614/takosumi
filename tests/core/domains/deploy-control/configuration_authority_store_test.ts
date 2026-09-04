@@ -4,10 +4,15 @@ import type {
   InstallConfig,
 } from "takosumi-contract/install-configs";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
+import type { PlanRun } from "@takosumi/internal/deploy-control-api";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
+  CapsulePlanCreationFenceConflictError,
   InMemoryOpenTofuControlStore,
+  planRunExecutionInputsDigestMaterial,
   type CapsuleInitialAuthorityInput,
   type OpenTofuControlStore,
+  type PlanRunInputs,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
@@ -85,6 +90,49 @@ function initialAuthority(suffix: string): CapsuleInitialAuthorityInput {
     updatedAt: NOW,
   };
   return { installConfig: config, capsule: row, providerBindingSet };
+}
+
+async function configurationPlanPreparation(
+  authority: CapsuleInitialAuthorityInput,
+  suffix: string,
+): Promise<{ readonly run: PlanRun; readonly inputs: PlanRunInputs }> {
+  const runId = `plan_configuration_${suffix}`;
+  const inputs: PlanRunInputs = { planRunId: runId, variables: {} };
+  return {
+    inputs,
+    run: {
+      id: runId,
+      workspaceId: authority.capsule.workspaceId,
+      capsuleId: authority.capsule.id,
+      capsuleContext: {
+        workspaceId: authority.capsule.workspaceId,
+        capsuleId: authority.capsule.id,
+        environment: authority.capsule.environment,
+      },
+      source: {
+        kind: "git",
+        url: "https://example.com/acme/configuration.git",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+      },
+      sourceDigest: `sha256:${"1".repeat(64)}`,
+      operation: "create",
+      runnerProfileId: "opentofu-default",
+      variablesDigest: await stableJsonDigest(inputs.variables),
+      executionInputsDigest: await stableJsonDigest(
+        planRunExecutionInputsDigestMaterial(inputs, undefined),
+      ),
+      requiredProviders: [],
+      requiredProviderRequirements: [],
+      status: "queued",
+      policy: { status: "passed", reasons: [], checkedAt: 1 },
+      policyDecisionDigest: `sha256:${"2".repeat(64)}`,
+      baseStateGeneration: 0,
+      capsuleExecutionAuthorityEpoch: 1,
+      auditEvents: [],
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  };
 }
 
 test("initial Capsule authority is one create-only atomic unit across every store", async () => {
@@ -183,6 +231,54 @@ test("initial Capsule authority is one create-only atomic unit across every stor
     expect(
       await store.getCapsuleExecutionAuthorityEpoch(occupiedSlot.capsule.id),
     ).toBe(1);
+  }
+});
+
+test("configuration Plan preparation fences Capsule authority in every store", async () => {
+  for (const [label, store] of await stores()) {
+    const authority = initialAuthority(`${label}_plan_fence`);
+    expect(await store.createCapsuleInitialAuthority(authority)).toMatchObject({
+      status: "created",
+    });
+    const expectedCapsulePlanAuthority = {
+      installConfigId: authority.installConfig.id,
+      executionAuthorityEpoch: 1,
+      currentStateGeneration: 0,
+      currentStateVersionId: undefined,
+    } as const;
+
+    const accepted = await configurationPlanPreparation(
+      authority,
+      `${label}_accepted`,
+    );
+    expect(
+      await store.preparePlanRun({
+        ...accepted,
+        expectedCapsulePlanAuthority,
+      }),
+      label,
+    ).toMatchObject({ status: "created", run: accepted.run });
+
+    const current = await store.getCapsule(authority.capsule.id);
+    if (!current) throw new Error(`${label}: initial Capsule is missing`);
+    await store.putCapsule({
+      ...current,
+      status: "destroyed",
+      updatedAt: LATER,
+    });
+    const stale = await configurationPlanPreparation(
+      authority,
+      `${label}_stale`,
+    );
+    await expect(
+      store.preparePlanRun({
+        ...stale,
+        expectedCapsulePlanAuthority,
+      }),
+      label,
+    ).rejects.toBeInstanceOf(CapsulePlanCreationFenceConflictError);
+    expect(await store.getPlanRun(stale.run.id), label).toBeUndefined();
+    expect(await store.getPlanRunInputs(stale.run.id), label).toBeUndefined();
   }
 });
 
