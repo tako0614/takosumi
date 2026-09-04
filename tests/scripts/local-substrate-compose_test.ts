@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -28,11 +28,10 @@ const miniflareDockerfilePath = resolve(
   "../../deploy/local-substrate/wrappers/Dockerfile.miniflare",
 );
 const miniflareDockerfile = readFileSync(miniflareDockerfilePath, "utf8");
-const cliSmokePath = resolve(
+const retiredCliSmokePath = resolve(
   import.meta.dir,
   "../../deploy/local-substrate/scripts/cli-smoke.sh",
 );
-const cliSmoke = readFileSync(cliSmokePath, "utf8");
 const workersCliSmoke = readFileSync(
   resolve(
     import.meta.dir,
@@ -317,10 +316,6 @@ test("workers smoke uses the private probe host without opening the public app s
   );
   expect(cloudEnv).not.toContain("TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED");
   expect(caddyfile).toContain("respond @private 404");
-  expect(cliSmoke).toContain(
-    'workers) DEFAULT_SERVICE_URL="https://service.takosumi.test"',
-  );
-  expect(cliSmoke).toContain('--resolve "${BASH_REMATCH[1]}:443:127.0.0.1"');
   expect(workersCliSmoke).toContain(
     '"https://${SERVICE_HOST}/internal/v1/runner-profiles"',
   );
@@ -553,37 +548,18 @@ test("local-substrate cloud service is an unprivileged Bun control plane", () =>
   expect(cloudBlock).not.toContain("agent:");
 });
 
-test("local-substrate cli smoke exercises Git Source Capsule plan/apply", () => {
-  expect(cliSmoke).toContain('post_json "/internal/v1/sources"');
-  expect(cliSmoke).toContain(
-    'post_json "/internal/v1/sources/$SOURCE_ID/sync"',
+test("local-substrate delegates install authority to the platform smoke", () => {
+  expect(existsSync(retiredCliSmokePath)).toBe(false);
+  expect(smoke).not.toContain('"bash $SCRIPT_DIR/cli-smoke.sh"');
+  expect(smoke).not.toContain("deploy-control.api.e2e");
+  expect(tenantIsolation).toContain(
+    '"$BASE/api/v1/workspaces/$WORKSPACE_ID/install-plans"',
   );
-  expect(cliSmoke).toContain(
-    'post_json "/internal/v1/workspaces/$WORKSPACE_ID/capsules"',
-  );
-  expect(cliSmoke).toContain(
-    'post_json "/internal/v1/capsules/$CAPSULE_ID/plan"',
-  );
-  expect(cliSmoke).toContain('post_json "/internal/v1/apply-runs"');
-  expect(cliSmoke).toContain('wait_for_run "$PLAN_ID" "plan"');
-  expect(cliSmoke).toContain('wait_for_run "$APPLY_ID" "apply"');
-  expect(cliSmoke).not.toContain(
-    "/internal/v1/workspaces/$WORKSPACE_ID/uploads",
-  );
-  expect(cliSmoke).not.toContain('post_json "/internal/v1/deploy"');
-  // The retired plan-creation route stays retired: the lifecycle runs through
-  // /internal/v1/capsules/{id}/plan and the unified /internal/v1/runs. Reading
-  // the PlanRun record is a different thing — it is the only surface carrying
-  // the private Capsule execution-authority epoch, which the apply guard
-  // compares and the public applyExpected projection deliberately omits. The
-  // accounts plane rebuilds its guard from that same record.
-  expect(cliSmoke).not.toContain('post_json "/internal/v1/plan-runs"');
-  expect(cliSmoke).toContain('get_json "/internal/v1/plan-runs/$PLAN_ID"');
-  expect(cliSmoke).toContain("capsuleExecutionAuthorityEpoch");
-  expect(cliSmoke).toContain('expected.pop("planId", None)');
-  expect(cliSmoke).toContain('expected.pop("runnerId", None)');
-  expect(cliSmoke).toContain('expected["planRunId"] = plan_run_id');
-  expect(cliSmoke).toContain('expected["runnerProfileId"] = runner_profile_id');
+  expect(
+    tenantIsolation.match(
+      /"\$BASE\/api\/v1\/workspaces\/\$WORKSPACE_ID\/capsules"\)/gu,
+    ),
+  ).toHaveLength(2);
 });
 
 test("local-substrate tenant isolation follows the final Workspace response", () => {

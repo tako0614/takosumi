@@ -44,7 +44,10 @@ import type {
   CapsuleRootProviderRequirement,
 } from "takosumi-contract/capsules";
 import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsules";
-import { usesDeclaredEnvCredentialRecipe } from "takosumi-contract/connections";
+import {
+  type ProviderBindings,
+  usesDeclaredEnvCredentialRecipe,
+} from "takosumi-contract/connections";
 import { providerVersionMeetsRuntimeInputFloor } from "takosumi-contract/credential-recipes";
 import { isOpenTofuBuiltinProviderSource } from "takosumi-contract/provider-env-rules";
 import type {
@@ -170,6 +173,7 @@ import {
   applyRunRuntimeSecretRetirementPending,
   capsuleLifecycleExpected,
   CapsuleStateVersionGuardConflict,
+  CapsulePlanCreationFenceConflictError,
   planRunExecutionInputsDigestMaterial,
   type OpenTofuControlStore,
   type PlanRunInputs,
@@ -1937,11 +1941,29 @@ export class RunEngine {
       const latestCapsule = await this.#requireCapsule(capsule.id);
       assertCapsulePlanStateAuthority(latestCapsule, outerAuthority);
     }
-    const prepared = await this.#store.preparePlanRun({
-      run: planRun,
-      inputs: storedPlanRunInputs,
-      ...(dependencySnapshot ? { dependencySnapshot } : {}),
-    });
+    let prepared;
+    try {
+      prepared = await this.#store.preparePlanRun({
+        run: planRun,
+        inputs: storedPlanRunInputs,
+        ...(dependencySnapshot ? { dependencySnapshot } : {}),
+        ...(internal.expectedCapsulePlanAuthority
+          ? {
+              expectedCapsulePlanAuthority:
+                internal.expectedCapsulePlanAuthority,
+            }
+          : {}),
+      });
+    } catch (error) {
+      if (error instanceof CapsulePlanCreationFenceConflictError) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "The Capsule configuration changed before its Plan could be persisted.",
+          { reason: "capsule_configuration_identity_conflict" },
+        );
+      }
+      throw error;
+    }
     planRun = prepared.run;
     if (prepared.status === "created") {
       await this.#recordActivity({
@@ -2000,6 +2022,46 @@ export class RunEngine {
       context,
       internal,
     );
+  }
+
+  /**
+   * Read-only preflight for Configuration Plan successors. It intentionally
+   * derives the same runner-adjusted exact provider requirements as
+   * `#genericCapsulePlanRequest`, but resolves the proposed complete binding
+   * set instead of the Capsule's still-current persisted row.
+   */
+  async validateCapsuleConfigurationProviderBindings(input: {
+    readonly capsule: Capsule;
+    readonly installConfig: InstallConfig;
+    readonly compatibilityReport: CapsuleCompatibilityReport;
+    readonly providerBindings: ProviderBindings;
+  }): Promise<void> {
+    const profile = await this.#requireRunnerProfile(
+      input.installConfig.runnerId ?? this.#defaultRunnerProfileId,
+    );
+    const requiredProviders = requiredProvidersFromCompatibilityReport(
+      input.compatibilityReport,
+      profile.allowedProviders,
+    );
+    const requirements = providerRequirementsFromCompatibilityReport(
+      input.compatibilityReport,
+      requiredProviders,
+    );
+    this.#connectionsService ??= new ConnectionsService({
+      store: this.#store,
+      operatorProviderConnections: this.#operatorProviderConnections,
+      allowOperatorScopedProviderConnections:
+        this.#allowOperatorScopedProviderConnections,
+    });
+    await this.#connectionsService.validateProposedProviderBindingsForRun({
+      capsule: input.capsule,
+      bindings: input.providerBindings,
+      requiredProviders: providerBindingResolutionRequirements(
+        requirements,
+        profile,
+      ),
+      installConfigPolicy: input.installConfig.policy,
+    });
   }
 
   /**
@@ -2408,6 +2470,12 @@ export class RunEngine {
         baseStateGeneration,
         ...(compatibilityReport
           ? { compatibilityReportId: compatibilityReport.id }
+          : {}),
+        ...(internal.expectedCapsulePlanAuthority
+          ? {
+              expectedCapsulePlanAuthority:
+                internal.expectedCapsulePlanAuthority,
+            }
           : {}),
         ...(capsulePlan ? { capsulePlan } : {}),
         capsulePlanExecutionAuthority,

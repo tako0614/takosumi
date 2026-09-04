@@ -166,7 +166,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 88
+`accounts/service/src/control-route-inventory.ts`; it currently contains 86
 public route descriptors. Representative operations from that inventory are:
 
 ```http
@@ -184,10 +184,14 @@ POST  /api/v1/sources/{sourceId}/sync
 GET   /api/v1/sources/{sourceId}/snapshots
 GET   /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules
 
-POST  /api/v1/workspaces/{workspaceId}/capsules
+GET   /api/v1/workspaces/{workspaceId}/capsules
 GET   /api/v1/capsules/{capsuleId}
 PATCH /api/v1/capsules/{capsuleId}
+GET   /api/v1/capsules/{capsuleId}/provider-bindings
+GET   /api/v1/capsule-configs
+GET   /api/v1/capsule-configs/{capsuleConfigId}
 POST  /api/v1/capsules/{capsuleId}/plan
+POST  /api/v1/capsules/{capsuleId}/configuration-plans
 
 POST /api/v1/workspaces/{workspaceId}/install-plans
 GET  /api/v1/install-plans/{installPlanId}
@@ -215,14 +219,55 @@ GET /api/v1/workspaces/{workspaceId}/interface-materialization-failures
 POST /api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intentId}/retries
 ```
 
+Create a Capsule through the Git install-plan coordinator. It pins the exact
+SourceSnapshot and successful compatibility declaration, creates the complete
+initial authority atomically, and returns a Plan Run for review. The public
+Workspace Capsule collection is GET-only.
+
 Creating a Git install plan requires `Idempotency-Key`. Replaying the same
 normalized request in the same Workspace and actor scope returns the same
-record; reusing the key for different input returns 409. The coordinator stores
-only bounded references to the Source, immutable SourceSnapshot, DB-owned
-InstallConfig, Capsule, and canonical Plan Run. It rejects variable values,
-credentials, tokens, and Output values. Reconciliation stops at a reviewable
-Plan Run; approval and apply remain exclusively on the Run API, with no
-install-plan apply route.
+record; reusing the key for different input returns 409. Its public projection
+contains only bounded references to the Source, immutable SourceSnapshot,
+DB-owned InstallConfig, Capsule, and canonical Plan Run. Private variable values
+supplied at creation remain only in non-public coordinator state until the
+atomic initial-authority commit, are never projected, and are removed from the
+coordinator immediately after that commit. Credentials, tokens, and Output
+values are rejected. Reconciliation stops at a reviewable Plan Run;
+approval and apply remain exclusively on the Run API, with no install-plan apply
+route.
+
+`POST /api/v1/capsules/{capsuleId}/configuration-plans` accepts the closed
+body `{variablePatch:{set,remove},providerBindings,interfaceBlueprints,expected:{authorityGuard}}`.
+It patches only the private current InstallConfig, resolves value-free provider
+bindings, and seals an immutable successor while preserving the existing
+source, module, policy, runner, lifecycle, output, Interface, runtime, and
+provenance authority. The InstallConfig pointer, ProviderBindingSet, pending
+Interface intents, and execution-authority epoch are changed under one CAS;
+the endpoint then creates a review-only OpenTofu Plan and never starts Apply.
+For a repository-manifest Capsule, only exact manifest user-input declarations
+authorize the patch. For a generic OpenTofu Capsule, the route rechecks the
+stored variable-contract digest against the successful compatibility
+declaration for the exact SourceSnapshot and uses only those declared
+names/basic types/default markers; it never infers a latest Snapshot or
+manifest.
+
+The first completed request returns 201. If the insert-only successor or exact
+authority CAS committed but its acknowledgement was lost before the canonical
+Plan became durable, retry completes the remaining work and still returns
+`201` with `replayed:false`. Once the canonical Plan is durable, an ordinary
+identical same-key replay (including a lost Plan acknowledgement) returns `200`
+with `replayed:true`, the same target, and the same durable `planRunId`; it does
+not create another Plan row. Reusing the key for different input conflicts with
+409. The route rejects reserved redaction sentinels, invalid variable
+patches/removals, stale authority guards, destroyed/disabled Capsules, and
+in-flight revision work.
+
+Public `PATCH /api/v1/capsule-configs/{id}` and
+`PUT /api/v1/capsules/{id}/provider-bindings` are retired for every row,
+including unmarked legacy rows. After authenticating and authorizing the
+Workspace, both return `405 Method Not Allowed` with `Allow: GET`. Configuration
+Plan or the dedicated re-adoption operation is the only deployment-intent
+mutation authority for an existing Capsule.
 
 The create body selects provider connections by the exact module-local tuple
 from the scan, not by a provider-source-only map:
@@ -245,6 +290,13 @@ from the scan, not by a provider-source-only map:
         "connectionId": "conn_takoform"
       }
     ]
+  },
+  "preflight": {
+    "sourceId": "src_exact",
+    "sourceSnapshotId": "snap_exact",
+    "compatibilityCheckRunId": "run_compatibility_exact",
+    "compatibilityReportId": "report_exact",
+    "installConfigId": "cfg_exact"
   }
 }
 ```
@@ -254,6 +306,10 @@ archive-relative module discovered by that snapshot's tree scan. Each
 `providerBindings` `provider` / `moduleLocalName` / optional `childAlias` must
 exactly match a requirement tuple for the selected module. `connectionId` is
 only a reference to an existing Connection.
+`preflight` pins the successful, ready compatibility declaration for that exact
+SourceSnapshot and module. Dashboard and smoke installs use this create-only
+coordinator; they do not create a Capsule and fill in bindings through a later
+public PUT.
 
 Creating a Git revision plan also requires `Idempotency-Key` and accepts only
 `{ "ref": "<git-ref>" }`. Creation returns 201, replaying the same normalized

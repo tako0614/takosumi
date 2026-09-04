@@ -94,6 +94,9 @@ export const TAKOSUMI_INSTALL_CONFIGS_ROUTE =
   `${INTERNAL_V1_PREFIX}/install-configs` as const;
 export const TAKOSUMI_INSTALL_CONFIG_ROUTE =
   `${INTERNAL_V1_PREFIX}/install-configs/:installConfigId` as const;
+/** Unrestricted operator-only immutable self-host configuration import. */
+export const TAKOSUMI_CAPSULE_CONFIGURATION_RESTORES_ROUTE =
+  `${INTERNAL_V1_PREFIX}/capsule-configuration-restores` as const;
 export const TAKOSUMI_CAPSULE_PLAN_ROUTE =
   `${INTERNAL_V1_PREFIX}/capsules/:capsuleId/plan` as const;
 export const TAKOSUMI_CAPSULE_DESTROY_PLAN_ROUTE =

@@ -106,7 +106,8 @@ export type ReadCapsuleSourceFiles = (
 ) => Promise<readonly CapsuleSourceFile[]>;
 
 /**
- * In-process identity supplied only by a durable Git lifecycle coordinator.
+ * In-process identity supplied only by a durable Git lifecycle coordinator or
+ * an authority-guarded Capsule configuration transition.
  * The Accounts HTTP parser never forwards these fields. Both ids are derived
  * from the exact coordinator/request/source/snapshot/base/module digest so a
  * lost acknowledgement can recover one canonical read-only analysis.
@@ -1249,7 +1250,7 @@ function installPlanCompatibilityIdentity(
       : undefined;
   const actorSuffix =
     typeof createdBy === "string"
-      ? /^(?:git-install-plan:gip_[0-9a-f]{16}|git-revision-plan:grp_[0-9a-f]{16}):([0-9a-f]{16})$/u.exec(
+      ? /^(?:git-install-plan:gip_[0-9a-f]{16}|git-revision-plan:grp_[0-9a-f]{16}|capsule-configuration-plan:icfg_[0-9a-f]{16}):([0-9a-f]{16})$/u.exec(
           createdBy,
         )?.[1]
       : undefined;

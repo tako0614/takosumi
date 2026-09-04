@@ -21,7 +21,6 @@ import {
   assertConfiguredPublicUrls,
   capsuleFromLedgerResponse,
   canonicalRunEventSequenceFromActivity,
-  createdCapsuleFromCreateResponse,
   defaultHelloWorkerInterfaceBlueprint,
   dryRunResult,
   failedResult,
@@ -34,9 +33,9 @@ import {
   runPlatformControlPlaneSmoke,
   selectSmokeInstallConfigId,
   shouldMarkPendingSmokeCapsuleError,
-  smokeCapsuleProviderBindingsBody,
+  smokeGitInstallPlanBody,
+  smokeGitInstallPlanProviderBindings,
   smokeSourceCompatibilityCheckBody,
-  smokeSourceCapsuleCreateBody,
   smokeCloudflareProviderConnectionMatch,
   smokeWorkspaceCloudflareConnectionBody,
   assertServiceIdentityResponse,
@@ -2162,19 +2161,21 @@ test("platform smoke failure redaction includes raw issued Interface access toke
   expect(JSON.stringify(result)).not.toContain(issuedToken);
 });
 
-test("platform smoke binds compatibility checks to the current Capsule", () => {
+test("platform smoke binds compatibility checks before Capsule creation", () => {
   const body = smokeSourceCompatibilityCheckBody({
     sourceSnapshotId: "snap_1",
-    capsuleId: "cap_1",
+    capsuleName: "example",
+    installConfigId: "cfg_default",
+    compileInstallUx: false,
     modulePath: "deploy/opentofu",
   });
 
   expect(body).toEqual({
     sourceSnapshotId: "snap_1",
-    capsuleId: "cap_1",
+    installConfigId: "cfg_default",
     modulePath: "deploy/opentofu",
   });
-  expect(body).not.toHaveProperty("installationId");
+  expect(body).not.toHaveProperty("capsuleId");
 });
 
 test("platform smoke can reproduce Store-backed managed Provider resolution", async () => {
@@ -2211,15 +2212,25 @@ test("platform smoke can reproduce Store-backed managed Provider resolution", as
   );
 
   expect(
-    smokeSourceCapsuleCreateBody(options, {
+    smokeGitInstallPlanBody(options, {
+      sourceName: "example",
       sourceId: "src_test",
+      sourceSnapshotId: "snap_test",
+      compatibilityCheckRunId: "ccr_test",
+      compatibilityReportId: "caprep_test",
       installConfigId: "cfg_generic",
+      providerBindings: [],
     }),
   ).toMatchObject({
-    sourceId: "src_test",
-    installConfigId: "cfg_generic",
-    modulePath: "deploy/opentofu",
-    store: storeMetadata,
+    preflight: {
+      sourceId: "src_test",
+      sourceSnapshotId: "snap_test",
+      compatibilityCheckRunId: "ccr_test",
+      compatibilityReportId: "caprep_test",
+      installConfigId: "cfg_generic",
+    },
+    options: { modulePath: "deploy/opentofu" },
+    initialConfiguration: { store: storeMetadata },
   });
   const result = dryRunResult(options);
   expect(result.inputs.storeMetadataDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
@@ -2482,22 +2493,6 @@ test("platform control-plane smoke keeps the Capsule name independent from OpenT
   expect(explicitOptions.appName).toBe("explicit-name");
 });
 
-test("platform control-plane smoke reads current Capsule create responses", () => {
-  expect(
-    createdCapsuleFromCreateResponse({
-      capsule: { id: "inst_current", name: "current capsule" },
-    }),
-  ).toEqual({ id: "inst_current", name: "current capsule" });
-  expect(() =>
-    createdCapsuleFromCreateResponse({
-      installation: { id: "inst_legacy", name: "legacy capsule" },
-    } as never),
-  ).toThrow("capsule create response did not include id");
-  expect(() => createdCapsuleFromCreateResponse({ capsule: {} })).toThrow(
-    "capsule create response did not include id",
-  );
-});
-
 test("platform control-plane smoke reads current Capsule ledger responses", () => {
   expect(
     capsuleFromLedgerResponse({
@@ -2750,11 +2745,16 @@ test("existing non-Cloudflare ProviderBindings do not inject Cloudflare hello-mo
   };
   expect(options.vars).toEqual(expectedVars);
   expect(
-    smokeSourceCapsuleCreateBody(options, {
+    smokeGitInstallPlanBody(options, {
+      sourceName: "generic-service",
       sourceId: "src_generic_service",
+      sourceSnapshotId: "snap_generic_service",
+      compatibilityCheckRunId: "ccr_generic_service",
+      compatibilityReportId: "caprep_generic_service",
       installConfigId: "cfg_generic",
+      providerBindings: options.providerBindings,
     }),
-  ).toMatchObject({ vars: expectedVars });
+  ).toMatchObject({ variables: expectedVars });
 });
 
 test("Yurucommu Takoform smoke sends no reviewed variables and leaves project_name to capsule_name", async () => {
@@ -2782,11 +2782,16 @@ test("Yurucommu Takoform smoke sends no reviewed variables and leaves project_na
 
   expect(options.vars).toEqual({});
   expect(
-    smokeSourceCapsuleCreateBody(options, {
+    smokeGitInstallPlanBody(options, {
+      sourceName: "yurucommu",
       sourceId: "src_yurucommu",
+      sourceSnapshotId: "snap_yurucommu",
+      compatibilityCheckRunId: "ccr_yurucommu",
+      compatibilityReportId: "caprep_yurucommu",
       installConfigId: "cfg_yurucommu_takoform",
+      providerBindings: options.providerBindings,
     }),
-  ).toMatchObject({ name: "yurucommu-e2e", vars: {} });
+  ).toMatchObject({ capsule: { name: "yurucommu-e2e" }, variables: {} });
 });
 
 test("an explicit empty ProviderBinding set remains authoritative zero", async () => {
@@ -2918,8 +2923,7 @@ test("platform control-plane smoke rejects ambiguous or non-canonical ProviderBi
 
 test("platform control-plane smoke binds an existing provider by its source", () => {
   expect(
-    smokeCapsuleProviderBindingsBody({
-      bindings: [
+    smokeGitInstallPlanProviderBindings([
         {
           provider: "registry.terraform.io/tako0614/takoform",
           moduleLocalName: "takoform",
@@ -2933,9 +2937,8 @@ test("platform control-plane smoke binds an existing provider by its source", ()
           connectionId: "pcn_existing_aws",
         },
       ],
-    }),
-  ).toEqual({
-    bindings: [
+    ),
+  ).toEqual([
       {
         provider: "registry.opentofu.org/hashicorp/aws",
         moduleLocalName: "aws",
@@ -2948,18 +2951,16 @@ test("platform control-plane smoke binds an existing provider by its source", ()
         rootAlias: "takoform_objects",
         connectionId: "pcn_existing_takoform",
       },
-    ],
-  });
+    ]);
   expect(
     JSON.stringify(
-      smokeCapsuleProviderBindingsBody({
-        bindings: [
+      smokeGitInstallPlanProviderBindings([
           {
             provider: "registry.opentofu.org/hashicorp/aws",
             connectionId: "pcn_existing_aws",
           },
         ],
-      }),
+      ),
     ),
   ).not.toContain('"alias"');
 });
@@ -2986,15 +2987,13 @@ test("platform smoke resolves an omitted guided binding identity from compatibil
       connectionId: "pcn_guided_cloudflare",
     },
   ]);
-  expect(smokeCapsuleProviderBindingsBody({ bindings: resolved })).toEqual({
-    bindings: [
+  expect(smokeGitInstallPlanProviderBindings(resolved)).toEqual([
       {
         provider: "registry.opentofu.org/cloudflare/cloudflare",
         moduleLocalName: "cloudflare",
         connectionId: "pcn_guided_cloudflare",
       },
-    ],
-  });
+    ]);
 });
 
 test("platform smoke selects the exact provider source from a multi-provider report", () => {
@@ -4218,13 +4217,12 @@ async function runConfiguredPublicUrlLifecycleFixture(
           installConfigs: [{ id: "cfg_configured_public_url", workspaceId }],
         });
       }
-      if (method === "POST" && path === `/api/v1/workspaces/${workspaceId}/capsules`) {
-        return Response.json({ capsule: { id: capsuleId, name: appName } });
-      }
       if (method === "POST" && path === `/api/v1/sources/${sourceId}/compatibility-check`) {
+        const reportId = "caprep_configured_public_url";
         return Response.json({
           report: {
-            id: "compat_configured_public_url",
+            id: reportId,
+            level: "ready",
             rootProviderRequirements: behavior.temporaryConnection
               ? [{
                   source: "registry.opentofu.org/cloudflare/cloudflare",
@@ -4232,16 +4230,38 @@ async function runConfiguredPublicUrlLifecycleFixture(
                 }]
               : [],
           },
+          run: {
+            id: "ccr_configured_public_url",
+            type: "compatibility_check",
+            status: "succeeded",
+            compatibilityReportId: reportId,
+          },
+          repositoryInstallUx: { status: "absent" },
         });
       }
       if (
-        method === "PUT" &&
-        path === `/api/v1/capsules/${capsuleId}/provider-bindings`
+        method === "POST" &&
+        path === `/api/v1/workspaces/${workspaceId}/install-plans`
       ) {
-        return Response.json({});
+        return Response.json({
+          installPlan: { id: "gip_configured_public_url", phase: "creating_capsule" },
+          nextAction: "reconcile",
+        }, { status: 201 });
       }
-      if (method === "POST" && path === `/api/v1/capsules/${capsuleId}/plan`) {
-        return Response.json({ run: runs.planWaiting });
+      if (
+        method === "POST" &&
+        path === "/api/v1/install-plans/gip_configured_public_url/reconcile"
+      ) {
+        return Response.json({
+          installPlan: {
+            id: "gip_configured_public_url",
+            phase: "reviewable",
+            capsuleId,
+            installConfigId: "icfg_configured_public_url",
+            planRunId: runs.planWaiting.id,
+          },
+          nextAction: "review_run",
+        });
       }
       if (method === "GET" && path === `/api/v1/runs/${runs.planWaiting.id}`) {
         return Response.json({ run: runs.planWaiting });
@@ -4431,6 +4451,17 @@ test("generic OpenTofu smoke verifies every configured URL absent after Destroy"
   expect(fixture.controlPlaneResolverCalls).toBe(1);
   expect(fixture.publicResolverCalls).toBe(0);
   expect(fixture.controlPlaneRequests.length).toBeGreaterThan(10);
+  expect(fixture.controlPlaneRequests.some((request) =>
+    request.method === "POST" &&
+    request.path === "/api/v1/workspaces/ws_configuredpublicurl/install-plans"
+  )).toBe(true);
+  expect(fixture.controlPlaneRequests.some((request) =>
+    request.path.includes("/provider-bindings") ||
+    /\/capsules\/[^/]+\/plan$/u.test(request.path)
+  )).toBe(false);
+  expect(fixture.controlPlaneRequests.some((request) =>
+    request.method === "PUT"
+  )).toBe(false);
   expect(fixture.publicRequests).toHaveLength(4);
   expect([
     ...fixture.controlPlaneRequests,
@@ -5040,17 +5071,13 @@ test("platform smoke keeps a successfully destroyed Capsule terminal when post-d
     }
     if (
       method === "POST" &&
-      path === `/api/v1/workspaces/${options.workspace}/capsules`
-    ) {
-      return Response.json({ capsule: { id: capsuleId, name: appName } });
-    }
-    if (
-      method === "POST" &&
       path === `/api/v1/sources/${sourceId}/compatibility-check`
     ) {
+      const reportId = "caprep_destroy_output_fixture";
       return Response.json({
         report: {
-          id: "compat_destroy_output_fixture",
+          id: reportId,
+          level: "ready",
           rootProviderRequirements: [
             {
               source: "registry.opentofu.org/cloudflare/cloudflare",
@@ -5058,16 +5085,38 @@ test("platform smoke keeps a successfully destroyed Capsule terminal when post-d
             },
           ],
         },
+        run: {
+          id: "ccr_destroy_output_fixture",
+          type: "compatibility_check",
+          status: "succeeded",
+          compatibilityReportId: reportId,
+        },
+        repositoryInstallUx: { status: "absent" },
       });
     }
     if (
-      method === "PUT" &&
-      path === `/api/v1/capsules/${capsuleId}/provider-bindings`
+      method === "POST" &&
+      path === `/api/v1/workspaces/${options.workspace}/install-plans`
     ) {
-      return Response.json({});
+      return Response.json({
+        installPlan: { id: "gip_destroy_output_fixture", phase: "creating_capsule" },
+        nextAction: "reconcile",
+      }, { status: 201 });
     }
-    if (method === "POST" && path === `/api/v1/capsules/${capsuleId}/plan`) {
-      return Response.json({ run: runRecords.planWaitingApproval });
+    if (
+      method === "POST" &&
+      path === "/api/v1/install-plans/gip_destroy_output_fixture/reconcile"
+    ) {
+      return Response.json({
+        installPlan: {
+          id: "gip_destroy_output_fixture",
+          phase: "reviewable",
+          capsuleId,
+          installConfigId: "icfg_destroy_output_fixture",
+          planRunId: runRecords.planWaitingApproval.id,
+        },
+        nextAction: "review_run",
+      });
     }
     if (
       method === "GET" &&
@@ -5371,17 +5420,13 @@ test("platform smoke does not retry or directly delete after a failed destroy ap
     }
     if (
       method === "POST" &&
-      path === `/api/v1/workspaces/${options.workspace}/capsules`
-    ) {
-      return Response.json({ capsule: { id: capsuleId, name: appName } });
-    }
-    if (
-      method === "POST" &&
       path === `/api/v1/sources/${sourceId}/compatibility-check`
     ) {
+      const reportId = "caprep_destroy_failure_fixture";
       return Response.json({
         report: {
-          id: "compat_destroy_failure_fixture",
+          id: reportId,
+          level: "ready",
           rootProviderRequirements: [
             {
               source: "registry.opentofu.org/cloudflare/cloudflare",
@@ -5389,16 +5434,38 @@ test("platform smoke does not retry or directly delete after a failed destroy ap
             },
           ],
         },
+        run: {
+          id: "ccr_destroy_failure_fixture",
+          type: "compatibility_check",
+          status: "succeeded",
+          compatibilityReportId: reportId,
+        },
+        repositoryInstallUx: { status: "absent" },
       });
     }
     if (
-      method === "PUT" &&
-      path === `/api/v1/capsules/${capsuleId}/provider-bindings`
+      method === "POST" &&
+      path === `/api/v1/workspaces/${options.workspace}/install-plans`
     ) {
-      return Response.json({});
+      return Response.json({
+        installPlan: { id: "gip_destroy_failure_fixture", phase: "creating_capsule" },
+        nextAction: "reconcile",
+      }, { status: 201 });
     }
-    if (method === "POST" && path === `/api/v1/capsules/${capsuleId}/plan`) {
-      return Response.json({ run: runRecords.planWaitingApproval });
+    if (
+      method === "POST" &&
+      path === "/api/v1/install-plans/gip_destroy_failure_fixture/reconcile"
+    ) {
+      return Response.json({
+        installPlan: {
+          id: "gip_destroy_failure_fixture",
+          phase: "reviewable",
+          capsuleId,
+          installConfigId: "icfg_destroy_failure_fixture",
+          planRunId: runRecords.planWaitingApproval.id,
+        },
+        nextAction: "review_run",
+      });
     }
     if (
       method === "GET" &&
@@ -5772,22 +5839,52 @@ async function runDestroyApplyReconciliationFixture(
         ],
       });
     }
-    if (method === "POST" && path === `/api/v1/workspaces/${options.workspace}/capsules`) {
-      return Response.json({ capsule: { id: capsuleId, name: appName } });
-    }
     if (
       method === "POST" &&
       path === `/api/v1/sources/${sourceId}/compatibility-check`
     ) {
+      const reportId = `caprep_destroy_apply_${reconciliation}_fixture`;
       return Response.json({
         report: {
-          id: `compat_destroy_apply_${reconciliation}_fixture`,
+          id: reportId,
+          level: "ready",
           rootProviderRequirements: [],
         },
+        run: {
+          id: `ccr_destroy_apply_${reconciliation}_fixture`,
+          type: "compatibility_check",
+          status: "succeeded",
+          compatibilityReportId: reportId,
+        },
+        repositoryInstallUx: { status: "absent" },
       });
     }
-    if (method === "POST" && path === `/api/v1/capsules/${capsuleId}/plan`) {
-      return Response.json({ run: runRecords.planWaitingApproval });
+    if (
+      method === "POST" &&
+      path === `/api/v1/workspaces/${options.workspace}/install-plans`
+    ) {
+      return Response.json({
+        installPlan: {
+          id: `gip_destroy_apply_${reconciliation}_fixture`,
+          phase: "creating_capsule",
+        },
+        nextAction: "reconcile",
+      }, { status: 201 });
+    }
+    if (
+      method === "POST" &&
+      path === `/api/v1/install-plans/gip_destroy_apply_${reconciliation}_fixture/reconcile`
+    ) {
+      return Response.json({
+        installPlan: {
+          id: `gip_destroy_apply_${reconciliation}_fixture`,
+          phase: "reviewable",
+          capsuleId,
+          installConfigId: `icfg_destroy_apply_${reconciliation}_fixture`,
+          planRunId: runRecords.planWaitingApproval.id,
+        },
+        nextAction: "review_run",
+      });
     }
     if (
       method === "GET" &&

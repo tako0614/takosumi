@@ -22,7 +22,6 @@ import type {
   CredentialRecipe as ContractCredentialRecipe,
   Dependency as ContractDependency,
   InstallConfig as ContractInstallConfig,
-  InstallConfigVariableDefault as ContractInstallConfigVariableDefault,
   Capsule as ContractCapsule,
   CapsuleProviderPackage as ContractCapsuleProviderPackage,
   CapsuleRootProviderRequirement as ContractCapsuleRootProviderRequirement,
@@ -46,6 +45,10 @@ import type {
   PublicWorkspaceListPage as ContractPublicWorkspaceListPage,
   UsageEvent as ContractUsageEvent,
   CapsuleCurrentResourceInventory as ContractCapsuleCurrentResourceInventory,
+  CapsuleConfigurationPlanRequest,
+  CapsuleConfigurationPlanResponse,
+  CreateGitInstallPlanRequest,
+  GitInstallPlanResponse,
 } from "takosumi-contract";
 import { isCanonicalRepositoryDirectoryPath } from "takosumi-contract";
 
@@ -146,16 +149,12 @@ function summarizeControlError(error: unknown): ControlApiErrorSummary {
  * issuing another mutation.
  */
 export class ControlApiIndeterminateError extends ControlApiError {
-  readonly operation:
-    | "apply"
-    | "capsule_create"
-    | "source_create"
-    | "source_patch";
+  readonly operation: "apply" | "source_create" | "source_patch";
   readonly isIndeterminate = true;
   readonly causeSummary?: ControlApiErrorSummary;
 
   constructor(
-    operation: "apply" | "capsule_create" | "source_create" | "source_patch",
+    operation: "apply" | "source_create" | "source_patch",
     message: string,
     cause?: unknown,
   ) {
@@ -850,6 +849,7 @@ export type RepositoryInstallUxPreview =
 
 export interface CapsuleCompatibilityResult {
   readonly reportId?: string;
+  readonly compatibilityCheckRunId?: string;
   readonly sourceSnapshotId?: string;
   readonly level: CapsuleCompatibilityLevel;
   readonly summary: string;
@@ -1172,30 +1172,6 @@ export async function listCapsules(
 }
 
 /**
- * Strict Capsule inventory used only around a create mutation. Unlike the
- * general dashboard list helper, this cannot turn a missing/malformed array
- * into `[]`: a complete before/after inventory is required for safe
- * acknowledgement recovery.
- */
-async function listCapsulesForCreateRecovery(
-  workspaceId: string,
-): Promise<readonly Capsule[]> {
-  return await fetchAllPages<Capsule>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/capsules?includeDestroyed=false`,
-    (body) => {
-      if (!Array.isArray(body.capsules)) {
-        throw new ControlApiError(
-          502,
-          "invalid_capsule_list_response",
-          "Capsule list returned an invalid response.",
-        );
-      }
-      return body.capsules as readonly Capsule[];
-    },
-  );
-}
-
-/**
  * Complete, runtime-validated Capsule inventory used to bind a Source-global
  * revision mutation to the Workloads it affects. The ordinary list helper is
  * intentionally forgiving for presentation; this seam must fail closed when
@@ -1239,10 +1215,135 @@ export async function listWorkspaceCurrentStateVersions(
 }
 
 export async function getCapsule(id: string): Promise<Capsule> {
+  const body = await controlFetch<{ capsule: Capsule }>(
+    `${BASE}/capsules/${encodeURIComponent(id)}`,
+  );
+  if (!isCapsuleResponse(body.capsule)) {
+    throw new ControlApiError(
+      502,
+      "invalid_capsule_response",
+      "Capsule read returned an invalid response.",
+    );
+  }
+  return body.capsule;
+}
+
+/**
+ * Reads the Capsule and its exact deployment-intent CAS guard from one server
+ * snapshot. Settings must echo this guard into the single Configuration Plan
+ * request; separate GETs could accidentally combine different authorities.
+ */
+export async function getCapsuleConfigurationContext(id: string): Promise<{
+  readonly capsule: Capsule;
+  readonly authorityGuard: string;
+}> {
   const body = await controlFetch<{
     capsule: Capsule;
+    installConfigReAdoption: { readonly authorityGuard: string };
   }>(`${BASE}/capsules/${encodeURIComponent(id)}`);
-  return body.capsule;
+  if (
+    !isCapsuleResponse(body.capsule) ||
+    typeof body.installConfigReAdoption?.authorityGuard !== "string" ||
+    body.installConfigReAdoption.authorityGuard.length === 0
+  ) {
+    throw new ControlApiError(
+      502,
+      "invalid_capsule_authority_response",
+      "Capsule authority read returned an invalid response.",
+    );
+  }
+  return {
+    capsule: body.capsule,
+    authorityGuard: body.installConfigReAdoption.authorityGuard,
+  };
+}
+
+/** Creates one reviewed successor for the Capsule's complete configuration. */
+export async function createCapsuleConfigurationPlan(
+  capsuleId: string,
+  request: CapsuleConfigurationPlanRequest,
+  idempotencyKey: string = crypto.randomUUID(),
+): Promise<CapsuleConfigurationPlanResponse> {
+  return await controlFetch<CapsuleConfigurationPlanResponse>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/configuration-plans`,
+    {
+      method: "POST",
+      headers: { "idempotency-key": idempotencyKey },
+      body: request,
+    },
+  );
+}
+
+/** Starts the durable create-only install coordinator. */
+export async function createGitInstallPlan(
+  workspaceId: string,
+  request: CreateGitInstallPlanRequest,
+  idempotencyKey: string = crypto.randomUUID(),
+): Promise<GitInstallPlanResponse> {
+  return await controlFetch<GitInstallPlanResponse>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/install-plans`,
+    {
+      method: "POST",
+      headers: { "idempotency-key": idempotencyKey },
+      body: request,
+    },
+  );
+}
+
+/** Advances exactly one durable install coordinator phase. */
+export async function reconcileGitInstallPlan(
+  installPlanId: string,
+): Promise<GitInstallPlanResponse> {
+  return await controlFetch<GitInstallPlanResponse>(
+    `${BASE}/install-plans/${encodeURIComponent(installPlanId)}/reconcile`,
+    { method: "POST" },
+  );
+}
+
+/**
+ * Drives the explicit reconcile command until the coordinator returns its
+ * review-only Plan. It never approves or applies that Run.
+ */
+export async function createReviewableGitInstallPlan(
+  workspaceId: string,
+  request: CreateGitInstallPlanRequest,
+  options: {
+    readonly maxReconciles?: number;
+    readonly idempotencyKey?: string;
+  } = {},
+): Promise<GitInstallPlanResponse> {
+  let response = await createGitInstallPlan(
+    workspaceId,
+    request,
+    options.idempotencyKey,
+  );
+  const max = options.maxReconciles ?? 120;
+  for (let attempt = 0; response.nextAction === "reconcile"; attempt += 1) {
+    if (attempt >= max) {
+      throw new ControlApiError(
+        504,
+        "install_plan_reconcile_timeout",
+        "The install plan did not become reviewable in time.",
+      );
+    }
+    response = await reconcileGitInstallPlan(response.installPlan.id);
+    if (response.nextAction === "reconcile") {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  if (
+    response.nextAction !== "review_run" ||
+    !response.installPlan.planRunId
+  ) {
+    throw new ControlApiError(
+      409,
+      response.installPlan.diagnostic?.code ?? "install_plan_failed",
+      response.installPlan.diagnostic?.message ??
+        "The install plan did not produce a reviewable Run.",
+      response,
+    );
+  }
+  return response;
 }
 
 const CAPSULE_STATUSES: ReadonlySet<CapsuleStatus> = new Set([
@@ -1283,35 +1384,6 @@ function isCapsuleResponse(value: unknown): value is Capsule {
   );
 }
 
-function isActiveCapsuleIdentity(value: unknown): value is Capsule {
-  return (
-    isCapsuleResponse(value) &&
-    value.status === "active" &&
-    typeof value.name === "string" &&
-    typeof value.environment === "string" &&
-    typeof value.sourceId === "string"
-  );
-}
-
-function capsuleMatchesCreateInput(
-  capsule: Capsule,
-  input: {
-    readonly workspaceId: string;
-    readonly projectId?: string;
-    readonly name: string;
-    readonly environment: string;
-    readonly sourceId: string;
-  },
-): boolean {
-  return (
-    capsule.workspaceId === input.workspaceId &&
-    capsule.name === input.name &&
-    capsule.environment === input.environment &&
-    capsule.sourceId === input.sourceId &&
-    (input.projectId === undefined || capsule.projectId === input.projectId)
-  );
-}
-
 function isMutationOutcomeUnknown(error: unknown): boolean {
   if (error instanceof ControlApiIndeterminateError) return true;
   if (error instanceof ControlApiError) {
@@ -1321,134 +1393,6 @@ function isMutationOutcomeUnknown(error: unknown): boolean {
   // observed. A definite HTTP rejection is always represented by
   // ControlApiError and is handled above.
   return true;
-}
-
-function invalidCapsuleResponse(): ControlApiError {
-  return new ControlApiError(
-    502,
-    "invalid_capsule_response",
-    "Capsule create returned an invalid response.",
-  );
-}
-
-function capsuleCreateIndeterminate(
-  message: string,
-  cause?: unknown,
-): ControlApiIndeterminateError {
-  return new ControlApiIndeterminateError("capsule_create", message, cause);
-}
-
-export async function createCapsule(input: {
-  readonly workspaceId: string;
-  readonly projectId?: string;
-  readonly name: string;
-  readonly environment: string;
-  readonly sourceId: string;
-  readonly installConfigId: string;
-  readonly modulePath?: string;
-  readonly sourceBuild?: SourceBuildConfig;
-  readonly vars?: Readonly<Record<string, ContractJsonValue>>;
-  readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
-  readonly autoUpdate?: boolean;
-}): Promise<Capsule> {
-  // Read the active baseline before the one-shot create. If the response is
-  // lost, this is the only readback that can prove whether the exact Capsule
-  // appeared; proceeding without it would authorize an unrecoverable blind
-  // create.
-  let baseline: readonly Capsule[];
-  try {
-    baseline = await listCapsulesForCreateRecovery(input.workspaceId);
-  } catch (error) {
-    throw capsuleCreateIndeterminate(
-      "Capsule create cannot start because the active Capsule baseline was unavailable.",
-      error,
-    );
-  }
-  // Inventory every non-destroyed status, not just active rows. A pre-existing
-  // pending Capsule may become active while this request is in flight; treating
-  // it as a newly-created candidate would make the lost-response proof false.
-  if (!baseline.every(isCapsuleResponse)) {
-    throw capsuleCreateIndeterminate(
-      "Capsule create cannot start because the Capsule baseline was invalid.",
-    );
-  }
-  const baselineIds = new Set(baseline.map((capsule) => capsule.id));
-
-  try {
-    const body = await controlFetch<unknown>(
-      `${BASE}/workspaces/${encodeURIComponent(input.workspaceId)}/capsules`,
-      {
-        method: "POST",
-        body: {
-          name: input.name,
-          environment: input.environment,
-          ...(input.projectId !== undefined
-            ? { projectId: input.projectId }
-            : {}),
-          sourceId: input.sourceId,
-          installConfigId: input.installConfigId,
-          ...(input.modulePath !== undefined
-            ? { modulePath: input.modulePath }
-            : {}),
-          ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
-          ...(input.vars && Object.keys(input.vars).length > 0
-            ? { vars: input.vars }
-            : {}),
-          ...(input.outputAllowlist && Object.keys(input.outputAllowlist).length > 0
-            ? { outputAllowlist: input.outputAllowlist }
-            : {}),
-          ...(input.autoUpdate === true ? { autoUpdate: true } : {}),
-        },
-      },
-    );
-    if (
-      !isRecord(body) ||
-      !isCapsuleResponse(body.capsule) ||
-      !capsuleMatchesCreateInput(body.capsule, input)
-    ) {
-      throw invalidCapsuleResponse();
-    }
-    return body.capsule;
-  } catch (error) {
-    // A definite HTTP rejection is authoritative: do not issue another POST
-    // or turn a user-visible validation/duplicate error into readback noise.
-    if (!isMutationOutcomeUnknown(error)) throw error;
-
-    let after: readonly Capsule[];
-    try {
-      after = await listCapsulesForCreateRecovery(input.workspaceId);
-    } catch (readbackError) {
-      throw capsuleCreateIndeterminate(
-        "Capsule create outcome is indeterminate because the active Capsule readback was unavailable.",
-        readbackError,
-      );
-    }
-
-    if (!after.every(isCapsuleResponse)) {
-      throw capsuleCreateIndeterminate(
-        "Capsule create outcome is indeterminate: the active Capsule readback was invalid.",
-        error,
-      );
-    }
-    const newlyAppearedActive = after.filter(
-      (capsule) =>
-        isActiveCapsuleIdentity(capsule) && !baselineIds.has(capsule.id),
-    );
-    if (newlyAppearedActive.length !== 1) {
-      throw capsuleCreateIndeterminate(
-        `Capsule create outcome is indeterminate: expected exactly one newly appeared active Capsule, observed ${newlyAppearedActive.length}.`,
-        error,
-      );
-    }
-    const [candidate] = newlyAppearedActive;
-    if (!candidate || !capsuleMatchesCreateInput(candidate, input)) {
-      throw capsuleCreateIndeterminate(
-        "Capsule create outcome is indeterminate: the newly appeared active Capsule did not match the exact request identity.",
-        error,
-      );
-    }
-    return candidate;
-  }
 }
 
 /** Toggles the Capsule's auto-update opt-in (PATCH /capsules/:id). */
@@ -1537,19 +1481,6 @@ export async function getCapsuleProviderBindingSet(
   return body.providerBindingSet;
 }
 
-export async function putCapsuleProviderBindingSet(
-  capsuleId: string,
-  bindings: ProviderBindings,
-): Promise<ProviderBindingSet> {
-  const body = await controlFetch<{
-    providerBindingSet: ProviderBindingSet;
-  }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-bindings`, {
-    method: "PUT",
-    body: { bindings },
-  });
-  return body.providerBindingSet;
-}
-
 // --- Capsule configs -------------------------------------------------------
 
 export const STORE_VIEW = "store" as const;
@@ -1591,55 +1522,6 @@ export async function getInstallConfig(
   const body = await controlFetch<{ installConfig: InstallConfig }>(
     `${BASE}/capsule-configs/${encodeURIComponent(id)}`,
     { signal },
-  );
-  return body.installConfig;
-}
-
-export async function patchInstallConfig(
-  id: string,
-  input: {
-    readonly variableMapping?: Readonly<Record<string, ContractJsonValue>>;
-    readonly removeVariables?: readonly string[];
-    readonly variablePresentationDefaults?: Readonly<
-      Record<string, ContractInstallConfigVariableDefault>
-    >;
-    readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
-    readonly interfaceBlueprints?: ContractInstallConfig["interfaceBlueprints"];
-    readonly lifecycleActions?: ContractInstallConfig["lifecycleActions"];
-    readonly lifecycleActionPolicy?: NonNullable<
-      ContractInstallConfig["policy"]["lifecycleActions"]
-    > | null;
-  },
-): Promise<InstallConfig> {
-  const body = await controlFetch<{ installConfig: InstallConfig }>(
-    `${BASE}/capsule-configs/${encodeURIComponent(id)}`,
-    {
-      method: "PATCH",
-      body: {
-        ...(input.variableMapping
-          ? { variableMapping: input.variableMapping }
-          : {}),
-        ...(input.removeVariables && input.removeVariables.length > 0
-          ? { removeVariables: input.removeVariables }
-          : {}),
-        ...(input.variablePresentationDefaults
-          ? { variablePresentationDefaults: input.variablePresentationDefaults }
-          : {}),
-        ...(input.outputAllowlist &&
-        Object.keys(input.outputAllowlist).length > 0
-          ? { outputAllowlist: input.outputAllowlist }
-          : {}),
-        ...(input.interfaceBlueprints !== undefined
-          ? { interfaceBlueprints: input.interfaceBlueprints }
-          : {}),
-        ...(input.lifecycleActions !== undefined
-          ? { lifecycleActions: input.lifecycleActions }
-          : {}),
-        ...(input.lifecycleActionPolicy !== undefined
-          ? { lifecycleActionPolicy: input.lifecycleActionPolicy }
-          : {}),
-      },
-    },
   );
   return body.installConfig;
 }
@@ -1815,6 +1697,12 @@ async function checkCapsuleCompatibilityRequest(
       readonly rootModuleVariables?: readonly string[];
     };
     readonly repositoryInstallUx?: RepositoryInstallUxPreview;
+    readonly run?: {
+      readonly id?: string;
+      readonly type?: string;
+      readonly status?: string;
+      readonly compatibilityReportId?: string;
+    };
   }>(`${BASE}/sources/${encodeURIComponent(sourceId)}/compatibility-check`, {
     method: "POST",
     signal,
@@ -1902,6 +1790,12 @@ async function checkCapsuleCompatibilityRequest(
     }));
   return {
     reportId: body.report.id,
+    ...(body.run?.id &&
+    body.run.type === "compatibility_check" &&
+    body.run.status === "succeeded" &&
+    body.run.compatibilityReportId === body.report.id
+      ? { compatibilityCheckRunId: body.run.id }
+      : {}),
     sourceSnapshotId,
     level:
       body.repositoryInstallUx?.status === "invalid"

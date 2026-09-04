@@ -6,7 +6,6 @@ import {
   listProviderConnections,
   listProviderConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
-  putCapsuleProviderBindingSet,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
 const realFetch = globalThis.fetch;
@@ -101,7 +100,7 @@ describe("connection list clients", () => {
 });
 
 describe("Capsule ProviderBinding client", () => {
-  test("uses only the canonical route and binding payload", async () => {
+  test("keeps only the canonical read route", async () => {
     const calls: Array<{ readonly url: string; readonly init?: RequestInit }> =
       [];
     const providerBindingSet = {
@@ -135,18 +134,11 @@ describe("Capsule ProviderBinding client", () => {
     expect(await getCapsuleProviderBindingSet("cap_1")).toEqual(
       providerBindingSet,
     );
-    expect(
-      await putCapsuleProviderBindingSet("cap_1", providerBindingSet.bindings),
-    ).toEqual(providerBindingSet);
 
     expect(calls.map((call) => call.url)).toEqual([
       "/api/v1/capsules/cap_1/provider-bindings",
-      "/api/v1/capsules/cap_1/provider-bindings",
     ]);
-    expect(calls[1]?.init?.method).toBe("PUT");
-    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
-      bindings: providerBindingSet.bindings,
-    });
     expect(JSON.stringify(calls)).not.toContain("providerConnectionSet");
+    expect(JSON.stringify(calls)).not.toContain('"method":"PUT"');
   });
 });

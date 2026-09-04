@@ -29,7 +29,10 @@ import { analyzeOpenTofuCapsuleFiles } from "../../../../core/domains/sources/ca
 import { RunCredentialBroker } from "../../../../core/domains/deploy-control/run_credential_broker.ts";
 import { generateOpenTofuChildModuleRoot } from "../../../../lib/rootgen/src/mod.ts";
 import { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../../providers/registry.ts";
-import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import {
+  seedCapsuleModel,
+  transitionProviderBindingSetForFixture,
+} from "../../../helpers/deploy-control/model_fixture.ts";
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
 
 const TAKOSERVER_PROVIDER = "registry.terraform.io/tako0614/takoform";
@@ -334,7 +337,7 @@ async function seedTakoserverRunModel(
     createdAt: NOW,
   });
   const { vault, connection } = await makeVault(store);
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: `ipcset_${options.capsuleId}`,
     workspaceId: WORKSPACE_ID,
     capsuleId: seeded.capsule.id,

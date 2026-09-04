@@ -6,6 +6,7 @@ import type {
   InstallConfig,
   InstallConfigCommittedPostApplyRecoveryProof,
 } from "takosumi-contract/install-configs";
+import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 
@@ -15,6 +16,7 @@ import {
   isSecretKey,
 } from "../../../../contract/redaction.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
+import { providerBindingSetAuthorityDigest } from "../../../../core/domains/deploy-control/store.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import {
   errorJson,
@@ -43,7 +45,7 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const EMPTY_DERIVED_TARGET_DIGEST = `sha256:${"0".repeat(64)}`;
 const UTF8_ENCODER = new TextEncoder();
 
-interface ReAdoptionReceipt {
+export interface ReAdoptionReceipt {
   readonly capsuleId: string;
   readonly actorSubject: string;
   readonly reason: string;
@@ -55,25 +57,34 @@ interface ReAdoptionReceipt {
   readonly previousStateGeneration: number;
   readonly previousStateVersionId?: string;
   readonly previousExecutionAuthorityEpoch: number;
+  /** Exact value-free ProviderBindingSet slot pinned by the GET-issued guard. */
+  readonly previousProviderBindingSetAuthorityDigest?: string;
+  /** Exact value-free successor authority, present for configuration Plans. */
+  readonly targetProviderBindingSet?: ProviderBindingSet;
+  readonly targetProviderBindingSetDigest?: string;
   readonly authorityGuard: string;
   readonly committedPostApplyRecovery?:
     InstallConfigCommittedPostApplyRecoveryProof;
   readonly derivedTargetDigest: string;
+  /** Exact predecessor/base row used to derive the immutable successor. */
   readonly baseInstallConfigId: string;
+  /** Digest of that exact predecessor/base row when sealed. */
+  readonly baseInstallConfigDigest?: string;
   readonly sourceSnapshotId: string;
 }
 
-interface ReAdoptionAuthoritySnapshot {
+export interface ReAdoptionAuthoritySnapshot {
   readonly capsule: Capsule;
   readonly installConfig: InstallConfig;
   readonly installConfigDigest: string;
   readonly executionAuthorityEpoch: number;
+  readonly providerBindingSetAuthorityDigest: string;
   readonly committedPostApplyRecovery?:
     InstallConfigCommittedPostApplyRecoveryProof;
   readonly authorityGuard: string;
 }
 
-interface ReAdoptionCasExpected {
+export interface ReAdoptionCasExpected {
   readonly installConfigId: string;
   readonly installConfigDigest: string;
   readonly currentStateGeneration: number;
@@ -89,7 +100,7 @@ export async function capsuleInstallConfigReAdoptionGuard(
   operations: ControlPlaneOperations,
   capsule: Capsule,
 ): Promise<string> {
-  const snapshot = await reAdoptionAuthoritySnapshot(
+  const snapshot = await capsuleInstallConfigReAdoptionAuthoritySnapshot(
     operations,
     capsule.id,
   );
@@ -185,7 +196,7 @@ export async function handleCapsuleInstallConfigReAdoption(
     });
   }
 
-  const authority = await reAdoptionAuthoritySnapshot(
+  const authority = await capsuleInstallConfigReAdoptionAuthoritySnapshot(
     ctx.operations,
     capsule.id,
   );
@@ -346,6 +357,8 @@ export async function handleCapsuleInstallConfigReAdoption(
       ? { previousStateVersionId: current.currentStateVersionId }
       : {}),
     previousExecutionAuthorityEpoch: authority.executionAuthorityEpoch,
+    previousProviderBindingSetAuthorityDigest:
+      authority.providerBindingSetAuthorityDigest,
     authorityGuard: authority.authorityGuard,
     ...(authority.committedPostApplyRecovery
       ? {
@@ -353,9 +366,10 @@ export async function handleCapsuleInstallConfigReAdoption(
       }
       : {}),
     baseInstallConfigId: baseConfig.id,
+    baseInstallConfigDigest: await stableJsonDigest(baseConfig),
     sourceSnapshotId: sourceSnapshot.id,
   };
-  const provisionalTarget = derivedTarget({
+  const target = await buildSealedReAdoptionTarget({
     id: targetInstallConfigId,
     baseConfig,
     adoption,
@@ -363,28 +377,7 @@ export async function handleCapsuleInstallConfigReAdoption(
     sourcePath: source.defaultPath,
     capsuleName: current.name,
     workspaceId: current.workspaceId,
-    receipt: {
-      ...receiptCore,
-      derivedTargetDigest: EMPTY_DERIVED_TARGET_DIGEST,
-    },
-    now,
-  });
-  const derivedTargetDigest = await stableJsonDigest(
-    derivedTargetWithoutSeal(provisionalTarget),
-  );
-  const receipt: ReAdoptionReceipt = {
-    ...receiptCore,
-    derivedTargetDigest,
-  };
-  const target = derivedTarget({
-    id: targetInstallConfigId,
-    baseConfig,
-    adoption,
-    sourceUrl: source.url,
-    sourcePath: source.defaultPath,
-    capsuleName: current.name,
-    workspaceId: current.workspaceId,
-    receipt,
+    receiptCore,
     now,
   });
   const created = await ctx.operations.capsules.createInstallConfigIfAbsent(
@@ -453,7 +446,7 @@ function derivedTargetWithoutSeal(target: InstallConfig): unknown {
   };
 }
 
-async function hasValidDerivedTargetSeal(
+export async function hasValidDerivedTargetSeal(
   target: InstallConfig,
 ): Promise<boolean> {
   const receipt = target.internal?.reAdoption;
@@ -463,6 +456,42 @@ async function hasValidDerivedTargetSeal(
       (await stableJsonDigest(derivedTargetWithoutSeal(target))) ===
         receipt.derivedTargetDigest,
   );
+}
+
+/**
+ * Seals an already-composed insert-only InstallConfig successor.
+ *
+ * Re-adoption compiles a successor from repository metadata, while ordinary
+ * configuration changes clone the exact current private config and patch only
+ * the user-owned values. Both transitions use the same immutable receipt and
+ * seal so replay cannot silently swap policy, runtime material, or bindings.
+ */
+export async function sealInstallConfigSuccessor(input: {
+  readonly target: Omit<InstallConfig, "internal"> & {
+    readonly internal: Omit<NonNullable<InstallConfig["internal"]>, "reAdoption">;
+  };
+  readonly receiptCore: Omit<ReAdoptionReceipt, "derivedTargetDigest">;
+}): Promise<InstallConfig> {
+  const provisional: InstallConfig = {
+    ...input.target,
+    internal: {
+      ...input.target.internal,
+      reAdoption: {
+        ...input.receiptCore,
+        derivedTargetDigest: EMPTY_DERIVED_TARGET_DIGEST,
+      },
+    },
+  };
+  const derivedTargetDigest = await stableJsonDigest(
+    derivedTargetWithoutSeal(provisional),
+  );
+  return {
+    ...input.target,
+    internal: {
+      ...input.target.internal,
+      reAdoption: { ...input.receiptCore, derivedTargetDigest },
+    },
+  };
 }
 
 function derivedTarget(input: {
@@ -525,6 +554,45 @@ function derivedTarget(input: {
   };
 }
 
+/**
+ * Builds the exact insert-only InstallConfig successor and seals all of its
+ * immutable material, including the value-free authority receipt. The caller
+ * owns only persistence/replay; neither route may hand-assemble a weaker row.
+ */
+export async function buildSealedReAdoptionTarget(input: {
+  readonly id: string;
+  readonly baseConfig: InstallConfig;
+  readonly adoption: Extract<
+    Awaited<ReturnType<typeof adoptRepoOwnedInstallConfig>>,
+    { readonly status: "accepted" }
+  >;
+  readonly sourceUrl: string;
+  readonly sourcePath: string;
+  readonly capsuleName: string;
+  readonly workspaceId: string;
+  readonly receiptCore: Omit<ReAdoptionReceipt, "derivedTargetDigest">;
+  readonly now: string;
+}): Promise<InstallConfig> {
+  const provisional = derivedTarget({
+    ...input,
+    receipt: {
+      ...input.receiptCore,
+      derivedTargetDigest: EMPTY_DERIVED_TARGET_DIGEST,
+    },
+  });
+  const {
+    reAdoption: _provisionalReceipt,
+    ...provisionalInternal
+  } = provisional.internal!;
+  return await sealInstallConfigSuccessor({
+    target: {
+      ...provisional,
+      internal: provisionalInternal,
+    },
+    receiptCore: input.receiptCore,
+  });
+}
+
 async function rebindResponse(input: {
   readonly operations: ControlPlaneOperations;
   readonly capsule: Capsule;
@@ -578,7 +646,7 @@ async function existingTarget(
   }
 }
 
-type ReAdoptionBaseInstallConfigResolution =
+export type ReAdoptionBaseInstallConfigResolution =
   | {
       readonly ok: true;
       readonly baseConfig: InstallConfig;
@@ -589,7 +657,7 @@ type ReAdoptionBaseInstallConfigResolution =
       readonly message: string;
     };
 
-async function resolveReAdoptionBaseInstallConfig(input: {
+export async function resolveReAdoptionBaseInstallConfig(input: {
   readonly operations: ControlPlaneOperations;
   readonly source: Source;
   readonly sourceSnapshot: SourceSnapshot;
@@ -648,7 +716,7 @@ async function resolveReAdoptionBaseInstallConfig(input: {
   };
 }
 
-async function reAdoptionAuthoritySnapshot(
+export async function capsuleInstallConfigReAdoptionAuthoritySnapshot(
   operations: ControlPlaneOperations,
   capsuleId: string,
 ): Promise<ReAdoptionAuthoritySnapshot> {
@@ -660,14 +728,23 @@ async function reAdoptionAuthoritySnapshot(
     installConfigDigest,
     executionAuthorityEpoch,
     committedPostApplyRecovery,
+    providerBindingSet,
   ] = await Promise.all([
     stableJsonDigest(installConfig),
     operations.capsules.getCapsuleExecutionAuthorityEpoch(capsule.id),
     operations.capsules.getInstallConfigReAdoptionRecoveryProof?.(capsule.id) ??
       Promise.resolve(undefined),
+    (
+      operations.capsules.getProviderBindingSetByCapsule as
+        | ((capsuleId: string, environment: string) =>
+          Promise<ProviderBindingSet | undefined>)
+        | undefined
+    )?.(capsule.id, capsule.environment) ?? Promise.resolve(undefined),
   ]);
+  const currentProviderBindingSetAuthorityDigest =
+    await providerBindingSetAuthorityDigest(providerBindingSet);
   const authorityGuard = await stableJsonDigest({
-    contract: "takosumi.capsule-install-config-re-adoption-guard/v1",
+    contract: "takosumi.capsule-install-config-re-adoption-guard/v2",
     workspaceId: capsule.workspaceId,
     capsuleId: capsule.id,
     installConfigId: capsule.installConfigId,
@@ -676,6 +753,8 @@ async function reAdoptionAuthoritySnapshot(
     currentStateGeneration: capsule.currentStateGeneration,
     currentStateVersionId: capsule.currentStateVersionId ?? null,
     executionAuthorityEpoch,
+    providerBindingSetAuthorityDigest:
+      currentProviderBindingSetAuthorityDigest,
     committedPostApplyRecovery: committedPostApplyRecovery ?? null,
   });
   return {
@@ -683,6 +762,8 @@ async function reAdoptionAuthoritySnapshot(
     installConfig,
     installConfigDigest,
     executionAuthorityEpoch,
+    providerBindingSetAuthorityDigest:
+      currentProviderBindingSetAuthorityDigest,
     ...(committedPostApplyRecovery
       ? { committedPostApplyRecovery }
       : {}),
@@ -1016,7 +1097,7 @@ function idempotencyConflict(request: Request): Response {
   );
 }
 
-function nextInstallConfigAuthorityTimestamp(
+export function nextInstallConfigAuthorityTimestamp(
   authorities: readonly (string | number)[],
 ): string {
   const millis = authorities.map((authority) =>

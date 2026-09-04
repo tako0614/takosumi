@@ -4,7 +4,7 @@
 # Walks:
 #   1. Mint subject A through the generic local OIDC mock dance.
 #   2. Use the local-substrate dev fixture session as subject B.
-#   3. Create a Workspace, Git Source, and Capsule as A with A's HttpOnly cookie.
+#   3. Create a Workspace, Git Source, and exact-provenance install plan as A.
 #   4. Read that Capsule as B with the local fixture bearer -> MUST be non-200.
 #   5. Read/list with A's cookie -> 200 (sanity).
 set -euo pipefail
@@ -132,12 +132,11 @@ RUN_SUFFIX="$(date +%s%N)-$RANDOM"
 SOURCE_URL="https://github.com/tako0614/takosumi.git"
 SOURCE_REF="main"
 # The Source pins this subtree, so the snapshot's module index is scoped to it
-# and the only root inside it is ".". The Capsule therefore names no modulePath
-# and lets the single observed candidate be selected, exactly as cli-smoke.sh
-# does — naming the Source path here asks for a module the pinned tree does not
-# contain (repository_install_ux_module_missing).
+# and the only root inside it is ".". The reviewed compatibility preflight and
+# install coordinator therefore select that exact module. Naming the Source
+# path as the module asks for a module the pinned tree does not contain
+# (repository_install_ux_module_missing).
 SOURCE_PATH="opentofu-modules/core/module"
-INSTALL_CONFIG_ID="${TAKOSUMI_DEPLOY_CONTROL_INSTALL_CONFIG_ID:-cfg-default-opentofu-capsule}"
 WORKSPACE_HANDLE="tenant-iso-${RUN_SUFFIX}"
 CAPSULE_NAME="tenant-capsule-${RUN_SUFFIX}"
 
@@ -255,34 +254,146 @@ if [[ "$SYNC_RUN_STATUS" != "succeeded" ]]; then
 	exit 1
 fi
 
-CAPSULE_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
+SOURCE_SNAPSHOT_ID=$(echo "$SYNC_RUN_BODY" | python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+print((d.get('run') or {}).get('snapshotId', ''))
+")
+if [[ -z "$SOURCE_SNAPSHOT_ID" ]]; then
+	echo "FAIL: succeeded Source sync Run did not expose snapshotId: $SYNC_RUN_BODY" >&2
+	exit 1
+fi
+
+COMPAT_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
 	-b "$JAR_A" "${BROWSER_ORIGIN[@]}" \
 	-H "Content-Type: application/json" \
 	-d "$(cat <<JSON
 {
-  "name": "$CAPSULE_NAME",
-  "environment": "test",
-  "sourceId": "$SOURCE_ID",
-  "installConfigId": "$INSTALL_CONFIG_ID",
-  "runnerProfileId": "opentofu-default"
+  "sourceSnapshotId": "$SOURCE_SNAPSHOT_ID",
+  "modulePath": ".",
+  "capsuleName": "$CAPSULE_NAME",
+  "compileInstallUx": true
 }
 JSON
 )" \
 	-w "\n%{http_code}" \
-	"$BASE/api/v1/workspaces/$WORKSPACE_ID/capsules")
-CAPSULE_STATUS=$(echo "$CAPSULE_RESP" | tail -n1)
-CAPSULE_BODY=$(echo "$CAPSULE_RESP" | head -n -1)
-if [[ "$CAPSULE_STATUS" != "201" ]]; then
-	echo "FAIL: subject A could not create Capsule: status=$CAPSULE_STATUS body=$CAPSULE_BODY" >&2
+	"$BASE/api/v1/sources/$SOURCE_ID/compatibility-check")
+COMPAT_STATUS=$(echo "$COMPAT_RESP" | tail -n1)
+COMPAT_BODY=$(echo "$COMPAT_RESP" | head -n -1)
+if [[ "$COMPAT_STATUS" != "201" ]]; then
+	echo "FAIL: subject A could not establish exact compatibility: status=$COMPAT_STATUS body=$COMPAT_BODY" >&2
 	exit 1
 fi
-CAPSULE_ID=$(echo "$CAPSULE_BODY" | python3 -c "
+read -r COMPATIBILITY_RUN_ID COMPATIBILITY_REPORT_ID INSTALL_CONFIG_ID <<<"$(echo "$COMPAT_BODY" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
-print((d.get('capsule') or {}).get('id', ''))
+run = d.get('run') or {}
+report = d.get('report') or {}
+ux = d.get('repositoryInstallUx') or {}
+if run.get('status') != 'succeeded' or report.get('level') != 'ready' or ux.get('status') != 'accepted':
+    print('')
+else:
+    print(run.get('id', ''), report.get('id', ''), ux.get('installConfigId', ''))
+")"
+if [[ -z "$COMPATIBILITY_RUN_ID" || -z "$COMPATIBILITY_REPORT_ID" || -z "$INSTALL_CONFIG_ID" ]]; then
+	echo "FAIL: compatibility preflight did not return successful ready install authority: $COMPAT_BODY" >&2
+	exit 1
+fi
+
+INSTALL_PLAN_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
+	-b "$JAR_A" "${BROWSER_ORIGIN[@]}" \
+	-H "Content-Type: application/json" \
+	-H "Idempotency-Key: tenant-install-$RUN_SUFFIX" \
+	-d "$(cat <<JSON
+{
+  "source": {
+    "name": "tenant-source-$RUN_SUFFIX",
+    "url": "$SOURCE_URL",
+    "ref": "$SOURCE_REF",
+    "path": "$SOURCE_PATH"
+  },
+  "capsule": {
+    "name": "$CAPSULE_NAME",
+    "environment": "test"
+  },
+  "options": {
+    "modulePath": ".",
+    "providerBindings": []
+  },
+  "preflight": {
+    "sourceId": "$SOURCE_ID",
+    "sourceSnapshotId": "$SOURCE_SNAPSHOT_ID",
+    "compatibilityCheckRunId": "$COMPATIBILITY_RUN_ID",
+    "compatibilityReportId": "$COMPATIBILITY_REPORT_ID",
+    "installConfigId": "$INSTALL_CONFIG_ID"
+  },
+  "initialConfiguration": {
+    "runnerProfileId": "opentofu-default"
+  }
+}
+JSON
+)" \
+	-w "\n%{http_code}" \
+	"$BASE/api/v1/workspaces/$WORKSPACE_ID/install-plans")
+INSTALL_PLAN_STATUS=$(echo "$INSTALL_PLAN_RESP" | tail -n1)
+INSTALL_PLAN_BODY=$(echo "$INSTALL_PLAN_RESP" | head -n -1)
+if [[ "$INSTALL_PLAN_STATUS" != "201" ]]; then
+	echo "FAIL: subject A could not create exact install plan: status=$INSTALL_PLAN_STATUS body=$INSTALL_PLAN_BODY" >&2
+	exit 1
+fi
+INSTALL_PLAN_ID=$(echo "$INSTALL_PLAN_BODY" | python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+print((d.get('installPlan') or {}).get('id', ''))
+")
+if [[ -z "$INSTALL_PLAN_ID" ]]; then
+	echo "FAIL: install-plan response did not include installPlan.id: $INSTALL_PLAN_BODY" >&2
+	exit 1
+fi
+
+INSTALL_PLAN_PHASE=""
+for _ in $(seq 1 6); do
+	INSTALL_PLAN_PHASE=$(echo "$INSTALL_PLAN_BODY" | python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+print((d.get('installPlan') or {}).get('phase', ''))
+")
+	case "$INSTALL_PLAN_PHASE" in
+		reviewable) break ;;
+		failed)
+			echo "FAIL: exact install plan failed before Run review: $INSTALL_PLAN_BODY" >&2
+			exit 1
+			;;
+	esac
+	INSTALL_PLAN_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
+		-b "$JAR_A" "${BROWSER_ORIGIN[@]}" \
+		-H "Content-Type: application/json" \
+		-d '{}' \
+		-w "\n%{http_code}" \
+		"$BASE/api/v1/install-plans/$INSTALL_PLAN_ID/reconcile")
+	INSTALL_PLAN_STATUS=$(echo "$INSTALL_PLAN_RESP" | tail -n1)
+	INSTALL_PLAN_BODY=$(echo "$INSTALL_PLAN_RESP" | head -n -1)
+	if [[ "$INSTALL_PLAN_STATUS" != "200" && "$INSTALL_PLAN_STATUS" != "202" ]]; then
+		echo "FAIL: subject A could not reconcile exact install plan: status=$INSTALL_PLAN_STATUS body=$INSTALL_PLAN_BODY" >&2
+		exit 1
+	fi
+done
+INSTALL_PLAN_PHASE=$(echo "$INSTALL_PLAN_BODY" | python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+print((d.get('installPlan') or {}).get('phase', ''))
+")
+if [[ "$INSTALL_PLAN_PHASE" != "reviewable" ]]; then
+	echo "FAIL: exact install plan did not reach Run review: $INSTALL_PLAN_BODY" >&2
+	exit 1
+fi
+CAPSULE_ID=$(echo "$INSTALL_PLAN_BODY" | python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+print((d.get('installPlan') or {}).get('capsuleId', ''))
 ")
 if [[ -z "$CAPSULE_ID" ]]; then
-	echo "FAIL: Capsule create response did not include capsule.id: $CAPSULE_BODY" >&2
+	echo "FAIL: reviewable install plan did not include capsuleId: $INSTALL_PLAN_BODY" >&2
 	exit 1
 fi
 

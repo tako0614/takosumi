@@ -142,6 +142,60 @@ test("InstallConfig list/get routes redact host config secret variables", async 
 
 });
 
+test("InstallConfig API redacts all generic OpenTofu variable values", async () => {
+  const config: InstallConfig = {
+    ...defaultCapsuleInstallConfig(),
+    id: "cfg-route-generic-redaction",
+    workspaceId: "ws-route-generic-redaction",
+    modulePath: "deploy/opentofu/cloudflare",
+    name: "generic-redaction",
+    variableMapping: {
+      region: "secret-region-value",
+      display_name: "secret-display-value",
+    },
+    variablePresentation: [
+      { name: "region", label: { en: "Region" } },
+      { name: "display_name", label: { en: "Display name" } },
+    ],
+    internal: {
+      genericOpenTofuVariableContractDigest: `sha256:${"2".repeat(64)}`,
+      genericOpenTofuSourceSnapshotId: "snapshot-generic-redaction",
+    },
+  };
+  const { app, operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: {
+      TAKOSUMI_DEV_MODE: "1",
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
+    },
+  });
+  const workspace = await operations.workspaces.createWorkspace({
+    handle: "generic-redaction",
+    displayName: "Generic redaction",
+    type: "personal",
+    ownerUserId: "user-generic-redaction",
+  });
+  await operations.capsules.putInstallConfig({
+    ...config,
+    workspaceId: workspace.id,
+  });
+
+  const response = await app.request(
+    `/internal/v1/install-configs/${config.id}`,
+    { headers: headers() },
+  );
+  expect(response.status).toBe(200);
+  const projected = (await response.json()).installConfig as {
+    readonly variableMapping: Readonly<Record<string, unknown>>;
+  };
+  expect(projected.variableMapping).toEqual({
+    region: "[REDACTED]",
+    display_name: "[REDACTED]",
+  });
+  expect(JSON.stringify(projected)).not.toContain("secret-region-value");
+  expect(JSON.stringify(projected)).not.toContain("secret-display-value");
+});
+
 test("operator API cannot mutate immutable host InstallConfigs", async () => {
   const { app, operations } = await createTakosumiService({
     role: "takosumi-api",
@@ -187,8 +241,11 @@ test("operator API cannot mutate immutable host InstallConfigs", async () => {
       }),
     },
   );
-  expect(response.status).toBe(403);
-  expect((await response.json()).error.message).toContain("immutable");
+  expect(response.status).toBe(409);
+  expect((await response.json()).error).toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "install_config_in_use" },
+  });
   expect(await operations.capsules.getInstallConfig(before.id)).toEqual(before);
 });
 
@@ -332,7 +389,7 @@ test("internal InstallConfig PATCH rejects compiled and re-adopted rows for ever
       expect(response.status).toBe(409);
       expect((await response.json()).error).toMatchObject({
         code: "failed_precondition",
-        details: { reason: "repository_install_ux_immutable" },
+        details: { reason: "install_config_in_use" },
       });
     }
   }
@@ -353,6 +410,66 @@ test("internal InstallConfig PATCH rejects compiled and re-adopted rows for ever
   expect(
     await operations.capsules.getCapsuleExecutionAuthorityEpoch(capsule.id),
   ).toBe(beforeEpoch);
+});
+
+test("internal InstallConfig PATCH rejects an immutable migration-restore receipt even when unattached", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const restored: InstallConfig = {
+    id: "cfg-restored-unattached-route",
+    name: "restored-unattached-route",
+    modulePath: ".",
+    variableMapping: { original: "restored" },
+    outputAllowlist: {},
+    policy: {},
+    internal: {
+      reason: "per_install_overrides",
+      migrationRestore: {
+        bundleDigest: `sha256:${"a".repeat(64)}`,
+        migrationId: "migration-unattached-route",
+        idempotencyKeyHash: `sha256:${"b".repeat(64)}`,
+        requestDigest: `sha256:${"c".repeat(64)}`,
+        sourceSnapshotId: "snap_restored_unattached_route",
+        compatibilityCheckRunId: "compat_restored_unattached_route",
+        compatibilityReportId: "report_restored_unattached_route",
+        actorSubject: "operator",
+      },
+    },
+    createdAt: "2026-09-04T00:00:00.000Z",
+    updatedAt: "2026-09-04T00:00:00.000Z",
+  };
+  await store.putInstallConfig(restored);
+  const { app } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: store,
+    authorizeDeployControlBearer: ({ token }) =>
+      token === "operator"
+        ? {
+            actor: "operator",
+            workspaceIds: "*",
+            operations: "*",
+            runnerProfileIds: "*",
+          }
+        : undefined,
+  });
+
+  const response = await app.request(
+    `/internal/v1/install-configs/${restored.id}`,
+    {
+      method: "PATCH",
+      headers: headers("operator"),
+      body: JSON.stringify({
+        kind: INSTALL_CONFIG_PATCH_V1_KIND,
+        variableMapping: { changed: "must-not-persist" },
+      }),
+    },
+  );
+  expect(response.status).toBe(409);
+  expect((await response.json()).error).toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "install_config_in_use" },
+  });
+  expect(await store.getInstallConfig(restored.id)).toEqual(restored);
 });
 
 test("Workspace-scoped bearer cannot patch a shared InstallConfig", async () => {
@@ -449,10 +566,123 @@ test("Workspace-scoped bearer cannot patch a shared InstallConfig", async () => 
       }),
     },
   );
-  expect(placeholderResponse.status).toBe(400);
+  expect(placeholderResponse.status).toBe(409);
   expect((await placeholderResponse.json()).error.message).toContain(
-    "only on a shared pre-install config",
+    "Only an unattached Workspace-neutral InstallConfig template may be patched",
   );
+});
+
+test("operator PATCH updates only an unattached shared template and rejects active or destroyed references", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { app, operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: store,
+    authorizeDeployControlBearer: ({ token }) =>
+      token === "operator"
+        ? {
+            actor: "operator",
+            workspaceIds: "*",
+            operations: "*",
+            runnerProfileIds: "*",
+          }
+        : undefined,
+  });
+  const now = "2026-09-04T00:00:00.000Z";
+  const shared: InstallConfig = {
+    id: "cfg-shared-unattached",
+    name: "shared-unattached",
+    variableMapping: { region: "initial" },
+    outputAllowlist: {},
+    policy: {},
+    createdAt: now,
+    updatedAt: now,
+  };
+  await store.putInstallConfig(shared);
+  const patched = await app.request(
+    `/internal/v1/install-configs/${shared.id}`,
+    {
+      method: "PATCH",
+      headers: headers("operator"),
+      body: JSON.stringify({
+        kind: INSTALL_CONFIG_PATCH_V1_KIND,
+        variableMapping: { region: "updated" },
+      }),
+    },
+  );
+  expect(patched.status).toBe(200);
+  expect((await operations.capsules.getInstallConfig(shared.id)).variableMapping)
+    .toEqual({ region: "updated" });
+
+  const workspaceId = "ws_template_reference";
+  await store.putWorkspace({
+    id: workspaceId,
+    handle: "template-reference",
+    displayName: "Template reference",
+    type: "personal",
+    ownerUserId: "acct_template_reference",
+    createdAt: now,
+    updatedAt: now,
+  });
+  await store.putSource({
+    id: "src_template_reference",
+    workspaceId,
+    name: "template-reference",
+    url: "https://example.com/acme/template-reference.git",
+    defaultRef: "main",
+    defaultPath: ".",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+    hookSecretHash: `sha256:${"a".repeat(64)}`,
+    autoSync: false,
+  });
+  const referenced: InstallConfig = {
+    id: "cfg-shared-referenced",
+    name: "shared-referenced",
+    variableMapping: { region: "immutable" },
+    outputAllowlist: {},
+    policy: {},
+    createdAt: now,
+    updatedAt: now,
+  };
+  await store.putInstallConfig(referenced);
+  const capsule = await operations.capsules.createCapsule({
+    workspaceId,
+    name: "template-reference",
+    environment: "preview",
+    sourceId: "src_template_reference",
+    installConfigId: referenced.id,
+    installingPrincipalId: "acct_template_reference",
+  });
+  const patchReferenced = () =>
+    app.request(`/internal/v1/install-configs/${referenced.id}`, {
+      method: "PATCH",
+      headers: headers("operator"),
+      body: JSON.stringify({
+        kind: INSTALL_CONFIG_PATCH_V1_KIND,
+        variableMapping: { region: "must-not-change" },
+      }),
+    });
+
+  const active = await patchReferenced();
+  expect(active.status).toBe(409);
+  expect((await active.json()).error.details).toEqual({
+    reason: "install_config_in_use",
+  });
+  expect(await store.getInstallConfig(referenced.id)).toEqual(referenced);
+
+  await operations.capsules.abandonUnappliedCapsule(
+    capsule.id,
+    "exercise destroyed provenance reference",
+  );
+  expect((await store.getCapsule(capsule.id))?.status).toBe("destroyed");
+  const destroyed = await patchReferenced();
+  expect(destroyed.status).toBe(409);
+  expect((await destroyed.json()).error.details).toEqual({
+    reason: "install_config_in_use",
+  });
+  expect(await store.getInstallConfig(referenced.id)).toEqual(referenced);
 });
 
 test("operator API rejects an unknown version before storage", async () => {

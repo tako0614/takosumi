@@ -29,7 +29,10 @@ import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secre
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { analyzeOpenTofuCapsuleFiles } from "../../../../core/domains/sources/capsule_compatibility.ts";
 import { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../../providers/registry.ts";
-import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import {
+  seedCapsuleModel,
+  transitionProviderBindingSetForFixture,
+} from "../../../helpers/deploy-control/model_fixture.ts";
 
 const PROVIDER = "registry.opentofu.org/tako0614/takoform";
 const WORKSPACE_ID = "workspace_runtime_input_fence";
@@ -207,7 +210,7 @@ async function seedFenceModel(
     minimumProviderVersion: "4.0.0",
   });
   await vault.test(connection.id);
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: `ipcset_${options.capsuleId}`,
     workspaceId: WORKSPACE_ID,
     capsuleId: seeded.capsule.id,

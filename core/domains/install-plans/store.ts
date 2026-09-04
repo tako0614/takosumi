@@ -1,4 +1,8 @@
-import type { GitInstallPlan } from "takosumi-contract";
+import type {
+  GitInstallPlan,
+  GitInstallPlanInitialConfiguration,
+} from "takosumi-contract";
+import type { JsonValue } from "takosumi-contract";
 
 export const GIT_INSTALL_PLAN_RECONCILE_LEASE_MS = 30_000;
 
@@ -9,6 +13,12 @@ export interface StoredGitInstallPlan extends GitInstallPlan {
   readonly idempotencyKeyHash: string;
   /** Private Capsule execution-authority fence for revision coordination. */
   readonly capsuleExecutionAuthorityEpoch?: number;
+  /** Private reviewed values retained only until atomic initial creation. */
+  readonly initialVariables?: Readonly<Record<string, JsonValue>>;
+  /** Private create-only configuration retained until atomic initial creation. */
+  readonly initialConfiguration?: GitInstallPlanInitialConfiguration;
+  /** Private digest pin for the exact config returned by install preflight. */
+  readonly preflightInstallConfigDigest?: string;
 }
 
 export interface ClaimedGitInstallPlan {
@@ -162,6 +172,9 @@ export function publicGitInstallPlan(plan: StoredGitInstallPlan): GitInstallPlan
     actorSubject: _actorSubject,
     idempotencyKeyHash: _idempotencyKeyHash,
     capsuleExecutionAuthorityEpoch: _capsuleExecutionAuthorityEpoch,
+    initialVariables: _initialVariables,
+    initialConfiguration: _initialConfiguration,
+    preflightInstallConfigDigest: _preflightInstallConfigDigest,
     ...publicPlan
   } = plan;
   return publicPlan;
@@ -178,6 +191,8 @@ export function assertImmutableScope(
     current.idempotencyKeyHash !== next.idempotencyKeyHash ||
     current.capsuleExecutionAuthorityEpoch !==
       next.capsuleExecutionAuthorityEpoch ||
+    current.preflightInstallConfigDigest !==
+      next.preflightInstallConfigDigest ||
     current.requestDigest !== next.requestDigest ||
     current.createdBy !== next.createdBy ||
     current.createdAt !== next.createdAt ||
@@ -185,7 +200,11 @@ export function assertImmutableScope(
     JSON.stringify(current.source) !== JSON.stringify(next.source) ||
     JSON.stringify(current.capsule) !== JSON.stringify(next.capsule) ||
     JSON.stringify(current.options) !== JSON.stringify(next.options) ||
+    JSON.stringify(current.preflight) !== JSON.stringify(next.preflight) ||
     JSON.stringify(current.revision) !== JSON.stringify(next.revision) ||
+    (current.preflight !== undefined &&
+      (current.installConfigBaseId !== next.installConfigBaseId ||
+        current.installConfigBaseDigest !== next.installConfigBaseDigest)) ||
     (current.operation === "revision" &&
       (current.sourceId !== next.sourceId ||
         current.capsuleId !== next.capsuleId ||

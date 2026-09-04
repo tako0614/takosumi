@@ -35,6 +35,7 @@ import {
   OpenTofuControllerError,
   OpenTofuController,
   type DeployControlActorContext,
+  type CapsulePlanCreationFence,
   type OpenTofuRunner,
   type OpenTofuRunnerExecutorRegistry,
   type ReleaseActivator,
@@ -46,7 +47,7 @@ import type {
   QuotaPolicy,
   ShowbackRater,
 } from "takosumi-contract/billing";
-import type { InstallConfig } from "takosumi-contract/install-configs";
+import type { Capsule, InstallConfig } from "takosumi-contract/install-configs";
 import type {
   CapsuleCurrentResourceInventoryResponse,
 } from "takosumi-contract/current-resource-inventory";
@@ -132,9 +133,11 @@ import type {
 } from "takosumi-contract/sources";
 import type {
   CapsuleAdoptedSourceRevision,
+  CapsuleCompatibilityReport,
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
+import type { ProviderBindings } from "takosumi-contract/connections";
 import type { CreateRestoreRequest } from "takosumi-contract/backups";
 import type {
   ApplyRunResponse,
@@ -756,9 +759,16 @@ export interface TakosumiOperations {
       readonly runnerProfileId?: string;
       readonly sourceSnapshotId?: string;
       readonly planRunId?: string;
+      readonly expectedCapsulePlanAuthority?: CapsulePlanCreationFence;
       readonly actor?: string;
     },
   ): Promise<PlanRunResponse>;
+  validateCapsuleConfigurationProviderBindings(input: {
+    readonly capsule: Capsule;
+    readonly installConfig: InstallConfig;
+    readonly compatibilityReport: CapsuleCompatibilityReport;
+    readonly providerBindings: ProviderBindings;
+  }): Promise<void>;
   /** Capsule-driven destroy-plan: always lands waiting_approval (spec §23). */
   createCapsuleDestroyPlan(
     capsuleId: string,
@@ -1732,7 +1742,8 @@ export async function createTakosumiService(
         options?.compatibilityReportId ||
         options?.runnerProfileId ||
         options?.sourceSnapshotId ||
-        options?.planRunId
+        options?.planRunId ||
+        options?.expectedCapsulePlanAuthority
           ? {
               ...(options?.compatibilityReportId
                 ? { compatibilityReportId: options.compatibilityReportId }
@@ -1746,9 +1757,17 @@ export async function createTakosumiService(
               ...(options?.planRunId
                 ? { planRunId: options.planRunId }
                 : {}),
+              ...(options?.expectedCapsulePlanAuthority
+                ? {
+                    expectedCapsulePlanAuthority:
+                      options.expectedCapsulePlanAuthority,
+                  }
+                : {}),
             }
           : {},
       ),
+    validateCapsuleConfigurationProviderBindings: (input) =>
+      opentofuController.validateCapsuleConfigurationProviderBindings(input),
     createCapsuleDestroyPlan: (capsuleId, options) =>
       opentofuController.createCapsuleDestroyPlan(
         capsuleId,

@@ -77,6 +77,20 @@ test("Capsule ProviderBindings use the canonical route without a legacy alias", 
   );
 });
 
+test("retired Capsule mutation paths expose GET descriptors only", () => {
+  for (const path of [
+    "/api/v1/workspaces/{workspaceId}/capsules",
+    "/api/v1/capsules/{capsuleId}/provider-bindings",
+    "/api/v1/capsule-configs/{capsuleConfigId}",
+  ]) {
+    expect(
+      PUBLIC_SESSION_CONTROL_ENDPOINTS.filter(
+        (endpoint) => endpoint.path === path,
+      ).map((endpoint) => endpoint.method),
+    ).toEqual(["GET"]);
+  }
+});
+
 test("OSS Accounts does not publish a commercial plan catalog", () => {
   expect(
     PUBLIC_SESSION_CONTROL_ENDPOINTS.some(

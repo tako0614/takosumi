@@ -33,7 +33,7 @@ Workspace / Capsule / StateVersion route vocabulary:
 - `POST /internal/v1/workspaces` / `GET /internal/v1/workspaces`
 - `POST /internal/v1/sources` / `POST /internal/v1/sources/{id}/sync`
 - `POST /internal/v1/connections/*` / `GET /internal/v1/connections`
-- `POST /internal/v1/workspaces/{workspaceId}/capsules`
+- `GET /internal/v1/workspaces/{workspaceId}/capsules` (creation is owned by the exact-provenance install coordinator)
 - `POST /internal/v1/capsules/{id}/plan`
 - `POST /internal/v1/runs/{id}/approve`
 - `POST /internal/v1/capsules/{id}/destroy-plan`

@@ -59,6 +59,10 @@ import {
   mountDeployControlCapsuleRoutes,
 } from "./deploy_control_capsule_routes.ts";
 import {
+  DEPLOY_CONTROL_CAPSULE_RESTORE_ENDPOINTS,
+  mountDeployControlCapsuleRestoreRoutes,
+} from "./deploy_control_capsule_restore_routes.ts";
+import {
   DEPLOY_CONTROL_RUN_ENDPOINTS,
   mountDeployControlRunRoutes,
 } from "./deploy_control_run_routes.ts";
@@ -119,6 +123,7 @@ const DEPLOY_CONTROL_INTERNAL_ENDPOINTS_RICH: readonly DeployControlEndpoint[] =
     ...DEPLOY_CONTROL_WORKSPACE_ENDPOINTS,
     ...DEPLOY_CONTROL_PROJECT_ENDPOINTS,
     ...DEPLOY_CONTROL_CAPSULE_ENDPOINTS,
+    ...DEPLOY_CONTROL_CAPSULE_RESTORE_ENDPOINTS,
     ...DEPLOY_CONTROL_RUN_ENDPOINTS,
     ...DEPLOY_CONTROL_DEPENDENCY_ENDPOINTS,
     ...DEPLOY_CONTROL_OUTPUT_SHARE_ENDPOINTS,
@@ -160,6 +165,7 @@ export function mountDeployControlInternalRoutes(
   mountDeployControlWorkspaceRoutes(ctx);
   mountDeployControlProjectRoutes(ctx);
   mountDeployControlCapsuleRoutes(ctx);
+  mountDeployControlCapsuleRestoreRoutes(ctx);
   mountDeployControlRunRoutes(ctx);
   mountDeployControlDependencyRoutes(ctx);
   mountDeployControlOutputShareRoutes(ctx);

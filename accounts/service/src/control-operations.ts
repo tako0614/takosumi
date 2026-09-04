@@ -40,6 +40,7 @@ import type {
 } from "takosumi-contract/sources";
 import type {
   CapsuleAdoptedSourceRevision,
+  CapsuleCompatibilityReport,
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
@@ -78,6 +79,10 @@ import type {
   ProviderBindingSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
+import type {
+  CapsulePlanCreationFence,
+  CapsuleProviderBindingSetReplacement,
+} from "../../../core/domains/deploy-control/store.ts";
 import type {
   ProviderResolution,
   PublicProviderResolution,
@@ -283,16 +288,20 @@ export interface ControlPlaneOperations {
       workspaceId: string,
       params: CapsuleListPageParams,
     ): Promise<Page<Capsule>>;
-    createCapsule(request: {
+    /** Server-only create of the complete initial deployment authority. */
+    createCapsuleInitialAuthority(request: {
+      readonly capsuleId: string;
       readonly workspaceId: string;
       readonly projectId?: string;
       readonly name: string;
       readonly environment: string;
       readonly sourceId: string;
-      readonly installConfigId: string;
       readonly installingPrincipalId: string;
       readonly autoUpdate?: boolean;
-    }): Promise<Capsule>;
+      readonly installConfig: InstallConfig;
+      readonly providerBindingSetId: string;
+      readonly providerBindings: ProviderBindingSet["bindings"];
+    }): Promise<{ readonly capsule: Capsule; readonly replayed: boolean }>;
     putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
     createInstallConfigIfAbsent(config: InstallConfig): Promise<boolean>;
     getInstallConfig(id: string): Promise<InstallConfig>;
@@ -346,14 +355,14 @@ export interface ControlPlaneOperations {
       readonly actorSubject: string;
       readonly reason: string;
       readonly requestDigest: string;
+      readonly providerBindingSetReplacement?:
+        CapsuleProviderBindingSetReplacement;
     }): Promise<{
       readonly capsule: Capsule;
       readonly replayed: boolean;
       readonly targetInstallConfigDigest: string;
+      readonly targetProviderBindingSetDigest?: string;
     }>;
-    putProviderBindingSet(
-      profile: ProviderBindingSet,
-    ): Promise<ProviderBindingSet>;
     getProviderBindingSetByCapsule(
       capsuleId: string,
       environment: string,
@@ -566,10 +575,22 @@ export interface ControlPlaneOperations {
       readonly sourceSnapshotId?: string;
       /** Server-only deterministic Run identity used for lost-ack recovery. */
       readonly planRunId?: string;
+      /** Exact Capsule authority fence for configuration-plan persistence. */
+      readonly expectedCapsulePlanAuthority?: CapsulePlanCreationFence;
       /** Server-owned audit marker; never parsed from an HTTP request body. */
       readonly actor?: string;
     },
   ): Promise<PlanRunResponse>;
+  /**
+   * Read-only Core preflight for the complete value-free ProviderBinding set
+   * proposed by a Configuration Plan. It must succeed before any successor CAS.
+   */
+  validateCapsuleConfigurationProviderBindings(input: {
+    readonly capsule: Capsule;
+    readonly installConfig: InstallConfig;
+    readonly compatibilityReport: CapsuleCompatibilityReport;
+    readonly providerBindings: ProviderBindings;
+  }): Promise<void>;
   createCapsuleDestroyPlan(
     capsuleId: string,
     options?: {

@@ -120,6 +120,33 @@ Takosumi-provided generic APIs/capabilities. It does not select a source,
 provider, resource, deployment, or lifecycle, and its absence does not prevent
 an ordinary Git/OpenTofu install.
 
+An ordinary Git/OpenTofu install without an accepted repository manifest still
+requires one successful compatibility Run for the exact SourceSnapshot and
+scanner-selected module. That Run must return the complete canonical
+`rootModuleVariableDeclarations` array; an explicit empty array is the valid
+contract for a module with no root variables. A failed Run or a missing,
+malformed, or duplicate declaration fails the install coordinator before it
+creates an InstallConfig, Capsule, or Plan. Takosumi stores only a value-free
+digest of the exact declaration contract and its SourceSnapshot provenance in
+the derived InstallConfig. It does not infer declarations from existing
+values, and generic declarations do not grant repository-manifest authority.
+
+The first install crosses deployment authority only through the create-only
+initial-authority coordinator. Its request pins the exact Source,
+SourceSnapshot, successful CompatibilityCheckRun, ready CompatibilityReport,
+selected InstallConfig, provider requirement tuples, and private reviewed
+variables. Memory, PostgreSQL, and D1 create the InstallConfig, Capsule,
+complete ProviderBindingSet, and execution-authority epoch 1 atomically; a
+partial collision fails without repairing or adopting an existing row. The
+coordinator then produces one review-only Plan. Dashboard and smoke callers do
+not assemble this state with public Capsule create plus later binding writes.
+
+The operator `PATCH /internal/v1/install-configs/{id}` is only for a shared
+pre-install template. The exact store CAS requires `workspaceId` absent, no
+generic/repository/re-adoption provenance, and no reverse Capsule reference in
+any status, including `destroyed`; otherwise it returns
+`install_config_in_use`. It is not a generic InstallConfig update seam.
+
 The app-owned Git/OpenTofu configuration remains the infrastructure and
 lifecycle authority. Takosumi owns the implementation of each generic
 API/capability it accepts. The repository manifest can only request that
@@ -208,9 +235,10 @@ their canonical JSON/digests) together with Capsule status,
 `currentStateGeneration`, `currentStateVersionId`, and
 `executionAuthorityEpoch` before the pointer and epoch update. Normally,
 re-adoption is allowed only when `runtimeSafety` is `safe` or absent (there is
-no decisive candidate). Unsafe or ambiguous Apply/Destroy/Restore Runs,
-in-flight work, and an unconsumed Plan for the Capsule block the rebind;
-consumed or terminal history does not.
+no decisive candidate). Unsafe or ambiguous Apply/Destroy/Restore Runs and
+queued/running Plan or Apply work for the Capsule block the rebind; a
+reviewable Plan is superseded by the epoch transition, and a consumed Plan or
+otherwise non-decisive terminal history does not block it.
 
 The sole exception is a receipt-fenced committed `post_apply` recovery while
 `runtimeSafety=unknown`. It requires the decisive failed `create`/`update`
@@ -226,10 +254,10 @@ are never returned in public Capsule, InstallConfig, or response projections.
 In that exception, the same CAS re-reads the latest decisive Run, exact
 StateVersion/Output rows, whole current/target InstallConfig JSON, whole
 Capsule JSON, and execution authority epoch, and requires no blocking
-queued/running Run or Apply and no current unconsumed Plan. Missing or drifted
+queued/running Plan or Apply. Missing or drifted
 receipt/Run/StateVersion/Output/config/Capsule/epoch, provider uncertainty or
 persisted `providerApplySucceeded=false` partial state, destroy/restore, a
-newer safety candidate, in-flight Apply, or current unconsumed Plan returns
+newer safety candidate, or queued/running Plan or Apply returns
 409. A successful rebind changes only `installConfigId`, `updatedAt`, and epoch
 + 1; `status=error`, state/output pointers, generation, and
 `runtimeSafety=unknown` remain unchanged. The rebind does not dispatch
@@ -249,6 +277,70 @@ activity event; a stale guard, changed current record, target mutation, or
 different request under the same key is rejected. The response contains only
 Capsule and target identifiers/digests plus the SourceSnapshot identifier.
 Plan remains a separate reviewable Run boundary.
+
+## Capsule configuration Plan
+
+An owner/operator may submit a closed configuration transition:
+
+```http
+POST /api/v1/capsules/{capsuleId}/configuration-plans
+Idempotency-Key: <opaque-key>
+```
+
+The body is exactly `{variablePatch:{set,remove},providerBindings,interfaceBlueprints,expected:{authorityGuard}}`.
+`variablePatch` is applied only to the private current InstallConfig; omitted
+values are preserved and the route never accepts values from a public redacted
+projection. Existing source/snapshot, module, policy, runner, lifecycle,
+output, required-interface, runtime, and provenance material is copied into a
+sealed immutable successor. Provider bindings and Interface blueprints remain
+value-free. The successor insert, ProviderBindingSet replacement, unresolved
+Interface-intent retirement, Capsule pointer, and execution-authority epoch
+advance share one exact CAS before one review-only Plan is prepared.
+
+Repository-manifest successors accept only exact user-input declarations from
+the pinned manifest. Generic OpenTofu successors instead revalidate the stored
+variable-contract digest against the successful compatibility declaration for
+the exact SourceSnapshot/module and accept only those declared names, basic
+types, and default requirements. Neither path infers a latest Snapshot or
+silently promotes the other provenance model.
+
+The target InstallConfig id, compatibility evidence ids, and PlanRun id are
+deterministic from the authenticated actor, Capsule, idempotency key, request,
+and sealed authority evidence. A successor insert and the authority CAS are
+preparation, not operation completion: if either committed but its
+acknowledgement was lost before the canonical Plan became durable, the retry
+finishes the remaining work and returns `201` with `replayed:false`. Once the
+canonical Plan exists, a same-key identical retry (including recovery from a
+lost Plan acknowledgement) observes that operation and returns `200` with
+`replayed:true` and the same durable `planRunId`; it never creates a second Plan
+row. A different request conflicts with `409`.
+
+Lost acknowledgements after successor insertion, CAS, Plan persistence, or
+queue dispatch converge on those same identities. At the in-flight-work fence,
+only `queued`/`running` Plan or Apply rows block. An already-computed reviewable
+Plan is superseded by the execution-authority epoch advance; separate unsafe or
+ambiguous runtime evidence still fails closed. Destroyed/disabled Capsules,
+in-flight revisions, stale guards, invalid set/remove patches, required/type
+violations, and redaction sentinels also fail closed. Public
+`PATCH /api/v1/capsule-configs/{id}` and direct
+`PUT /api/v1/capsules/{id}/provider-bindings` are retired for every row. They
+authenticate and authorize before returning `405` with `Allow: GET`; an
+unmarked legacy row grants no compatibility exception. Subsequent
+deployment-intent changes must use this Configuration Plan authority or the
+dedicated re-adoption operation.
+
+Self-host migration restores configuration through the operator-only
+`POST /internal/v1/capsule-configuration-restores`. The closed
+request binds the immutable encrypted bundle digest, migration/idempotency key,
+target Workspace and Source, exact SourceSnapshot, exact successful/ready
+compatibility declaration, complete configuration, and an explicitly empty
+ProviderBinding list. It uses the same create-only atomic initial-authority
+commit and creates one deterministic review-only Plan. A lost acknowledgement
+before the authority/Plan is complete returns the canonical `201` /
+`replayed:false` successor result; an ordinary same-key observation returns
+`200` / `replayed:true`. Different content under the key or any durable-row
+drift fails closed. Public configuration PATCH/ProviderBinding PUT are never
+used for restore.
 
 ## Operator runtime-secret file capability
 

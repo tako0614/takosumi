@@ -450,11 +450,15 @@ export async function previewRepoOwnedInstallConfig(
   input: RepoOwnedInstallConfigAdoptionInput & {
     readonly compatibilityReport: CapsuleCompatibilityReport;
     readonly installingPrincipalId: string;
+    /** Optional coordinator scope for one create-only initial authority. */
+    readonly identityScope?: string;
+    /** False returns the exact row without writing it ahead of the atomic create. */
+    readonly persist?: boolean;
   },
 ): Promise<RepoOwnedInstallConfigPreviewResult> {
   const adoption = await adoptRepoOwnedInstallConfig({
     ...input,
-    requireReviewedValues: false,
+    requireReviewedValues: input.requireReviewedValues ?? false,
   });
   if (adoption.status !== "accepted") return adoption;
   // The Store base config is only a policy ceiling. Its legacy presentation
@@ -510,6 +514,7 @@ export async function previewRepoOwnedInstallConfig(
   };
   const digest = await stableJsonDigest({
     baseInstallConfigId: input.baseConfig.id,
+    ...(input.identityScope ? { identityScope: input.identityScope } : {}),
     installConfig: installConfigMaterial,
   });
   const id = `icfg_${digest.replace(/^sha256:/u, "").slice(0, 16)}`;
@@ -541,10 +546,18 @@ export async function previewRepoOwnedInstallConfig(
       throw error;
     }
     // Missing is the ordinary first compilation. The deterministic id makes a
-    // concurrent retry converge through the InstallConfig store upsert.
+    // concurrent retry converge through the create-if-absent store seam.
   }
 
-  const config = await input.operations.capsules.putInstallConfig(expected);
+  if (input.persist === false) {
+    return { status: "accepted", installConfig: expected };
+  }
+  const created = await input.operations.capsules.createInstallConfigIfAbsent(
+    expected,
+  );
+  const config = created
+    ? expected
+    : await input.operations.capsules.getInstallConfig(expected.id);
   if (!(await installConfigIdentityEqual(config, expected))) {
     return {
       status: "invalid",

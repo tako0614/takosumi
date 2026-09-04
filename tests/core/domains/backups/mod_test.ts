@@ -10,7 +10,10 @@ import {
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import type { StoredSource } from "../../../../core/domains/deploy-control/store.ts";
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
-import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import {
+  seedCapsuleModel,
+  transitionProviderBindingSetForFixture,
+} from "../../../helpers/deploy-control/model_fixture.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
@@ -202,10 +205,12 @@ test("control bundle captures the Workspace ledger as public projections", async
   expect((bundle.workspace as { id: string }).id).toBe("ws_backup1");
   expect(bundle.sources.map((s) => s.id)).toEqual([seeded.source.id]);
   expect(bundle.sourceSnapshots.map((s) => s.id)).toEqual([seeded.snapshot.id]);
-  // Capsules are Workspace-scoped and captured; the fixture InstallConfig is an
-  // Built-in shared config (no workspaceId), so it is NOT a Workspace-owned config.
+  // Initial authority uses one Workspace-owned immutable InstallConfig, so the
+  // Capsule and its exact configuration are captured together.
   expect(bundle.capsules.length).toBe(1);
-  expect(bundle.installConfigs.length).toBe(0);
+  expect(bundle.installConfigs.map((config) => config.id)).toEqual([
+    seeded.installConfig.id,
+  ]);
 
   // A Workspace-OWN InstallConfig is captured.
   await store.putInstallConfig({
@@ -221,7 +226,7 @@ test("control bundle captures the Workspace ledger as public projections", async
   });
   const second = await service.createBackup({ workspaceId: "ws_backup1" });
   const bundle2 = await readBundle(artifactStore!, second.ref);
-  expect(bundle2.installConfigs.length).toBe(1);
+  expect(bundle2.installConfigs.length).toBe(2);
 });
 
 test("control bundle strips the Source internal hook-secret + sync fields", async () => {
@@ -373,7 +378,7 @@ test("control bundle carries StateVersion metadata + output projection only", as
     updatedAt: TS,
     verifiedAt: TS,
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "dp_1",
     workspaceId: "ws_backup1",
     capsuleId: seeded.capsule.id,

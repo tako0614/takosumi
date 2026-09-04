@@ -161,12 +161,6 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
-      method: "POST",
-      path: "/api/v1/workspaces/{workspaceId}/capsules",
-      summary: "Create a Capsule",
-      auth: "account-session",
-    },
-    {
       method: "GET",
       path: "/api/v1/workspaces/{workspaceId}/graph",
       summary: "Read the Workspace Capsule dependency graph",
@@ -257,6 +251,13 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
+      method: "POST",
+      path: "/api/v1/capsules/{capsuleId}/configuration-plans",
+      summary:
+        "Atomically adopt an immutable desired config/provider-binding successor and return a review-only OpenTofu Plan",
+      auth: "account-session",
+    },
+    {
       method: "GET",
       path: "/api/v1/capsules/{capsuleId}/usage-summary",
       summary: "Read the Capsule's showback usage aggregate",
@@ -317,12 +318,6 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
-      method: "PUT",
-      path: "/api/v1/capsules/{capsuleId}/provider-bindings",
-      summary: "Replace Capsule ProviderBinding selections",
-      auth: "account-session",
-    },
-    {
       method: "GET",
       path: "/api/v1/capsule-configs",
       summary: "List Capsule creation configs visible to the caller",
@@ -332,12 +327,6 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       method: "GET",
       path: "/api/v1/capsule-configs/{capsuleConfigId}",
       summary: "Read a Capsule creation config",
-      auth: "account-session",
-    },
-    {
-      method: "PATCH",
-      path: "/api/v1/capsule-configs/{capsuleConfigId}",
-      summary: "Update a Capsule creation config",
       auth: "account-session",
     },
     {

@@ -1,6 +1,6 @@
 /**
  * Session-authed Workspace (`/api/v1/workspaces`)
- * control routes: workspace CRUD, members, capsule create/list, graph,
+ * control routes: workspace CRUD, members, Capsule reads, graph,
  * runs/activity, backups, billing reads, plan-update / drift-check. Extracted
  * from `control-routes.ts` (P3 god-file split).
  */
@@ -16,7 +16,6 @@ import type {
   DeployControlErrorCode,
   ListConnectionsResponse,
   ListRunnerProfilesResponse,
-  OpenTofuModuleSource,
   PlanRunResponse,
   PublicPlanRun,
   TestConnectionResponse,
@@ -30,7 +29,6 @@ import type {
   PatchSourceRequest,
   SourceResponse,
 } from "takosumi-contract/sources";
-import { isRepositoryManifestInterfaceCapableApiVersion } from "takosumi-contract/repository-manifest";
 import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
@@ -44,19 +42,11 @@ import type {
   WorkspaceType,
 } from "takosumi-contract/workspaces";
 import type {
-  InstallConfig,
-  InstallConfigVariableDefault,
-  InstallConfigVariablePresentation,
   Capsule,
-  OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
   PublicCapsule,
 } from "takosumi-contract/install-configs";
-import {
-  capsuleInterfaceBlueprintsNeedInstallingPrincipal,
-  resolveCapsuleInterfaceBlueprintInstallingPrincipal,
-} from "takosumi-contract/interfaces";
 import {
   parseScopeBoundaryPolicy,
   UI_SURFACE_INTERFACE_TYPE,
@@ -71,12 +61,7 @@ import type {
 } from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
-import type {
-  ProviderBinding,
-  ProviderBindings,
-  ProviderBindingSet,
-  ProviderConnection,
-} from "takosumi-contract/connections";
+import type { ProviderConnection } from "takosumi-contract/connections";
 import type {
   ProviderResolution,
   PublicProviderResolution,
@@ -100,7 +85,6 @@ import type {
   RunLogsResponse,
   PublicRun,
 } from "takosumi-contract/runs";
-import type { JsonValue } from "takosumi-contract";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
@@ -143,28 +127,15 @@ import {
   connectionScopeHints,
   dependencyModeValue,
   dependencyVisibilityValue,
-  installConfigStoreValue,
-  isJsonValue,
   isOutputsMapping,
   isPlainJsonObject,
-  modulePathValue,
-  outputAllowlistValue,
   outputShareEntries,
   outputShareSensitivePolicy,
   parseProviderBinding,
   parseProviderBindings,
   parseLimit,
   workspaceTypeValue,
-  sourceBuildValue,
-  stringRecord,
-  stringRecordValue,
 } from "./parse.ts";
-import { parseInterfaceBlueprintsValue } from "./interface-blueprints.ts";
-import { normalizeVariablePathRecord } from "../../../../core/domains/deploy-control/validation.ts";
-import {
-  DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
-  defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/capsules/default_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
   clampPageLimit,
@@ -172,11 +143,6 @@ import {
   pageSorted,
 } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import {
-  adoptRepoOwnedInstallConfig,
-  hydrateRepoOwnedStoreConfig,
-  latestSourceSnapshotForSource,
-} from "./repo-owned-install-config.ts";
 import { handleWorkspaceProjects } from "./projects.ts";
 import { maybeEnsurePersonalWorkspaceForSubject } from "../control-personal-workspace.ts";
 import { handleWorkspaceInstallPlans } from "./install-plans.ts";
@@ -381,16 +347,7 @@ export async function handleWorkspaces(
     if (leaf === "capsules" && segments.length === 3) {
       if (method === "GET")
         return await listWorkspaceCapsules(operations, workspaceId, url);
-      if (method === "POST") {
-        return await createCapsule(
-          request,
-          operations,
-          store,
-          ctx.session,
-          workspaceId,
-        );
-      }
-      return methodNotAllowed("GET, POST");
+      return methodNotAllowed("GET");
     }
     if (leaf === "current-state-versions" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
@@ -1308,513 +1265,6 @@ async function listCurrentStateVersionsFromSingleReads(
   );
 }
 
-function repositoryDerivedInstallConfigModule(config: InstallConfig): {
-  readonly derived: boolean;
-  readonly modulePath: string | undefined;
-} {
-  const internal = config.internal;
-  const derived =
-    internal?.sourceSnapshotId !== undefined &&
-    internal.repositoryInstallUxDigest !== undefined;
-  return {
-    derived,
-    // This value was selected and persisted by repository install-UX
-    // preflight. Keep it byte-for-byte intact; request parsing below is not a
-    // valid way to reinterpret stored execution authority.
-    modulePath: derived
-      ? typeof config.modulePath === "string"
-        ? config.modulePath
-        : undefined
-      : undefined,
-  };
-}
-
-function canonicalRequestedModulePath(modulePath: string): string {
-  return modulePath === "" ? "." : modulePath;
-}
-
-async function createCapsule(
-  request: Request,
-  operations: ControlPlaneOperations,
-  store: AccountsStore,
-  session: ControlSession,
-  workspaceId: string,
-): Promise<Response> {
-  const body = await readJsonObject(request);
-  if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const unexpectedFields = Object.keys(body).filter(
-    (field) => !CAPSULE_CREATE_FIELDS.has(field),
-  );
-  if (unexpectedFields.length > 0) {
-    return errorJson(
-      "invalid_request",
-      `body contains unknown fields: ${unexpectedFields.sort().join(", ")}`,
-      400,
-    );
-  }
-  const name = stringValue(body.name);
-  const projectId = stringValue(body.projectId);
-  const environment = stringValue(body.environment);
-  const sourceId = stringValue(body.sourceId);
-  const installConfigId = stringValue(body.installConfigId);
-  const runnerProfileId =
-    stringValue(body.runnerId) ?? stringValue(body.runnerProfileId);
-  const outputAllowlist = outputAllowlistValue(body.outputAllowlist);
-  const interfaceBlueprintsResult =
-    body.interfaceBlueprints === undefined
-      ? undefined
-      : parseInterfaceBlueprintsValue(body.interfaceBlueprints);
-  const interfaceBlueprints =
-    interfaceBlueprintsResult?.ok === true
-      ? interfaceBlueprintsResult.value
-      : undefined;
-  const storeMetadata = installConfigStoreValue(body.store);
-  const modulePath = modulePathValue(body.modulePath);
-  const sourceBuild = sourceBuildValue(body.sourceBuild);
-  if (body.modulePath !== undefined && modulePath === undefined) {
-    return errorJson(
-      "invalid_request",
-      "modulePath must be a safe relative OpenTofu module path.",
-      400,
-    );
-  }
-  if (body.sourceBuild !== undefined && sourceBuild === undefined) {
-    return errorJson(
-      "invalid_request",
-      "sourceBuild must contain argv commands and relative output paths.",
-      400,
-    );
-  }
-  if (body.outputAllowlist !== undefined && outputAllowlist === undefined) {
-    return errorJson(
-      "invalid_request",
-      "outputAllowlist must be an object of { from, type, required? } entries",
-      400,
-    );
-  }
-  if (
-    interfaceBlueprintsResult !== undefined &&
-    !interfaceBlueprintsResult.ok
-  ) {
-    return errorJson("invalid_request", interfaceBlueprintsResult.message, 400);
-  }
-  if (body.store !== undefined && storeMetadata === undefined) {
-    return errorJson(
-      "invalid_request",
-      "store metadata must be omitted or copied from a valid TCS Store listing",
-      400,
-    );
-  }
-  const autoUpdate = body.autoUpdate === true;
-  const vars = normalizedVarsValue(body.vars);
-  if (body.vars !== undefined && vars === undefined) {
-    return errorJson(
-      "invalid_request",
-      "vars must be an object of JSON values keyed by OpenTofu variable names",
-      400,
-    );
-  }
-  if (!name || !environment || !sourceId || !installConfigId) {
-    return errorJson(
-      "invalid_request",
-      "name, environment, sourceId, and installConfigId are required",
-      400,
-    );
-  }
-  const { source } = await operations.getSource(sourceId);
-  const sourceOwnerWorkspaceId = sourceWorkspaceId(source);
-  if (!sourceOwnerWorkspaceId) {
-    return errorJson(
-      "internal_error",
-      "source is missing Workspace identity",
-      500,
-    );
-  }
-  if (sourceOwnerWorkspaceId !== workspaceId) {
-    const auth = await requireWorkspaceAccess({
-      operations,
-      store,
-      workspaceId: sourceOwnerWorkspaceId,
-      session,
-    });
-    if (!auth.ok) return auth.response;
-    return errorJson(
-      "invalid_request",
-      "sourceId must belong to the target Workspace.",
-      400,
-    );
-  }
-  let resolvedInstallConfigId = installConfigId;
-  const baseConfig =
-    await operations.capsules.getInstallConfig(installConfigId);
-  if (
-    baseConfig.workspaceId !== undefined &&
-    baseConfig.workspaceId !== workspaceId
-  ) {
-    return errorJson(
-      "invalid_request",
-      "installConfigId is not available to the target Workspace.",
-      400,
-    );
-  }
-  const repositoryDerivedModule = repositoryDerivedInstallConfigModule(
-    baseConfig,
-  );
-  if (repositoryDerivedModule.derived) {
-    if (
-      repositoryDerivedModule.modulePath === undefined ||
-      repositoryDerivedModule.modulePath.length === 0
-    ) {
-      return errorJson(
-        "repository_install_ux_invalid",
-        "The reviewed repository InstallConfig is missing its persisted module path; run install UX preflight again.",
-        400,
-        request,
-        {},
-        { diagnosticCode: "repository_install_ux_module_path_missing" },
-      );
-    }
-    if (
-      modulePath !== undefined &&
-      canonicalRequestedModulePath(modulePath) !==
-        repositoryDerivedModule.modulePath
-    ) {
-      return errorJson(
-        "repository_install_ux_invalid",
-        "modulePath must match the module selected by the reviewed repository InstallConfig.",
-        400,
-        request,
-        {},
-        { diagnosticCode: "repository_install_ux_module_path_mismatch" },
-      );
-    }
-  }
-  // Repository Install UX adoption belongs to Capsule creation, after the
-  // compatibility review has produced a DB-owned InstallConfig. The separate
-  // /capsules/:id/plan and /runs/:id/apply routes consume that persisted
-  // config; they never call this route or recompile repository metadata.
-  const repoMetadataSnapshot = await latestSourceSnapshotForSource(
-    operations,
-    source,
-  );
-  if (
-    baseConfig.internal?.sourceSnapshotId &&
-    (repoMetadataSnapshot?.id !== baseConfig.internal.sourceSnapshotId ||
-      repoMetadataSnapshot.repositoryManifest?.status !== "present" ||
-      repoMetadataSnapshot.repositoryManifest.digest !==
-        baseConfig.internal.repositoryInstallUxDigest)
-  ) {
-    return errorJson(
-      "repository_install_ux_stale",
-      "The repository changed after install setup was reviewed; sync and review the latest install configuration.",
-      409,
-      request,
-    );
-  }
-  const hydratedRepoConfig = await hydrateRepoOwnedStoreConfig({
-    operations,
-    source,
-    sourceSnapshot: repoMetadataSnapshot,
-    storeMetadata,
-    modulePath:
-      repositoryDerivedModule.modulePath ?? modulePath,
-  });
-  const resolvedStoreMetadata = hydratedRepoConfig.storeMetadata;
-  const resolvedModulePath = hydratedRepoConfig.modulePath;
-  const repoInstallUx = await adoptRepoOwnedInstallConfig({
-    operations,
-    source,
-    sourceSnapshot: repoMetadataSnapshot,
-    baseConfig,
-    modulePath: resolvedModulePath,
-    capsuleName: name,
-    workspaceId,
-    installingPrincipalId: session.subject,
-    ...(vars ? { reviewedVariables: vars } : {}),
-    ...(interfaceBlueprints !== undefined
-      ? { reviewedInterfaceBlueprints: interfaceBlueprints }
-      : {}),
-    ...(outputAllowlist !== undefined
-      ? { reviewedOutputAllowlist: outputAllowlist }
-      : {}),
-  });
-  if (repoInstallUx.status === "invalid") {
-    return errorJson(
-      "repository_install_ux_invalid",
-      repoInstallUx.diagnostic.message,
-      400,
-      request,
-      {},
-      { diagnosticCode: repoInstallUx.diagnostic.code },
-    );
-  }
-  const presentationDefaultVars = variablePresentationDefaultMapping(
-    repoInstallUx.status === "accepted"
-      ? repoInstallUx.variablePresentation
-      : baseConfig.variablePresentation,
-    { capsuleName: name, workspaceId },
-  );
-  const hasPresentationDefaultVars =
-    Object.keys(presentationDefaultVars).length > 0;
-  const hasVars = vars !== undefined && Object.keys(vars).length > 0;
-  const repoOwnedInterfaceProposalAccepted =
-    repoInstallUx.status === "accepted" &&
-    isRepositoryManifestInterfaceCapableApiVersion(
-      repoInstallUx.repositoryManifestApiVersion,
-    );
-  const selectedInterfaceBlueprints = repoOwnedInterfaceProposalAccepted
-    ? repoInstallUx.interfaceBlueprints
-    : (interfaceBlueprints ?? baseConfig.interfaceBlueprints);
-  const needsInstallingPrincipalScope =
-    capsuleInterfaceBlueprintsNeedInstallingPrincipal(
-      selectedInterfaceBlueprints,
-    );
-  const resolvedInterfaceBlueprints =
-    resolveCapsuleInterfaceBlueprintInstallingPrincipal(
-      selectedInterfaceBlueprints,
-      session.subject,
-    );
-  if (
-    hasVars ||
-    hasPresentationDefaultVars ||
-    runnerProfileId ||
-    outputAllowlist !== undefined ||
-    resolvedStoreMetadata !== undefined ||
-    resolvedModulePath !== undefined ||
-    sourceBuild !== undefined ||
-    interfaceBlueprints !== undefined ||
-    needsInstallingPrincipalScope ||
-    repoInstallUx.status === "accepted"
-  ) {
-    const now = new Date().toISOString();
-    const { modulePath: _baseModulePath, ...baseConfigWithoutModulePath } =
-      baseConfig;
-    const configBase =
-      resolvedModulePath === "" ? baseConfigWithoutModulePath : baseConfig;
-    const config = await operations.capsules.putInstallConfig({
-      ...configBase,
-      id: `icfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
-      workspaceId,
-      name: `${name}-config`,
-      internal:
-        repoInstallUx.status === "accepted"
-          ? {
-              reason: "per_install_overrides",
-              sourceSnapshotId: repoInstallUx.sourceSnapshotId,
-              repositoryInstallUxDigest: repoInstallUx.digest,
-            }
-          : { reason: "per_install_overrides" },
-      variableMapping:
-        repoInstallUx.status === "accepted"
-          ? mergeVariableMappings(
-              repoInstallUx.variableMapping,
-              presentationDefaultVars,
-              baseConfig.variableMapping,
-            )
-          : mergeVariableMappings(
-              baseConfig.variableMapping,
-              presentationDefaultVars,
-              vars ?? {},
-            ),
-      ...(repoInstallUx.status === "accepted"
-        ? {
-            variablePresentation: repoInstallUx.variablePresentation,
-            installExperience: repoInstallUx.installExperience,
-          }
-        : {}),
-      ...(resolvedStoreMetadata ? { store: resolvedStoreMetadata } : {}),
-      ...(runnerProfileId ? { runnerId: runnerProfileId } : {}),
-      ...(resolvedModulePath ? { modulePath: resolvedModulePath } : {}),
-      ...(repoInstallUx.status === "accepted" &&
-      repoInstallUx.runtimeBindingMaterialization !== undefined
-        ? {
-            runtimeBindingMaterialization:
-              repoInstallUx.runtimeBindingMaterialization,
-          }
-        : {}),
-      ...(sourceBuild
-        ? { sourceBuild }
-        : repoInstallUx.status === "accepted" &&
-            repoInstallUx.sourceBuild !== undefined
-          ? { sourceBuild: repoInstallUx.sourceBuild }
-          : {}),
-      ...(resolvedInterfaceBlueprints
-        ? { interfaceBlueprints: resolvedInterfaceBlueprints }
-        : {}),
-      ...(repoInstallUx.status === "accepted" &&
-      repoInstallUx.requiredInterfaces !== undefined
-        ? { requiredInterfaces: repoInstallUx.requiredInterfaces }
-        : {}),
-      outputAllowlist: repoOwnedInterfaceProposalAccepted
-        ? repoInstallUx.outputAllowlist
-        : (outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig)),
-      createdAt: now,
-      updatedAt: now,
-    });
-    resolvedInstallConfigId = config.id;
-  }
-  const capsule = await operations.capsules.createCapsule({
-    workspaceId,
-    ...(projectId ? { projectId } : {}),
-    name,
-    environment,
-    sourceId,
-    installConfigId: resolvedInstallConfigId,
-    installingPrincipalId: session.subject,
-    ...(autoUpdate ? { autoUpdate: true } : {}),
-  });
-  return jsonStatus({ capsule: publicCapsule(capsule) }, 201);
-}
-
-const CAPSULE_CREATE_FIELDS = new Set([
-  "autoUpdate",
-  "environment",
-  "installConfigId",
-  "interfaceBlueprints",
-  "modulePath",
-  "name",
-  "outputAllowlist",
-  "projectId",
-  "runnerId",
-  "runnerProfileId",
-  "sourceBuild",
-  "sourceId",
-  "store",
-  "vars",
-]);
-
-function variablePresentationDefaultMapping(
-  presentation: InstallConfig["variablePresentation"] | undefined,
-  options: {
-    readonly capsuleName: string;
-    readonly workspaceId: string;
-  },
-): Readonly<Record<string, JsonValue>> {
-  if (!presentation) return {};
-  let out: Record<string, JsonValue> = {};
-  for (const input of presentation) {
-    if (input.secret === true) continue;
-    if (!input.defaultValue) continue;
-    const value = variablePresentationDefaultValue(
-      input,
-      input.defaultValue,
-      options,
-    );
-    if (value === undefined) continue;
-    try {
-      out = mergeVariableMappings(
-        out,
-        normalizeVariablePathRecord(
-          { [input.name]: value },
-          "variablePresentation",
-        ),
-      ) as Record<string, JsonValue>;
-    } catch {
-      continue;
-    }
-  }
-  return out;
-}
-
-function variablePresentationDefaultValue(
-  input: InstallConfigVariablePresentation,
-  defaultValue: InstallConfigVariableDefault,
-  options: {
-    readonly capsuleName: string;
-    readonly workspaceId: string;
-  },
-): JsonValue | undefined {
-  let value: JsonValue;
-  switch (defaultValue.source) {
-    case "literal":
-      value = defaultValue.value;
-      break;
-    case "capsule_name":
-      value = storeSlug(options.capsuleName);
-      break;
-    case "workspace_scoped_capsule_name": {
-      const base = storeSlug(options.capsuleName);
-      const suffix = workspaceSlugSuffix(options.workspaceId);
-      value = suffix ? `${base}-${suffix}` : base;
-      break;
-    }
-  }
-  switch (input.type ?? "string") {
-    case "string":
-      return typeof value === "string" ? value : undefined;
-    case "number":
-      return typeof value === "number" && Number.isFinite(value)
-        ? value
-        : undefined;
-    case "boolean":
-      return typeof value === "boolean" ? value : undefined;
-    case "json":
-      return value;
-  }
-}
-
-function storeSlug(value: string): string {
-  return (
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/gu, "-")
-      .replace(/^-+|-+$/gu, "")
-      .slice(0, 48) || "capsule"
-  );
-}
-
-function workspaceSlugSuffix(value: string): string {
-  return value
-    .replace(/^workspace_/u, "")
-    .replace(/[^a-z0-9-]+/giu, "-")
-    .replace(/^-+|-+$/gu, "")
-    .slice(0, 6)
-    .toLowerCase();
-}
-
-function mergeVariableMappings(
-  ...records: readonly Readonly<Record<string, unknown>>[]
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const record of records) {
-    for (const [key, value] of Object.entries(record)) {
-      out[key] = mergeVariableMappingValue(out[key], value);
-    }
-  }
-  return out;
-}
-
-function mergeVariableMappingValue(
-  existing: unknown,
-  incoming: unknown,
-): unknown {
-  if (isPlainJsonObject(existing) && isPlainJsonObject(incoming)) {
-    return mergeVariableMappings(existing, incoming);
-  }
-  return incoming;
-}
-
-function scopedCloneOutputAllowlist(
-  baseConfig: InstallConfig,
-): InstallConfig["outputAllowlist"] {
-  if (Object.keys(baseConfig.outputAllowlist).length > 0) {
-    return baseConfig.outputAllowlist;
-  }
-  return defaultCapsuleOutputAllowlist();
-}
-
-function normalizedVarsValue(
-  value: unknown,
-): Readonly<Record<string, JsonValue>> | undefined {
-  if (value === undefined) return undefined;
-  if (!isPlainJsonObject(value)) return undefined;
-  try {
-    return normalizeVariablePathRecord(value, "vars");
-  } catch {
-    return undefined;
-  }
-}
 
 async function createRestoreRun(
   request: Request,

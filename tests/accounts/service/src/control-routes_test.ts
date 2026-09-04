@@ -605,22 +605,7 @@ function operationsFixture() {
     createdAt: string;
     updatedAt: string;
   }> = [];
-  const capsuleCreates: Record<string, unknown>[] = [];
   const workspacePageCalls: Record<string, unknown>[] = [];
-  let providerBindingSet:
-    | {
-        readonly id: string;
-        readonly workspaceId: string;
-        readonly capsuleId: string;
-        readonly environment: string;
-        readonly bindings: readonly {
-          readonly provider: string;
-          readonly connectionId: string;
-        }[];
-        readonly createdAt: string;
-        readonly updatedAt: string;
-      }
-    | undefined;
   const operations = {
     workspaces: {
       getWorkspace: async () => workspace,
@@ -750,26 +735,7 @@ function operationsFixture() {
         updatedAt: workspace.updatedAt,
       }),
       getCapsuleExecutionAuthorityEpoch: async () => 1,
-      createCapsule: async (input: Record<string, unknown>) => {
-        capsuleCreates.push(input);
-        return {
-          id: `cap_${capsuleCreates.length}`,
-          ...input,
-          projectId: input.projectId ?? "prj_default_ws_owner",
-          slug: input.name,
-          currentStateGeneration: 0,
-          status: "pending",
-          createdAt: workspace.createdAt,
-          updatedAt: workspace.updatedAt,
-        };
-      },
-      getProviderBindingSetByCapsule: async () => providerBindingSet,
-      putProviderBindingSet: async (
-        bindingSet: NonNullable<typeof providerBindingSet>,
-      ) => {
-        providerBindingSet = bindingSet;
-        return bindingSet;
-      },
+      getProviderBindingSetByCapsule: async () => undefined,
     },
     connections: {
       listProviderConnections: async () => [
@@ -788,7 +754,7 @@ function operationsFixture() {
       ],
     },
   } as unknown as ControlPlaneOperations;
-  return { operations, projects, capsuleCreates, workspacePageCalls };
+  return { operations, projects, workspacePageCalls };
 }
 
 function context(
@@ -2774,39 +2740,7 @@ test("Dashboard overview follows bounded union pages beyond the store page cap",
   ).toEqual([...firstPage, ...secondPage].map((row) => row.id));
 });
 
-test("Capsule create forwards optional projectId and otherwise uses the canonical default", async () => {
-  const fixture = operationsFixture();
-  for (const [name, projectId] of [
-    ["explicit", "prj_explicit"],
-    ["default", undefined],
-  ] as const) {
-    const request = new Request(
-      `https://app.example.test/api/v1/workspaces/${workspace.id}/capsules`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          name,
-          environment: "prod",
-          sourceId: "src_git",
-          installConfigId: "cfg_default",
-          ...(projectId ? { projectId } : {}),
-        }),
-      },
-    );
-    const response = await handleWorkspaces(
-      context(fixture.operations, request),
-      ["workspaces", workspace.id, "capsules"],
-      "POST",
-    );
-    expect(response?.status).toBe(201);
-  }
-
-  expect(fixture.capsuleCreates[0].projectId).toBe("prj_explicit");
-  expect("projectId" in fixture.capsuleCreates[1]).toBe(false);
-});
-
-test("Capsule create rejects the retired managed-hostname input", async () => {
+test("Workspace Capsule POST is retired and exposes GET only", async () => {
   const fixture = operationsFixture();
   const request = new Request(
     `https://app.example.test/api/v1/workspaces/${workspace.id}/capsules`,
@@ -2814,11 +2748,11 @@ test("Capsule create rejects the retired managed-hostname input", async () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        name: "retired-hostname",
+        name: "retired-create",
         environment: "prod",
         sourceId: "src_git",
         installConfigId: "cfg_default",
-        managedPublicHostname: { mode: "vanity" },
+        vars: { secret: "must-not-be-stored" },
       }),
     },
   );
@@ -2829,17 +2763,11 @@ test("Capsule create rejects the retired managed-hostname input", async () => {
     "POST",
   );
 
-  expect(response?.status).toBe(400);
-  expect(await response?.json()).toMatchObject({
-    error: {
-      code: "invalid_request",
-      message: "body contains unknown fields: managedPublicHostname",
-    },
-  });
-  expect(fixture.capsuleCreates).toEqual([]);
+  expect(response?.status).toBe(405);
+  expect(response?.headers.get("allow")).toBe("GET");
 });
 
-test("Capsule ProviderBindings accept only the canonical route and payload", async () => {
+test("Capsule ProviderBindings retain GET and retire every PUT payload", async () => {
   const fixture = operationsFixture();
   const bindings = [
     {
@@ -2864,9 +2792,10 @@ test("Capsule ProviderBindings accept only the canonical route and payload", asy
     ["capsules", "cap_1", "provider-bindings"],
     "PUT",
   );
-  expect(written?.status).toBe(200);
+  expect(written?.status).toBe(405);
+  expect(written?.headers.get("allow")).toBe("GET");
   expect(await written?.json()).toMatchObject({
-    providerBindingSet: { bindings },
+    error: { code: "method_not_allowed" },
   });
 
   const legacyRequest = new Request(
@@ -2890,13 +2819,10 @@ test("Capsule ProviderBindings accept only the canonical route and payload", asy
     ["capsules", "cap_1", "provider-bindings"],
     "PUT",
   );
-  expect(rejected?.status).toBe(400);
+  expect(rejected?.status).toBe(405);
+  expect(rejected?.headers.get("allow")).toBe("GET");
   expect(await rejected?.json()).toMatchObject({
-    error: {
-      code: "invalid_request",
-      message:
-        "bindings[0]: alias is deprecated; use childAlias and rootAlias",
-    },
+    error: { code: "method_not_allowed" },
   });
 
   const read = await handleCapsules(
@@ -2910,9 +2836,7 @@ test("Capsule ProviderBindings accept only the canonical route and payload", asy
     "GET",
   );
   expect(read?.status).toBe(200);
-  expect(await read?.json()).toMatchObject({
-    providerBindingSet: { bindings },
-  });
+  expect(await read?.json()).toEqual({ providerBindingSet: null });
 
   const legacyRouteRequest = new Request(
     "https://app.example.test/api/v1/capsules/cap_1/provider-connections",
@@ -2926,7 +2850,7 @@ test("Capsule ProviderBindings accept only the canonical route and payload", asy
   ).toBeUndefined();
 });
 
-test("Capsule ProviderBindings accept hyphenated OpenTofu identities", async () => {
+test("Capsule ProviderBindings PUT is retired for valid OpenTofu identities", async () => {
   const fixture = operationsFixture();
   const bindings = [
     {
@@ -2952,13 +2876,14 @@ test("Capsule ProviderBindings accept hyphenated OpenTofu identities", async () 
     "PUT",
   );
 
-  expect(response?.status).toBe(200);
+  expect(response?.status).toBe(405);
+  expect(response?.headers.get("allow")).toBe("GET");
   expect(await response?.json()).toMatchObject({
-    providerBindingSet: { bindings },
+    error: { code: "method_not_allowed" },
   });
 });
 
-test("Capsule ProviderBindings reject missing or malformed OpenTofu identities", async () => {
+test("Capsule ProviderBindings PUT is retired before payload parsing", async () => {
   const fixture = operationsFixture();
   const baseBinding = {
     provider: "registry.opentofu.org/hashicorp/aws",
@@ -2987,7 +2912,7 @@ test("Capsule ProviderBindings reject missing or malformed OpenTofu identities",
     },
   ] as const;
 
-  for (const { binding, message } of cases) {
+  for (const { binding } of cases) {
     const request = new Request(
       "https://app.example.test/api/v1/capsules/cap_1/provider-bindings",
       {
@@ -3001,17 +2926,15 @@ test("Capsule ProviderBindings reject missing or malformed OpenTofu identities",
       ["capsules", "cap_1", "provider-bindings"],
       "PUT",
     );
-    expect(response?.status).toBe(400);
+    expect(response?.status).toBe(405);
+    expect(response?.headers.get("allow")).toBe("GET");
     expect(await response?.json()).toMatchObject({
-      error: {
-        code: "invalid_request",
-        message: `bindings[0]: ${message}`,
-      },
+      error: { code: "method_not_allowed" },
     });
   }
 });
 
-test("Capsule ProviderBindings project current release-owned run policy", async () => {
+test("Capsule ProviderBindings PUT cannot project connection policy", async () => {
   const fixture = operationsFixture();
   const provider = "registry.terraform.io/tako0614/takoform";
   fixture.operations.connections.listProviderConnections = async () => [
@@ -3064,18 +2987,10 @@ test("Capsule ProviderBindings project current release-owned run policy", async 
     "PUT",
   );
 
-  expect(response?.status).toBe(200);
+  expect(response?.status).toBe(405);
+  expect(response?.headers.get("allow")).toBe("GET");
   expect(await response?.json()).toMatchObject({
-    providerBindingSet: {
-      bindings: [
-        {
-          provider,
-          moduleLocalName: "takoform",
-          connectionId: "conn_release_takoform_policy",
-          runCredentialSettings: { requiredAvailableMinor: 2300 },
-        },
-      ],
-    },
+    error: { code: "method_not_allowed" },
   });
 });
 

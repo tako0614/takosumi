@@ -86,6 +86,8 @@ import type {
   BeginApplyRunResult,
   CapsuleExecutionAuthority,
   CapsuleExecutionAuthorityInput,
+  CapsuleInitialAuthorityInput,
+  CapsuleInitialAuthorityResult,
   CapsuleInstallConfigRebindInput,
   CapsuleInstallConfigRebindResult,
   ClaimCapsuleInterfaceMaterializationIntentInput,
@@ -118,6 +120,7 @@ import type {
 } from "./store.ts";
 import {
   assertSourceSyncSuccessCommit,
+  assertCapsulePlanCreationFence,
   assertPlanRunPreparation,
   assertCapsuleInterfaceMaterializationIntentClaimInput,
   assertCapsuleInterfaceMaterializationIntentSettlementInput,
@@ -143,6 +146,8 @@ import {
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
   planRunPreparationExactlyMatches,
   PlanRunPreparationConflictError,
+  providerBindingSetAuthorityDigest,
+  providerBindingSetTargetsCapsule,
   runtimeSecretRetirementDispatchAttempt,
   sourceSnapshotsExactlyMatch,
   storedCapsuleCompatibilityProviderGraph,
@@ -689,12 +694,7 @@ function pgCapsuleInstallConfigRebindBlocked(
       ),
       and(
         inArray(pgSchema.runs.kind, [...RUN_KINDS_PLAN]),
-        inArray(pgSchema.runs.status, [
-          "queued",
-          "running",
-          "waiting_approval",
-          "succeeded",
-        ]),
+        inArray(pgSchema.runs.status, ["queued", "running"]),
         sql`COALESCE(${pgSchema.runs.runJson} ->> 'appliedApplyRunId', '') = ''`,
         sql`COALESCE(
           NULLIF(${pgSchema.runs.runJson} ->> 'capsuleExecutionAuthorityEpoch', '')::integer,
@@ -839,6 +839,59 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return await this.#client.transaction(async (transaction) => {
       const db = this.#drizzleForClient(transaction);
       const run = input.run;
+      if (input.expectedCapsulePlanAuthority !== undefined && run.capsuleId) {
+        // An existing exact row is an idempotent replay and deliberately does
+        // not revalidate mutable current authority.  A new row, however, must
+        // lock and validate the Capsule before any Run/sidecar write so a
+        // successor or epoch race cannot leave a stale Plan behind.
+        const existingRun = await db
+          .select({ id: pgSchema.runs.id })
+          .from(pgSchema.runs)
+          .where(eq(pgSchema.runs.id, run.id))
+          .limit(1);
+        if (existingRun.length === 0) {
+          const rows = await transaction.query<{
+            installConfigId: string | null;
+            currentStateVersionId: string | null;
+            executionAuthorityEpoch: number | string | null;
+            capsuleJson: unknown;
+          }>(
+            `select
+               install_config_id as "installConfigId",
+               current_state_version_id as "currentStateVersionId",
+               execution_authority_epoch as "executionAuthorityEpoch",
+               installation_json as "capsuleJson"
+             from takosumi_capsules
+             where id = $1
+             for update`,
+            [run.capsuleId],
+          );
+          const row = rows.rows[0];
+          const persistedCapsule = row
+            ? normalizeOptionalCapsuleRecord(
+                parseJson(row.capsuleJson) as Capsule,
+              )
+            : undefined;
+          const capsule = persistedCapsule
+            ? {
+                ...persistedCapsule,
+                ...(row?.installConfigId
+                  ? { installConfigId: row.installConfigId }
+                  : {}),
+                currentStateVersionId:
+                  row?.currentStateVersionId ?? undefined,
+              }
+            : undefined;
+          assertCapsulePlanCreationFence(
+            capsule,
+            row?.executionAuthorityEpoch === null ||
+                row?.executionAuthorityEpoch === undefined
+              ? undefined
+              : Number(row.executionAuthorityEpoch),
+            input.expectedCapsulePlanAuthority,
+          );
+        }
+      }
       const inserted = await db
         .insert(pgSchema.runs)
         .values({
@@ -1856,6 +1909,40 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return rows.length === 1;
   }
 
+  async replaceUnreferencedSharedInstallConfig(
+    expected: InstallConfig,
+    replacement: InstallConfig,
+  ): Promise<boolean> {
+    if (
+      replacement.id !== expected.id ||
+      expected.workspaceId !== undefined ||
+      replacement.workspaceId !== undefined
+    ) {
+      return false;
+    }
+    const referenced = this.#db
+      .select({ id: pgSchema.capsules.id })
+      .from(pgSchema.capsules)
+      .where(eq(pgSchema.capsules.installConfigId, expected.id));
+    const rows = await this.#db
+      .update(pgSchema.installConfigs)
+      .set({
+        workspaceId: null,
+        configJson: replacement,
+        updatedAt: replacement.updatedAt,
+      })
+      .where(
+        and(
+          eq(pgSchema.installConfigs.id, expected.id),
+          isNull(pgSchema.installConfigs.workspaceId),
+          eq(pgSchema.installConfigs.configJson, expected),
+          notExists(referenced),
+        ),
+      )
+      .returning({ id: pgSchema.installConfigs.id });
+    return rows.length === 1;
+  }
+
   async getInstallConfig(id: string): Promise<InstallConfig | undefined> {
     const config = await this.#pgFirstJson<InstallConfig>(
       pgSchema.installConfigs,
@@ -1988,6 +2075,139 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return normalizeCapsuleRecord(capsule);
   }
 
+  async createCapsuleInitialAuthority(
+    input: CapsuleInitialAuthorityInput,
+  ): Promise<CapsuleInitialAuthorityResult> {
+    const capsule = normalizeCapsuleRecord(input.capsule);
+    const binding = input.providerBindingSet;
+    if (
+      input.installConfig.id !== capsule.installConfigId ||
+      input.installConfig.workspaceId !== capsule.workspaceId ||
+      binding.workspaceId !== capsule.workspaceId ||
+      binding.capsuleId !== capsule.id ||
+      binding.environment !== capsule.environment
+    ) {
+      return { status: "conflict" };
+    }
+    return await this.#client.transaction(async (transaction) => {
+      const db = this.#drizzleForClient(transaction);
+      // Initial authority is rare and must be one exact create-or-replay CAS.
+      // Serialize every candidate across the three tables so two concurrent
+      // first-install requests cannot both observe absence and turn a unique
+      // constraint into an indeterminate transport-style failure.
+      await transaction.query(
+        `lock table takosumi_install_configs,
+                    takosumi_capsules,
+                    takosumi_provider_env_binding_sets
+           in share row exclusive mode`,
+      );
+      const [configRows, capsuleRows, bindingRows] = await Promise.all([
+        db
+          .select({ json: pgSchema.installConfigs.configJson })
+          .from(pgSchema.installConfigs)
+          .where(eq(pgSchema.installConfigs.id, input.installConfig.id))
+          .limit(1),
+        db
+          .select({
+            json: pgSchema.capsules.capsuleJson,
+            epoch: pgSchema.capsules.executionAuthorityEpoch,
+          })
+          .from(pgSchema.capsules)
+          .where(eq(pgSchema.capsules.id, capsule.id))
+          .limit(1),
+        db
+          .select({ json: pgSchema.providerBindingSets.profileJson })
+          .from(pgSchema.providerBindingSets)
+          .where(
+            or(
+              eq(pgSchema.providerBindingSets.id, binding.id),
+              and(
+                eq(pgSchema.providerBindingSets.capsuleId, capsule.id),
+                eq(
+                  pgSchema.providerBindingSets.environment,
+                  capsule.environment,
+                ),
+              ),
+            ),
+          ),
+      ]);
+      const bindingRow = bindingRows.find((row) => {
+        const candidate = parseJson(row.json) as ProviderBindingSet;
+        return candidate.id === binding.id;
+      });
+      const bindingSlotRow = bindingRows.find((row) => {
+        const candidate = parseJson(row.json) as ProviderBindingSet;
+        return candidate.capsuleId === capsule.id &&
+          candidate.environment === capsule.environment;
+      });
+      if (
+        configRows[0] ||
+        capsuleRows[0] ||
+        bindingRow ||
+        bindingSlotRow
+      ) {
+        if (
+          !configRows[0] ||
+          !capsuleRows[0] ||
+          !bindingRow ||
+          bindingSlotRow !== bindingRow
+        ) {
+          return { status: "conflict" as const };
+        }
+        const [configDigest, capsuleDigest, bindingDigest] = await Promise.all([
+          stableJsonDigest(parseJson(configRows[0].json)),
+          stableJsonDigest(
+            normalizeCapsuleRecord(parseJson(capsuleRows[0].json) as Capsule),
+          ),
+          stableJsonDigest(parseJson(bindingRow.json)),
+        ]);
+        const [expectedConfig, expectedCapsule, expectedBinding] =
+          await Promise.all([
+            stableJsonDigest(input.installConfig),
+            stableJsonDigest(capsule),
+            stableJsonDigest(binding),
+          ]);
+        return capsuleRows[0].epoch === 1 &&
+            configDigest === expectedConfig &&
+            capsuleDigest === expectedCapsule &&
+            bindingDigest === expectedBinding
+          ? { status: "replayed" as const, capsule }
+          : { status: "conflict" as const };
+      }
+      const duplicate = await db
+        .select({ id: pgSchema.capsules.id })
+        .from(pgSchema.capsules)
+        .where(
+          and(
+            eq(pgSchema.capsules.projectId, capsule.projectId),
+            eq(pgSchema.capsules.name, capsule.name),
+            eq(pgSchema.capsules.environment, capsule.environment),
+            ne(pgSchema.capsules.status, "destroyed"),
+          ),
+        )
+        .limit(1);
+      if (duplicate[0]) return { status: "conflict" as const };
+      await db.insert(pgSchema.installConfigs).values({
+        id: input.installConfig.id,
+        workspaceId: input.installConfig.workspaceId ?? null,
+        configJson: input.installConfig,
+        createdAt: input.installConfig.createdAt,
+        updatedAt: input.installConfig.updatedAt,
+      });
+      await db.insert(pgSchema.capsules).values(capsuleValues(capsule));
+      await db.insert(pgSchema.providerBindingSets).values({
+        id: binding.id,
+        workspaceId: binding.workspaceId,
+        capsuleId: binding.capsuleId,
+        environment: binding.environment,
+        profileJson: binding,
+        createdAt: binding.createdAt,
+        updatedAt: binding.updatedAt,
+      });
+      return { status: "created" as const, capsule };
+    });
+  }
+
   async resolveCapsuleExecutionAuthority(
     workspaceId: string,
     capsuleId: string,
@@ -2089,6 +2309,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   ): Promise<CapsuleInstallConfigRebindResult> {
     return await this.#client.transaction(async (transaction) => {
       const db = this.#drizzleForClient(transaction);
+      const bindingReplacement = input.providerBindingSetReplacement;
+      // ProviderBindingSet writers take ROW EXCLUSIVE table locks. This
+      // stronger, replacement-only lock makes both an existing row and exact
+      // absence stable through the digest check and atomic transition.
+      if (bindingReplacement) {
+        await transaction.query(
+          "lock table takosumi_provider_env_binding_sets in share row exclusive mode",
+        );
+      }
       const capsuleRows = await db
         .select({
           json: pgSchema.capsules.capsuleJson,
@@ -2101,6 +2330,40 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       if (!capsuleRow) return { status: "not_found" as const };
       const capsule = normalizeCapsuleRecord(
         parseJson(capsuleRow.json) as Capsule,
+      );
+      const bindingRows = bindingReplacement
+        ? await transaction.query<{
+            readonly id: string;
+            readonly capsule_id: string;
+            readonly environment: string;
+            readonly json: unknown;
+          }>(
+            `select id,
+                    installation_id as capsule_id,
+                    environment,
+                    profile_json as json
+               from takosumi_provider_env_binding_sets
+              where (installation_id = $1 and environment = $2)
+                 or id = $3
+              order by id
+              for update`,
+            [
+              capsule.id,
+              capsule.environment,
+              bindingReplacement.target.id,
+            ],
+          )
+        : undefined;
+      const currentBindingRow = bindingRows?.rows.find(
+        (row) =>
+          row.capsule_id === capsule.id &&
+          row.environment === capsule.environment,
+      );
+      const currentBindingSet = currentBindingRow
+        ? (parseJson(currentBindingRow.json) as ProviderBindingSet)
+        : undefined;
+      const targetBindingIdRow = bindingRows?.rows.find(
+        (row) => row.id === bindingReplacement?.target.id,
       );
       // Lock current and target in stable id order through the Capsule CAS.
       // InstallConfig patching takes a conflicting UPDATE lock, so a patch
@@ -2131,12 +2394,26 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         !exactRecoveryProofsEqual(
           targetConfig.internal?.reAdoption?.committedPostApplyRecovery,
           recoveryProof,
-        )
+        ) ||
+        (bindingReplacement !== undefined &&
+          ((await stableJsonDigest(bindingReplacement.target)) !==
+              bindingReplacement.targetDigest ||
+            !providerBindingSetTargetsCapsule(
+              bindingReplacement.target,
+              capsule,
+            ) ||
+            (targetBindingIdRow !== undefined &&
+              targetBindingIdRow !== currentBindingRow)))
       ) {
         return { status: "conflict" as const, capsule };
       }
       if (capsule.installConfigId === input.targetInstallConfigId) {
-        return { status: "replayed" as const, capsule };
+        return bindingReplacement === undefined ||
+            (currentBindingSet !== undefined &&
+              (await stableJsonDigest(currentBindingSet)) ===
+                bindingReplacement.targetDigest)
+          ? { status: "replayed" as const, capsule }
+          : { status: "conflict" as const, capsule };
       }
       const currentConfig = configsById.get(capsule.installConfigId) as
         | InstallConfig
@@ -2146,6 +2423,11 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         capsule.installConfigId !== input.expected.installConfigId ||
         (await stableJsonDigest(currentConfig)) !==
           input.expected.installConfigDigest ||
+        (bindingReplacement !== undefined &&
+          ((currentBindingSet !== undefined &&
+              !providerBindingSetTargetsCapsule(currentBindingSet, capsule)) ||
+            (await providerBindingSetAuthorityDigest(currentBindingSet)) !==
+              bindingReplacement.expectedCurrentAuthorityDigest)) ||
         capsule.currentStateGeneration !==
           input.expected.currentStateGeneration ||
         capsule.currentStateVersionId !==
@@ -2228,6 +2510,61 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             eq(pgSchema.installConfigs.configJson, targetConfig),
           ),
         );
+      const bindingSetAuthorityFence = bindingReplacement === undefined
+        ? sql`true`
+        : currentBindingRow && currentBindingSet
+        ? exists(
+            db
+              .select({ id: pgSchema.providerBindingSets.id })
+              .from(pgSchema.providerBindingSets)
+              .where(
+                and(
+                  eq(pgSchema.providerBindingSets.id, currentBindingRow.id),
+                  eq(
+                    pgSchema.providerBindingSets.workspaceId,
+                    capsule.workspaceId,
+                  ),
+                  eq(pgSchema.providerBindingSets.capsuleId, capsule.id),
+                  eq(
+                    pgSchema.providerBindingSets.environment,
+                    capsule.environment,
+                  ),
+                  eq(
+                    pgSchema.providerBindingSets.profileJson,
+                    currentBindingSet,
+                  ),
+                ),
+              ),
+          )
+        : notExists(
+            db
+              .select({ id: pgSchema.providerBindingSets.id })
+              .from(pgSchema.providerBindingSets)
+              .where(
+                and(
+                  eq(pgSchema.providerBindingSets.capsuleId, capsule.id),
+                  eq(
+                    pgSchema.providerBindingSets.environment,
+                    capsule.environment,
+                  ),
+                ),
+              ),
+          );
+      const targetBindingIdAvailableFence = bindingReplacement === undefined
+        ? sql`true`
+        : currentBindingRow?.id === bindingReplacement.target.id
+        ? bindingSetAuthorityFence
+        : notExists(
+            db
+              .select({ id: pgSchema.providerBindingSets.id })
+              .from(pgSchema.providerBindingSets)
+              .where(
+                eq(
+                  pgSchema.providerBindingSets.id,
+                  bindingReplacement.target.id,
+                ),
+              ),
+          );
       const updated = normalizeCapsuleRecord({
         ...capsule,
         installConfigId: input.targetInstallConfigId,
@@ -2276,12 +2613,35 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             // this exact JSON fence part of the same authority transition.
             exists(currentConfigFence),
             exists(targetConfigFence),
+            bindingSetAuthorityFence,
+            targetBindingIdAvailableFence,
             runtimeSafetyFence,
             notExists(blocking),
           ),
         )
         .returning({ json: pgSchema.capsules.capsuleJson });
       if (rows[0]) {
+        if (bindingReplacement) {
+          const bindingTable = pgSchema.providerBindingSets;
+          await db
+            .delete(bindingTable)
+            .where(
+              and(
+                eq(bindingTable.capsuleId, input.capsuleId),
+                eq(bindingTable.environment, capsule.environment),
+              ),
+            );
+          const targetBindingSet = bindingReplacement.target;
+          await db.insert(bindingTable).values({
+            id: targetBindingSet.id,
+            workspaceId: targetBindingSet.workspaceId,
+            capsuleId: targetBindingSet.capsuleId,
+            environment: targetBindingSet.environment,
+            profileJson: targetBindingSet,
+            createdAt: targetBindingSet.createdAt,
+            updatedAt: targetBindingSet.updatedAt,
+          });
+        }
         const intentTable =
           pgSchema.capsuleInterfaceMaterializationIntents;
         await db
@@ -2321,7 +2681,12 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       );
       if (!current) return { status: "not_found" as const };
       if (current.installConfigId === input.targetInstallConfigId) {
-        return { status: "replayed" as const, capsule: current };
+        return bindingReplacement === undefined ||
+            (currentBindingSet !== undefined &&
+              (await stableJsonDigest(currentBindingSet)) ===
+                bindingReplacement.targetDigest)
+          ? { status: "replayed" as const, capsule: current }
+          : { status: "conflict" as const, capsule: current };
       }
       const busyRows = await db
         .select({ id: pgSchema.runs.id })
@@ -3573,32 +3938,6 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   // --- Provider Binding sets (physical key: installation_id, environment) --
-
-  async putProviderBindingSet(
-    profile: ProviderBindingSet,
-  ): Promise<ProviderBindingSet> {
-    // One profile per (Capsule, environment): delete any stale row for the
-    // same pair under a different id before upserting.
-    await this.#db
-      .delete(pgSchema.providerBindingSets)
-      .where(
-        and(
-          eq(pgSchema.providerBindingSets.capsuleId, profile.capsuleId),
-          eq(pgSchema.providerBindingSets.environment, profile.environment),
-          ne(pgSchema.providerBindingSets.id, profile.id),
-        ),
-      );
-    await this.#pgUpsert(pgSchema.providerBindingSets, {
-      id: profile.id,
-      workspaceId: profile.workspaceId,
-      capsuleId: profile.capsuleId,
-      environment: profile.environment,
-      profileJson: profile,
-      createdAt: profile.createdAt,
-      updatedAt: profile.updatedAt,
-    });
-    return profile;
-  }
 
   async deleteProviderBindingSet(
     capsuleId: string,

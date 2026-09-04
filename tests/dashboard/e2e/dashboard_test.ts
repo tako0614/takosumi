@@ -241,7 +241,13 @@ interface ProviderDestinationFixtureState extends SourceCreateFixtureState {
   readonly compatibilityBodies: unknown[];
   readonly installModuleRequests: string[];
   readonly sourceCreateBodies: Record<string, unknown>[];
-  bindingBody?: { readonly bindings?: readonly Record<string, unknown>[] };
+  installPlanBody?: {
+    readonly options?: {
+      readonly providerBindings?: readonly Record<string, unknown>[];
+    };
+    readonly preflight?: Readonly<Record<string, unknown>>;
+    readonly variables?: Readonly<Record<string, unknown>>;
+  };
 }
 
 interface ProviderDestinationFixtureCoordinates {
@@ -403,8 +409,14 @@ async function stubProviderDestinationFixture(
       state.compatibilityBodies.push(request.postDataJSON());
       return route.fulfill({
         json: {
+          run: {
+            id: "ccr_provider_destination_e2e",
+            type: "compatibility_check",
+            status: "succeeded",
+            compatibilityReportId: "caprep_provider_destination_e2e",
+          },
           report: {
-            id: "report_provider_destination_e2e",
+            id: "caprep_provider_destination_e2e",
             level: "ready",
             findings: [],
             providerPackages: [
@@ -465,52 +477,45 @@ async function stubProviderDestinationFixture(
       });
     }
     if (
-      path === "/api/v1/workspaces/ws_alpha/capsules" &&
+      path === "/api/v1/workspaces/ws_alpha/install-plans" &&
       request.method() === "POST"
     ) {
+      state.installPlanBody =
+        request.postDataJSON() as ProviderDestinationFixtureState["installPlanBody"];
       return route.fulfill({
+        status: 201,
         json: {
-          capsule: {
-            id: "cap_provider_destination_e2e",
+          installPlan: {
+            id: "install_provider_destination_e2e",
             workspaceId: "ws_alpha",
-            name: sourceName,
-            slug: sourceName,
-            environment: "production",
+            createdBy: "portable-e2e",
+            requestDigest: `sha256:${"2".repeat(64)}`,
+            source: {
+              name: sourceName,
+              url: sourceUrl,
+              ref: PORTABLE_SOURCE_COMMIT,
+              path: sourcePath,
+            },
+            capsule: { name: sourceName, environment: "production" },
+            options: state.installPlanBody?.options ?? {},
+            preflight: state.installPlanBody?.preflight,
             sourceId,
+            sourceSnapshotId: snapshotId,
             installConfigId: "cfg-default-opentofu-capsule",
-            status: "pending",
-            currentStateGeneration: 0,
-            createdAt: "2026-08-01T00:00:00.000Z",
-            updatedAt: "2026-08-01T00:00:00.000Z",
-          },
-        },
-      });
-    }
-    if (
-      path ===
-        "/api/v1/capsules/cap_provider_destination_e2e/provider-bindings" &&
-      request.method() === "PUT"
-    ) {
-      state.bindingBody = request.postDataJSON() as ProviderDestinationFixtureState["bindingBody"];
-      return route.fulfill({
-        json: {
-          providerBindingSet: {
-            id: "binding-set-provider-destination-e2e",
-            workspaceId: "ws_alpha",
             capsuleId: "cap_provider_destination_e2e",
-            environment: "production",
-            bindings: state.bindingBody?.bindings ?? [],
+            planRunId,
+            phase: "reviewable",
+            generation: 1,
             createdAt: "2026-08-01T00:00:00.000Z",
             updatedAt: "2026-08-01T00:00:00.000Z",
           },
+          nextAction: "review_run",
+          links: {
+            self: "/api/v1/install-plans/install_provider_destination_e2e",
+            run: `/api/v1/runs/${planRunId}`,
+          },
         },
       });
-    }
-    if (
-      path === "/api/v1/capsules/cap_provider_destination_e2e/plan" &&
-      request.method() === "POST"
-    ) {
-      return route.fulfill({ json: { run: { id: planRunId } } });
     }
     if (path === `/api/v1/runs/${planRunId}`) {
       return route.fulfill({
@@ -856,7 +861,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.getByRole("button", { name: /続ける|Continue/u }).click();
 
     await expect
-      .poll(() => state.bindingBody?.bindings)
+      .poll(() => state.installPlanBody?.options?.providerBindings)
       .toEqual([
         {
           provider: "registry.opentofu.org/cloudflare/cloudflare-v02",
@@ -868,19 +873,27 @@ test.describe("Takosumi dashboard browser surface", () => {
       page.locator('[data-install-provider-destination="auto-selected"]'),
     ).toHaveCount(0);
     await expect
-      .poll(() => state.mutations.indexOf("PUT /api/v1/capsules/cap_provider_destination_e2e/provider-bindings"))
+      .poll(() =>
+        state.mutations.indexOf(
+          "POST /api/v1/workspaces/ws_alpha/install-plans",
+        ),
+      )
       .toBeGreaterThanOrEqual(0);
-    await expect
-      .poll(() => state.mutations.indexOf("POST /api/v1/capsules/cap_provider_destination_e2e/plan"))
-      .toBeGreaterThanOrEqual(0);
-    expect(
-      state.mutations.indexOf(
-        "PUT /api/v1/capsules/cap_provider_destination_e2e/provider-bindings",
-      ),
-    ).toBeLessThan(
-      state.mutations.indexOf(
-        "POST /api/v1/capsules/cap_provider_destination_e2e/plan",
-      ),
+    expect(state.installPlanBody?.preflight).toEqual({
+      sourceId: "src_provider_destination_e2e",
+      sourceSnapshotId: "snap_provider_destination_e2e",
+      compatibilityCheckRunId: "ccr_provider_destination_e2e",
+      compatibilityReportId: "caprep_provider_destination_e2e",
+      installConfigId: "cfg-default-opentofu-capsule",
+    });
+    expect(state.mutations).not.toContain(
+      "POST /api/v1/workspaces/ws_alpha/capsules",
+    );
+    expect(state.mutations).not.toContain(
+      "PUT /api/v1/capsules/cap_provider_destination_e2e/provider-bindings",
+    );
+    expect(state.mutations).not.toContain(
+      "POST /api/v1/capsules/cap_provider_destination_e2e/plan",
     );
     expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
@@ -919,9 +932,12 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(
       page.locator('[data-install-provider-destination="auto-selected"]'),
     ).toHaveCount(0);
-    expect(state.bindingBody).toBeUndefined();
+    expect(state.installPlanBody).toBeUndefined();
     expect(state.mutations).not.toContain(
       "PUT /api/v1/capsules/cap_provider_destination_e2e/provider-bindings",
+    );
+    expect(state.mutations).not.toContain(
+      "POST /api/v1/workspaces/ws_alpha/install-plans",
     );
     expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
@@ -1000,7 +1016,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       page.locator('[data-install-provider-destination="auto-selected"]'),
     ).toHaveCount(0);
     await expect
-      .poll(() => state.bindingBody?.bindings)
+      .poll(() => state.installPlanBody?.options?.providerBindings)
       .toEqual([
         {
           provider: "registry.opentofu.org/cloudflare/cloudflare-v02",
@@ -1108,7 +1124,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.getByRole("button", { name: /続ける|Continue/u }).click();
 
     await expect
-      .poll(() => state.bindingBody?.bindings)
+      .poll(() => state.installPlanBody?.options?.providerBindings)
       .toEqual([
         {
           provider: "registry.opentofu.org/aws/aws",
@@ -1317,6 +1333,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     const stableRefResolutionBodies: unknown[] = [];
     const sourcePostBodies: unknown[] = [];
     const syncBodies: unknown[] = [];
+    const installPlanBodies: unknown[] = [];
     const sourceState: SourceCreateFixtureState = {
       sourceListReads: [],
       sourcePosts: [],
@@ -1513,8 +1530,14 @@ test.describe("Takosumi dashboard browser surface", () => {
         compatibilityBodies.push(request.postDataJSON());
         return route.fulfill({
           json: {
+            run: {
+              id: "ccr_install_e2e",
+              type: "compatibility_check",
+              status: "succeeded",
+              compatibilityReportId: "caprep_install_e2e",
+            },
             report: {
-              id: "report_install_e2e",
+              id: "caprep_install_e2e",
               level: "ready",
               findings: [],
               providerPackages: [],
@@ -1554,42 +1577,40 @@ test.describe("Takosumi dashboard browser surface", () => {
         });
       }
       if (
-        path === "/api/v1/workspaces/ws_alpha/capsules" &&
+        path === "/api/v1/workspaces/ws_alpha/install-plans" &&
         request.method() === "POST"
       ) {
+        const body = request.postDataJSON() as Record<string, unknown>;
+        installPlanBodies.push(body);
         return route.fulfill({
+          status: 201,
           json: {
-            capsule: {
-              id: "cap_install_e2e",
+            installPlan: {
+              id: "install_plan_e2e",
               workspaceId: "ws_alpha",
-              name: "example-service",
-              slug: "example-service",
-              environment: "production",
+              createdBy: "portable-e2e",
+              requestDigest: `sha256:${"3".repeat(64)}`,
+              source: body.source,
+              capsule: body.capsule,
+              options: body.options ?? {},
+              preflight: body.preflight,
               sourceId: "src_install_e2e",
+              sourceSnapshotId: "snap_install_e2e",
               installConfigId: "cfg_install_e2e",
-              status: "pending",
-              currentStateGeneration: 0,
-              createdAt: now,
-              updatedAt: now,
-            },
-          },
-        });
-      }
-      if (path === "/api/v1/capsules/cap_install_e2e/provider-bindings") {
-        return route.fulfill({
-          json: {
-            providerBindingSet: {
               capsuleId: "cap_install_e2e",
-              workspaceId: "ws_alpha",
-              bindings: [],
+              planRunId: "run_plan_e2e",
+              phase: "reviewable",
+              generation: 1,
               createdAt: now,
               updatedAt: now,
             },
+            nextAction: "review_run",
+            links: {
+              self: "/api/v1/install-plans/install_plan_e2e",
+              run: "/api/v1/runs/run_plan_e2e",
+            },
           },
         });
-      }
-      if (path === "/api/v1/capsules/cap_install_e2e/plan") {
-        return route.fulfill({ json: { run: { id: "run_plan_e2e" } } });
       }
       return route.fallback();
     });
@@ -1647,9 +1668,31 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.getByRole("button", { name: /続ける|Continue/u }).click();
     await expect
       .poll(() =>
-        seenMutations.includes("POST /api/v1/capsules/cap_install_e2e/plan"),
+        seenMutations.includes("POST /api/v1/workspaces/ws_alpha/install-plans"),
       )
       .toBe(true);
+    expect(installPlanBodies).toEqual([
+      expect.objectContaining({
+        options: expect.objectContaining({ modulePath: "deploy/takoform" }),
+        preflight: {
+          sourceId: "src_install_e2e",
+          sourceSnapshotId: "snap_install_e2e",
+          compatibilityCheckRunId: "ccr_install_e2e",
+          compatibilityReportId: "caprep_install_e2e",
+          installConfigId: "cfg_install_e2e",
+        },
+        variables: { region: "edited" },
+      }),
+    ]);
+    expect(seenMutations).not.toContain(
+      "POST /api/v1/workspaces/ws_alpha/capsules",
+    );
+    expect(seenMutations).not.toContain(
+      "PUT /api/v1/capsules/cap_install_e2e/provider-bindings",
+    );
+    expect(seenMutations).not.toContain(
+      "POST /api/v1/capsules/cap_install_e2e/plan",
+    );
     expectSingleSourceCreate(sourceState);
     expect(stableRefResolutionBodies).toEqual([
       { url: "https://github.com/example/service" },
@@ -1662,6 +1705,243 @@ test.describe("Takosumi dashboard browser surface", () => {
       }),
     ]);
     expect(syncBodies).toEqual([{ expectedRef: resolvedCommit }]);
+  });
+
+  test("Workload settings submit one complete Configuration Plan and open its Run review", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the deterministic configuration authority fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const now = "2026-08-05T00:00:00.000Z";
+    const capsuleId = "cap_repository_office";
+    const installConfigId = `cfg_${capsuleId}`;
+    const sourceId = `src_${capsuleId}`;
+    const planRunId = "run_configuration_plan_e2e";
+    const authorityGuard = `sha256:${"a".repeat(64)}`;
+    const configurationPlanBodies: unknown[] = [];
+    const seenMutations: string[] = [];
+    const capsule = {
+      id: capsuleId,
+      workspaceId: "ws_alpha",
+      name: PORTABLE_EXPECTATIONS.appName,
+      slug: "repository-office",
+      sourceId,
+      installConfigId,
+      environment: "production",
+      currentStateGeneration: 1,
+      status: "active",
+      freshness: "fresh",
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await page.route("**/api/v1/**", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const path = url.pathname;
+      if (
+        shouldRecordControlPlaneMutation(
+          mode,
+          mutationOrigin,
+          request.url(),
+          request.method(),
+        )
+      ) {
+        seenMutations.push(`${request.method()} ${path}`);
+      }
+      if (path === `/api/v1/capsules/${capsuleId}`) {
+        return route.fulfill({
+          json: {
+            capsule,
+            installConfigReAdoption: { authorityGuard },
+          },
+        });
+      }
+      if (path === `/api/v1/capsule-configs/${installConfigId}`) {
+        return route.fulfill({
+          json: {
+            installConfig: {
+              id: installConfigId,
+              workspaceId: "ws_alpha",
+              name: PORTABLE_EXPECTATIONS.appName,
+              sourceSelector: {
+                kind: "git",
+                url: "https://github.com/example/repository-office.git",
+                ref: PORTABLE_SOURCE_COMMIT,
+                path: ".",
+              },
+              policy: {},
+              variableMapping: { region: "initial" },
+              variablePresentation: [
+                {
+                  name: "region",
+                  type: "string",
+                  required: true,
+                  label: { ja: "リージョン", en: "Region" },
+                },
+              ],
+              outputAllowlist: {},
+              interfaceBlueprints: [],
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        });
+      }
+      if (path === `/api/v1/capsules/${capsuleId}/provider-bindings`) {
+        return route.fulfill({
+          json: {
+            providerBindingSet: {
+              id: "pbs_configuration_plan_e2e",
+              workspaceId: "ws_alpha",
+              capsuleId,
+              environment: "production",
+              bindings: [],
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        });
+      }
+      if (path === `/api/v1/capsules/${capsuleId}/usage-summary`) {
+        return route.fulfill({
+          json: {
+            summary: {
+              capsuleId,
+              usdMicros: 0,
+              eventCount: 0,
+              ratedEventCount: 0,
+              unratedEventCount: 0,
+            },
+          },
+        });
+      }
+      if (path === "/api/v1/sources") {
+        return route.fulfill({
+          json: {
+            sources: [
+              {
+                id: sourceId,
+                workspaceId: "ws_alpha",
+                name: PORTABLE_EXPECTATIONS.appName,
+                url: "https://github.com/example/repository-office.git",
+                defaultRef: PORTABLE_SOURCE_COMMIT,
+                defaultPath: ".",
+                status: "active",
+                autoSync: false,
+                createdAt: now,
+                updatedAt: now,
+              },
+            ],
+          },
+        });
+      }
+      if (path === "/api/v1/provider-connections") {
+        return route.fulfill({ json: { providerConnections: [] } });
+      }
+      if (
+        path === `/api/v1/capsules/${capsuleId}/configuration-plans` &&
+        request.method() === "POST"
+      ) {
+        configurationPlanBodies.push(request.postDataJSON());
+        return route.fulfill({
+          status: 201,
+          json: {
+            capsule: { ...capsule, installConfigId: "cfg_configuration_e2e" },
+            configurationPlan: {
+              replayed: false,
+              previousInstallConfigId: installConfigId,
+              targetInstallConfigId: "cfg_configuration_e2e",
+              sourceSnapshotId: "snap_configuration_e2e",
+              planRunId,
+            },
+            links: { run: `/api/v1/runs/${planRunId}` },
+          },
+        });
+      }
+      if (path === `/api/v1/runs/${planRunId}`) {
+        return route.fulfill({
+          json: {
+            run: {
+              id: planRunId,
+              workspaceId: "ws_alpha",
+              capsuleId,
+              type: "plan",
+              status: "succeeded",
+              summary: { add: 0, change: 1, destroy: 0 },
+              policyStatus: "pass",
+              createdBy: "portable-e2e",
+              createdAt: now,
+            },
+          },
+        });
+      }
+      if (path === `/api/v1/runs/${planRunId}/logs`) {
+        return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+      }
+      if (path === `/api/v1/runs/${planRunId}/cost`) {
+        return route.fulfill({
+          json: {
+            cost: {
+              runId: planRunId,
+              billingMode: "disabled",
+              estimatedUsdMicros: 0,
+              ratingStatus: "not_applicable",
+              blocked: false,
+              reasons: [],
+            },
+          },
+        });
+      }
+      if (path === `/api/v1/runs/${planRunId}/stream`) {
+        return route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          body: "",
+        });
+      }
+      if (
+        path === "/api/v1/workspaces/ws_alpha/runs" &&
+        url.searchParams.get("limit") === "200"
+      ) {
+        return route.fulfill({ json: { runs: [] } });
+      }
+      return route.fallback();
+    });
+
+    await gotoDashboardDocument(
+      page,
+      `/workloads/${capsuleId}/settings`,
+    );
+    const region = page.getByLabel(/リージョン|Region/u);
+    await expect(region).toHaveValue("initial");
+    await region.fill("edited");
+    await page
+      .getByRole("button", { name: /変更を確認|Review changes/u })
+      .click();
+
+    await expect.poll(() => configurationPlanBodies.length).toBe(1);
+    expect(configurationPlanBodies).toEqual([
+      {
+        variablePatch: { set: { region: "edited" }, remove: [] },
+        providerBindings: [],
+        interfaceBlueprints: [],
+        expected: { authorityGuard },
+      },
+    ]);
+    expect(seenMutations).toEqual([
+      `POST /api/v1/capsules/${capsuleId}/configuration-plans`,
+    ]);
+    await expect(page).toHaveURL(new RegExp(`/runs/${planRunId}$`, "u"));
+    await expect(
+      page.getByRole("heading", { name: /変更内容を確認|Review changes/u }),
+    ).toBeVisible();
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
   });
 
   test("direct Git installs submit the exact scanned module path", async ({

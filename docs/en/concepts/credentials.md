@@ -128,12 +128,27 @@ ProviderBinding. Create a development Capsule and a production Capsule from the 
 module, and assign each its own Connection. That is how environments are separated in
 Takosumi.
 
+For an existing Capsule, review an assignment change as one Configuration Plan
+instead of issuing a direct PUT. First read the Capsule's `authorityGuard` and
+the current ProviderBindingSet, then submit the complete post-change binding and
+Interface selections in one request.
+
 ```bash
-curl -X PUT "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/provider-bindings" \
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" > capsule.json
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/provider-bindings" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" > bindings.json
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/configuration-plans" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \
+  -H "idempotency-key: $CONFIGURATION_CHANGE_ID" \
   -H 'content-type: application/json' \
-  -d @bindings.json
+  -d @configuration-plan.json
 ```
+
+`configuration-plan.json` contains `variablePatch`, the complete resulting
+`providerBindings` and `interfaceBlueprints`, and the Capsule GET value as
+`expected.authorityGuard`. Review and approve the returned `planRunId` before
+applying it. Public ProviderBinding PUT is `405` (`Allow: GET`) for every row.
 
 ## Interface tokens work differently
 

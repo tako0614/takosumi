@@ -10,6 +10,7 @@ import type {
   InstallConfig,
   InstallConfigCommittedPostApplyRecoveryProof,
 } from "takosumi-contract/install-configs";
+import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type { Output } from "takosumi-contract/outputs";
 import type { Run } from "takosumi-contract/runs";
 import type { StateVersion } from "takosumi-contract/state-versions";
@@ -25,6 +26,7 @@ import type {
 } from "../../../../core/adapters/storage/sql.ts";
 import {
   InMemoryOpenTofuControlStore,
+  providerBindingSetAuthorityDigest,
   type CapsuleInstallConfigRebindInput,
   type CapsuleInstallConfigRebindResult,
   type MarkCapsuleStaleCommand,
@@ -95,21 +97,40 @@ function capsule(id: string, installConfigId: string): Capsule {
 async function seedRebind(
   store: OpenTofuControlStore,
   suffix: string,
+  initialBindingSuffix?: string,
 ): Promise<{
   readonly capsule: Capsule;
   readonly previous: InstallConfig;
   readonly target: InstallConfig;
   readonly next: InstallConfig;
+  readonly initialBindingSet: ProviderBindingSet;
 }> {
   const previous = config(`config_previous_${suffix}`);
   const target = config(`config_target_${suffix}`);
   const next = config(`config_next_${suffix}`);
   const row = capsule(`capsule_${suffix}`, previous.id);
-  await store.putInstallConfig(previous);
   await store.putInstallConfig(target);
   await store.putInstallConfig(next);
-  await store.putCapsule(row);
-  return { capsule: row, previous, target, next };
+  const initialBindingSet = initialBindingSuffix
+    ? bindingSet(row, initialBindingSuffix)
+    : {
+        id: `binding_set_initial_${suffix}`,
+        workspaceId: row.workspaceId,
+        capsuleId: row.id,
+        environment: row.environment,
+        bindings: [],
+        createdAt: NOW,
+        updatedAt: NOW,
+      };
+  const initial = await store.createCapsuleInitialAuthority({
+    installConfig: previous,
+    capsule: row,
+    providerBindingSet: initialBindingSet,
+  });
+  if (initial.status !== "created") {
+    throw new Error(`initial rebind fixture conflicted: ${suffix}`);
+  }
+  return { capsule: row, previous, target, next, initialBindingSet };
 }
 
 async function rebind(
@@ -143,6 +164,47 @@ async function rebindInput(input: {
       executionAuthorityEpoch: input.epoch ?? 1,
     },
     updatedAt: LATER,
+  };
+}
+
+function bindingSet(
+  capsule: Capsule,
+  suffix: string,
+): ProviderBindingSet {
+  return {
+    id: `binding_set_${suffix}`,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    environment: capsule.environment,
+    bindings: [
+      {
+        provider: "registry.opentofu.org/hashicorp/aws",
+        connectionId: `connection_${suffix}`,
+        region: "ap-northeast-1",
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: LATER,
+  };
+}
+
+async function rebindInputWithBindings(input: {
+  readonly capsule: Capsule;
+  readonly previous: InstallConfig;
+  readonly target: InstallConfig;
+  readonly currentBindingSet?: ProviderBindingSet;
+  readonly targetBindingSet: ProviderBindingSet;
+  readonly epoch?: number;
+}): Promise<CapsuleInstallConfigRebindInput> {
+  return {
+    ...(await rebindInput(input)),
+    providerBindingSetReplacement: {
+      expectedCurrentAuthorityDigest: await providerBindingSetAuthorityDigest(
+        input.currentBindingSet,
+      ),
+      target: input.targetBindingSet,
+      targetDigest: await stableJsonDigest(input.targetBindingSet),
+    },
   };
 }
 
@@ -958,19 +1020,105 @@ test("concurrent same-target rebind is one update plus one idempotent replay", a
   }
 });
 
-test("only a current unconsumed Plan blocks rebind; consumed history and stale epochs do not", async () => {
+test("deployment-intent rebind atomically replaces a ProviderBindingSet across every store", async () => {
   for (const [label, store] of await stores()) {
-    const current = await seedRebind(store, `current_plan_${label}`);
-    await store.putPlanRun(
-      planRun({
-        id: `plan_current_${label}`,
-        capsuleId: current.capsule.id,
-        epoch: 1,
-      }),
+    const seeded = await seedRebind(
+      store,
+      `bindings_${label}`,
+      `current_${label}`,
     );
-    expect((await rebind(store, current)).status, `${label}:current`).toBe(
-      "busy",
+    const currentBindingSet = seeded.initialBindingSet;
+    const targetBindingSet = bindingSet(seeded.capsule, `target_${label}`);
+    const input = await rebindInputWithBindings({
+      ...seeded,
+      currentBindingSet,
+      targetBindingSet,
+    });
+
+    expect((await store.rebindCapsuleInstallConfig(input)).status, label).toBe(
+      "updated",
     );
+    expect(
+      await store.getProviderBindingSetByCapsule(
+        seeded.capsule.id,
+        seeded.capsule.environment,
+      ),
+      label,
+    ).toEqual(targetBindingSet);
+    expect((await store.rebindCapsuleInstallConfig(input)).status, label).toBe(
+      "replayed",
+    );
+
+    const laterBindingSet: ProviderBindingSet = {
+      ...targetBindingSet,
+      id: `${targetBindingSet.id}_later`,
+      bindings: [],
+    };
+    const laterInput = await rebindInputWithBindings({
+      capsule: seeded.capsule,
+      previous: seeded.target,
+      target: seeded.next,
+      currentBindingSet: targetBindingSet,
+      targetBindingSet: laterBindingSet,
+      epoch: 2,
+    });
+    expect(
+      (await store.rebindCapsuleInstallConfig(laterInput)).status,
+      label,
+    ).toBe("updated");
+    expect((await store.rebindCapsuleInstallConfig(input)).status, label).toBe(
+      "conflict",
+    );
+    expect(
+      await store.getCapsuleExecutionAuthorityEpoch(seeded.capsule.id),
+      label,
+    ).toBe(3);
+  }
+});
+
+test("only queued/running current Plans block rebind; computed Plans are superseded by the epoch transition", async () => {
+  for (const [label, store] of await stores()) {
+    for (const status of ["queued", "running"] as const) {
+      const current = await seedRebind(
+        store,
+        `current_plan_${status}_${label}`,
+      );
+      await store.putPlanRun(
+        planRun({
+          id: `plan_current_${status}_${label}`,
+          capsuleId: current.capsule.id,
+          epoch: 1,
+          status,
+        }),
+      );
+      expect(
+        (await rebind(store, current)).status,
+        `${label}:current:${status}`,
+      ).toBe("busy");
+    }
+
+    for (const status of ["waiting_approval", "succeeded"] as const) {
+      const computed = await seedRebind(
+        store,
+        `computed_plan_${status}_${label}`,
+      );
+      await store.putPlanRun(
+        planRun({
+          id: `plan_computed_${status}_${label}`,
+          capsuleId: computed.capsule.id,
+          epoch: 1,
+          status,
+        }),
+      );
+      expect(
+        (await rebind(store, computed)).status,
+        `${label}:computed:${status}`,
+      ).toBe("updated");
+      expect(
+        await store.getCapsuleExecutionAuthorityEpoch(computed.capsule.id),
+        `${label}:computed:${status}:epoch`,
+      ).toBe(2);
+    }
 
     const consumed = await seedRebind(store, `consumed_plan_${label}`);
     await store.putPlanRun(
@@ -1422,6 +1570,7 @@ test("receipt-fenced recovery is subordinate to latest safety and blocking Run a
           id: `plan_blocking_recovery_${label}`,
           capsuleId: recovery.capsule.id,
           epoch: 1,
+          status: "queued",
         }),
       );
       expect(

@@ -14,6 +14,7 @@ import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { OpenTofuRunner } from "../../../core/domains/deploy-control/mod.ts";
+import type { CapsulesService } from "../../../core/domains/capsules/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import type { OpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import { createTakosumiService } from "../../../core/bootstrap.ts";
@@ -59,11 +60,12 @@ interface Harness {
     request: (path: string, init?: RequestInit) => Promise<Response>;
   };
   readonly store: OpenTofuControlStore;
+  readonly capsules: Pick<CapsulesService, "createCapsuleInitialAuthority">;
 }
 
 async function harness(): Promise<Harness> {
   const store = new InMemoryOpenTofuControlStore();
-  const { app } = await createTakosumiService({
+  const { app, operations } = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
@@ -72,7 +74,7 @@ async function harness(): Promise<Harness> {
     opentofuControlStore: store,
     opentofuRunner: runner(),
   });
-  return { app, store };
+  return { app, store, capsules: operations.capsules };
 }
 
 async function createWorkspace(
@@ -96,6 +98,7 @@ async function createWorkspace(
 /** Creates a source + Capsule in a Workspace and returns the Capsule id. */
 async function createCapsule(
   store: OpenTofuControlStore,
+  capsules: Harness["capsules"],
   app: Harness["app"],
   workspaceId: string,
   name: string,
@@ -124,26 +127,19 @@ async function createCapsule(
     createdAt: nowIso,
     updatedAt: nowIso,
   };
-  await store.putInstallConfig(config);
-
-  const installRes = await app.request(
-    `/internal/v1/workspaces/${workspaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name,
-        environment: "preview",
-        sourceId,
-        installConfigId: config.id,
-      }),
-    },
-  );
-  expect(installRes.status).toBe(201);
-  const capsuleId = (await installRes.json()).capsule.id as string;
-  const capsule = await store.getCapsule(capsuleId);
-  expect(capsule).toBeDefined();
-  await seedProviderConnections(store, capsule!);
+  const capsuleId = `cap_${name}00000001`;
+  const initial = await capsules.createCapsuleInitialAuthority({
+    capsuleId,
+    providerBindingSetId: `ipcset_${name}00000001`,
+    workspaceId,
+    name,
+    environment: "preview",
+    sourceId,
+    installingPrincipalId: "deploy-control-bearer",
+    installConfig: config,
+    providerBindings: [],
+  });
+  await seedProviderConnections(store, initial.capsule);
 
   const snapshot: SourceSnapshot = {
     id: `snap_${name}00001`,
@@ -204,12 +200,18 @@ async function listActivity(
 }
 
 test("real flows emit Activity events; listing is workspace-scoped and newest-first", async () => {
-  const { app, store } = await harness();
+  const { app, store, capsules } = await harness();
   const workspaceId = await createWorkspace(app, "acme");
   const otherWorkspaceId = await createWorkspace(app, "other");
 
   // Creating a Capsule emits capsule.created.
-  const capsuleId = await createCapsule(store, app, workspaceId, "shop");
+  const capsuleId = await createCapsule(
+    store,
+    capsules,
+    app,
+    workspaceId,
+    "shop",
+  );
 
   // Planning emits run.plan_created.
   const planRes = await app.request(`/internal/v1/capsules/${capsuleId}/plan`, {
@@ -249,13 +251,13 @@ test("real flows emit Activity events; listing is workspace-scoped and newest-fi
 });
 
 test("?limit bounds the page; invalid limits are rejected 400", async () => {
-  const { app, store } = await harness();
+  const { app, store, capsules } = await harness();
   const workspaceId = await createWorkspace(app, "acme");
 
   // Three Capsules => at least three capsule.created events.
-  await createCapsule(store, app, workspaceId, "one");
-  await createCapsule(store, app, workspaceId, "two");
-  await createCapsule(store, app, workspaceId, "three");
+  await createCapsule(store, capsules, app, workspaceId, "one");
+  await createCapsule(store, capsules, app, workspaceId, "two");
+  await createCapsule(store, capsules, app, workspaceId, "three");
 
   const limited = await listActivity(app, workspaceId, "?limit=2");
   expect(limited.status).toBe(200);

@@ -14,6 +14,7 @@ import {
 } from "takosumi-contract/install-configs";
 import type { Workspace } from "takosumi-contract/workspaces";
 import { withHistoricalPublicHostReservations } from "../../../helpers/deploy-control/historical_public_host_store.ts";
+import { transitionProviderBindingSetForFixture } from "../../../helpers/deploy-control/model_fixture.ts";
 
 const NOW = "2026-06-06T00:00:00.000Z";
 
@@ -290,7 +291,7 @@ test("abandonUnappliedCapsule closes the ledger and bindings without mutating hi
   await seedAll(store);
   const capsule = await createCapsule(service);
   expect(capsule.id).toBe("cap_test00000001");
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "pbind_1",
     workspaceId: capsule.workspaceId,
     capsuleId: capsule.id,
@@ -561,7 +562,7 @@ test("a Workspace-owned InstallConfig cannot author a new operator lifecycle act
   expect(unchanged.lifecycleActions?.[0]?.id).toBe("activate");
 });
 
-test("repository-derived InstallConfigs reject patches without changing authority", async () => {
+test("only unattached Workspace-neutral InstallConfig templates accept patches", async () => {
   const { store, service } = build();
   await seedWorkspace(store);
   await seedSource(store);
@@ -606,11 +607,12 @@ test("repository-derived InstallConfigs reject patches without changing authorit
     variableMapping: { original: "re-adopted" },
   });
 
-  let putCount = 0;
-  const putInstallConfig = store.putInstallConfig.bind(store);
-  store.putInstallConfig = async (config) => {
-    putCount += 1;
-    return await putInstallConfig(config);
+  let replacementCount = 0;
+  const replaceUnreferencedSharedInstallConfig =
+    store.replaceUnreferencedSharedInstallConfig.bind(store);
+  store.replaceUnreferencedSharedInstallConfig = async (current, replacement) => {
+    replacementCount += 1;
+    return await replaceUnreferencedSharedInstallConfig(current, replacement);
   };
   const beforeCapsule = await service.getCapsule(capsule.id);
   const beforeEpoch = await service.getCapsuleExecutionAuthorityEpoch(
@@ -628,10 +630,12 @@ test("repository-derived InstallConfigs reject patches without changing authorit
     await expect(service.applyInstallConfigPatch(row.id, patch)).rejects
       .toMatchObject({
         code: "failed_precondition",
-        details: { reason: "repository_install_ux_immutable" },
-        message: expect.stringContaining("compiled repository install configuration is immutable"),
+        details: { reason: "install_config_in_use" },
+        message: expect.stringContaining(
+          "Only an unattached Workspace-neutral InstallConfig template may be patched",
+        ),
       });
-    expect(putCount).toBe(0);
+    expect(replacementCount).toBe(0);
     const after = await service.getInstallConfig(row.id);
     expect(after).toEqual(before);
     expect(await stableJsonDigest(after)).toBe(beforeDigest);
@@ -648,16 +652,20 @@ test("repository-derived InstallConfigs reject patches without changing authorit
     workspaceId: "ws_1",
     internal: { reason: "per_install_overrides" },
   });
-  putCount = 0;
-  const mutableResult = await service.applyInstallConfigPatch(mutable.id, patch);
-  expect(mutableResult.variableMapping).toEqual({ changed: "must-not-persist" });
-  expect(putCount).toBe(1);
+  replacementCount = 0;
+  await expect(service.applyInstallConfigPatch(mutable.id, patch)).rejects
+    .toMatchObject({
+      code: "failed_precondition",
+      details: { reason: "install_config_in_use" },
+    });
+  expect(await service.getInstallConfig(mutable.id)).toEqual(mutable);
+  expect(replacementCount).toBe(0);
 
   const shared = await seedConfig(store, { id: "cfg_shared" });
-  putCount = 0;
+  replacementCount = 0;
   const sharedResult = await service.applyInstallConfigPatch(shared.id, patch);
   expect(sharedResult.variableMapping).toEqual({ changed: "must-not-persist" });
-  expect(putCount).toBe(1);
+  expect(replacementCount).toBe(1);
 });
 
 test("InstallConfig reads list only selectable service-side configuration", async () => {
@@ -675,49 +683,5 @@ test("InstallConfig reads list only selectable service-side configuration", asyn
   ]);
   await expect(service.getInstallConfig("cfg_missing")).rejects.toMatchObject({
     code: "not_found",
-  });
-});
-
-test("putProviderBindingSet validates the Capsule Workspace", async () => {
-  const { store, service } = build();
-  await seedAll(store);
-  const capsule = await createCapsule(service);
-  const bindingSet = await service.putProviderBindingSet({
-    id: "pbind_1",
-    workspaceId: "ws_1",
-    capsuleId: capsule.id,
-    environment: "production",
-    bindings: [],
-    createdAt: NOW,
-    updatedAt: NOW,
-  });
-  expect(bindingSet.id).toBe("pbind_1");
-  expect(
-    await service.getProviderBindingSetByCapsule(capsule.id, "production"),
-  ).toEqual(bindingSet);
-
-  await expect(
-    service.putProviderBindingSet({
-      ...bindingSet,
-      id: "pbind_bad",
-      workspaceId: "ws_other",
-    }),
-  ).rejects.toMatchObject({ code: "invalid_argument" });
-
-  await expect(
-    service.putProviderBindingSet({
-      ...bindingSet,
-      id: "pbind_builtin",
-      bindings: [
-        {
-          provider: "terraform.io/builtin/terraform",
-          moduleLocalName: "terraform",
-          connectionId: "conn_impossible",
-        },
-      ],
-    }),
-  ).rejects.toMatchObject({
-    code: "invalid_argument",
-    message: "OpenTofu builtin providers cannot have ProviderBindings",
   });
 });

@@ -51,8 +51,10 @@ describe("/new Provider Connections return context", () => {
   test("source credentials, bindings, and compatibility authority reach Plan", () => {
     expect(install).toContain("sourceAuthConnectionId()");
     expect(install).toContain("authConnectionId: sourceAuthConnectionId()");
-    expect(install).toContain("putCapsuleProviderBindingSet(");
-    expect(install).toContain("providerBindings(rows)");
+    expect(install).toContain("createReviewableGitInstallPlan(");
+    expect(install).toContain("providerBindings: rows.map");
+    expect(install).not.toContain("putCapsuleProviderBindingSet(");
+    expect(install).not.toContain("createCapsule(");
     expect(install).toContain("checked.reportId");
     expect(install).toContain("compatibilityReportId: checked.reportId");
   });

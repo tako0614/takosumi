@@ -113,6 +113,15 @@ function publicPolicyConfig(
 export function redactedInstallConfigVariableMapping(
   config: InstallConfig,
 ): Readonly<Record<string, unknown>> {
+  // A generic OpenTofu InstallConfig is sourced from an HCL variable contract,
+  // not a declaration that proves which values are sensitive.  The marker is
+  // therefore a write-only authority for the complete mapping: even an
+  // innocuous-looking name such as `region` may carry a secret value in an
+  // arbitrary repository.  Treat a partial marker as write-only too so a
+  // malformed/legacy row cannot become an accidental value disclosure.
+  const genericOpenTofuValuesAreWriteOnly =
+    config.internal?.genericOpenTofuVariableContractDigest !== undefined ||
+    config.internal?.genericOpenTofuSourceSnapshotId !== undefined;
   const declaredSecret = new Set(
     (config.variablePresentation ?? [])
       .filter((entry) => entry.secret === true)
@@ -121,7 +130,9 @@ export function redactedInstallConfigVariableMapping(
   const redacted: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(config.variableMapping)) {
     redacted[name] =
-      declaredSecret.has(name) || isSecretKey(name)
+      genericOpenTofuValuesAreWriteOnly ||
+        declaredSecret.has(name) ||
+        isSecretKey(name)
         ? REDACTED_VALUE
         : redactJsonValue(value as JsonValue);
   }

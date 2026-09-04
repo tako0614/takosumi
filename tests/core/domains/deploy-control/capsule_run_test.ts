@@ -89,6 +89,7 @@ import {
   FIXTURE_CLOUDFLARE_PROVIDER,
   seedCapsuleModel,
   seedProviderConnections,
+  transitionProviderBindingSetForFixture,
   type SeedCapsuleModelOptions,
   type SeededCapsuleModel,
 } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -759,10 +760,14 @@ async function seedRunnableCapsuleModel(
   store: OpenTofuControlStore,
   options: SeedCapsuleModelOptions = {},
 ) {
+  const requiredProviders = options.requiredProviders ?? [
+    FIXTURE_CLOUDFLARE_PROVIDER,
+  ];
   const seeded = await seedCapsuleModel(store, {
     workspaceId: options.workspaceId ?? "ws_test001",
     capsuleId: options.capsuleId ?? "cap_fixture1",
     ...options,
+    requiredProviders,
   });
   if (
     options.installConfig?.installExperience?.projections?.some(
@@ -771,7 +776,7 @@ async function seedRunnableCapsuleModel(
   ) {
     await pinOidcRepositoryManifest(store, seeded.snapshot);
   }
-  await seedProviderConnections(store, seeded.capsule);
+  await seedProviderConnections(store, seeded.capsule, { requiredProviders });
   return seeded;
 }
 
@@ -1545,7 +1550,7 @@ test("capsule plan does not invent Cloudflare Capsule inputs from scope hints", 
       }),
     },
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_cloudflare_scope",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -1601,7 +1606,7 @@ test("requested Cloudflare Capsule input can be filled from provider scope hints
       }),
     },
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_cloudflare_scope",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -1657,7 +1662,7 @@ test("dotted Cloudflare Capsule input merges with provider scope hints", async (
       }),
     },
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_cloudflare_scope",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -1729,7 +1734,7 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
       }),
     },
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_cloudflare_scope",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -2208,7 +2213,7 @@ test("declared generic Capsule Cloudflare inputs and outputs are wired from sour
       }),
     },
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_cloudflare_scope",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -2322,7 +2327,7 @@ test("standard Git Capsule variables stay ordinary OpenTofu inputs", async () =>
     ),
     scopeHints: { accountId: "acct_scope_123" },
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_cloudflare_scope",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -2392,7 +2397,7 @@ test("app_url stays an ordinary OpenTofu input without publicEndpoint mapping", 
       accountId: "ts_acc_takosumi_cloud",
     },
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_cloudflare_managed_plain",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -2579,7 +2584,7 @@ test("explicit Cloudflare Capsule variables override provider scope hint default
     ),
     scopeHints: { accountId: "acct_scope_123" },
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_cloudflare_scope",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -3227,6 +3232,21 @@ test("pre-v1 Resource Shape backing Capsule destroys from state without rebuildi
     sourceId: undefined as never,
   });
 
+  const historicalBindingSet = await store.getProviderBindingSetByCapsule(
+    "cap_fixture1",
+    "preview",
+  );
+  expect(historicalBindingSet).toBeDefined();
+  await transitionProviderBindingSetForFixture(store, {
+    ...historicalBindingSet!,
+    // Pre-v1 rows only carried provider + connection identity. The legacy
+    // mint resolver may match this source-only default to the provider type's
+    // historical local name while exact new runs remain fail-closed.
+    bindings: historicalBindingSet!.bindings.map(
+      ({ moduleLocalName: _moduleLocalName, ...binding }) => binding,
+    ),
+  });
+
   const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
 
   expect(destroy.planRun.operation).toBe("destroy");
@@ -3243,21 +3263,6 @@ test("pre-v1 Resource Shape backing Capsule destroys from state without rebuildi
     subject: { kind: "capsule", id: "cap_fixture1" },
     environment: "preview",
     generation: 1,
-  });
-
-  const historicalBindingSet = await store.getProviderBindingSetByCapsule(
-    "cap_fixture1",
-    "preview",
-  );
-  expect(historicalBindingSet).toBeDefined();
-  await store.putProviderBindingSet({
-    ...historicalBindingSet!,
-    // Pre-v1 rows only carried provider + connection identity. The legacy
-    // mint resolver may match this source-only default to the provider type's
-    // historical local name while exact new runs remain fail-closed.
-    bindings: historicalBindingSet!.bindings.map(
-      ({ moduleLocalName: _moduleLocalName, ...binding }) => binding,
-    ),
   });
 
   await controller.approveRun(destroy.planRun.id);
@@ -3469,7 +3474,10 @@ test("legacy source-less destroy keeps an explicit builtin-only inventory eligib
     seeded.capsule.environment,
   );
   expect(bindingSet).toBeDefined();
-  await store.putProviderBindingSet({ ...bindingSet!, bindings: [] });
+  await transitionProviderBindingSetForFixture(store, {
+    ...bindingSet!,
+    bindings: [],
+  });
 
   const runner = recordingRunner({ requiredProviders: [] });
   const profile = multiProviderRunnerProfile(["*"]);
@@ -3708,7 +3716,7 @@ test("capsule queued plan fails closed when exact prepared inputs are missing or
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_missing_sidecar",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -4001,7 +4009,7 @@ test("capsule plan reuses a preflight CompatibilityReport hint without recheckin
       }),
     },
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_cloudflare_scope",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -4525,7 +4533,7 @@ test("generic OpenTofu runner profile derives pre-init requiredProviders from Pr
     updatedAt: "2026-06-07T00:00:00.000Z",
     verifiedAt: "2026-06-07T00:00:00.000Z",
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_vercel",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -4590,7 +4598,7 @@ test("binding-only provider derivation rejects a missing module-local name", asy
     updatedAt: "2026-08-27T00:00:00.000Z",
     verifiedAt: "2026-08-27T00:00:00.000Z",
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_vercel_legacy_binding",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -4679,7 +4687,7 @@ test("generic OpenTofu runner profile permits direct provider install by default
     updatedAt: "2026-06-07T00:00:00.000Z",
     verifiedAt: "2026-06-07T00:00:00.000Z",
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_vercel_direct_profile",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -4775,7 +4783,7 @@ test("an explicit empty compiler requirement set never falls back to ProviderBin
     updatedAt: "2026-08-27T00:00:00.000Z",
     verifiedAt: "2026-08-27T00:00:00.000Z",
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "bindings_vercel_ignored",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -4820,7 +4828,7 @@ test("an explicit empty compiler requirement set never falls back to ProviderBin
   expect(runner.planJobs[0]?.generatedRoot).toBeUndefined();
 });
 
-test("provider-free Capsule apply ignores a ProviderBinding added after Plan review", async () => {
+test("a ProviderBinding successor invalidates an already reviewed provider-free Plan", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner({
     requiredProviders: [],
@@ -4842,7 +4850,7 @@ test("provider-free Capsule apply ignores a ProviderBinding added after Plan rev
     store,
     cloudflareConnection("conn_added_after_plan"),
   );
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "bindings_added_after_plan",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -4857,14 +4865,16 @@ test("provider-free Capsule apply ignores a ProviderBinding added after Plan rev
     updatedAt: "2026-07-17T00:00:00.000Z",
   });
 
-  const { applyRun } = await controller.createApplyRun({
-    planRunId: planRun.id,
-    expected: applyExpectedGuardFromPlanRun(planRun),
+  await expect(
+    controller.createApplyRun({
+      planRunId: planRun.id,
+      expected: applyExpectedGuardFromPlanRun(planRun),
+    }),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "capsule_execution_authority_changed" },
   });
-
-  expect(applyRun.status).toBe("succeeded");
-  expect(runner.applyJobs).toHaveLength(1);
-  expect(runner.applyJobs[0]?.credentials).toBeUndefined();
+  expect(runner.applyJobs).toHaveLength(0);
 });
 
 test("low-level plan does not infer requiredProviders from ProviderBinding alone", async () => {
@@ -4886,7 +4896,7 @@ test("low-level plan does not infer requiredProviders from ProviderBinding alone
     updatedAt: "2026-06-07T00:00:00.000Z",
     verifiedAt: "2026-06-07T00:00:00.000Z",
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_vercel_direct",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -5243,7 +5253,7 @@ test("capsule apply revalidates CompatibilityReport before provider credential m
     secretRef: "sec_apply_guard",
     createdAt: "2026-06-07T00:00:00.000Z",
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_apply_guard",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -5336,7 +5346,7 @@ test("capsule apply rejects a CompatibilityReport scoped to another Capsule befo
     secretRef: "sec_apply_scope_guard",
     createdAt: "2026-06-07T00:00:00.000Z",
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_apply_scope_guard",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -5400,7 +5410,7 @@ test("capsule apply fails closed when the exact generated-root sidecar is missin
     now: sequenceNow(1),
     newId: deterministicIds(),
   });
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_apply_missing_sidecar",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,
@@ -8422,7 +8432,7 @@ test("Workspace-owned ProviderConnection apply is not capped by host-managed pol
     secretRef: "sec_self_cf",
     createdAt: "2026-06-07T00:00:00.000Z",
   } as never);
-  await store.putProviderBindingSet({
+  await transitionProviderBindingSetForFixture(store, {
     id: "profile_self",
     workspaceId: seeded.capsule.workspaceId,
     capsuleId: seeded.capsule.id,

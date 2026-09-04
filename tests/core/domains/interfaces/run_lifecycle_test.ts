@@ -470,7 +470,7 @@ output "endpoint" {
 
 test("successful Apply atomically records Plan-pinned Interface materialization before a terminal observer crash", async () => {
   const store = new CapturingInterfaceIntentStore();
-  const { capsule, installConfig } = await seedCapsuleModel(store, {
+  const { capsule } = await seedCapsuleModel(store, {
     workspaceId: "workspace_interface_intent_crash",
     capsuleId: "capsule_interface_intent_crash",
     name: "intent-app",
@@ -555,6 +555,10 @@ output "endpoint" {
   });
 
   const { planRun } = await operations.controller.createCapsulePlan(capsule.id);
+  const pinnedInterfaceMaterialization = (
+    await store.getPlanRunInputs(planRun.id)
+  )?.interfaceMaterialization;
+  expect(pinnedInterfaceMaterialization).toBeDefined();
   operations.controller.setTerminalRunObserver(async (run) => {
     if ("planRunId" in run && run.status === "succeeded") {
       throw new Error("simulated terminal observer crash");
@@ -573,10 +577,10 @@ output "endpoint" {
   expect(store.interfaceMaterializationIntent).toMatchObject({
     workspaceId: capsule.workspaceId,
     capsuleId: capsule.id,
-    installConfigId: installConfig.id,
+    installConfigId: pinnedInterfaceMaterialization!.installConfigId,
     status: "pending",
     attempts: 0,
-    blueprints: installConfig.interfaceBlueprints,
+    blueprints: pinnedInterfaceMaterialization!.blueprints,
   });
   expect(store.interfaceMaterializationIntent?.blueprintsDigest).toMatch(
     /^sha256:[0-9a-f]{64}$/,

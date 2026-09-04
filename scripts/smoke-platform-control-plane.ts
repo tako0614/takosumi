@@ -487,6 +487,7 @@ interface RequestOptions {
   readonly binary?: Uint8Array;
   readonly allowEmpty?: boolean;
   readonly timeoutMs?: number;
+  readonly idempotencyKey?: string;
 }
 
 class RequestTimeoutError extends Error {
@@ -633,6 +634,7 @@ interface RunRecord {
   readonly status: string;
   readonly type: string;
   readonly sourceSnapshotId?: string;
+  readonly compatibilityReportId?: string;
   readonly policyStatus?: string;
   readonly backupId?: string;
   readonly restoreStateGeneration?: number;
@@ -2646,9 +2648,9 @@ function failedNextAction(input: {
   if (
     input.error instanceof RequestTimeoutError &&
     input.error.method === "POST" &&
-    /\/capsules\/[^/]+\/plan$/u.test(input.error.path)
+    /\/workspaces\/[^/]+\/install-plans$/u.test(input.error.path)
   ) {
-    return "The Capsule plan request timed out before returning a plan run id. Check the scratch Workspace for a pending smoke Capsule run with this app name, verify the temporary Provider Connection is revoked, then inspect platform worker logs for the source sync, compatibility check, or plan creation step that did not return.";
+    return "The install coordinator request timed out before returning a plan run id. Check the scratch Workspace for the idempotent smoke install, verify the temporary Provider Connection is retained until recovery is complete, then reconcile the exact install plan.";
   }
   if (input.connectionRevokeSkippedReason !== undefined) {
     return "Inspect the failed cleanup run, destroy the recorded Capsule after fixing the blocker, then revoke the retained ProviderConnection and rerun the smoke.";
@@ -3144,48 +3146,51 @@ async function deployGitSourceCapsule(
     options,
     input.workspaceId,
   );
-  const capsule = await createSourceCapsule(options, {
-    workspaceId: input.workspaceId,
-    sourceId: source.id,
-    installConfigId,
-  });
   const compatibility = await createSmokeSourceCompatibilityCheck(options, {
     sourceId: source.id,
     sourceSnapshotId,
-    capsuleId: capsule.id,
+    capsuleName: options.appName,
+    installConfigId,
+    compileInstallUx: options.installConfigId === undefined,
   });
-  if (input.providerBindings.length > 0) {
-    const resolvedProviderBindings =
-      resolveSmokeProviderBindingsFromCompatibility(
-        input.providerBindings,
-        compatibility.report.rootProviderRequirements,
-      );
-    await putCapsuleProviderBindings(options, {
-      capsuleId: capsule.id,
-      bindings: resolvedProviderBindings,
-    });
+  if (
+    compatibility.report.level !== "ready" ||
+    compatibility.run?.type !== "compatibility_check" ||
+    compatibility.run.status !== "succeeded" ||
+    compatibility.run.compatibilityReportId !== compatibility.report.id
+  ) {
+    throw new Error(
+      "source compatibility check did not return one exact successful declaration",
+    );
   }
-  const plan = await requestJson<{ readonly run: RunRecord }>({
-    baseUrl: options.url,
-    token: options.accountSessionToken,
-    method: "POST",
-    path: `${API_PREFIX}/capsules/${encodeURIComponent(capsule.id)}/plan`,
-    timeoutMs: options.deployTimeoutSeconds * 1000,
-    body: {
-      ...(options.runnerProfileId ? { runnerId: options.runnerProfileId } : {}),
-      compatibilityReportId: compatibility.report.id,
-    },
+  const resolvedProviderBindings =
+    resolveSmokeProviderBindingsFromCompatibility(
+      input.providerBindings,
+      compatibility.report.rootProviderRequirements,
+    );
+  const reviewedInstallConfigId =
+    compatibility.repositoryInstallUx?.status === "accepted"
+      ? compatibility.repositoryInstallUx.installConfigId
+      : installConfigId;
+  const coordinated = await createReviewableSmokeInstallPlan(options, {
+    workspaceId: input.workspaceId,
+    sourceId: source.id,
+    sourceSnapshotId,
+    compatibilityCheckRunId: compatibility.run.id,
+    compatibilityReportId: compatibility.report.id,
+    installConfigId: reviewedInstallConfigId,
+    providerBindings: resolvedProviderBindings,
   });
   return {
-    capsule,
-    run: plan.run,
-    planRun: plan.run,
+    capsule: { id: coordinated.capsuleId, name: options.appName },
+    run: coordinated.run,
+    planRun: coordinated.run,
     created: true,
     sourceId: source.id,
     sourceSyncRunId: sourceSyncRun.id,
     sourceSnapshotId,
     sourceSnapshotTransport,
-    installConfigId,
+    installConfigId: coordinated.installConfigId,
     compatibilityReportId: compatibility.report.id,
   };
 }
@@ -3239,7 +3244,9 @@ async function createSmokeSourceCompatibilityCheck(
   input: {
     readonly sourceId: string;
     readonly sourceSnapshotId: string;
-    readonly capsuleId: string;
+    readonly capsuleName: string;
+    readonly installConfigId: string;
+    readonly compileInstallUx: boolean;
   },
 ): Promise<{
   readonly report: {
@@ -3248,6 +3255,10 @@ async function createSmokeSourceCompatibilityCheck(
     readonly rootProviderRequirements: readonly SmokeCompatibilityRootProviderRequirement[];
   };
   readonly run?: RunRecord;
+  readonly repositoryInstallUx?: {
+    readonly status: "accepted" | "absent" | "invalid";
+    readonly installConfigId?: string;
+  };
 }> {
   const response = await requestJson<{
     readonly report?: {
@@ -3256,6 +3267,10 @@ async function createSmokeSourceCompatibilityCheck(
       readonly rootProviderRequirements?: unknown;
     };
     readonly run?: RunRecord;
+    readonly repositoryInstallUx?: {
+      readonly status?: string;
+      readonly installConfigId?: string;
+    };
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
@@ -3265,7 +3280,9 @@ async function createSmokeSourceCompatibilityCheck(
     )}/compatibility-check`,
     body: smokeSourceCompatibilityCheckBody({
       sourceSnapshotId: input.sourceSnapshotId,
-      capsuleId: input.capsuleId,
+      capsuleName: input.capsuleName,
+      installConfigId: input.installConfigId,
+      compileInstallUx: input.compileInstallUx,
       modulePath: options.modulePath,
     }),
   });
@@ -3286,21 +3303,37 @@ async function createSmokeSourceCompatibilityCheck(
       rootProviderRequirements,
     },
     ...(response.run ? { run: response.run } : {}),
+    ...(response.repositoryInstallUx?.status === "accepted" &&
+    response.repositoryInstallUx.installConfigId
+      ? {
+          repositoryInstallUx: {
+            status: "accepted" as const,
+            installConfigId: response.repositoryInstallUx.installConfigId,
+          },
+        }
+      : response.repositoryInstallUx?.status === "absent" ||
+          response.repositoryInstallUx?.status === "invalid"
+        ? {
+            repositoryInstallUx: {
+              status: response.repositoryInstallUx.status,
+            },
+          }
+        : {}),
   };
 }
 
 export function smokeSourceCompatibilityCheckBody(input: {
   readonly sourceSnapshotId: string;
-  readonly capsuleId: string;
+  readonly capsuleName: string;
+  readonly installConfigId: string;
+  readonly compileInstallUx: boolean;
   readonly modulePath?: string;
-}): {
-  readonly sourceSnapshotId: string;
-  readonly capsuleId: string;
-  readonly modulePath?: string;
-} {
+}): Readonly<Record<string, unknown>> {
   return {
     sourceSnapshotId: input.sourceSnapshotId,
-    capsuleId: input.capsuleId,
+    ...(input.compileInstallUx
+      ? { compileInstallUx: true, capsuleName: input.capsuleName }
+      : { installConfigId: input.installConfigId }),
     ...(input.modulePath ? { modulePath: input.modulePath } : {}),
   };
 }
@@ -3402,32 +3435,7 @@ export function isSelectableCapsuleInstallConfig(
   return true;
 }
 
-async function createSourceCapsule(
-  options: PlatformControlPlaneSmokeOptions,
-  input: {
-    readonly workspaceId: string;
-    readonly sourceId: string;
-    readonly installConfigId: string;
-  },
-): Promise<{ readonly id: string; readonly name?: string }> {
-  const response = await requestJson<CapsuleCreateSmokeResponse>({
-    baseUrl: options.url,
-    token: options.accountSessionToken,
-    method: "POST",
-    path: `${API_PREFIX}/workspaces/${encodeURIComponent(
-      input.workspaceId,
-    )}/capsules`,
-    body: smokeSourceCapsuleCreateBody(options, input),
-  });
-  const created = createdCapsuleFromCreateResponse(response);
-  const id = created.id;
-  return {
-    id,
-    ...(created.name ? { name: created.name } : {}),
-  };
-}
-
-export function smokeSourceCapsuleCreateBody(
+export function smokeGitInstallPlanBody(
   options: Pick<
     PlatformControlPlaneSmokeOptions,
     | "appName"
@@ -3440,43 +3448,50 @@ export function smokeSourceCapsuleCreateBody(
     | "storeMetadata"
   >,
   input: {
+    readonly sourceName: string;
     readonly sourceId: string;
+    readonly sourceSnapshotId: string;
+    readonly compatibilityCheckRunId: string;
+    readonly compatibilityReportId: string;
     readonly installConfigId: string;
+    readonly providerBindings: readonly SmokeProviderBindingInput[];
   },
 ): Readonly<Record<string, unknown>> {
   return {
-    name: options.appName,
-    environment: options.environment,
-    sourceId: input.sourceId,
-    installConfigId: input.installConfigId,
-    ...(options.modulePath ? { modulePath: options.modulePath } : {}),
-    ...(options.runnerProfileId
-      ? { runnerProfileId: options.runnerProfileId }
-      : {}),
-    outputAllowlist: options.outputAllowlist,
-    vars: options.vars,
-    ...(options.interfaceBlueprints && options.interfaceBlueprints.length > 0
-      ? { interfaceBlueprints: options.interfaceBlueprints }
-      : {}),
-    ...(options.storeMetadata ? { store: options.storeMetadata } : {}),
-  };
-}
-
-export interface CapsuleCreateSmokeResponse {
-  readonly capsule?: { readonly id?: string; readonly name?: string };
-}
-
-export function createdCapsuleFromCreateResponse(
-  response: CapsuleCreateSmokeResponse,
-): { readonly id: string; readonly name?: string } {
-  const created = response.capsule;
-  const id = created?.id;
-  if (!id) {
-    throw new Error("capsule create response did not include id");
-  }
-  return {
-    id,
-    ...(created?.name ? { name: created.name } : {}),
+    source: {
+      name: input.sourceName,
+      url: options.sourceGitUrl,
+      ref: options.sourceRef ?? "HEAD",
+      path: options.sourcePath ?? ".",
+    },
+    capsule: {
+      name: options.appName,
+      environment: options.environment,
+    },
+    options: {
+      modulePath: options.modulePath ?? ".",
+      providerBindings: smokeGitInstallPlanProviderBindings(
+        input.providerBindings,
+      ),
+    },
+    preflight: {
+      sourceId: input.sourceId,
+      sourceSnapshotId: input.sourceSnapshotId,
+      compatibilityCheckRunId: input.compatibilityCheckRunId,
+      compatibilityReportId: input.compatibilityReportId,
+      installConfigId: input.installConfigId,
+    },
+    variables: options.vars,
+    initialConfiguration: {
+      ...(options.runnerProfileId
+        ? { runnerProfileId: options.runnerProfileId }
+        : {}),
+      outputAllowlist: options.outputAllowlist,
+      ...(options.interfaceBlueprints !== undefined
+        ? { interfaceBlueprints: options.interfaceBlueprints }
+        : {}),
+      ...(options.storeMetadata ? { store: options.storeMetadata } : {}),
+    },
   };
 }
 
@@ -3500,22 +3515,93 @@ function capsuleCurrentStateVersionId(
   return capsule.currentStateVersionId;
 }
 
-async function putCapsuleProviderBindings(
+interface SmokeInstallPlanResponse {
+  readonly installPlan: {
+    readonly id: string;
+    readonly phase: string;
+    readonly capsuleId?: string;
+    readonly installConfigId?: string;
+    readonly planRunId?: string;
+    readonly diagnostic?: { readonly code?: string; readonly message?: string };
+  };
+  readonly nextAction: "reconcile" | "review_run" | "none";
+}
+
+async function createReviewableSmokeInstallPlan(
   options: PlatformControlPlaneSmokeOptions,
   input: {
-    readonly capsuleId: string;
-    readonly bindings: readonly SmokeProviderBindingInput[];
+    readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly sourceSnapshotId: string;
+    readonly compatibilityCheckRunId: string;
+    readonly compatibilityReportId: string;
+    readonly installConfigId: string;
+    readonly providerBindings: readonly SmokeProviderBindingInput[];
   },
-): Promise<void> {
-  await requestJson({
+): Promise<{
+  readonly capsuleId: string;
+  readonly installConfigId: string;
+  readonly run: RunRecord;
+}> {
+  const sourceName = options.sourceName ?? `${options.appName}-source`;
+  const requestBody = smokeGitInstallPlanBody(options, {
+    ...input,
+    sourceName,
+  });
+  const idempotencyKey = `smoke-install-${digestJson({
+    workspaceId: input.workspaceId,
+    sourceSnapshotId: input.sourceSnapshotId,
+    capsuleName: options.appName,
+    requestBody,
+  }).slice("sha256:".length, "sha256:".length + 32)}`;
+  let response = await requestJson<SmokeInstallPlanResponse>({
     baseUrl: options.url,
     token: options.accountSessionToken,
-    method: "PUT",
-    path: `${API_PREFIX}/capsules/${encodeURIComponent(
-      input.capsuleId,
-    )}/provider-bindings`,
-    body: smokeCapsuleProviderBindingsBody(input),
+    method: "POST",
+    path: `${API_PREFIX}/workspaces/${encodeURIComponent(
+      input.workspaceId,
+    )}/install-plans`,
+    body: requestBody,
+    idempotencyKey,
+    timeoutMs: options.deployTimeoutSeconds * 1000,
   });
+  const deadline = Date.now() + options.deployTimeoutSeconds * 1000;
+  while (response.nextAction === "reconcile") {
+    if (Date.now() >= deadline) {
+      throw new Error("install coordinator did not return a reviewable Plan in time");
+    }
+    response = await requestJson<SmokeInstallPlanResponse>({
+      baseUrl: options.url,
+      token: options.accountSessionToken,
+      method: "POST",
+      path: `${API_PREFIX}/install-plans/${encodeURIComponent(
+        response.installPlan.id,
+      )}/reconcile`,
+      timeoutMs: Math.max(1, deadline - Date.now()),
+    });
+  }
+  const plan = response.installPlan;
+  if (
+    response.nextAction !== "review_run" ||
+    plan.phase !== "reviewable" ||
+    !plan.capsuleId ||
+    !plan.installConfigId ||
+    !plan.planRunId
+  ) {
+    throw new Error(
+      `install coordinator ended without a reviewable Plan (${plan.diagnostic?.code ?? plan.phase})`,
+    );
+  }
+  const run = await requestJson<{ readonly run: RunRecord }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/runs/${encodeURIComponent(plan.planRunId)}`,
+  });
+  return {
+    capsuleId: plan.capsuleId,
+    installConfigId: plan.installConfigId,
+    run: run.run,
+  };
 }
 
 function parseSmokeCompatibilityRootProviderRequirements(
@@ -3615,22 +3701,18 @@ export function resolveSmokeProviderBindingsFromCompatibility(
   });
 }
 
-export function smokeCapsuleProviderBindingsBody(input: {
-  readonly bindings: readonly SmokeProviderBindingInput[];
-}): Readonly<Record<string, unknown>> {
-  return {
-    bindings: [...input.bindings]
-      .sort(compareSmokeProviderBindings)
-      .map((binding) => ({
-        provider: binding.provider,
-        ...(binding.moduleLocalName
-          ? { moduleLocalName: binding.moduleLocalName }
-          : {}),
-        ...(binding.childAlias ? { childAlias: binding.childAlias } : {}),
-        ...(binding.rootAlias ? { rootAlias: binding.rootAlias } : {}),
-        connectionId: binding.connectionId,
-      })),
-  };
+export function smokeGitInstallPlanProviderBindings(
+  bindings: readonly SmokeProviderBindingInput[],
+): readonly Readonly<Record<string, string>>[] {
+  return [...bindings].sort(compareSmokeProviderBindings).map((binding) => ({
+    provider: binding.provider,
+    ...(binding.moduleLocalName
+      ? { moduleLocalName: binding.moduleLocalName }
+      : {}),
+    ...(binding.childAlias ? { childAlias: binding.childAlias } : {}),
+    ...(binding.rootAlias ? { rootAlias: binding.rootAlias } : {}),
+    connectionId: binding.connectionId,
+  }));
 }
 
 async function ensurePlanReadyForApply(
@@ -6915,6 +6997,16 @@ export async function fetchPinnedControlPlaneRequest(
       ? {}
       : { "content-length": String(requestBody.byteLength) }),
   };
+  if (options.idempotencyKey !== undefined) {
+    if (
+      !options.idempotencyKey ||
+      new TextEncoder().encode(options.idempotencyKey).byteLength > 256 ||
+      /[\0\r\n]/u.test(options.idempotencyKey)
+    ) {
+      throw new Error("Takosumi control-plane Idempotency-Key is invalid");
+    }
+    headers["idempotency-key"] = options.idempotencyKey;
+  }
   let result: { readonly response: Response; readonly body: string };
   try {
     result = await fetchPublicCheckAttempt(
@@ -8945,15 +9037,21 @@ async function runSelfTest(): Promise<void> {
   ) {
     throw new Error("self-test built-in Interface blueprint is not credential-free");
   }
-  const capsuleCreateBody = smokeSourceCapsuleCreateBody(options, {
+  const installPlanBody = smokeGitInstallPlanBody(options, {
+    sourceName: "selftest-source",
     sourceId: "src_selftest",
+    sourceSnapshotId: "snap_selftest",
+    compatibilityCheckRunId: "ccr_selftest",
+    compatibilityReportId: "caprep_selftest",
     installConfigId: "cfg_selftest",
+    providerBindings: [],
   });
   if (
-    !Array.isArray(capsuleCreateBody.interfaceBlueprints) ||
-    capsuleCreateBody.interfaceBlueprints.length !== 1
+    !isRecord(installPlanBody.initialConfiguration) ||
+    !Array.isArray(installPlanBody.initialConfiguration.interfaceBlueprints) ||
+    installPlanBody.initialConfiguration.interfaceBlueprints.length !== 1
   ) {
-    throw new Error("self-test Capsule create body omitted Interface blueprints");
+    throw new Error("self-test install coordinator omitted Interface blueprints");
   }
   assertSmokeSerializationSafe(result, options);
   expectSafeSerializationSelfTest();
@@ -9380,7 +9478,7 @@ async function runSelfTest(): Promise<void> {
     connectionRevoked: true,
     error: new RequestTimeoutError(
       "POST",
-      `${API_PREFIX}/capsules/cap_selftest/plan`,
+      `${API_PREFIX}/workspaces/ws_selftest/install-plans`,
       1,
     ),
   });
@@ -9388,7 +9486,7 @@ async function runSelfTest(): Promise<void> {
     deployTimeout.status !== "failed" ||
     deployTimeout.capsuleId !== undefined ||
     deployTimeout.planRunId !== undefined ||
-    !deployTimeout.nextAction?.includes("Capsule plan request timed out")
+    !deployTimeout.nextAction?.includes("install coordinator request timed out")
   ) {
     throw new Error("self-test deploy timeout failed result shape is wrong");
   }
@@ -9535,7 +9633,7 @@ async function runSelfTest(): Promise<void> {
         baseUrl: "https://app-staging.takosumi.com",
         token: "redacted",
         method: "POST",
-        path: `${API_PREFIX}/capsules/cap_selftest/plan`,
+        path: `${API_PREFIX}/workspaces/ws_selftest/install-plans`,
         timeoutMs: 1,
         body: {},
       }),

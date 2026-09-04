@@ -154,7 +154,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 88 件です。
+次の 86 件です。
 
 **Account views**
 
@@ -202,7 +202,6 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | POST     | `/api/v1/workspaces/{workspaceId}/projects`                | Project を作る                               |
 | GET      | `/api/v1/projects/{projectId}`                             | Project を読む                               |
 | GET      | `/api/v1/workspaces/{workspaceId}/capsules`                | Capsule を一覧する                           |
-| POST     | `/api/v1/workspaces/{workspaceId}/capsules`                | Capsule を作る                               |
 | GET      | `/api/v1/capsules/{capsuleId}`                             | Capsule を読む                               |
 | POST     | `/api/v1/capsules/{capsuleId}/install-config-re-adoptions` | SourceSnapshot の InstallConfig を再採用する |
 | PATCH    | `/api/v1/capsules/{capsuleId}`                             | Capsule を更新する                           |
@@ -214,18 +213,19 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | POST     | `/api/v1/capsules/{capsuleId}/dependencies`                | 依存を作る                                   |
 | DELETE   | `/api/v1/dependencies/{dependencyId}`                      | 依存を削除する                               |
 | GET      | `/api/v1/capsules/{capsuleId}/provider-bindings`           | ProviderBinding の選択を読む                 |
-| PUT      | `/api/v1/capsules/{capsuleId}/provider-bindings`           | ProviderBinding の選択を置き換える           |
 | GET      | `/api/v1/workspaces/{workspaceId}/current-state-versions`  | 現在の StateVersion をまとめて読む           |
 | GET      | `/api/v1/capsule-configs`                                  | Capsule 作成設定を一覧する                   |
 | GET      | `/api/v1/capsule-configs/{capsuleConfigId}`                | Capsule 作成設定を読む                       |
-| PATCH    | `/api/v1/capsule-configs/{capsuleConfigId}`                | Capsule 作成設定を更新する                   |
 
-Capsule を作ってから実行するには、まず計画を作り、内容を確認してから適用します。
+新しい Capsule は `POST /api/v1/workspaces/{workspaceId}/install-plans` から
+exact SourceSnapshot と成功済み compatibility declaration を固定して作成し、返された
+Plan Run を確認してから適用します。Workspace Capsule collection の公開面は GET のみです。
 Run は必ず計画の作成から始まります。
 
 | メソッド | パス                                        | 説明                         |
 | -------- | ------------------------------------------- | ---------------------------- |
 | POST     | `/api/v1/capsules/{capsuleId}/plan`         | 計画 Run を作る              |
+| POST     | `/api/v1/capsules/{capsuleId}/configuration-plans` | dirty 設定を immutable successor と review-only Plan にする |
 | POST     | `/api/v1/capsules/{capsuleId}/destroy-plan` | 破棄計画 Run を作る          |
 | POST     | `/api/v1/capsules/{capsuleId}/drift-check`  | 差分確認 Run を作る          |
 | POST     | `/api/v1/capsules/{capsuleId}/backups`      | Capsule のバックアップを作る |
@@ -253,10 +253,47 @@ Run は必ず計画の作成から始まります。
 | POST     | `/api/v1/install-plans/{installPlanId}/reconcile` | 明示的に一段だけ進める                    |
 
 作成には `Idempotency-Key` が必須です。同じ Workspace・actor・key と同じ正規化 request
-は同じ record を返し、内容が異なれば 409 になります。coordinator が保持するのは Source、
+は同じ record を返し、内容が異なれば 409 になります。public projection が含むのは Source、
 SourceSnapshot、InstallConfig、Capsule、Plan Run の参照と bounded diagnostic だけです。
-variable 値、credential、token、Output 値は受け付けません。`reviewable` になった後の
-承認と apply は `Run` API だけが所有し、install-plan 専用 apply route はありません。
+作成時に渡した private variable 値は atomic initial authority commit まで非公開 coordinator
+state にだけ保持され、response には投影されず、commit 直後に coordinator から削除されます。
+credential、token、Output 値は受け付けません。
+`reviewable` になった後の承認と apply は `Run` API だけが所有し、install-plan 専用 apply
+route はありません。
+
+`configuration-plans` は、現在の private InstallConfig に closed な
+`variablePatch`（`set` / `remove`）、value-free ProviderBinding 選択、Interface
+blueprint と GET-issued `authorityGuard` を適用します。未指定の値を公開 projection
+から再構成することはなく、現在の module、policy、source、runner、lifecycle、output
+rules、required Interfaces、runtime materialization、provenance を保持した immutable
+successor を作ります。InstallConfig pointer、ProviderBindingSet、未解決 Interface
+intent、execution-authority epoch は同じ CAS で更新され、その後に review-only Plan
+だけを作ります。
+
+repository manifest を採用した Capsule では exact manifest の user input 宣言だけが
+`variablePatch` を許可します。generic OpenTofu Capsule では、保存済み contract digest と
+exact SourceSnapshot の successful compatibility declaration を再照合し、その宣言にある
+名前・型・default 有無だけを authority にします。latest Snapshot や manifest の存在は
+推測しません。
+
+同じ `Idempotency-Key` と同じ request は、失われた応答を再送しても同じ
+`targetInstallConfigId` と durable `planRunId` に収束し、Plan 行を追加作成しません。
+insert-only successor または authority CAS の acknowledgement が canonical Plan の durable
+化より前に失われた場合、それらは操作完了ではないため、retry は残りの処理と Plan を完了して
+`201` / `replayed:false` を返します。canonical Plan が既に存在する場合だけ（Plan 永続化後の
+acknowledgement loss を含む）、retry は完了済み操作を observe して `200` /
+`replayed:true` を返します。別の request を
+同じ key で送ると 409 です。reserved redaction sentinel、invalid patch/remove、stale guard、
+destroyed/disabled、in-flight revision、`queued`/`running` Plan または Apply は拒否されます。
+これは in-flight-work fence の status 条件であり、unsafe/ambiguous な runtime evidence は
+別に fail closed です。computed/reviewable Plan は epoch advance で supersede され、
+transition を block しません。Apply はこの endpoint では開始されません。
+
+`PATCH /api/v1/capsule-configs/{id}` と
+`PUT /api/v1/capsules/{id}/provider-bindings` は全 row で廃止されています。認証・Workspace
+認可を先に行った後、必ず `405 Method Not Allowed` と `Allow: GET` を返し、marker のない
+legacy row も例外にしません。既存 Capsule の deployment intent 更新は
+`configuration-plans` または専用の re-adoption operation だけが所有します。
 
 作成 body の provider 選択は provider source だけの map ではなく、scan で得た
 module-local tuple をそのまま指定します。
@@ -279,6 +316,13 @@ module-local tuple をそのまま指定します。
         "connectionId": "conn_takoform"
       }
     ]
+  },
+  "preflight": {
+    "sourceId": "src_exact",
+    "sourceSnapshotId": "snap_exact",
+    "compatibilityCheckRunId": "run_compatibility_exact",
+    "compatibilityReportId": "report_exact",
+    "installConfigId": "cfg_exact"
   }
 }
 ```
@@ -287,6 +331,9 @@ module-local tuple をそのまま指定します。
 tree scan で検出された archive-relative module です。`providerBindings` の
 `provider` / `moduleLocalName` / optional `childAlias` は選択 module の requirement
 tuple と完全一致しなければならず、`connectionId` は既存 Connection の参照だけです。
+`preflight` は同じ SourceSnapshot/module に対する successful/ready compatibility declaration
+を exact id で固定します。Dashboard と smoke はこの create-only coordinator を使い、先に
+Capsule を作って public binding PUT で補完することはありません。
 
 **Git revision plan**
 
@@ -365,7 +412,9 @@ value-free projection です。
 
 実際の `capsule` は通常の public Capsule projection であり、上の短縮例は shape の説明
 です。再送は同じ key/request の canonical target を返し、別 request、stale guard、
-current/target record の digest・JSON drift、unsafe な Run/未消費 Plan では 409 になります。
+current/target record の digest・JSON drift、unsafe/ambiguous な lifecycle evidence、
+`queued`/`running` Plan または Apply では 409 になります。computed/reviewable Plan は
+epoch transition で supersede されます。
 認証されていない caller は 401、Workspace にアクセスできない caller は 403、body や
 header の validation failure は 400 です。再採用は既存 row の patch ではなく immutable な
 derived InstallConfig の作成と Capsule の authority-fenced rebind です。Plan、approval、
@@ -388,10 +437,11 @@ proof を内部で束ねます。同じ proof は immutable derived target の p
 
 この例外でも各 store は同じ pointer/epoch CAS の中で、latest decisive candidate がその
 exact failed create/update Apply であること、exact Run / StateVersion / Output row、whole
-current/target InstallConfig JSON、whole Capsule JSON、queued/running Apply がないこと、current
-unconsumed Plan がないことを再検証します。receipt/row drift、provider 成否の不確実性、
-`providerApplySucceeded=false` の persisted partial state、destroy/restore、新しい safety
-candidate はすべて 409 です。成功が変更するのは `installConfigId`、`updatedAt`、epoch + 1
+current/target InstallConfig JSON、whole Capsule JSON、`queued`/`running` Plan または Apply が
+ないことを再検証します。computed/reviewable Plan は epoch advance で supersede されます。
+receipt/row drift、provider 成否の不確実性、`providerApplySucceeded=false` の persisted partial
+state、destroy/restore、新しい safety candidate はすべて 409 です。成功が変更するのは
+`installConfigId`、`updatedAt`、epoch + 1
 だけで、`status=error`、state/output pointer、generation、`runtimeSafety=unknown` は維持され、
 Plan や provider を dispatch しません。old Plan は新しい epoch で拒否され、target
 InstallConfig を読む fresh Plan とその successful Apply だけが Capsule を `active` / `safe`
@@ -455,7 +505,8 @@ Run は Capsule への操作を 1 種類の記録エントリにまとめたも�
 `source_sync` / `compatibility_check` / `plan` / `apply` / `destroy_plan` /
 `destroy_apply` / `drift_check` / `backup` / `restore` のいずれかになります。
 
-Git checkout からビルドする Capsule は、作成時に任意の `sourceBuild` を指定できます。
+Git checkout からビルドする Capsule は、install plan の exact preflight と
+`initialConfiguration.sourceBuild` で review 済み build contract を固定できます。
 これはユーザーが明示的に承認する Capsule 設定です。
 
 ```json

@@ -511,9 +511,10 @@ test("repository install preview recovers only its full deterministic config ide
         }
         return stored;
       },
-      putInstallConfig: async (config: InstallConfig) => {
+      createInstallConfigIfAbsent: async (config: InstallConfig) => {
+        if (stored) return false;
         stored = config;
-        return config;
+        return true;
       },
     },
   } as unknown as ControlPlaneOperations;
@@ -598,7 +599,7 @@ test("repository runtime profile is carried into the deterministic preview", asy
         getInstallConfig: async () => {
           throw new OpenTofuControllerError("not_found", "missing");
         },
-        putInstallConfig: async (config: InstallConfig) => config,
+        createInstallConfigIfAbsent: async () => true,
       },
     } as unknown as ControlPlaneOperations,
     source,

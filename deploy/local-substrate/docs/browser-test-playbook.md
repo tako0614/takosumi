@@ -43,13 +43,19 @@ After `ca-install.sh` Chrome trusts the Pebble-issued certs (no green-lock warni
 4. Expect: redirect back to `https://app.takosumi.test/sign-in/callback?code=...`
 5. Expect: the dashboard session is established.
 
-## Smoke flow E — deploy control API
+## Smoke flow E — deployment authority
 
-1. Run the deploy control smoke:
+Capsule の exact-provenance install、Plan / Apply、run/state/output evidence は
+local internal API ではなく account-plane の authority を通す platform smoke が正本です。
+
+1. repo root から対象 platform と credential を明示して実行します:
    ```bash
-   bash scripts/cli-smoke.sh
+   bun run smoke:platform-control-plane -- --help
    ```
-2. Expect: runner profile lookup, plan Run, apply Run, Capsule read, and run/state/output evidence list all succeed through the local worker probe API.
+2. 実際の invocation では exact Git SourceSnapshot と successful compatibility
+   declaration を作り、install plan が返す review Run から apply へ進むことを確認します。
+3. `scripts/smoke.sh` は local substrate 自体の health/isolation に限定し、この
+   deployment-authority smoke を重複実装しません。
 
 Dynamic `<id>.app.takosumi.test` projection is deferred. Takosumi v1's public deploy control API does not expose raw desired-route listings; route projection must come from a future operator-internal source.
 
