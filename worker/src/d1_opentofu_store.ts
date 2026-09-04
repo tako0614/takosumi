@@ -110,6 +110,8 @@ import type {
   CapsulePatch,
   CapsuleStateVersionGuard,
   OpenTofuControlStore,
+  PreparePlanRunInput,
+  PreparePlanRunResult,
   PlanRunInputs,
   PublicHostReservation,
   RecoverableOpenTofuRunListOptions,
@@ -129,6 +131,7 @@ import type {
 } from "../../core/domains/deploy-control/store.ts";
 import {
   assertSourceSyncSuccessCommit,
+  assertPlanRunPreparation,
   assertCapsuleInterfaceMaterializationIntentClaimInput,
   assertCapsuleInterfaceMaterializationIntentSettlementInput,
   assertRetryCapsuleInterfaceMaterializationIntentInput,
@@ -149,7 +152,10 @@ import {
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
   parseStoredCapsuleCompatibilityProviderGraph,
+  planRunPreparationPersistsInputs,
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
+  planRunPreparationExactlyMatches,
+  PlanRunPreparationConflictError,
   runtimeSecretRetirementDispatchAttempt,
   sourceSnapshotsExactlyMatch,
   storedCapsuleCompatibilityProviderGraph,
@@ -1082,6 +1088,91 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       runJson: JSON.stringify(run),
     });
     return run;
+  }
+
+  async preparePlanRun(
+    input: PreparePlanRunInput,
+  ): Promise<PreparePlanRunResult> {
+    assertD1AtomicCommitBatch(this.db, "preparePlanRun");
+    assertPlanRunPreparation(input);
+    await this.#ensureSchema();
+    const run = input.run;
+    const statements = [
+      this.#orm.insert(schema.runs).values({
+        id: run.id,
+        runGroupId: null,
+        workspaceId: run.workspaceId,
+        sourceId: null,
+        capsuleId: run.capsuleId ?? null,
+        environment: run.capsuleContext?.environment ?? null,
+        type: planRunType(run),
+        status: run.status,
+        leaseToken: null,
+        heartbeatAt: run.heartbeatAt ?? null,
+        runJson: run,
+        createdAt: String(run.createdAt),
+      }),
+      ...(input.dependencySnapshot
+        ? [
+            this.#orm.insert(schema.dependencySnapshots).values({
+              id: input.dependencySnapshot.id,
+              runId: input.dependencySnapshot.runId,
+              recordJson: input.dependencySnapshot,
+              createdAt: input.dependencySnapshot.createdAt,
+            }),
+          ]
+        : []),
+      ...(planRunPreparationPersistsInputs(run)
+        ? [
+            this.#orm.insert(schema.planRunInputs).values({
+              planRunId: input.inputs.planRunId,
+              inputsJson: input.inputs,
+            }),
+          ]
+        : []),
+    ];
+    try {
+      await this.#orm.batch(
+        statements as [(typeof statements)[number], ...typeof statements],
+      );
+      return { status: "created", run };
+    } catch (error) {
+      // Plain INSERTs make duplicate preparation fail the whole D1 batch. Adopt
+      // only an already-complete preparation with the same immutable execution
+      // identity; never fill a torn legacy row from mutable current state.
+      // Plan/Apply/Source-sync rows share one primary-key namespace. The typed
+      // Plan accessor intentionally filters by kind, so a cross-kind collision
+      // would otherwise surface the raw D1 UNIQUE error instead of the store's
+      // immutable-preparation conflict contract.
+      const rawCurrentRun = await this.#getRawRun<StoredRunRecord>(run.id);
+      const currentRun = coerceRunRowStatus(
+        rawCurrentRun && isPlanRunRecord(rawCurrentRun)
+          ? rawCurrentRun
+          : undefined,
+      );
+      const currentInputs = await this.getPlanRunInputs(run.id);
+      const currentSnapshot = currentRun?.dependencySnapshotId
+        ? await this.getDependencySnapshot(currentRun.dependencySnapshotId)
+        : undefined;
+      if (
+        planRunPreparationExactlyMatches(
+          currentRun,
+          currentInputs,
+          currentSnapshot,
+          input,
+        )
+      ) {
+        return { status: "existing", run: currentRun };
+      }
+      if (
+        rawCurrentRun !== undefined ||
+        currentInputs !== undefined ||
+        currentSnapshot !== undefined
+      ) {
+        throw new PlanRunPreparationConflictError(run.id);
+      }
+      throw error;
+    }
   }
 
   async getPlanRun(id: string): Promise<PlanRun | undefined> {
@@ -5072,6 +5163,17 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return row?.runJson as T | undefined;
   }
 
+  /** Reads a shared runs row without narrowing to one typed run family. */
+  async #getRawRun<T>(id: string): Promise<T | undefined> {
+    await this.#ensureSchema();
+    const row = await this.#orm
+      .select({ runJson: schema.runs.runJson })
+      .from(schema.runs)
+      .where(eq(schema.runs.id, id))
+      .get();
+    return row?.runJson as T | undefined;
+  }
+
   async #ensureSchema(): Promise<void> {
     // The default store deliberately keeps this check outside the memoized
     // schema promise: an operator can acquire the maintenance fence after an
@@ -5387,6 +5489,7 @@ function d1InvalidCapsuleGuardRow(capsuleId: string) {
 function assertD1AtomicCommitBatch(
   db: D1Database,
   operation:
+    | "preparePlanRun"
     | "commitRunState"
     | "commitRestoredState"
     | "commitSourceSyncSuccess"

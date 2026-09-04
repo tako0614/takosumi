@@ -23,10 +23,12 @@ import {
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import {
   InMemoryOpenTofuControlStore,
+  planRunExecutionInputsDigestMaterial,
   type TransitionRunInput,
   type TransitionRunResult,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
   fixtureStateCommit,
   seedCapsuleModel,
@@ -101,6 +103,14 @@ async function seedApply(
     currentStateGeneration: 0,
     status: "active",
   });
+  const inputs = {
+    planRunId: ids.planRunId,
+    variables: {},
+    generatedRoot: {
+      files: { "main.tf": 'module "child" { source = "./module" }' },
+      moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
+    },
+  } as const;
   const planRun: PlanRun = {
     id: ids.planRunId,
     workspaceId: capsule.workspaceId,
@@ -120,7 +130,10 @@ async function seedApply(
     sourceDigest: "sha256:src",
     operation: "update",
     runnerProfileId: "opentofu-default",
-    variablesDigest: "sha256:vars",
+    variablesDigest: await stableJsonDigest(inputs.variables),
+    executionInputsDigest: await stableJsonDigest(
+      planRunExecutionInputsDigestMaterial(inputs, undefined),
+    ),
     requiredProviders: [],
     status: "succeeded",
     policy: { status: "passed", reasons: [], checkedAt: 1 },
@@ -132,15 +145,7 @@ async function seedApply(
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.putPlanRun(planRun);
-  await store.putPlanRunInputs({
-    planRunId: planRun.id,
-    variables: {},
-    generatedRoot: {
-      files: { "main.tf": 'module "child" { source = "./module" }' },
-      moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
-    },
-  });
+  await store.preparePlanRun({ run: planRun, inputs });
   const applyRun: ApplyRun = {
     id: ids.applyRunId,
     planRunId: ids.planRunId,
@@ -155,7 +160,7 @@ async function seedApply(
       currentStateVersionId: seedStateVersionId,
       runnerProfileId: "opentofu-default",
       sourceDigest: "sha256:src",
-      variablesDigest: "sha256:vars",
+      variablesDigest: planRun.variablesDigest,
       policyDecisionDigest: "sha256:policy",
       planDigest: PLAN_DIGEST,
       planArtifactDigest: PLAN_DIGEST,
@@ -911,6 +916,14 @@ test("the plan heartbeat is re-stamped while a long plan blocks in the runner", 
     currentStateGeneration: 0,
     status: "active",
   });
+  const inputs = {
+    planRunId: "plan_hb_long",
+    variables: {},
+    generatedRoot: {
+      files: { "main.tf": 'module "child" { source = "./module" }' },
+      moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
+    },
+  } as const;
   const planRun: PlanRun = {
     id: "plan_hb_long",
     workspaceId: capsule.workspaceId,
@@ -928,7 +941,10 @@ test("the plan heartbeat is re-stamped while a long plan blocks in the runner", 
     },
     sourceSnapshotId: snapshot.id,
     sourceDigest: "sha256:src",
-    variablesDigest: "sha256:vars",
+    variablesDigest: await stableJsonDigest(inputs.variables),
+    executionInputsDigest: await stableJsonDigest(
+      planRunExecutionInputsDigestMaterial(inputs, undefined),
+    ),
     operation: "update",
     runnerProfileId: "provider-free",
     requiredProviders: [],
@@ -939,15 +955,7 @@ test("the plan heartbeat is re-stamped while a long plan blocks in the runner", 
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.putPlanRun(planRun);
-  await store.putPlanRunInputs({
-    planRunId: planRun.id,
-    variables: {},
-    generatedRoot: {
-      files: { "main.tf": 'module "child" { source = "./module" }' },
-      moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
-    },
-  });
+  await store.preparePlanRun({ run: planRun, inputs });
 
   let clock = 2000;
   const now = () => (clock += 1);

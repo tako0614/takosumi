@@ -13,8 +13,10 @@ import {
 import {
   type BeginApplyRunResult,
   InMemoryOpenTofuControlStore,
+  planRunExecutionInputsDigestMaterial,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
   fixtureStateCommit,
   providerRequirementsForFixture,
@@ -891,6 +893,51 @@ test("idempotency: dispatching a terminal run no-ops", async () => {
   expect(planCalls).toEqual(1);
 });
 
+test("replaying plan creation repairs a lost queued enqueue but not a completed run", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const enqueues: Parameters<EnqueueRun>[0][] = [];
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(2250),
+    newId: deterministicIds(),
+    runner: stubRunner(),
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: (dispatch) => {
+      enqueues.push(dispatch);
+      return Promise.resolve();
+    },
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_plan_create_replay",
+  });
+  const internal = { planRunId: "plan_create_replay" } as const;
+
+  const first = await controller.createPlanRun(request, {}, internal);
+  expect(first.planRun.status).toBe("queued");
+  expect(enqueues).toHaveLength(1);
+
+  // A client retries after losing the first enqueue acknowledgement. The row
+  // is still queued, so replay must enqueue it again for recovery.
+  const queuedReplay = await controller.createPlanRun(request, {}, internal);
+  expect(queuedReplay.planRun.status).toBe("queued");
+  expect(enqueues).toHaveLength(2);
+
+  // Once a consumer has completed the exact row, a late create replay must not
+  // add another queue message. The terminal consumer remains idempotent too.
+  await store.putPlanRun({
+    ...(await store.getPlanRun(first.planRun.id))!,
+    status: "succeeded",
+    planDigest: PLAN_DIGEST,
+    planArtifact: planArtifact(),
+    finishedAt: 2300,
+    updatedAt: 2300,
+  });
+  const completedReplay = await controller.createPlanRun(request, {}, internal);
+  expect(completedReplay.planRun.status).toBe("succeeded");
+  expect(enqueues).toHaveLength(2);
+});
+
 test("idempotency: a fresh-heartbeat running run is not taken over", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const clock = controllableClock(3000);
@@ -1728,19 +1775,23 @@ test("state generation: a stale plan is rejected at apply (state_generation_mism
   // currentStateVersion guard, to prove the generation guard fires inside execute.
   const stalePlan = (await store.getPlanRun(updateB.id))!;
   const forgedId = "plan_forged_stale";
-  await store.putPlanRun({
+  const forgedInputs = { planRunId: forgedId, variables: {} } as const;
+  const forgedPlan = {
     ...stalePlan,
     id: forgedId,
     baseStateGeneration: 1,
     capsuleCurrentStateVersionId: capsule!.currentStateVersionId,
     appliedApplyRunId: undefined,
     status: "succeeded",
-  });
+    variablesDigest: await stableJsonDigest(forgedInputs.variables),
+    executionInputsDigest: await stableJsonDigest(
+      planRunExecutionInputsDigestMaterial(forgedInputs, undefined),
+    ),
+  } as const;
+  await store.preparePlanRun({ run: forgedPlan, inputs: forgedInputs });
   const staleApply = await controller.createApplyRun({
     planRunId: forgedId,
-    expected: applyExpectedGuardFromPlanRun(
-      (await store.getPlanRun(forgedId))!,
-    ),
+    expected: applyExpectedGuardFromPlanRun(forgedPlan),
   });
   expect(staleApply.applyRun.status).toBe("failed");
   expect(staleApply.applyRun.diagnostics?.[0]?.message).toContain(

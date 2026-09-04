@@ -238,6 +238,13 @@ export interface PlanRun {
   readonly operation: OpenTofuOperation;
   readonly runnerProfileId: string;
   readonly variablesDigest: string;
+  /**
+   * Private digest of the exact PlanRunInputs plus optional
+   * DependencySnapshot committed before this Run became queue-visible. Current
+   * Plan writers always set it; absence is reserved for historical rows, which
+   * are not safe to redispatch.
+   */
+  readonly executionInputsDigest?: string;
   readonly requiredProviders: readonly string[];
   /**
    * Exact child-module provider identities pinned by current Plan creation.
@@ -401,7 +408,7 @@ export interface PlanRunCapsuleContext {
   readonly environment: string;
 }
 
-export type PublicPlanRun = PlanRun;
+export type PublicPlanRun = Omit<PlanRun, "executionInputsDigest">;
 
 export interface PlanRunSummary {
   readonly add?: number;

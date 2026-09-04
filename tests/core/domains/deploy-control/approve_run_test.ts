@@ -4,7 +4,11 @@ import {
   applyExpectedGuardFromPlanRun,
   OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  planRunExecutionInputsDigestMaterial,
+} from "../../../../core/domains/deploy-control/store.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
 
 const PLAN_DIGEST =
@@ -18,6 +22,7 @@ async function seedWaitingApprovalPlan(
   store: InMemoryOpenTofuControlStore,
   id = "plan_wait",
 ): Promise<PlanRun> {
+  const inputs = { planRunId: id, variables: {} } as const;
   const planRun: PlanRun = {
     id,
     workspaceId: "workspace_1",
@@ -25,7 +30,10 @@ async function seedWaitingApprovalPlan(
     sourceDigest: "sha256:src",
     operation: "update",
     runnerProfileId: "opentofu-default",
-    variablesDigest: "sha256:vars",
+    variablesDigest: await stableJsonDigest(inputs.variables),
+    executionInputsDigest: await stableJsonDigest(
+      planRunExecutionInputsDigestMaterial(inputs, undefined),
+    ),
     requiredProviders: [],
     status: "waiting_approval",
     policy: { status: "passed", reasons: [], checkedAt: 1 },
@@ -41,7 +49,7 @@ async function seedWaitingApprovalPlan(
     createdAt: 1,
     updatedAt: 1,
   };
-  await store.putPlanRun(planRun);
+  await store.preparePlanRun({ run: planRun, inputs });
   return planRun;
 }
 

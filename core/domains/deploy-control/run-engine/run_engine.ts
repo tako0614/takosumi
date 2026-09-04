@@ -170,6 +170,7 @@ import {
   applyRunRuntimeSecretRetirementPending,
   capsuleLifecycleExpected,
   CapsuleStateVersionGuardConflict,
+  planRunExecutionInputsDigestMaterial,
   type OpenTofuControlStore,
   type PlanRunInputs,
 } from "../store.ts";
@@ -1496,8 +1497,8 @@ export class RunEngine {
   async runtimeInputsForPlanRun(
     planRun: PlanRun,
   ): Promise<readonly DispatchRuntimeInputs[] | undefined> {
-    const inputs = await this.#getPlanRunInputs(planRun.id);
-    return inputs?.runtimeInputs;
+    const inputs = await this.#requirePreparedPlanRunInputs(planRun);
+    return inputs.runtimeInputs;
   }
 
   /** Secret exposure policy of the profile a run dispatches to (credential gate). */
@@ -1799,6 +1800,62 @@ export class RunEngine {
           (await this.#resolvePlanSourceSnapshotId(capsule!)));
     const baseStateGeneration =
       internal.baseStateGeneration ?? capsule?.currentStateGeneration ?? 0;
+    const genericRootDispatch =
+      internal.genericRootDispatch ??
+      (capsule && request.source.kind === "git"
+        ? await this.#defaultGenericRootDispatchForPlanRun(
+            { ...request, source: request.source },
+            capsule,
+            compatibilityReportId,
+            requiredProviderRequirements,
+          )
+        : undefined);
+    const generatedRoot = genericRootDispatch?.generatedRoot;
+    const operatorModule = genericRootDispatch?.operatorModule;
+    const workspaceOutputAllowlist =
+      genericRootDispatch?.workspaceOutputAllowlist;
+    const outputAllowlist = genericRootDispatch?.outputAllowlist;
+    const sourceBuild = genericRootDispatch?.sourceBuild;
+    const stateAdoption = genericRootDispatch?.stateAdoption;
+    const priorState = genericRootDispatch?.priorState;
+    const moduleVariableMaterializationDigest =
+      genericRootDispatch?.moduleVariableMaterializationDigest;
+    const interfaceMaterialization =
+      genericRootDispatch?.interfaceMaterialization;
+    const runtimeInputs = genericRootDispatch?.runtimeInputs;
+    const lifecycleActions =
+      internal.lifecycleActions ?? genericRootDispatch?.lifecycleActions;
+    const planRunInputs: PlanRunInputs = {
+      planRunId,
+      variables,
+      ...(generatedRoot ? { generatedRoot } : {}),
+      ...(operatorModule ? { operatorModule } : {}),
+      ...(workspaceOutputAllowlist ? { workspaceOutputAllowlist } : {}),
+      ...(outputAllowlist ? { outputAllowlist } : {}),
+      ...(sourceBuild ? { sourceBuild } : {}),
+      ...(stateAdoption ? { stateAdoption } : {}),
+      ...(priorState ? { priorState } : {}),
+      ...(moduleVariableMaterializationDigest
+        ? { moduleVariableMaterializationDigest }
+        : {}),
+      ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
+      ...(runtimeInputs ? { runtimeInputs } : {}),
+      ...(lifecycleActions ? { lifecycleActions } : {}),
+    };
+    const dependencySnapshot = internal.resolvedDependencies?.entries.length
+      ? this.#dependencySnapshotForPlanRun(
+          planRunId,
+          internal.resolvedDependencies,
+        )
+      : undefined;
+    const executionInputsDigest = await stableJsonDigest(
+      planRunExecutionInputsDigestMaterial(planRunInputs, dependencySnapshot),
+    );
+    const storedPlanRunInputs = await this.#planRunInputsForStorage(
+      planRunInputs,
+      internal.resolvedDependencies?.hasSensitiveInjected === true,
+    );
+    const dispatchDiagnostics = genericRootDispatch?.diagnostics ?? [];
     let planRun: PlanRun = {
       id: planRunId,
       workspaceId,
@@ -1815,10 +1872,14 @@ export class RunEngine {
       operation,
       runnerProfileId: profile.id,
       variablesDigest,
+      executionInputsDigest,
       requiredProviders: declaredProviders,
       requiredProviderRequirements,
       baseStateGeneration,
       ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
+      ...(dependencySnapshot
+        ? { dependencySnapshotId: dependencySnapshot.id }
+        : {}),
       ...(compatibilityReportId ? { compatibilityReportId } : {}),
       ...(capsuleContext ? { capsuleContext } : {}),
       ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
@@ -1826,6 +1887,9 @@ export class RunEngine {
       ...(internal.refreshOnly ? { refreshOnly: true as const } : {}),
       ...(internal.autoApplyRequested
         ? { autoApplyRequested: true as const }
+        : {}),
+      ...(dispatchDiagnostics.length > 0
+        ? { diagnostics: dispatchDiagnostics }
         : {}),
       // A create-time policy denial is a terminal `failed` run carrying the
       // policy reason (the retired `blocked` status is gone); a passed plan is
@@ -1873,119 +1937,47 @@ export class RunEngine {
       const latestCapsule = await this.#requireCapsule(capsule.id);
       assertCapsulePlanStateAuthority(latestCapsule, outerAuthority);
     }
-    await this.#store.putPlanRun(planRun);
-    if (internal.resolvedDependencies?.entries.length) {
-      planRun = await this.#pinDependencySnapshotRecord(
-        planRun,
-        internal.resolvedDependencies,
-      );
-    }
-    await this.#recordActivity({
-      workspaceId: planRun.workspaceId,
-      ...(context.actor ? { actorId: context.actor } : {}),
-      action: "run.plan_created",
-      targetType: "run",
-      targetId: planRun.id,
-      runId: planRun.id,
-      metadata: {
-        operation: planRun.operation,
-        capsuleId: planRun.capsuleId,
-        policyStatus: planRun.policy.status,
-        ...(planRun.refreshOnly ? { refreshOnly: true } : {}),
-      },
+    const prepared = await this.#store.preparePlanRun({
+      run: planRun,
+      inputs: storedPlanRunInputs,
+      ...(dependencySnapshot ? { dependencySnapshot } : {}),
     });
-    if (planRun.status === "failed") {
-      await this.#recordDeployOperationMetric({
-        run: planRun,
-        operationKind: "plan",
-        status: "failed",
-      });
-    }
-    const genericRootDispatch =
-      internal.genericRootDispatch ??
-      (capsule && request.source.kind === "git"
-        ? await this.#defaultGenericRootDispatchForPlanRun(
-            { ...request, source: request.source },
-            capsule,
-            compatibilityReportId,
-            requiredProviderRequirements,
-          )
-        : undefined);
-    const generatedRoot = genericRootDispatch?.generatedRoot;
-    const operatorModule = genericRootDispatch?.operatorModule;
-    const workspaceOutputAllowlist =
-      genericRootDispatch?.workspaceOutputAllowlist;
-    const outputAllowlist = genericRootDispatch?.outputAllowlist;
-    const sourceBuild = genericRootDispatch?.sourceBuild;
-    const stateAdoption = genericRootDispatch?.stateAdoption;
-    const priorState = genericRootDispatch?.priorState;
-    const moduleVariableMaterializationDigest =
-      genericRootDispatch?.moduleVariableMaterializationDigest;
-    const interfaceMaterialization =
-      genericRootDispatch?.interfaceMaterialization;
-    const runtimeInputs = genericRootDispatch?.runtimeInputs;
-    const dispatchDiagnostics = genericRootDispatch?.diagnostics ?? [];
-    if (dispatchDiagnostics.length > 0) {
-      // Value-free notices raised while compiling the generated root, recorded
-      // on the reviewed PlanRun so an inert capability is never silent.
-      planRun = {
-        ...planRun,
-        diagnostics: [...(planRun.diagnostics ?? []), ...dispatchDiagnostics],
-      };
-      await this.#store.putPlanRun(planRun);
-    }
-    const lifecycleActions =
-      internal.lifecycleActions ?? genericRootDispatch?.lifecycleActions;
-    if (
-      Object.keys(variables).length > 0 ||
-      generatedRoot !== undefined ||
-      operatorModule !== undefined ||
-      workspaceOutputAllowlist !== undefined ||
-      outputAllowlist !== undefined ||
-      sourceBuild !== undefined ||
-      stateAdoption !== undefined ||
-      priorState !== undefined ||
-      moduleVariableMaterializationDigest !== undefined ||
-      interfaceMaterialization !== undefined ||
-      runtimeInputs !== undefined ||
-      lifecycleActions !== undefined
-    ) {
-      // A sensitive dependency-injected value flows into `variables` and may
-      // also enter an optional wrapper. It must not persist in cleartext, so
-      // seal the WHOLE sidecar at rest when any sensitive value was injected (spec
-      // §11 / §18: secret outputs are never stored as cleartext ledger values).
-      // The controller unseals it transparently at plan/apply dispatch.
-      const sealSidecar =
-        internal.resolvedDependencies?.hasSensitiveInjected === true;
-      await this.#putPlanRunInputs(
-        {
-          planRunId: planRun.id,
-          variables,
-          ...(generatedRoot ? { generatedRoot } : {}),
-          ...(operatorModule ? { operatorModule } : {}),
-          ...(workspaceOutputAllowlist ? { workspaceOutputAllowlist } : {}),
-          ...(outputAllowlist ? { outputAllowlist } : {}),
-          ...(sourceBuild ? { sourceBuild } : {}),
-          ...(stateAdoption ? { stateAdoption } : {}),
-          ...(priorState ? { priorState } : {}),
-          ...(moduleVariableMaterializationDigest
-            ? { moduleVariableMaterializationDigest }
-            : {}),
-          ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
-          ...(runtimeInputs ? { runtimeInputs } : {}),
-          ...(lifecycleActions ? { lifecycleActions } : {}),
+    planRun = prepared.run;
+    if (prepared.status === "created") {
+      await this.#recordActivity({
+        workspaceId: planRun.workspaceId,
+        ...(context.actor ? { actorId: context.actor } : {}),
+        action: "run.plan_created",
+        targetType: "run",
+        targetId: planRun.id,
+        runId: planRun.id,
+        metadata: {
+          operation: planRun.operation,
+          capsuleId: planRun.capsuleId,
+          policyStatus: planRun.policy.status,
+          ...(planRun.refreshOnly ? { refreshOnly: true } : {}),
         },
-        sealSidecar,
-      );
+      });
+      if (planRun.status === "failed") {
+        await this.#recordDeployOperationMetric({
+          run: planRun,
+          operationKind: "plan",
+          status: "failed",
+        });
+      }
     }
-    if (planRun.status === "queued") {
+    if (prepared.status === "created" && planRun.status === "queued") {
       // A queued plan observes desired/provider state but has not changed the
       // pinned runtime revision. Notify the Interface lifecycle before an
       // inline queue can complete the plan, so terminal observation can always
       // clear the matching pending condition deterministically.
       await this.#notifyPlanQueued(planRun);
     }
-    if (policy.status === "passed" && this.#hasRunnerForProfile(profile)) {
+    // Re-enqueue an existing queued row to recover a lost enqueue
+    // acknowledgement, but never enqueue a Plan that a consumer has already
+    // completed (or parked for approval). The queue consumer's own CAS remains
+    // the execution fence for the duplicate queued message.
+    if (planRun.status === "queued" && this.#hasRunnerForProfile(profile)) {
       await this.#enqueueRun({
         action: "plan",
         runId: planRun.id,
@@ -2380,9 +2372,8 @@ export class RunEngine {
     // pinned producer outputs would be irrelevant. For plan/update, resolve the
     // consumer's Dependencies, read each producer's Output, build the
     // injected values, and merge them into the generated-root module inputs
-    // BEFORE the run is created. The DependencySnapshot is pinned
-    // AFTER the run row exists (runId known), then the planRun is re-put with its
-    // id (order: resolve -> inject -> create plan -> snapshot -> re-put).
+    // BEFORE the run is created. The DependencySnapshot and exact private
+    // inputs are then committed atomically with the queue-visible PlanRun.
     const selectedPlanRequest = runnerProfileId
       ? { ...planRequest, runnerProfileId }
       : planRequest;
@@ -2449,28 +2440,18 @@ export class RunEngine {
     };
   }
 
-  /**
-   * Records the DependencySnapshot for a created PlanRun and re-puts the run with
-   * its id (spec §17). The snapshot pins exactly the entries resolved at plan
-   * creation; the apply consumer re-reads it to verify producer state generations
-   * (strict mode) + recompute the values digests (tamper check) before applying.
-   * Returns the updated PlanRun.
-   */
-  async #pinDependencySnapshotRecord(
-    planRun: PlanRun,
+  /** Builds the immutable DependencySnapshot included in Plan preparation. */
+  #dependencySnapshotForPlanRun(
+    planRunId: string,
     resolved: ResolvedDependencies,
-  ): Promise<PlanRun> {
-    const snapshot: DependencySnapshot = {
+  ): DependencySnapshot {
+    return {
       id: this.#newId("depsnap"),
-      runId: planRun.id,
+      runId: planRunId,
       dependencies: resolved.entries,
       mode: resolved.mode,
       createdAt: new Date(this.#now()).toISOString(),
     };
-    await this.#store.putDependencySnapshot(snapshot);
-    const updated: PlanRun = { ...planRun, dependencySnapshotId: snapshot.id };
-    await this.#store.putPlanRun(updated);
-    return updated;
   }
 
   /**
@@ -4080,7 +4061,7 @@ export class RunEngine {
     // sourceSnapshotId is unchanged + still resolvable, mirroring the
     // digest/generation guards. Runs without a recorded snapshot are unaffected.
     await this.#verification.revalidateSourceSnapshot(planRun);
-    const planInputs = await this.#getPlanRunInputs(planRun.id);
+    const planInputs = await this.#requirePreparedPlanRunInputs(planRun);
     await this.#revalidateModuleVariableMaterialization(
       planRun,
       planInputs,
@@ -4804,6 +4785,13 @@ export class RunEngine {
       // Terminal, or a sibling consumer holds it with a fresh heartbeat: no-op.
       return planRun;
     }
+    let inputs: PlanRunInputs;
+    try {
+      inputs = await this.#requirePreparedPlanRunInputs(planRun);
+    } catch (error) {
+      await this.#store.deletePlanRunInputs(runId);
+      return await this.#failPlanRun(planRun, undefined, error);
+    }
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
     // An asynchronous dispatcher is execution authority: a missing explicit executor
     // binding is a hard configuration failure, never a silent fallback.
@@ -4815,10 +4803,9 @@ export class RunEngine {
       return await this.#failPlanRun(planRun, undefined, error);
     }
     // The sidecar is sealed at rest when a sensitive dependency value was
-    // injected; #getPlanRunInputs unseals it transparently here so the plan runs
-    // against the same inputs / generated root it was created with.
-    const inputs = await this.#getPlanRunInputs(runId);
-    const variables = normalizeVariables(inputs?.variables);
+    // injected. Preparation verification above unseals it and checks the whole
+    // plaintext bundle against the digest committed with the queue-visible Run.
+    const variables = inputs.variables;
     const dispatch = moduleDispatchFromInputs(inputs);
     try {
       await this.#verification.assertCapsuleCompatibilityAllowsRun(planRun);
@@ -4912,10 +4899,29 @@ export class RunEngine {
     const planRun = await this.#requirePlanRun(applyRun.planRunId);
     const profile = await this.#requireRunnerProfile(applyRun.runnerProfileId);
     this.#runnerForProfile(profile);
-    // Generated-root dispatch for apply: re-read the retained inputs sidecar so
-    // apply runs tofu in the SAME generated root the plan reviewed.
-    // #getPlanRunInputs unseals a sealed (sensitive-bearing) sidecar.
-    const inputs = await this.#getPlanRunInputs(planRun.id);
+    // Generated-root dispatch for apply: re-read and authenticate the retained
+    // preparation bundle so apply runs tofu in the SAME generated root and
+    // policy/runtime context that the plan reviewed.
+    let inputs: PlanRunInputs | undefined;
+    if (!planRun.appliedApplyRunId) {
+      try {
+        inputs = await this.#requirePreparedPlanRunInputs(planRun);
+      } catch (error) {
+        await this.#store.deletePlanRunInputs(planRun.id);
+        const failed = await this.#failApplyRun(
+          applyRun,
+          undefined,
+          profile,
+          applyRun.startedAt ?? applyRun.createdAt,
+          planRun.operation === "destroy" ? "destroy.failed" : "apply.failed",
+          error,
+        );
+        const capsule = failed.capsuleId
+          ? await this.#store.getCapsule(failed.capsuleId)
+          : undefined;
+        return { applyRun: failed, ...(capsule ? { capsule } : {}) };
+      }
+    }
     const dispatch = moduleDispatchFromInputs(inputs);
     const key = planRun.capsuleId ?? planRun.id;
     // Capsule lease (spec §22 / §23): when a durable coordination seam is
@@ -5050,11 +5056,11 @@ export class RunEngine {
   }
 
   /**
-   * Persists the runs_inputs sidecar (spec §11 / §18). When `seal` is set, the
+   * Builds the at-rest runs_inputs sidecar (spec §11 / §18). When `seal` is set, the
    * sidecar carries at least one SENSITIVE dependency-injected value, so the
-   * WHOLE sealable payload (`variables` / `generatedRoot` /
-   * `workspaceOutputAllowlist` / `outputAllowlist`) is encrypted into
-   * {@link PlanRunInputs.sealed}
+   * complete sidecar payload (variables, generated root, output policy,
+   * source/lifecycle actions, OIDC/interface materialization, and runtime-input
+   * descriptors) is encrypted into {@link PlanRunInputs.sealed}
    * with the SAME at-rest envelope used for state / plan / dependency-value
    * artifacts, and the cleartext fields are dropped from the row. The store only
    * ever sees ciphertext. A sealer is REQUIRED in that case: missing ⇒ fail closed
@@ -5062,10 +5068,12 @@ export class RunEngine {
    * this never persists a cleartext credential under any path). When `seal` is
    * unset the sidecar is plain (no sensitive value to protect).
    */
-  async #putPlanRunInputs(inputs: PlanRunInputs, seal: boolean): Promise<void> {
+  async #planRunInputsForStorage(
+    inputs: PlanRunInputs,
+    seal: boolean,
+  ): Promise<PlanRunInputs> {
     if (!seal) {
-      await this.#store.putPlanRunInputs(inputs);
-      return;
+      return inputs;
     }
     if (!this.#dependencyValueSealer) {
       throw new OpenTofuControllerError(
@@ -5123,11 +5131,11 @@ export class RunEngine {
     };
     const sealed = await this.#dependencyValueSealer.seal(payload);
     // Cleartext sealable fields are dropped; only `planRunId` + `sealed` persist.
-    await this.#store.putPlanRunInputs({
+    return {
       planRunId: inputs.planRunId,
       variables: {},
       sealed,
-    });
+    };
   }
 
   /**
@@ -5153,9 +5161,16 @@ export class RunEngine {
       );
     }
     const payload = await this.#dependencyValueSealer.open(row.sealed);
-    const variables = (payload.variables ?? {}) as Readonly<
-      Record<string, JsonValue>
-    >;
+    if (!Object.prototype.hasOwnProperty.call(payload, "variables")) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan_run_inputs_corrupt: plan run ${planRunId} sealed inputs omit variables`,
+        { reason: "plan_run_inputs_corrupt" },
+      );
+    }
+    const variables = normalizeVariables(
+      payload.variables as Readonly<Record<string, unknown>>,
+    );
     const generatedRoot = payload.generatedRoot as unknown as
       DispatchGeneratedRoot | undefined;
     const operatorModule = payload.operatorModule as unknown as
@@ -5196,6 +5211,89 @@ export class RunEngine {
       ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
       ...(runtimeInputs ? { runtimeInputs } : {}),
     };
+  }
+
+  /**
+   * Loads and authenticates the exact plaintext preparation bundle committed
+   * atomically with a PlanRun. Historical/torn rows deliberately fail closed:
+   * neither restart repair nor Apply may synthesize `{}` or a different root.
+   */
+  async #requirePreparedPlanRunInputs(planRun: PlanRun): Promise<PlanRunInputs> {
+    const executionInputsDigest = planRun.executionInputsDigest?.trim();
+    if (!executionInputsDigest) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan_run_inputs_unprepared: plan run ${planRun.id} has no exact preparation digest`,
+        { reason: "plan_run_inputs_unprepared" },
+      );
+    }
+    const inputs = await this.#getPlanRunInputs(planRun.id);
+    if (!inputs) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan_run_inputs_missing: plan run ${planRun.id} has no exact prepared inputs`,
+        { reason: "plan_run_inputs_missing" },
+      );
+    }
+    if (
+      inputs.planRunId !== planRun.id ||
+      !Object.prototype.hasOwnProperty.call(inputs, "variables")
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan_run_inputs_corrupt: plan run ${planRun.id} inputs do not match their owner`,
+        { reason: "plan_run_inputs_corrupt" },
+      );
+    }
+    let variables: Readonly<Record<string, JsonValue>>;
+    try {
+      variables = normalizeVariables(inputs.variables);
+    } catch {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan_run_inputs_corrupt: plan run ${planRun.id} variables are not valid JSON input`,
+        { reason: "plan_run_inputs_corrupt" },
+      );
+    }
+    const normalizedInputs: PlanRunInputs = { ...inputs, variables };
+    if ((await stableJsonDigest(variables)) !== planRun.variablesDigest) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan_run_inputs_corrupt: plan run ${planRun.id} variables changed after preparation`,
+        { reason: "plan_run_inputs_corrupt" },
+      );
+    }
+    let dependencySnapshot: DependencySnapshot | undefined;
+    if (planRun.dependencySnapshotId) {
+      dependencySnapshot = await this.#store.getDependencySnapshot(
+        planRun.dependencySnapshotId,
+      );
+      if (
+        !dependencySnapshot ||
+        dependencySnapshot.id !== planRun.dependencySnapshotId ||
+        dependencySnapshot.runId !== planRun.id
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `plan_run_inputs_missing: plan run ${planRun.id} has no exact dependency snapshot`,
+          { reason: "plan_run_inputs_missing" },
+        );
+      }
+    }
+    const actualDigest = await stableJsonDigest(
+      planRunExecutionInputsDigestMaterial(
+        normalizedInputs,
+        dependencySnapshot,
+      ),
+    );
+    if (actualDigest !== executionInputsDigest) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `plan_run_inputs_corrupt: plan run ${planRun.id} exact preparation digest changed`,
+        { reason: "plan_run_inputs_corrupt" },
+      );
+    }
+    return normalizedInputs;
   }
 
   /** Allocates the opaque raw-output destination before runner dispatch. */

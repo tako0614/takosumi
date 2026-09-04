@@ -815,15 +815,11 @@ test("tampered sealed dependency values fail the apply closed", async () => {
     planRunId: consumerPlan.planRun.id,
     expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
   });
-  // Fail-closed: the apply must NOT succeed once the sealed values are tampered.
-  expect(tamperedApply.applyRun.status).not.toBe("succeeded");
   expect(tamperedApply.applyRun.status).toBe("failed");
-  // And the failure comes from opening the sealed blob (the AES-GCM auth-tag /
-  // content-digest layer rejects the tampered ciphertext before the values are
-  // ever recovered), not from some unrelated guard.
   expect(
     JSON.stringify(tamperedApply.applyRun.diagnostics).toLowerCase(),
   ).toContain("digest mismatch");
+  expect(runner.applyJobs).toHaveLength(1); // producer only
 });
 
 test("tampered sealed runs_inputs sidecar fails the apply closed", async () => {
@@ -1136,12 +1132,14 @@ test("remote_state apply fails when the pinned StateVersion object is tampered",
   });
 
   await controller.approveRun(consumerPlan.planRun.id);
-  const tamperedApply = await controller.createApplyRun({
-    planRunId: consumerPlan.planRun.id,
-    expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
+  await expect(
+    controller.createApplyRun({
+      planRunId: consumerPlan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(consumerPlan.planRun),
+    }),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "plan_run_inputs_corrupt" },
   });
-  expect(tamperedApply.applyRun.status).toBe("failed");
-  expect(tamperedApply.applyRun.diagnostics?.[0]?.message).toContain(
-    "dependency_snapshot_tampered",
-  );
+  expect(runner.applyJobs).toHaveLength(1); // producer only
 });

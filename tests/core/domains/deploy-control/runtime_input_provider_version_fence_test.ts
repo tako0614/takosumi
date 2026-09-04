@@ -219,6 +219,7 @@ async function seedFenceModel(
     updatedAt: NOW,
   });
   const observed: { plan?: OpenTofuPlanJob } = {};
+  let runId = 0;
   const controller = new OpenTofuController({
     store,
     runner: {
@@ -242,7 +243,8 @@ async function seedFenceModel(
     defaultRunnerProfileId: runnerProfile().id,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     now: () => Date.parse(NOW),
-    newId: (prefix) => `${prefix}_${options.capsuleId}`,
+    newId: (prefix) =>
+      `${prefix}_${options.capsuleId}_${String((runId += 1)).padStart(2, "0")}`,
   });
   return { seeded, controller, observed, compatibilityReportId };
 }
