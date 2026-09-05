@@ -140,6 +140,58 @@ type RunnerPublicationAttempt = Readonly<{
   review: string;
 }>;
 
+type RunnerLegacyPublicationAttempt = Readonly<{
+  kind: "takosumi.runner-image-publication-state@v1";
+  status: "publication-started";
+  environment: RunnerImageReleaseEnvironment;
+  release: string;
+  observedAt: string;
+  source: {
+    branch: string;
+    commit: string;
+    dockerfileSha256: string;
+    buildContextSha256: string;
+  };
+  config: {
+    path: string;
+    buildSha256: string;
+    previousImage: string;
+  };
+  image: {
+    transportTag: string;
+    transportRef: string;
+    localImageId: string;
+    localDescriptorDigest?: string;
+  };
+  review: string;
+}>;
+
+type RunnerLegacyPublicationResolution = Readonly<{
+  kind: "takosumi.runner-image-publication-state@v1";
+  status: "published";
+  environment: RunnerImageReleaseEnvironment;
+  release: string;
+  observedAt: string;
+  transportRef: string;
+  immutableRef: string;
+  imageConfigDigest: string;
+  build: Readonly<Record<string, unknown>>;
+}>;
+
+type PublicationStateContext = Readonly<{
+  environment: RunnerImageReleaseEnvironment;
+  imageRepository: string;
+}>;
+
+type PublicationStateRecords = Readonly<{
+  entries: readonly (RunnerPublicationAttempt | RunnerPublicationResolution)[];
+  legacy: Readonly<{
+    releases: ReadonlySet<string>;
+    transportRefs: ReadonlySet<string>;
+    transportTags: ReadonlySet<string>;
+  }>;
+}>;
+
 type RunnerPublicationResolution =
   | Readonly<{
       kind: "takosumi.runner-image-publication-state@v2";
@@ -667,9 +719,12 @@ async function buildRunnerImage(
   sourceRoots: readonly string[],
 ): Promise<RunnerImageBuildRecord> {
   if (!options.state) throw new Error("build requires --state");
-  const unresolved = await unresolvedPublicationAttempts(
+  const publicationStateContext = runnerPublicationStateContext(options, context);
+  const publicationState = await readPublicationState(
     publicationJournal ?? options.state,
+    publicationStateContext,
   );
+  const unresolved = unresolvedPublicationAttemptsFromRecords(publicationState.entries);
   if (unresolved.length !== 0) {
     throw new Error("runner_image_publication_reconciliation_required");
   }
@@ -680,6 +735,9 @@ async function buildRunnerImage(
   );
   const localTag = `takosumi-runner:${transportTag}`;
   if (!options.execute) {
+    if (publicationState.legacy.releases.has(options.release)) {
+      throw new Error("runner_image_publication_state_invalid");
+    }
     return buildRecord(
       options,
       context,
@@ -690,6 +748,13 @@ async function buildRunnerImage(
       null,
       "planned",
     );
+  }
+  if (
+    publicationState.legacy.releases.has(options.release) ||
+    publicationState.legacy.transportTags.has(transportTag) ||
+    publicationState.legacy.transportRefs.has(`${imageRepository}:${transportTag}`)
+  ) {
+    throw new Error("runner_image_publication_state_invalid");
   }
   await prepareEvidenceFile(options.evidence, sourceRoots);
   await prepareEvidenceFile(options.state, sourceRoots);
@@ -1030,16 +1095,21 @@ async function reconcileRunnerImage(
   materializeSource: RunnerImageReleaseRuntime["materializeSource"],
 ): Promise<unknown> {
   if (!options.state) throw new Error("reconcile requires --state");
-  await prepareEvidenceFile(options.evidence, sourceRoots);
-  const attempts = await unresolvedPublicationAttempts(publicationJournal);
+  const publicationStateContext = runnerPublicationStateContext(options, context);
+  const attempts = await unresolvedPublicationAttempts(
+    publicationJournal,
+    publicationStateContext,
+  );
   if (attempts.length === 0) {
     const resolved = await uniquePublicationResolution(
       publicationJournal,
       options.environment,
       options.release,
+      publicationStateContext,
     );
     if (!resolved) throw new Error("runner_image_publication_reconciliation_not_required");
     const { resolution, attempt } = resolved;
+    await prepareEvidenceFile(options.evidence, sourceRoots);
     if (!publicationAttemptMatchesReconciliationContext(attempt, options, context)) {
       throw new Error("runner_image_publication_reconciliation_identity_mismatch");
     }
@@ -1051,6 +1121,7 @@ async function reconcileRunnerImage(
   if (attempts.length !== 1) {
     throw new Error("runner_image_publication_reconciliation_ambiguous");
   }
+  await prepareEvidenceFile(options.evidence, sourceRoots);
   const attempt = attempts[0]!;
   if (!publicationAttemptMatchesReconciliationContext(attempt, options, context)) {
     throw new Error("runner_image_publication_reconciliation_identity_mismatch");
@@ -1405,10 +1476,27 @@ async function proveLegacyPublicationLocalIdentity(
   return localIdentity.descriptorDigest;
 }
 
+function runnerPublicationStateContext(
+  options: RunnerImageReleaseOptions,
+  context: ReleaseContext,
+): PublicationStateContext {
+  return {
+    environment: options.environment,
+    imageRepository: runnerImageRepository(context.config.runnerImage),
+  };
+}
+
 async function unresolvedPublicationAttempts(
   state: string | PublicationJournal,
+  context: PublicationStateContext,
 ): Promise<readonly RunnerPublicationAttempt[]> {
-  const records = await readPublicationState(state);
+  const records = (await readPublicationState(state, context)).entries;
+  return unresolvedPublicationAttemptsFromRecords(records);
+}
+
+function unresolvedPublicationAttemptsFromRecords(
+  records: readonly (RunnerPublicationAttempt | RunnerPublicationResolution)[],
+): readonly RunnerPublicationAttempt[] {
   const unresolved = new Map<string, RunnerPublicationAttempt>();
   for (const entry of records) {
     if (entry.status === "publication-started") {
@@ -1467,11 +1555,12 @@ async function uniquePublicationResolution(
   state: string | PublicationJournal,
   environment: RunnerImageReleaseEnvironment,
   release: string,
+  context: PublicationStateContext,
 ): Promise<Readonly<{
   resolution: RunnerPublishedResolution;
   attempt: RunnerPublicationAttempt;
 }> | null> {
-  const records = await readPublicationState(state);
+  const records = (await readPublicationState(state, context)).entries;
   const matches = records.filter(
     (entry): entry is RunnerPublishedResolution =>
       entry.status === "published" &&
@@ -1499,20 +1588,118 @@ async function uniquePublicationResolution(
 
 async function readPublicationState(
   state: string | PublicationJournal,
-): Promise<readonly (RunnerPublicationAttempt | RunnerPublicationResolution)[]> {
+  context: PublicationStateContext,
+): Promise<PublicationStateRecords> {
   let bytes: Uint8Array;
   try {
     bytes = typeof state === "string"
       ? await readStablePrivateFile(state, "publication state")
       : await state.read();
   } catch (error) {
-    if (isFileSystemError(error, "ENOENT")) return [];
+    if (isFileSystemError(error, "ENOENT")) return emptyPublicationStateRecords();
     throw error;
   }
-  return parsePublicationState(bytes);
+  return parsePublicationState(bytes, context);
 }
 
 function parsePublicationState(
+  bytes: Uint8Array,
+  context: PublicationStateContext,
+): PublicationStateRecords {
+  const parsed: Array<Record<string, unknown>> = [];
+  for (const line of new TextDecoder("utf-8", { fatal: true })
+    .decode(bytes)
+    .split(/\r?\n/u)
+    .filter(Boolean)) {
+    let value: unknown;
+    try {
+      value = JSON.parse(line) as unknown;
+    } catch {
+      throw new Error("runner_image_publication_state_invalid");
+    }
+    if (!isRecord(value)) {
+      throw new Error("runner_image_publication_state_invalid");
+    }
+    parsed.push(value);
+  }
+
+  const firstCurrentIndex = parsed.findIndex(
+    (value) => value.kind === "takosumi.runner-image-publication-state@v2",
+  );
+  const legacy = firstCurrentIndex === -1
+    ? parsed
+    : parsed.slice(0, firstCurrentIndex);
+  if (
+    parsed.slice(firstCurrentIndex === -1 ? parsed.length : firstCurrentIndex)
+      .some((value) => value.kind === "takosumi.runner-image-publication-state@v1")
+  ) {
+    throw new Error("runner_image_publication_state_invalid");
+  }
+  validateLegacyPublicationPrefix(legacy, context);
+
+  const entries: Array<RunnerPublicationAttempt | RunnerPublicationResolution> = [];
+  const legacyReleases = new Set<string>();
+  const legacyTransportRefs = new Set<string>();
+  const legacyTransportTags = new Set<string>();
+  for (let index = 0; index < legacy.length; index += 2) {
+    const attempt = legacy[index]!;
+    legacyReleases.add(attempt.release as string);
+    legacyTransportRefs.add((attempt.image as Record<string, unknown>).transportRef as string);
+    legacyTransportTags.add((attempt.image as Record<string, unknown>).transportTag as string);
+  }
+  for (const value of parsed.slice(firstCurrentIndex === -1 ? parsed.length : firstCurrentIndex)) {
+    if (value.kind !== "takosumi.runner-image-publication-state@v2") {
+      throw new Error("runner_image_publication_state_invalid");
+    }
+    if (value.status === "publication-started") {
+      if (!validPublicationAttempt(value)) {
+        throw new Error("runner_image_publication_state_invalid");
+      }
+      if (
+        legacyReleases.has(value.release as string) ||
+        legacyTransportRefs.has((value.image as Record<string, unknown>).transportRef as string) ||
+        legacyTransportTags.has((value.image as Record<string, unknown>).transportTag as string)
+      ) {
+        throw new Error("runner_image_publication_state_invalid");
+      }
+      entries.push(value as unknown as RunnerPublicationAttempt);
+    } else if (value.status === "published" || value.status === "reconciled-absent") {
+      if (!validPublicationResolution(value)) {
+        throw new Error("runner_image_publication_state_invalid");
+      }
+      if (
+        legacyReleases.has(value.release as string) ||
+        legacyTransportRefs.has(value.transportRef as string)
+      ) {
+        throw new Error("runner_image_publication_state_invalid");
+      }
+      entries.push(value as unknown as RunnerPublicationResolution);
+    } else {
+      throw new Error("runner_image_publication_state_invalid");
+    }
+  }
+  return {
+    entries,
+    legacy: {
+      releases: legacyReleases,
+      transportRefs: legacyTransportRefs,
+      transportTags: legacyTransportTags,
+    },
+  };
+}
+
+function emptyPublicationStateRecords(): PublicationStateRecords {
+  return {
+    entries: [],
+    legacy: {
+      releases: new Set(),
+      transportRefs: new Set(),
+      transportTags: new Set(),
+    },
+  };
+}
+
+function parseCurrentPublicationState(
   bytes: Uint8Array,
 ): readonly (RunnerPublicationAttempt | RunnerPublicationResolution)[] {
   const entries: Array<RunnerPublicationAttempt | RunnerPublicationResolution> = [];
@@ -1534,10 +1721,7 @@ function parsePublicationState(
         throw new Error("runner_image_publication_state_invalid");
       }
       entries.push(value as unknown as RunnerPublicationAttempt);
-    } else if (
-      value.status === "published" ||
-      value.status === "reconciled-absent"
-    ) {
+    } else if (value.status === "published" || value.status === "reconciled-absent") {
       if (!validPublicationResolution(value)) {
         throw new Error("runner_image_publication_state_invalid");
       }
@@ -1547,6 +1731,294 @@ function parsePublicationState(
     }
   }
   return entries;
+}
+
+function validateLegacyPublicationPrefix(
+  records: readonly Record<string, unknown>[],
+  context: PublicationStateContext,
+): void {
+  if (records.length === 0) return;
+  if (records.length % 2 !== 0) {
+    throw new Error("runner_image_publication_state_invalid");
+  }
+  const releases = new Set<string>();
+  const transportRefs = new Set<string>();
+  const transportTags = new Set<string>();
+  let previousObservedAt = Number.NEGATIVE_INFINITY;
+  for (let index = 0; index < records.length; index += 2) {
+    const attemptValue = records[index]!;
+    const resolutionValue = records[index + 1]!;
+    if (!validLegacyPublicationAttempt(attemptValue, context)) {
+      throw new Error("runner_image_publication_state_invalid");
+    }
+    const attempt = attemptValue as unknown as RunnerLegacyPublicationAttempt;
+    if (!validLegacyPublicationResolution(resolutionValue, attempt, context)) {
+      throw new Error("runner_image_publication_state_invalid");
+    }
+    const resolution = resolutionValue as unknown as RunnerLegacyPublicationResolution;
+    const attemptObservedAt = Date.parse(attempt.observedAt);
+    const resolutionObservedAt = Date.parse(resolution.observedAt);
+    const buildObservedAt = Date.parse(
+      (resolution.build as Record<string, unknown>).observedAt as string,
+    );
+    if (
+      attemptObservedAt < previousObservedAt ||
+      attemptObservedAt > buildObservedAt ||
+      buildObservedAt > resolutionObservedAt
+    ) {
+      throw new Error("runner_image_publication_state_invalid");
+    }
+    previousObservedAt = resolutionObservedAt;
+    if (
+      releases.has(attempt.release) ||
+      transportRefs.has(attempt.image.transportRef) ||
+      transportTags.has(attempt.image.transportTag)
+    ) {
+      throw new Error("runner_image_publication_state_invalid");
+    }
+    releases.add(attempt.release);
+    transportRefs.add(attempt.image.transportRef);
+    transportTags.add(attempt.image.transportTag);
+  }
+}
+
+function validLegacyPublicationAttempt(
+  value: Record<string, unknown>,
+  context: PublicationStateContext,
+): value is RunnerLegacyPublicationAttempt {
+  if (
+    !exactRecordKeys(value, [
+      "config",
+      "environment",
+      "image",
+      "kind",
+      "observedAt",
+      "release",
+      "review",
+      "source",
+      "status",
+    ]) ||
+    value.kind !== "takosumi.runner-image-publication-state@v1" ||
+    value.status !== "publication-started" ||
+    value.environment !== context.environment ||
+    typeof value.release !== "string" ||
+    !RELEASE_LABEL.test(value.release) ||
+    typeof value.observedAt !== "string" ||
+    !Number.isFinite(Date.parse(value.observedAt)) ||
+    !isRecord(value.source) ||
+    !exactRecordKeys(value.source, [
+      "branch",
+      "buildContextSha256",
+      "commit",
+      "dockerfileSha256",
+    ]) ||
+    !isBoundedString(value.source.branch, 512) ||
+    typeof value.source.commit !== "string" ||
+    !/^[0-9a-f]{40}$/u.test(value.source.commit) ||
+    typeof value.source.dockerfileSha256 !== "string" ||
+    !SHA256.test(value.source.dockerfileSha256) ||
+    typeof value.source.buildContextSha256 !== "string" ||
+    !SHA256.test(value.source.buildContextSha256) ||
+    !isRecord(value.config) ||
+    !exactRecordKeys(value.config, ["buildSha256", "path", "previousImage"]) ||
+    !isBoundedString(value.config.path, 4096) ||
+    typeof value.config.buildSha256 !== "string" ||
+    !SHA256.test(value.config.buildSha256) ||
+    typeof value.config.previousImage !== "string" ||
+    !DIGEST_IMAGE.test(value.config.previousImage) ||
+    runnerImageRepository(value.config.previousImage) !== context.imageRepository ||
+    !isRecord(value.image) ||
+    !exactRecordKeys(value.image, ["localImageId", "transportRef", "transportTag"], [
+      "localDescriptorDigest",
+    ]) ||
+    typeof value.image.transportTag !== "string" ||
+    !RELEASE_LABEL.test(value.image.transportTag) ||
+    typeof value.image.transportRef !== "string" ||
+    value.image.transportRef !==
+      `${context.imageRepository}:${value.image.transportTag}` ||
+    !TRANSPORT_REF.test(value.image.transportRef) ||
+    typeof value.image.localImageId !== "string" ||
+    !SHA256.test(value.image.localImageId) ||
+    (value.image.localDescriptorDigest !== undefined &&
+      (typeof value.image.localDescriptorDigest !== "string" ||
+        !SHA256.test(value.image.localDescriptorDigest))) ||
+    !validReview(value.review)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function validLegacyPublicationResolution(
+  value: Record<string, unknown>,
+  attempt: RunnerLegacyPublicationAttempt,
+  context: PublicationStateContext,
+): value is RunnerLegacyPublicationResolution {
+  if (
+    !exactRecordKeys(value, [
+      "build",
+      "environment",
+      "imageConfigDigest",
+      "immutableRef",
+      "kind",
+      "observedAt",
+      "release",
+      "status",
+      "transportRef",
+    ]) ||
+    value.kind !== "takosumi.runner-image-publication-state@v1" ||
+    value.status !== "published" ||
+    value.environment !== context.environment ||
+    value.environment !== attempt.environment ||
+    value.release !== attempt.release ||
+    typeof value.release !== "string" ||
+    !RELEASE_LABEL.test(value.release) ||
+    typeof value.observedAt !== "string" ||
+    !Number.isFinite(Date.parse(value.observedAt)) ||
+    typeof value.transportRef !== "string" ||
+    value.transportRef !== attempt.image.transportRef ||
+    !TRANSPORT_REF.test(value.transportRef) ||
+    typeof value.immutableRef !== "string" ||
+    !DIGEST_IMAGE.test(value.immutableRef) ||
+    !value.immutableRef.startsWith(`${context.imageRepository}@`) ||
+    typeof value.imageConfigDigest !== "string" ||
+    !SHA256.test(value.imageConfigDigest) ||
+    !isRecord(value.build) ||
+    !validLegacyBuildRecord(value.build, attempt, value)
+  ) {
+    return false;
+  }
+  const descriptorDigest = value.immutableRef.slice(
+    value.immutableRef.lastIndexOf("@") + 1,
+  );
+  return descriptorDigest ===
+    (attempt.image.localDescriptorDigest ?? attempt.image.localImageId);
+}
+
+function validLegacyBuildRecord(
+  value: Record<string, unknown>,
+  attempt: RunnerLegacyPublicationAttempt,
+  resolution: Record<string, unknown>,
+): value is Readonly<Record<string, unknown>> {
+  if (
+    !exactRecordKeys(value, [
+      "config",
+      "environment",
+      "image",
+      "kind",
+      "observedAt",
+      "operation",
+      "release",
+      "review",
+      "source",
+      "status",
+    ], ["reconciledBy"]) ||
+    value.kind !== "takosumi.runner-image-release@v2" ||
+    value.operation !== "build" ||
+    value.status !== "published" ||
+    value.environment !== attempt.environment ||
+    value.release !== attempt.release ||
+    typeof value.observedAt !== "string" ||
+    !Number.isFinite(Date.parse(value.observedAt)) ||
+    !isRecord(value.source) ||
+    !exactRecordKeys(value.source, [
+      "branch",
+      "buildContextSha256",
+      "commit",
+      "dockerfileSha256",
+    ]) ||
+    value.source.branch !== attempt.source.branch ||
+    value.source.commit !== attempt.source.commit ||
+    value.source.dockerfileSha256 !== attempt.source.dockerfileSha256 ||
+    value.source.buildContextSha256 !== attempt.source.buildContextSha256 ||
+    !isBoundedString(value.source.branch, 512) ||
+    typeof value.source.commit !== "string" ||
+    !/^[0-9a-f]{40}$/u.test(value.source.commit) ||
+    typeof value.source.dockerfileSha256 !== "string" ||
+    !SHA256.test(value.source.dockerfileSha256) ||
+    typeof value.source.buildContextSha256 !== "string" ||
+    !SHA256.test(value.source.buildContextSha256) ||
+    !isRecord(value.config) ||
+    !exactRecordKeys(value.config, [
+      "buildSha256",
+      "expectedActivationSha256",
+      "path",
+      "previousImage",
+    ]) ||
+    value.config.path !== attempt.config.path ||
+    value.config.buildSha256 !== attempt.config.buildSha256 ||
+    value.config.previousImage !== attempt.config.previousImage ||
+    !isBoundedString(value.config.path, 4096) ||
+    typeof value.config.buildSha256 !== "string" ||
+    !SHA256.test(value.config.buildSha256) ||
+    typeof value.config.expectedActivationSha256 !== "string" ||
+    !SHA256.test(value.config.expectedActivationSha256) ||
+    typeof value.config.previousImage !== "string" ||
+    !DIGEST_IMAGE.test(value.config.previousImage) ||
+    !isRecord(value.image) ||
+    !exactRecordKeys(value.image, [
+      "imageConfigDigest",
+      "immutableRef",
+      "transportRef",
+      "transportTag",
+    ]) ||
+    value.image.transportTag !== attempt.image.transportTag ||
+    value.image.transportRef !== attempt.image.transportRef ||
+    value.image.immutableRef !== resolution.immutableRef ||
+    value.image.imageConfigDigest !== resolution.imageConfigDigest ||
+    typeof value.image.transportTag !== "string" ||
+    !RELEASE_LABEL.test(value.image.transportTag) ||
+    typeof value.image.transportRef !== "string" ||
+    !TRANSPORT_REF.test(value.image.transportRef) ||
+    !value.image.transportRef.endsWith(`:${value.image.transportTag}`) ||
+    typeof value.image.immutableRef !== "string" ||
+    !DIGEST_IMAGE.test(value.image.immutableRef) ||
+    typeof value.image.imageConfigDigest !== "string" ||
+    !SHA256.test(value.image.imageConfigDigest) ||
+    value.review !== attempt.review ||
+    !validReview(value.review)
+  ) {
+    return false;
+  }
+  if (value.reconciledBy !== undefined) {
+    if (
+      !isRecord(value.reconciledBy) ||
+      !exactRecordKeys(value.reconciledBy, ["branch", "commit"]) ||
+      !isBoundedString(value.reconciledBy.branch, 512) ||
+      value.reconciledBy.branch !== value.source.branch ||
+      typeof value.reconciledBy.commit !== "string" ||
+      !/^[0-9a-f]{40}$/u.test(value.reconciledBy.commit)
+    ) {
+      return false;
+    }
+  }
+  const attemptObservedAt = Date.parse(attempt.observedAt);
+  return attemptObservedAt <= Date.parse(value.observedAt) &&
+    Date.parse(value.observedAt) <= Date.parse(resolution.observedAt);
+}
+
+function exactRecordKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  const allowed = new Set([...required, ...optional]);
+  const keys = Object.keys(value);
+  return (
+    keys.length >= required.length &&
+    keys.every((key) => allowed.has(key)) &&
+    required.every((key) => Object.hasOwn(value, key))
+  );
+}
+
+function validReview(value: unknown): value is string {
+  if (!isBoundedString(value, 256)) return false;
+  try {
+    assertReview(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function validPublicationAttempt(value: Record<string, unknown>): boolean {
@@ -3226,7 +3698,7 @@ async function legacyPublicationJournalAdoptionStatus(
       ) {
         throw new Error("publication state changed while reading");
       }
-      const entries = parsePublicationState(bytes);
+      const entries = parseCurrentPublicationState(bytes);
       if (
         entries.length !== 1 ||
         entries[0]?.status !== "publication-started" ||

@@ -406,6 +406,146 @@ function publicationAttempt(
   } as const;
 }
 
+function legacyPublicationAttempt(
+  input: Fixture,
+  overrides: Readonly<{
+    release?: string;
+    transportTag?: string;
+    transportRef?: string;
+    localDescriptorDigest?: string | null;
+    observedAt?: string;
+    environment?: "staging" | "production";
+    configPath?: string;
+    previousImage?: string;
+  }> = {},
+) {
+  const transportTag = overrides.transportTag ?? `legacy-${"0".repeat(8)}`;
+  const imageRepository = PREVIOUS.slice(0, PREVIOUS.indexOf("@"));
+  const localDescriptorDigest = overrides.localDescriptorDigest === undefined
+    ? `sha256:${"d".repeat(64)}`
+    : overrides.localDescriptorDigest;
+  return {
+    kind: "takosumi.runner-image-publication-state@v1",
+    status: "publication-started",
+    environment: overrides.environment ?? "staging",
+    release: overrides.release ?? "legacy-release-1",
+    observedAt: overrides.observedAt ?? "2026-08-27T00:00:00.000Z",
+    source: {
+      branch: "fix/TASK-0032-runner-image",
+      commit: COMMIT,
+      dockerfileSha256: sha256(DOCKERFILE),
+      buildContextSha256: dashboardAssetTreeSeal(input.repository).digest,
+    },
+    config: {
+      path: overrides.configPath ?? input.config,
+      buildSha256: sha256(input.configSource),
+      previousImage: overrides.previousImage ?? PREVIOUS,
+    },
+    image: {
+      transportTag,
+      transportRef: overrides.transportRef ?? `${imageRepository}:${transportTag}`,
+      localImageId: `sha256:${"d".repeat(64)}`,
+      ...(localDescriptorDigest === null ? {} : { localDescriptorDigest }),
+    },
+    review: "operator:builder",
+  } as const;
+}
+
+function legacyPublicationResolution(
+  attempt: ReturnType<typeof legacyPublicationAttempt>,
+  overrides: Readonly<{
+    release?: string;
+    transportRef?: string;
+    immutableRef?: string;
+    imageConfigDigest?: string;
+    observedAt?: string;
+    buildObservedAt?: string;
+    environment?: "staging" | "production";
+    reconciledBy?: Readonly<{ branch: string; commit: string }>;
+  }> = {},
+) {
+  const transportRef = overrides.transportRef ?? attempt.image.transportRef;
+  const immutableRef = overrides.immutableRef ?? NEXT;
+  const imageConfigDigest = overrides.imageConfigDigest ?? `sha256:${"f".repeat(64)}`;
+  const build = {
+    kind: "takosumi.runner-image-release@v2",
+    operation: "build",
+    status: "published",
+    environment: overrides.environment ?? attempt.environment,
+    release: overrides.release ?? attempt.release,
+    observedAt: overrides.buildObservedAt ?? "2026-08-27T00:00:30.000Z",
+    source: { ...attempt.source },
+    config: {
+      ...attempt.config,
+      expectedActivationSha256: `sha256:${"a".repeat(64)}`,
+    },
+    image: {
+      transportTag: attempt.image.transportTag,
+      transportRef,
+      immutableRef,
+      imageConfigDigest,
+    },
+    ...(overrides.reconciledBy ? { reconciledBy: overrides.reconciledBy } : {}),
+    review: attempt.review,
+  } as const;
+  return {
+    kind: "takosumi.runner-image-publication-state@v1",
+    status: "published",
+    environment: overrides.environment ?? attempt.environment,
+    release: overrides.release ?? attempt.release,
+    observedAt: overrides.observedAt ?? "2026-08-27T00:01:00.000Z",
+    transportRef,
+    immutableRef,
+    imageConfigDigest,
+    build,
+  } as const;
+}
+
+function legacyPublicationPrefix(input: Fixture, count = 4): string {
+  const records: unknown[] = [];
+  for (let index = 1; index <= count; index += 1) {
+    const digest = String(index).repeat(64);
+    const attempt = legacyPublicationAttempt(input, {
+      release: `legacy-release-${index}`,
+      transportTag: `legacy-${index}`,
+      observedAt: `2026-08-27T00:0${index}:00.000Z`,
+      localDescriptorDigest: `sha256:${digest}`,
+    });
+    records.push(
+      attempt,
+      legacyPublicationResolution(attempt, {
+        release: attempt.release,
+        transportRef: attempt.image.transportRef,
+        immutableRef:
+          `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${digest}`,
+        observedAt: `2026-08-27T00:0${index}:30.000Z`,
+        buildObservedAt: `2026-08-27T00:0${index}:15.000Z`,
+      }),
+    );
+  }
+  return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+}
+
+async function bindEmptyPublicationJournalThroughFailedBuild(
+  input: Fixture,
+  journalRoot: string,
+): Promise<bigint> {
+  await expect(
+    runRunnerImageRelease(buildOptions(input, "staging", true), {
+      ...buildRuntime(input, async (executable, args) => {
+        if (executable === "docker" && args[0] === "buildx") {
+          return { exitCode: 1, stdout: "", stderr: "simulated build failure" };
+        }
+        throw new Error(`unexpected command: ${args.join(" ")}`);
+      }),
+      publicationJournalRoot: journalRoot,
+    }),
+  ).rejects.toThrow();
+  expect(readFileSync(input.state, "utf8")).toBe("");
+  expect(existsSync(publicationCoordinationPaths(journalRoot).locator)).toBeTrue();
+  return statSync(input.state).ino;
+}
+
 function sha256(value: string | Uint8Array): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
@@ -678,6 +818,361 @@ test("staging accepts a clean pushed feature branch and records branch plus comm
     status: "planned",
     source: { branch: "fix/TASK-0032-runner-image", commit: COMMIT },
   });
+});
+
+test("closed v1 publication pairs are accepted as an archival prefix for a new dry-run", async () => {
+  const input = fixture();
+  writePrivate(input.state, legacyPublicationPrefix(input));
+  await expect(
+    runRunnerImageRelease(buildOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+    }),
+  ).resolves.toMatchObject({
+    status: "planned",
+    release: "release-1",
+  });
+});
+
+test("archival history permits each pair's historical config path and predecessor image", async () => {
+  const input = fixture();
+  const records: unknown[] = [];
+  for (let index = 1; index <= 4; index += 1) {
+    const descriptor = String(index).repeat(64);
+    const previous =
+      `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${String(index + 4).repeat(64)}`;
+    const attempt = legacyPublicationAttempt(input, {
+      release: `historical-release-${index}`,
+      transportTag: `historical-${index}`,
+      configPath: `/tmp/historical-wrangler-${index}.toml`,
+      previousImage: previous,
+      localDescriptorDigest: `sha256:${descriptor}`,
+      observedAt: `2026-08-27T01:0${index}:00.000Z`,
+    });
+    records.push(
+      attempt,
+      legacyPublicationResolution(attempt, {
+        immutableRef:
+          `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${descriptor}`,
+        observedAt: `2026-08-27T01:0${index}:30.000Z`,
+        buildObservedAt: `2026-08-27T01:0${index}:15.000Z`,
+      }),
+    );
+  }
+  writePrivate(input.state, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+  await expect(
+    runRunnerImageRelease(buildOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+    }),
+  ).resolves.toMatchObject({ status: "planned" });
+});
+
+test("archival history permits distinct publications that share one immutable digest", async () => {
+  const input = fixture();
+  const digest = `sha256:${"d".repeat(64)}`;
+  const first = legacyPublicationAttempt(input, {
+    release: "same-digest-release-1",
+    transportTag: "same-digest-1",
+    localDescriptorDigest: digest,
+  });
+  const second = legacyPublicationAttempt(input, {
+    release: "same-digest-release-2",
+    transportTag: "same-digest-2",
+    localDescriptorDigest: digest,
+    observedAt: "2026-08-27T00:02:00.000Z",
+  });
+  const records = [
+    first,
+    legacyPublicationResolution(first, { immutableRef: NEXT }),
+    second,
+    legacyPublicationResolution(second, {
+      immutableRef: NEXT,
+      observedAt: "2026-08-27T00:03:00.000Z",
+      buildObservedAt: "2026-08-27T00:02:30.000Z",
+    }),
+  ];
+  writePrivate(input.state, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+  await expect(
+    runRunnerImageRelease(buildOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+    }),
+  ).resolves.toMatchObject({ status: "planned" });
+});
+
+test("a complete v2 tail may retain an immutable digest already present in v1 history", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  await bindEmptyPublicationJournalThroughFailedBuild(input, journalRoot);
+  const records = legacyPublicationPrefix(input)
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line)) as Array<Record<string, unknown>>;
+  const descriptor = `sha256:${"d".repeat(64)}`;
+  (records[0]!.image as Record<string, unknown>).localDescriptorDigest = descriptor;
+  records[1]!.immutableRef = NEXT;
+  (records[1]!.build as Record<string, unknown>).image = {
+    ...(records[1]!.build as Record<string, unknown>).image as Record<string, unknown>,
+    immutableRef: NEXT,
+  };
+  writePrivate(input.state, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+  await runRunnerImageRelease(buildOptions(input, "staging", true), {
+    ...buildRuntime(input, successfulPublicationCommand),
+    publicationJournalRoot: journalRoot,
+  });
+  await expect(
+    runRunnerImageRelease(buildOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      publicationJournalRoot: journalRoot,
+    }),
+  ).resolves.toMatchObject({ status: "planned" });
+});
+
+test("execute appends only current v2 records after a closed v1 prefix", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  const stateInode = await bindEmptyPublicationJournalThroughFailedBuild(input, journalRoot);
+  const prefix = legacyPublicationPrefix(input);
+  writePrivate(input.state, prefix);
+  const before = readFileSync(input.state);
+  expect(statSync(input.state).ino).toBe(stateInode);
+  await runRunnerImageRelease(buildOptions(input, "staging", true), {
+    ...buildRuntime(input, successfulPublicationCommand),
+    publicationJournalRoot: journalRoot,
+  });
+  const after = readFileSync(input.state);
+  expect(statSync(input.state).ino).toBe(stateInode);
+  expect(after.subarray(0, before.byteLength)).toEqual(before);
+  const appended = new TextDecoder().decode(after.subarray(before.byteLength));
+  const appendedRecords = appended.trim().split("\n").map((line) => JSON.parse(line));
+  expect(appendedRecords.length).toBe(2);
+  expect(appendedRecords.every((record) =>
+    record.kind === "takosumi.runner-image-publication-state@v2"
+  )).toBeTrue();
+});
+
+test("a legacy release cannot be reconciled or written as current evidence", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  const stateInode = await bindEmptyPublicationJournalThroughFailedBuild(
+    input,
+    journalRoot,
+  );
+  rmSync(input.evidence);
+  const prefix = legacyPublicationPrefix(input);
+  writePrivate(input.state, prefix);
+  const before = readFileSync(input.state);
+  expect(statSync(input.state).ino).toBe(stateInode);
+  let commands = 0;
+  await expect(
+    runRunnerImageRelease(
+      {
+        ...buildOptions(input),
+        command: "reconcile",
+        release: "legacy-release-1",
+      },
+      {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+        publicationJournalRoot: journalRoot,
+        command: async () => {
+          commands += 1;
+          throw new Error("legacy reconciliation must not invoke Docker");
+        },
+      },
+    ),
+  ).rejects.toThrow("runner_image_publication_reconciliation_not_required");
+  expect(commands).toBe(0);
+  expect(readFileSync(input.state)).toEqual(before);
+  expect(statSync(input.state).ino).toBe(stateInode);
+  expect(existsSync(input.evidence)).toBeFalse();
+});
+
+test("a new publication cannot reuse a historical release alias", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  await bindEmptyPublicationJournalThroughFailedBuild(input, journalRoot);
+  writePrivate(input.state, legacyPublicationPrefix(input));
+  let dockerCommands = 0;
+  await expect(
+    runRunnerImageRelease(
+      { ...buildOptions(input, "staging", true), release: "legacy-release-1" },
+      {
+        ...buildRuntime(input, async () => {
+          dockerCommands += 1;
+          throw new Error("historical release alias reached Docker");
+        }),
+        publicationJournalRoot: journalRoot,
+      },
+    ),
+  ).rejects.toThrow("runner_image_publication_state_invalid");
+  expect(dockerCommands).toBe(0);
+});
+
+test("a descriptorless reconciled published pair remains archival-valid through image-id fallback", async () => {
+  const input = fixture();
+  const attempt = legacyPublicationAttempt(input, { localDescriptorDigest: null });
+  const resolution = legacyPublicationResolution(attempt, {
+    immutableRef: NEXT,
+    transportRef: attempt.image.transportRef,
+    reconciledBy: {
+      branch: "fix/TASK-0032-runner-image",
+      commit: RECONCILER_COMMIT,
+    },
+  });
+  writePrivate(input.state, `${JSON.stringify(attempt)}\n${JSON.stringify(resolution)}\n`);
+  await expect(
+    runRunnerImageRelease(buildOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+    }),
+  ).resolves.toMatchObject({ status: "planned" });
+});
+
+test("legacy prefix mutations are rejected before Docker or journal append", async () => {
+  const cases: ReadonlyArray<Readonly<{
+    name: string;
+    mutate: (records: Array<Record<string, unknown>>, input: Fixture) => void;
+  }>> = [
+    {
+      name: "resolution release relation",
+      mutate: (records) => {
+        records[1]!.release = "legacy-release-other";
+      },
+    },
+    {
+      name: "build source relation",
+      mutate: (records) => {
+        (records[1]!.build as Record<string, unknown>).source = {
+          ...(records[1]!.build as Record<string, unknown>).source as Record<string, unknown>,
+          commit: "b".repeat(40),
+        };
+      },
+    },
+    {
+      name: "extra key",
+      mutate: (records) => {
+        records[0]!.unexpected = true;
+      },
+    },
+    {
+      name: "missing key",
+      mutate: (records) => {
+        delete (records[0]!.source as Record<string, unknown>).commit;
+      },
+    },
+    {
+      name: "orphan",
+      mutate: (records) => {
+        records.splice(1);
+      },
+    },
+    {
+      name: "duplicate pair",
+      mutate: (records) => {
+        records.push(records[0]!, records[1]!);
+      },
+    },
+    {
+      name: "nonprefix v1",
+      mutate: (records, input) => {
+        records.push(publicationAttempt(input), records[0]!);
+      },
+    },
+    {
+      name: "wrong scope",
+      mutate: (records) => {
+        (records[0]!.config as Record<string, unknown>).previousImage =
+          `registry.cloudflare.com/${"c".repeat(32)}/takosumi-runner@sha256:${"1".repeat(64)}`;
+      },
+    },
+    {
+      name: "wrong transport repository",
+      mutate: (records) => {
+        (records[0]!.image as Record<string, unknown>).transportRef =
+          `registry.cloudflare.com/${"c".repeat(32)}/takosumi-runner:legacy-1`;
+      },
+    },
+    {
+      name: "wrong immutable repository",
+      mutate: (records) => {
+        const wrong =
+          `registry.cloudflare.com/${"c".repeat(32)}/takosumi-runner@sha256:${"1".repeat(64)}`;
+        records[1]!.immutableRef = wrong;
+        (records[1]!.build as Record<string, unknown>).image = {
+          ...(records[1]!.build as Record<string, unknown>).image as Record<string, unknown>,
+          immutableRef: wrong,
+        };
+      },
+    },
+    {
+      name: "reconciled absence",
+      mutate: (records) => {
+        records[1]!.status = "reconciled-absent";
+      },
+    },
+    {
+      name: "missing nested build key",
+      mutate: (records) => {
+        delete ((records[1]!.build as Record<string, unknown>).source as Record<string, unknown>).commit;
+      },
+    },
+    {
+      name: "reconciler branch relation",
+      mutate: (records) => {
+        (records[1]!.build as Record<string, unknown>).reconciledBy = {
+          branch: "main",
+          commit: RECONCILER_COMMIT,
+        };
+      },
+    },
+    {
+      name: "cross-generation release collision",
+      mutate: (records, input) => {
+        const current = publicationAttempt(input) as Record<string, unknown>;
+        current.release = "legacy-release-1";
+        records.push(current);
+      },
+    },
+    {
+      name: "cross-generation transport collision",
+      mutate: (records, input) => {
+        const current = publicationAttempt(input) as Record<string, unknown>;
+        current.image = {
+          ...(current.image as Record<string, unknown>),
+          transportTag: "legacy-1",
+          transportRef: (records[0]!.image as Record<string, unknown>).transportRef,
+        };
+        records.push(current);
+      },
+    },
+  ];
+  for (const entry of cases) {
+    const input = fixture();
+    const journalRoot = join(input.operator, "publication-locator");
+    await bindEmptyPublicationJournalThroughFailedBuild(input, journalRoot);
+    const records = legacyPublicationPrefix(input)
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)) as Array<Record<string, unknown>>;
+    entry.mutate(records, input);
+    writePrivate(input.state, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+    const before = readFileSync(input.state);
+    let dockerCommands = 0;
+    await expect(
+      runRunnerImageRelease(buildOptions(input, "staging", true), {
+        ...buildRuntime(input, async () => {
+          dockerCommands += 1;
+          throw new Error(`${entry.name} reached Docker`);
+        }),
+        publicationJournalRoot: journalRoot,
+      }),
+    ).rejects.toThrow("runner_image_publication_state_invalid");
+    expect(dockerCommands, entry.name).toBe(0);
+    expect(readFileSync(input.state), entry.name).toEqual(before);
+  }
 });
 
 test("staging rejects an unpushed or divergent current branch", async () => {

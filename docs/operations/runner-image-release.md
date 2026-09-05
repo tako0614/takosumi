@@ -58,6 +58,10 @@ contain bounded, redacted diagnostics and digest fields, never secrets. The
 closed artifact revisions carrying source authority are runner release v3,
 runner publication state v2, platform plan v6, and platform ready evidence v3.
 Older artifacts fail closed; rebuild and re-plan instead of translating them.
+The reader has one narrow archival exception: a closed prefix of validated v1
+publication pairs may remain in an existing journal for history inspection.
+Those rows are not current evidence and are never translated into a v2
+resolution.
 Before any evidence or coordination file is opened, the runner CLI canonicalizes
 existing and future paths and requires the realized config, its sibling source
 pin, publication state, terminal evidence, build/platform input evidence,
@@ -146,6 +150,14 @@ digest, then revalidates the unchanged journal inode before publishing the
 locator. Descriptor-aware, multi-record, missing-tag, and mismatched-tag
 unbound journals remain unbound and fail closed. Reconcile that exact tag
 without mutation:
+
+A bound journal may begin with adjacent, closed v1 `publication-started` and
+`published` pairs from the historical writer. The reader validates their exact
+source, config, transport, immutable-digest, descriptor-fallback, and time
+relations against the selected environment and repository, then excludes those
+rows from unresolved and unique current-publication evidence. A new build
+appends v2 records after that prefix only. The old v1 release/evidence path is
+not supported for general recovery or reconciliation.
 
 ```bash
 bun run deploy -- takosumi-runner-image reconcile \
