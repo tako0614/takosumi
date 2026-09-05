@@ -135,7 +135,63 @@ export function normalizeStoredCapsuleCompatibilityReport(
     (report as { readonly level: unknown }).level,
   );
   storedCapsuleCompatibilityProviderGraph(report);
-  return report;
+  const declarations = (
+    report as { readonly rootModuleVariableDeclarations?: unknown }
+  ).rootModuleVariableDeclarations;
+  return declarations === undefined
+    ? report
+    : {
+        ...report,
+        rootModuleVariableDeclarations:
+          parseStoredCapsuleRootModuleVariableDeclarations(declarations),
+      };
+}
+
+export function parseStoredCapsuleRootModuleVariableDeclarations(
+  value: unknown,
+): NonNullable<
+  CapsuleCompatibilityReport["rootModuleVariableDeclarations"]
+> {
+  if (!Array.isArray(value)) {
+    throw new TypeError(
+      "stored Capsule root module variable declarations must be an array",
+    );
+  }
+  const names = new Set<string>();
+  return value.map((entry, index) => {
+    const declaration = closedRecord(
+      entry,
+      ["name", "type", "hasDefault"],
+      `stored Capsule root module variable declarations[${index}]`,
+    );
+    const name = requiredStoredString(declaration.name, "name");
+    if (names.has(name)) {
+      throw new TypeError(
+        "stored Capsule root module variable declaration names must be unique",
+      );
+    }
+    names.add(name);
+    const type = declaration.type;
+    if (
+      type !== "string" &&
+      type !== "number" &&
+      type !== "boolean" &&
+      type !== "json" &&
+      type !== "unknown"
+    ) {
+      throw new TypeError(
+        "stored Capsule root module variable declaration type is invalid",
+      );
+    }
+    return {
+      name,
+      type,
+      hasDefault: requiredStoredBoolean(
+        declaration.hasDefault,
+        "hasDefault",
+      ),
+    };
+  });
 }
 
 /**

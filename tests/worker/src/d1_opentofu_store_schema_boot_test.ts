@@ -70,6 +70,79 @@ test("ensureD1OpenTofuLedgerSchema converges on a fresh database", async () => {
   }
 });
 
+test("v68 adds nullable compatibility declarations without upgrading legacy evidence", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 67 });
+  expect(
+    await d1ColumnNamesForTest(db, "capsule_compatibility_reports"),
+  ).not.toContain("root_module_variable_declarations_json");
+  await db
+    .prepare(
+      `insert into capsule_compatibility_reports (
+         id, source_id, source_snapshot_id, module_path, level,
+         findings_json, providers_json, resources_json, data_sources_json,
+         provisioners_json, root_module_variables_json,
+         root_module_outputs_json, created_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      "caprep_v67_legacy_declarations",
+      "source_v67_legacy_declarations",
+      "snapshot_v67_legacy_declarations",
+      ".",
+      "ready",
+      "[]",
+      JSON.stringify({ providerPackages: [], rootProviderRequirements: [] }),
+      "[]",
+      "[]",
+      "[]",
+      JSON.stringify(["project_name"]),
+      "[]",
+      "2026-09-05T00:00:00.000Z",
+    )
+    .run();
+
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  expect(
+    await d1ColumnNamesForTest(db, "capsule_compatibility_reports"),
+  ).toContain("root_module_variable_declarations_json");
+  expect(
+    await db
+      .prepare(
+        `select root_module_variable_declarations_json as declarations
+         from capsule_compatibility_reports
+         where id = ?`,
+      )
+      .bind("caprep_v67_legacy_declarations")
+      .first(),
+  ).toEqual({ declarations: null });
+  expect(
+    await db
+      .prepare(
+        `select version, name, checksum from schema_migrations
+         where version = 68`,
+      )
+      .first(),
+  ).toEqual({
+    version: 68,
+    name: "d1_capsule_compatibility_variable_declarations",
+    checksum: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+  });
+  const store = createCloudflareD1OpenTofuControlStore(db, {
+    schemaMode: "predeployed",
+  });
+  const report = await store.getCapsuleCompatibilityReport(
+    "caprep_v67_legacy_declarations",
+  );
+  expect(report).toBeDefined();
+  expect(
+    report
+      ? Object.hasOwn(report, "rootModuleVariableDeclarations")
+      : undefined,
+  ).toBe(false);
+});
+
 test("v61/v62 create an empty Resource identity fence without historical backfill", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 60 });
@@ -712,7 +785,7 @@ test("predeployed verification is strictly read-only", async () => {
   );
 });
 
-test("predeployed verification accepts only the exact current v67 ledger", async () => {
+test("predeployed verification accepts only the exact current v68 ledger", async () => {
   const predecessor = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(predecessor, {
     throughMigrationVersion: 62,
@@ -753,7 +826,7 @@ test("predeployed verification accepts only the exact current v67 ledger", async
   await extra
     .prepare(
       `insert into schema_migrations (version, name, checksum, applied_at)
-       values (68, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
+       values (69, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
     )
     .bind(`sha256:${"f".repeat(64)}`)
     .run();

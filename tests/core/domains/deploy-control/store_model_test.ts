@@ -12,6 +12,8 @@ import type { Project } from "takosumi-contract/projects";
 import type { Workspace, WorkspaceMember } from "takosumi-contract/workspaces";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
+import { compileRepositoryInstallUx } from "../../../../core/domains/capsules/repository_install_ux_compiler.ts";
 import {
   CapsuleStateVersionGuardConflict,
   InMemoryOpenTofuControlStore,
@@ -649,6 +651,254 @@ test("Capsule compatibility reports persist the analyzed module path on every st
       label,
     ).toMatchObject(report);
   }
+});
+
+test("Capsule compatibility reports retain exact repository install UX metadata on every store", async () => {
+  const report = {
+    id: "caprep_repository_install_ux",
+    sourceId: "source_repository_install_ux",
+    sourceSnapshotId: "snapshot_repository_install_ux",
+    modulePath: ".",
+    level: "ready",
+    findings: [],
+    providerPackages: [],
+    rootProviderRequirements: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    rootModuleVariables: ["project_name"],
+    rootModuleVariableDeclarations: [
+      { name: "project_name", type: "string", hasDefault: false },
+    ],
+    rootModuleOutputs: [
+      { name: "launch_url", sensitive: false, ephemeral: false },
+    ],
+    createdAt: TS,
+  } satisfies CapsuleCompatibilityReport;
+  const document = {
+    apiVersion: "takosumi.com/v1",
+    kind: "Repository",
+    install: {
+      modules: {
+        ".": {
+          inputs: [
+            {
+              name: "project_name",
+              role: "service_name",
+              source: { kind: "capsule_name" },
+              type: "string",
+              label: { ja: "プロジェクト名", en: "Project name" },
+            },
+          ],
+        },
+      },
+    },
+  } satisfies RepositoryManifestDocument;
+
+  const outcomes: unknown[] = [];
+  for (const [label, store] of await stores()) {
+    await store.putCapsuleCompatibilityReport(report);
+    const reloaded = await store.getCapsuleCompatibilityReport(report.id);
+    const compilation = reloaded
+      ? compileRepositoryInstallUx({
+          document,
+          sourceSnapshotId: report.sourceSnapshotId,
+          modulePath: ".",
+          compatibilityReport: reloaded,
+          capsuleName: "Yurucommu",
+          workspaceId: "workspace_repository_install_ux",
+        })
+      : undefined;
+    outcomes.push({
+      label,
+      declarations: reloaded?.rootModuleVariableDeclarations,
+      compilation: compilation?.ok
+        ? {
+            ok: true,
+            status:
+              compilation.compiled.installExperience.repositoryInstallUx
+                ?.status,
+          }
+        : compilation,
+    });
+  }
+  expect(outcomes).toEqual(
+    ["memory", "postgres", "d1"].map((label) => ({
+      label,
+      declarations: report.rootModuleVariableDeclarations,
+      compilation: { ok: true, status: "accepted" },
+    })),
+  );
+});
+
+test("legacy compatibility reports stay declaration-unavailable while analyzed empty modules retain an empty declaration list", async () => {
+  const legacy = {
+    id: "caprep_declarations_legacy",
+    sourceId: "source_declarations_legacy",
+    sourceSnapshotId: "snapshot_declarations_legacy",
+    modulePath: ".",
+    level: "ready",
+    findings: [],
+    providerPackages: [],
+    rootProviderRequirements: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    rootModuleVariables: [],
+    rootModuleOutputs: [],
+    createdAt: TS,
+  } satisfies CapsuleCompatibilityReport;
+  const analyzedEmpty = {
+    ...legacy,
+    id: "caprep_declarations_empty",
+    rootModuleVariableDeclarations: [],
+  } satisfies CapsuleCompatibilityReport;
+
+  for (const [label, store] of await stores()) {
+    await store.putCapsuleCompatibilityReport(legacy);
+    await store.putCapsuleCompatibilityReport(analyzedEmpty);
+    const reloadedLegacy = await store.getCapsuleCompatibilityReport(legacy.id);
+    const reloadedEmpty = await store.getCapsuleCompatibilityReport(
+      analyzedEmpty.id,
+    );
+    expect(
+      {
+        legacyHasDeclarations: reloadedLegacy
+          ? Object.hasOwn(reloadedLegacy, "rootModuleVariableDeclarations")
+          : undefined,
+        emptyHasDeclarations: reloadedEmpty
+          ? Object.hasOwn(reloadedEmpty, "rootModuleVariableDeclarations")
+          : undefined,
+        emptyDeclarations: reloadedEmpty?.rootModuleVariableDeclarations,
+      },
+      label,
+    ).toEqual({
+      legacyHasDeclarations: false,
+      emptyHasDeclarations: true,
+      emptyDeclarations: [],
+    });
+  }
+});
+
+test("compatibility report writes reject malformed root module variable declarations", async () => {
+  const base = {
+    id: "caprep_invalid_variable_declarations",
+    sourceId: "source_invalid_variable_declarations",
+    sourceSnapshotId: "snapshot_invalid_variable_declarations",
+    modulePath: ".",
+    level: "ready",
+    findings: [],
+    providerPackages: [],
+    rootProviderRequirements: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    rootModuleVariables: ["project_name"],
+    rootModuleOutputs: [],
+    createdAt: TS,
+  } satisfies CapsuleCompatibilityReport;
+  const malformed = [
+    [{ name: "", type: "string", hasDefault: false }],
+    [
+      { name: "project_name", type: "string", hasDefault: false },
+      { name: "project_name", type: "string", hasDefault: true },
+    ],
+    [{ name: "project_name", type: "any", hasDefault: false }],
+    [{ name: "project_name", type: "string", hasDefault: "false" }],
+    [
+      {
+        name: "project_name",
+        type: "string",
+        hasDefault: false,
+        description: "Project name",
+      },
+    ],
+  ] as const;
+
+  for (const [label, store] of await stores()) {
+    for (const [index, rootModuleVariableDeclarations] of malformed.entries()) {
+      const report = {
+        ...base,
+        id: `${base.id}_${index}`,
+        rootModuleVariableDeclarations,
+      } as unknown as CapsuleCompatibilityReport;
+      await expect(
+        Promise.resolve().then(() =>
+          store.putCapsuleCompatibilityReport(report),
+        ),
+        `${label}:${index}`,
+      ).rejects.toThrow();
+    }
+  }
+});
+
+test("Postgres and D1 report reads reject malformed root module variable declarations", async () => {
+  const report = {
+    id: "caprep_malformed_variable_declarations",
+    sourceId: "source_malformed_variable_declarations",
+    sourceSnapshotId: "snapshot_malformed_variable_declarations",
+    modulePath: ".",
+    level: "ready",
+    findings: [],
+    providerPackages: [],
+    rootProviderRequirements: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    rootModuleVariables: ["project_name"],
+    rootModuleVariableDeclarations: [
+      { name: "project_name", type: "string", hasDefault: false },
+    ],
+    rootModuleOutputs: [],
+    createdAt: TS,
+  } satisfies CapsuleCompatibilityReport;
+  const malformed = JSON.stringify([
+    {
+      name: "project_name",
+      type: "string",
+      hasDefault: false,
+      description: "Project name",
+    },
+  ]);
+
+  const pgClient = await PGliteSqlClient.create();
+  pgClients.push(pgClient);
+  const pgStore = new SqlOpenTofuControlStore({ client: pgClient });
+  await pgStore.putCapsuleCompatibilityReport(report);
+  await pgClient.query(
+    "update takosumi_capsule_compatibility_reports set root_module_variable_declarations_json = $1::json where id = $2",
+    [malformed, report.id],
+  );
+  await expect(pgStore.getCapsuleCompatibilityReport(report.id)).rejects.toThrow(
+    /unsupported field/,
+  );
+  await expect(
+    pgStore.getLatestCapsuleCompatibilityReportForSourceSnapshot(
+      report.sourceSnapshotId,
+      { sourceId: report.sourceId },
+    ),
+  ).rejects.toThrow(/unsupported field/);
+
+  const d1 = new SqliteFakeD1();
+  const d1Store = new CloudflareD1OpenTofuControlStore(d1);
+  await d1Store.putCapsuleCompatibilityReport(report);
+  await d1
+    .prepare(
+      `update capsule_compatibility_reports
+       set root_module_variable_declarations_json = ?
+       where id = ?`,
+    )
+    .bind(malformed, report.id)
+    .run();
+  await expect(d1Store.getCapsuleCompatibilityReport(report.id)).rejects.toThrow(
+    /unsupported field/,
+  );
+  await expect(
+    d1Store.getLatestCapsuleCompatibilityReportForSourceSnapshot(
+      report.sourceSnapshotId,
+      { sourceId: report.sourceId },
+    ),
+  ).rejects.toThrow(/unsupported field/);
 });
 
 test("compatibility provider graph storage rejects the retired flat array", () => {

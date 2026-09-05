@@ -284,6 +284,9 @@ export const capsuleCompatibilityReports = sqliteTable(
       .default([]),
     createdAt: text("created_at").notNull(),
     modulePath: text("module_path"),
+    rootModuleVariableDeclarationsJson: jsonText(
+      "root_module_variable_declarations_json",
+    ),
   },
   (table) => [
     index("capsule_compatibility_reports_source_snapshot_idx").on(

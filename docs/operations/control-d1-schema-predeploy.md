@@ -6,7 +6,67 @@ control schema. A hosted composition may add tables, but it must predeploy this
 OSS-owned subset first and must not rely on request traffic to create or repair
 it.
 
-This CLI has two different operating boundaries:
+## Official owner entrypoint
+
+Official bounded staging changes use the owning repository's fixed-environment
+surface:
+
+```bash
+bun run deploy -- takosumi-control-d1-schema-staging plan
+bun run deploy -- takosumi-control-d1-schema-staging apply \
+  --confirm-manifest sha256:<reviewed-manifest>
+bun run deploy -- takosumi-control-d1-schema-staging release \
+  --confirm-manifest sha256:<reviewed-manifest>
+bun run deploy -- takosumi-control-d1-schema-staging verify
+```
+
+Selecting this surface fixes the staging environment; caller-supplied
+`--environment` arguments are refused. There is no official production in-place
+schema surface. Production must first qualify its separate transition procedure
+and owner entrypoint under the boundaries below.
+
+The staging surface delegates the existing CLI, including its source, manifest,
+target, maintenance, and verification checks. They add no second migration
+ledger or coordinator. `plan` and `apply --dry-run` remain local-only. Operator
+credentials and `TAKOSUMI_CONTROL_D1_SOURCE_COMMIT` use the configuration below.
+
+Official `apply` always retains the maintenance fence. A successful schema
+transcript is not permission to resume application traffic: read back the
+compatible platform runtime first, then explicitly `release` the exact fence
+and verify authenticated Control operations. The entrypoint never retries a
+mutation or automatically restores a Worker.
+
+### Compatibility-report declarations: v67 to v68
+
+This is a nullable, no-backfill expansion. Historical reports have no retained
+variable declaration evidence; their new column stays `NULL`, not an invented
+declaration list. A new compatibility check against the exact SourceSnapshot
+must create a complete report before a new InstallPlan can use that evidence.
+
+The v67 runtime is no longer a valid rollback once the v68 migration ledger row
+commits: its exact predeployed-schema verifier rejects the newer head. A
+nullable SQL column does not make that runtime contract compatible. For the
+bounded staging transition, use a planned, forward-only maintenance window:
+
+1. Rehearse the exact migration on representative head-v67 fixtures, retain the
+   backup described below, and prepare and review both the v68 schema manifest
+   and the exact v68 platform code closure before touching the live database.
+2. Apply v68 through the schema surface with the fence retained.
+3. Execute the prepared platform release through its owning entrypoint and
+   read back its exact served identity. Platform readback proves code/image
+   publication; it does not replace Control schema verification.
+4. Release the schema-owner fence, verify the schema, and run authenticated
+   Control reads plus a fresh compatibility-check/install-plan sequence.
+
+Failure after step 2 retains the fence and is repaired forward. The recorded
+platform predecessor is component history, not a valid global rollback target
+inside this window. Do not restore v67 code, down-migrate, infer discarded
+declarations, or rewrite an already reviewed report to make it pass. Database
+restoration requires the separate recovery authority in the backup runbook.
+Staging proof does not qualify a production transition or authorize using this
+in-place procedure against the official production database.
+
+The underlying CLI has two different operating boundaries:
 
 - `plan`, `verify`, and `fence` are valid building blocks for every operator;
 - in-place `apply` is only for a new, local, test, or explicitly bounded small

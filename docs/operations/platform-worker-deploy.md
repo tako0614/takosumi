@@ -15,12 +15,18 @@ A self-hoster applying them against infrastructure they own is exercising their
 own authority. The official operator uses the same owner entrypoint with
 realized config held outside this repository.
 
-The shared deploy rules — clean worktree, owner gate first, build from that
-worktree, prove it on production's own inputs before the irreversible step,
-readback plus one real authenticated request, never blind-retry — are in
-`takos-control/engineering.policy.json` → `deploy`. This surface is
-`state-change` whenever it carries a control-ledger schema change, and
-`reversible` otherwise.
+The shared deploy rules are in `takos-control/engineering.policy.json` →
+`deploy`. This surface publishes code, assets, bindings, and the configured
+runner image; Control-ledger schema changes belong to the separate
+[Control D1 schema owner surface](control-d1-schema-predeploy.md).
+
+Platform restore is an explicit code/image operation, not a database restore.
+A predecessor Version is a usable rollback only while that runtime remains
+compatible with the current database contract. After a schema compatibility
+cutoff, retain the schema-owner maintenance fence and repair forward; do not
+infer rollback safety from the predecessor ID or platform `ready` evidence.
+Coordinate a schema transition before executing either surface and complete
+authenticated Control verification after the schema-owner releases its fence.
 
 ## Composition
 

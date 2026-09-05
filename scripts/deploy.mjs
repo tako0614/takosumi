@@ -63,6 +63,14 @@ const PLATFORM_PRODUCTION = {
   target: "cloudflare-worker:takosumi",
 };
 
+const CONTROL_SCHEMA_SURFACES = [
+  {
+    surface: "takosumi-control-d1-schema-staging",
+    environment: "staging",
+    target: "cloudflare-d1:TAKOSUMI_CONTROL_D1_STAGING_DATABASE_ID",
+  },
+];
+
 const CONTRACT_PACKAGE = {
   surface: "takosumi-contract-package",
   target: "npm:@takosjp/takosumi-contract",
@@ -86,7 +94,7 @@ const platformContract = ({ surface, target, environment }) => ({
     "post-conditions":
       "execute parses exactly one emitted Worker Version UUID, requires only that UUID at 100 percent, reads that immutable tagged Version back with the exact required bindings and fetch handler, proves the public root and Takosumi discovery document serve it, and requires exact Container list/detail identity, configured immutable image, no active rollout, and zero unhealthy instances; authenticated Hosted extension E2E is a separate required composition check",
     reversal:
-      "the recorded plan names the exact source repository and commit plus their canonical authority digest, so the tree it was built from is re-materialized with `materialize-source` rather than depended on; the same reviewed owner surface exposes restore against the exact plan confirmation; it first uses the sealed image-only predecessor config with strict immediate rollout, then restores the exact predecessor Worker Version at 100 percent, and records exact public Version plus Container identity/image/health readback under a durable staged checkpoint; deleted Durable Object storage is forward-only and cannot be restored by code rollback",
+      "the recorded plan names the exact source repository and commit plus their canonical authority digest, so the tree it was built from is re-materialized with `materialize-source`; restore is a separate explicit code/image operation against the exact plan confirmation, using the sealed predecessor image and Worker Version with public Version and Container readback; it does not restore databases or prove Control schema compatibility, so the predecessor is a usable rollback only while its database contract remains valid; after a schema cutoff retain the schema-owner fence and repair forward instead; deleted Durable Object storage also cannot be restored by code rollback",
     "failure-handling":
       "plan-derived external fsynced unknown checkpoints are durable immediately before forward upload and each restore stage and are shared by alternate evidence paths; malformed or torn checkpoints are post-touch ambiguity; bounded redacted provider diagnostics record pre-mutation, post-mutation-unknown, or post-mutation-readback failure; execute never uploads after any forward checkpoint, and bounded lost-ack recovery requires one unique post-plan tagged Version or remains incomplete",
     "pre-mutation-proof":
@@ -103,6 +111,25 @@ const CONTRACT = {
   surfaces: [
     platformContract(PLATFORM_STAGING),
     platformContract(PLATFORM_PRODUCTION),
+    ...CONTROL_SCHEMA_SURFACES.map(({ surface, target, environment }) => ({
+      surface,
+      target,
+      triggers: ["irreversible", "authority"],
+      obligations: {
+        provenance:
+          "delegates the canonical Control D1 schema CLI; plan derives its schema and migration manifest locally, while mutation verifies the actual clean checkout HEAD, the declared source commit, and the exact confirmed manifest",
+        "pre-mutation-proof":
+          `the fixed ${environment} selector resolves only that environment's operator-private target; the existing CLI validates the manifest and source before remote mutation, and the operator must retain a backup and rehearse the exact transition before apply`,
+        "independent-review":
+          "an independent operator review covers the exact additive or destructive migration, rehearsal, target, runtime compatibility cutoff, and forward-repair path before apply or release",
+        "post-conditions":
+          "apply always retains the maintenance fence and reports the existing CLI's exact structural and ledger verification; after the compatible platform runtime is read back, a separate schema release verifies and releases that exact fence, followed by authenticated Control read/write smoke",
+        reversal:
+          "schema is forward-only; an applied migration can invalidate the previous runtime even when SQL is additive, so a platform predecessor ID is component history rather than proof of rollback compatibility; retain the fence on failure and repair forward or use a separately approved database recovery, never an automatic down-migration or code restore",
+        "failure-handling":
+          "preserves the canonical CLI exit code and redacted transcript; source, manifest, environment, schema, and fence mismatches fail closed; apply does not release the fence and this entrypoint never retries a mutation or restores a Worker",
+      },
+    })),
     RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE,
     {
       surface: WEBSITE.surface,
@@ -202,6 +229,35 @@ function die(message, detail = []) {
   process.stderr.write(`deploy blocked: ${message}\n`);
   for (const line of detail) process.stderr.write(`- ${line}\n`);
   process.exit(1);
+}
+
+const controlSchema = CONTROL_SCHEMA_SURFACES.find(
+  ({ surface }) => surface === selected,
+);
+if (controlSchema) {
+  const [command, ...args] = process.argv.slice(3);
+  if (
+    args.some((arg) =>
+      arg === "--environment" || arg.startsWith("--environment=")
+    )
+  ) {
+    die("schema environment is fixed by the selected surface");
+  }
+  if (!["plan", "verify", "apply", "release"].includes(command)) {
+    die("schema command must be plan, verify, apply, or release");
+  }
+  if (command === "apply" && !args.includes("--retain-maintenance-fence")) {
+    args.push("--retain-maintenance-fence");
+  }
+  const { runControlD1SchemaCli } = await import(
+    "../deploy/platform/control_d1_schema_cli.ts"
+  );
+  process.exit(await runControlD1SchemaCli([
+    command,
+    "--environment",
+    controlSchema.environment,
+    ...args,
+  ]));
 }
 
 if (

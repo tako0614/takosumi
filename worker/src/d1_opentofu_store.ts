@@ -155,6 +155,7 @@ import {
   isRecoverableOpenTofuRunRecord,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
+  parseStoredCapsuleRootModuleVariableDeclarations,
   parseStoredCapsuleCompatibilityProviderGraph,
   planRunPreparationPersistsInputs,
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
@@ -4270,6 +4271,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       dataSourcesJson: normalized.dataSources,
       provisionersJson: normalized.provisioners,
       rootModuleVariablesJson: normalized.rootModuleVariables ?? [],
+      rootModuleVariableDeclarationsJson:
+        normalized.rootModuleVariableDeclarations ?? null,
       rootModuleOutputsJson: normalized.rootModuleOutputs ?? [],
       createdAt: normalized.createdAt,
     });
@@ -4306,6 +4309,14 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         row.provisionersJson as CapsuleCompatibilityReport["provisioners"],
       rootModuleVariables:
         row.rootModuleVariablesJson as CapsuleCompatibilityReport["rootModuleVariables"],
+      ...(row.rootModuleVariableDeclarationsJson === null
+        ? {}
+        : {
+            rootModuleVariableDeclarations:
+              parseStoredCapsuleRootModuleVariableDeclarations(
+                row.rootModuleVariableDeclarationsJson,
+              ),
+          }),
       rootModuleOutputs:
         row.rootModuleOutputsJson as CapsuleCompatibilityReport["rootModuleOutputs"],
       createdAt: row.createdAt,
@@ -4366,6 +4377,14 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         row.provisionersJson as CapsuleCompatibilityReport["provisioners"],
       rootModuleVariables:
         row.rootModuleVariablesJson as CapsuleCompatibilityReport["rootModuleVariables"],
+      ...(row.rootModuleVariableDeclarationsJson === null
+        ? {}
+        : {
+            rootModuleVariableDeclarations:
+              parseStoredCapsuleRootModuleVariableDeclarations(
+                row.rootModuleVariableDeclarationsJson,
+              ),
+          }),
       rootModuleOutputs:
         row.rootModuleOutputsJson as CapsuleCompatibilityReport["rootModuleOutputs"],
       createdAt: row.createdAt,
@@ -10170,6 +10189,31 @@ ${D1_CAPSULE_INTERFACE_MATERIALIZATION_INTENT_STATEMENTS.join("\n---\n")}
       await runD1AtomicSql(
         db,
         D1_CAPSULE_INTERFACE_MATERIALIZATION_INTENT_STATEMENTS,
+      );
+    },
+  },
+  {
+    version: 68,
+    name: "d1_capsule_compatibility_variable_declarations",
+    checksumSource: `
+capsule_compatibility_reports.root_module_variable_declarations_json nullable exact type and default metadata
+legacy reports remain null and require a fresh compatibility check
+an analyzed module with no variable declarations stores an empty JSON array
+`,
+    async atomicStatements(db) {
+      return await d1EnsureColumnStatements(
+        db,
+        "capsule_compatibility_reports",
+        "root_module_variable_declarations_json",
+        "text",
+      );
+    },
+    async apply(db) {
+      await ensureD1Column(
+        db,
+        "capsule_compatibility_reports",
+        "root_module_variable_declarations_json",
+        "text",
       );
     },
   },

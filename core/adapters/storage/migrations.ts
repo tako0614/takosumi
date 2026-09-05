@@ -859,6 +859,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "root_module_outputs_json",
         "created_at",
         "module_path",
+        "root_module_variable_declarations_json",
       ],
       primaryKey: ["id"],
       indexes: [
@@ -4883,5 +4884,16 @@ create index if not exists takosumi_interface_intents_dead_letter_idx
   on takosumi_capsule_interface_materialization_intents (
     workspace_id, status, dead_lettered_at desc, id desc
   );`,
+    },
+    {
+      id: "deploy.capsule_compatibility_variable_declarations.add",
+      version: 112,
+      domain: "deploy",
+      description:
+        "Persist exact root-module variable type/default declarations for repository-owned install UX. Existing reports remain null and require a fresh compatibility check; an empty analyzed declaration list is stored as an empty JSON array.",
+      sql: `alter table takosumi_capsule_compatibility_reports
+  add column if not exists root_module_variable_declarations_json jsonb;`,
+      down: `alter table takosumi_capsule_compatibility_reports
+  drop column if exists root_module_variable_declarations_json;`,
     },
   ]);

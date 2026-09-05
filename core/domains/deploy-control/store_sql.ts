@@ -141,6 +141,7 @@ import {
   isRecoverableOpenTofuRunRecord,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
+  parseStoredCapsuleRootModuleVariableDeclarations,
   parseStoredCapsuleCompatibilityProviderGraph,
   planRunPreparationPersistsInputs,
   PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
@@ -3818,6 +3819,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       dataSourcesJson: normalized.dataSources,
       provisionersJson: normalized.provisioners,
       rootModuleVariablesJson: normalized.rootModuleVariables ?? [],
+      rootModuleVariableDeclarationsJson:
+        normalized.rootModuleVariableDeclarations ?? null,
       rootModuleOutputsJson: normalized.rootModuleOutputs ?? [],
       createdAt: normalized.createdAt,
     });
@@ -3860,6 +3863,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       rootModuleVariables: parseJson(
         row.rootModuleVariablesJson,
       ) as CapsuleCompatibilityReport["rootModuleVariables"],
+      ...(row.rootModuleVariableDeclarationsJson === null
+        ? {}
+        : {
+            rootModuleVariableDeclarations:
+              parseStoredCapsuleRootModuleVariableDeclarations(
+                parseJson(row.rootModuleVariableDeclarationsJson),
+              ),
+          }),
       rootModuleOutputs: parseJson(
         row.rootModuleOutputsJson,
       ) as CapsuleCompatibilityReport["rootModuleOutputs"],
@@ -3930,6 +3941,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       rootModuleVariables: parseJson(
         row.rootModuleVariablesJson,
       ) as CapsuleCompatibilityReport["rootModuleVariables"],
+      ...(row.rootModuleVariableDeclarationsJson === null
+        ? {}
+        : {
+            rootModuleVariableDeclarations:
+              parseStoredCapsuleRootModuleVariableDeclarations(
+                parseJson(row.rootModuleVariableDeclarationsJson),
+              ),
+          }),
       rootModuleOutputs: parseJson(
         row.rootModuleOutputsJson,
       ) as CapsuleCompatibilityReport["rootModuleOutputs"],

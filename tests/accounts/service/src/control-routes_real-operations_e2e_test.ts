@@ -50,6 +50,14 @@ import {
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
+  createCloudflareD1OpenTofuControlStore,
+  ensureD1OpenTofuLedgerSchema,
+} from "../../../../worker/src/d1_opentofu_store.ts";
+import {
+  acquireControlD1MaintenanceFence,
+  releaseControlD1MaintenanceFence,
+} from "../../../../worker/src/d1_schema_maintenance.ts";
+import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleInstallConfig,
 } from "../../../../core/domains/capsules/default_install_config.ts";
@@ -63,6 +71,7 @@ import {
   seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
+import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import type {
   Output,
 } from "takosumi-contract/outputs";
@@ -3837,7 +3846,28 @@ test("retired Capsule config PATCH cannot drop public_endpoint metadata", async 
 test("account session control routes execute plan and apply through the real OpenTofu controller", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
-  const deployStore = new InMemoryOpenTofuControlStore();
+  const controlDatabase = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(controlDatabase);
+  const maintenanceFence = await acquireControlD1MaintenanceFence(
+    controlDatabase,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-09-05T00:00:00.000Z",
+  );
+  await releaseControlD1MaintenanceFence(
+    controlDatabase,
+    maintenanceFence,
+    "2026-09-05T00:01:00.000Z",
+  );
+  const deployStore = createCloudflareD1OpenTofuControlStore(
+    controlDatabase,
+    { schemaMode: "predeployed" },
+  );
   const runner = recordingRunner();
   const { operations } = await createTakosumiService({
     role: "takosumi-api",
@@ -3914,6 +3944,10 @@ test("account session control routes execute plan and apply through the real Ope
   expect(runner.stableTagJobs).toHaveLength(1);
 
   const installUxPreview = await controlJson<{
+    readonly report: {
+      readonly id: string;
+      readonly rootModuleVariableDeclarations?: readonly unknown[];
+    };
     readonly repositoryInstallUx: {
       readonly status: "accepted";
       readonly installConfigId: string;
@@ -3934,6 +3968,14 @@ test("account session control routes execute plan and apply through the real Ope
     201,
   );
   expect(installUxPreview.repositoryInstallUx.status).toBe("accepted");
+  expect(installUxPreview.report.rootModuleVariableDeclarations).toEqual([]);
+  expect(
+    (
+      await deployStore.getCapsuleCompatibilityReport(
+        installUxPreview.report.id,
+      )
+    )?.rootModuleVariableDeclarations,
+  ).toEqual([]);
   const previewConfig = await operations.capsules.getInstallConfig(
     installUxPreview.repositoryInstallUx.installConfigId,
   );

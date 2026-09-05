@@ -355,6 +355,7 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     defaulted("root_module_outputs_json"),
     nn("created_at"),
     nullable("module_path"),
+    nullable("root_module_variable_declarations_json"),
   ]);
 
   expect(getTableName(d1Schema.runs)).toBe("runs");
@@ -578,7 +579,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24,
     25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
     44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-    61, 62, 63, 64, 65, 66, 67,
+    61, 62, 63, 64, 65, 66, 67, 68,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -645,6 +646,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_git_install_plans",
     "d1_retired_host_schema_drop_empty",
     "d1_capsule_interface_materialization_intents",
+    "d1_capsule_compatibility_variable_declarations",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -1471,6 +1473,7 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     defaulted("root_module_outputs_json"),
     nn("created_at"),
     nullable("module_path"),
+    nullable("root_module_variable_declarations_json"),
   ]);
 
   expect(getTableName(postgresSchema.runs)).toBe("takosumi_runs");
@@ -1674,6 +1677,54 @@ test("Postgres migration end-state mirrors the Drizzle schema for every deploy t
       const live = await livePgColumnsOf(client, tableName);
       expect(live, tableName).toEqual(nameNotNull(columnsOf(table)));
     }
+  } finally {
+    await client.close();
+  }
+});
+
+test("Postgres v112 adds nullable compatibility declarations without upgrading legacy evidence", async () => {
+  const client = await PGliteSqlClient.createThroughMigrationVersion(111);
+  try {
+    await client.exec(`insert into takosumi_capsule_compatibility_reports (
+      id, source_id, source_snapshot_id, module_path, level,
+      findings_json, providers_json, resources_json, data_sources_json,
+      provisioners_json, root_module_variables_json, root_module_outputs_json,
+      created_at
+    ) values (
+      'caprep_v111_legacy_declarations',
+      'source_v111_legacy_declarations',
+      'snapshot_v111_legacy_declarations',
+      '.',
+      'ready',
+      '[]',
+      '{"providerPackages":[],"rootProviderRequirements":[]}',
+      '[]',
+      '[]',
+      '[]',
+      '["project_name"]',
+      '[]',
+      '2026-09-05T00:00:00.000Z'
+    )`);
+    const migration = postgresStorageMigrationStatements.find(
+      (entry) =>
+        entry.id ===
+        "deploy.capsule_compatibility_variable_declarations.add",
+    );
+    expect(migration?.version).toBe(112);
+    for (const statement of splitSqlStatements(migration!.sql)) {
+      await client.exec(statement);
+    }
+
+    const result = await client.rawQuery<{
+      root_module_variable_declarations_json: unknown;
+    }>(`select root_module_variable_declarations_json
+        from takosumi_capsule_compatibility_reports
+        where id = 'caprep_v111_legacy_declarations'`);
+    expect(result.rows).toEqual([
+      { root_module_variable_declarations_json: null },
+    ]);
+    expect(postgresStorageMigrationStatements.at(-2)?.version).toBe(111);
+    expect(postgresStorageMigrationStatements.at(-1)?.version).toBe(112);
   } finally {
     await client.close();
   }
