@@ -97,6 +97,19 @@ mutable tag is transport only: it is never a release version, consumer input,
 or published identity, and the implementation does not perform a racy
 check-then-push.
 
+Before appending `publication-started` or pushing, an executing build boots the
+exact inspected local image ID with Docker using `--pull=never`, no network,
+ports, mounts, or caller-provided environment, and a read-only root with a
+small temporary filesystem. The image's own user, ENTRYPOINT and command are
+preserved: the container starts detached through its normal startup script.
+A bounded `docker exec` probe checks the non-root user and loopback `/healthz`
+response is HTTP 200 with `{ok:true,runner:"opentofu"}`, then emits one known
+marker. Probe output is limited to 4 KiB while being collected, and a timed-out
+Docker client is terminated and reaped before cleanup starts. The temporary
+container must be force-removed before publication; cleanup failure is an
+explicit refusal. A missing marker, failed startup/health check, or timeout is
+a pre-publication failure; no journal attempt or push is made.
+
 For an executing build, `CLOUDFLARE_ACCOUNT_ID` must be exactly the account in
 the realized previous-image repository. That checked publication repository,
 not an independently parsed config value or caller-selected state path, is the

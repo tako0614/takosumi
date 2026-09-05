@@ -323,6 +323,8 @@ function runnerBuildRuntime(repositoryRoot: string) {
           }),
         );
       }
+      if (args[0] === "run" || args[0] === "exec") return commandResult("takosumi-runner-boot-ok\n");
+      if (args[0] === "rm" && args[1] === "--force") return commandResult("");
       if (args[0] === "manifest") {
         return commandResult(
           JSON.stringify({

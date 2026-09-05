@@ -41,6 +41,7 @@ const APPLICATION_NAME = "takosumi-staging-opentofurunnerobject";
 const PREDECESSOR_VERSION = "11111111-1111-4111-8111-111111111111";
 const DEPLOYED_VERSION = "22222222-2222-4222-8222-222222222222";
 const OPENTOFU_SHA256 = "9".repeat(64);
+const RUNNER_BOOT_SMOKE_MARKER = "takosumi-runner-boot-ok";
 const DOCKERFILE = [
   "FROM scratch",
   "ARG OPENTOFU_VERSION=1.12.5",
@@ -717,6 +718,16 @@ async function successfulPublicationCommand(
   args: readonly string[],
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   if (args[0] === "buildx") return { exitCode: 0, stdout: "", stderr: "" };
+  if (args[0] === "run" || args[0] === "exec") {
+    return {
+      exitCode: 0,
+      stdout: `${RUNNER_BOOT_SMOKE_MARKER}\n`,
+      stderr: "",
+    };
+  }
+  if (args[0] === "rm" && args[1] === "--force") {
+    return { exitCode: 0, stdout: "", stderr: "" };
+  }
   if (args[1] === "containers" && args[2] === "push") {
     const localTag = args[3]!;
     const transportTag = localTag.slice(localTag.indexOf(":") + 1);
@@ -785,6 +796,13 @@ async function bindDescriptorAwareAttemptThroughBuild(
       ...buildRuntime(input, async (_executable, args) => {
         if (args[0] === "buildx") {
           return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        if (args[0] === "run" || args[0] === "exec" || args[0] === "rm") {
+          return {
+            exitCode: 0,
+            stdout: `${RUNNER_BOOT_SMOKE_MARKER}\n`,
+            stderr: "",
+          };
         }
         if (args[1] === "containers" && args[2] === "push") {
           return { exitCode: 2, stdout: "", stderr: "simulated uncertain push" };
@@ -2957,6 +2975,13 @@ test("build publishes linux amd64 with generated transport identity and records 
   const record = await runRunnerImageRelease(buildOptions(input, "staging", true), {
     ...buildRuntime(input, async (_executable, args) => {
       if (args[0] === "buildx") return { exitCode: 0, stdout: "", stderr: "" };
+      if (args[0] === "run" || args[0] === "exec" || args[0] === "rm") {
+        return {
+          exitCode: 0,
+          stdout: `${RUNNER_BOOT_SMOKE_MARKER}\n`,
+          stderr: "",
+        };
+      }
       if (args[1] === "containers" && args[2] === "push") {
         pushedConfig = readFileSync(args[args.indexOf("--config") + 1]!, "utf8");
         return { exitCode: 0, stdout: `Pushed image: ${TRANSPORT_REF}\n`, stderr: "" };
@@ -3028,6 +3053,286 @@ test("build publishes linux amd64 with generated transport identity and records 
     localImageId: `sha256:${"6".repeat(64)}`,
     localDescriptorDigest: `sha256:${"d".repeat(64)}`,
   });
+});
+
+test("build boots the image's native entrypoint and cleans up before publication", async () => {
+  const input = fixture();
+  const calls: string[][] = [];
+  const localImageId = `sha256:${"6".repeat(64)}`;
+  await runRunnerImageRelease(buildOptions(input, "staging", true), {
+    ...buildRuntime(input, async (_executable, args) => {
+      if (args[0] === "buildx") return { exitCode: 0, stdout: "", stderr: "" };
+      if (args[0] === "run" || args[0] === "exec" || args[0] === "rm") {
+        return {
+          exitCode: 0,
+          stdout: `${RUNNER_BOOT_SMOKE_MARKER}\n`,
+          stderr: "",
+        };
+      }
+      if (args[1] === "containers" && args[2] === "push") {
+        return { exitCode: 0, stdout: `Pushed image: ${TRANSPORT_REF}\n`, stderr: "" };
+      }
+      if (args[0] === "manifest") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            Descriptor: {
+              mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+              digest: `sha256:${"d".repeat(64)}`,
+              platform: { os: "linux", architecture: "amd64" },
+            },
+            SchemaV2Manifest: {
+              schemaVersion: 2,
+              mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+              config: { digest: `sha256:${"f".repeat(64)}` },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      throw new Error(`unexpected command: ${args.join(" ")}`);
+    }, calls, {
+      Id: localImageId,
+      Descriptor: {
+        digest: `sha256:${"d".repeat(64)}`,
+        mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+      },
+      Os: "linux",
+      Architecture: "amd64",
+    }),
+  });
+  const runIndex = calls.findIndex((args) => args[0] === "docker" && args[1] === "run");
+  const pushIndex = calls.findIndex((args) =>
+    args[0] === "bunx" && args[1] === "wrangler" && args[2] === "containers" && args[3] === "push"
+  );
+  expect(runIndex).toBeGreaterThan(-1);
+  expect(pushIndex).toBeGreaterThan(runIndex);
+  const runArgs = calls[runIndex]!.slice(2);
+  const imageIndex = runArgs.indexOf(localImageId);
+  expect(imageIndex).toBeGreaterThan(-1);
+  const nameIndex = runArgs.indexOf("--name");
+  expect(nameIndex).toBeGreaterThan(-1);
+  expect(runArgs[nameIndex + 1]).toMatch(/^takosumi-runner-boot-r-/);
+  expect(runArgs.slice(0, imageIndex)).toEqual(expect.arrayContaining([
+    "--detach",
+    "--pull=never",
+    "--rm",
+    "--network=none",
+    "--read-only",
+    "--cap-drop=ALL",
+    "--security-opt",
+    "no-new-privileges",
+    "--tmpfs",
+  ]));
+  expect(runArgs.slice(0, imageIndex)).not.toEqual(expect.arrayContaining([
+    "--env",
+    "-e",
+    "--mount",
+    "-v",
+    "--volume",
+    "-p",
+    "--publish",
+    "--user",
+    "--entrypoint",
+  ]));
+  expect(runArgs.slice(imageIndex + 1)).toEqual([]);
+  const execIndex = calls.findIndex((args) => args[0] === "docker" && args[1] === "exec");
+  const cleanupIndex = calls.findIndex((args) => args[0] === "docker" && args[1] === "rm");
+  expect(execIndex).toBeGreaterThan(runIndex);
+  expect(cleanupIndex).toBeGreaterThan(execIndex);
+  expect(pushIndex).toBeGreaterThan(cleanupIndex);
+  expect(calls[execIndex]![2]).toBe(runArgs[nameIndex + 1]);
+  const execArgs = calls[execIndex]!;
+  const script = execArgs[execArgs.indexOf("-e") + 1];
+  expect(script).not.toContain("import(");
+  expect(script).toContain("127.0.0.1:8080/healthz");
+  expect(script).toContain("process.getuid");
+  expect(script).toContain(RUNNER_BOOT_SMOKE_MARKER);
+});
+
+test("boot smoke failures refuse before a publication attempt or push", async () => {
+  const cases = [
+    {
+      name: "nonzero",
+      command: "run",
+      result: { exitCode: 1, stdout: "", stderr: "boot failed" },
+    },
+    {
+      name: "malformed output",
+      command: "exec",
+      result: { exitCode: 0, stdout: "unexpected marker", stderr: "" },
+    },
+    {
+      name: "health failure",
+      command: "exec",
+      result: { exitCode: 1, stdout: "", stderr: "health failed" },
+    },
+    {
+      name: "multibyte output exceeds byte limit",
+      command: "exec",
+      result: { exitCode: 0, stdout: `${"あ".repeat(1400)}\n${RUNNER_BOOT_SMOKE_MARKER}\n`, stderr: "" },
+    },
+  ] as const;
+  for (const entry of cases) {
+    const input = fixture();
+    const calls: string[][] = [];
+    await expect(
+      runRunnerImageRelease(buildOptions(input, "staging", true), {
+        ...buildRuntime(input, async (_executable, args) => {
+          if (args[0] === "buildx") return { exitCode: 0, stdout: "", stderr: "" };
+          if (args[0] === entry.command) return entry.result;
+          if (args[0] === "run") return { exitCode: 0, stdout: "container-id", stderr: "" };
+          if (args[0] === "rm" && args[1] === "--force") {
+            return { exitCode: 0, stdout: "", stderr: "" };
+          }
+          throw new Error(`unexpected command: ${args.join(" ")}`);
+        }, calls),
+      }),
+    ).rejects.toThrow("runner_image_boot_smoke_failed");
+    expect(calls.some((args) => args[0] === "bunx" && args[3] === "push"), entry.name).toBeFalse();
+    expect(
+      calls.some(
+        (args) =>
+          args[0] === "docker" &&
+          args[1] === "rm" &&
+          args[2] === "--force",
+      ),
+      entry.name,
+    ).toBeTrue();
+    expect(readFileSync(input.state, "utf8"), entry.name).toBe("");
+  }
+
+  const input = fixture();
+  const calls: string[][] = [];
+  await expect(
+    runRunnerImageRelease(buildOptions(input, "staging", true), {
+      ...buildRuntime(input, async (_executable, args) => {
+        if (args[0] === "buildx") return { exitCode: 0, stdout: "", stderr: "" };
+        if (args[0] === "run") return new Promise(() => {});
+        if (args[0] === "rm" && args[1] === "--force") {
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        throw new Error(`unexpected command: ${args.join(" ")}`);
+      }, calls),
+      commandTimeoutMilliseconds: 10,
+    }),
+  ).rejects.toThrow("runner_image_boot_smoke_failed");
+  expect(calls.some((args) => args[0] === "bunx" && args[3] === "push")).toBeFalse();
+  expect(
+    calls.some(
+      (args) =>
+        args[0] === "docker" &&
+        args[1] === "rm" &&
+        args[2] === "--force",
+    ),
+  ).toBeTrue();
+  expect(readFileSync(input.state, "utf8")).toBe("");
+});
+
+test("boot smoke cleanup failures remain an explicit pre-publication refusal", async () => {
+  for (const [cleanupMode, bootState] of [
+    ["error", "healthy"],
+    ["error", "failed"],
+    ["timeout", "healthy"],
+    ["timeout", "failed"],
+  ] as const) {
+    const input = fixture();
+    const calls: string[][] = [];
+    await expect(
+      runRunnerImageRelease(buildOptions(input, "staging", true), {
+        ...buildRuntime(input, async (_executable, args) => {
+          if (args[0] === "buildx") {
+            return { exitCode: 0, stdout: "", stderr: "" };
+          }
+          if (args[0] === "run") {
+            return bootState === "healthy"
+              ? { exitCode: 0, stdout: "container-id", stderr: "" }
+              : { exitCode: 1, stdout: "", stderr: "boot failed" };
+          }
+          if (args[0] === "exec") {
+            return { exitCode: 0, stdout: RUNNER_BOOT_SMOKE_MARKER, stderr: "" };
+          }
+          if (args[0] === "rm" && args[1] === "--force") {
+            return cleanupMode === "timeout"
+              ? new Promise(() => {})
+              : { exitCode: 1, stdout: "", stderr: "daemon unavailable" };
+          }
+          throw new Error(`unexpected command: ${args.join(" ")}`);
+        }, calls),
+        ...(cleanupMode === "timeout"
+          ? { commandTimeoutMilliseconds: 10 }
+          : {}),
+      }),
+    ).rejects.toThrow("runner_image_boot_smoke_cleanup_failed");
+    expect(calls.some((args) => args[0] === "bunx" && args[3] === "push"), cleanupMode).toBeFalse();
+    expect(readFileSync(input.state, "utf8"), cleanupMode).toBe("");
+  }
+});
+
+test("real Docker-client failures are bounded and reaped before container cleanup", async () => {
+  for (const mode of ["timeout", "output"] as const) {
+    const input = fixture();
+    const bin = join(input.operator, "bin");
+    const trace = join(input.operator, "client-trace.jsonl");
+    const container = join(input.operator, "temporary-container");
+    mkdirSync(bin, { mode: 0o700 });
+    const fakeCommand = [
+      `#!${process.execPath}`,
+      'import { appendFileSync, existsSync, unlinkSync, writeFileSync } from "node:fs";',
+      'import { basename } from "node:path";',
+      `const mode=${JSON.stringify(mode)},trace=${JSON.stringify(trace)},container=${JSON.stringify(container)};`,
+      'const args=process.argv.slice(2),command=basename(process.argv[1]);',
+      'const record=(value)=>appendFileSync(trace,JSON.stringify(value)+"\\n");',
+      'if(command==="curl"){',
+      `writeFileSync(args[args.indexOf("--output")+1],args.at(-1).endsWith("_SHA256SUMS")?${JSON.stringify(`${OPENTOFU_SHA256}  tofu_1.12.5_linux_amd64.zip\n`)}:"fixture signature");process.exit(0);}`,
+      'if(command==="cosign")process.exit(0);',
+      'if(command==="bunx"){record("unexpected-push");process.exit(99);}',
+      'if(args[0]==="buildx")process.exit(0);',
+      `if(args[0]==="image"){console.log(${JSON.stringify(JSON.stringify({ Id: `sha256:${"d".repeat(64)}`, Descriptor: { digest: `sha256:${"d".repeat(64)}`, mediaType: "application/vnd.docker.distribution.manifest.v2+json" }, Os: "linux", Architecture: "amd64" }))});process.exit(0);}`,
+      'if(args[0]==="run"){',
+      'record("started");',
+      'process.on("SIGTERM",()=>{record("terminated");setTimeout(()=>{writeFileSync(container,String(process.pid));record("late-create");process.exit(0);},100);});',
+      'setInterval(()=>{},1000);',
+      'if(mode==="output")process.stdout.write("あ".repeat(4000));',
+      '}else if(args[0]==="rm"){',
+      'if(!existsSync(container)){record("cleanup-before-client-exit");process.exit(42);}',
+      'unlinkSync(container);record("cleanup");process.exit(0);',
+      '}else{record("unexpected-"+args[0]);process.exit(99);}',
+    ].join("\n");
+    for (const name of ["curl", "cosign", "docker", "bunx"]) {
+      writeFileSync(join(bin, name), fakeCommand, { mode: 0o755 });
+    }
+    const originalPath = process.env.PATH;
+    let failure: unknown;
+    try {
+      process.env.PATH = `${bin}:${originalPath ?? ""}`;
+      await runRunnerImageRelease(buildOptions(input, "staging", true), {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+        nonce: () => "01".repeat(16),
+        accountId: "b".repeat(32),
+        materializeSource: materializeFixtureSource,
+        commandTimeoutMilliseconds: 500,
+      });
+    } catch (error) {
+      failure = error;
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+    expect(failure).toMatchObject({
+      cause: {
+        message: "runner_image_boot_smoke_failed",
+        cause: mode === "timeout"
+          ? { name: "CommandTimeoutError" }
+          : { message: "runner_image_boot_smoke_output_limit_exceeded" },
+      },
+    });
+    expect(readFileSync(trace, "utf8").trim().split("\n").map((line) => JSON.parse(line)))
+      .toEqual(["started", "terminated", "late-create", "cleanup"]);
+    expect(existsSync(container)).toBeFalse();
+    expect(readFileSync(input.state, "utf8")).toBe("");
+  }
 });
 
 test("build rejects a missing or invalid local image descriptor before publication", async () => {
@@ -3133,6 +3438,13 @@ test("publication ambiguity records unknown outcome and never claims a digest", 
     runRunnerImageRelease(buildOptions(input, "staging", true), {
       ...buildRuntime(input, async (_executable, args) => {
         if (args[0] === "buildx") return { exitCode: 0, stdout: "", stderr: "" };
+        if (args[0] === "run" || args[0] === "exec" || args[0] === "rm") {
+          return {
+            exitCode: 0,
+            stdout: `${RUNNER_BOOT_SMOKE_MARKER}\n`,
+            stderr: "",
+          };
+        }
         if (args[1] === "containers" && args[2] === "push") {
           return { exitCode: 0, stdout: "push accepted without identity", stderr: "" };
         }
@@ -3155,6 +3467,13 @@ test("a local-tag interleaving race cannot bind different remotely pushed bytes"
     runRunnerImageRelease(buildOptions(input, "staging", true), {
       ...buildRuntime(input, async (_executable, args) => {
         if (args[0] === "buildx") return { exitCode: 0, stdout: "", stderr: "" };
+        if (args[0] === "run" || args[0] === "exec" || args[0] === "rm") {
+          return {
+            exitCode: 0,
+            stdout: `${RUNNER_BOOT_SMOKE_MARKER}\n`,
+            stderr: "",
+          };
+        }
         if (args[1] === "containers" && args[2] === "push") {
           return { exitCode: 0, stdout: `Pushed image: ${TRANSPORT_REF}\n`, stderr: "" };
         }

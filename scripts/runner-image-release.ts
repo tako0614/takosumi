@@ -278,6 +278,9 @@ const RUNNER_APPLICATION_NAMES = {
 const RELEASE_COMMAND_TIMEOUT_MS = 2 * 60_000;
 const RELEASE_MUTATION_COMMAND_TIMEOUT_MS = 15 * 60_000;
 const RELEASE_BUILD_COMMAND_TIMEOUT_MS = 30 * 60_000;
+const RUNNER_BOOT_SMOKE_TIMEOUT_MS = 30_000;
+const RUNNER_BOOT_SMOKE_OUTPUT_MAX_BYTES = 4_096;
+const RUNNER_BOOT_SMOKE_MARKER = "takosumi-runner-boot-ok";
 const COMMAND_TERMINATION_GRACE_MS = 5_000;
 
 export { RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE } from "./runner-image-release-contract.ts";
@@ -828,6 +831,12 @@ async function buildRunnerImage(
       workspace,
     );
     const localIdentity = parseLocalRunnerImageIdentity(localImage.stdout);
+    await assertRunnerImageBootSmoke(
+      localIdentity.imageId,
+      transportTag,
+      command,
+      workspace,
+    );
     const attempt: RunnerPublicationAttempt = {
       kind: "takosumi.runner-image-publication-state@v2",
       status: "publication-started",
@@ -1452,6 +1461,116 @@ function parseLocalRunnerImageIdentity(source: string): Readonly<{
     imageId: value.Id,
     descriptorDigest: value.Descriptor.digest,
   };
+}
+
+async function assertRunnerImageBootSmoke(
+  imageId: string,
+  transportTag: string,
+  command: NonNullable<RunnerImageReleaseRuntime["command"]>,
+  cwd: string,
+): Promise<void> {
+  const containerName = `takosumi-runner-boot-${transportTag}`;
+  const smokeScript = [
+    `const marker=${JSON.stringify(RUNNER_BOOT_SMOKE_MARKER)};`,
+    "let exitCode=1;",
+    "const controller=new AbortController();",
+    "const timer=setTimeout(()=>{controller.abort();process.exit(1);},5000);",
+    "try{",
+    'if(typeof process.getuid!=="function"||process.getuid()===0)throw new Error("nonprivileged runner required");',
+    "let response;",
+    "while(!controller.signal.aborted){",
+    'try{response=await fetch("http://127.0.0.1:8080/healthz",{signal:controller.signal});break;}catch{await Bun.sleep(25);}',
+    "}",
+    'if(!response)throw new Error("health unavailable");',
+    'if(response.status!==200)throw new Error("health status");',
+    "const body=await response.json();",
+    'if(!body||body.ok!==true||body.runner!=="opentofu")throw new Error("health payload");',
+    "process.stdout.write(marker+'\\n');",
+    "exitCode=0;",
+    "}catch{}finally{clearTimeout(timer);}",
+    "process.exit(exitCode);",
+  ].join(" ");
+  let failed = false;
+  let failure: unknown;
+  try {
+    await checkedCommand(
+      command,
+      "docker",
+      [
+        "run",
+        "--detach",
+        "--pull=never",
+        "--rm",
+        "--network=none",
+        "--read-only",
+        "--name",
+        containerName,
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,nodev,size=16m",
+        "--cap-drop=ALL",
+        "--security-opt",
+        "no-new-privileges",
+        imageId,
+      ],
+      cwd,
+    );
+    const result = await checkedCommand(
+      command,
+      "docker",
+      ["exec", containerName, "/usr/local/bin/bun", "-e", smokeScript],
+      cwd,
+    );
+    const output = `${result.stdout}\n${result.stderr}`.trim();
+    if (
+      Buffer.byteLength(output, "utf8") > RUNNER_BOOT_SMOKE_OUTPUT_MAX_BYTES ||
+      output.split(/\r?\n/u).at(-1) !== RUNNER_BOOT_SMOKE_MARKER
+    ) {
+      throw new Error("runner_image_boot_smoke_output_invalid");
+    }
+  } catch (error) {
+    failed = true;
+    failure = error;
+  }
+  const cleanupError = await cleanupRunnerImageBootSmoke(
+    containerName,
+    command,
+    cwd,
+  );
+  if (cleanupError !== null) {
+    throw new Error("runner_image_boot_smoke_cleanup_failed", {
+      cause: cleanupError,
+    });
+  }
+  if (failed) throw new Error("runner_image_boot_smoke_failed", { cause: failure });
+}
+
+async function cleanupRunnerImageBootSmoke(
+  containerName: string,
+  command: NonNullable<RunnerImageReleaseRuntime["command"]>,
+  cwd: string,
+): Promise<unknown | null> {
+  try {
+    await checkedCommand(command, "docker", ["rm", "--force", containerName], cwd);
+    return null;
+  } catch (error) {
+    if (runnerBootSmokeContainerAbsent(error, containerName)) return null;
+    return error;
+  }
+}
+
+function runnerBootSmokeContainerAbsent(
+  error: unknown,
+  containerName: string,
+): boolean {
+  if (!(error instanceof ReleaseCommandError) || error.result.exitCode !== 1) {
+    return false;
+  }
+  const diagnostic = `${error.result.stdout}\n${error.result.stderr}`.toLowerCase();
+  return (
+    diagnostic.includes(containerName.toLowerCase()) &&
+    (diagnostic.includes("no such container") ||
+      diagnostic.includes("no such object"))
+  );
 }
 
 async function proveLegacyPublicationLocalIdentity(
@@ -3021,6 +3140,16 @@ function releaseCommandTimeout(
   if (executable === "docker" && args[0] === "buildx") {
     return RELEASE_BUILD_COMMAND_TIMEOUT_MS;
   }
+  if (executable === "docker" && (args[0] === "run" || args[0] === "exec")) {
+    return RUNNER_BOOT_SMOKE_TIMEOUT_MS;
+  }
+  if (
+    executable === "docker" &&
+    args[0] === "rm" &&
+    args[1] === "--force"
+  ) {
+    return RUNNER_BOOT_SMOKE_TIMEOUT_MS;
+  }
   if (
     executable === "bunx" &&
     args[0] === "wrangler" &&
@@ -3083,15 +3212,21 @@ async function runCommand(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let stopError: Error | null = null;
+    let outputBytes = 0;
+    const boundedOutput = executable === "docker" &&
+      (args[0] === "run" || args[0] === "exec" || args[0] === "rm");
     let terminationTimer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
+    const stop = (error: Error) => {
+      if (settled || stopError) return;
+      stopError = error;
       terminateCommand(child, "SIGTERM");
       terminationTimer = setTimeout(() => {
         terminateCommand(child, "SIGKILL");
       }, COMMAND_TERMINATION_GRACE_MS);
-      reject(
+    };
+    const timeout = setTimeout(() => {
+      stop(
         new CommandTimeoutError(
           releaseCommandLabel(executable, args),
           timeoutMilliseconds,
@@ -3100,24 +3235,34 @@ async function runCommand(
     }, timeoutMilliseconds);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (value: string) => {
-      stdout += value;
-    });
-    child.stderr.on("data", (value: string) => {
-      stderr += value;
-    });
+    const capture = (stream: "stdout" | "stderr", value: string) => {
+      if (stopError) return;
+      outputBytes += Buffer.byteLength(value, "utf8");
+      if (boundedOutput && outputBytes > RUNNER_BOOT_SMOKE_OUTPUT_MAX_BYTES) {
+        stop(new Error("runner_image_boot_smoke_output_limit_exceeded"));
+        return;
+      }
+      if (stream === "stdout") stdout += value;
+      else stderr += value;
+    };
+    child.stdout.on("data", (value: string) => capture("stdout", value));
+    child.stderr.on("data", (value: string) => capture("stderr", value));
     child.on("error", (error) => {
       clearTimeout(timeout);
       if (terminationTimer) clearTimeout(terminationTimer);
       if (settled) return;
       settled = true;
-      reject(error);
+      reject(stopError ?? error);
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
       if (terminationTimer) clearTimeout(terminationTimer);
       if (settled) return;
       settled = true;
+      if (stopError) {
+        reject(stopError);
+        return;
+      }
       resolveResult({ exitCode: code ?? 1, stdout, stderr });
     });
   });
