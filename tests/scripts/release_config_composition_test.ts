@@ -540,32 +540,6 @@ function realizedConfig(image: string): string {
       authDelivery: "context",
       ownsPathSubtree: true,
       workspaceContext: "query-required",
-      selfServicePatScopes: ["resources:read"],
-      requestScopeRules: [
-        {
-          path: "/resources",
-          methods: ["GET"],
-          requiredScopes: ["resources:read"],
-        },
-      ],
-      capabilities: [
-        "takosumi.account.subscription.v1",
-        "hosted-resource.inventory.v1",
-      ],
-      contributions: [
-        {
-          id: "takoserver-hosted-resources",
-          slot: "workspace.hosted-resources",
-          href: "/api/v1/account/subscription/resources",
-          presentation: "native",
-          label: "Hosted resources",
-          labels: { ja: "ホスト済みリソース" },
-          description: "Resources managed by Takoserver for this Workspace.",
-          descriptions: {
-            ja: "このワークスペースでTakoserverが管理するリソースです。",
-          },
-        },
-      ],
       runCredential: {
         audience: "takosumi-hosted.takoform.v1",
         requiredScopes: ["takoform.run"],

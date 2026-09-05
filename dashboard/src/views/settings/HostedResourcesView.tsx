@@ -24,6 +24,7 @@ import {
 } from "../../components/ui/index.ts";
 import {
   HOSTED_RESOURCE_INVENTORY_PAGE_SIZE,
+  hostedResourceInventoryQuery,
   loadHostedResourceContribution,
   listHostedResourceInventoryPage,
   type HostedResourceCondition,
@@ -31,11 +32,6 @@ import {
 } from "../../lib/hosted-resources.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { type MessageKey, t } from "../../i18n/index.ts";
-
-interface HostedResourcesQuery {
-  readonly href: string;
-  readonly workspaceId: string;
-}
 
 interface HostedResourceStatus {
   readonly label: MessageKey;
@@ -50,14 +46,12 @@ function Inner(): JSX.Element {
   const [contribution, { refetch: refetchContribution }] = createResource(
     () => loadHostedResourceContribution(),
   );
-  const query = createMemo<HostedResourcesQuery | undefined>(() => {
-    const workspaceId = currentWorkspaceId();
-    const entry = contribution.error ? undefined : contribution.latest;
-    if (!workspaceId || !entry) {
-      return undefined;
-    }
-    return { href: entry.href, workspaceId };
-  });
+  const query = createMemo(() =>
+    hostedResourceInventoryQuery(
+      contribution.error ? undefined : contribution.latest,
+      currentWorkspaceId() || undefined,
+    ),
+  );
   const [inventory, { refetch: refetchInventory }] = createResource(
     query,
     ({ href, workspaceId }) =>

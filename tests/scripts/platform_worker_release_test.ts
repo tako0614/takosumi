@@ -4,6 +4,7 @@ import {
   assertConfigTargetsSource,
   assertPublishedVersion,
   bindingNames,
+  hasHostedDiscovery,
   parsePlatformWorkerReleaseArgs,
   parsePlatformContainerDetail,
   parseServingVersion,
@@ -106,32 +107,6 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
       authDelivery: "context",
       ownsPathSubtree: true,
       workspaceContext: "query-required",
-      selfServicePatScopes: ["resources:read"],
-      requestScopeRules: [
-        {
-          path: "/resources",
-          methods: ["GET"],
-          requiredScopes: ["resources:read"],
-        },
-      ],
-      capabilities: [
-        "takosumi.account.subscription.v1",
-        "hosted-resource.inventory.v1",
-      ],
-      contributions: [
-        {
-          id: "takoserver-hosted-resources",
-          slot: "workspace.hosted-resources",
-          href: "/api/v1/account/subscription/resources",
-          presentation: "native",
-          label: "Hosted resources",
-          labels: { ja: "ホスト済みリソース" },
-          description: "Resources managed by Takoserver for this Workspace.",
-          descriptions: {
-            ja: "このワークスペースでTakoserverが管理するリソースです。",
-          },
-        },
-      ],
       ...(includeBroker
         ? {
             runCredential: {
@@ -173,6 +148,25 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
       "production",
     ),
   ).not.toThrow();
+  const withSponsorshipField = (field: string, value: unknown) =>
+    source("takosumi-hosted").replace(
+      '"workspaceContext":"query-required"',
+      `"workspaceContext":"query-required","${field}":${JSON.stringify(value)}`,
+    );
+  for (const [field, value] of [
+    ["authMode", "platform"],
+    ["selfServicePatScopes", []],
+    ["requestScopeRules", []],
+    ["capabilities", []],
+    ["contributions", []],
+  ] as const) {
+    expect(() =>
+      assertConfigTargetsSource(
+        withSponsorshipField(field, value),
+        "production",
+      ),
+    ).toThrow("platform_worker_release_config_source_invalid");
+  }
   expect(() =>
     assertConfigTargetsSource(
       source("takosumi-hosted").replace(
@@ -405,6 +399,35 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
       "production",
     ),
   ).toThrow("platform_worker_release_config_source_invalid");
+});
+
+test("public release readback ignores capabilities owned by another extension", () => {
+  const origin = "https://app.takosumi.com";
+  const discovery = {
+    endpoints: {
+      extensions: {
+        "openai.models.v1": `${origin}/api/v1/ai`,
+        "openai.chat-completions.v1": `${origin}/api/v1/ai`,
+        "takosumi.account.subscription.v1": `${origin}/api/v1/account/subscription`,
+        "hosted-resource.inventory.v1": `${origin}/api/v1/account/subscription`,
+        "generic.extension.v1": `${origin}/api/v1/generic`,
+      },
+    },
+  };
+  expect(hasHostedDiscovery(discovery, origin)).toBeTrue();
+  expect(
+    hasHostedDiscovery(
+      {
+        endpoints: {
+          extensions: {
+            ...discovery.endpoints.extensions,
+            "openai.models.v1": `${origin}/api/v1/wrong-ai`,
+          },
+        },
+      },
+      origin,
+    ),
+  ).toBeFalse();
 });
 
 test("platform release parser exposes reviewed plan, execute, recovery, and restore actions", () => {

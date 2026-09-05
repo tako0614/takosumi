@@ -11,7 +11,12 @@ import Page from "../account/components/auth/Page.tsx";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import { MANAGE_DESTINATIONS } from "../account/components/shell/nav.ts";
 import {
+  HOSTED_RESOURCES_SLOT,
+  loadHostedResourceContribution,
+} from "../../lib/hosted-resources.ts";
+import {
   loadPlatformContributions,
+  filterByContributionSlots,
   platformContributionDescription,
   platformContributionLabel,
   platformContributionsForSlot,
@@ -28,6 +33,14 @@ function contributionHref(href: string): string {
 
 function Inner(): JSX.Element {
   const [contributions] = createResource(loadPlatformContributions);
+  const [hostedResourceContribution] = createResource(
+    () => loadHostedResourceContribution(),
+  );
+  const manageDestinations = () =>
+    filterByContributionSlots(
+      MANAGE_DESTINATIONS,
+      hostedResourceContribution.latest ? [HOSTED_RESOURCES_SLOT] : [],
+    );
   return (
     <div class="settings-view">
       <PageHeader
@@ -36,7 +49,7 @@ function Inner(): JSX.Element {
         subtitle={t("settings.manage.subtitle")}
       />
       <div class="settings-links">
-        <For each={MANAGE_DESTINATIONS}>
+        <For each={manageDestinations()}>
           {(dest) => (
             <A href={dest.href} class="settings-link tg-card tg-card-hover">
               <span class="settings-link-icon" aria-hidden="true">

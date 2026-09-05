@@ -24,6 +24,7 @@ import {
   Store,
 } from "lucide-solid";
 import type { MessageKey } from "../../../../i18n/index.ts";
+import { HOSTED_RESOURCES_SLOT } from "../../../../lib/hosted-resources.ts";
 
 export type ShellNavItem = {
   readonly href: string;
@@ -43,11 +44,13 @@ export const PRIMARY_NAV: readonly ShellNavItem[] = [
 
 export type ManageDestination = ShellNavItem & {
   readonly descriptionKey: MessageKey;
+  readonly requiresContributionSlot?: string;
 };
 
 /**
  * Hosting-management destinations surfaced on 設定 > 管理. Relocated from the
- * old top-level nav — every capability stays reachable, none were removed.
+ * old top-level nav — optional surfaces are shown only when their contribution
+ * is available.
  */
 export const MANAGE_DESTINATIONS: readonly ManageDestination[] = [
   {
@@ -55,6 +58,7 @@ export const MANAGE_DESTINATIONS: readonly ManageDestination[] = [
     labelKey: "nav.hostedResources",
     descriptionKey: "settings.manage.hostedResources",
     icon: CloudCog,
+    requiresContributionSlot: HOSTED_RESOURCES_SLOT,
   },
   {
     href: "/workloads",

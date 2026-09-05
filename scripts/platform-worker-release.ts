@@ -5035,7 +5035,7 @@ async function verifyPublicReadback(
   }
 }
 
-function hasHostedDiscovery(value: unknown, origin: string): boolean {
+export function hasHostedDiscovery(value: unknown, origin: string): boolean {
   if (
     !record(value) ||
     !record(value.endpoints) ||
@@ -5045,8 +5045,7 @@ function hasHostedDiscovery(value: unknown, origin: string): boolean {
   }
   const extensions = value.endpoints.extensions;
   return (
-    extensions["takosumi.account.subscription.v1"] ===
-      `${origin}/api/v1/account/subscription` &&
+    extensions["openai.models.v1"] === `${origin}/api/v1/ai` &&
     extensions["openai.chat-completions.v1"] === `${origin}/api/v1/ai`
   );
 }
@@ -5161,15 +5160,11 @@ function matchesHostedSponsorshipRoute(value: unknown): boolean {
         [
           "authDelivery",
           "basePath",
-          "capabilities",
           "handlerKey",
           "id",
           "ownsPathSubtree",
-          "contributions",
           "providerCredentialBroker",
-          "requestScopeRules",
           "runCredential",
-          "selfServicePatScopes",
           "workspaceContext",
         ].sort(),
       ) &&
@@ -5179,17 +5174,6 @@ function matchesHostedSponsorshipRoute(value: unknown): boolean {
     value.authDelivery === "context" &&
     value.ownsPathSubtree === true &&
     value.workspaceContext === "query-required" &&
-    Array.isArray(value.selfServicePatScopes) &&
-    value.selfServicePatScopes.length === 1 &&
-    value.selfServicePatScopes[0] === "resources:read" &&
-    matchesHostedInventoryScopeRules(value.requestScopeRules) &&
-    Array.isArray(value.capabilities) &&
-    JSON.stringify(value.capabilities) ===
-      JSON.stringify([
-        "takosumi.account.subscription.v1",
-        "hosted-resource.inventory.v1",
-      ]) &&
-    matchesHostedInventoryContribution(value.contributions) &&
     matchesHostedRunCredential(value.runCredential) &&
     matchesHostedProviderCredentialBroker(value.providerCredentialBroker)
   );
@@ -5235,57 +5219,6 @@ function matchesHostedAiRoute(value: unknown): boolean {
       ]) &&
     JSON.stringify(value.capabilities) ===
       JSON.stringify(["openai.models.v1", "openai.chat-completions.v1"])
-  );
-}
-
-function matchesHostedInventoryScopeRules(value: unknown): boolean {
-  if (!Array.isArray(value) || value.length !== 1 || !record(value[0])) {
-    return false;
-  }
-  const rule = value[0];
-  return (
-    JSON.stringify(Object.keys(rule).sort()) ===
-      JSON.stringify(["methods", "path", "requiredScopes"]) &&
-    rule.path === "/resources" &&
-    JSON.stringify(rule.methods) === JSON.stringify(["GET"]) &&
-    JSON.stringify(rule.requiredScopes) === JSON.stringify(["resources:read"])
-  );
-}
-
-function matchesHostedInventoryContribution(value: unknown): boolean {
-  if (!Array.isArray(value) || value.length !== 1 || !record(value[0])) {
-    return false;
-  }
-  const contribution = value[0];
-  return (
-    JSON.stringify(Object.keys(contribution).sort()) ===
-      JSON.stringify(
-        [
-          "description",
-          "descriptions",
-          "href",
-          "id",
-          "label",
-          "labels",
-          "presentation",
-          "slot",
-        ].sort(),
-      ) &&
-    contribution.id === "takoserver-hosted-resources" &&
-    contribution.slot === "workspace.hosted-resources" &&
-    contribution.href === "/api/v1/account/subscription/resources" &&
-    contribution.presentation === "native" &&
-    contribution.label === "Hosted resources" &&
-    contribution.description ===
-      "Resources managed by Takoserver for this Workspace." &&
-    record(contribution.labels) &&
-    JSON.stringify(contribution.labels) ===
-      JSON.stringify({ ja: "ホスト済みリソース" }) &&
-    record(contribution.descriptions) &&
-    JSON.stringify(contribution.descriptions) ===
-      JSON.stringify({
-        ja: "このワークスペースでTakoserverが管理するリソースです。",
-      })
   );
 }
 

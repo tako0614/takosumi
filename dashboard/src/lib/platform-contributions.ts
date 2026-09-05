@@ -59,6 +59,17 @@ export function platformContributionsForSlot(
   );
 }
 
+export function filterByContributionSlots<
+  T extends { readonly requiresContributionSlot?: string },
+>(items: readonly T[], availableSlots: readonly string[]): readonly T[] {
+  const slots = new Set(availableSlots);
+  return items.filter(
+    (item) =>
+      item.requiresContributionSlot === undefined ||
+      slots.has(item.requiresContributionSlot),
+  );
+}
+
 export function platformContributionLabel(
   contribution: PlatformContribution,
   locale: string,

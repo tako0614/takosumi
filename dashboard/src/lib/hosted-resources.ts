@@ -67,6 +67,19 @@ export interface HostedResourceContribution {
   readonly href: `/${string}`;
 }
 
+export interface HostedResourceInventoryQuery {
+  readonly href: string;
+  readonly workspaceId: string;
+}
+
+export function hostedResourceInventoryQuery(
+  contribution: HostedResourceContribution | undefined,
+  workspaceId: string | undefined,
+): HostedResourceInventoryQuery | undefined {
+  if (!contribution || !workspaceId) return undefined;
+  return { href: contribution.href, workspaceId };
+}
+
 /** Errors intentionally contain no backend response body or provider detail. */
 export class HostedResourceCatalogError extends Error {
   constructor(readonly status: number, message = "Hosted resources unavailable") {

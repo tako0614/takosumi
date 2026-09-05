@@ -120,7 +120,7 @@ describe("dashboard shell navigation layout", () => {
       '"/settings/manage"',
     );
     expect(read("views/settings/ManageView.tsx")).toContain(
-      "MANAGE_DESTINATIONS",
+      "filterByContributionSlots",
     );
   });
 

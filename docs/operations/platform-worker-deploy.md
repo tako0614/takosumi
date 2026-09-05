@@ -110,14 +110,14 @@ Form. Any such closed Cloud Host is deployed and operated by its owning
 repository; the old package procedure is a superseded migration note.
 
 The official staging composition binds the independently deployed private
-`takosumi-hosted-staging` Worker under `HOSTED`. It mounts the account service at
-`/api/v1/account/subscription` and the authenticated AI data plane at
-`/api/v1/ai`; Marketplace, cloud Resource, wallet, migration, and object-storage
-APIs remain Takoserver-owned and are not exposed as separate Takosumi APIs.
-Takosumi authenticates the Principal and Workspace before forwarding. The
-route-less Hosted target receives only verified context, never a browser cookie,
-the original bearer, an account id, a legal Organization id, or an unverified
-Workspace context.
+`takosumi-hosted-staging` Worker under `HOSTED`. It exposes the route-less
+sponsorship credential exchange at `/api/v1/account/subscription` and the
+authenticated AI data plane at `/api/v1/ai`; Marketplace, cloud Resource,
+wallet, migration, and object-storage APIs remain Takoserver-owned and are not
+exposed as separate Takosumi APIs. Takosumi authenticates the Principal and
+Workspace before forwarding. The route-less Hosted target receives only
+verified context, never a browser cookie, the original bearer, an account id, a
+legal Organization id, or an unverified Workspace context.
 
 ### Realized Hosted extension descriptors
 
@@ -127,15 +127,23 @@ descriptors exactly, key set included. An unknown key is a refusal, not a
 tolerated addition, because a descriptor the OSS parser rejects makes the whole
 route unloadable rather than degrade quietly.
 
-- `takosumi-hosted-sponsorship` at `/api/v1/account/subscription`, carrying the
-  account service, the `hosted-resource.inventory.v1` workspace contribution,
-  the generic Run credential audience, and the provider credential broker.
+- `takosumi-hosted-sponsorship` at `/api/v1/account/subscription`, carrying
+  only the generic Run credential audience and provider credential broker. It
+  has no public capability, scope, contribution, or resource-inventory claim.
 - `takosumi-ai` at `/api/v1/ai`, the authenticated OpenAI-compatible data
   plane. Its `workspaceContext` is `query-optional`: an OpenAI-compatible client
   is configured with a base URL and sends `POST /chat/completions`, so it cannot
   attach a `workspaceId` query, and `query-required` would answer every such
   request with `invalid_request`. When the query is present it is still bound to
   verified platform access before dispatch.
+
+The route-less sponsorship descriptor has exactly eight top-level keys:
+`id`, `basePath`, `handlerKey`, `authDelivery`, `ownsPathSubtree`,
+`workspaceContext`, `runCredential`, and `providerCredentialBroker`. It omits
+the optional default `authMode` and empty `selfServicePatScopes`,
+`requestScopeRules`, `capabilities`, and `contributions`; adding any of those
+keys is a composition mismatch. Takoserver owns actual Resource/backend
+readback, while Takosumi owns the Run/StateVersion/Output/Audit lifecycle.
 
 The sponsorship descriptor's `providerCredentialBroker` declares exactly ten
 keys. Six are the broker identity — `connectionId`, `recipeId`,
@@ -310,9 +318,12 @@ that exact lock inode, re-reads the canonical staged checkpoint, and follows its
 existing lost-acknowledgement recovery path instead of starting another
 restore.
 
-The authenticated Hosted subscription read is a separate E2E post-condition
-after publication; cloud-resource and AI E2E run against Takoserver's owning
-endpoints.
+The standard-provider E2E is a separate post-condition after publication. It
+must exercise the normal Source/Plan/Apply/Destroy path, prove the resulting
+Takosumi Run, StateVersion, Output, and Audit records, and read the real Host's
+backend resource through its owning endpoint. Provider execution uses the
+route-less Run-credential broker; the retired Hosted inventory child read is
+not an E2E probe. AI E2E continues against Takoserver's owning endpoint.
 
 ## Self-host build and deployment
 
