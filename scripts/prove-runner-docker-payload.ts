@@ -16,11 +16,39 @@ export const RUNNER_PROOF_OUTPUTS = {
     "https://proof.example.com/.well-known/takosumi-services.json",
 } as const;
 
+export const RUNNER_PROOF_RUNTIME_INPUT_VARIABLE =
+  "takosumi_runtime_inputs__probe" as const;
+export const RUNNER_PROOF_RUNTIME_INPUT_NAME = "PROBE_TOKEN" as const;
+
+const RUNNER_PROOF_CREDENTIAL_MANIFEST = {
+  bindings: [
+    {
+      providerSource: "registry.opentofu.org/example/probe",
+      connectionId: "runner-proof-connection",
+      recipeId: "runner-proof",
+      authMode: "token",
+      envNames: [RUNNER_PROOF_RUNTIME_INPUT_NAME],
+      fileEnvNames: [],
+      requiredEnvGroups: [[RUNNER_PROOF_RUNTIME_INPUT_NAME]],
+    },
+  ],
+} as const;
+
+const RUNNER_PROOF_RUNTIME_INPUT_DECLARATION = [
+  `variable "${RUNNER_PROOF_RUNTIME_INPUT_VARIABLE}" {`,
+  "  type      = map(string)",
+  "  sensitive = true",
+  "  ephemeral = true",
+  "}",
+  "",
+].join("\n");
+
 export const RUNNER_PROOF_MAIN_TF = [
   "terraform {",
   '  required_version = ">= 1.9.0"',
   "}",
   "",
+  RUNNER_PROOF_RUNTIME_INPUT_DECLARATION,
   "locals {",
   `  base_domain          = ${JSON.stringify(RUNNER_PROOF_OUTPUTS.base_domain)}`,
   '  public_origin        = "https://${local.base_domain}"',
@@ -46,6 +74,51 @@ export const RUNNER_PROOF_MAIN_TF = [
   "",
 ].join("\n");
 
+function generatedRoot() {
+  return {
+    files: {
+      "versions.tf": "terraform {}\n",
+      "variables.tf": RUNNER_PROOF_RUNTIME_INPUT_DECLARATION,
+      "main.tf": [
+        'module "proof" {',
+        '  source = "./module"',
+        `  ${RUNNER_PROOF_RUNTIME_INPUT_VARIABLE} = var.${RUNNER_PROOF_RUNTIME_INPUT_VARIABLE}`,
+        "}",
+        "",
+      ].join("\n"),
+      "outputs.tf": Object.keys(RUNNER_PROOF_OUTPUTS)
+        .map(
+          (name) =>
+            [
+              `output "${name}" {`,
+              `  value = module.proof.${name}`,
+              "}",
+              "",
+            ].join("\n"),
+        )
+        .join("\n"),
+    },
+  } as const;
+}
+
+function runtimeInputCredentials(
+  values: Readonly<Record<string, string>>,
+) {
+  return {
+    env: {
+      [RUNNER_PROOF_RUNTIME_INPUT_NAME]: "runner-proof-fake-credential",
+    },
+    manifest: RUNNER_PROOF_CREDENTIAL_MANIFEST,
+    runtimeInputs: [
+      {
+        variableName: RUNNER_PROOF_RUNTIME_INPUT_VARIABLE,
+        names: [RUNNER_PROOF_RUNTIME_INPUT_NAME],
+        values,
+      },
+    ],
+  } as const;
+}
+
 function planRun(runId: string) {
   return {
     id: runId,
@@ -59,14 +132,19 @@ function planRun(runId: string) {
   } as const;
 }
 
-function requestBase(runId: string) {
+function requestBase(
+  runId: string,
+  runtimeInputValues: Readonly<Record<string, string>>,
+) {
   return {
+    generatedRoot: generatedRoot(),
     planRun: planRun(runId),
     runnerProfile: {
       id: "runner-docker-proof",
       allowedProviders: [],
       deniedProviders: [],
     },
+    credentials: runtimeInputCredentials(runtimeInputValues),
   } as const;
 }
 
@@ -80,7 +158,7 @@ export function buildRunnerProofPlanEnvelope(
     runId,
     requestedAt,
     request: {
-      ...requestBase(runId),
+      ...requestBase(runId, {}),
       outputAllowlist: Object.fromEntries(
         Object.keys(RUNNER_PROOF_OUTPUTS).map((name) => [name, { from: name }]),
       ),
@@ -102,7 +180,10 @@ export function buildRunnerProofApplyEnvelope(
     runId,
     requestedAt,
     request: {
-      ...requestBase(runId),
+      ...requestBase(runId, {
+        [RUNNER_PROOF_RUNTIME_INPUT_NAME]:
+          "runner-proof-fake-token-20260905",
+      }),
       planArtifact: {
         kind: "runner-local",
         ref: `runner-local://${runId}/tfplan`,
