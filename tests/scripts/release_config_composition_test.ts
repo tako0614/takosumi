@@ -26,6 +26,7 @@ import {
   type PlatformReleasePlan,
   type PlatformReleasePlanRuntime,
 } from "../../scripts/platform-worker-release.ts";
+import { platformReleaseSourceAuthorityDigest } from "../../scripts/lib/platform-release-source.ts";
 
 const roots: string[] = [];
 const COMMIT = "a".repeat(40);
@@ -142,6 +143,7 @@ test("real release producers reject a repository-only source-authority change be
   });
 
   const platformEvidence = join(operatorRoot, "platform-evidence.json");
+  const releaseCommand = successfulPlatformReleaseCommand(platformPlan);
   await completeRelease(
     {
       action: "execute",
@@ -153,9 +155,13 @@ test("real release producers reject a repository-only source-authority change be
     platformPlan,
     true,
     undefined,
-    successfulPlatformReleaseCommand(platformPlan),
+    releaseCommand,
     undefined,
     async () => {},
+    {
+      checkoutIdentity: () => ({ repository: REPOSITORY, commit: COMMIT }),
+      isAncestor: (ancestor, descendant) => ancestor === descendant,
+    },
   );
   expect(JSON.parse(readFileSync(platformEvidence, "utf8"))).toMatchObject({
     kind: "takosumi.platform-worker-release-evidence@v3",
@@ -163,6 +169,43 @@ test("real release producers reject a repository-only source-authority change be
     sourceRepository: build.source.repository,
     sourceAuthoritySha256: build.source.authoritySha256,
     planConfirmation: platformPlan.confirmation,
+  });
+
+  const recoveryCommit = "f".repeat(40);
+  const recoveryEvidence = join(operatorRoot, "platform-recovery-evidence.json");
+  const recoveryOptions = {
+    action: "recover" as const,
+    plan: planPath,
+    confirmation: platformPlan.confirmation,
+    reviewer: "operator:platform-reviewer",
+    evidence: recoveryEvidence,
+  };
+  const recoveryRuntime = {
+    checkoutIdentity: () => ({ repository: REPOSITORY, commit: recoveryCommit }),
+    isAncestor: (ancestor: string, descendant: string) =>
+      ancestor === COMMIT && descendant === recoveryCommit,
+  };
+  await completeRelease(
+    recoveryOptions,
+    platformPlan,
+    false,
+    recoveryCommit,
+    releaseCommand,
+    undefined,
+    async () => {},
+    recoveryRuntime,
+  );
+  expect(JSON.parse(readFileSync(recoveryEvidence, "utf8"))).toMatchObject({
+    sourceRepository: REPOSITORY,
+    sourceCommit: COMMIT,
+    sourceAuthoritySha256: platformPlan.sourceAuthoritySha256,
+    recoverySourceRepository: REPOSITORY,
+    recoverySourceCommit: recoveryCommit,
+    recoverySourceAuthoritySha256: platformReleaseSourceAuthorityDigest({
+      kind: "takosumi.platform-release-source@v1",
+      repository: REPOSITORY,
+      commit: recoveryCommit,
+    }),
   });
 
   const verify = await runRunnerImageRelease(
@@ -173,7 +216,7 @@ test("real release producers reject a repository-only source-authority change be
       release: "release-1",
       evidence: join(operatorRoot, "runner-verify.jsonl"),
       buildEvidence,
-      platformEvidence,
+      platformEvidence: recoveryEvidence,
       execute: false,
     },
     {
@@ -191,6 +234,29 @@ test("real release producers reject a repository-only source-authority change be
     },
     image: NEXT_IMAGE,
     platformVersionId: DEPLOYED_VERSION,
+  });
+
+  const lateDriftEvidence = join(operatorRoot, "platform-recovery-drift.json");
+  await expect(completeRelease(
+    { ...recoveryOptions, evidence: lateDriftEvidence },
+    platformPlan,
+    false,
+    recoveryCommit,
+    releaseCommand,
+    undefined,
+    async () => {
+      writeFileSync(join(operatorRoot, "wrangler.staging.source.json"), JSON.stringify({
+        kind: "takosumi.platform-release-source@v1",
+        repository: OTHER_REPOSITORY,
+        commit: COMMIT,
+      }));
+    },
+    recoveryRuntime,
+  )).rejects.toThrow("platform_worker_release_incomplete");
+  expect(JSON.parse(readFileSync(lateDriftEvidence, "utf8"))).toMatchObject({
+    status: "incomplete",
+    mutationOutcome: "accepted",
+    diagnostic: { message: "platform_worker_release_source_drift" },
   });
 
   writeFileSync(

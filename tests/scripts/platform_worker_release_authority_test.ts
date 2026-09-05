@@ -27,6 +27,7 @@ import {
   appendPlatformMutationFence,
   appendPlatformRestoreFence,
   buildDryRunSeal,
+  assertPlatformActionSource,
   completeRelease,
   createPlatformDeployClosure,
   createPlatformDryRunConfig,
@@ -303,6 +304,11 @@ function forwardExecuteFixture(prefix: string): Readonly<{
     ["rev-parse", "HEAD"],
     resolve(import.meta.dir, "../.."),
   );
+  writeFileSync(platformReleaseSourcePinPath(operatorConfigPath), JSON.stringify({
+    kind: "takosumi.platform-release-source@v1",
+    repository: sourceRepository,
+    commit: sourceCommit,
+  }), { mode: 0o600 });
   const identity = {
     kind: "takosumi.platform-worker-release-plan@v6" as const,
     createdAt: "2026-09-04T00:00:00.000Z",
@@ -2009,6 +2015,116 @@ test("real completeRelease refuses late predecessor Container drift with zero pr
       item.label,
     ).toBeFalse();
   }
+});
+
+test("real completeRelease refuses a changed repository pin before provider reads", async () => {
+  const fixture = forwardExecuteFixture("takosumi-platform-repository-drift-");
+  writeFileSync(platformReleaseSourcePinPath(fixture.plan.configPath), JSON.stringify({
+    kind: "takosumi.platform-release-source@v1",
+    repository: "https://github.com/example/takosumi.git",
+    commit: fixture.plan.sourceCommit,
+  }));
+  let commands = 0;
+  await expect(completeRelease(
+    {
+      action: "execute",
+      plan: fixture.planPath,
+      confirmation: fixture.plan.confirmation,
+      reviewer: "operator:test-reviewer",
+      evidence: fixture.evidencePath,
+    },
+    fixture.plan,
+    true,
+    undefined,
+    async () => {
+      commands += 1;
+      throw new Error("provider must not be reached");
+    },
+  )).rejects.toThrow("platform_worker_release_incomplete");
+  expect(commands).toBe(0);
+  expect(JSON.parse(readFileSync(fixture.evidencePath, "utf8"))).toMatchObject({
+    mutationOutcome: "not-started",
+    diagnostic: { message: "platform_worker_release_source_drift" },
+  });
+});
+
+test("execute, recover and restore bind both the original pin and the current checkout repository", () => {
+  const { plan } = forwardExecuteFixture("takosumi-platform-action-authority-");
+  for (const action of ["execute", "recover", "restore"] as const) {
+    expect(() => assertPlatformActionSource(plan, action, {
+      checkoutIdentity: () => ({
+        repository: "https://github.com/example/takosumi.git",
+        commit: plan.sourceCommit,
+      }),
+      isAncestor: () => true,
+    })).toThrow("platform_worker_release_source_drift");
+  }
+  const descendant = "f".repeat(40);
+  const runtime = {
+    checkoutIdentity: () => ({ repository: plan.sourceRepository, commit: descendant }),
+    isAncestor: (ancestor: string, commit: string) =>
+      ancestor === plan.sourceCommit && commit === descendant,
+  };
+  expect(() => assertPlatformActionSource(plan, "execute", runtime)).toThrow(
+    "platform_worker_release_source_drift",
+  );
+  for (const action of ["recover", "restore"] as const) {
+    expect(assertPlatformActionSource(plan, action, runtime)).toEqual({
+      repository: plan.sourceRepository,
+      commit: descendant,
+      authoritySha256: platformReleaseSourceAuthorityDigest({
+        kind: "takosumi.platform-release-source@v1",
+        repository: plan.sourceRepository,
+        commit: descendant,
+      }),
+    });
+    expect(() => assertPlatformActionSource(plan, action, {
+      ...runtime,
+      isAncestor: () => false,
+    })).toThrow("platform_worker_release_source_drift");
+  }
+});
+
+test("real completeRelease refuses a repository swap during the last Container read before upload", async () => {
+  const fixture = forwardExecuteFixture("takosumi-platform-final-source-fence-");
+  const events: string[] = [];
+  const mutations = { upload: 0, migration: 0, secret: 0, traffic: 0 };
+  let repository = fixture.plan.sourceRepository;
+  const provider = forwardExecuteCommand(
+    fixture,
+    { kind: "state", current: fixture.plan.predecessorContainer },
+    events,
+    mutations,
+  );
+  await expect(completeRelease(
+    {
+      action: "execute",
+      plan: fixture.planPath,
+      confirmation: fixture.plan.confirmation,
+      reviewer: "operator:test-reviewer",
+      evidence: fixture.evidencePath,
+    },
+    fixture.plan,
+    true,
+    undefined,
+    async (args) => {
+      const result = await provider(args);
+      if (events.at(-1)?.startsWith("container-info:")) {
+        repository = "https://github.com/example/takosumi.git";
+      }
+      return result;
+    },
+    undefined,
+    undefined,
+    {
+      checkoutIdentity: () => ({ repository, commit: fixture.plan.sourceCommit }),
+      isAncestor: () => true,
+    },
+  )).rejects.toThrow("platform_worker_release_incomplete");
+  expect(mutations).toEqual({ upload: 0, migration: 0, secret: 0, traffic: 0 });
+  expect(JSON.parse(readFileSync(fixture.evidencePath, "utf8"))).toMatchObject({
+    diagnostic: { message: "platform_worker_release_source_drift" },
+  });
 });
 
 test("real completeRelease performs the final Container read on fresh custody immediately before its sole upload", async () => {

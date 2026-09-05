@@ -32,6 +32,7 @@ import {
   platformReleaseSourceAuthorityDigest,
   readPlatformReleaseSourcePin,
   resolvePlatformReleaseSourceAuthority,
+  sameGitRemote,
   type PlatformReleaseSourcePin,
 } from "./lib/platform-release-source.ts";
 import {
@@ -1785,7 +1786,7 @@ export type PlatformReadyEvidenceInput = Readonly<{
   deployedContainer: PlatformContainerState;
   reviewer: string;
   lostAcknowledgement: boolean;
-  recoverySourceCommit?: string;
+  recoverySource?: PlatformActionSource;
 }>;
 
 /** The exact ready-evidence envelope written after production readback. */
@@ -1801,9 +1802,12 @@ export function createPlatformReadyEvidence(
     sourceRepository: plan.sourceRepository,
     sourceCommit: plan.sourceCommit,
     sourceAuthoritySha256: plan.sourceAuthoritySha256,
-    ...(input.recoverySourceCommit &&
-    input.recoverySourceCommit !== plan.sourceCommit
-      ? { recoverySourceCommit: input.recoverySourceCommit }
+    ...(input.recoverySource
+      ? {
+          recoverySourceRepository: input.recoverySource.repository,
+          recoverySourceCommit: input.recoverySource.commit,
+          recoverySourceAuthoritySha256: input.recoverySource.authoritySha256,
+        }
       : {}),
     configPath: plan.configPath,
     configSha256: plan.configSha256,
@@ -2225,9 +2229,7 @@ async function execute(
       options.confirmation,
       environment,
     );
-    if (git(["rev-parse", "HEAD"]).trim() !== releasePlan.sourceCommit) {
-      throw new Error("platform_worker_release_source_drift");
-    }
+    assertPlatformActionSource(releasePlan, "execute");
     await assertPlanClosure(releasePlan);
     await completeRelease(options, releasePlan, true);
   } catch (error) {
@@ -2256,12 +2258,9 @@ async function recover(
       options.confirmation,
       environment,
     );
-    const head = git(["rev-parse", "HEAD"]).trim();
-    if (!isAncestor(releasePlan.sourceCommit, head)) {
-      throw new Error("platform_worker_release_recovery_source_invalid");
-    }
+    const source = assertPlatformActionSource(releasePlan, "recover");
     await assertPlanClosure(releasePlan);
-    await completeRelease(options, releasePlan, false, head);
+    await completeRelease(options, releasePlan, false, source.commit);
   } catch (error) {
     writePlatformFailureIfAbsent(options, environment, releasePlan, error);
     throw error;
@@ -2288,16 +2287,13 @@ async function restore(
       options.confirmation,
       environment,
     );
-    const head = git(["rev-parse", "HEAD"]).trim();
-    if (!isAncestor(releasePlan.sourceCommit, head)) {
-      throw new Error("platform_worker_release_restore_source_invalid");
-    }
+    const source = assertPlatformActionSource(releasePlan, "restore");
     assertPlatformRestorePathGraph(options, releasePlan);
     await assertPlanClosure(releasePlan);
     await withPlatformRestoreLock(
       options.plan,
       releasePlan.confirmation,
-      () => completeRestore(options, releasePlan!, head),
+      () => completeRestore(options, releasePlan!, source.commit),
     );
   } catch (error) {
     const restoreState = releasePlan
@@ -3662,6 +3658,58 @@ async function assertPlanClosure(plan: PlatformReleasePlan): Promise<void> {
   }
 }
 
+export type PlatformActionSource = Readonly<{
+  repository: string;
+  commit: string;
+  authoritySha256: string;
+}>;
+
+export type PlatformActionSourceRuntime = Readonly<{
+  checkoutIdentity: () => Readonly<{ repository: string; commit: string }>;
+  isAncestor: (ancestor: string, descendant: string) => boolean;
+}>;
+
+const platformActionSourceRuntime: PlatformActionSourceRuntime = {
+  checkoutIdentity: () => ({
+    repository: git(["remote", "get-url", "origin"]).trim(),
+    commit: git(["--no-replace-objects", "rev-parse", "HEAD"]).trim(),
+  }),
+  isAncestor,
+};
+
+export function assertPlatformActionSource(
+  plan: PlatformReleasePlan,
+  action: "execute" | "recover" | "restore",
+  runtime: PlatformActionSourceRuntime = platformActionSourceRuntime,
+  expectedSource?: PlatformActionSource,
+): PlatformActionSource {
+  const pin = readPlatformReleaseSourcePin(plan.configPath);
+  const checkout = runtime.checkoutIdentity();
+  if (
+    pin.repository !== plan.sourceRepository ||
+    pin.commit !== plan.sourceCommit ||
+    platformReleaseSourceAuthorityDigest(pin) !== plan.sourceAuthoritySha256 ||
+    !sameGitRemote(checkout.repository, plan.sourceRepository) ||
+    !/^[0-9a-f]{40}$/u.test(checkout.commit) ||
+    (action === "execute"
+      ? checkout.commit !== plan.sourceCommit
+      : !runtime.isAncestor(plan.sourceCommit, checkout.commit))
+  ) {
+    throw new Error("platform_worker_release_source_drift");
+  }
+  const source = {
+    ...checkout,
+    authoritySha256: platformReleaseSourceAuthorityDigest({
+      kind: "takosumi.platform-release-source@v1",
+      ...checkout,
+    }),
+  };
+  if (expectedSource && source.authoritySha256 !== expectedSource.authoritySha256) {
+    throw new Error("platform_worker_release_source_drift");
+  }
+  return source;
+}
+
 export async function completeRelease(
   options: Extract<Options, { action: "execute" | "recover" }>,
   plan: PlatformReleasePlan,
@@ -3671,6 +3719,7 @@ export async function completeRelease(
   uploadCustodyFactory: typeof createPlatformUploadCustody =
     createPlatformUploadCustody,
   publicReadback: typeof verifyPublicReadback = verifyPublicReadback,
+  sourceRuntime: PlatformActionSourceRuntime = platformActionSourceRuntime,
 ): Promise<void> {
   let fence = readPlatformMutationFence(options.plan, plan.confirmation);
   let mutationOutcome: "not-started" | "unknown" | "accepted" =
@@ -3685,6 +3734,12 @@ export async function completeRelease(
       dirname(plan.checkpointPath),
     );
   try {
+    const source = assertPlatformActionSource(plan, options.action, sourceRuntime);
+    if (recoverySourceCommit && recoverySourceCommit !== source.commit) {
+      throw new Error("platform_worker_release_source_drift");
+    }
+    const assertSource = () =>
+      assertPlatformActionSource(plan, options.action, sourceRuntime, source);
     custody = takeUploadCustody();
     if (fence === null) {
       if (!allowMutation) {
@@ -3720,7 +3775,10 @@ export async function completeRelease(
         ),
         plan.environment,
         plan.predecessorContainer,
-        command,
+        async (argv) => {
+          assertSource();
+          return command(argv);
+        },
       );
       const deployedVersionId = parseDeployedVersion(
         `${deployed.stdout}\n${deployed.stderr}`,
@@ -3781,6 +3839,7 @@ export async function completeRelease(
       command,
     );
     custody.assertUnchanged();
+    assertSource();
     const evidence = createPlatformReadyEvidence({
       plan,
       completedAt: new Date().toISOString(),
@@ -3788,7 +3847,7 @@ export async function completeRelease(
       deployedContainer,
       reviewer: options.reviewer,
       lostAcknowledgement,
-      ...(recoverySourceCommit ? { recoverySourceCommit } : {}),
+      ...(options.action === "recover" ? { recoverySource: source } : {}),
     });
     writePrivate(
       options.evidence,
@@ -3938,6 +3997,14 @@ async function completeRestore(
   plan: PlatformReleasePlan,
   restoreSourceCommit: string,
 ): Promise<void> {
+  const source = assertPlatformActionSource(plan, "restore");
+  if (restoreSourceCommit !== source.commit) {
+    throw new Error("platform_worker_release_source_drift");
+  }
+  const sourceBoundCommand: PlatformReleaseCommand = async (argv) => {
+    assertPlatformActionSource(plan, "restore", platformActionSourceRuntime, source);
+    return requiredCommand(argv);
+  };
   const forward = readPlatformMutationFence(options.plan, plan.confirmation);
   if (forward?.outcome !== "accepted" || !forward.versionId) {
     throw new Error("platform_worker_restore_forward_release_incomplete");
@@ -3991,6 +4058,7 @@ async function completeRestore(
           restoreMessage,
           custody.uploadEntrypointPath,
         ),
+        sourceBoundCommand,
       );
       restoreVersionId = parseDeployedVersion(
         `${restored.stdout}\n${restored.stderr}`,
@@ -4067,6 +4135,7 @@ async function completeRestore(
           plan.predecessorVersionId,
           restoreMessage,
         ),
+        sourceBoundCommand,
       );
       appendPlatformRestoreFence(
         options.plan,
@@ -4090,6 +4159,7 @@ async function completeRestore(
             plan.predecessorVersionId,
             restoreMessage,
           ),
+          sourceBoundCommand,
         );
       }
       appendPlatformRestoreFence(
@@ -4123,15 +4193,18 @@ async function completeRestore(
       plan.predecessorContainer.image,
     );
     custody.assertUnchanged();
+    assertPlatformActionSource(plan, "restore", platformActionSourceRuntime, source);
     const evidence = {
       kind: "takosumi.platform-worker-restore-evidence@v1",
       status: "restored",
       completedAt: new Date().toISOString(),
       environment: plan.environment,
+      sourceRepository: plan.sourceRepository,
       sourceCommit: plan.sourceCommit,
-      ...(restoreSourceCommit !== plan.sourceCommit
-        ? { restoreSourceCommit }
-        : {}),
+      sourceAuthoritySha256: plan.sourceAuthoritySha256,
+      restoreSourceRepository: source.repository,
+      restoreSourceCommit: source.commit,
+      restoreSourceAuthoritySha256: source.authoritySha256,
       planConfirmation: plan.confirmation,
       reviewer: options.reviewer,
       deployedVersionId: forward.versionId,
@@ -5684,7 +5757,7 @@ function gitAt(cwd: string, args: readonly string[]): string {
 
 function isAncestor(ancestor: string, descendant: string): boolean {
   const result = Bun.spawnSync(
-    ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+    ["git", "--no-replace-objects", "merge-base", "--is-ancestor", ancestor, descendant],
     {
       cwd: ROOT,
       stdin: "ignore",

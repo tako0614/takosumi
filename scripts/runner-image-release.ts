@@ -173,6 +173,9 @@ type PlatformReadyEvidence = Readonly<{
   sourceRepository: string;
   sourceCommit: string;
   sourceAuthoritySha256: string;
+  recoverySourceRepository?: string;
+  recoverySourceCommit?: string;
+  recoverySourceAuthoritySha256?: string;
   configPath: string;
   configSha256: string;
   dashboardAssetsSha256: string;
@@ -1030,12 +1033,18 @@ async function reconcileRunnerImage(
   await prepareEvidenceFile(options.evidence, sourceRoots);
   const attempts = await unresolvedPublicationAttempts(publicationJournal);
   if (attempts.length === 0) {
-    const resolution = await uniquePublicationResolution(
+    const resolved = await uniquePublicationResolution(
       publicationJournal,
       options.environment,
       options.release,
     );
-    if (!resolution) throw new Error("runner_image_publication_reconciliation_not_required");
+    if (!resolved) throw new Error("runner_image_publication_reconciliation_not_required");
+    const { resolution, attempt } = resolved;
+    if (!publicationAttemptMatchesReconciliationContext(attempt, options, context)) {
+      throw new Error("runner_image_publication_reconciliation_identity_mismatch");
+    }
+    await assertHistoricalPublicationCommit(context.repository, attempt, git);
+    await publicationJournal.assertBound();
     await appendTerminalEvidenceIfAbsent(options.evidence, resolution.build);
     return resolution.build;
   }
@@ -1458,8 +1467,12 @@ async function uniquePublicationResolution(
   state: string | PublicationJournal,
   environment: RunnerImageReleaseEnvironment,
   release: string,
-): Promise<RunnerPublishedResolution | null> {
-  const matches = (await readPublicationState(state)).filter(
+): Promise<Readonly<{
+  resolution: RunnerPublishedResolution;
+  attempt: RunnerPublicationAttempt;
+}> | null> {
+  const records = await readPublicationState(state);
+  const matches = records.filter(
     (entry): entry is RunnerPublishedResolution =>
       entry.status === "published" &&
       entry.environment === environment &&
@@ -1468,7 +1481,20 @@ async function uniquePublicationResolution(
   if (matches.length > 1) {
     throw new Error("runner_image_publication_reconciliation_ambiguous");
   }
-  return matches[0] ?? null;
+  const resolution = matches[0];
+  if (!resolution) return null;
+  const attempts = records.filter(
+    (entry): entry is RunnerPublicationAttempt =>
+      entry.status === "publication-started" &&
+      entry.image.transportRef === resolution.transportRef,
+  );
+  if (
+    attempts.length !== 1 ||
+    !publicationResolutionMatchesAttempt(resolution, attempts[0]!)
+  ) {
+    throw new Error("runner_image_publication_state_invalid");
+  }
+  return { resolution, attempt: attempts[0]! };
 }
 
 async function readPublicationState(
@@ -2396,6 +2422,17 @@ async function readPlatformEvidence(path: string): Promise<PlatformReadyEvidence
     !isBoundedString(value.reviewer, 256)
   ) {
     throw new Error("platform ready evidence is invalid");
+  }
+  if (
+    ["recoverySourceRepository", "recoverySourceCommit", "recoverySourceAuthoritySha256"]
+      .some((key) => Object.hasOwn(value, key)) &&
+    (!validSourceAuthority({
+      repository: value.recoverySourceRepository,
+      commit: value.recoverySourceCommit,
+      authoritySha256: value.recoverySourceAuthoritySha256,
+    }) || !sameGitRemote(value.sourceRepository, value.recoverySourceRepository as string))
+  ) {
+    throw new Error("platform ready evidence has invalid recovery source authority");
   }
   assertReview(value.reviewer);
   return value as unknown as PlatformReadyEvidence;

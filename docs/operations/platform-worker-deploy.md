@@ -226,7 +226,11 @@ bun run deploy -- takosumi-platform-staging execute \
 ```
 
 Execute rechecks the confirmed source, config, secret names, complete dashboard
-tree, and dry-run tree. It copies that closure with stable no-follow reads into
+tree, and dry-run tree. Execute, recover, and restore re-read the config's sibling
+source pin and require its exact repository, commit, and authority digest to
+match the plan. The checkout's origin must identify the same repository; a
+matching commit alone is insufficient. These checks also run immediately before
+provider mutation and before successful evidence is written. It copies that closure with stable no-follow reads into
 fresh external single-link upload custody, then deploys the custody dry-run
 entry with `--no-bundle` and its exact projected config. Custody is re-sealed
 immediately before and after upload, so upload does not re-read the retained
@@ -256,6 +260,14 @@ If provider acknowledgement is lost, recovery lists the bounded recent Version
 set and accepts exactly one post-plan Version carrying that unique plan tag.
 Zero or multiple matches remain incomplete. The exact predecessor stays in the
 plan and ready evidence for rollback.
+
+Keep the original plan's source pin unchanged during recovery or restore. A
+later recovery-tool commit is allowed only in the same repository and must
+descend from the planned commit, with Git replacement disabled. Normal execute
+still requires the exact planned commit. Recovery and restore evidence retain
+the original source authority and separately record the tool's repository,
+commit, and source-authority digest. Changing the pin requires a new plan; it
+does not re-authorize an existing plan.
 
 Rollback is also owned by this surface; do not copy a printed Wrangler command
 or bypass its checkpoint/readback boundary:

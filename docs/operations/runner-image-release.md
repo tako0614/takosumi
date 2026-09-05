@@ -175,6 +175,11 @@ also retain its exact local transport tag: Docker must report both its image ID
 and descriptor digest as the journal's legacy `localImageId`. Otherwise the
 attempt remains unresolved.
 
+An already-resolved journal is subject to the same repository, branch, config,
+and historical-commit checks before its evidence can be re-emitted. This
+idempotent path does not repeat a Docker readback, but it cannot carry an
+existing repository's publication into another repository's release context.
+
 A recovered build record keeps the attempt repository, commit, source-authority
 digest, Dockerfile, and source-tree digest under `source`; it records the later
 clean, pushed release-tool repository, commit, and source-authority digest

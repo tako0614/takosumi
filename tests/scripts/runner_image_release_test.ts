@@ -1873,6 +1873,30 @@ test("an already-bound OCI attempt uses its explicit descriptor and retains the 
     status: "published",
     image: { immutableRef, imageConfigDigest },
   });
+
+  const otherRepository = "https://github.com/example/takosumi.git";
+  writeFileSync(input.sourcePin, JSON.stringify({
+    kind: "takosumi.platform-release-source@v1",
+    repository: otherRepository,
+    commit: COMMIT,
+  }));
+  const originalGit = gitFor("fix/TASK-0032-runner-image");
+  const replayEvidence = join(input.operator, "other-repository-replay.jsonl");
+  await expect(runRunnerImageRelease(
+    { ...buildOptions(input), command: "reconcile", evidence: replayEvidence },
+    {
+      repositoryRoot: input.repository,
+      git: async (root, args) => args.join(" ") === "remote get-url origin"
+        ? otherRepository
+        : originalGit(root, args),
+      materializeSource: materializeFixtureSource,
+      publicationJournalRoot: journalRoot,
+      command: async () => {
+        throw new Error("resolved reconciliation must not inspect again");
+      },
+    },
+  )).rejects.toThrow("runner_image_publication_reconciliation_identity_mismatch");
+  expect(readFileSync(replayEvidence, "utf8")).not.toContain('"status":"published"');
 });
 
 test("a persisted resolution must bind the attempt to the descriptor rather than only the config", async () => {
@@ -2704,6 +2728,41 @@ test("verify consumes exact platform evidence and performs no Worker mutation", 
     projectedConfig,
   ]);
   expect(statSync(input.evidence).mode & 0o777).toBe(0o600);
+});
+
+test("verify rejects partial, cross-repository or forged platform recovery authority before readback", async () => {
+  for (const recovery of [
+    { recoverySourceCommit: RECONCILER_COMMIT },
+    {
+      recoverySourceRepository: REPOSITORY,
+      recoverySourceCommit: RECONCILER_COMMIT,
+      recoverySourceAuthoritySha256: sourceAuthorityDigest(REPOSITORY, COMMIT),
+    },
+    {
+      recoverySourceRepository: "https://github.com/example/takosumi.git",
+      recoverySourceCommit: RECONCILER_COMMIT,
+      recoverySourceAuthoritySha256: sourceAuthorityDigest(
+        "https://github.com/example/takosumi.git",
+        RECONCILER_COMMIT,
+      ),
+    },
+  ]) {
+    const input = fixture(NEXT);
+    writeBuildEvidence(input);
+    writePlatformEvidence(input);
+    const evidence = JSON.parse(readFileSync(input.platformEvidence, "utf8"));
+    writeFileSync(input.platformEvidence, JSON.stringify({ ...evidence, ...recovery }));
+    let readbacks = 0;
+    await expect(runRunnerImageRelease(verifyOptions(input), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      command: async () => {
+        readbacks += 1;
+        throw new Error("invalid recovery must not reach provider");
+      },
+    })).rejects.toThrow("platform ready evidence has invalid recovery source authority");
+    expect(readbacks).toBe(0);
+  }
 });
 
 test("verify accepts a matching detail state but uses the unique list state", async () => {
