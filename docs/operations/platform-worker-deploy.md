@@ -188,7 +188,16 @@ to the sponsorship descriptor, and set `takosumi-ai.workspaceContext` to
 
 The official staging target is a reviewed two-step owner surface. Plan is
 read-only: it requires clean pushed source, binds its exact repository/commit
-authority into the confirmed plan, reproduces the environment-specific
+authority into the confirmed plan, and consumes the operator-private runner
+build evidence for the configured immutable image. Every matching published v3
+record is fully validated. Valid historical records without proof are ignored,
+and identical proved records are deduplicated by exact proof kind and image; one
+unique closed runtime-input Plan proof for that image must remain. Missing
+proof, malformed matching provenance, or evidence only for another image fails
+before dashboard build, dry-run, or provider access. Runner build provenance
+must name the same owning Git remote as the Worker pin, but their commits are
+independent authorities; image identity, not commit lockstep, joins the
+releases. Plan then reproduces the environment-specific
 dashboard build twice, seals every physical output path/size/digest, validates
 that the external config points at that same worktree, seals the metadata-only
 secret-name inventory and exact serving predecessor, and seals Wrangler's
@@ -230,6 +239,7 @@ to the predecessor digest for reviewed restore.
 ```bash
 bun run deploy -- takosumi-platform-staging plan \
   --config /absolute/operator-private/wrangler.staging.toml \
+  --runner-build-evidence /absolute/non-worktree-release-state/runner-build.jsonl \
   --plan-out /absolute/non-worktree-release-state/release-plan.json
 
 bun run deploy -- takosumi-platform-staging execute \
@@ -239,8 +249,9 @@ bun run deploy -- takosumi-platform-staging execute \
   --evidence /absolute/non-worktree-release-state/release-evidence.json
 ```
 
-Execute rechecks the confirmed source, config, secret names, complete dashboard
-tree, and dry-run tree. Execute, recover, and restore re-read the config's sibling
+Execute rechecks the confirmed source, runner-image proof, config, secret names,
+complete dashboard tree, and dry-run tree. It requires the configured image to
+remain the proof-bound immutable image before upload. Execute, recover, and restore re-read the config's sibling
 source pin and require its exact repository, commit, and authority digest to
 match the plan. The checkout's origin must identify the same repository; a
 matching commit alone is insufficient. These checks also run immediately before
@@ -307,6 +318,14 @@ rollout, and zero-error health, then routes the exact predecessor Worker Version
 alone at 100 percent. Separate fsynced `unknown` stages fence the Container
 upload and Worker routing command. Ready restore evidence requires the public
 predecessor Version plus the same exact healthy predecessor Container readback.
+Those checks prove predecessor identity and health only. The forward image proof
+sealed into the plan does not prove the predecessor image's runtime-input
+behavior, and forward build evidence cannot be reused for that claim. Require
+separate valid proof for the exact predecessor image or an appropriately
+authorized functional readback before relying on restored installation
+behavior. Independently, the current Control v68 compatibility cutoff requires
+forward repair for a pre-v68 runtime even when restore identity and health
+succeed.
 Failure evidence is derived from those stages: no restore checkpoint is
 pre-mutation, an `unknown` or malformed checkpoint is post-mutation ambiguity,
 and an accepted stage is post-mutation readback.

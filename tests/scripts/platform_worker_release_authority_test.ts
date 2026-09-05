@@ -320,6 +320,10 @@ function forwardExecuteFixture(prefix: string): Readonly<{
       repository: sourceRepository,
       commit: sourceCommit,
     }),
+    runnerImageProof: {
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v1" as const,
+      image: FORWARD_RUNNER_IMAGE,
+    },
     releaseNonce: "a".repeat(32),
     configPath: operatorConfigPath,
     configSha256: testDigest(readFileSync(operatorConfigPath)),

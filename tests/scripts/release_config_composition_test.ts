@@ -52,7 +52,7 @@ afterEach(() => {
   }
 });
 
-test("real release producers reject a repository-only source-authority change before verify readback", async () => {
+test("real release flow accepts a proved runner image across Worker commits and rejects source drift", async () => {
   const root = mkdtempSync(join(tmpdir(), "takosumi-release-composition-"));
   roots.push(root);
   const repositoryRoot = join(root, "takosumi");
@@ -119,9 +119,239 @@ test("real release producers reject a repository-only source-authority change be
   writeFileSync(config, activatedSource);
 
   expect(() => assertConfigTargetsSource(activatedSource, "staging")).not.toThrow();
+  await expect(
+    runPlatformWorkerRelease(
+      [
+        "plan",
+        "--config",
+        config,
+        "--plan-out",
+        join(operatorRoot, "platform-plan-without-runner-proof.json"),
+      ],
+      "staging",
+      platformPlanRuntime(repositoryRoot),
+    ),
+  ).rejects.toThrow("platform_worker_release_runner_image_proof_required");
+  const publishedBuild = JSON.parse(
+    readFileSync(buildEvidence, "utf8"),
+  ) as RunnerImageBuildRecord;
+  const unprovenBuild: Record<string, unknown> = { ...publishedBuild };
+  delete unprovenBuild.runtimeInputPlanProof;
+  const legacyBuild: Record<string, unknown> = {
+    ...unprovenBuild,
+    kind: "takosumi.runner-image-release@v2",
+  };
+  const otherImage =
+    `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@sha256:${"e".repeat(64)}`;
+  for (const [name, incompatibleBuild] of [
+    ["unproven", unprovenBuild],
+    ["legacy", legacyBuild],
+    [
+      "legacy-proof",
+      {
+        ...publishedBuild,
+        runtimeInputPlanProof: {
+          kind: "takosumi.runner-image-runtime-input-plan-proof@v0",
+          image: NEXT_IMAGE,
+        },
+      },
+    ],
+    [
+      "different-image",
+      {
+        ...publishedBuild,
+        image: { ...publishedBuild.image, immutableRef: otherImage },
+        runtimeInputPlanProof: {
+          kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+          image: otherImage,
+        },
+      },
+    ],
+    [
+      "mismatched-proof",
+      {
+        ...publishedBuild,
+        runtimeInputPlanProof: {
+          kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+          image: otherImage,
+        },
+      },
+    ],
+    [
+      "forged-provenance",
+      {
+        ...publishedBuild,
+        source: {
+          ...publishedBuild.source,
+          authoritySha256: `sha256:${"0".repeat(64)}`,
+        },
+      },
+    ],
+    [
+      "foreign-repository",
+      {
+        ...publishedBuild,
+        source: {
+          ...publishedBuild.source,
+          repository: OTHER_REPOSITORY,
+          authoritySha256: platformReleaseSourceAuthorityDigest({
+            kind: "takosumi.platform-release-source@v1",
+            repository: OTHER_REPOSITORY,
+            commit: publishedBuild.source.commit,
+          }),
+        },
+      },
+    ],
+  ] as const) {
+    const incompatibleEvidence = join(
+      operatorRoot,
+      `runner-build-${name}.jsonl`,
+    );
+    writeFileSync(
+      incompatibleEvidence,
+      `${JSON.stringify(incompatibleBuild)}\n`,
+      { mode: 0o600 },
+    );
+    let dashboardBuilds = 0;
+    let closureBuilds = 0;
+    const runtime = platformPlanRuntime(repositoryRoot);
+    await expect(
+      runPlatformWorkerRelease(
+        [
+          "plan",
+          "--config",
+          config,
+          "--runner-build-evidence",
+          incompatibleEvidence,
+          "--plan-out",
+          join(operatorRoot, `platform-plan-${name}.json`),
+        ],
+        "staging",
+        {
+          ...runtime,
+          buildDashboard: async (environment) => {
+            dashboardBuilds += 1;
+            return runtime.buildDashboard(environment);
+          },
+          createClosure: async (input) => {
+            closureBuilds += 1;
+            return runtime.createClosure(input);
+          },
+        },
+      ),
+    ).rejects.toThrow("platform_worker_release_runner_image_proof_invalid");
+    expect(dashboardBuilds, name).toBe(0);
+    expect(closureBuilds, name).toBe(0);
+  }
+  const independentRunnerCommit = "e".repeat(40);
+  const independentBuild = {
+    ...publishedBuild,
+    source: {
+      ...publishedBuild.source,
+      commit: independentRunnerCommit,
+      authoritySha256: platformReleaseSourceAuthorityDigest({
+      kind: "takosumi.platform-release-source@v1",
+      repository: publishedBuild.source.repository,
+      commit: independentRunnerCommit,
+      }),
+    },
+  };
+  for (const [name, records] of [
+    ["historical-unproven-then-proved", [unprovenBuild, independentBuild]],
+    ["duplicate-proved", [independentBuild, independentBuild]],
+  ] as const) {
+    const historyEvidence = join(operatorRoot, `runner-build-${name}.jsonl`);
+    const historyPlan = join(operatorRoot, `platform-plan-${name}.json`);
+    writeFileSync(
+      historyEvidence,
+      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+      { mode: 0o600 },
+    );
+    await runPlatformWorkerRelease(
+      [
+        "plan",
+        "--config",
+        config,
+        "--runner-build-evidence",
+        historyEvidence,
+        "--plan-out",
+        historyPlan,
+      ],
+      "staging",
+      platformPlanRuntime(repositoryRoot),
+    );
+    expect(JSON.parse(readFileSync(historyPlan, "utf8"))).toMatchObject({
+      runnerImageProof: {
+        kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+        image: NEXT_IMAGE,
+      },
+    });
+  }
+  const malformedHistoryEvidence = join(
+    operatorRoot,
+    "runner-build-malformed-then-proved.jsonl",
+  );
+  writeFileSync(
+    malformedHistoryEvidence,
+    `${JSON.stringify({
+      ...publishedBuild,
+      source: {
+        ...publishedBuild.source,
+        authoritySha256: `sha256:${"0".repeat(64)}`,
+      },
+    })}\n${JSON.stringify(independentBuild)}\n`,
+    { mode: 0o600 },
+  );
+  let malformedHistoryDashboardBuilds = 0;
+  let malformedHistoryClosureBuilds = 0;
+  const malformedHistoryRuntime = platformPlanRuntime(repositoryRoot);
+  await expect(
+    runPlatformWorkerRelease(
+      [
+        "plan",
+        "--config",
+        config,
+        "--runner-build-evidence",
+        malformedHistoryEvidence,
+        "--plan-out",
+        join(operatorRoot, "platform-plan-malformed-then-proved.json"),
+      ],
+      "staging",
+      {
+        ...malformedHistoryRuntime,
+        buildDashboard: async (environment) => {
+          malformedHistoryDashboardBuilds += 1;
+          return malformedHistoryRuntime.buildDashboard(environment);
+        },
+        createClosure: async (input) => {
+          malformedHistoryClosureBuilds += 1;
+          return malformedHistoryRuntime.createClosure(input);
+        },
+      },
+    ),
+  ).rejects.toThrow("platform_worker_release_runner_image_proof_invalid");
+  expect(malformedHistoryDashboardBuilds).toBe(0);
+  expect(malformedHistoryClosureBuilds).toBe(0);
+  const independentBuildEvidence = join(
+    operatorRoot,
+    "runner-build-independent-source.jsonl",
+  );
+  writeFileSync(
+    independentBuildEvidence,
+    `${JSON.stringify(independentBuild)}\n`,
+    { mode: 0o600 },
+  );
   const planPath = join(operatorRoot, "platform-plan.json");
   await runPlatformWorkerRelease(
-    ["plan", "--config", config, "--plan-out", planPath],
+    [
+      "plan",
+      "--config",
+      config,
+      "--runner-build-evidence",
+      independentBuildEvidence,
+      "--plan-out",
+      planPath,
+    ],
     "staging",
     platformPlanRuntime(repositoryRoot),
   );
@@ -141,6 +371,11 @@ test("real release producers reject a repository-only source-authority change be
     configPath: build.config.path,
     configSha256: activationSha256,
   });
+  expect(platformPlan.runnerImageProof).toEqual({
+    kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+    image: NEXT_IMAGE,
+  });
+  expect(independentBuild.source.commit).not.toBe(platformPlan.sourceCommit);
 
   const platformEvidence = join(operatorRoot, "platform-evidence.json");
   const releaseCommand = successfulPlatformReleaseCommand(platformPlan);
@@ -215,7 +450,7 @@ test("real release producers reject a repository-only source-authority change be
       environment: "staging",
       release: "release-1",
       evidence: join(operatorRoot, "runner-verify.jsonl"),
-      buildEvidence,
+      buildEvidence: independentBuildEvidence,
       platformEvidence: recoveryEvidence,
       execute: false,
     },

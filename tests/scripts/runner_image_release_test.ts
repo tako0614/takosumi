@@ -284,6 +284,7 @@ function writeBuildEvidence(
       dockerfileSha256: sha256(
         readFileSync(join(input.repository, "runner", "Dockerfile")),
       ),
+      buildContextSha256: dashboardAssetTreeSeal(input.repository).digest,
     },
     config: {
       path: overrides.configPath ?? input.config,
@@ -296,6 +297,11 @@ function writeBuildEvidence(
       transportTag: TRANSPORT_TAG,
       transportRef: TRANSPORT_REF,
       immutableRef: overrides.immutableRef ?? NEXT,
+      imageConfigDigest: `sha256:${"f".repeat(64)}`,
+    },
+    runtimeInputPlanProof: {
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+      image: overrides.immutableRef ?? NEXT,
     },
     review: overrides.review ?? "operator:builder",
   };
@@ -1810,6 +1816,7 @@ test("a pushed descendant tool reconciles the exact archived attempt under the j
     image: { immutableRef: NEXT },
     review: attempt.review,
   });
+  expect(reconciled).not.toHaveProperty("runtimeInputPlanProof");
 });
 
 test("historical reconciliation rejects untrusted current or attempt Git history before archive or readback", async () => {
@@ -2107,7 +2114,7 @@ test("historical reconciliation leaves the attempt unresolved when the remote de
   expect(readFileSync(input.state, "utf8").trim().split("\n")).toHaveLength(1);
 });
 
-test("a recovered historical build verifies activation on the trusted reconciler commit", async () => {
+test("a recovered historical build remains unproven on the trusted reconciler commit", async () => {
   const input = fixture();
   writeSourcePin(input.sourcePin, RECONCILER_COMMIT);
   const attempt = publicationAttempt(input);
@@ -2165,15 +2172,8 @@ test("a recovered historical build verifies activation on the trusted reconciler
       command: readback.command,
       wait: async () => undefined,
     }),
-  ).resolves.toMatchObject({
-    operation: "verify",
-    status: "verified",
-    source: {
-      branch: "fix/TASK-0032-runner-image",
-      commit: RECONCILER_COMMIT,
-    },
-    image: NEXT,
-  });
+  ).rejects.toThrow("runner_image_runtime_input_plan_proof_required");
+  expect(readback.calls).toEqual([]);
 });
 
 test("legacy reconciliation proves the recorded Docker Id through the exact local tag before remote readback", async () => {
@@ -2328,7 +2328,7 @@ test("legacy reconciliation stays unresolved when the exact local tag is absent 
   }
 });
 
-test("an already-bound OCI attempt uses its explicit descriptor and retains the actual config digest", async () => {
+test("a proof-bearing lost acknowledgement preserves its image proof through reconciliation", async () => {
   const input = fixture();
   const journalRoot = join(input.operator, "publication-locator");
   await bindDescriptorAwareAttemptThroughBuild(input, journalRoot);
@@ -2336,6 +2336,17 @@ test("an already-bound OCI attempt uses its explicit descriptor and retains the 
   const imageConfigDigest = `sha256:${"3".repeat(64)}`;
   const immutableRef =
     `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner@${descriptorDigest}`;
+  const [attempt] = readFileSync(input.state, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line)) as Array<Record<string, unknown>>;
+  expect(attempt).toMatchObject({
+    status: "publication-started",
+    runtimeInputPlanProof: {
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+      image: immutableRef,
+    },
+  });
   const reconciled = await runRunnerImageRelease(
     { ...buildOptions(input), command: "reconcile" },
     {
@@ -2367,6 +2378,23 @@ test("an already-bound OCI attempt uses its explicit descriptor and retains the 
   expect(reconciled).toMatchObject({
     status: "published",
     image: { immutableRef, imageConfigDigest },
+    runtimeInputPlanProof: {
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+      image: immutableRef,
+    },
+  });
+  const reconciliationRecords = readFileSync(input.state, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  expect(reconciliationRecords[1]).toMatchObject({
+    status: "published",
+    build: {
+      runtimeInputPlanProof: {
+        kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+        image: immutableRef,
+      },
+    },
   });
 
   await expect(
@@ -2410,6 +2438,65 @@ test("an already-bound OCI attempt uses its explicit descriptor and retains the 
     },
   )).rejects.toThrow("runner_image_publication_reconciliation_identity_mismatch");
   expect(readFileSync(replayEvidence, "utf8")).not.toContain('"status":"published"');
+});
+
+test("proof-bearing reconciliation refuses descriptor drift without published evidence", async () => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  await bindDescriptorAwareAttemptThroughBuild(input, journalRoot);
+  const reconciliationEvidence = join(
+    input.operator,
+    "descriptor-drift-reconciliation.jsonl",
+  );
+  await expect(
+    runRunnerImageRelease(
+      {
+        ...buildOptions(input),
+        command: "reconcile",
+        evidence: reconciliationEvidence,
+      },
+      {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+        materializeSource: materializeFixtureSource,
+        publicationJournalRoot: journalRoot,
+        command: async (_executable, args) => {
+          expect(args).toEqual([
+            "manifest",
+            "inspect",
+            "--verbose",
+            TRANSPORT_REF,
+          ]);
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              Descriptor: {
+                mediaType: "application/vnd.oci.image.manifest.v1+json",
+                digest: `sha256:${"e".repeat(64)}`,
+                platform: { architecture: "amd64", os: "linux" },
+              },
+              OCIManifest: {
+                schemaVersion: 2,
+                mediaType: "application/vnd.oci.image.manifest.v1+json",
+                config: { digest: `sha256:${"3".repeat(64)}` },
+              },
+            }),
+            stderr: "",
+          };
+        },
+      },
+    ),
+  ).rejects.toThrow("runner_image_remote_content_mismatch");
+  expect(JSON.parse(readFileSync(reconciliationEvidence, "utf8"))).toMatchObject({
+    operation: "reconcile",
+    status: "incomplete",
+    mutationOutcome: "read-only",
+    diagnostic: { message: "runner_image_remote_content_mismatch" },
+  });
+  expect(readFileSync(reconciliationEvidence, "utf8")).not.toContain(
+    '"status":"published"',
+  );
+  expect(readFileSync(input.state, "utf8").trim().split("\n")).toHaveLength(1);
 });
 
 test("a persisted resolution must bind the attempt to the descriptor rather than only the config", async () => {
@@ -2972,7 +3059,7 @@ test("build publishes linux amd64 with generated transport identity and records 
   const input = fixture();
   const calls: string[][] = [];
   let pushedConfig = "";
-  const record = await runRunnerImageRelease(buildOptions(input, "staging", true), {
+  const record = (await runRunnerImageRelease(buildOptions(input, "staging", true), {
     ...buildRuntime(input, async (_executable, args) => {
       if (args[0] === "buildx") return { exitCode: 0, stdout: "", stderr: "" };
       if (args[0] === "run" || args[0] === "exec" || args[0] === "rm") {
@@ -3014,7 +3101,7 @@ test("build publishes linux amd64 with generated transport identity and records 
       Os: "linux",
       Architecture: "amd64",
     }),
-  });
+  })) as RunnerImageBuildRecord;
   expect(record).toMatchObject({
     status: "published",
     image: { transportTag: TRANSPORT_TAG, transportRef: TRANSPORT_REF, immutableRef: NEXT },
@@ -3059,7 +3146,7 @@ test("build boots the image's native entrypoint and cleans up before publication
   const input = fixture();
   const calls: string[][] = [];
   const localImageId = `sha256:${"6".repeat(64)}`;
-  await runRunnerImageRelease(buildOptions(input, "staging", true), {
+  const record = await runRunnerImageRelease(buildOptions(input, "staging", true), {
     ...buildRuntime(input, async (_executable, args) => {
       if (args[0] === "buildx") return { exitCode: 0, stdout: "", stderr: "" };
       if (args[0] === "run" || args[0] === "exec" || args[0] === "rm") {
@@ -3146,8 +3233,30 @@ test("build boots the image's native entrypoint and cleans up before publication
   const script = execArgs[execArgs.indexOf("-e") + 1];
   expect(script).not.toContain("import(");
   expect(script).toContain("127.0.0.1:8080/healthz");
+  expect(script).toContain("127.0.0.1:8080/runs/");
+  expect(script).toContain("takosumi_runtime_inputs__probe");
+  expect(script).toContain("PROBE_TOKEN");
+  expect(script).toContain('"values":{}');
+  expect(script).toContain("sensitive = true");
+  expect(script).toContain("ephemeral = true");
+  expect(script).toContain("requiredEnvGroups");
   expect(script).toContain("process.getuid");
   expect(script).toContain(RUNNER_BOOT_SMOKE_MARKER);
+  expect(record).toMatchObject({
+    runtimeInputPlanProof: {
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+      image: NEXT,
+    },
+  });
+  const [attempt] = readFileSync(input.state, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line)) as [
+    { runtimeInputPlanProof: { kind: string; image: string } },
+  ];
+  expect(attempt.runtimeInputPlanProof).toEqual(
+    record.runtimeInputPlanProof,
+  );
 });
 
 test("boot smoke failures refuse before a publication attempt or push", async () => {
@@ -3503,6 +3612,58 @@ test("a local-tag interleaving race cannot bind different remotely pushed bytes"
   expect(readFileSync(input.evidence, "utf8")).toContain(
     "runner_image_remote_content_mismatch",
   );
+});
+
+test("verify refuses historical build evidence without the runtime-input Plan proof", async () => {
+  const input = fixture(NEXT);
+  writeBuildEvidence(input);
+  const unproven = JSON.parse(
+    readFileSync(input.buildEvidence, "utf8"),
+  ) as Record<string, unknown>;
+  delete unproven.runtimeInputPlanProof;
+  writePrivate(input.buildEvidence, `${JSON.stringify(unproven)}\n`);
+  writePlatformEvidence(input);
+  let readbacks = 0;
+  await expect(
+    runRunnerImageRelease(verifyOptions(input, false), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      command: async () => {
+        readbacks += 1;
+        throw new Error("unproven evidence must not reach live readback");
+      },
+    }),
+  ).rejects.toThrow("runner_image_runtime_input_plan_proof_required");
+  expect(readbacks).toBe(0);
+});
+
+test("verify refuses a proved image built by another repository", async () => {
+  const input = fixture(NEXT);
+  writeBuildEvidence(input);
+  const build = JSON.parse(
+    readFileSync(input.buildEvidence, "utf8"),
+  ) as Record<string, unknown>;
+  const source = build.source as Record<string, unknown>;
+  const repository = "https://github.com/example/takosumi.git";
+  source.repository = repository;
+  source.authoritySha256 = sourceAuthorityDigest(
+    repository,
+    source.commit as string,
+  );
+  writePrivate(input.buildEvidence, `${JSON.stringify(build)}\n`);
+  writePlatformEvidence(input);
+  let readbacks = 0;
+  await expect(
+    runRunnerImageRelease(verifyOptions(input, false), {
+      repositoryRoot: input.repository,
+      git: gitFor("fix/TASK-0032-runner-image"),
+      command: async () => {
+        readbacks += 1;
+        throw new Error("foreign build evidence must not reach live readback");
+      },
+    }),
+  ).rejects.toThrow("runner_image_source_authority_mismatch");
+  expect(readbacks).toBe(0);
 });
 
 test("verify consumes exact platform evidence and performs no Worker mutation", async () => {

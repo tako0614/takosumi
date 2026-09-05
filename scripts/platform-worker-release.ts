@@ -39,6 +39,12 @@ import {
   PLATFORM_BINDINGS,
   platformBindingNames,
 } from "../deploy/accounts-cloudflare/src/bindings-check.ts";
+import {
+  isPublishedRunnerImageBuildRecord,
+  isRunnerImageRuntimeInputPlanProof,
+  runnerImageRuntimeInputPlanProofFromBuildRecord,
+  type RunnerImageRuntimeInputPlanProof,
+} from "./runner-image-release-contract.ts";
 
 export {
   injectPlatformSourcePaths,
@@ -680,6 +686,16 @@ function platformRunnerImageRange(source: string): Readonly<{
   const valueStart = runners[0]!.start + image.index! + image[0].indexOf('"') + 1;
   const valueEnd = valueStart + image[1]!.length;
   return { valueStart, valueEnd, image: image[1]! };
+}
+
+export function assertPlatformRunnerImageProof(
+  configSource: string,
+  proof: unknown,
+): asserts proof is RunnerImageRuntimeInputPlanProof {
+  const image = platformRunnerImageRange(configSource).image;
+  if (!isRunnerImageRuntimeInputPlanProof(proof, image)) {
+    throw new Error("platform_worker_release_runner_image_proof_invalid");
+  }
 }
 
 type PlatformMutationCheckpointRecord = Readonly<{
@@ -1722,6 +1738,7 @@ export interface PlatformReleasePlan {
   readonly sourceRepository: string;
   readonly sourceCommit: string;
   readonly sourceAuthoritySha256: string;
+  readonly runnerImageProof: RunnerImageRuntimeInputPlanProof;
   readonly releaseNonce: string;
   readonly configPath: string;
   readonly configSha256: string;
@@ -1760,6 +1777,10 @@ export function createPlatformReleasePlan(
   identity: PlatformReleasePlanIdentity,
 ): PlatformReleasePlan {
   if (
+    !isRunnerImageRuntimeInputPlanProof(
+      identity.runnerImageProof,
+      identity.runnerImageProof.image,
+    ) ||
     identity.sourceAuthoritySha256 !==
     platformReleaseSourceAuthorityDigest({
       kind: "takosumi.platform-release-source@v1",
@@ -1841,6 +1862,7 @@ type Options =
   | {
       readonly action: "plan";
       readonly config: string;
+      readonly runnerBuildEvidence: string;
       readonly planOut: string;
     }
   | {
@@ -2030,10 +2052,13 @@ export function parsePlatformWorkerReleaseArgs(
   }
   const allowed =
     action === "plan"
-      ? ["--config", "--plan-out"]
+      ? ["--config", "--runner-build-evidence", "--plan-out"]
       : action === "materialize-source"
         ? ["--config", "--into"]
         : ["--plan", "--confirm", "--review", "--evidence"];
+  if (action === "plan" && !values.has("--runner-build-evidence")) {
+    throw new Error("platform_worker_release_runner_image_proof_required");
+  }
   if (
     values.size !== allowed.length ||
     allowed.some((key) => !values.has(key)) ||
@@ -2045,6 +2070,7 @@ export function parsePlatformWorkerReleaseArgs(
     return {
       action,
       config: absolute(values.get("--config")!),
+      runnerBuildEvidence: absolute(values.get("--runner-build-evidence")!),
       planOut: absolute(values.get("--plan-out")!),
     };
   }
@@ -2094,6 +2120,62 @@ export function platformWorkerRestoreVersionArguments(
   ];
 }
 
+function readRunnerImagePlanProof(
+  path: string,
+  image: string,
+  repository: string,
+): RunnerImageRuntimeInputPlanProof {
+  try {
+    assertPrivateFile(path);
+    const bytes = readStablePhysicalBytes(
+      path,
+      "platform_worker_release_runner_image_proof_invalid",
+    );
+    const matches = new Map<string, RunnerImageRuntimeInputPlanProof>();
+    for (const line of new TextDecoder("utf-8", { fatal: true })
+      .decode(bytes)
+      .split(/\r?\n/u)
+      .filter(Boolean)) {
+      const value = JSON.parse(line) as unknown;
+      if (
+        !record(value) ||
+        value.kind !== "takosumi.runner-image-release@v3" ||
+        value.operation !== "build" ||
+        value.status !== "published" ||
+        !record(value.image) ||
+        value.image.immutableRef !== image
+      ) {
+        continue;
+      }
+      if (!isPublishedRunnerImageBuildRecord(value)) {
+        throw new Error("platform_worker_release_runner_image_proof_invalid");
+      }
+      if (!sameGitRemote(value.source.repository, repository)) {
+        throw new Error("platform_worker_release_runner_image_proof_invalid");
+      }
+      const proof = runnerImageRuntimeInputPlanProofFromBuildRecord(value, image);
+      if (proof === null) {
+        continue;
+      }
+      matches.set(JSON.stringify([proof.kind, proof.image]), proof);
+    }
+    if (matches.size !== 1) {
+      throw new Error("platform_worker_release_runner_image_proof_invalid");
+    }
+    return matches.values().next().value!;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "platform_worker_release_runner_image_proof_invalid"
+    ) {
+      throw error;
+    }
+    throw new Error("platform_worker_release_runner_image_proof_invalid", {
+      cause: error,
+    });
+  }
+}
+
 async function plan(
   options: Extract<Options, { action: "plan" }>,
   environment: PlatformEnvironment,
@@ -2126,6 +2208,11 @@ async function plan(
     checkoutRepository: checkout.repository,
     checkoutCommit: checkout.commit,
   });
+  const runnerImageProof = readRunnerImagePlanProof(
+    options.runnerBuildEvidence,
+    platformRunnerImageRange(configSource).image,
+    sourceAuthority.pin.repository,
+  );
   const dashboardAssets = await runtime.buildDashboard(environment);
   const sourceCommit = sourceAuthority.pin.commit;
   // Provider reads need a runnable config, and the realized one deliberately
@@ -2177,6 +2264,7 @@ async function plan(
     sourceRepository: sourceAuthority.pin.repository,
     sourceCommit,
     sourceAuthoritySha256: sourceAuthority.authoritySha256,
+    runnerImageProof,
     releaseNonce: runtime.nonce(),
     configPath: options.config,
     configSha256: digest(config),
@@ -3586,6 +3674,7 @@ async function assertPlanClosure(plan: PlatformReleasePlan): Promise<void> {
   );
   const configSource = new TextDecoder("utf-8", { fatal: true }).decode(config);
   assertConfigTargetsSource(configSource, plan.environment);
+  assertPlatformRunnerImageProof(configSource, plan.runnerImageProof);
   if (digest(config) !== plan.configSha256) {
     throw new Error("platform_worker_release_config_drift");
   }
@@ -4286,6 +4375,7 @@ function parsePlan(
           "sourceRepository",
           "sourceCommit",
           "sourceAuthoritySha256",
+          "runnerImageProof",
           "releaseNonce",
           "configPath",
           "configSha256",
@@ -4327,6 +4417,12 @@ function parsePlan(
         repository: value.sourceRepository,
         commit: value.sourceCommit,
       }) ||
+    !record(value.runnerImageProof) ||
+    typeof value.runnerImageProof.image !== "string" ||
+    !isRunnerImageRuntimeInputPlanProof(
+      value.runnerImageProof,
+      value.runnerImageProof.image,
+    ) ||
     typeof value.releaseNonce !== "string" ||
     !/^[0-9a-f]{32}$/u.test(value.releaseNonce) ||
     typeof value.configPath !== "string" ||

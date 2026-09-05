@@ -20,6 +20,15 @@ import { userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { dashboardAssetTreeSeal } from "./platform-worker-release.ts";
+import {
+  isPublishedRunnerImageBuildRecord,
+  isRunnerImageRuntimeInputPlanProof,
+  runnerImageRuntimeInputPlanProofFromBuildRecord,
+  RUNNER_IMAGE_RUNTIME_INPUT_PLAN_PROOF_KIND,
+  type RunnerImageBuildRecord,
+  type RunnerImageReleaseEnvironment,
+  type RunnerImageRuntimeInputPlanProof,
+} from "./runner-image-release-contract.ts";
 import { lineageVerdict } from "./lib/deploy-lineage.ts";
 import {
   injectPlatformSourcePaths,
@@ -30,7 +39,7 @@ import {
 } from "./lib/platform-release-source.ts";
 
 export type RunnerImageReleaseCommand = "build" | "reconcile" | "verify";
-export type RunnerImageReleaseEnvironment = "staging" | "production";
+export type { RunnerImageReleaseEnvironment } from "./runner-image-release-contract.ts";
 
 export type RunnerImageReleaseOptions = Readonly<{
   command: RunnerImageReleaseCommand;
@@ -73,43 +82,6 @@ type ReleaseContext = Readonly<{
   dockerfileSha256: string;
 }>;
 
-export type RunnerImageBuildRecord = Readonly<{
-  kind: "takosumi.runner-image-release@v3";
-  operation: "build";
-  status: "planned" | "published";
-  environment: RunnerImageReleaseEnvironment;
-  release: string;
-  observedAt: string;
-  source: {
-    branch: string;
-    repository: string;
-    commit: string;
-    authoritySha256: string;
-    dockerfileSha256: string;
-    buildContextSha256?: string;
-  };
-  config: {
-    path: string;
-    buildSha256: string;
-    expectedActivationSha256: string | null;
-    previousImage: string;
-  };
-  image: {
-    transportTag: string;
-    transportRef: string | null;
-    immutableRef: string | null;
-    imageConfigDigest?: string | null;
-  };
-  /** Present only when a later trusted checkout reconciled an earlier attempt. */
-  reconciledBy?: {
-    branch: string;
-    repository: string;
-    commit: string;
-    authoritySha256: string;
-  };
-  review: string | null;
-}>;
-
 type RunnerPublicationAttempt = Readonly<{
   kind: "takosumi.runner-image-publication-state@v2";
   status: "publication-started";
@@ -137,6 +109,7 @@ type RunnerPublicationAttempt = Readonly<{
     /** Explicit descriptor authority written by descriptor-aware publishers. */
     localDescriptorDigest?: string;
   };
+  runtimeInputPlanProof?: RunnerImageRuntimeInputPlanProof;
   review: string;
 }>;
 
@@ -281,9 +254,19 @@ const RELEASE_BUILD_COMMAND_TIMEOUT_MS = 30 * 60_000;
 const RUNNER_BOOT_SMOKE_TIMEOUT_MS = 30_000;
 const RUNNER_BOOT_SMOKE_OUTPUT_MAX_BYTES = 4_096;
 const RUNNER_BOOT_SMOKE_MARKER = "takosumi-runner-boot-ok";
+const RUNNER_RUNTIME_INPUT_PLAN_VARIABLE =
+  "takosumi_runtime_inputs__probe";
+const RUNNER_RUNTIME_INPUT_PLAN_NAME = "PROBE_TOKEN";
 const COMMAND_TERMINATION_GRACE_MS = 5_000;
 
-export { RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE } from "./runner-image-release-contract.ts";
+export {
+  RUNNER_IMAGE_RELEASE_CONTRACT_SURFACE,
+  RUNNER_IMAGE_RUNTIME_INPUT_PLAN_PROOF_KIND,
+} from "./runner-image-release-contract.ts";
+export type {
+  RunnerImageBuildRecord,
+  RunnerImageRuntimeInputPlanProof,
+} from "./runner-image-release-contract.ts";
 
 export type RunnerImageReleaseRuntime = Readonly<{
   repositoryRoot?: string;
@@ -837,6 +820,9 @@ async function buildRunnerImage(
       command,
       workspace,
     );
+    const runtimeInputPlanProof = runnerImageRuntimeInputPlanProof(
+      `${imageRepository}@${localIdentity.descriptorDigest}`,
+    );
     const attempt: RunnerPublicationAttempt = {
       kind: "takosumi.runner-image-publication-state@v2",
       status: "publication-started",
@@ -862,6 +848,7 @@ async function buildRunnerImage(
         localImageId: localIdentity.imageId,
         localDescriptorDigest: localIdentity.descriptorDigest,
       },
+      runtimeInputPlanProof,
       review: options.review!,
     };
     if (!publicationJournal) {
@@ -903,6 +890,9 @@ async function buildRunnerImage(
     if (image.transportRef !== remoteRef) {
       throw new Error("runner_image_remote_manifest_invalid");
     }
+    if (runtimeInputPlanProof.image !== image.immutableRef) {
+      throw new Error("runner_image_runtime_input_plan_proof_invalid");
+    }
     const expectedSource = replaceRunnerImage(
       context.config.source,
       context.config.runnerImage,
@@ -923,6 +913,7 @@ async function buildRunnerImage(
       image.immutableRef,
       expectedActivationSha256,
       "published",
+      runtimeInputPlanProof,
     );
     const record: RunnerImageBuildRecord = {
       ...baseRecord,
@@ -1195,6 +1186,12 @@ async function reconcileRunnerImage(
         image.immutableRef,
       ),
     );
+    if (
+      attempt.runtimeInputPlanProof !== undefined &&
+      attempt.runtimeInputPlanProof.image !== image.immutableRef
+    ) {
+      throw new Error("runner_image_runtime_input_plan_proof_invalid");
+    }
     const historicalContext: ReleaseContext = {
       ...context,
       repository: {
@@ -1222,6 +1219,7 @@ async function reconcileRunnerImage(
       image.immutableRef,
       expectedActivationSha256,
       "published",
+      attempt.runtimeInputPlanProof,
     );
     const record: RunnerImageBuildRecord = {
       ...base,
@@ -1470,11 +1468,17 @@ async function assertRunnerImageBootSmoke(
   cwd: string,
 ): Promise<void> {
   const containerName = `takosumi-runner-boot-${transportTag}`;
+  const runId = `runner-release-proof-${transportTag}`;
+  const planRequest = runnerRuntimeInputPlanRequest(runId);
+  const childModuleSource = 'output "message" {\n  value = "runtime-input-plan-proof"\n}\n';
   const smokeScript = [
     `const marker=${JSON.stringify(RUNNER_BOOT_SMOKE_MARKER)};`,
+    `const runId=${JSON.stringify(runId)};`,
+    `const request=${JSON.stringify(planRequest)};`,
+    `const moduleSource=${JSON.stringify(childModuleSource)};`,
     "let exitCode=1;",
     "const controller=new AbortController();",
-    "const timer=setTimeout(()=>{controller.abort();process.exit(1);},5000);",
+    "const timer=setTimeout(()=>{controller.abort();process.exit(1);},25000);",
     "try{",
     'if(typeof process.getuid!=="function"||process.getuid()===0)throw new Error("nonprivileged runner required");',
     "let response;",
@@ -1485,6 +1489,14 @@ async function assertRunnerImageBootSmoke(
     'if(response.status!==200)throw new Error("health status");',
     "const body=await response.json();",
     'if(!body||body.ok!==true||body.runner!=="opentofu")throw new Error("health payload");',
+    'const runRoot=(Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT||"/tmp/takosumi-runs")+"/"+runId+"/source";',
+    'const mkdir=Bun.spawn(["mkdir","-p",runRoot],{stdout:"ignore",stderr:"ignore"});',
+    'if(await mkdir.exited!==0)throw new Error("source preparation");',
+    'if(await Bun.write(runRoot+"/main.tf",moduleSource)!==new TextEncoder().encode(moduleSource).byteLength)throw new Error("source write");',
+    'const plan=await fetch("http://127.0.0.1:8080/runs/"+encodeURIComponent(runId),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(request),signal:controller.signal});',
+    'if(plan.status!==200)throw new Error("plan status");',
+    "const result=await plan.json();",
+    'if(!result||result.status!=="succeeded"||result.exitCode!==0||typeof result.planDigest!=="string"||result.planDigest.length===0)throw new Error("plan payload");',
     "process.stdout.write(marker+'\\n');",
     "exitCode=0;",
     "}catch{}finally{clearTimeout(timer);}",
@@ -1542,6 +1554,81 @@ async function assertRunnerImageBootSmoke(
     });
   }
   if (failed) throw new Error("runner_image_boot_smoke_failed", { cause: failure });
+}
+
+function runnerRuntimeInputPlanRequest(runId: string): Readonly<Record<string, unknown>> {
+  return {
+    kind: "takosumi.opentofu-run@v1",
+    action: "plan",
+    runId,
+    requestedAt: "2026-09-05T00:00:00.000Z",
+    request: {
+      planRun: {
+        id: runId,
+        operation: "create",
+        source: {
+          kind: "git",
+          url: "https://proof.invalid/runner-runtime-input-plan.git",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+        },
+      },
+      generatedRoot: {
+        files: {
+          "versions.tf": "terraform {}\n",
+          "variables.tf": [
+            `variable "${RUNNER_RUNTIME_INPUT_PLAN_VARIABLE}" {`,
+            "  type      = map(string)",
+            "  sensitive = true",
+            "  ephemeral = true",
+            "}",
+            "",
+          ].join("\n"),
+          "main.tf": 'module "child" {\n  source = "./module"\n}\n',
+          "outputs.tf": 'output "message" {\n  value = module.child.message\n}\n',
+        },
+      },
+      requiredProviders: [],
+      runnerProfile: {
+        id: "runner-release-runtime-input-plan-proof",
+        allowedProviders: [],
+        deniedProviders: [],
+        requireProviderBindings: false,
+      },
+      outputAllowlist: { message: { from: "message" } },
+      credentials: {
+        env: { [RUNNER_RUNTIME_INPUT_PLAN_NAME]: "runner-release-proof" },
+        manifest: {
+          bindings: [
+            {
+              providerSource: "registry.opentofu.org/example/probe",
+              connectionId: "conn_runner_release_probe",
+              recipeId: "runner-release-probe",
+              authMode: "token",
+              envNames: [RUNNER_RUNTIME_INPUT_PLAN_NAME],
+              fileEnvNames: [],
+              requiredEnvGroups: [[RUNNER_RUNTIME_INPUT_PLAN_NAME]],
+            },
+          ],
+        },
+        runtimeInputs: [
+          {
+            variableName: RUNNER_RUNTIME_INPUT_PLAN_VARIABLE,
+            names: [RUNNER_RUNTIME_INPUT_PLAN_NAME],
+            values: {},
+          },
+        ],
+      },
+    },
+  };
+}
+
+function runnerImageRuntimeInputPlanProof(
+  image: string,
+): RunnerImageRuntimeInputPlanProof {
+  if (!DIGEST_IMAGE.test(image)) {
+    throw new Error("runner_image_runtime_input_plan_proof_invalid");
+  }
+  return { kind: RUNNER_IMAGE_RUNTIME_INPUT_PLAN_PROOF_KIND, image };
 }
 
 async function cleanupRunnerImageBootSmoke(
@@ -1666,6 +1753,8 @@ function publicationResolutionMatchesAttempt(
     build.image.transportTag === attempt.image.transportTag &&
     build.image.transportRef === attempt.image.transportRef &&
     build.image.imageConfigDigest === resolution.imageConfigDigest &&
+    JSON.stringify(build.runtimeInputPlanProof ?? null) ===
+      JSON.stringify(attempt.runtimeInputPlanProof ?? null) &&
     build.review === attempt.review
   );
 }
@@ -2094,6 +2183,11 @@ function validLegacyBuildRecord(
     !DIGEST_IMAGE.test(value.image.immutableRef) ||
     typeof value.image.imageConfigDigest !== "string" ||
     !SHA256.test(value.image.imageConfigDigest) ||
+    (value.runtimeInputPlanProof !== undefined &&
+      !isRunnerImageRuntimeInputPlanProof(
+        value.runtimeInputPlanProof,
+        value.image.immutableRef,
+      )) ||
     value.review !== attempt.review ||
     !validReview(value.review)
   ) {
@@ -2171,6 +2265,12 @@ function validPublicationAttempt(value: Record<string, unknown>): boolean {
     (value.image.localDescriptorDigest === undefined ||
       (typeof value.image.localDescriptorDigest === "string" &&
         SHA256.test(value.image.localDescriptorDigest))) &&
+    (value.runtimeInputPlanProof === undefined ||
+      (typeof value.image.localDescriptorDigest === "string" &&
+        isRunnerImageRuntimeInputPlanProof(
+          value.runtimeInputPlanProof,
+          `${runnerImageRepository(value.config.previousImage)}@${value.image.localDescriptorDigest}`,
+        ))) &&
     typeof value.review === "string" &&
     isBoundedString(value.review, 256)
   );
@@ -2195,72 +2295,13 @@ function validPublicationResolution(value: Record<string, unknown>): boolean {
     DIGEST_IMAGE.test(value.immutableRef) &&
     typeof value.imageConfigDigest === "string" &&
     SHA256.test(value.imageConfigDigest) &&
-    validPublishedBuildRecord(value.build) &&
+    isPublishedRunnerImageBuildRecord(value.build) &&
     value.environment === value.build.environment &&
     value.release === value.build.release &&
     value.transportRef === value.build.image.transportRef &&
     value.immutableRef === value.build.image.immutableRef &&
     value.imageConfigDigest === value.build.image.imageConfigDigest
   );
-}
-
-function validPublishedBuildRecord(
-  value: unknown,
-): value is RunnerImageBuildRecord & {
-  source: RunnerImageBuildRecord["source"] & { buildContextSha256: string };
-  image: RunnerImageBuildRecord["image"] & {
-    transportRef: string;
-    immutableRef: string;
-    imageConfigDigest: string;
-  };
-  review: string;
-} {
-  if (
-    !isRecord(value) ||
-    value.kind !== "takosumi.runner-image-release@v3" ||
-    value.operation !== "build" ||
-    value.status !== "published" ||
-    (value.environment !== "staging" && value.environment !== "production") ||
-    typeof value.release !== "string" ||
-    !RELEASE_LABEL.test(value.release) ||
-    typeof value.observedAt !== "string" ||
-    !Number.isFinite(Date.parse(value.observedAt)) ||
-    !isRecord(value.source) ||
-    !isBoundedString(value.source.branch, 512) ||
-    !validSourceAuthority(value.source) ||
-    typeof value.source.dockerfileSha256 !== "string" ||
-    !SHA256.test(value.source.dockerfileSha256) ||
-    typeof value.source.buildContextSha256 !== "string" ||
-    !SHA256.test(value.source.buildContextSha256) ||
-    !isRecord(value.config) ||
-    !isBoundedString(value.config.path, 4096) ||
-    typeof value.config.buildSha256 !== "string" ||
-    !SHA256.test(value.config.buildSha256) ||
-    typeof value.config.expectedActivationSha256 !== "string" ||
-    !SHA256.test(value.config.expectedActivationSha256) ||
-    typeof value.config.previousImage !== "string" ||
-    !DIGEST_IMAGE.test(value.config.previousImage) ||
-    !isRecord(value.image) ||
-    typeof value.image.transportTag !== "string" ||
-    !RELEASE_LABEL.test(value.image.transportTag) ||
-    typeof value.image.transportRef !== "string" ||
-    !TRANSPORT_REF.test(value.image.transportRef) ||
-    !value.image.transportRef.endsWith(`:${value.image.transportTag}`) ||
-    typeof value.image.immutableRef !== "string" ||
-    !DIGEST_IMAGE.test(value.image.immutableRef) ||
-    typeof value.image.imageConfigDigest !== "string" ||
-    !SHA256.test(value.image.imageConfigDigest) ||
-    (value.reconciledBy !== undefined &&
-      (!isRecord(value.reconciledBy) ||
-        !isBoundedString(value.reconciledBy.branch, 512) ||
-        value.reconciledBy.branch !== value.source.branch ||
-        !validSourceAuthority(value.reconciledBy))) ||
-    typeof value.review !== "string" ||
-    !isBoundedString(value.review, 256)
-  ) {
-    return false;
-  }
-  return true;
 }
 
 function validSourceAuthority(value: unknown): value is Readonly<{
@@ -2372,24 +2413,22 @@ async function verifyRunnerImage(
     options.environment,
     options.release,
   );
-  const activationSource = build.reconciledBy ?? build.source;
   if (
-    activationSource.branch !== context.repository.branch ||
-    activationSource.commit !== context.repository.commit ||
-    (build.reconciledBy === undefined &&
-      build.source.dockerfileSha256 !== context.dockerfileSha256)
-  ) {
-    throw new Error("build evidence does not match current runner source");
-  }
-  if (
-    activationSource.repository !== context.releaseSource.pin.repository ||
-    activationSource.authoritySha256 !== context.releaseSource.authoritySha256
+    !sameGitRemote(
+      build.source.repository,
+      context.releaseSource.pin.repository,
+    )
   ) {
     throw new Error("runner_image_source_authority_mismatch");
   }
   const immutableRef = build.image.immutableRef;
   if (!immutableRef || !DIGEST_IMAGE.test(immutableRef)) {
     throw new Error("build evidence has no immutable runner image");
+  }
+  if (
+    runnerImageRuntimeInputPlanProofFromBuildRecord(build, immutableRef) === null
+  ) {
+    throw new Error("runner_image_runtime_input_plan_proof_required");
   }
   if (
     build.config.path !== context.config.path ||
@@ -2417,8 +2456,7 @@ async function verifyRunnerImage(
   }
   const platform = await readPlatformEvidence(platformPath);
   if (
-    platform.sourceRepository !== activationSource.repository ||
-    platform.sourceAuthoritySha256 !== activationSource.authoritySha256 ||
+    platform.sourceRepository !== context.releaseSource.pin.repository ||
     platform.sourceAuthoritySha256 !== context.releaseSource.authoritySha256
   ) {
     throw new Error("runner_image_source_authority_mismatch");
@@ -2895,6 +2933,7 @@ function buildRecord(
   immutableRef: string | null,
   expectedActivationSha256: string | null,
   status: RunnerImageBuildRecord["status"],
+  runtimeInputPlanProof?: RunnerImageRuntimeInputPlanProof,
 ): RunnerImageBuildRecord {
   return {
     kind: "takosumi.runner-image-release@v3",
@@ -2917,6 +2956,7 @@ function buildRecord(
       previousImage: context.config.runnerImage,
     },
     image: { transportTag, transportRef, immutableRef },
+    ...(runtimeInputPlanProof ? { runtimeInputPlanProof } : {}),
     review: options.review ?? null,
   };
 }
@@ -2945,34 +2985,16 @@ async function readBuildRecord(
       value.environment === environment &&
       value.release === release
     ) {
-      records.push(value as RunnerImageBuildRecord);
+      if (!isPublishedRunnerImageBuildRecord(value)) {
+        throw new Error("build evidence has invalid provenance or image fields");
+      }
+      records.push(value);
     }
   }
   if (records.length !== 1) {
     throw new Error("build evidence must contain exactly one matching record");
   }
-  const record = records[0]!;
-  if (
-    !isBoundedString(record.source?.branch, 512) ||
-    !validSourceAuthority(record.source) ||
-    !SHA256.test(record.source?.dockerfileSha256 ?? "") ||
-    !isBoundedString(record.config?.path, 4096) ||
-    !SHA256.test(record.config?.buildSha256 ?? "") ||
-    !SHA256.test(record.config?.expectedActivationSha256 ?? "") ||
-    !DIGEST_IMAGE.test(record.config?.previousImage ?? "") ||
-    !RELEASE_LABEL.test(record.image?.transportTag ?? "") ||
-    !TRANSPORT_REF.test(record.image?.transportRef ?? "") ||
-    !DIGEST_IMAGE.test(record.image?.immutableRef ?? "") ||
-    (record.reconciledBy !== undefined &&
-      (!isBoundedString(record.reconciledBy.branch, 512) ||
-        record.reconciledBy.branch !== record.source.branch ||
-        !validSourceAuthority(record.reconciledBy))) ||
-    !isBoundedString(record.review, 256)
-  ) {
-    throw new Error("build evidence has invalid provenance or image fields");
-  }
-  assertReview(record.review);
-  return record;
+  return records[0]!;
 }
 
 async function readPlatformEvidence(path: string): Promise<PlatformReadyEvidence> {

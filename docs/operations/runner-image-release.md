@@ -103,12 +103,18 @@ ports, mounts, or caller-provided environment, and a read-only root with a
 small temporary filesystem. The image's own user, ENTRYPOINT and command are
 preserved: the container starts detached through its normal startup script.
 A bounded `docker exec` probe checks the non-root user and loopback `/healthz`
-response is HTTP 200 with `{ok:true,runner:"opentofu"}`, then emits one known
-marker. Probe output is limited to 4 KiB while being collected, and a timed-out
-Docker client is terminated and reaped before cleanup starts. The temporary
-container must be force-removed before publication; cleanup failure is an
-explicit refusal. A missing marker, failed startup/health check, or timeout is
-a pre-publication failure; no journal attempt or push is made.
+response is HTTP 200 with `{ok:true,runner:"opentofu"}`. It then sends a real,
+provider-free Plan to the native `/runs` endpoint. The generated root declares
+one defaultless sensitive ephemeral `takosumi_runtime_inputs__probe` variable,
+and the matching credential manifest dispatches an explicit empty runtime-input
+map. Success therefore proves that the image implements the runtime-input Plan
+delivery path without placing credential values in the test. Only then does the
+probe emit its known marker. Probe output is limited to 4 KiB while being
+collected, and a timed-out Docker client is terminated and reaped before cleanup
+starts. The temporary container must be force-removed before publication;
+cleanup failure is an explicit refusal. A missing marker, failed startup,
+health, or semantic Plan check, or timeout is a pre-publication failure; no
+journal attempt or push is made.
 
 For an executing build, `CLOUDFLARE_ACCOUNT_ID` must be exactly the account in
 the realized previous-image repository. That checked publication repository,
@@ -119,7 +125,8 @@ cannot fork coordination while pushing to the same registry target.
 Immediately before the one push, build fsyncs the exact transport reference,
 locally inspected Docker image ID and explicit image descriptor digest, sealed
 source/config identities (including the readable repository/commit and their
-authority digest), and reviewer to the publication state journal. After
+authority digest), the semantic Plan proof bound to the prospective immutable
+descriptor identity, and reviewer to the publication state journal. After
 the push it reads Docker 29's exact `Descriptor.platform`, requires one
 `linux/amd64` manifest, and accepts exactly one Docker schema-2 or OCI manifest
 payload. The remote descriptor digest must exactly equal the locally inspected
@@ -225,6 +232,7 @@ platform authority:
 ```bash
 bun run deploy -- takosumi-platform-staging plan \
   --config /absolute/operator-private/wrangler.staging.toml \
+  --runner-build-evidence /absolute/non-worktree-release-state/runner-build.jsonl \
   --plan-out /absolute/non-worktree-release-state/platform-plan.json
 
 bun run deploy -- takosumi-platform-staging execute \
@@ -234,7 +242,16 @@ bun run deploy -- takosumi-platform-staging execute \
   --evidence /absolute/non-worktree-release-state/platform-evidence.json
 ```
 
-For production, use `takosumi-platform`. The platform plan seals the exact
+For production, use `takosumi-platform`. The platform plan fully validates every
+matching published v3 runner build record. It ignores valid historical records
+without proof, deduplicates identical proof-bearing records by exact kind and
+image, and requires one unique runtime-input Plan proof naming the same
+immutable image as the realized config. Missing proof, malformed matching
+provenance, or evidence only for another image fails before dashboard build,
+dry-run, or provider access. Historical rows are not rewritten or promoted by
+reconciliation. Runner build provenance must name the same owning Git remote as
+the Worker pin, but their commits may differ: each retains its own validated
+provenance, while the immutable image and proof are the shared boundary. The plan seals the exact
 config SHA, complete dashboard asset tree, deterministic dry-run tree, source
 repository/commit authority, secret-name inventory, and predecessor Worker
 Version. The plan confirmation covers the readable source pin fields and their
@@ -263,13 +280,13 @@ bun run deploy -- takosumi-runner-image verify \
   --execute
 ```
 
-Verify requires the current config SHA to equal the build record's exact
-image-only transform. Before any live provider readback, it also requires the
-build activation source authority, platform ready source authority, and freshly
-resolved sibling source-pin authority to be identical. For a normal build the
-activation source is `source`; for a recovered build it is `reconciledBy`, while
-the historical image provenance remains in `source`. Platform evidence must
-also bind the same config and serving Worker Version. Verify then requires
+Verify requires a proved build record and the current config SHA to equal that
+record's exact image-only transform. Before any live provider readback, it
+validates the runner build provenance independently, then requires the platform
+ready source authority to equal the freshly resolved Worker sibling source-pin
+authority. A Worker release does not have to use the runner image's source
+commit. Platform evidence must also bind the same config and serving Worker
+Version. Verify then requires
 exactly `takosumi-staging-opentofurunnerobject` or
 `takosumi-opentofurunnerobject`, with matching list/detail identity, the exact
 selected digest, no active rollout, `active`/`ready` state, and zero failed,
@@ -288,8 +305,14 @@ that same plan with the environment's `takosumi-platform[-staging] restore`
 action: it restores the predecessor Container image with immediate rollout,
 then the exact predecessor Worker Version at 100 percent, and requires both
 public Version and authoritative Container identity/image/health readback.
-Follow it with runner verification. Do not use a raw image push, Worker deploy,
-or copied Wrangler rollback command as an alternate official release path.
+That readback does not prove the predecessor image's runtime-input behavior.
+Runner verification is valid only with separate build evidence whose closed
+proof names that exact predecessor image; the forward image's build evidence
+cannot verify it. Otherwise require an appropriately authorized functional
+readback or repair forward. Independently, the current Control v68 compatibility
+cutoff requires forward repair for a pre-v68 runtime. Do not use a raw image
+push, Worker deploy, or copied Wrangler rollback command as an alternate
+official release path.
 
 ## Local verification
 

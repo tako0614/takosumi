@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { resolve } from "node:path";
 import {
   assertConfigTargetsSource,
+  assertPlatformRunnerImageProof,
   assertPublishedVersion,
   bindingNames,
   hasHostedDiscovery,
@@ -18,6 +19,8 @@ import {
 } from "../../scripts/platform-worker-release.ts";
 
 const root = resolve(import.meta.dir, "../..");
+const PROVED_RUNNER_IMAGE =
+  `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"b".repeat(64)}`;
 
 test("platform release owns isolated staging and production targets", () => {
   expect(platformTargetForEnvironment("staging")).toEqual({
@@ -436,14 +439,26 @@ test("platform release parser exposes reviewed plan, execute, recovery, and rest
       "plan",
       "--config",
       "/private/wrangler.staging.toml",
+      "--runner-build-evidence",
+      "/private/runner-build.jsonl",
       "--plan-out",
       "/private/plan.json",
     ]),
   ).toEqual({
     action: "plan",
     config: "/private/wrangler.staging.toml",
+    runnerBuildEvidence: "/private/runner-build.jsonl",
     planOut: "/private/plan.json",
   });
+  expect(() =>
+    parsePlatformWorkerReleaseArgs([
+      "plan",
+      "--config",
+      "/private/wrangler.staging.toml",
+      "--plan-out",
+      "/private/plan.json",
+    ]),
+  ).toThrow("platform_worker_release_runner_image_proof_required");
   expect(() =>
     parsePlatformWorkerReleaseArgs([
       "execute",
@@ -497,6 +512,28 @@ test("platform release parser exposes reviewed plan, execute, recovery, and rest
     reviewer: "operator:reviewer",
     evidence: "/private/restored.json",
   });
+});
+
+test("execute rebinds the sealed runner proof to the configured immutable image", () => {
+  const config = [
+    "[[containers]]",
+    'class_name = "OpenTofuRunnerObject"',
+    `image = ${JSON.stringify(PROVED_RUNNER_IMAGE)}`,
+    "",
+  ].join("\n");
+  expect(() =>
+    assertPlatformRunnerImageProof(config, {
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+      image: PROVED_RUNNER_IMAGE,
+    }),
+  ).not.toThrow();
+  expect(() =>
+    assertPlatformRunnerImageProof(config, {
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+      image:
+        `registry.cloudflare.com/${"a".repeat(32)}/takosumi-runner@sha256:${"c".repeat(64)}`,
+    }),
+  ).toThrow("platform_worker_release_runner_image_proof_invalid");
 });
 
 test("platform command diagnostics normalize ArrayBuffer output before bounded redaction", () => {
