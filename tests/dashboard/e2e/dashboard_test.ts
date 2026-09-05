@@ -222,6 +222,110 @@ function workspaceTrigger(page: Page) {
     .first();
 }
 
+const PORTABLE_HOSTED_RESOURCE_PATH =
+  "/extensions/hosted-resources/inventory";
+
+const PORTABLE_EMPTY_PLATFORM_CONTRIBUTIONS = {
+  kind: "takosumi.platform-extension-contributions@v1",
+  generatedAt: "2026-08-16T00:00:00.000Z",
+  contributions: [],
+};
+
+function portableHostedResourceCatalog(
+  contribution: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const extensions = [
+    {
+      basePath: "/extensions/hosted-resources",
+      configured: true,
+      capabilities: ["hosted-resource.inventory.v1"],
+      authMode: "platform",
+      requiredScopes: ["resources:read"],
+      selfServicePatScopes: ["resources:read"],
+      workspaceContext: "query-required",
+      contributions: [
+        {
+          id: "hosted-resources",
+          slot: "workspace.hosted-resources",
+          href: PORTABLE_HOSTED_RESOURCE_PATH,
+          presentation: "native",
+          label: "Hosted resources",
+          ...contribution,
+        },
+      ],
+    },
+  ];
+  return {
+    kind: "takosumi.platform-extensions@v1",
+    generatedAt: "2026-08-16T00:00:00.000Z",
+    serviceUrl: "https://operator.example",
+    extensions,
+    summary: { total: 1, configured: 1, missing: 0 },
+  };
+}
+
+function portableHostedResourceInventory(workspaceId: string) {
+  return {
+    kind: "takosumi.hosted-resource-inventory@v1",
+    workspaceId,
+    items: [
+      {
+        apiVersion: "takosumi.dev/v1alpha1",
+        kind: "HostedResource",
+        name: "portable-sponsorship",
+        formRef: {
+          apiVersion: "takosumi.dev/v1alpha1",
+          kind: "Form",
+          definitionVersion: "v1",
+          schemaDigest: `sha256:${"4".repeat(64)}`,
+        },
+        uid: "uid_portable_sponsorship",
+        generation: "1",
+        revision: "1",
+        conditions: [
+          {
+            type: "Ready",
+            status: "True",
+            reason: "Ready",
+            lastTransitionTime: "2026-08-16T00:00:00.000Z",
+          },
+        ],
+        workloadId: "cap_repository_office",
+      },
+    ],
+  };
+}
+
+async function installHostedResourceBrowserFixture(
+  page: Page,
+  catalog: unknown,
+): Promise<{ readonly inventoryRequests: string[] }> {
+  const inventoryRequests: string[] = [];
+  await page.route("**/__takosumi/platform/extensions", async (route) => {
+    await route.fulfill({ json: catalog });
+  });
+  await page.route(
+    "**/__takosumi/platform/contributions",
+    async (route) => {
+      await route.fulfill({ json: PORTABLE_EMPTY_PLATFORM_CONTRIBUTIONS });
+    },
+  );
+  await page.route("**/extensions/hosted-resources/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "GET") {
+      inventoryRequests.push(`${url.pathname}${url.search}`);
+    }
+    if (url.pathname !== PORTABLE_HOSTED_RESOURCE_PATH) {
+      await route.fallback();
+      return;
+    }
+    const workspaceId = url.searchParams.get("workspaceId") ?? "";
+    await route.fulfill({ json: portableHostedResourceInventory(workspaceId) });
+  });
+  return { inventoryRequests };
+}
+
 const SOURCE_ARCHIVE_DIGEST = `sha256:${"1".repeat(64)}`;
 
 interface SourceCreateFixtureState {
@@ -598,6 +702,173 @@ test.describe("Takosumi dashboard browser surface", () => {
         ),
       ),
     );
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
+  test("hides hosted-resource management when no native contribution is present", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the contribution fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const fixture = await installHostedResourceBrowserFixture(page, {
+      kind: "takosumi.platform-extensions@v1",
+      generatedAt: "2026-08-16T00:00:00.000Z",
+      serviceUrl: "https://operator.example",
+      extensions: [],
+      summary: { total: 0, configured: 0, missing: 0 },
+    });
+
+    await page.goto("/settings/manage", { waitUntil: "domcontentloaded" });
+    await expect(
+      page.getByRole("heading", { name: /管理ツール|Manage/u }),
+    ).toBeVisible();
+    await expect(
+      page.locator('a[href="/settings/manage/hosted-resources"]'),
+    ).toHaveCount(0);
+
+    await page.goto("/settings/manage/hosted-resources", {
+      waitUntil: "domcontentloaded",
+    });
+    await expect(
+      page.getByRole("heading", {
+        name: /ホスト済みリソースは利用できません|Hosted resources are unavailable/u,
+      }),
+    ).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    expect(fixture.inventoryRequests).toEqual([]);
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
+  test("opens a native hosted-resource contribution in the current Workspace", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the contribution fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const fixture = await installHostedResourceBrowserFixture(
+      page,
+      portableHostedResourceCatalog(),
+    );
+
+    await page.goto("/settings/manage", { waitUntil: "domcontentloaded" });
+    const manageHeading = page.getByRole("heading", {
+      name: /管理ツール|Manage/u,
+    });
+    await expect(manageHeading).toBeVisible();
+    const hostedLink = page.locator(
+      'a[href="/settings/manage/hosted-resources"]',
+    );
+    await expect(hostedLink).toBeVisible();
+
+    const trigger = workspaceTrigger(page);
+    await trigger.click();
+    const menu = page.locator('[role="menu"]:visible').first();
+    await expect(menu).toBeVisible();
+    await menu
+      .getByRole("menuitemradio")
+      .filter({ hasText: expectations.switchWorkspaceName })
+      .first()
+      .click();
+    await expect(trigger).toHaveAttribute(
+      "aria-label",
+      new RegExp(
+        expectations.switchWorkspaceName.replace(
+          /[.*+?^${}()|[\]\\]/gu,
+          "\\$&",
+        ),
+      ),
+    );
+
+    await hostedLink.click();
+    await expect(page).toHaveURL(/\/settings\/manage\/hosted-resources$/u);
+    await expect(
+      page.locator("strong").filter({ hasText: "portable-sponsorship" }),
+    ).toBeVisible();
+    await expect.poll(() => fixture.inventoryRequests.length).toBe(1);
+    expect(fixture.inventoryRequests).toEqual([
+      `${PORTABLE_HOSTED_RESOURCE_PATH}?workspaceId=ws_beta&limit=25`,
+    ]);
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
+  test("does not advertise malformed hosted-resource contributions", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the contribution fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const fixture = await installHostedResourceBrowserFixture(
+      page,
+      portableHostedResourceCatalog({ label: undefined }),
+    );
+
+    await page.goto("/settings/manage", { waitUntil: "domcontentloaded" });
+    await expect(
+      page.getByRole("heading", { name: /管理ツール|Manage/u }),
+    ).toBeVisible();
+    await expect(
+      page.locator('a[href="/settings/manage/hosted-resources"]'),
+    ).toHaveCount(0);
+
+    await page.goto("/settings/manage/hosted-resources", {
+      waitUntil: "domcontentloaded",
+    });
+    await expect(
+      page.getByRole("heading", {
+        name: /ホスト済みリソースは利用できません|Hosted resources are unavailable/u,
+      }),
+    ).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    expect(fixture.inventoryRequests).toEqual([]);
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
+  test("does not advertise non-native hosted-resource contributions", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the contribution fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const fixture = await installHostedResourceBrowserFixture(
+      page,
+      portableHostedResourceCatalog({ presentation: "link" }),
+    );
+
+    await page.goto("/settings/manage", { waitUntil: "domcontentloaded" });
+    await expect(
+      page.getByRole("heading", { name: /管理ツール|Manage/u }),
+    ).toBeVisible();
+    await expect(
+      page.locator('a[href="/settings/manage/hosted-resources"]'),
+    ).toHaveCount(0);
+
+    await page.goto("/settings/manage/hosted-resources", {
+      waitUntil: "domcontentloaded",
+    });
+    await expect(
+      page.getByRole("heading", {
+        name: /ホスト済みリソースは利用できません|Hosted resources are unavailable/u,
+      }),
+    ).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    expect(fixture.inventoryRequests).toEqual([]);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });

@@ -39,7 +39,9 @@ function Inner(): JSX.Element {
   const manageDestinations = () =>
     filterByContributionSlots(
       MANAGE_DESTINATIONS,
-      hostedResourceContribution.latest ? [HOSTED_RESOURCES_SLOT] : [],
+      hostedResourceContribution.error || !hostedResourceContribution.latest
+        ? []
+        : [HOSTED_RESOURCES_SLOT],
     );
   return (
     <div class="settings-view">
