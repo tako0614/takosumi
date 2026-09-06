@@ -29,14 +29,16 @@ import { platformReleaseSourceAuthorityDigest } from "../../scripts/lib/platform
 
 const COMMIT = "a".repeat(40);
 const REPOSITORY = "https://github.com/tako0614/takosumi.git";
-// Exact values from the Docker 29 save/load proof. The containerd image store
-// reports the manifest digest as Docker `.Id`; the OCI manifest's config digest
-// is a distinct identity and must not be inferred from `.Id`.
+// Exact values from the Docker 29 default-builder/containerd reproduction.
+// Default provenance produces an OCI index; disabling provenance produces the
+// single Docker schema-2 manifest required by the release contract.
+const DEFAULT_PROVENANCE_LOCAL_IMAGE_ID =
+  "sha256:545554bafc859f22db83ee44ae7a18323bfd937460c39aae012935388b4f89c5";
 const LOCAL_IMAGE_ID =
-  "sha256:321d896823892b5b3d2821793ef0f52b17c7bbd4513bab32475efede17fefec8";
+  "sha256:aadeb8bcd4a034e70bb181f1bf617c5d9b2e07485eb19fc04cc17c69e1977c50";
 const DESCRIPTOR_DIGEST = LOCAL_IMAGE_ID;
 const OCI_CONFIG_DIGEST =
-  "sha256:39c642d8e29d90148ed50969b6e1650cc475fe891ef1f436ec8782d8e477dfa5";
+  "sha256:eb0c0591f6405bc3109d8afe43459edc0733a1e71ef26c674c2d1ea4495de9dd";
 const OPENTOFU_SHA256 = "9".repeat(64);
 const roots: string[] = [];
 
@@ -114,6 +116,7 @@ test("native candidate producer builds once, runs both exact proofs, and exports
   const priorCloudflareToken = process.env.CLOUDFLARE_API_TOKEN;
   process.env.TAKOSUMI_RUNNER_PROOF_APPARMOR_UNCONFINED = "1";
   process.env.CLOUDFLARE_API_TOKEN = "x";
+  let buildHasNoProvenance = false;
   let record: Awaited<ReturnType<typeof runRunnerImageNativeCandidate>>;
   try {
     record = await runRunnerImageNativeCandidate(
@@ -145,6 +148,7 @@ test("native candidate producer builds once, runs both exact proofs, and exports
             return success("plan: PASS\napply: PASS\nRESULT: PASS\n");
           }
           if (executable === "docker" && args[0] === "buildx") {
+            buildHasNoProvenance = args.includes("--provenance=false");
             return success();
           }
           if (
@@ -152,7 +156,11 @@ test("native candidate producer builds once, runs both exact proofs, and exports
             args[0] === "image" &&
             args[1] === "inspect"
           ) {
-            return success(localImageInspect());
+            return success(
+              buildHasNoProvenance
+                ? localImageInspect()
+                : defaultProvenanceLocalImageInspect(),
+            );
           }
           if (executable === "docker" && args[0] === "run") return success();
           if (executable === "docker" && args[0] === "exec") {
@@ -232,6 +240,7 @@ test("native candidate producer builds once, runs both exact proofs, and exports
     ({ executable, args }) => executable === "docker" && args[0] === "buildx",
   )!;
   expect(build.args).toContain("--load");
+  expect(build.args).toContain("--provenance=false");
   expect(build.args).toContain("linux/amd64");
   const save = observed.find(
     ({ executable, args }) =>
@@ -376,7 +385,22 @@ function localImageInspect(): string {
   });
 }
 
-test("Docker local image ID remains distinct from the OCI config digest", () => {
+function defaultProvenanceLocalImageInspect(): string {
+  return JSON.stringify({
+    Id: DEFAULT_PROVENANCE_LOCAL_IMAGE_ID,
+    Descriptor: {
+      digest: DEFAULT_PROVENANCE_LOCAL_IMAGE_ID,
+      mediaType: "application/vnd.oci.image.index.v1+json",
+    },
+    Os: "linux",
+    Architecture: "amd64",
+  });
+}
+
+test("Docker 29 provenance indexes stay refused while the single manifest keeps local and config identities distinct", () => {
+  expect(() =>
+    parseLocalRunnerImageIdentity(defaultProvenanceLocalImageInspect()),
+  ).toThrow("runner_image_local_identity_invalid");
   const identity = parseLocalRunnerImageIdentity(localImageInspect());
   expect(identity).toEqual({
     localImageId: LOCAL_IMAGE_ID,

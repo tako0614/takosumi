@@ -87,8 +87,12 @@ bun run deploy -- takosumi-runner-image build \
 Build materializes the exact pushed and source-pinned Git commit into an external
 physical build context, copies the already-validated pathless config into the
 same private custody, projects runner paths from the pinned clean checkout, and
-builds the sealed source for `linux/amd64`. Before Docker runs it downloads the
-OpenTofu checksum, certificate, and signature named by the sealed Dockerfile,
+builds the sealed source for `linux/amd64`. Both build paths explicitly select
+`--provenance=false` so BuildKit does not wrap the image in an attestation-bearing
+index. The publication identity remains one image manifest; source custody,
+native proofs, and the CI handoff's GitHub attestation are verified separately.
+Before Docker runs it downloads the OpenTofu checksum, certificate, and signature
+named by the sealed Dockerfile,
 verifies the checksum file with Cosign against OpenTofu's release workflow OIDC
 identity and issuer, and requires the pinned linux/amd64 archive checksum to be
 present exactly once. It then generates a collision-resistant transport tag

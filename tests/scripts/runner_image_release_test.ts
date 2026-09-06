@@ -55,6 +55,12 @@ const DOCKERFILE = [
 const TRANSPORT_TAG = `r-${COMMIT.slice(0, 12)}-${sha256(DOCKERFILE).slice(7, 19)}-${"01".repeat(16)}`;
 const TRANSPORT_REF =
   `registry.cloudflare.com/${"b".repeat(32)}/takosumi-runner:${TRANSPORT_TAG}`;
+const DOCKER_29_PROVENANCE_INDEX_ID =
+  "sha256:545554bafc859f22db83ee44ae7a18323bfd937460c39aae012935388b4f89c5";
+const DOCKER_29_SINGLE_MANIFEST_ID =
+  "sha256:aadeb8bcd4a034e70bb181f1bf617c5d9b2e07485eb19fc04cc17c69e1977c50";
+const DOCKER_29_SINGLE_MANIFEST_REF =
+  `${PREVIOUS.slice(0, PREVIOUS.indexOf("@"))}@${DOCKER_29_SINGLE_MANIFEST_ID}`;
 
 afterEach(() => {
   for (const root of roots.splice(0)) {
@@ -4134,9 +4140,13 @@ test("build publishes linux amd64 with generated transport identity and records 
   const input = fixture();
   const calls: string[][] = [];
   let pushedConfig = "";
+  let buildHasNoProvenance = false;
   const record = (await runRunnerImageRelease(buildOptions(input, "staging", true), {
     ...buildRuntime(input, async (_executable, args) => {
-      if (args[0] === "buildx") return { exitCode: 0, stdout: "", stderr: "" };
+      if (args[0] === "buildx") {
+        buildHasNoProvenance = args.includes("--provenance=false");
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
       if (args[0] === "run" || args[0] === "exec" || args[0] === "rm") {
         return {
           exitCode: 0,
@@ -4154,7 +4164,7 @@ test("build publishes linux amd64 with generated transport identity and records 
           stdout: JSON.stringify({
             Descriptor: {
               mediaType: "application/vnd.docker.distribution.manifest.v2+json",
-              digest: `sha256:${"d".repeat(64)}`,
+              digest: DOCKER_29_SINGLE_MANIFEST_ID,
               platform: { os: "linux", architecture: "amd64" },
             },
             SchemaV2Manifest: {
@@ -4167,25 +4177,44 @@ test("build publishes linux amd64 with generated transport identity and records 
         };
       }
       throw new Error(`unexpected command: ${args.join(" ")}`);
-    }, calls, {
-      Id: `sha256:${"6".repeat(64)}`,
-      Descriptor: {
-        digest: `sha256:${"d".repeat(64)}`,
-        mediaType: "application/vnd.docker.distribution.manifest.v2+json",
-      },
-      Os: "linux",
-      Architecture: "amd64",
+    }, calls, () => {
+      const digest = buildHasNoProvenance
+        ? DOCKER_29_SINGLE_MANIFEST_ID
+        : DOCKER_29_PROVENANCE_INDEX_ID;
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          Id: digest,
+          Descriptor: {
+            digest,
+            mediaType: buildHasNoProvenance
+              ? "application/vnd.docker.distribution.manifest.v2+json"
+              : "application/vnd.oci.image.index.v1+json",
+          },
+          Os: "linux",
+          Architecture: "amd64",
+        }),
+        stderr: "",
+      };
     }),
   })) as RunnerImageBuildRecord;
   expect(record).toMatchObject({
     status: "published",
-    image: { transportTag: TRANSPORT_TAG, transportRef: TRANSPORT_REF, immutableRef: NEXT },
+    image: {
+      transportTag: TRANSPORT_TAG,
+      transportRef: TRANSPORT_REF,
+      immutableRef: DOCKER_29_SINGLE_MANIFEST_REF,
+    },
     config: {
       previousImage: PREVIOUS,
       expectedActivationSha256: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     },
   });
-  expect(calls.some((args) => args.includes("linux/amd64"))).toBeTrue();
+  const build = calls.find(
+    ([executable, command]) => executable === "docker" && command === "buildx",
+  );
+  expect(build).toContain("--provenance=false");
+  expect(build).toContain("linux/amd64");
   expect(pushedConfig).toBe(
     injectPlatformSourcePaths(
       input.configSource,
@@ -4203,7 +4232,7 @@ test("build publishes linux amd64 with generated transport identity and records 
   expect(calls.some((args) => args.includes("images") || args.includes("list"))).toBeFalse();
   expect(statSync(input.evidence).mode & 0o777).toBe(0o600);
   expect(JSON.parse(readFileSync(input.evidence, "utf8"))).toMatchObject({
-    image: { immutableRef: NEXT },
+    image: { immutableRef: DOCKER_29_SINGLE_MANIFEST_REF },
   });
   const [attempt] = readFileSync(input.state, "utf8")
     .trim()
@@ -4212,8 +4241,8 @@ test("build publishes linux amd64 with generated transport identity and records 
     { image: { localImageId: string; localDescriptorDigest: string } },
   ];
   expect(attempt.image).toMatchObject({
-    localImageId: `sha256:${"6".repeat(64)}`,
-    localDescriptorDigest: `sha256:${"d".repeat(64)}`,
+    localImageId: DOCKER_29_SINGLE_MANIFEST_ID,
+    localDescriptorDigest: DOCKER_29_SINGLE_MANIFEST_ID,
   });
 });
 

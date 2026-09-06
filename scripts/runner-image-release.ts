@@ -851,6 +851,7 @@ async function buildRunnerImage(
           "buildx",
           "build",
           "--load",
+          "--provenance=false",
           "--platform",
           "linux/amd64",
           "--file",

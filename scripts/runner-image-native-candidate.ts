@@ -106,6 +106,7 @@ export async function runRunnerImageNativeCandidate(
         "buildx",
         "build",
         "--load",
+        "--provenance=false",
         "--platform",
         "linux/amd64",
         "--file",
