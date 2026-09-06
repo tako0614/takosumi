@@ -18,6 +18,10 @@ test("runner image release has one Takosumi-owned entrypoint, focused check, and
     join(ROOT, "scripts/runner-image-release.ts"),
     "utf8",
   );
+  const nativeProofSource = readFileSync(
+    join(ROOT, "scripts/lib/runner-image-native-proof.ts"),
+    "utf8",
+  );
   const sourceAuthority = readFileSync(
     join(ROOT, "scripts/lib/platform-release-source.ts"),
     "utf8",
@@ -70,7 +74,8 @@ test("runner image release has one Takosumi-owned entrypoint, focused check, and
   expect(sourceAuthority).toContain('"deploy/platform/entry-worker.ts"');
   expect(sourceAuthority).toContain('"dashboard/dist"');
   expect(sourceAuthority).toContain("O_NOFOLLOW");
-  expect(releaseSource).toContain('"cosign"');
+  expect(releaseSource).toContain("verifyRunnerOpenTofuSigstore");
+  expect(nativeProofSource).toContain('"cosign"');
   expect(releaseSource).toContain('"publication-started"');
   expect(releaseSource).toContain('"reconciled-absent"');
   expect(releaseSource).not.toMatch(/"wrangler",\s*"deploy"/u);

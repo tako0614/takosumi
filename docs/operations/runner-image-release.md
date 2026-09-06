@@ -97,8 +97,8 @@ mutable tag is transport only: it is never a release version, consumer input,
 or published identity, and the implementation does not perform a racy
 check-then-push.
 
-Before appending `publication-started` or pushing, an executing build boots the
-exact inspected local image ID with Docker using `--pull=never`, no network,
+Before appending `publication-started` or pushing, a local executing build boots
+the exact inspected local image ID with Docker using `--pull=never`, no network,
 ports, mounts, or caller-provided environment, and a read-only root with a
 small temporary filesystem. The image's own user, ENTRYPOINT and command are
 preserved: the container starts detached through its normal startup script.
@@ -115,6 +115,12 @@ starts. The temporary container must be force-removed before publication;
 cleanup failure is an explicit refusal. A missing marker, failed startup,
 health, or semantic Plan check, or timeout is a pre-publication failure; no
 journal attempt or push is made.
+
+An executing build may instead consume the exact image tested by the native CI
+candidate path below. That path authenticates and loads the tested image; it
+does not rebuild it or repeat native startup on the operator's machine. Both
+paths use the same hardened runtime-input Plan proof implementation and the
+same descriptor-bound publication journal and readback.
 
 For an executing build, `CLOUDFLARE_ACCOUNT_ID` must be exactly the account in
 the realized previous-image repository. That checked publication repository,
@@ -222,6 +228,87 @@ The successful build record retains the previous digest and computes the exact
 expected activation config SHA by replacing only the unique runner image
 literal. Route, binding, migration, compatibility, Container field, comment,
 whitespace, or any other byte change produces a different SHA and is refused.
+
+### Consume an exact native CI candidate
+
+The `runner proof` workflow builds one `linux/amd64` image from its clean source
+commit and runs both the hardened publication smoke above and the real HTTP
+Plan/Apply proof against that image. It exports:
+
+- `runner-image.tar`: a Docker image-save archive of the tested image;
+- `candidate.json`: source repository/commit, source authority, source-tree and
+  Dockerfile digests, archive digest/size, exact image descriptor and platform,
+  and the proofs bound to that descriptor;
+- `attestation.jsonl`: the GitHub Actions Sigstore bundle covering both files.
+
+The workflow has only source-read and attestation permissions. It receives no
+Cloudflare credential and neither pushes an image nor changes the running
+platform. GitHub-hosted Actions is the native builder for this optional path;
+the operator remains the publication authority. The workflow and producer are
+part of the exact source reviewed for publication. An attestation authenticates
+their output and provenance; it does not replace that review or the native tests.
+
+The candidate producer can also be invoked for local native verification:
+
+```bash
+bun scripts/runner-image-native-candidate.ts \
+  --output-dir /absolute/non-worktree-new-directory/runner-native-candidate
+```
+
+The output directory must not already exist. Local creation alone does not make
+a candidate acceptable to the CI-consumption path: that path requires the
+authenticated GitHub-hosted workflow bundle, not an operator-written proof.
+
+Select the successful workflow run for the exact current publication commit
+and download its three files into an operator-private directory outside Git.
+Use directory mode `0700` and input file mode `0600`. GitHub artifact downloads
+may restore files as `0644`, so set the modes before invoking the publisher:
+
+```bash
+chmod 700 /absolute/operator-private/candidate
+chmod 600 /absolute/operator-private/candidate/runner-image.tar \
+  /absolute/operator-private/candidate/candidate.json \
+  /absolute/operator-private/candidate/attestation.jsonl
+```
+
+The workflow retains this handoff for three days; its name includes the full
+source commit, run ID, and run attempt. A matching filename or successful run
+alone is not trusted evidence. Supply all three inputs to the existing command:
+
+```bash
+bun run deploy -- takosumi-runner-image build \
+  --config /absolute/operator-private/wrangler.staging.toml \
+  --environment staging \
+  --release release-2026-09-06 \
+  --state /absolute/non-worktree-release-state/runner-publication.jsonl \
+  --evidence /absolute/non-worktree-release-state/runner-build.jsonl \
+  --candidate-image /absolute/operator-private/candidate/runner-image.tar \
+  --candidate-record /absolute/operator-private/candidate/candidate.json \
+  --candidate-attestation /absolute/operator-private/candidate/attestation.jsonl \
+  --review operator:<reviewer> \
+  --execute
+```
+
+The source/config, OpenTofu signature, and existing publication gates remain in
+force. The consumer verifies the single attestation's two file subjects against
+the current source repository and full commit and this repository's exact
+`.github/workflows/runner-image-proof.yml`, refusing self-hosted provenance. It
+uses private stable custody for the files and checks the source-tree,
+Dockerfile, archive, platform, descriptor, and proof identities before accepting
+the candidate. Missing or mismatched evidence does not fall back to a rebuild.
+
+Docker 29 with the containerd image store is required to preserve the image
+descriptor through save/load. The consumer uses `docker image load`, never
+`docker import`, and verifies the loaded descriptor before the existing
+nonce-bound transport publication. After retagging, it removes the fixed
+candidate tag only while that tag still names the authenticated image, and
+confirms removal before publication. The same cleanup runs on pre-publication
+load/verification failure; pre-existing or changed tags are never adopted or
+removed. This lets one candidate be reused without trusting an old local tag.
+It runs neither a local build nor a local container boot in candidate mode.
+Registry descriptor equality, unknown-outcome
+reconciliation, release v3 records, platform activation, and runner verification
+remain unchanged. A downloaded candidate is not a published or active Runner.
 
 ## 2. Change only the realized pin and release the platform
 

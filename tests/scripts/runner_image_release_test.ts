@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -27,6 +27,10 @@ import {
   injectPlatformSourcePaths,
 } from "../../scripts/platform-worker-release.ts";
 import { platformReleaseSourceAuthorityDigest } from "../../scripts/lib/platform-release-source.ts";
+import {
+  RUNNER_IMAGE_NATIVE_CANDIDATE_KIND,
+  RUNNER_IMAGE_NATIVE_PROOF_KIND,
+} from "../../scripts/lib/runner-image-native-proof.ts";
 
 const roots: string[] = [];
 const COMMIT = "a".repeat(40);
@@ -101,6 +105,9 @@ function fixture(
     state: join(operator, "runner-publication-state.jsonl"),
     buildEvidence: join(operator, "runner-build.jsonl"),
     platformEvidence: join(operator, "platform-evidence.json"),
+    candidateImage: join(operator, "runner-image.tar"),
+    candidateRecord: join(operator, "candidate.json"),
+    candidateAttestation: join(operator, "attestation.jsonl"),
   };
 }
 
@@ -234,6 +241,92 @@ function buildOptions(
     ...(execute ? { review: "operator:builder" } : {}),
     execute,
   };
+}
+
+function candidateBuildOptions(input: Fixture) {
+  return parseRunnerImageReleaseArgs([
+    "build",
+    "--config",
+    input.config,
+    "--environment",
+    "staging",
+    "--release",
+    "release-1",
+    "--evidence",
+    input.evidence,
+    "--state",
+    input.state,
+    "--candidate-image",
+    input.candidateImage,
+    "--candidate-record",
+    input.candidateRecord,
+    "--candidate-attestation",
+    input.candidateAttestation,
+    "--review",
+    "operator:builder",
+    "--execute",
+  ]);
+}
+
+function writeCandidateArtifacts(
+  input: Fixture,
+  overrides: Readonly<{
+    repository?: string;
+    commit?: string;
+    treeSha256?: string;
+    dockerfileSha256?: string;
+    archiveSha256?: string;
+    descriptorDigest?: string;
+    descriptorMediaType?: string;
+    architecture?: string;
+  }> = {},
+): void {
+  const archive = "authenticated candidate image archive\n";
+  const repository = overrides.repository ?? REPOSITORY;
+  const commit = overrides.commit ?? COMMIT;
+  const descriptorDigest = overrides.descriptorDigest ?? `sha256:${"d".repeat(64)}`;
+  writePrivate(input.candidateImage, archive);
+  writePrivate(input.candidateAttestation, '{"bundle":"offline"}\n');
+  writePrivate(
+    input.candidateRecord,
+    `${JSON.stringify({
+      kind: RUNNER_IMAGE_NATIVE_CANDIDATE_KIND,
+      observedAt: "2026-09-06T00:00:00.000Z",
+      source: {
+        repository,
+        commit,
+        authoritySha256: sourceAuthorityDigest(repository, commit),
+        treeSha256:
+          overrides.treeSha256 ?? dashboardAssetTreeSeal(input.repository).digest,
+        dockerfileSha256:
+          overrides.dockerfileSha256 ??
+          sha256(readFileSync(join(input.repository, "runner", "Dockerfile"))),
+      },
+      image: {
+        tag: `takosumi-runner-native-candidate:${commit}`,
+        localImageId: `sha256:${"d".repeat(64)}`,
+        descriptorDigest,
+        descriptorMediaType:
+          overrides.descriptorMediaType ??
+          "application/vnd.docker.distribution.manifest.v2+json",
+        platform: {
+          os: "linux",
+          architecture: overrides.architecture ?? "amd64",
+        },
+      },
+      archive: {
+        name: "runner-image.tar",
+        size: Buffer.byteLength(archive),
+        sha256: overrides.archiveSha256 ?? sha256(archive),
+      },
+      nativeProof: {
+        kind: RUNNER_IMAGE_NATIVE_PROOF_KIND,
+        descriptorDigest,
+        hardenedRuntimeInputPlan: "passed",
+        fullHttpPlanApply: "passed",
+      },
+    })}\n`,
+  );
 }
 
 function verifyOptions(input: Fixture, execute = true) {
@@ -667,7 +760,13 @@ function buildRuntime(
     args: readonly string[],
   ) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
   observed?: string[][],
-  localImageInspect: unknown = {
+  localImageInspect:
+    | Readonly<Record<string, unknown>>
+    | ((args: readonly string[]) => {
+        exitCode: number;
+        stdout: string;
+        stderr: string;
+      }) = {
     Id: `sha256:${"d".repeat(64)}`,
     Descriptor: {
       digest: `sha256:${"d".repeat(64)}`,
@@ -700,6 +799,9 @@ function buildRuntime(
         return { exitCode: 0, stdout: "Verified OK\n", stderr: "" };
       }
       if (executable === "docker" && args[0] === "image") {
+        if (typeof localImageInspect === "function") {
+          return localImageInspect(args);
+        }
         return {
           exitCode: 0,
           stdout: JSON.stringify(localImageInspect),
@@ -763,6 +865,129 @@ async function successfulPublicationCommand(
     };
   }
   throw new Error(`unexpected command: ${args.join(" ")}`);
+}
+
+function candidateLocalImageStore() {
+  const fixedTag = `takosumi-runner-native-candidate:${COMMIT}`;
+  const exactIdentity = {
+    Id: `sha256:${"d".repeat(64)}`,
+    Descriptor: {
+      digest: `sha256:${"d".repeat(64)}`,
+      mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+    },
+    Os: "linux",
+    Architecture: "amd64",
+  } as const;
+  const differentIdentity = {
+    ...exactIdentity,
+    Id: `sha256:${"e".repeat(64)}`,
+    Descriptor: {
+      ...exactIdentity.Descriptor,
+      digest: `sha256:${"e".repeat(64)}`,
+    },
+  } as const;
+  const tags = new Map<string, typeof exactIdentity | typeof differentIdentity>();
+  let failNextTransportInspection = false;
+  let swapBeforeCleanup = false;
+  let fixedInspectionsAfterLoad = 0;
+  let removals = 0;
+  return {
+    command(args: readonly string[]) {
+      if (args[0] !== "image") {
+        throw new Error(`unexpected Docker image command: ${args.join(" ")}`);
+      }
+      if (args[1] === "load") {
+        tags.set(fixedTag, exactIdentity);
+        fixedInspectionsAfterLoad = 0;
+        return { exitCode: 0, stdout: "Loaded image\n", stderr: "" };
+      }
+      if (args[1] === "tag") {
+        const identity = tags.get(args[2]!);
+        if (!identity) {
+          return {
+            exitCode: 1,
+            stdout: "",
+            stderr: `No such image: ${args[2]}`,
+          };
+        }
+        tags.set(args[3]!, identity);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      if (args[1] === "rm") {
+        const target = args[2]!;
+        if (!tags.has(target)) {
+          return {
+            exitCode: 1,
+            stdout: "",
+            stderr: `No such image: ${target}`,
+          };
+        }
+        tags.delete(target);
+        removals += 1;
+        return { exitCode: 0, stdout: `Untagged: ${target}\n`, stderr: "" };
+      }
+      if (args[1] === "inspect") {
+        const target = args[2]!;
+        let identity = tags.get(target);
+        if (target === fixedTag && identity) {
+          fixedInspectionsAfterLoad += 1;
+          if (swapBeforeCleanup && fixedInspectionsAfterLoad >= 2) {
+            identity = differentIdentity;
+            tags.set(target, identity);
+          }
+        }
+        if (
+          target.startsWith("takosumi-runner:r-") &&
+          failNextTransportInspection
+        ) {
+          failNextTransportInspection = false;
+          identity = differentIdentity;
+        }
+        return identity
+          ? { exitCode: 0, stdout: JSON.stringify(identity), stderr: "" }
+          : {
+              exitCode: 1,
+              stdout: "",
+              stderr: `No such image: ${target}`,
+            };
+      }
+      throw new Error(`unexpected Docker image command: ${args.join(" ")}`);
+    },
+    failNextTransportInspection() {
+      failNextTransportInspection = true;
+    },
+    swapCandidateBeforeCleanup() {
+      swapBeforeCleanup = true;
+    },
+    hasFixedTag() {
+      return tags.has(fixedTag);
+    },
+    fixedTagIdentity() {
+      return tags.get(fixedTag);
+    },
+    removals() {
+      return removals;
+    },
+  };
+}
+
+async function successfulCandidatePublicationCommand(
+  executable: string,
+  args: readonly string[],
+) {
+  if (executable === "gh" && args[0] === "attestation") {
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify([
+        {
+          attestation: { bundle: "same-native-candidate-attestation" },
+          verificationResult: { statement: { subject: [{}] } },
+        },
+      ]),
+      stderr: "",
+    };
+  }
+  return successfulPublicationCommand(executable, args);
 }
 
 function legacyLocalImageInspect() {
@@ -1411,6 +1636,87 @@ test("public CLI exposes build and read-only verify, never activate", () => {
       "--execute",
     ]),
   ).toThrow("--execute requires --review");
+
+  expect(
+    parseRunnerImageReleaseArgs([
+      "build",
+      "--config",
+      "/private/wrangler.toml",
+      "--environment",
+      "staging",
+      "--release",
+      "release-1",
+      "--evidence",
+      "/private/build.jsonl",
+      "--state",
+      "/private/publication-state.jsonl",
+      "--candidate-image",
+      "/private/runner-image.tar",
+      "--candidate-record",
+      "/private/candidate.json",
+      "--candidate-attestation",
+      "/private/attestation.jsonl",
+      "--review",
+      "operator:builder",
+      "--execute",
+    ]),
+  ).toMatchObject({
+    candidateImage: "/private/runner-image.tar",
+    candidateRecord: "/private/candidate.json",
+    candidateAttestation: "/private/attestation.jsonl",
+  });
+  for (const extra of [
+    ["--candidate-image", "/private/runner-image.tar"],
+    [
+      "--candidate-image",
+      "/private/runner-image.tar",
+      "--candidate-record",
+      "/private/candidate.json",
+    ],
+  ]) {
+    expect(() =>
+      parseRunnerImageReleaseArgs([
+        "build",
+        "--config",
+        "/private/wrangler.toml",
+        "--environment",
+        "staging",
+        "--release",
+        "release-1",
+        "--evidence",
+        "/private/build.jsonl",
+        "--state",
+        "/private/publication-state.jsonl",
+        "--review",
+        "operator:builder",
+        "--execute",
+        ...extra,
+      ]),
+    ).toThrow("candidate image, record, and attestation are required together");
+  }
+  expect(() =>
+    parseRunnerImageReleaseArgs([
+      "verify",
+      "--config",
+      "/private/wrangler.toml",
+      "--environment",
+      "staging",
+      "--release",
+      "release-1",
+      "--evidence",
+      "/private/verify.jsonl",
+      "--build-evidence",
+      "/private/build.jsonl",
+      "--platform-evidence",
+      "/private/platform.json",
+      "--candidate-image",
+      "/private/runner-image.tar",
+      "--candidate-record",
+      "/private/candidate.json",
+      "--candidate-attestation",
+      "/private/attestation.jsonl",
+    ]),
+  ).toThrow("candidate inputs are accepted only by executing build");
 });
 
 test("evidence stays external, physical, and exactly mode 0600", async () => {
@@ -3053,6 +3359,775 @@ test("read-only reconciliation can prove an exact recorded transport tag absent"
       },
     ),
   ).resolves.toMatchObject({ status: "planned" });
+});
+
+test("candidate build authenticates and loads exact native bytes without rebuilding or rerunning them", async () => {
+  const input = fixture();
+  writeCandidateArtifacts(input);
+  const observed: string[][] = [];
+  const imageStore = candidateLocalImageStore();
+  const record = await runRunnerImageRelease(candidateBuildOptions(input), {
+    ...buildRuntime(
+      input,
+      async (executable, args) => {
+        if (executable === "gh" && args[0] === "attestation") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify([
+              {
+                attestation: { bundle: "same-native-candidate-attestation" },
+                verificationResult: { statement: { subject: [{}] } },
+              },
+            ]),
+            stderr: "",
+          };
+        }
+        return successfulPublicationCommand(executable, args);
+      },
+      observed,
+      imageStore.command,
+    ),
+  });
+
+  expect(record).toMatchObject({
+    status: "published",
+    source: { commit: COMMIT },
+    image: { immutableRef: NEXT },
+    runtimeInputPlanProof: {
+      kind: "takosumi.runner-image-runtime-input-plan-proof@v1",
+      image: NEXT,
+    },
+  });
+  const gh = observed.filter((command) => command[0] === "gh");
+  expect(gh).toHaveLength(2);
+  for (const command of gh) {
+    expect(command).toContain("--bundle");
+    expect(command).toContain("--repo");
+    expect(command).toContain("tako0614/takosumi");
+    expect(command).toContain("--signer-workflow");
+    expect(command).toContain(
+      "tako0614/takosumi/.github/workflows/runner-image-proof.yml",
+    );
+    expect(command).toContain("--signer-digest");
+    expect(command).toContain(COMMIT);
+    expect(command).toContain("--source-digest");
+    expect(command).toContain("--deny-self-hosted-runners");
+    expect(command).toContain("--format");
+    expect(command).toContain("json");
+  }
+  expect(
+    observed.some(
+      (command) => command[0] === "docker" && command[1] === "buildx",
+    ),
+  ).toBeFalse();
+  expect(
+    observed.some(
+      (command) =>
+        command[0] === "docker" &&
+        (command[1] === "run" || command[1] === "exec"),
+    ),
+  ).toBeFalse();
+  expect(
+    observed.find(
+      (command) =>
+        command[0] === "docker" &&
+        command[1] === "image" &&
+        command[2] === "load",
+    ),
+  ).toContain("--platform");
+  expect(
+    observed.find(
+      (command) =>
+        command[0] === "docker" &&
+        command[1] === "image" &&
+        command[2] === "tag",
+    ),
+  ).toEqual([
+    "docker",
+    "image",
+    "tag",
+    `takosumi-runner-native-candidate:${COMMIT}`,
+    `takosumi-runner:${TRANSPORT_TAG}`,
+  ]);
+  expect(imageStore.hasFixedTag()).toBeFalse();
+  expect(imageStore.removals()).toBe(1);
+});
+
+test("candidate archive work receives a bounded long timeout without widening normal release command budgets", async () => {
+  const timeoutSpy = spyOn(globalThis, "setTimeout");
+  type ObservedTimeout = Readonly<{
+    executable: string;
+    args: readonly string[];
+    milliseconds: number;
+  }>;
+  const instrument = (
+    runtime: ReturnType<typeof buildRuntime>,
+    observed: ObservedTimeout[],
+  ) => ({
+    ...runtime,
+    command: async (
+      executable: string,
+      args: readonly string[],
+      cwd: string,
+    ) => {
+      const milliseconds = timeoutSpy.mock.calls.at(-1)?.[1];
+      if (typeof milliseconds !== "number") {
+        throw new Error("release command did not install a bounded timeout");
+      }
+      observed.push({ executable, args: [...args], milliseconds });
+      void cwd;
+      return runtime.command(executable, args);
+    },
+  });
+
+  try {
+    const candidateInput = fixture();
+    writeCandidateArtifacts(candidateInput);
+    const candidateTimeouts: ObservedTimeout[] = [];
+    const imageStore = candidateLocalImageStore();
+    await runRunnerImageRelease(
+      candidateBuildOptions(candidateInput),
+      instrument(
+        buildRuntime(
+          candidateInput,
+          successfulCandidatePublicationCommand,
+          undefined,
+          imageStore.command,
+        ),
+        candidateTimeouts,
+      ),
+    );
+
+    expect(
+      candidateTimeouts
+        .filter(
+          ({ executable, args }) =>
+            executable === "gh" && args[0] === "attestation",
+        )
+        .map(({ args, milliseconds }) => [basename(args[2]!), milliseconds]),
+    ).toEqual([
+      ["candidate.json", 2 * 60_000],
+      ["runner-image.tar", 30 * 60_000],
+    ]);
+    expect(
+      candidateTimeouts
+        .filter(
+          ({ executable, args }) =>
+            executable === "docker" &&
+            args[0] === "image" &&
+            args[1] === "load",
+        )
+        .map(({ milliseconds }) => milliseconds),
+    ).toEqual([30 * 60_000]);
+    expect(
+      candidateTimeouts
+        .filter(
+          ({ executable, args }) =>
+            executable === "docker" &&
+            args[0] === "image" &&
+            args[1] !== "load",
+        )
+        .every(({ milliseconds }) => milliseconds === 2 * 60_000),
+    ).toBeTrue();
+
+    const normalInput = fixture();
+    const normalTimeouts: ObservedTimeout[] = [];
+    await runRunnerImageRelease(
+      buildOptions(normalInput, "staging", true),
+      instrument(
+        buildRuntime(normalInput, successfulPublicationCommand),
+        normalTimeouts,
+      ),
+    );
+
+    expect(
+      normalTimeouts
+        .filter(
+          ({ executable, args }) =>
+            executable === "docker" && args[0] === "buildx",
+        )
+        .map(({ milliseconds }) => milliseconds),
+    ).toEqual([30 * 60_000]);
+    expect(
+      normalTimeouts
+        .filter(
+          ({ executable, args }) =>
+            executable === "docker" &&
+            (args[0] === "run" ||
+              args[0] === "exec" ||
+              (args[0] === "rm" && args[1] === "--force")),
+        )
+        .map(({ milliseconds }) => milliseconds),
+    ).toEqual([30_000, 30_000, 30_000]);
+    expect(
+      normalTimeouts
+        .filter(
+          ({ executable, args }) =>
+            executable === "bunx" &&
+            args[0] === "wrangler" &&
+            args[1] === "containers" &&
+            args[2] === "push",
+        )
+        .map(({ milliseconds }) => milliseconds),
+    ).toEqual([15 * 60_000]);
+    expect(
+      normalTimeouts
+        .filter(
+          ({ executable }) => executable === "curl" || executable === "cosign",
+        )
+        .every(({ milliseconds }) => milliseconds === 2 * 60_000),
+    ).toBeTrue();
+    expect(
+      normalTimeouts
+        .filter(
+          ({ executable, args }) =>
+            executable === "docker" &&
+            (args[0] === "image" || args[0] === "manifest"),
+        )
+        .every(({ milliseconds }) => milliseconds === 2 * 60_000),
+    ).toBeTrue();
+  } finally {
+    timeoutSpy.mockRestore();
+  }
+});
+
+test("one authenticated candidate can be consumed by sequential releases on the same Docker host", async () => {
+  const input = fixture();
+  writeCandidateArtifacts(input);
+  const observed: string[][] = [];
+  const imageStore = candidateLocalImageStore();
+  const runtime = buildRuntime(
+    input,
+    successfulCandidatePublicationCommand,
+    observed,
+    imageStore.command,
+  );
+  const first = await runRunnerImageRelease(candidateBuildOptions(input), {
+    ...runtime,
+    nonce: () => "01".repeat(16),
+  });
+  const second = await runRunnerImageRelease(
+    { ...candidateBuildOptions(input), release: "release-2" },
+    { ...runtime, nonce: () => "02".repeat(16) },
+  );
+
+  expect(first).toMatchObject({ status: "published", release: "release-1" });
+  expect(second).toMatchObject({ status: "published", release: "release-2" });
+  expect(imageStore.hasFixedTag()).toBeFalse();
+  expect(imageStore.removals()).toBe(2);
+  expect(
+    observed.filter(
+      (command) =>
+        command[0] === "docker" &&
+        command[1] === "image" &&
+        command[2] === "load",
+    ),
+  ).toHaveLength(2);
+});
+
+test("post-load prepublication failure cleans the fixed tag and permits exact retry", async () => {
+  const input = fixture();
+  writeCandidateArtifacts(input);
+  const observed: string[][] = [];
+  const imageStore = candidateLocalImageStore();
+  const runtime = buildRuntime(
+    input,
+    successfulCandidatePublicationCommand,
+    observed,
+    imageStore.command,
+  );
+  imageStore.failNextTransportInspection();
+  await expect(
+    runRunnerImageRelease(candidateBuildOptions(input), {
+      ...runtime,
+      nonce: () => "01".repeat(16),
+    }),
+  ).rejects.toThrow("failed before publication");
+  expect(readFileSync(input.state, "utf8")).toBe("");
+  expect(imageStore.hasFixedTag()).toBeFalse();
+  expect(imageStore.removals()).toBe(1);
+
+  await expect(
+    runRunnerImageRelease(candidateBuildOptions(input), {
+      ...runtime,
+      nonce: () => "02".repeat(16),
+    }),
+  ).resolves.toMatchObject({ status: "published" });
+  expect(imageStore.hasFixedTag()).toBeFalse();
+  expect(imageStore.removals()).toBe(2);
+});
+
+test("candidate cleanup preserves an identity-swapped tag and refuses before publication", async () => {
+  const input = fixture();
+  writeCandidateArtifacts(input);
+  const observed: string[][] = [];
+  const imageStore = candidateLocalImageStore();
+  imageStore.swapCandidateBeforeCleanup();
+  await expect(
+    runRunnerImageRelease(candidateBuildOptions(input), {
+      ...buildRuntime(
+        input,
+        successfulCandidatePublicationCommand,
+        observed,
+        imageStore.command,
+      ),
+    }),
+  ).rejects.toThrow("runner_image_native_candidate_local_tag_cleanup_failed");
+  expect(readFileSync(input.state, "utf8")).toBe("");
+  expect(imageStore.hasFixedTag()).toBeTrue();
+  expect(imageStore.fixedTagIdentity()).toMatchObject({
+    Id: `sha256:${"e".repeat(64)}`,
+  });
+  expect(imageStore.removals()).toBe(0);
+  expect(
+    observed.some(
+      (command) =>
+        command[0] === "bunx" ||
+        (command[0] === "docker" && command[1] === "manifest"),
+    ),
+  ).toBeFalse();
+});
+
+test("candidate provenance failures stop before Docker load, publication journal append, or registry access", async () => {
+  for (const failure of [
+    "wrong repository",
+    "wrong source SHA",
+    "wrong signer workflow",
+    "self-hosted runner",
+    "malformed bundle",
+  ]) {
+    const input = fixture();
+    writeCandidateArtifacts(input);
+    const observed: string[][] = [];
+    await expect(
+      runRunnerImageRelease(candidateBuildOptions(input), {
+        ...buildRuntime(
+          input,
+          async (executable, args) => {
+            if (executable === "gh" && args[0] === "attestation") {
+              return failure === "malformed bundle"
+                ? { exitCode: 0, stdout: "not-json", stderr: "" }
+                : { exitCode: 1, stdout: "", stderr: failure };
+            }
+            throw new Error(`unexpected command: ${executable} ${args.join(" ")}`);
+          },
+          observed,
+        ),
+      }),
+    ).rejects.toThrow();
+    expect(readFileSync(input.state, "utf8")).toBe("");
+    expect(
+      observed.some(
+        (command) =>
+          (command[0] === "docker" &&
+            (command[1] === "manifest" || command[2] === "load")) ||
+          (command[0] === "bunx" && command.includes("push")),
+      ),
+    ).toBeFalse();
+  }
+});
+
+test("candidate source, archive, record, platform, and loaded descriptor mismatches never start publication", async () => {
+  const cases = [
+    {
+      name: "repository",
+      record: { repository: "https://github.com/example/forged.git" },
+    },
+    {
+      name: "source authority",
+      record: { repository: "https://github.com/TAKO0614/takosumi.git" },
+    },
+    { name: "source sha", record: { commit: "8".repeat(40) } },
+    { name: "source tree", record: { treeSha256: `sha256:${"7".repeat(64)}` } },
+    {
+      name: "Dockerfile",
+      record: { dockerfileSha256: `sha256:${"6".repeat(64)}` },
+    },
+    { name: "archive", record: { archiveSha256: `sha256:${"5".repeat(64)}` } },
+    { name: "platform", record: { architecture: "arm64" } },
+    {
+      name: "media type",
+      record: {
+        descriptorMediaType: "application/vnd.oci.image.manifest.v1+json",
+      },
+    },
+    {
+      name: "descriptor",
+      record: { descriptorDigest: `sha256:${"4".repeat(64)}` },
+    },
+  ] as const;
+  for (const testCase of cases) {
+    const input = fixture();
+    writeCandidateArtifacts(input, testCase.record);
+    const observed: string[][] = [];
+    await expect(
+      runRunnerImageRelease(candidateBuildOptions(input), {
+        ...buildRuntime(
+          input,
+          async (executable, args) => {
+            if (executable === "gh" && args[0] === "attestation") {
+              return {
+                exitCode: 0,
+                stdout: JSON.stringify([
+                  {
+                    attestation: { bundle: "same-candidate-attestation" },
+                    verificationResult: { statement: { subject: [{}] } },
+                  },
+                ]),
+                stderr: "",
+              };
+            }
+            if (
+              executable === "docker" &&
+              args[0] === "image" &&
+              args[1] === "load"
+            ) {
+              return { exitCode: 0, stdout: "", stderr: "" };
+            }
+            throw new Error(`unexpected command: ${executable} ${args.join(" ")}`);
+          },
+          observed,
+          (args) =>
+            args[2]?.startsWith("takosumi-runner-native-candidate:") &&
+            !observed.some(
+              (command) =>
+                command[0] === "docker" &&
+                command[1] === "image" &&
+                command[2] === "load",
+            )
+              ? {
+                  exitCode: 1,
+                  stdout: "",
+                  stderr: `No such image: ${args[2]}`,
+                }
+              : {
+                  exitCode: 0,
+                  stdout: JSON.stringify({
+                    Id: `sha256:${"d".repeat(64)}`,
+                    Descriptor: {
+                      digest: `sha256:${"d".repeat(64)}`,
+                      mediaType:
+                        "application/vnd.docker.distribution.manifest.v2+json",
+                    },
+                    Os: "linux",
+                    Architecture: "amd64",
+                  }),
+                  stderr: "",
+                },
+        ),
+      }),
+    ).rejects.toThrow();
+    expect(readFileSync(input.state, "utf8"), testCase.name).toBe("");
+    expect(
+      observed.some(
+        (command) =>
+          command[0] === "bunx" ||
+          (command[0] === "docker" && command[1] === "manifest"),
+      ),
+      testCase.name,
+    ).toBeFalse();
+  }
+});
+
+test("candidate custody mutation and a cached candidate tag are refused before load", async () => {
+  for (const scenario of [
+    "archive mutation",
+    "record mutation",
+    "attestation mutation",
+    "cached tag",
+  ] as const) {
+    const input = fixture();
+    writeCandidateArtifacts(input);
+    const observed: string[][] = [];
+    await expect(
+      runRunnerImageRelease(candidateBuildOptions(input), {
+        ...buildRuntime(
+          input,
+          async (executable, args) => {
+            if (executable === "gh" && args[0] === "attestation") {
+              const subject = args[2]!;
+              if (scenario === "archive mutation" && basename(subject) === "runner-image.tar") {
+                writeFileSync(subject, "replaced after verification\n");
+                chmodSync(subject, 0o600);
+              }
+              if (scenario === "record mutation" && basename(subject) === "candidate.json") {
+                writeFileSync(subject, '{"replaced":true}\n');
+                chmodSync(subject, 0o600);
+              }
+              if (scenario === "attestation mutation") {
+                const bundle = args[args.indexOf("--bundle") + 1]!;
+                writeFileSync(bundle, '{"replaced":true}\n');
+                chmodSync(bundle, 0o600);
+              }
+              return {
+                exitCode: 0,
+                stdout: JSON.stringify([
+                  {
+                    attestation: { bundle: "same-candidate-attestation" },
+                    verificationResult: { statement: { subject: [{}] } },
+                  },
+                ]),
+                stderr: "",
+              };
+            }
+            throw new Error(`unexpected command: ${executable} ${args.join(" ")}`);
+          },
+          observed,
+          (args) =>
+            scenario === "cached tag"
+              ? {
+                  exitCode: 0,
+                  stdout: JSON.stringify({
+                    Id: `sha256:${"d".repeat(64)}`,
+                    Descriptor: {
+                      digest: `sha256:${"d".repeat(64)}`,
+                      mediaType:
+                        "application/vnd.docker.distribution.manifest.v2+json",
+                    },
+                    Os: "linux",
+                    Architecture: "amd64",
+                  }),
+                  stderr: "",
+                }
+              : {
+                  exitCode: 1,
+                  stdout: "",
+                  stderr: `No such image: ${args[2]}`,
+                },
+        ),
+      }),
+    ).rejects.toThrow();
+    expect(readFileSync(input.state, "utf8")).toBe("");
+    expect(
+      observed.some(
+        (command) =>
+          command[0] === "docker" &&
+          command[1] === "image" &&
+          command[2] === "load",
+      ),
+    ).toBeFalse();
+  }
+});
+
+test("candidate handoff requires physical private distinct paths before any writable release preparation", async () => {
+  for (const scenario of ["wrong basename", "public mode", "hardlink alias"] as const) {
+    const input = fixture();
+    writeCandidateArtifacts(input);
+    let options = candidateBuildOptions(input);
+    if (scenario === "wrong basename") {
+      const renamed = join(input.operator, "renamed-image.tar");
+      renameSync(input.candidateImage, renamed);
+      options = { ...options, candidateImage: renamed };
+    } else if (scenario === "public mode") {
+      chmodSync(input.candidateImage, 0o644);
+    } else {
+      rmSync(input.candidateRecord);
+      linkSync(input.candidateImage, input.candidateRecord);
+    }
+    const journalRoot = join(input.operator, "candidate-publication-journal");
+    let commands = 0;
+    let materializations = 0;
+    await expect(
+      runRunnerImageRelease(options, {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+        nonce: () => "01".repeat(16),
+        accountId: "b".repeat(32),
+        publicationJournalRoot: journalRoot,
+        materializeSource: async () => {
+          materializations += 1;
+          throw new Error("invalid candidate path reached materialization");
+        },
+        command: async () => {
+          commands += 1;
+          throw new Error("invalid candidate path reached child command");
+        },
+      }),
+    ).rejects.toThrow();
+    expect(commands, scenario).toBe(0);
+    if (scenario === "hardlink alias") {
+      expect(materializations, scenario).toBe(0);
+      expect(existsSync(journalRoot), scenario).toBeFalse();
+      expect(existsSync(input.state), scenario).toBeFalse();
+    }
+  }
+});
+
+test("candidate paths cannot alias config, source pin, evidence, state, or publication coordination", async () => {
+  for (const alias of [
+    "config",
+    "source pin",
+    "evidence",
+    "state",
+    "publication locator",
+    "publication lock",
+  ] as const) {
+    const input = fixture();
+    writeCandidateArtifacts(input);
+    const journalRoot = join(input.operator, "candidate-alias-coordination");
+    const coordination = publicationCoordinationPaths(journalRoot);
+    const options = {
+      ...candidateBuildOptions(input),
+      ...(alias === "config" ? { candidateImage: input.config } : {}),
+      ...(alias === "source pin" ? { candidateRecord: input.sourcePin } : {}),
+      ...(alias === "evidence" ? { candidateAttestation: input.evidence } : {}),
+      ...(alias === "state" ? { candidateImage: input.state } : {}),
+      ...(alias === "publication locator"
+        ? { candidateRecord: coordination.locator }
+        : {}),
+      ...(alias === "publication lock"
+        ? { candidateAttestation: coordination.lock }
+        : {}),
+    };
+    let commands = 0;
+    let materializations = 0;
+    await expect(
+      runRunnerImageRelease(options, {
+        repositoryRoot: input.repository,
+        git: gitFor("fix/TASK-0032-runner-image"),
+        nonce: () => "01".repeat(16),
+        accountId: "b".repeat(32),
+        publicationJournalRoot: journalRoot,
+        materializeSource: async () => {
+          materializations += 1;
+          throw new Error("candidate alias reached materialization");
+        },
+        command: async () => {
+          commands += 1;
+          throw new Error("candidate alias reached child command");
+        },
+      }),
+    ).rejects.toThrow("runner_image_release_path_alias");
+    expect(commands, alias).toBe(0);
+    expect(materializations, alias).toBe(0);
+    expect(existsSync(journalRoot), alias).toBeFalse();
+    expect(existsSync(input.evidence), alias).toBeFalse();
+    expect(existsSync(input.state), alias).toBeFalse();
+  }
+});
+
+test("missing bundle, malformed record, and split attestations stop before Docker or publication", async () => {
+  for (const scenario of ["missing bundle", "malformed record", "split attestations"] as const) {
+    const input = fixture();
+    writeCandidateArtifacts(input);
+    if (scenario === "missing bundle") rmSync(input.candidateAttestation);
+    if (scenario === "malformed record") {
+      writePrivate(input.candidateRecord, '{"unexpected":true}\n');
+    }
+    const observed: string[][] = [];
+    await expect(
+      runRunnerImageRelease(candidateBuildOptions(input), {
+        ...buildRuntime(
+          input,
+          async (executable, args) => {
+            if (executable === "gh" && args[0] === "attestation") {
+              return {
+                exitCode: 0,
+                stdout: JSON.stringify([
+                  {
+                    attestation: {
+                      bundle: scenario === "split attestations"
+                        ? basename(args[2]!)
+                        : "same-candidate-attestation",
+                    },
+                    verificationResult: { statement: { subject: [{}] } },
+                  },
+                ]),
+                stderr: "",
+              };
+            }
+            throw new Error(`unexpected command: ${executable} ${args.join(" ")}`);
+          },
+          observed,
+        ),
+      }),
+    ).rejects.toThrow();
+    if (existsSync(input.state)) expect(readFileSync(input.state, "utf8")).toBe("");
+    expect(
+      observed.some(
+        (command) =>
+          command[0] === "docker" ||
+          command[0] === "bunx",
+      ),
+      scenario,
+    ).toBeFalse();
+  }
+});
+
+test("candidate post-push descriptor mismatch remains an unknown publication outcome", async () => {
+  const input = fixture();
+  writeCandidateArtifacts(input);
+  const observed: string[][] = [];
+  const imageStore = candidateLocalImageStore();
+  await expect(
+    runRunnerImageRelease(candidateBuildOptions(input), {
+      ...buildRuntime(
+        input,
+        async (executable, args) => {
+          if (executable === "gh" && args[0] === "attestation") {
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify([
+                {
+                  attestation: { bundle: "same-candidate-attestation" },
+                  verificationResult: { statement: { subject: [{}] } },
+                },
+              ]),
+              stderr: "",
+            };
+          }
+          if (
+            executable === "bunx" &&
+            args[0] === "wrangler" &&
+            args[1] === "containers" &&
+            args[2] === "push"
+          ) {
+            return { exitCode: 0, stdout: `Pushed image: ${TRANSPORT_REF}\n`, stderr: "" };
+          }
+          if (executable === "docker" && args[0] === "manifest") {
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                Descriptor: {
+                  mediaType:
+                    "application/vnd.docker.distribution.manifest.v2+json",
+                  digest: `sha256:${"e".repeat(64)}`,
+                  platform: { os: "linux", architecture: "amd64" },
+                },
+                SchemaV2Manifest: {
+                  schemaVersion: 2,
+                  mediaType:
+                    "application/vnd.docker.distribution.manifest.v2+json",
+                  config: { digest: `sha256:${"f".repeat(64)}` },
+                },
+              }),
+              stderr: "",
+            };
+          }
+          throw new Error(`unexpected command: ${executable} ${args.join(" ")}`);
+        },
+        observed,
+        imageStore.command,
+      ),
+    }),
+  ).rejects.toThrow("publication outcome is incomplete");
+  expect(readFileSync(input.state, "utf8")).toContain(
+    '"status":"publication-started"',
+  );
+  const failure = JSON.parse(readFileSync(input.evidence, "utf8"));
+  expect(failure).toMatchObject({
+    status: "publication-incomplete",
+    mutationOutcome: "unknown",
+    diagnostic: { message: "runner_image_remote_content_mismatch" },
+  });
+  expect(
+    observed.some(
+      (command) =>
+        command[0] === "docker" &&
+        (command[1] === "buildx" || command[1] === "run" || command[1] === "exec"),
+    ),
+  ).toBeFalse();
+  expect(imageStore.hasFixedTag()).toBeFalse();
 });
 
 test("build publishes linux amd64 with generated transport identity and records remote digest", async () => {

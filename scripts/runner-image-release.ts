@@ -31,6 +31,21 @@ import {
 } from "./runner-image-release-contract.ts";
 import { lineageVerdict } from "./lib/deploy-lineage.ts";
 import {
+  DOCKER_SCHEMA2_MANIFEST_MEDIA_TYPE,
+  githubRepositoryFromRemote,
+  materializeRunnerSource,
+  OCI_IMAGE_MANIFEST_MEDIA_TYPE,
+  parseRunnerImageNativeCandidateRecord,
+  parseLocalRunnerImageIdentity,
+  proveRunnerImageHardenedNative,
+  RUNNER_BOOT_SMOKE_OUTPUT_MAX_BYTES,
+  RUNNER_IMAGE_NATIVE_CANDIDATE_ARCHIVE_MAX_BYTES,
+  verifyRunnerOpenTofuSigstore,
+  type LocalRunnerImageIdentity,
+  type MaterializedRunnerSource,
+  type RunnerImageNativeCandidateRecord,
+} from "./lib/runner-image-native-proof.ts";
+import {
   injectPlatformSourcePaths,
   platformReleaseSourceAuthorityDigest,
   resolvePlatformReleaseSourceAuthority,
@@ -50,6 +65,9 @@ export type RunnerImageReleaseOptions = Readonly<{
   state?: string;
   buildEvidence?: string;
   platformEvidence?: string;
+  candidateImage?: string;
+  candidateRecord?: string;
+  candidateAttestation?: string;
   review?: string;
   execute: boolean;
 }>;
@@ -235,10 +253,6 @@ const TRANSPORT_REF =
   /^registry\.cloudflare\.com\/[0-9a-f]{32}\/takosumi-runner:[a-z0-9][a-z0-9._-]{0,127}$/u;
 const RELEASE_LABEL = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
-const DOCKER_SCHEMA2_MANIFEST_MEDIA_TYPE =
-  "application/vnd.docker.distribution.manifest.v2+json";
-const OCI_IMAGE_MANIFEST_MEDIA_TYPE =
-  "application/vnd.oci.image.manifest.v1+json";
 const VERSION = /^[0-9a-f]{8}-[0-9a-f-]{27,}$/u;
 const WORKER_NAMES = {
   staging: "takosumi-staging",
@@ -252,11 +266,6 @@ const RELEASE_COMMAND_TIMEOUT_MS = 2 * 60_000;
 const RELEASE_MUTATION_COMMAND_TIMEOUT_MS = 15 * 60_000;
 const RELEASE_BUILD_COMMAND_TIMEOUT_MS = 30 * 60_000;
 const RUNNER_BOOT_SMOKE_TIMEOUT_MS = 30_000;
-const RUNNER_BOOT_SMOKE_OUTPUT_MAX_BYTES = 4_096;
-const RUNNER_BOOT_SMOKE_MARKER = "takosumi-runner-boot-ok";
-const RUNNER_RUNTIME_INPUT_PLAN_VARIABLE =
-  "takosumi_runtime_inputs__probe";
-const RUNNER_RUNTIME_INPUT_PLAN_NAME = "PROBE_TOKEN";
 const COMMAND_TERMINATION_GRACE_MS = 5_000;
 
 export {
@@ -301,7 +310,7 @@ export type RunnerImageReleaseRuntime = Readonly<{
 export const RUNNER_IMAGE_RELEASE_USAGE = `Takosumi runner image release
 
 Usage:
-  bun run deploy -- takosumi-runner-image build --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --state <absolute-jsonl> --evidence <absolute-jsonl> [--review <review>] [--execute]
+  bun run deploy -- takosumi-runner-image build --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --state <absolute-jsonl> --evidence <absolute-jsonl> [--candidate-image <absolute-runner-image.tar> --candidate-record <absolute-candidate.json> --candidate-attestation <absolute-attestation.jsonl>] [--review <review>] [--execute]
   bun run deploy -- takosumi-runner-image reconcile --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --state <absolute-jsonl> --evidence <absolute-jsonl>
   bun run deploy -- takosumi-runner-image verify --config <absolute-wrangler.toml> --environment <staging|production> --release <label> --evidence <absolute-jsonl> --build-evidence <absolute-jsonl> --platform-evidence <absolute-json> [--review <review>] [--execute]
 
@@ -451,6 +460,9 @@ export function parseRunnerImageReleaseArgs(
     "state",
     "build-evidence",
     "platform-evidence",
+    "candidate-image",
+    "candidate-record",
+    "candidate-attestation",
     "review",
   ]);
   for (let index = 0; index < rest.length; index += 1) {
@@ -511,6 +523,28 @@ export function parseRunnerImageReleaseArgs(
   if (commandValue === "verify" && state !== undefined) {
     throw new Error("verify does not accept --state");
   }
+  const candidateImage = values.get("candidate-image")?.trim();
+  const candidateRecord = values.get("candidate-record")?.trim();
+  const candidateAttestation = values.get("candidate-attestation")?.trim();
+  const candidateCount = [
+    "candidate-image",
+    "candidate-record",
+    "candidate-attestation",
+  ].filter((name) => values.has(name)).length;
+  if (
+    candidateCount !== 0 &&
+    (candidateCount !== 3 ||
+      !candidateImage ||
+      !candidateRecord ||
+      !candidateAttestation)
+  ) {
+    throw new Error(
+      "candidate image, record, and attestation are required together",
+    );
+  }
+  if (candidateCount === 3 && (commandValue !== "build" || !execute)) {
+    throw new Error("candidate inputs are accepted only by executing build");
+  }
   return {
     command: commandValue,
     config: required("config"),
@@ -520,6 +554,9 @@ export function parseRunnerImageReleaseArgs(
     ...(state ? { state } : {}),
     ...(buildEvidence ? { buildEvidence } : {}),
     ...(platformEvidence ? { platformEvidence } : {}),
+    ...(candidateImage ? { candidateImage } : {}),
+    ...(candidateRecord ? { candidateRecord } : {}),
+    ...(candidateAttestation ? { candidateAttestation } : {}),
     ...(review ? { review } : {}),
     execute,
   };
@@ -529,6 +566,7 @@ export async function runRunnerImageRelease(
   options: RunnerImageReleaseOptions,
   runtime: RunnerImageReleaseRuntime = {},
 ): Promise<unknown> {
+  assertRunnerImageCandidateOptions(options);
   if (options.execute && !options.review?.trim()) {
     throw new Error("--execute requires --review");
   }
@@ -577,6 +615,15 @@ export async function runRunnerImageRelease(
     ...(options.buildEvidence ? { buildEvidence: options.buildEvidence } : {}),
     ...(options.platformEvidence
       ? { platformEvidence: options.platformEvidence }
+      : {}),
+    ...(options.candidateImage
+      ? { candidateImage: options.candidateImage }
+      : {}),
+    ...(options.candidateRecord
+      ? { candidateRecord: options.candidateRecord }
+      : {}),
+    ...(options.candidateAttestation
+      ? { candidateAttestation: options.candidateAttestation }
       : {}),
     ...(publicationJournal ? { publicationJournal } : {}),
   });
@@ -778,48 +825,62 @@ async function buildRunnerImage(
       mode: 0o600,
       flag: "wx",
     });
-    await verifyOpenTofuSigstore(
-      new TextDecoder("utf-8", { fatal: true }).decode(dockerfileSource),
-      workspace,
-      command,
-      context.repository.root,
-    );
-    await checkedCommand(
-      command,
-      "docker",
-      [
-        "buildx",
-        "build",
-        "--load",
-        "--platform",
-        "linux/amd64",
-        "--file",
-        sealedDockerfile,
-        "--tag",
+    let localIdentity: LocalRunnerImageIdentity;
+    const candidate = runnerImageCandidateInputs(options);
+    if (candidate) {
+      localIdentity = await consumeRunnerImageNativeCandidate(
+        candidate,
+        context,
+        materialized,
         localTag,
-        sealedSource,
-      ],
-      workspace,
-    );
-    if (
-      JSON.stringify(dashboardAssetTreeSeal(sealedSource)) !==
-      JSON.stringify(buildContext)
-    ) {
-      throw new Error("runner_image_sealed_source_drift");
+        command,
+        workspace,
+        sourceRoots,
+      );
+    } else {
+      await verifyRunnerOpenTofuSigstore(
+        new TextDecoder("utf-8", { fatal: true }).decode(dockerfileSource),
+        workspace,
+        command,
+        context.repository.root,
+      );
+      await checkedCommand(
+        command,
+        "docker",
+        [
+          "buildx",
+          "build",
+          "--load",
+          "--platform",
+          "linux/amd64",
+          "--file",
+          sealedDockerfile,
+          "--tag",
+          localTag,
+          sealedSource,
+        ],
+        workspace,
+      );
+      if (
+        JSON.stringify(dashboardAssetTreeSeal(sealedSource)) !==
+        JSON.stringify(buildContext)
+      ) {
+        throw new Error("runner_image_sealed_source_drift");
+      }
+      const localImage = await checkedCommand(
+        command,
+        "docker",
+        ["image", "inspect", localTag, "--format", "{{json .}}"],
+        workspace,
+      );
+      localIdentity = parseLocalRunnerImageIdentity(localImage.stdout);
+      await proveRunnerImageHardenedNative(
+        localIdentity,
+        transportTag,
+        command,
+        workspace,
+      );
     }
-    const localImage = await checkedCommand(
-      command,
-      "docker",
-      ["image", "inspect", localTag, "--format", "{{json .}}"],
-      workspace,
-    );
-    const localIdentity = parseLocalRunnerImageIdentity(localImage.stdout);
-    await assertRunnerImageBootSmoke(
-      localIdentity.imageId,
-      transportTag,
-      command,
-      workspace,
-    );
     const runtimeInputPlanProof = runnerImageRuntimeInputPlanProof(
       `${imageRepository}@${localIdentity.descriptorDigest}`,
     );
@@ -845,7 +906,7 @@ async function buildRunnerImage(
       image: {
         transportTag,
         transportRef: remoteRef,
-        localImageId: localIdentity.imageId,
+        localImageId: localIdentity.localImageId,
         localDescriptorDigest: localIdentity.descriptorDigest,
       },
       runtimeInputPlanProof,
@@ -997,70 +1058,531 @@ async function buildRunnerImage(
   }
 }
 
-type MaterializedRunnerSource = Readonly<{
-  sourceRoot: string;
-  dockerfilePath: string;
-  dockerfileSource: Uint8Array;
-  dockerfileSha256: string;
-  buildContext: ReturnType<typeof dashboardAssetTreeSeal>;
+type RunnerImageCandidateInputs = Readonly<{
+  image: string;
+  record: string;
+  attestation: string;
 }>;
 
-async function materializeRunnerSource(
-  repositoryRoot: string,
-  commit: string,
-  workspace: string,
-  command: NonNullable<RunnerImageReleaseRuntime["command"]>,
-  materializeSource: RunnerImageReleaseRuntime["materializeSource"],
-): Promise<MaterializedRunnerSource> {
-  if (!/^[0-9a-f]{40}$/u.test(commit)) {
-    throw new Error("runner_image_sealed_source_mismatch");
-  }
-  const sourceRoot = join(workspace, "source");
-  await mkdir(sourceRoot, { mode: 0o700 });
-  if (materializeSource) {
-    await materializeSource(repositoryRoot, commit, sourceRoot);
-  } else {
-    const archive = join(workspace, "source.tar");
-    await checkedCommand(
-      command,
-      "git",
-      [
-        "--no-replace-objects",
-        "archive",
-        "--format=tar",
-        `--output=${archive}`,
-        commit,
-      ],
-      repositoryRoot,
+function assertRunnerImageCandidateOptions(
+  options: RunnerImageReleaseOptions,
+): void {
+  const candidate = runnerImageCandidateInputs(options);
+  const candidateCount = [
+    options.candidateImage,
+    options.candidateRecord,
+    options.candidateAttestation,
+  ].filter((value) => value !== undefined).length;
+  if (candidateCount !== 0 && candidateCount !== 3) {
+    throw new Error(
+      "candidate image, record, and attestation are required together",
     );
-    await checkedCommand(
+  }
+  if (candidate !== null && (options.command !== "build" || !options.execute)) {
+    throw new Error("candidate inputs are accepted only by executing build");
+  }
+}
+
+function runnerImageCandidateInputs(
+  options: RunnerImageReleaseOptions,
+): RunnerImageCandidateInputs | null {
+  if (
+    options.candidateImage === undefined ||
+    options.candidateRecord === undefined ||
+    options.candidateAttestation === undefined
+  ) {
+    return null;
+  }
+  return {
+    image: options.candidateImage,
+    record: options.candidateRecord,
+    attestation: options.candidateAttestation,
+  };
+}
+
+async function consumeRunnerImageNativeCandidate(
+  candidate: RunnerImageCandidateInputs,
+  context: ReleaseContext,
+  materialized: MaterializedRunnerSource,
+  localTag: string,
+  command: NonNullable<RunnerImageReleaseRuntime["command"]>,
+  workspace: string,
+  sourceRoots: readonly string[],
+): Promise<LocalRunnerImageIdentity> {
+  if (
+    basename(candidate.image) !== "runner-image.tar" ||
+    basename(candidate.record) !== "candidate.json" ||
+    basename(candidate.attestation) !== "attestation.jsonl"
+  ) {
+    throw new Error("runner_image_native_candidate_path_invalid");
+  }
+  const inputs = {
+    image: await canonicalEvidenceInput(candidate.image, sourceRoots),
+    record: await canonicalEvidenceInput(candidate.record, sourceRoots),
+    attestation: await canonicalEvidenceInput(
+      candidate.attestation,
+      sourceRoots,
+    ),
+  };
+  const custodyRoot = join(workspace, "candidate-custody");
+  await mkdir(custodyRoot, { mode: 0o700 });
+  const custody = {
+    record: await copyCandidateInputToCustody(
+      inputs.record,
+      join(custodyRoot, "candidate.json"),
+      "candidate record",
+      256 * 1024,
+    ),
+    attestation: await copyCandidateInputToCustody(
+      inputs.attestation,
+      join(custodyRoot, "attestation.jsonl"),
+      "candidate attestation",
+      16 * 1024 * 1024,
+    ),
+    image: await copyCandidateInputToCustody(
+      inputs.image,
+      join(custodyRoot, "runner-image.tar"),
+      "candidate archive",
+      RUNNER_IMAGE_NATIVE_CANDIDATE_ARCHIVE_MAX_BYTES,
+    ),
+  };
+  await syncPhysicalDirectory(custodyRoot);
+  const githubRepository = githubRepositoryFromRemote(
+    context.releaseSource.pin.repository,
+  );
+  const signerWorkflow =
+    `${githubRepository}/.github/workflows/runner-image-proof.yml`;
+  const verify = async (subject: string) => {
+    const result = await checkedCommand(
       command,
-      "tar",
+      "gh",
       [
-        "--extract",
-        "--file",
-        archive,
-        "--directory",
-        sourceRoot,
-        "--no-same-owner",
-        "--no-same-permissions",
+        "attestation",
+        "verify",
+        subject,
+        "--bundle",
+        custody.attestation.path,
+        "--repo",
+        githubRepository,
+        "--signer-workflow",
+        signerWorkflow,
+        "--signer-digest",
+        context.repository.commit,
+        "--source-digest",
+        context.repository.commit,
+        "--deny-self-hosted-runners",
+        "--format",
+        "json",
       ],
       workspace,
     );
-    await rm(archive);
-  }
-  const dockerfilePath = join(sourceRoot, "runner", "Dockerfile");
-  const dockerfileSource = await readStablePhysicalFile(
-    dockerfilePath,
-    "sealed Dockerfile",
-  );
-  return {
-    sourceRoot,
-    dockerfilePath,
-    dockerfileSource,
-    dockerfileSha256: sha256(dockerfileSource),
-    buildContext: dashboardAssetTreeSeal(sourceRoot),
+    return parseVerifiedCandidateAttestation(result.stdout);
   };
+  await assertCandidateCustodyUnchanged(custody.attestation, "candidate attestation");
+  await assertCandidateCustodyUnchanged(custody.record, "candidate record");
+  const recordAttestation = await verify(custody.record.path);
+  await assertCandidateCustodyUnchanged(custody.record, "candidate record");
+  await assertCandidateCustodyUnchanged(custody.attestation, "candidate attestation");
+  await assertCandidateCustodyUnchanged(custody.image, "candidate archive");
+  const imageAttestation = await verify(custody.image.path);
+  await assertCandidateCustodyUnchanged(custody.image, "candidate archive");
+  await assertCandidateCustodyUnchanged(custody.attestation, "candidate attestation");
+  if (recordAttestation !== imageAttestation) {
+    throw new Error("runner_image_native_candidate_attestation_mismatch");
+  }
+  const candidateRecordSource = await readCandidateCustodyFile(
+    custody.record,
+    "candidate record",
+  );
+  const record = parseRunnerImageNativeCandidateRecord(
+    new TextDecoder("utf-8", { fatal: true }).decode(
+      candidateRecordSource,
+    ),
+  );
+  assertRunnerImageNativeCandidateMatchesSource(record, context, materialized);
+  if (
+    record.archive.size !== custody.image.size ||
+    record.archive.sha256 !== custody.image.sha256
+  ) {
+    throw new Error("runner_image_native_candidate_archive_mismatch");
+  }
+  await assertCandidateCustodyUnchanged(custody.image, "candidate archive");
+  const prior = await command(
+    "docker",
+    ["image", "inspect", record.image.tag, "--format", "{{json .}}"],
+    workspace,
+  );
+  if (prior.exitCode === 0 || !isExactMissingLocalImage(prior, record.image.tag)) {
+    throw new Error("runner_image_native_candidate_local_tag_not_fresh");
+  }
+  let candidateTagMayExist = false;
+  try {
+    // Docker load can leave the archive's fixed source tag behind even when it
+    // exits nonzero, so cleanup authority starts immediately before the call.
+    candidateTagMayExist = true;
+    await checkedCommand(
+      command,
+      "docker",
+      [
+        "image",
+        "load",
+        "--platform",
+        "linux/amd64",
+        "--input",
+        custody.image.path,
+      ],
+      workspace,
+    );
+    await assertCandidateCustodyUnchanged(custody.image, "candidate archive");
+    const loaded = await inspectCandidateLocalImage(
+      record.image.tag,
+      command,
+      workspace,
+    );
+    assertCandidateLocalIdentity(record, loaded);
+    await checkedCommand(
+      command,
+      "docker",
+      ["image", "tag", record.image.tag, localTag],
+      workspace,
+    );
+    const retagged = await inspectCandidateLocalImage(
+      localTag,
+      command,
+      workspace,
+    );
+    assertCandidateLocalIdentity(record, retagged);
+    const cleanupError = await removeExactCandidateLocalTag(
+      record,
+      command,
+      workspace,
+    );
+    if (cleanupError !== null) {
+      throw new Error("runner_image_native_candidate_local_tag_cleanup_failed", {
+        cause: cleanupError,
+      });
+    }
+    candidateTagMayExist = false;
+    return retagged;
+  } catch (error) {
+    if (candidateTagMayExist) {
+      const cleanupError = await removeExactCandidateLocalTag(
+        record,
+        command,
+        workspace,
+      );
+      if (cleanupError !== null) {
+        throw new Error(
+          "runner_image_native_candidate_local_tag_cleanup_failed",
+          { cause: new AggregateError([error, cleanupError]) },
+        );
+      }
+    }
+    throw error;
+  }
+}
+
+function assertRunnerImageNativeCandidateMatchesSource(
+  record: RunnerImageNativeCandidateRecord,
+  context: ReleaseContext,
+  materialized: MaterializedRunnerSource,
+): void {
+  const trustedRepository = githubRepositoryFromRemote(
+    context.releaseSource.pin.repository,
+  );
+  const candidateRepository = githubRepositoryFromRemote(
+    record.source.repository,
+  );
+  if (
+    candidateRepository.toLowerCase() !== trustedRepository.toLowerCase() ||
+    record.source.authoritySha256 !== context.releaseSource.authoritySha256 ||
+    record.source.commit !== context.repository.commit ||
+    record.source.treeSha256 !== materialized.buildContext.digest ||
+    record.source.dockerfileSha256 !== materialized.dockerfileSha256
+  ) {
+    throw new Error("runner_image_native_candidate_source_mismatch");
+  }
+  if (
+    JSON.stringify(dashboardAssetTreeSeal(materialized.sourceRoot)) !==
+    JSON.stringify(materialized.buildContext)
+  ) {
+    throw new Error("runner_image_sealed_source_drift");
+  }
+}
+
+function parseVerifiedCandidateAttestation(source: string): string {
+  let value: unknown;
+  try {
+    value = JSON.parse(source) as unknown;
+  } catch {
+    throw new Error("runner_image_native_candidate_attestation_output_invalid");
+  }
+  if (
+    !Array.isArray(value) ||
+    value.length !== 1 ||
+    !isRecord(value[0]) ||
+    !isRecord(value[0].attestation) ||
+    !isRecord(value[0].verificationResult)
+  ) {
+    throw new Error("runner_image_native_candidate_attestation_output_invalid");
+  }
+  return sha256(JSON.stringify(value[0].attestation));
+}
+
+type CandidateCustodyFile = Readonly<{
+  path: string;
+  size: number;
+  sha256: string;
+  identity: BigIntStats;
+}>;
+
+async function copyCandidateInputToCustody(
+  source: string,
+  destination: string,
+  label: string,
+  maximumBytes: number,
+): Promise<CandidateCustodyFile> {
+  const sourcePath = await lstat(source, { bigint: true });
+  if (
+    sourcePath.isSymbolicLink() ||
+    !sourcePath.isFile() ||
+    sourcePath.nlink !== 1n ||
+    sourcePath.size <= 0n ||
+    sourcePath.size > BigInt(maximumBytes) ||
+    (sourcePath.mode & 0o777n) !== 0o600n ||
+    (process.getuid && sourcePath.uid !== BigInt(process.getuid()))
+  ) {
+    throw new Error(`${label} is not a bounded operator-owned physical file`);
+  }
+  const input = await open(
+    source,
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+  );
+  let output: FileHandle | null = null;
+  try {
+    output = await open(
+      destination,
+      fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_WRONLY |
+        fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    const openedBefore = await input.stat({ bigint: true });
+    if (!samePhysicalFile(sourcePath, openedBefore)) {
+      throw new Error(`${label} changed while opening`);
+    }
+    const digest = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let offset = 0;
+    for (;;) {
+      const result = await input.read(buffer, 0, buffer.byteLength, offset);
+      if (result.bytesRead === 0) break;
+      const bytes = buffer.subarray(0, result.bytesRead);
+      let written = 0;
+      while (written < bytes.byteLength) {
+        const result = await output.write(
+          bytes,
+          written,
+          bytes.byteLength - written,
+          offset + written,
+        );
+        if (result.bytesWritten <= 0) {
+          throw new Error(`${label} custody write failed`);
+        }
+        written += result.bytesWritten;
+      }
+      digest.update(bytes);
+      offset += bytes.byteLength;
+    }
+    await output.sync();
+    const openedAfter = await input.stat({ bigint: true });
+    const sourceAfter = await lstat(source, { bigint: true });
+    if (
+      BigInt(offset) !== openedBefore.size ||
+      !Number.isSafeInteger(offset) ||
+      !samePhysicalFile(openedBefore, openedAfter) ||
+      !samePhysicalFile(openedAfter, sourceAfter)
+    ) {
+      throw new Error(`${label} changed while copying`);
+    }
+    const outputInfo = await output.stat({ bigint: true });
+    const destinationInfo = await lstat(destination, { bigint: true });
+    if (
+      !outputInfo.isFile() ||
+      outputInfo.nlink !== 1n ||
+      (outputInfo.mode & 0o777n) !== 0o600n ||
+      !samePhysicalFile(outputInfo, destinationInfo)
+    ) {
+      throw new Error(`${label} custody is invalid`);
+    }
+    return {
+      path: destination,
+      size: offset,
+      sha256: `sha256:${digest.digest("hex")}`,
+      identity: outputInfo,
+    };
+  } finally {
+    await Promise.allSettled([
+      input.close(),
+      ...(output === null ? [] : [output.close()]),
+    ]);
+  }
+}
+
+async function readCandidateCustodyFile(
+  custody: CandidateCustodyFile,
+  label: string,
+): Promise<Uint8Array> {
+  const bytes = await readStablePrivateFile(custody.path, `${label} custody`);
+  const pathAfter = await lstat(custody.path, { bigint: true });
+  if (
+    bytes.byteLength !== custody.size ||
+    sha256(bytes) !== custody.sha256 ||
+    !samePhysicalFile(custody.identity, pathAfter)
+  ) {
+    throw new Error(`${label} custody changed`);
+  }
+  return bytes;
+}
+
+async function assertCandidateCustodyUnchanged(
+  custody: CandidateCustodyFile,
+  label: string,
+): Promise<void> {
+  const current = await lstat(custody.path, { bigint: true });
+  if (
+    !samePhysicalFile(custody.identity, current) ||
+    (current.mode & 0o777n) !== 0o600n
+  ) {
+    throw new Error(`${label} custody changed`);
+  }
+  const descriptor = await open(
+    custody.path,
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+  );
+  try {
+    const before = await descriptor.stat({ bigint: true });
+    if (!samePhysicalFile(custody.identity, before)) {
+      throw new Error(`${label} custody changed`);
+    }
+    const digest = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let offset = 0;
+    for (;;) {
+      const result = await descriptor.read(buffer, 0, buffer.byteLength, offset);
+      if (result.bytesRead === 0) break;
+      digest.update(buffer.subarray(0, result.bytesRead));
+      offset += result.bytesRead;
+    }
+    const after = await descriptor.stat({ bigint: true });
+    const pathAfter = await lstat(custody.path, { bigint: true });
+    if (
+      offset !== custody.size ||
+      `sha256:${digest.digest("hex")}` !== custody.sha256 ||
+      !samePhysicalFile(before, after) ||
+      !samePhysicalFile(after, pathAfter)
+    ) {
+      throw new Error(`${label} custody changed`);
+    }
+  } finally {
+    await descriptor.close();
+  }
+}
+
+function isExactMissingLocalImage(
+  result: CommandResult,
+  image: string,
+): boolean {
+  if (result.exitCode !== 1) return false;
+  const diagnostic = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  return (
+    diagnostic.includes(image.toLowerCase()) &&
+    (diagnostic.includes("no such image") ||
+      diagnostic.includes("no such object"))
+  );
+}
+
+async function removeExactCandidateLocalTag(
+  record: RunnerImageNativeCandidateRecord,
+  command: NonNullable<RunnerImageReleaseRuntime["command"]>,
+  cwd: string,
+): Promise<unknown | null> {
+  try {
+    const before = await command(
+      "docker",
+      ["image", "inspect", record.image.tag, "--format", "{{json .}}"],
+      cwd,
+    );
+    if (isExactMissingLocalImage(before, record.image.tag)) return null;
+    if (before.exitCode !== 0) {
+      return new ReleaseCommandError(
+        releaseCommandLabel("docker", ["image", "inspect", record.image.tag]),
+        before,
+      );
+    }
+    let identity: LocalRunnerImageIdentity;
+    try {
+      identity = parseLocalRunnerImageIdentity(before.stdout);
+      assertCandidateLocalIdentity(record, identity);
+    } catch (error) {
+      return new Error(
+        "runner_image_native_candidate_local_tag_cleanup_identity_mismatch",
+        { cause: error },
+      );
+    }
+    const removed = await command(
+      "docker",
+      ["image", "rm", record.image.tag],
+      cwd,
+    );
+    if (removed.exitCode !== 0) {
+      return new ReleaseCommandError(
+        releaseCommandLabel("docker", ["image", "rm", record.image.tag]),
+        removed,
+      );
+    }
+    const after = await command(
+      "docker",
+      ["image", "inspect", record.image.tag, "--format", "{{json .}}"],
+      cwd,
+    );
+    if (!isExactMissingLocalImage(after, record.image.tag)) {
+      return new Error("runner_image_native_candidate_local_tag_cleanup_unconfirmed");
+    }
+    return null;
+  } catch (error) {
+    return error;
+  }
+}
+
+async function inspectCandidateLocalImage(
+  image: string,
+  command: NonNullable<RunnerImageReleaseRuntime["command"]>,
+  cwd: string,
+): Promise<LocalRunnerImageIdentity> {
+  const result = await checkedCommand(
+    command,
+    "docker",
+    ["image", "inspect", image, "--format", "{{json .}}"],
+    cwd,
+  );
+  return parseLocalRunnerImageIdentity(result.stdout);
+}
+
+function assertCandidateLocalIdentity(
+  record: RunnerImageNativeCandidateRecord,
+  identity: LocalRunnerImageIdentity,
+): void {
+  if (
+    record.image.localImageId !== identity.localImageId ||
+    record.image.descriptorDigest !== identity.descriptorDigest ||
+    record.image.descriptorMediaType !== identity.descriptorMediaType ||
+    record.image.platform.os !== identity.platform.os ||
+    record.image.platform.architecture !== identity.platform.architecture
+  ) {
+    throw new Error("runner_image_native_candidate_loaded_identity_mismatch");
+  }
 }
 
 function publicationAttemptMatchesReconciliationContext(
@@ -1351,277 +1873,6 @@ function isExactRemoteManifestAbsence(
   );
 }
 
-async function verifyOpenTofuSigstore(
-  dockerfileSource: string,
-  workspace: string,
-  command: NonNullable<RunnerImageReleaseRuntime["command"]>,
-  cwd: string,
-): Promise<void> {
-  const versionMatches = [
-    ...dockerfileSource.matchAll(/^ARG OPENTOFU_VERSION=([^\s]+)$/gmu),
-  ];
-  const checksumMatches = [
-    ...dockerfileSource.matchAll(/^ARG OPENTOFU_SHA256=([0-9a-f]{64})$/gmu),
-  ];
-  if (
-    versionMatches.length !== 1 ||
-    checksumMatches.length !== 1 ||
-    !/^\d+\.\d+\.\d+$/u.test(versionMatches[0]![1]!)
-  ) {
-    throw new Error("runner_image_opentofu_identity_invalid");
-  }
-  const version = versionMatches[0]![1]!;
-  const expectedChecksum = checksumMatches[0]![1]!;
-  const majorMinor = version.split(".").slice(0, 2).join(".");
-  const base = `https://github.com/opentofu/opentofu/releases/download/v${version}`;
-  const upstream = join(workspace, "opentofu-upstream");
-  await mkdir(upstream, { mode: 0o700 });
-  const sums = join(upstream, `tofu_${version}_SHA256SUMS`);
-  const signature = `${sums}.sig`;
-  const certificate = `${sums}.pem`;
-  for (const [url, output] of [
-    [`${base}/tofu_${version}_SHA256SUMS`, sums],
-    [`${base}/tofu_${version}_SHA256SUMS.sig`, signature],
-    [`${base}/tofu_${version}_SHA256SUMS.pem`, certificate],
-  ] as const) {
-    await checkedCommand(
-      command,
-      "curl",
-      [
-        "--fail",
-        "--silent",
-        "--show-error",
-        "--location",
-        "--proto",
-        "=https",
-        "--tlsv1.2",
-        "--output",
-        output,
-        url,
-      ],
-      cwd,
-    );
-  }
-  await checkedCommand(
-    command,
-    "cosign",
-    [
-      "verify-blob",
-      "--certificate-identity",
-      `https://github.com/opentofu/opentofu/.github/workflows/release.yml@refs/heads/v${majorMinor}`,
-      "--signature",
-      signature,
-      "--certificate",
-      certificate,
-      "--certificate-oidc-issuer",
-      "https://token.actions.githubusercontent.com",
-      sums,
-    ],
-    cwd,
-  );
-  const sumsSource = new TextDecoder("utf-8", { fatal: true }).decode(
-    await readStablePhysicalFile(sums, "OpenTofu checksums"),
-  );
-  const asset = `tofu_${version}_linux_amd64.zip`;
-  const matching = sumsSource
-    .split(/\r?\n/u)
-    .filter((line) => line === `${expectedChecksum}  ${asset}`);
-  if (matching.length !== 1) {
-    throw new Error("runner_image_opentofu_checksum_invalid");
-  }
-}
-
-function parseLocalRunnerImageIdentity(source: string): Readonly<{
-  imageId: string;
-  descriptorDigest: string;
-}> {
-  let value: unknown;
-  try {
-    value = JSON.parse(source.trim()) as unknown;
-  } catch {
-    throw new Error("runner_image_local_identity_invalid");
-  }
-  if (
-    !isRecord(value) ||
-    typeof value.Id !== "string" ||
-    !SHA256.test(value.Id) ||
-    !isRecord(value.Descriptor) ||
-    typeof value.Descriptor.digest !== "string" ||
-    !SHA256.test(value.Descriptor.digest) ||
-    (value.Descriptor.mediaType !== DOCKER_SCHEMA2_MANIFEST_MEDIA_TYPE &&
-      value.Descriptor.mediaType !== OCI_IMAGE_MANIFEST_MEDIA_TYPE) ||
-    value.Os !== "linux" ||
-    value.Architecture !== "amd64"
-  ) {
-    throw new Error("runner_image_local_identity_invalid");
-  }
-  return {
-    imageId: value.Id,
-    descriptorDigest: value.Descriptor.digest,
-  };
-}
-
-async function assertRunnerImageBootSmoke(
-  imageId: string,
-  transportTag: string,
-  command: NonNullable<RunnerImageReleaseRuntime["command"]>,
-  cwd: string,
-): Promise<void> {
-  const containerName = `takosumi-runner-boot-${transportTag}`;
-  const runId = `runner-release-proof-${transportTag}`;
-  const planRequest = runnerRuntimeInputPlanRequest(runId);
-  const childModuleSource = 'output "message" {\n  value = "runtime-input-plan-proof"\n}\n';
-  const smokeScript = [
-    `const marker=${JSON.stringify(RUNNER_BOOT_SMOKE_MARKER)};`,
-    `const runId=${JSON.stringify(runId)};`,
-    `const request=${JSON.stringify(planRequest)};`,
-    `const moduleSource=${JSON.stringify(childModuleSource)};`,
-    "let exitCode=1;",
-    "const controller=new AbortController();",
-    "const timer=setTimeout(()=>{controller.abort();process.exit(1);},25000);",
-    "try{",
-    'if(typeof process.getuid!=="function"||process.getuid()===0)throw new Error("nonprivileged runner required");',
-    "let response;",
-    "while(!controller.signal.aborted){",
-    'try{response=await fetch("http://127.0.0.1:8080/healthz",{signal:controller.signal});break;}catch{await Bun.sleep(25);}',
-    "}",
-    'if(!response)throw new Error("health unavailable");',
-    'if(response.status!==200)throw new Error("health status");',
-    "const body=await response.json();",
-    'if(!body||body.ok!==true||body.runner!=="opentofu")throw new Error("health payload");',
-    'const runRoot=(Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT||"/tmp/takosumi-runs")+"/"+runId+"/source";',
-    'const mkdir=Bun.spawn(["mkdir","-p",runRoot],{stdout:"ignore",stderr:"ignore"});',
-    'if(await mkdir.exited!==0)throw new Error("source preparation");',
-    'if(await Bun.write(runRoot+"/main.tf",moduleSource)!==new TextEncoder().encode(moduleSource).byteLength)throw new Error("source write");',
-    'const plan=await fetch("http://127.0.0.1:8080/runs/"+encodeURIComponent(runId),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(request),signal:controller.signal});',
-    'if(plan.status!==200)throw new Error("plan status");',
-    "const result=await plan.json();",
-    'if(!result||result.status!=="succeeded"||result.exitCode!==0||typeof result.planDigest!=="string"||result.planDigest.length===0)throw new Error("plan payload");',
-    "process.stdout.write(marker+'\\n');",
-    "exitCode=0;",
-    "}catch{}finally{clearTimeout(timer);}",
-    "process.exit(exitCode);",
-  ].join(" ");
-  let failed = false;
-  let failure: unknown;
-  try {
-    await checkedCommand(
-      command,
-      "docker",
-      [
-        "run",
-        "--detach",
-        "--pull=never",
-        "--rm",
-        "--network=none",
-        "--read-only",
-        "--name",
-        containerName,
-        "--tmpfs",
-        "/tmp:rw,noexec,nosuid,nodev,size=16m",
-        "--cap-drop=ALL",
-        "--security-opt",
-        "no-new-privileges",
-        imageId,
-      ],
-      cwd,
-    );
-    const result = await checkedCommand(
-      command,
-      "docker",
-      ["exec", containerName, "/usr/local/bin/bun", "-e", smokeScript],
-      cwd,
-    );
-    const output = `${result.stdout}\n${result.stderr}`.trim();
-    if (
-      Buffer.byteLength(output, "utf8") > RUNNER_BOOT_SMOKE_OUTPUT_MAX_BYTES ||
-      output.split(/\r?\n/u).at(-1) !== RUNNER_BOOT_SMOKE_MARKER
-    ) {
-      throw new Error("runner_image_boot_smoke_output_invalid");
-    }
-  } catch (error) {
-    failed = true;
-    failure = error;
-  }
-  const cleanupError = await cleanupRunnerImageBootSmoke(
-    containerName,
-    command,
-    cwd,
-  );
-  if (cleanupError !== null) {
-    throw new Error("runner_image_boot_smoke_cleanup_failed", {
-      cause: cleanupError,
-    });
-  }
-  if (failed) throw new Error("runner_image_boot_smoke_failed", { cause: failure });
-}
-
-function runnerRuntimeInputPlanRequest(runId: string): Readonly<Record<string, unknown>> {
-  return {
-    kind: "takosumi.opentofu-run@v1",
-    action: "plan",
-    runId,
-    requestedAt: "2026-09-05T00:00:00.000Z",
-    request: {
-      planRun: {
-        id: runId,
-        operation: "create",
-        source: {
-          kind: "git",
-          url: "https://proof.invalid/runner-runtime-input-plan.git",
-          commit: "0123456789abcdef0123456789abcdef01234567",
-        },
-      },
-      generatedRoot: {
-        files: {
-          "versions.tf": "terraform {}\n",
-          "variables.tf": [
-            `variable "${RUNNER_RUNTIME_INPUT_PLAN_VARIABLE}" {`,
-            "  type      = map(string)",
-            "  sensitive = true",
-            "  ephemeral = true",
-            "}",
-            "",
-          ].join("\n"),
-          "main.tf": 'module "child" {\n  source = "./module"\n}\n',
-          "outputs.tf": 'output "message" {\n  value = module.child.message\n}\n',
-        },
-      },
-      requiredProviders: [],
-      runnerProfile: {
-        id: "runner-release-runtime-input-plan-proof",
-        allowedProviders: [],
-        deniedProviders: [],
-        requireProviderBindings: false,
-      },
-      outputAllowlist: { message: { from: "message" } },
-      credentials: {
-        env: { [RUNNER_RUNTIME_INPUT_PLAN_NAME]: "runner-release-proof" },
-        manifest: {
-          bindings: [
-            {
-              providerSource: "registry.opentofu.org/example/probe",
-              connectionId: "conn_runner_release_probe",
-              recipeId: "runner-release-probe",
-              authMode: "token",
-              envNames: [RUNNER_RUNTIME_INPUT_PLAN_NAME],
-              fileEnvNames: [],
-              requiredEnvGroups: [[RUNNER_RUNTIME_INPUT_PLAN_NAME]],
-            },
-          ],
-        },
-        runtimeInputs: [
-          {
-            variableName: RUNNER_RUNTIME_INPUT_PLAN_VARIABLE,
-            names: [RUNNER_RUNTIME_INPUT_PLAN_NAME],
-            values: {},
-          },
-        ],
-      },
-    },
-  };
-}
-
 function runnerImageRuntimeInputPlanProof(
   image: string,
 ): RunnerImageRuntimeInputPlanProof {
@@ -1629,35 +1880,6 @@ function runnerImageRuntimeInputPlanProof(
     throw new Error("runner_image_runtime_input_plan_proof_invalid");
   }
   return { kind: RUNNER_IMAGE_RUNTIME_INPUT_PLAN_PROOF_KIND, image };
-}
-
-async function cleanupRunnerImageBootSmoke(
-  containerName: string,
-  command: NonNullable<RunnerImageReleaseRuntime["command"]>,
-  cwd: string,
-): Promise<unknown | null> {
-  try {
-    await checkedCommand(command, "docker", ["rm", "--force", containerName], cwd);
-    return null;
-  } catch (error) {
-    if (runnerBootSmokeContainerAbsent(error, containerName)) return null;
-    return error;
-  }
-}
-
-function runnerBootSmokeContainerAbsent(
-  error: unknown,
-  containerName: string,
-): boolean {
-  if (!(error instanceof ReleaseCommandError) || error.result.exitCode !== 1) {
-    return false;
-  }
-  const diagnostic = `${error.result.stdout}\n${error.result.stderr}`.toLowerCase();
-  return (
-    diagnostic.includes(containerName.toLowerCase()) &&
-    (diagnostic.includes("no such container") ||
-      diagnostic.includes("no such object"))
-  );
 }
 
 async function proveLegacyPublicationLocalIdentity(
@@ -1674,7 +1896,7 @@ async function proveLegacyPublicationLocalIdentity(
   );
   const localIdentity = parseLocalRunnerImageIdentity(localImage.stdout);
   if (
-    localIdentity.imageId !== attempt.image.localImageId ||
+    localIdentity.localImageId !== attempt.image.localImageId ||
     localIdentity.descriptorDigest !== attempt.image.localImageId
   ) {
     throw new Error("runner_image_legacy_local_identity_mismatch");
@@ -3159,6 +3381,26 @@ function releaseCommandTimeout(
   executable: string,
   args: readonly string[],
 ): number {
+  if (
+    executable === "gh" &&
+    args[0] === "attestation" &&
+    args[1] === "verify" &&
+    basename(args[2] ?? "") === "runner-image.tar" &&
+    args.includes("--bundle")
+  ) {
+    return RELEASE_BUILD_COMMAND_TIMEOUT_MS;
+  }
+  if (
+    executable === "docker" &&
+    args[0] === "image" &&
+    args[1] === "load" &&
+    args[2] === "--platform" &&
+    args[3] === "linux/amd64" &&
+    args[4] === "--input" &&
+    basename(args[5] ?? "") === "runner-image.tar"
+  ) {
+    return RELEASE_BUILD_COMMAND_TIMEOUT_MS;
+  }
   if (executable === "docker" && args[0] === "buildx") {
     return RELEASE_BUILD_COMMAND_TIMEOUT_MS;
   }
@@ -3634,6 +3876,9 @@ type RunnerImageReleasePathGraph = Readonly<{
   state?: string;
   buildEvidence?: string;
   platformEvidence?: string;
+  candidateImage?: string;
+  candidateRecord?: string;
+  candidateAttestation?: string;
   publicationJournal?: PublicationJournalIdentity;
 }>;
 
@@ -3661,6 +3906,33 @@ async function assertRunnerImageReleasePathGraph(
           {
             label: "platform-evidence",
             path: graph.platformEvidence,
+            callerOwned: true,
+          },
+        ]
+      : []),
+    ...(graph.candidateImage
+      ? [
+          {
+            label: "candidate-image",
+            path: graph.candidateImage,
+            callerOwned: true,
+          },
+        ]
+      : []),
+    ...(graph.candidateRecord
+      ? [
+          {
+            label: "candidate-record",
+            path: graph.candidateRecord,
+            callerOwned: true,
+          },
+        ]
+      : []),
+    ...(graph.candidateAttestation
+      ? [
+          {
+            label: "candidate-attestation",
+            path: graph.candidateAttestation,
             callerOwned: true,
           },
         ]
