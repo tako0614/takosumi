@@ -656,6 +656,145 @@ test.describe("Takosumi dashboard browser surface", () => {
     "public-live is an unauthenticated read-only profile",
   );
 
+  for (const change of ["none", "review", "applied"] as const) {
+    const title = change === "applied"
+      ? "refuses a failed initial Plan retry when another Apply commits before the click"
+      : change === "review"
+      ? "refuses a failed initial Plan retry when its reviewed source changes before the click"
+      : "retries a failed initial Plan with the same reviewed source without abandoning the Capsule";
+    test(title, async ({ page }) => {
+      test.skip(
+        mode !== "portable",
+        "the retained initial Plan fixture is portable-only",
+      );
+      const errors = pageErrors(page);
+      const traffic = monitorDashboardTraffic(page, mode);
+      const capsuleId = "cap_retry_initial";
+      const oldRunId = "run_initial_failed";
+      const nextRunId = "run_initial_retried";
+      const compatibilityReportId = "report_initial_reviewed";
+      let currentReportId = compatibilityReportId;
+      let currentStateGeneration = 0;
+      let currentStateVersionId: string | undefined;
+      const mutations: { path: string; body: unknown }[] = [];
+      const now = "2026-09-06T00:00:00.000Z";
+      await page.route("**/api/v1/**", async (route) => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (request.method() !== "GET") {
+          mutations.push({ path, body: request.postDataJSON() });
+        }
+        if (path === `/api/v1/capsules/${capsuleId}`) {
+          return route.fulfill({
+            json: {
+              capsule: {
+                id: capsuleId,
+                workspaceId: "ws_alpha",
+                name: "Retained service",
+                slug: "retained-service",
+                sourceId: "source_retained",
+                installConfigId: "config_retained",
+                environment: "staging",
+                currentStateGeneration,
+                currentStateVersionId,
+                status: "pending",
+                compatibilityReportId: currentReportId,
+                createdAt: now,
+                updatedAt: now,
+              },
+            },
+          });
+        }
+        if (path === `/api/v1/capsules/${capsuleId}/plan`) {
+          return route.fulfill({
+            status: 201,
+            json: { run: { id: nextRunId } },
+          });
+        }
+        const runId = [oldRunId, nextRunId].find((id) =>
+          path.startsWith(`/api/v1/runs/${id}`)
+        );
+        if (runId && path === `/api/v1/runs/${runId}`) {
+          return route.fulfill({
+            json: {
+              run: {
+                id: runId,
+                workspaceId: "ws_alpha",
+                capsuleId,
+                type: "plan",
+                baseStateGeneration: 0,
+                status: runId === oldRunId ? "failed" : "running",
+                policyStatus: "pass",
+                sourceSnapshotId: "snapshot_retained",
+                compatibilityReportId,
+                createdBy: "portable-e2e",
+                createdAt: now,
+              },
+            },
+          });
+        }
+        if (runId && path.endsWith("/logs")) {
+          return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+        }
+        if (runId && path.endsWith("/cost")) {
+          return route.fulfill({
+            json: {
+              cost: {
+                runId,
+                billingMode: "disabled",
+                estimatedUsdMicros: 0,
+                ratingStatus: "not_applicable",
+                blocked: false,
+                reasons: [],
+              },
+            },
+          });
+        }
+        if (runId && path.endsWith("/stream")) {
+          return route.fulfill({
+            status: 200,
+            contentType: "text/event-stream",
+            body: "",
+          });
+        }
+        if (path === "/api/v1/workspaces/ws_alpha/runs") {
+          return route.fulfill({ json: { runs: [] } });
+        }
+        return route.fallback();
+      });
+      await gotoDashboardDocument(page, `/runs/${oldRunId}`);
+      const retry = page.getByRole("button", {
+        name: /もう一度変更を確認|Review changes again/u,
+      });
+      await expect(retry).toBeVisible();
+      await expect(page.getByRole("button", {
+        name: /最新のソースで最初からやり直す|latest source/u,
+      })).toBeVisible();
+      if (change === "review") {
+        currentReportId = "report_replaced_after_page_load";
+      } else if (change === "applied") {
+        currentStateGeneration = 1;
+        currentStateVersionId = "state_committed_after_page_load";
+      }
+      await retry.click();
+      if (change !== "none") {
+        await expect(page.getByRole("alert")).toContainText(
+          /確認結果が古くなりました|The check result is out of date/u,
+        );
+        await expect(page).toHaveURL(new RegExp(`/runs/${oldRunId}$`, "u"));
+        expect(mutations).toEqual([]);
+      } else {
+        await expect(page).toHaveURL(new RegExp(`/runs/${nextRunId}$`, "u"));
+        expect(mutations).toEqual([{
+          path: `/api/v1/capsules/${capsuleId}/plan`,
+          body: { compatibilityReportId },
+        }]);
+      }
+      await assertNoPageErrors(errors);
+      traffic.assertNoFailures();
+    });
+  }
+
   test("authenticates through dashboard bootstrap and switches Workspace scope", async ({
     page,
   }) => {

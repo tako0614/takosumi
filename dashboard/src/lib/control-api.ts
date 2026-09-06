@@ -401,6 +401,8 @@ export type CapsuleStatus =
 export interface Capsule {
   readonly id: string;
   readonly workspaceId: string;
+  /** Exact compatibility evidence pinned by the retained install configuration. */
+  readonly compatibilityReportId?: string;
   /** Owning Project, when exposed by the public Capsule projection. */
   readonly projectId?: string;
   readonly name: string;

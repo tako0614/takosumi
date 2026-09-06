@@ -85,6 +85,7 @@ import {
   isDeployApprovalCandidate,
   isReviewRun,
 } from "../../lib/run-approval.ts";
+import { initialPlanRetryReport } from "../../lib/initial-plan-retry.ts";
 import {
   stateVersionReadinessAfterApply,
   type StateVersionReadiness,
@@ -812,14 +813,15 @@ function Inner() {
     ) {
       return true;
     }
-    // A failed first-install Plan is pinned to its reviewed immutable
-    // SourceSnapshot. Never flash or offer the ordinary retry while the
-    // Capsule read is pending: that path would reproduce the same stale
-    // source. Applied update Plans keep their existing re-plan behavior.
+    // Retrying the same reviewed source and explicitly restarting from latest
+    // source are separate choices. A runner/credential repair does not require
+    // abandoning the retained first install. Wait for its authoritative read.
+    if (capsule.error) return false;
     if (capsule.latest?.id !== r.capsuleId) return false;
     return Boolean(
-      capsule.latest?.currentStateVersionId ||
-        (capsule.latest?.currentStateGeneration ?? 0) > 0,
+      initialPlanRetryReport(r, capsule.latest) ||
+        ((r.baseStateGeneration ?? 0) > 0 &&
+          (capsule.latest?.currentStateGeneration ?? 0) > 0),
     );
   });
   const appliedRunStateVersionKey = createMemo(() => {
@@ -1367,23 +1369,49 @@ function Inner() {
   });
 
   const retryPlan = createAction(async () => {
-    const instId = run.latest?.capsuleId;
-    if (!instId) return;
+    const currentRun = run.latest;
+    const instId = currentRun?.capsuleId;
+    if (!currentRun || !instId) return;
     const capsule = await getCapsule(instId);
+    if (capsule.id !== instId || capsule.workspaceId !== currentRun.workspaceId) {
+      throw new ControlApiError(
+        409,
+        "retry_plan_identity_mismatch",
+        t("controlError.sourceRevisionMismatch"),
+      );
+    }
+    const initialReport = initialPlanRetryReport(currentRun, capsule);
+    // The Plan's immutable base generation owns its retry mode. Another Apply
+    // must not turn an initial-source retry into an update from latest source.
+    const isUpdatedPlan =
+      (currentRun.baseStateGeneration ?? 0) > 0 &&
+      capsule.currentStateGeneration > 0;
+    if (
+      currentRun.type === "plan" &&
+      !isUpdatedPlan &&
+      !initialReport
+    ) {
+      throw new ControlApiError(
+        409,
+        "retry_plan_review_mismatch",
+        t("controlError.compatibilityStale"),
+      );
+    }
     // Preserve the requested operation. A failed destroy must be retried as a
     // destroy. A first-install retry must preserve the exact reviewed
     // SourceSnapshot/CompatibilityReport pair; refreshing only the report
     // would mismatch the InstallConfig-pinned snapshot. Deployed updates still
     // sync and pin the latest source.
     const envelope =
-      run.latest?.type === "destroy_plan"
+      currentRun.type === "destroy_plan"
         ? await destroyPlanCapsule(instId)
         : capsule.currentStateGeneration === 0 &&
-            run.latest?.compatibilityReportId
+            currentRun.compatibilityReportId
           ? await planCapsule(instId, {
-              compatibilityReportId: run.latest.compatibilityReportId,
+              compatibilityReportId:
+                initialReport ?? currentRun.compatibilityReportId,
             })
-        : await planCapsuleUpdate(instId);
+          : await planCapsuleUpdate(instId);
     const newRunId = extractRunId(envelope);
     if (newRunId) {
       navigate(
@@ -1972,10 +2000,8 @@ function Inner() {
                       </Button>
                     </Show>
 
-                    {/* Other terminal failures can be re-planned normally.
-                        Failed update Plans refresh source through
-                        planCapsuleUpdate; failed first installs are excluded
-                        until the Capsule read proves they were applied. */}
+                    {/* Same-source first-install retries preserve their exact
+                        review; applied updates use planCapsuleUpdate. */}
                     <Show
                       when={
                         Boolean(r().capsuleId) &&

@@ -111,7 +111,10 @@ describe("RunView", () => {
     // report makes the next plan fail closed on a snapshot mismatch.
     expect(source).toContain("capsule.currentStateGeneration === 0");
     expect(source).toContain("await planCapsule(instId, {");
-    expect(source).toContain("compatibilityReportId: run.latest.compatibilityReportId");
+    expect(source).toMatch(
+      /compatibilityReportId:\s+initialReport \?\? currentRun\.compatibilityReportId/u,
+    );
+    expect(source).toContain("initialPlanRetryReport(currentRun, capsule)");
     expect(source).toContain("planCapsuleUpdate(instId)");
   });
 
@@ -151,7 +154,7 @@ describe("RunView", () => {
   });
 
   test("destroy retry preserves the destroy operation", () => {
-    expect(source).toContain('run.latest?.type === "destroy_plan"');
+    expect(source).toContain('currentRun.type === "destroy_plan"');
     expect(source).toContain("await destroyPlanCapsule(instId)");
   });
 
