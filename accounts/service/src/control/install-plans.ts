@@ -570,6 +570,13 @@ async function prepareInstallCompilation(
           "The generic OpenTofu compatibility analysis did not complete successfully.",
       });
     }
+    if (compatibility.report.level !== "ready") {
+      return failedPlan(plan, {
+        code: "generic_opentofu_compatibility_not_ready",
+        message:
+          "The generic OpenTofu compatibility analysis is not ready for installation.",
+      });
+    }
     const declarations = compatibility.report.rootModuleVariableDeclarations;
     if (declarations === undefined) {
       return failedPlan(plan, {

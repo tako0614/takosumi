@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import {
   compileOpenTofuConfigurationGraph,
+  compileOpenTofuConfigurationGraphFromLoader,
   discoverOpenTofuModules,
   parseOpenTofuProviderLockObservation,
   type OpenTofuSourceFile,
@@ -237,6 +238,208 @@ terraform {
       childAlias: "zone",
     },
   ]);
+});
+
+test("OpenTofu .tofu supersedes a same-basename .tf before graph semantics", () => {
+  const result = compile([
+    {
+      path: "main.tf",
+      text: `
+terraform {
+  required_providers {
+    aws = { source = "hashicorp/aws" version = "= 1.0.0" }
+  }
+}
+module "ignored" { source = "./ignored-child" }
+`,
+    },
+    {
+      path: "main.tofu",
+      text: `
+terraform {
+  required_providers {
+    aws = { source = "hashicorp/aws" version = "= 2.0.0" }
+  }
+}
+`,
+    },
+    {
+      path: "unique.tf",
+      text: `terraform { required_providers { local = { source = "hashicorp/local" } } }`,
+    },
+  ]);
+
+  expect(result.complete).toBe(true);
+  expect(result.files.map((file) => file.path)).toEqual([
+    "main.tofu",
+    "unique.tf",
+  ]);
+  expect(result.providerPackages).toEqual([
+    { source: "registry.opentofu.org/hashicorp/aws", version: "2.0.0" },
+    { source: "registry.opentofu.org/hashicorp/local" },
+  ]);
+  expect(result.rootProviderRequirements).toEqual([
+    {
+      source: "registry.opentofu.org/hashicorp/aws",
+      moduleLocalName: "aws",
+      version: "2.0.0",
+    },
+    {
+      source: "registry.opentofu.org/hashicorp/local",
+      moduleLocalName: "local",
+    },
+  ]);
+  expect(result.diagnostics).toEqual([]);
+
+  expect(discoverOpenTofuModules({
+    files: [
+      {
+        path: "main.tf",
+        text: `module "ignored" { source = "./ignored-child" }`,
+      },
+      {
+        path: "main.tofu",
+        text: `terraform { required_providers { aws = { source = "hashicorp/aws" version = "= 2.0.0" } } }`,
+      },
+      {
+        path: "unique.tf",
+        text: `terraform { required_providers { local = { source = "hashicorp/local" } } }`,
+      },
+    ],
+  })).toEqual({
+    complete: true,
+    modules: [
+      {
+        path: ".",
+        providerPackages: [
+          { source: "registry.opentofu.org/hashicorp/aws", version: "2.0.0" },
+          { source: "registry.opentofu.org/hashicorp/local" },
+        ],
+        rootProviderRequirements: [
+          {
+            source: "registry.opentofu.org/hashicorp/aws",
+            moduleLocalName: "aws",
+            version: "2.0.0",
+          },
+          {
+            source: "registry.opentofu.org/hashicorp/local",
+            moduleLocalName: "local",
+          },
+        ],
+      },
+    ],
+    diagnostics: [],
+  });
+});
+
+test("OpenTofu JSON precedence is directory-local and keeps selected JSON conservative", () => {
+  const result = compile([
+    {
+      path: "providers.tf.json",
+      text: JSON.stringify({
+        terraform: {
+          required_providers: {
+            ignored: { source: "attacker/ignored" },
+          },
+        },
+      }),
+    },
+    {
+      path: "providers.tofu.json",
+      text: JSON.stringify({
+        terraform: {
+          required_providers: {
+            random: { source: "hashicorp/random" },
+          },
+        },
+      }),
+    },
+  ]);
+
+  expect(result.complete).toBe(true);
+  expect(result.files.map((file) => file.path)).toEqual([
+    "providers.tofu.json",
+  ]);
+  expect(result.providerPackages).toEqual([
+    { source: "registry.opentofu.org/hashicorp/random" },
+  ]);
+  expect(result.diagnostics).toContainEqual({
+    code: "json_semantics_unsupported",
+    path: "providers.tofu.json",
+    message:
+      "Provider identities are derived from JSON, but full compatibility semantics for JSON blocks are not yet classified.",
+    fatal: false,
+  });
+  expect(result.diagnostics.some((diagnostic) => diagnostic.path === "providers.tf.json")).toBe(
+    false,
+  );
+});
+
+test("same-basename precedence applies inside reachable nested modules and path guards stay strict", () => {
+  const nested = compile([
+    {
+      path: "main.tf",
+      text: 'module "child" { source = "./child" }',
+    },
+    {
+      path: "child/main.tf",
+      text: `terraform { required_providers { aws = { source = "hashicorp/aws" version = "= 1.0.0" } } }`,
+    },
+    {
+      path: "child/main.tofu",
+      text: `terraform { required_providers { aws = { source = "hashicorp/aws" version = "= 2.0.0" } } }`,
+    },
+    {
+      path: "child/unique.tf",
+      text: `terraform { required_providers { local = { source = "hashicorp/local" } } }`,
+    },
+    {
+      path: "other/main.tofu",
+      text: `terraform { required_providers { ignored = { source = "attacker/ignored" } } }`,
+    },
+  ]);
+
+  expect(nested.complete).toBe(true);
+  expect(nested.files.map((file) => file.path)).toEqual([
+    "child/main.tofu",
+    "child/unique.tf",
+    "main.tf",
+  ]);
+  expect(nested.providerPackages).toEqual([
+    { source: "registry.opentofu.org/hashicorp/aws", version: "2.0.0" },
+    { source: "registry.opentofu.org/hashicorp/local" },
+  ]);
+  expect(() => compile([], "../outside")).toThrow(
+    /selected OpenTofu module directory must stay relative/,
+  );
+});
+
+test("loader and in-memory compilation share effective-file selection", async () => {
+  const graph = await compileOpenTofuConfigurationGraphFromLoader({
+    loadModuleDirectory: async (directory) => {
+      if (directory !== ".") return { exists: false, files: [] };
+      return {
+        exists: true,
+        files: [
+          {
+            path: "main.tf",
+            text: 'module "ignored" { source = "./missing" }',
+          },
+          {
+            path: "main.tofu",
+            text: `terraform { required_providers { random = { source = "hashicorp/random" } } }`,
+          },
+        ],
+      };
+    },
+  });
+
+  expect(graph.complete).toBe(true);
+  expect(graph.files.map((file) => file.path)).toEqual(["main.tofu"]);
+  expect(graph.providerPackages).toEqual([
+    { source: "registry.opentofu.org/hashicorp/random" },
+  ]);
+  expect(graph.diagnostics).toEqual([]);
 });
 
 test("canonical graph represents zero, one, and N exact identities", () => {

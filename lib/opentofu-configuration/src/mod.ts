@@ -471,7 +471,8 @@ class ConfigurationGraphCompiler {
   readonly #files: OpenTofuSourceFile[] = [];
   readonly #compiledDirectories = new Map<string, CompiledDirectory>();
   readonly #diagnostics: OpenTofuConfigurationDiagnostic[] = [];
-  #totalBytes = 0;
+  #inputFileCount = 0;
+  #inputTotalBytes = 0;
   currentDirectory: string | undefined;
 
   constructor(selected: string, limits: OpenTofuConfigurationLimits) {
@@ -549,6 +550,7 @@ class ConfigurationGraphCompiler {
         fatal: true,
       });
     }
+    const directoryFiles: OpenTofuSourceFile[] = [];
     for (const file of files) {
       if (dirname(file.path) !== current) {
         this.#diagnostics.push({
@@ -560,7 +562,7 @@ class ConfigurationGraphCompiler {
         continue;
       }
       const bytes = new TextEncoder().encode(file.text).byteLength;
-      if (this.#files.length >= this.#limits.maxFiles) {
+      if (this.#inputFileCount >= this.#limits.maxFiles) {
         this.#diagnostics.push({
           code: "file_limit_exceeded",
           path: file.path,
@@ -578,7 +580,7 @@ class ConfigurationGraphCompiler {
         });
         return;
       }
-      if (this.#totalBytes + bytes > this.#limits.maxTotalBytes) {
+      if (this.#inputTotalBytes + bytes > this.#limits.maxTotalBytes) {
         this.#diagnostics.push({
           code: "total_bytes_exceeded",
           path: file.path,
@@ -587,10 +589,17 @@ class ConfigurationGraphCompiler {
         });
         return;
       }
-      this.#files.push(file);
-      this.#totalBytes += bytes;
+      this.#inputFileCount += 1;
+      this.#inputTotalBytes += bytes;
+      directoryFiles.push(file);
     }
-    const compiled = compileModuleDirectory(files);
+    // OpenTofu ignores the lower-precedence spelling when the same normalized
+    // path basename is present in both extension families. Select only after
+    // strict path, duplicate, directory, and input-limit validation so ignored
+    // source records cannot bypass the bounded observation contract.
+    const effectiveFiles = selectEffectiveOpenTofuFiles(directoryFiles);
+    this.#files.push(...effectiveFiles);
+    const compiled = compileModuleDirectory(effectiveFiles);
     this.#compiledDirectories.set(current, compiled);
     this.#diagnostics.push(...compiled.diagnostics);
     for (const local of compiled.localModuleSources) {
@@ -637,6 +646,55 @@ class ConfigurationGraphCompiler {
       ),
     };
   }
+}
+
+function selectEffectiveOpenTofuFiles(
+  files: readonly OpenTofuSourceFile[],
+): readonly OpenTofuSourceFile[] {
+  const selected = new Map<
+    string,
+    Readonly<{ file: OpenTofuSourceFile; precedence: number }>
+  >();
+  for (const file of files) {
+    const selection = effectiveOpenTofuFileSelection(file.path);
+    if (!selection) continue;
+    const previous = selected.get(selection.key);
+    if (!previous || selection.precedence > previous.precedence) {
+      selected.set(selection.key, { file, precedence: selection.precedence });
+    }
+  }
+  return [...selected.values()]
+    .map(({ file }) => file)
+    .sort((left, right) => compareCodePoints(left.path, right.path));
+}
+
+function effectiveOpenTofuFileSelection(
+  path: string,
+): Readonly<{ key: string; precedence: number }> | undefined {
+  const kind = openTofuConfigurationFileKind(path);
+  if (kind === undefined) return undefined;
+  if (kind === "hcl") {
+    if (path.endsWith(".tofu")) {
+      return {
+        key: `hcl\0${path.slice(0, -".tofu".length)}`,
+        precedence: 2,
+      };
+    }
+    return {
+      key: `hcl\0${path.slice(0, -".tf".length)}`,
+      precedence: 1,
+    };
+  }
+  if (path.endsWith(".tofu.json")) {
+    return {
+      key: `json\0${path.slice(0, -".tofu.json".length)}`,
+      precedence: 2,
+    };
+  }
+  return {
+    key: `json\0${path.slice(0, -".tf.json".length)}`,
+    precedence: 1,
+  };
 }
 
 function compileModuleDirectory(

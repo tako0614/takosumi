@@ -616,6 +616,55 @@ test("generic Git install fails before configuration when compatibility analysis
   expect(fixture.counts.plan).toBe(0);
 });
 
+test.each([
+  {
+    level: "unsupported" as const,
+    declarations: [],
+    key: "generic-unsupported-compatibility",
+  },
+  {
+    level: "needs_patch" as const,
+    declarations: [
+      { name: "region", type: "string" as const, hasDefault: false },
+    ],
+    key: "generic-needs-patch-compatibility",
+  },
+])(
+  "generic Git install fails before configuration for a $level compatibility report",
+  async ({ level, declarations, key }) => {
+    const fixture = installFixture({
+      repositoryManifest: {
+        status: "invalid",
+        reason: "invalid_document",
+      },
+      compatibilityReportLevel: level,
+      compatibilityRootModuleVariableDeclarations: declarations,
+    });
+    const created = await fixture.request(
+      "/api/v1/workspaces/ws_install/install-plans",
+      "POST",
+      createBody(),
+      { "idempotency-key": key },
+    );
+    const planId = (await created.json()).installPlan.id as string;
+    await fixture.reconcile(planId); // Source
+    await fixture.reconcile(planId); // Source sync
+    fixture.succeedSourceSync();
+    await fixture.reconcile(planId); // snapshot -> compiling
+    const failed = await fixture.reconcile(planId);
+
+    expect((await failed.json()).installPlan).toMatchObject({
+      phase: "failed",
+      diagnostic: {
+        code: "generic_opentofu_compatibility_not_ready",
+      },
+    });
+    expect(fixture.compatibilityMutationCount).toBe(1);
+    expect(fixture.installConfigMutationCount).toBe(0);
+    expect(fixture.counts).toEqual({ source: 1, sync: 1, capsule: 0, plan: 0 });
+  },
+);
+
 test("generic Git install fails before configuration on non-canonical variable declarations", async () => {
   const fixture = installFixture({
     repositoryManifest: {
@@ -1105,6 +1154,7 @@ function installFixture(
     readonly installConfigs?: readonly InstallConfig[];
     readonly providerConnections?: readonly ProviderConnection[];
     readonly compatibilityRunStatus?: "succeeded" | "failed";
+    readonly compatibilityReportLevel?: CapsuleCompatibilityReport["level"];
     readonly compatibilityRootModuleVariableDeclarations?: CapsuleCompatibilityReport["rootModuleVariableDeclarations"];
     readonly omitCompatibilityRootModuleVariableDeclarations?: boolean;
     readonly providerValidationError?: OpenTofuControllerError;
@@ -1252,7 +1302,7 @@ function installFixture(
         sourceId,
         sourceSnapshotId: request.sourceSnapshotId!,
         modulePath: request.modulePath ?? ".",
-        level: "ready",
+        level: options.compatibilityReportLevel ?? "ready",
         findings: [],
         providers: [],
         resources: [],

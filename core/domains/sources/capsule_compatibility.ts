@@ -140,6 +140,34 @@ export function analyzeOpenTofuCapsuleFiles(
     });
   }
 
+  const rootModuleVariableScan = scanRootModuleVariableDeclarations(hclFiles);
+  for (const duplicate of rootModuleVariableScan.duplicates) {
+    findings.push({
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      code: "duplicate_root_variable_declaration",
+      message:
+        "The selected root module declares the same variable more than once; the generic install contract cannot identify one declaration.",
+      path: duplicate.path,
+      context: { name: duplicate.name },
+      suggestion:
+        "Declare each selected-root variable exactly once; variables with the same name in child modules are independent.",
+    });
+  }
+  for (const orphan of rootModuleVariableScan.orphanOverrides) {
+    findings.push({
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      code: "orphan_root_variable_override",
+      message:
+        "The selected root override file changes a variable that has no base declaration; the generic install contract cannot infer a declaration.",
+      path: orphan.path,
+      context: { name: orphan.name },
+      suggestion:
+        "Declare the variable in a non-override selected-root file before overriding its metadata.",
+    });
+  }
+
   const providerAllowlist = allowedProviderSet(input.policy);
   const credentialRequiredProviders = explicitProviderSet(
     input.policy?.providerCredentials?.requiredProviders,
@@ -284,8 +312,7 @@ export function analyzeOpenTofuCapsuleFiles(
     dataSources,
     provisioners,
     rootModuleVariables: collectRootModuleVariableNames(hclFiles),
-    rootModuleVariableDeclarations:
-      collectRootModuleVariableDeclarations(hclFiles),
+    rootModuleVariableDeclarations: rootModuleVariableScan.declarations,
     rootModuleOutputs,
   };
 }
@@ -610,19 +637,137 @@ export function collectRootModuleVariableNames(
 export function collectRootModuleVariableDeclarations(
   files: readonly CapsuleSourceFile[],
 ): readonly CapsuleRootModuleVariableDeclaration[] {
-  const byName = new Map<string, CapsuleRootModuleVariableDeclaration>();
+  return scanRootModuleVariableDeclarations(files).declarations;
+}
+
+interface RootModuleVariableDeclarationOccurrence {
+  readonly declaration: CapsuleRootModuleVariableDeclaration;
+  readonly path: string;
+  readonly order: number;
+  readonly hasTypeAttribute: boolean;
+  readonly hasDefaultAttribute: boolean;
+}
+
+interface RootModuleVariableDeclarationScan {
+  readonly declarations: readonly CapsuleRootModuleVariableDeclaration[];
+  readonly duplicates: readonly { readonly name: string; readonly path: string }[];
+  readonly orphanOverrides: readonly { readonly name: string; readonly path: string }[];
+}
+
+function scanRootModuleVariableDeclarations(
+  files: readonly CapsuleSourceFile[],
+): RootModuleVariableDeclarationScan {
+  const baseOccurrences: RootModuleVariableDeclarationOccurrence[] = [];
+  const overrideOccurrences: RootModuleVariableDeclarationOccurrence[] = [];
+  let order = 0;
   for (const file of files) {
     if (!isRootModuleTfFile(file.path)) continue;
+    const isOverride = isRootModuleOverrideFile(file.path);
     for (const block of matchNamedBlocks(file.text, "variable")) {
-      byName.set(block.name, {
-        name: block.name,
-        type: rootModuleVariableBasicType(block.body),
-        hasDefault: rootModuleVariableHasDefault(block.body),
-      });
+      const maskedBody = maskHclCommentsAndHeredocs(block.body);
+      const occurrence = {
+        declaration: {
+          name: block.name,
+          type: rootModuleVariableBasicType(block.body),
+          hasDefault: rootModuleVariableHasDefault(block.body),
+        },
+        path: file.path,
+        order: order++,
+        hasTypeAttribute: /^\s*type\s*=/mu.test(maskedBody),
+        hasDefaultAttribute: /^\s*default\s*=/mu.test(maskedBody),
+      } satisfies RootModuleVariableDeclarationOccurrence;
+      (isOverride ? overrideOccurrences : baseOccurrences).push(occurrence);
     }
   }
-  return Array.from(byName.values()).sort((left, right) =>
-    left.name.localeCompare(right.name),
+  const sortedBase = baseOccurrences.sort(compareRootModuleVariableOccurrences);
+  const sortedOverrides = overrideOccurrences.sort(
+    compareRootModuleVariableOccurrences,
+  );
+  const seenNames = new Set<string>();
+  const duplicateByName = new Map<
+    string,
+    { readonly name: string; readonly path: string }
+  >();
+  const baseDeclarations = new Map<
+    string,
+    CapsuleRootModuleVariableDeclaration
+  >();
+  for (const occurrence of sortedBase) {
+    const name = occurrence.declaration.name;
+    if (seenNames.has(name)) {
+      duplicateByName.set(
+        name,
+        duplicateByName.get(name) ?? { name, path: occurrence.path },
+      );
+      continue;
+    }
+    seenNames.add(name);
+    baseDeclarations.set(name, occurrence.declaration);
+  }
+  const duplicateNames = new Set(duplicateByName.keys());
+  const overriddenDeclarations = new Map(baseDeclarations);
+  const orphanByName = new Map<
+    string,
+    { readonly name: string; readonly path: string }
+  >();
+  for (const occurrence of sortedOverrides) {
+    const name = occurrence.declaration.name;
+    if (duplicateNames.has(name)) continue;
+    const base = baseDeclarations.get(name);
+    if (!base) {
+      orphanByName.set(
+        name,
+        orphanByName.get(name) ?? { name, path: occurrence.path },
+      );
+      continue;
+    }
+    const current = overriddenDeclarations.get(name) ?? base;
+    overriddenDeclarations.set(name, {
+      ...current,
+      ...(occurrence.hasTypeAttribute
+        ? { type: occurrence.declaration.type }
+        : {}),
+      ...(occurrence.hasDefaultAttribute
+        ? { hasDefault: occurrence.declaration.hasDefault }
+        : {}),
+    });
+  }
+  return {
+    // Do not choose a winning base declaration when one root name appears more
+    // than once. The report remains serializable under the strict stored-report
+    // contract while the duplicate finding makes the compatibility result
+    // unsupported before generic-install preparation can begin. Override
+    // blocks are different: OpenTofu merges them into an existing base block
+    // in lexicographical filename/position order.
+    declarations: Array.from(overriddenDeclarations.entries())
+      .filter(([name]) => !duplicateNames.has(name))
+      .map(([, declaration]) => declaration)
+      .sort((left, right) => left.name.localeCompare(right.name)),
+    duplicates: Array.from(duplicateByName.values()).sort((left, right) =>
+      left.name.localeCompare(right.name),
+    ),
+    orphanOverrides: Array.from(orphanByName.values()).sort((left, right) =>
+      left.name.localeCompare(right.name),
+    ),
+  };
+}
+
+function compareRootModuleVariableOccurrences(
+  left: RootModuleVariableDeclarationOccurrence,
+  right: RootModuleVariableDeclarationOccurrence,
+): number {
+  const pathOrder = compareCodePoints(left.path, right.path);
+  if (pathOrder !== 0) return pathOrder;
+  return left.order - right.order;
+}
+
+function isRootModuleOverrideFile(path: string): boolean {
+  if (!isRootModuleTfFile(path)) return false;
+  return (
+    path === "override.tf" ||
+    path === "override.tofu" ||
+    path.endsWith("_override.tf") ||
+    path.endsWith("_override.tofu")
   );
 }
 
@@ -731,7 +876,13 @@ function providerInSet(
 }
 
 function compareCodePoints(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
+  const leftPoints = Array.from(left, (character) => character.codePointAt(0) ?? 0);
+  const rightPoints = Array.from(right, (character) => character.codePointAt(0) ?? 0);
+  for (let index = 0; index < Math.min(leftPoints.length, rightPoints.length); index++) {
+    const difference = (leftPoints[index] ?? 0) - (rightPoints[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return leftPoints.length - rightPoints.length;
 }
 
 function isQualifiedProviderSource(source: string): boolean {

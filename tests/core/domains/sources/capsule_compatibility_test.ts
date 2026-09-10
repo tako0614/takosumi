@@ -5,6 +5,7 @@ import {
   collectRootModuleOutputDeclarations,
   collectRootModuleVariableDeclarations,
 } from "../../../../core/domains/sources/capsule_compatibility.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 
 const snapshot: SourceSnapshot = {
@@ -167,6 +168,535 @@ variable "ignored_child_variable" {
     { name: "settings", type: "json", hasDefault: true },
     { name: "untyped", type: "unknown", hasDefault: false },
   ]);
+});
+
+test.each([
+  {
+    label: "same root file",
+    duplicatePath: "main.tf",
+    files: [
+      {
+        path: "main.tf",
+        text: `
+variable "shared" {
+  type    = string
+  default = "first-value-must-not-become-a-finding"
+}
+
+variable "shared" {
+  type    = number
+  default = 2
+}
+
+variable "independent" {
+  type = bool
+}
+
+output "ok" { value = true }
+`,
+      },
+      {
+        path: "modules/child/variables.tf",
+        text: `
+variable "shared" {
+  type = bool
+}
+`,
+      },
+    ],
+    declarations: [
+      { name: "independent", type: "boolean", hasDefault: false },
+    ],
+  },
+  {
+    label: "different root files",
+    duplicatePath: "variables.tofu",
+    files: [
+      {
+        path: "main.tf",
+        text: `
+variable "shared" {
+  type = string
+}
+
+output "ok" { value = true }
+`,
+      },
+      {
+        path: "variables.tofu",
+        text: `
+variable "shared" {
+  type    = number
+  default = 2
+}
+
+variable "independent" {
+  type = bool
+}
+`,
+      },
+      {
+        path: "modules/child/variables.tofu",
+        text: `
+variable "shared" {
+  type = bool
+}
+`,
+      },
+    ],
+    declarations: [
+      { name: "independent", type: "boolean", hasDefault: false },
+    ],
+  },
+])(
+  "rejects duplicate selected-root variable declarations in $label without exposing values",
+  ({ duplicatePath, files, declarations }) => {
+    const result = analyzeOpenTofuCapsuleFiles({
+      sourceId: "src_duplicate_root_variable",
+      sourceSnapshot: snapshot,
+      files,
+    });
+
+    expect(result.level).toBe("unsupported");
+    expect(result.rootModuleVariableDeclarations).toEqual(declarations);
+    const duplicateFindings = result.findings.filter(
+      (finding) => finding.code === "duplicate_root_variable_declaration",
+    );
+    expect(duplicateFindings).toEqual([
+      {
+        severity: "error",
+        compatibilityImpact: "unsupported",
+        code: "duplicate_root_variable_declaration",
+        message:
+          "The selected root module declares the same variable more than once; the generic install contract cannot identify one declaration.",
+        path: duplicatePath,
+        context: { name: "shared" },
+        suggestion:
+          "Declare each selected-root variable exactly once; variables with the same name in child modules are independent.",
+      },
+    ]);
+    expect(duplicateFindings[0]?.message).not.toContain("first-value");
+    expect(duplicateFindings[0]?.message).not.toContain("2");
+  },
+);
+
+test("duplicate analysis remains serializable through the strict stored report path", async () => {
+  const analysis = analyzeOpenTofuCapsuleFiles({
+    sourceId: snapshot.sourceId,
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+variable "ambiguous" {
+  type = string
+}
+
+variable "ambiguous" {
+  type = number
+}
+
+variable "stable" {
+  type = bool
+}
+
+output "ok" { value = true }
+`,
+      },
+    ],
+  });
+  const store = new InMemoryOpenTofuControlStore();
+  const persisted = await store.putCapsuleCompatibilityReport({
+    id: "caprep_duplicate_root_variable",
+    sourceId: snapshot.sourceId,
+    sourceSnapshotId: snapshot.id,
+    createdAt: "2026-06-07T00:00:00.000Z",
+    ...analysis,
+  });
+
+  expect(persisted.level).toBe("unsupported");
+  expect(persisted.rootModuleVariableDeclarations).toEqual([
+    { name: "stable", type: "boolean", hasDefault: false },
+  ]);
+  expect(
+    persisted.findings.filter(
+      (finding) => finding.code === "duplicate_root_variable_declaration",
+    ),
+  ).toEqual([
+    expect.objectContaining({
+      path: "main.tf",
+      context: { name: "ambiguous" },
+    }),
+  ]);
+  await expect(
+    store.getCapsuleCompatibilityReport(persisted.id),
+  ).resolves.toEqual(persisted);
+});
+
+test("does not treat a same-name child-module variable as a root duplicate", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_child_same_name_variable",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+module "child" { source = "./modules/child" }
+
+variable "shared" {
+  type = string
+}
+
+output "ok" { value = true }
+`,
+      },
+      {
+        path: "modules/child/variables.tf",
+        text: `
+variable "shared" {
+  type = number
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.rootModuleVariableDeclarations).toEqual([
+    { name: "shared", type: "string", hasDefault: false },
+  ]);
+  expect(result.findings).not.toContainEqual(
+    expect.objectContaining({ code: "duplicate_root_variable_declaration" }),
+  );
+});
+
+test("uses the same-basename .tofu file as the effective root configuration", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_effective_tofu_root_variable",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+variable "shared" {
+  type = string
+}
+
+variable "shared" {
+  type = number
+}
+`,
+      },
+      {
+        path: "main.tofu",
+        text: `
+variable "selected" {
+  type = bool
+}
+
+output "ok" { value = true }
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.rootModuleVariableDeclarations).toEqual([
+    { name: "selected", type: "boolean", hasDefault: false },
+  ]);
+  expect(result.findings).not.toContainEqual(
+    expect.objectContaining({ code: "duplicate_root_variable_declaration" }),
+  );
+});
+
+test.each([
+  {
+    label: "type-only override retains the base default",
+    files: [
+      {
+        path: "main.tf",
+        text: `
+variable "service" {
+  type    = string
+  default = "base"
+}
+
+output "ok" { value = true }
+`,
+      },
+      {
+        path: "service_override.tf",
+        text: `
+variable "service" {
+  type = number
+}
+`,
+      },
+    ],
+    declarations: [{ name: "service", type: "number", hasDefault: true }],
+  },
+  {
+    label: "default-only override retains the base type",
+    files: [
+      {
+        path: "main.tf",
+        text: `
+variable "service" {
+  type = string
+}
+
+output "ok" { value = true }
+`,
+      },
+      {
+        path: "service_override.tf",
+        text: `
+variable "service" {
+  default = "override"
+}
+`,
+      },
+    ],
+    declarations: [{ name: "service", type: "string", hasDefault: true }],
+  },
+])(
+  "merges selected-root variable override metadata for $label",
+  ({ files, declarations }) => {
+    const result = analyzeOpenTofuCapsuleFiles({
+      sourceId: "src_root_variable_override_metadata",
+      sourceSnapshot: snapshot,
+      files,
+    });
+
+    expect(result.level).toBe("ready");
+    expect(result.rootModuleVariableDeclarations).toEqual(declarations);
+    expect(result.findings).not.toContainEqual(
+      expect.objectContaining({
+        code: "duplicate_root_variable_declaration",
+      }),
+    );
+    expect(result.findings).not.toContainEqual(
+      expect.objectContaining({ code: "orphan_root_variable_override" }),
+    );
+  },
+);
+
+test("applies multiple same-name root overrides in filename order independent of input order", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_root_variable_override_order",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "z_override.tf",
+        text: `
+variable "service" {
+  type = bool
+}
+`,
+      },
+      {
+        path: "main.tf",
+        text: `
+variable "service" {
+  type = string
+}
+
+output "ok" { value = true }
+`,
+      },
+      {
+        path: "a_override.tf",
+        text: `
+variable "service" {
+  type    = number
+  default = 1
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.rootModuleVariableDeclarations).toEqual([
+    { name: "service", type: "boolean", hasDefault: true },
+  ]);
+});
+
+test.each([
+  ["z_override.tf", "ä_override.tf"],
+  ["\uE000_override.tf", "\u{10000}_override.tf"],
+])("orders override filenames by Unicode code-point order: %s then %s", (earlier, later) => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_root_variable_unicode_override_order",
+    sourceSnapshot: snapshot,
+    files: [
+      { path: later, text: 'variable "service" { type = bool }' },
+      {
+        path: "main.tf",
+        text: 'variable "service" { type = string }\noutput "ok" { value = true }',
+      },
+      { path: earlier, text: 'variable "service" { type = number }' },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.rootModuleVariableDeclarations).toEqual([
+    { name: "service", type: "boolean", hasDefault: false },
+  ]);
+});
+
+test("merges multiple same-name variable blocks within one root override file by position", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_root_variable_override_blocks",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+variable "service" {
+  type = string
+}
+
+output "ok" { value = true }
+`,
+      },
+      {
+        path: "override.tf",
+        text: `
+variable "service" {
+  type = number
+}
+
+variable "service" {
+  default = 1
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.rootModuleVariableDeclarations).toEqual([
+    { name: "service", type: "number", hasDefault: true },
+  ]);
+});
+
+test("base duplicate variables remain unsupported even when an override targets the same name", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_root_variable_override_duplicate_base",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+variable "ambiguous" { type = string }
+variable "ambiguous" { type = number }
+output "ok" { value = true }
+`,
+      },
+      {
+        path: "override.tf",
+        text: `
+variable "ambiguous" { type = bool }
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(result.rootModuleVariableDeclarations).toEqual([]);
+  expect(result.findings).toContainEqual(
+    expect.objectContaining({
+      code: "duplicate_root_variable_declaration",
+      path: "main.tf",
+      context: { name: "ambiguous" },
+    }),
+  );
+  expect(result.findings).not.toContainEqual(
+    expect.objectContaining({ code: "orphan_root_variable_override" }),
+  );
+});
+
+test("same-basename .tofu override shadows the lower-precedence .tf override", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_root_variable_override_tofu",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+variable "service" {
+  type = string
+}
+
+output "ok" { value = true }
+`,
+      },
+      {
+        path: "service_override.tf",
+        text: `
+variable "service" {
+  type    = number
+  default = 1
+}
+`,
+      },
+      {
+        path: "service_override.tofu",
+        text: `
+variable "service" {
+  type = bool
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.rootModuleVariableDeclarations).toEqual([
+    { name: "service", type: "boolean", hasDefault: false },
+  ]);
+});
+
+test("orphan root variable overrides fail closed without inventing declaration metadata", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_root_variable_orphan_override",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: 'output "ok" { value = true }',
+      },
+      {
+        path: "orphan_override.tf",
+        text: `
+variable "orphan" {
+  type    = string
+  default = "must-not-become-metadata"
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(result.rootModuleVariableDeclarations).toEqual([]);
+  expect(result.findings).toEqual([
+    {
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      code: "orphan_root_variable_override",
+      message:
+        "The selected root override file changes a variable that has no base declaration; the generic install contract cannot infer a declaration.",
+      path: "orphan_override.tf",
+      context: { name: "orphan" },
+      suggestion:
+        "Declare the variable in a non-override selected-root file before overriding its metadata.",
+    },
+  ]);
+  expect(JSON.stringify(result.findings)).not.toContain(
+    "must-not-become-metadata",
+  );
 });
 
 test("collectRootModuleOutputDeclarations preserves OpenTofu Output metadata", () => {
