@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -10,7 +17,12 @@ import {
   requiredProvidersForGeneratedRoot,
   requiredProviderSourcesFromTerraformTree,
 } from "../../runner/lib/providers.ts";
-import { CAPSULE_COMPATIBILITY_MAX_FILES } from "../../runner/lib/constants.ts";
+import {
+  CAPSULE_COMPATIBILITY_MAX_FILES,
+  DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES,
+} from "../../runner/lib/constants.ts";
+import { initPlanAndBuildResponse } from "../../runner/lib/plan_apply.ts";
+import type { RunWorkspace } from "../../runner/lib/types.ts";
 import { generateOpenTofuChildModuleRoot } from "../../lib/rootgen/src/mod.ts";
 
 const REQUEST = {
@@ -41,6 +53,69 @@ async function withRoot(
     await rm(root, { recursive: true, force: true });
   }
 }
+
+function pipelineWorkspace(root: string): RunWorkspace {
+  return {
+    root,
+    sourceRoot: root,
+    moduleDir: root,
+    planPath: join(root, "tfplan"),
+    providerLockfilePath: join(root, "provider-lockfile.hcl"),
+    restoredStatePath: join(root, "terraform.tfstate"),
+    moduleInfoPath: join(root, "module-info.json"),
+    generatedRootDir: join(root, "generated-root"),
+    childModuleDir: join(root, "generated-root", "module"),
+    artifactDir: join(root, "artifact"),
+    depsDir: join(root, "deps"),
+  };
+}
+
+async function fakeTofu(
+  script: string,
+): Promise<{ readonly bin: string; readonly cleanup: () => Promise<void> }> {
+  const bin = await mkdtemp(join(tmpdir(), "takosumi-provider-scan-bin-"));
+  const tofu = join(bin, "tofu");
+  await writeFile(tofu, script);
+  await chmod(tofu, 0o755);
+  return {
+    bin,
+    cleanup: async () => {
+      await rm(bin, { recursive: true, force: true });
+    },
+  };
+}
+
+async function digestBytes(bytes: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return `sha256:${Array.from(digest, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("")}`;
+}
+
+const FAKE_PLAN_TOFU = `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  init)
+    ;;
+  plan)
+    out=""
+    previous=""
+    for arg in "$@"; do
+      if [ "$previous" = "-out" ]; then out="$arg"; fi
+      previous="$arg"
+    done
+    test -n "$out"
+    printf 'fake-plan' > "$out"
+    ;;
+  show)
+    printf '{"format_version":"1.2","resource_changes":[]}'
+    ;;
+  *)
+    echo "unexpected tofu command: $*" >&2
+    exit 2
+    ;;
+esac
+`;
 
 // `tofu init` loads .tf.json / .tofu.json / .tofu exactly like .tf, so a
 // provider declared in any of them must be visible to the runner policy.
@@ -515,4 +590,224 @@ test("pre-init policy refuses to enforce a provider policy on an incomplete scan
       providerScanComplete: true,
     }),
   ).not.toThrow();
+});
+
+test("post-init lockfile FIFO is rejected without blocking the runner", async () => {
+  await withRoot(async (root) => {
+    await writeFile(
+      join(root, "provider.tf"),
+      'terraform { required_providers { aws = { source = "hashicorp/aws" } } }\n',
+    );
+    const providerScan = await requiredProviderSourcesFromTerraformTree(root);
+    const fake = await fakeTofu(`#!/usr/bin/env bash
+set -euo pipefail
+if [ "$1" = init ]; then
+  rm -f .terraform.lock.hcl
+  mkfifo .terraform.lock.hcl
+  exit 0
+fi
+echo "unexpected tofu command: $*" >&2
+exit 2
+`);
+    const workspace = pipelineWorkspace(root);
+    const runId = `provider-lock-fifo-${crypto.randomUUID()}`;
+    const context = {
+      env: { PATH: `${fake.bin}:${Bun.env.PATH ?? ""}` },
+    };
+    let outcomeSettled = false;
+    const outcomePromise = initPlanAndBuildResponse(
+      runId,
+      workspace,
+      root,
+      {
+        operation: "create",
+        commandContext: context,
+        requiredProviders: providerScan.providers,
+        providerScan,
+      },
+    ).then(
+      (result) => ({ ok: true as const, result }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    outcomePromise.finally(() => {
+      outcomeSettled = true;
+    });
+    let writer: ReturnType<typeof Bun.spawn> | undefined;
+    try {
+      // Before O_NONBLOCK, open(O_RDONLY) waits for a writer on this FIFO.
+      // The bounded race makes that regression observable without leaving a
+      // blocked descriptor: the writer below unblocks the old path before the
+      // assertion runs.
+      const settledQuickly = await Promise.race([
+        outcomePromise.then(() => true),
+        Bun.sleep(250).then(() => false),
+      ]);
+      if (!settledQuickly && !outcomeSettled) {
+        writer = Bun.spawn(
+          ["bash", "-c", "timeout 1s sh -c 'printf x > .terraform.lock.hcl'"],
+          { cwd: root, stdout: "ignore", stderr: "ignore" },
+        );
+      }
+      const outcome = await outcomePromise;
+      if (writer) await writer.exited;
+      expect(settledQuickly).toBe(true);
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error("FIFO lockfile unexpectedly succeeded");
+      expect(String(outcome.error)).toContain(
+        "OpenTofu dependency lock is not a physical regular file",
+      );
+    } finally {
+      if (writer) await writer.exited;
+      await fake.cleanup();
+    }
+  });
+}, 10_000);
+
+test("provider-free plans report explicit lockfile absence", async () => {
+  await withRoot(async (root) => {
+    await writeFile(join(root, "main.tf"), "terraform {}\n");
+    const providerScan = await requiredProviderSourcesFromTerraformTree(root);
+    const fake = await fakeTofu(FAKE_PLAN_TOFU);
+    const workspace = pipelineWorkspace(root);
+    try {
+      const result = await initPlanAndBuildResponse(
+        `provider-free-absent-${crypto.randomUUID()}`,
+        workspace,
+        root,
+        {
+          operation: "create",
+          commandContext: {
+            env: { PATH: `${fake.bin}:${Bun.env.PATH ?? ""}` },
+          },
+          requiredProviders: providerScan.providers,
+          providerScan,
+        },
+      );
+
+      expect(result.status).toBe("succeeded");
+      expect(result.providerLockDigest).toBeUndefined();
+      expect(result.providerLockArtifact).toBeNull();
+    } finally {
+      await fake.cleanup();
+    }
+  });
+});
+
+test("provider-free plans retain exact present lockfile bytes, including empty files", async () => {
+  for (const [label, lockBytes] of [
+    ["comment", new TextEncoder().encode("# retained exactly\r\n")],
+    ["empty", new Uint8Array()],
+  ] as const) {
+    await withRoot(async (root) => {
+      await writeFile(join(root, "main.tf"), "terraform {}\n");
+      const providerScan = await requiredProviderSourcesFromTerraformTree(root);
+      const lockSource = join(root, "lockfile.fixture");
+      await writeFile(lockSource, lockBytes);
+      const fake = await fakeTofu(`#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  init)
+    cp "$LOCK_SOURCE" .terraform.lock.hcl
+    ;;
+  plan)
+    out=""
+    previous=""
+    for arg in "$@"; do
+      if [ "$previous" = "-out" ]; then out="$arg"; fi
+      previous="$arg"
+    done
+    test -n "$out"
+    printf 'fake-plan' > "$out"
+    ;;
+  show)
+    printf '{"format_version":"1.2","resource_changes":[]}'
+    ;;
+  *)
+    echo "unexpected tofu command: $*" >&2
+    exit 2
+    ;;
+esac
+`);
+      const workspace = pipelineWorkspace(root);
+      const runId = `provider-free-present-${label}-${crypto.randomUUID()}`;
+      try {
+        const result = await initPlanAndBuildResponse(
+          runId,
+          workspace,
+          root,
+          {
+            operation: "create",
+            commandContext: {
+              env: {
+                PATH: `${fake.bin}:${Bun.env.PATH ?? ""}`,
+                LOCK_SOURCE: lockSource,
+              },
+            },
+            requiredProviders: providerScan.providers,
+            providerScan,
+          },
+        );
+        const expectedDigest = await digestBytes(lockBytes);
+
+        expect(result.status).toBe("succeeded");
+        expect(result.providerLockDigest).toBe(expectedDigest);
+        expect(result.providerLockArtifact).toEqual({
+          kind: "runner-local",
+          ref: `runner-local://${runId}/provider-lockfile`,
+          digest: expectedDigest,
+          contentType: "application/vnd.opentofu.lock.hcl",
+          sizeBytes: lockBytes.byteLength,
+        });
+        await expect(readFile(workspace.providerLockfilePath)).resolves.toEqual(
+          lockBytes,
+        );
+      } finally {
+        await fake.cleanup();
+      }
+    });
+  }
+});
+
+test("provider lockfile capture rejects files over the configured cap", async () => {
+  await withRoot(async (root) => {
+    await writeFile(join(root, "main.tf"), "terraform {}\n");
+    const providerScan = await requiredProviderSourcesFromTerraformTree(root);
+    const lockSource = join(root, "oversized-lockfile.fixture");
+    await writeFile(
+      lockSource,
+      new Uint8Array(DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES + 1),
+    );
+    const fake = await fakeTofu(`#!/usr/bin/env bash
+set -euo pipefail
+if [ "$1" = init ]; then
+  cp "$LOCK_SOURCE" .terraform.lock.hcl
+  exit 0
+fi
+exit 2
+`);
+    try {
+      await expect(
+        initPlanAndBuildResponse(
+          `provider-lock-oversized-${crypto.randomUUID()}`,
+          pipelineWorkspace(root),
+          root,
+          {
+            operation: "create",
+            commandContext: {
+              env: {
+                PATH: `${fake.bin}:${Bun.env.PATH ?? ""}`,
+                LOCK_SOURCE: lockSource,
+              },
+            },
+            requiredProviders: providerScan.providers,
+            providerScan,
+          },
+        ),
+      ).rejects.toThrow(
+        `OpenTofu provider lockfile exceeds ${DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES} bytes`,
+      );
+    } finally {
+      await fake.cleanup();
+    }
+  });
 });

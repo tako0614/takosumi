@@ -173,6 +173,126 @@ test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2",
   assert.notDeepEqual(encrypted, PLAN_BYTES);
 });
 
+test("OpenTofu runner Durable Object promotes exact provider lockfile bytes to encrypted R2", async () => {
+  const lockBytes = new Uint8Array([
+    0x70,
+    0x72,
+    0x6f,
+    0x76,
+    0x69,
+    0x64,
+    0x65,
+    0x72,
+    0x20,
+    0x22,
+    0xc3,
+    0xa9,
+    0x22,
+    0x20,
+    0x7b,
+    0x0a,
+    0x7d,
+    0x0a,
+  ]);
+  const lockDigest = await digestBytes(lockBytes);
+  const runId = "plan_lockfile";
+  const calls: string[] = [];
+  const r2 = new FakeR2Bucket();
+  const runner = runnerWithContainer(r2, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      calls.push(`${request.method} ${path}`);
+      if (request.method === "POST" && path === `/runs/${runId}`) {
+        return Response.json({
+          status: "succeeded",
+          exitCode: 0,
+          planDigest: PLAN_DIGEST,
+          planArtifact: {
+            kind: "runner-local",
+            ref: `runner-local://${runId}/tfplan`,
+            digest: PLAN_DIGEST,
+          },
+          requiredProviders: [RUN_CREDENTIAL_PROVIDER],
+          providerLockDigest: lockDigest,
+          providerLockArtifact: {
+            kind: "runner-local",
+            ref: `runner-local://${runId}/provider-lockfile`,
+            digest: lockDigest,
+            contentType: "application/vnd.opentofu.lock.hcl",
+            sizeBytes: lockBytes.byteLength,
+          },
+        });
+      }
+      if (request.method === "GET" && path === `/runs/${runId}/artifacts/tfplan`) {
+        return new Response(PLAN_BYTES, {
+          headers: { "content-type": "application/vnd.opentofu.plan" },
+        });
+      }
+      if (
+        request.method === "GET" &&
+        path === `/runs/${runId}/artifacts/tf-lockfile`
+      ) {
+        return new Response(lockBytes, {
+          headers: {
+            "content-type": "application/vnd.opentofu.lock.hcl",
+            "content-length": String(lockBytes.byteLength),
+          },
+        });
+      }
+      if (
+        request.method === "GET" &&
+        path === `/runs/${runId}/artifacts/tfplan-json`
+      ) {
+        return Response.json({ error: "not found" }, { status: 404 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request(`https://runner/runs/${runId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId,
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [
+    `POST /runs/${runId}`,
+    `GET /runs/${runId}/artifacts/tfplan`,
+    `GET /runs/${runId}/artifacts/tf-lockfile`,
+    `GET /runs/${runId}/artifacts/tfplan-json`,
+  ]);
+  const payload = (await response.json()) as Record<string, unknown>;
+  const artifact = payload.providerLockArtifact as Record<string, unknown>;
+  assert.deepEqual(artifact, {
+    kind: "object-storage",
+    ref: `r2://takos-artifacts/opentofu-plan-runs/${runId}/provider-lockfile.hcl`,
+    digest: lockDigest,
+    contentType: "application/vnd.opentofu.lock.hcl",
+    sizeBytes: lockBytes.byteLength,
+    createdAt: artifact.createdAt,
+  });
+  const encrypted = r2.body(
+    `opentofu-plan-runs/${runId}/provider-lockfile.hcl.enc`,
+  );
+  assert.ok(encrypted && encrypted.byteLength > lockBytes.byteLength);
+  const reopened = await StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  }).open(encrypted!, lockDigest);
+  assert.deepEqual(reopened, lockBytes);
+  assert.equal(
+    r2.body(`opentofu-plan-runs/${runId}/provider-lockfile.hcl`),
+    undefined,
+  );
+});
+
 test("OpenTofu runner rejects one-byte-oversized plans before R2 persistence", async () => {
   const r2 = new FakeR2Bucket();
   const runner = runnerWithContainer(

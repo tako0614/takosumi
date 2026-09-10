@@ -5733,6 +5733,167 @@ test("capsule plan blocks when provider lockfile digest is required but missing"
   expect(policyEvents.at(-1)?.data?.providerLockfileDigestPresent).toBe(false);
 });
 
+test("capsule plan persists provider lockfile artifact privately and omits it publicly", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const baseRunner = recordingRunner();
+  const runner: RecordingRunner = {
+    ...baseRunner,
+    plan: async (job) => ({
+      ...(await baseRunner.plan(job)),
+      providerLockArtifact: {
+        kind: "object-storage",
+        ref: `r2://fixture-bucket/runs/${job.planRun.id}/provider-lockfile.hcl`,
+        digest: LOCK_DIGEST,
+        sizeBytes: 24,
+        contentType: "application/vnd.opentofu.lock.hcl",
+        createdAt: 42,
+      },
+    }),
+  };
+  await seedRunnableCapsuleModel(store);
+  const controller = controllerWith(store, runner);
+
+  const created = await controller.createCapsulePlan("cap_fixture1");
+  expect(created.planRun.status).toBe("succeeded");
+  expect(created.planRun).not.toHaveProperty("providerLockArtifact");
+
+  const persisted = await store.getPlanRun(created.planRun.id);
+  expect(persisted?.status).toBe("succeeded");
+  expect(persisted?.providerLockArtifact).toEqual({
+    kind: "object-storage",
+    ref: `r2://fixture-bucket/runs/${created.planRun.id}/provider-lockfile.hcl`,
+    digest: LOCK_DIGEST,
+    sizeBytes: 24,
+    contentType: "application/vnd.opentofu.lock.hcl",
+    createdAt: 42,
+  });
+
+  const publicResponse = await controller.getPlanRun(created.planRun.id);
+  expect(publicResponse.planRun.status).toBe("succeeded");
+  expect(publicResponse.planRun).not.toHaveProperty("providerLockArtifact");
+  expect(JSON.stringify(publicResponse.planRun)).not.toContain(
+    "provider-lockfile.hcl",
+  );
+});
+
+test("capsule plan rejects invalid provider lockfile artifacts before persistence", async () => {
+  const invalidArtifacts: readonly {
+    readonly label: string;
+    readonly artifact: OpenTofuPlanResult["providerLockArtifact"];
+  }[] = [
+    {
+      label: "wrong durable run ref",
+      artifact: {
+        kind: "object-storage",
+        ref: "r2://fixture-bucket/runs/not-this-plan/provider-lockfile.hcl",
+        digest: LOCK_DIGEST,
+        sizeBytes: 24,
+        contentType: "application/vnd.opentofu.lock.hcl",
+      },
+    },
+    {
+      label: "digest mismatch",
+      artifact: {
+        kind: "object-storage",
+        ref: "r2://fixture-bucket/runs/plan_0001/provider-lockfile.hcl",
+        digest: `sha256:${"1".repeat(64)}`,
+        sizeBytes: 24,
+        contentType: "application/vnd.opentofu.lock.hcl",
+      },
+    },
+    {
+      label: "unpromoted runner-local artifact",
+      artifact: {
+        kind: "runner-local",
+        ref: "runner-local://provider-lockfile",
+        digest: LOCK_DIGEST,
+        sizeBytes: 24,
+        contentType: "application/vnd.opentofu.lock.hcl",
+      },
+    },
+    { label: "explicit absence for provider-using plan", artifact: null },
+  ];
+
+  for (const invalid of invalidArtifacts) {
+    const store = new InMemoryOpenTofuControlStore();
+    const baseRunner = recordingRunner();
+    const runner: RecordingRunner = {
+      ...baseRunner,
+      plan: async (job) => ({
+        ...(await baseRunner.plan(job)),
+        providerLockArtifact:
+          invalid.label === "digest mismatch" &&
+            invalid.artifact?.kind === "object-storage"
+            ? {
+                ...invalid.artifact,
+                ref: `r2://fixture-bucket/runs/${job.planRun.id}/provider-lockfile.hcl`,
+              }
+            : invalid.artifact,
+      }),
+    };
+    await seedRunnableCapsuleModel(store);
+    const controller = controllerWith(store, runner);
+
+    const response = await controller.createCapsulePlan("cap_fixture1");
+    expect(response.planRun.status, invalid.label).toBe("failed");
+    expect(response.planRun, invalid.label).not.toHaveProperty(
+      "providerLockArtifact",
+    );
+
+    const persisted = await store.getPlanRun(response.planRun.id);
+    expect(persisted?.status, invalid.label).toBe("failed");
+    expect(persisted, invalid.label).not.toHaveProperty("providerLockArtifact");
+  }
+});
+
+test("capsule plan rejects an unpromoted runner-local provider lockfile artifact", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({
+    providerLockArtifact: {
+      kind: "runner-local",
+      ref: "runner-local://plan/tf-lockfile",
+      digest: LOCK_DIGEST,
+      sizeBytes: 16,
+    },
+  });
+  await seedRunnableCapsuleModel(store);
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+
+  expect(planRun.status).toBe("failed");
+  expect(planRun.diagnostics?.some((diagnostic) =>
+    diagnostic.message.includes("must be promoted to durable storage"),
+  )).toBe(true);
+});
+
+test("capsule plan rejects a durable provider lockfile artifact without its MIME", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const recordPlan = runner.plan;
+  runner.plan = async (job) => {
+    const result = await recordPlan(job);
+    return {
+      ...result,
+      providerLockArtifact: {
+        kind: "local",
+        ref: `local-opentofu://runs/${job.planRun.id}/provider-lockfile`,
+        digest: LOCK_DIGEST,
+        sizeBytes: 16,
+      },
+    };
+  };
+  await seedRunnableCapsuleModel(store);
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+
+  expect(planRun.status).toBe("failed");
+  expect(planRun.diagnostics?.some((diagnostic) =>
+    diagnostic.message.includes("provider lockfile artifact metadata is invalid"),
+  )).toBe(true);
+});
+
 test("capsule plan blocks when provider mirror evidence is required but missing", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const requiredProviders = [

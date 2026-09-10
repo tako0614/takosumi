@@ -4,10 +4,16 @@
 //
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, writeFile } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import { constants as fsConstants, type Stats } from "node:fs";
 import { join } from "node:path";
 import type { RunWorkspace } from "./types.ts";
-import { RUN_ROOT, DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES } from "./constants.ts";
+import {
+  RUN_ROOT,
+  DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES,
+  DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES,
+} from "./constants.ts";
 import { isRecord, safeRunId, digestBytes } from "./util.ts";
 
 // Stores the full `tofu show -json tfplan` JSON next to the plan binary so the
@@ -36,6 +42,103 @@ export async function writePlanJsonArtifact(
 
 export function planJsonPath(workspace: RunWorkspace): string {
   return join(workspace.root, "tfplan.json");
+}
+
+/** Stable runner-local path for the captured post-init lockfile bytes. */
+export function providerLockfilePath(workspace: RunWorkspace): string {
+  return workspace.providerLockfilePath;
+}
+
+/**
+ * Reads one runner-private provider lockfile through a bounded, no-follow file
+ * descriptor. This intentionally applies only to the lockfile relay/capture
+ * path; other runner artifacts retain their existing contracts.
+ */
+export async function readProviderLockfileBytes(
+  path: string,
+  options: {
+    readonly nonRegularError?: string;
+    readonly changedError?: string;
+  } = {},
+): Promise<Uint8Array | undefined> {
+  let file: FileHandle;
+  try {
+    file = await open(
+      path,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+    );
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { readonly code?: unknown }).code)
+        : "";
+    if (code === "ENOENT") return undefined;
+    throw error;
+  }
+  try {
+    const before = await file.stat();
+    if (!before.isFile() || before.nlink !== 1) {
+      throw new Error(
+        options.nonRegularError ??
+          "OpenTofu provider lockfile is not a physical regular file",
+      );
+    }
+    if (before.size > DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES) {
+      throw new Error(
+        `OpenTofu provider lockfile exceeds ${DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES} bytes`,
+      );
+    }
+    // Read one byte over the cap through the already-open descriptor. A
+    // stat-before-read check alone would allow a concurrently growing file to
+    // bypass the size bound.
+    const buffer = new Uint8Array(
+      DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES + 1,
+    );
+    let bytesRead = 0;
+    while (bytesRead < buffer.byteLength) {
+      const read = await file.read(
+        buffer,
+        bytesRead,
+        buffer.byteLength - bytesRead,
+        bytesRead,
+      );
+      if (read.bytesRead === 0) break;
+      bytesRead += read.bytesRead;
+    }
+    if (bytesRead > DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES) {
+      throw new Error(
+        `OpenTofu provider lockfile exceeds ${DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES} bytes`,
+      );
+    }
+    const bytes = buffer.subarray(0, bytesRead);
+    const after = await file.stat();
+    if (!sameProviderLockfile(before, after, bytes.byteLength)) {
+      throw new Error(
+        options.changedError ??
+          "OpenTofu provider lockfile changed while it was read",
+      );
+    }
+    return bytes;
+  } finally {
+    await file.close();
+  }
+}
+
+function sameProviderLockfile(
+  before: Stats,
+  after: Stats,
+  bytes: number,
+): boolean {
+  return (
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.size === bytes &&
+    after.size === bytes &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs &&
+    before.nlink === 1 &&
+    after.nlink === 1
+  );
 }
 
 function planJsonArtifactMaxBytes(): number {
@@ -110,6 +213,47 @@ export async function handlePlanArtifactRequest(
   );
 }
 
+/**
+ * Serves the exact post-init `.terraform.lock.hcl` bytes to the host relay.
+ * This route is runner-private: the Durable Object pulls it immediately and
+ * stores an encrypted immutable artifact; it is never part of a public Run
+ * projection. There is intentionally no PUT variant, so callers cannot
+ * replace the post-init bytes after capture.
+ */
+export async function handleProviderLockfileArtifactRequest(
+  runId: string,
+  request: Request,
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return Response.json(
+      { error: "method not allowed" },
+      { status: 405, headers: { allow: "GET" } },
+    );
+  }
+  try {
+    const bytes = await readProviderLockfileBytes(
+      providerLockfilePath(workspaceForRun(runId)),
+    );
+    if (bytes === undefined) {
+      return Response.json(
+        { error: "provider lockfile artifact not found" },
+        { status: 404 },
+      );
+    }
+    return new Response(bytes.slice().buffer as ArrayBuffer, {
+      headers: {
+        "content-type": "application/vnd.opentofu.lock.hcl",
+        "content-length": String(bytes.byteLength),
+      },
+    });
+  } catch {
+    return Response.json(
+      { error: "provider lockfile artifact not found" },
+      { status: 404 },
+    );
+  }
+}
+
 export function workspaceForRun(runId: string): RunWorkspace {
   const root = join(RUN_ROOT, safeRunId(runId));
   const sourceRoot = join(root, "source");
@@ -118,6 +262,7 @@ export function workspaceForRun(runId: string): RunWorkspace {
     sourceRoot,
     moduleDir: sourceRoot,
     planPath: join(root, "tfplan"),
+    providerLockfilePath: join(root, "provider-lockfile.hcl"),
     restoredStatePath: join(root, "restored.tfstate"),
     moduleInfoPath: join(root, "module-info.json"),
     generatedRootDir: join(root, "generated-root"),

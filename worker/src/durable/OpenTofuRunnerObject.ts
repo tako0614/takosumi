@@ -23,6 +23,7 @@ import {
   type RunCredentialTokenPayload,
 } from "../../../core/shared/run_credential_tokens.ts";
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
+import { isOpenTofuBuiltinProviderSource } from "takosumi-contract/provider-env-rules";
 import { redactString } from "takosumi-contract/redaction";
 import {
   assertRunExecutionEvidence,
@@ -32,10 +33,12 @@ import {
 
 const DEFAULT_PLAN_ARTIFACT_BUCKET = "takos-artifacts";
 const PLAN_ARTIFACT_CONTENT_TYPE = "application/vnd.opentofu.plan";
+const PROVIDER_LOCKFILE_CONTENT_TYPE = "application/vnd.opentofu.lock.hcl";
 const STATE_ARTIFACT_CONTENT_TYPE = "application/json";
 const EXECUTION_EVIDENCE_CONTENT_TYPE = "application/json";
 const SOURCE_ARCHIVE_CONTENT_TYPE = "application/zstd";
 const DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
+const DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES = 1 * 1024 * 1024;
 // At-rest content type for AES-GCM ciphertext blobs (state/plan .enc objects).
 const ENCRYPTED_ARTIFACT_CONTENT_TYPE = "application/octet-stream";
 const RUNNER_REQUEST_HEADER_ALLOWLIST = new Set(["content-type"]);
@@ -87,6 +90,7 @@ const RUNNER_R2_LOG_ARTIFACT = Object.freeze({
   rawOutputs: "raw_outputs",
   restoredStateObject: "restored_state_object",
   planArtifact: "plan_artifact",
+  providerLockfileArtifact: "provider_lockfile_artifact",
   planJsonArtifact: "plan_json_artifact",
   stateArtifact: "state_artifact",
   statePointer: "state_pointer",
@@ -97,6 +101,7 @@ export const RUNNER_ARTIFACT_LIMIT_DEFAULTS = Object.freeze({
   sourceArchive: 50 * 1024 * 1024,
   state: 16 * 1024 * 1024,
   plan: 24 * 1024 * 1024,
+  providerLockfile: DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES,
   output: 4 * 1024 * 1024,
   runnerResponse: 6 * 1024 * 1024,
   statePointer: 64 * 1024,
@@ -115,6 +120,7 @@ type RunnerArtifactKind =
   | "source_archive"
   | "state"
   | "plan"
+  | "provider_lockfile"
   | "plan_json"
   | "output"
   | "runner_response"
@@ -125,6 +131,7 @@ interface RunnerArtifactLimits {
   readonly sourceArchive: number;
   readonly state: number;
   readonly plan: number;
+  readonly providerLockfile: number;
   readonly output: number;
   readonly runnerResponse: number;
   readonly statePointer: number;
@@ -3092,6 +3099,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       },
       "plan artifact",
     );
+    // Provider lockfile bytes are captured by the runner immediately after
+    // init. Promote them before returning any successful plan response so the
+    // PlanRun can never claim portable lockfile continuity without a durable
+    // encrypted object.
+    const providerLockArtifact =
+      await this.#persistProviderLockfileArtifact(
+        runId,
+        payload,
+        baseUrl,
+        stateScope,
+      );
     // Plan JSON sits beside the binary; encrypt it too when the runner produced
     // it (the runner exposes it on the /artifacts/tfplan-json route).
     await this.#persistPlanJsonArtifact(runId, baseUrl, stateScope);
@@ -3106,9 +3124,201 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           sizeBytes: stored.size,
           createdAt: Date.now(),
         },
+        ...(providerLockArtifact !== undefined
+          ? { providerLockArtifact }
+          : {}),
       },
       runnerResponse.status,
     );
+  }
+
+  async #persistProviderLockfileArtifact(
+    runId: string,
+    payload: Record<string, unknown>,
+    baseUrl: URL,
+    stateScope: StateScope | undefined,
+  ): Promise<Record<string, unknown> | null | undefined> {
+    const raw = payload.providerLockArtifact;
+    // Old runner images did not know this field. Preserve that unknown state;
+    // the core treats it as historical digest-only and never fabricates a
+    // portable lockfile reference.
+    if (raw === undefined) return undefined;
+    if (raw === null) {
+      const providers = payload.requiredProviders;
+      if (
+        !Array.isArray(providers) ||
+        providers.some(
+          (provider) =>
+            typeof provider !== "string" ||
+            !isOpenTofuBuiltinProviderSource(provider),
+        )
+      ) {
+        throw new Error(
+          "provider lockfile artifact is explicitly absent without proof that the plan is provider-free",
+        );
+      }
+      return null;
+    }
+    const artifact = recordField(payload, "providerLockArtifact");
+    if (!artifact) {
+      throw new Error("providerLockArtifact must be an object or null");
+    }
+    const kind = requiredStringField(artifact, "kind");
+    const ref = requiredStringField(artifact, "ref");
+    const expectedRef = `runner-local://${runId}/provider-lockfile`;
+    if (kind !== "runner-local" || ref !== expectedRef) {
+      throw new Error(
+        "provider lockfile artifact ref must be the current run's runner-local artifact",
+      );
+    }
+    const expectedDigest = requiredSha256DigestField(artifact, "digest");
+    const providerLockDigest = requiredSha256DigestField(
+      payload,
+      "providerLockDigest",
+    );
+    if (providerLockDigest !== expectedDigest) {
+      throw new Error(
+        "provider lockfile artifact digest does not match providerLockDigest",
+      );
+    }
+    const declaredSize = nonNegativeIntegerField(artifact, "sizeBytes");
+    assertArtifactSize(
+      "provider_lockfile",
+      this.#artifactLimits.providerLockfile,
+      declaredSize,
+    );
+    const contentType = stringField(artifact, "contentType");
+    if (contentType && contentType !== PROVIDER_LOCKFILE_CONTENT_TYPE) {
+      throw new Error("provider lockfile artifact content type is invalid");
+    }
+    const response = await this.#containerFetch(
+      new Request(providerLockfileArtifactUrl(baseUrl, runId), {
+        method: "GET",
+      }),
+    );
+    if (!response.ok) {
+      throw new Error(
+        `container provider lockfile artifact fetch failed: ${response.status}`,
+      );
+    }
+    const bytes = await readBoundedResponseBytes(
+      response,
+      "provider_lockfile",
+      this.#artifactLimits.providerLockfile,
+    );
+    if (bytes.byteLength !== declaredSize) {
+      throw new Error(
+        `provider lockfile artifact size mismatch: expected ${declaredSize}, got ${bytes.byteLength}`,
+      );
+    }
+    const digest = await digestBytes(bytes);
+    if (digest !== expectedDigest) {
+      throw new Error(`provider lockfile artifact digest mismatch: ${digest}`);
+    }
+    const key = providerLockfileArtifactKey(runId, stateScope);
+    const sealed = await this.#stateCrypto().seal(bytes);
+    const options: R2PutOptions = {
+      httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
+      customMetadata: {
+        "takosumi-plan-run-id": runId,
+        "takosumi-provider-lockfile": "true",
+        "takosumi-content-digest": digest,
+        "takosumi-size-bytes": String(bytes.byteLength),
+        "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+        "takosumi-encryption-format": sealed.format,
+      },
+      onlyIf: { etagDoesNotMatch: "*" },
+    };
+    try {
+      await putR2ObjectWithRetry(
+        this.env.R2_ARTIFACTS,
+        encryptedKey(key),
+        sealed.ciphertext,
+        options,
+        "provider lockfile artifact",
+      );
+    } catch (error) {
+      if (
+        !(error instanceof R2ConditionalPutConflictError) &&
+        !(error instanceof RunnerArtifactRelayInfrastructureError)
+      ) {
+        throw error;
+      }
+      await this.#assertExistingProviderLockfileArtifact(
+        key,
+        runId,
+        expectedDigest,
+        bytes.byteLength,
+      );
+    }
+    return {
+      kind: "object-storage",
+      ref: planArtifactRef(this.#planArtifactBucket(), key),
+      digest,
+      contentType: PROVIDER_LOCKFILE_CONTENT_TYPE,
+      sizeBytes: bytes.byteLength,
+      createdAt: Date.now(),
+    };
+  }
+
+  async #assertExistingProviderLockfileArtifact(
+    key: string,
+    runId: string,
+    expectedDigest: string,
+    expectedSize: number,
+  ): Promise<void> {
+    await this.#readProviderLockfilePlaintext(
+      key,
+      runId,
+      expectedDigest,
+      expectedSize,
+    );
+  }
+
+  /**
+   * Reopens one immutable encrypted provider-lockfile object through the same
+   * private artifact-store boundary used by the promotion conflict/replay
+   * path. The plaintext is returned for a future operator-private transfer
+   * reader; no HTTP/public route exposes it here.
+   */
+  async #readProviderLockfilePlaintext(
+    key: string,
+    runId: string,
+    expectedDigest: string,
+    expectedSize: number,
+  ): Promise<Uint8Array> {
+    const object = await this.env.R2_ARTIFACTS.get(encryptedKey(key));
+    if (!object) {
+      throw new RunnerArtifactRelayInfrastructureError();
+    }
+    const metadata = object.customMetadata;
+    if (
+      object.httpMetadata?.contentType !== ENCRYPTED_ARTIFACT_CONTENT_TYPE ||
+      metadata?.["takosumi-plan-run-id"] !== runId ||
+      metadata?.["takosumi-provider-lockfile"] !== "true" ||
+      metadata?.["takosumi-content-digest"] !== expectedDigest ||
+      metadata?.["takosumi-size-bytes"] !== String(expectedSize) ||
+      metadata?.["takosumi-encryption-format"] !== "aes-gcm-bytes-v2" ||
+      metadata?.["takosumi-ciphertext-length"] !== String(object.size)
+    ) {
+      throw new Error("provider lockfile artifact immutable identity mismatch");
+    }
+    const ciphertext = await readBoundedR2ObjectBytes(
+      object,
+      "provider_lockfile",
+      maxStateArtifactCiphertextBytes(this.#artifactLimits.providerLockfile),
+    );
+    const plaintext = await this.#stateCrypto().open(
+      ciphertext,
+      expectedDigest,
+    );
+    if (
+      plaintext.byteLength !== expectedSize ||
+      (await digestBytes(plaintext)) !== expectedDigest
+    ) {
+      throw new Error("provider lockfile artifact immutable bytes mismatch");
+    }
+    return plaintext;
   }
 
   // Pull the `tofu show -json tfplan` JSON from the container (when present) and
@@ -3522,6 +3732,13 @@ function artifactUrl(baseUrl: URL, runId: string): string {
   return url.toString();
 }
 
+function providerLockfileArtifactUrl(baseUrl: URL, runId: string): string {
+  const url = new URL(baseUrl);
+  url.pathname = `/runs/${encodeURIComponent(runId)}/artifacts/tf-lockfile`;
+  url.search = "";
+  return url.toString();
+}
+
 function isRunDispatchRequest(request: Request): boolean {
   if (request.method !== "POST") return false;
   return /^\/runs\/[^/]+$/.test(new URL(request.url).pathname);
@@ -3543,6 +3760,8 @@ function runnerR2LogArtifact(context: string, key: string): string {
       return RUNNER_R2_LOG_ARTIFACT.restoredStateObject;
     case "plan artifact":
       return RUNNER_R2_LOG_ARTIFACT.planArtifact;
+    case "provider lockfile artifact":
+      return RUNNER_R2_LOG_ARTIFACT.providerLockfileArtifact;
     case "plan json artifact":
       return RUNNER_R2_LOG_ARTIFACT.planJsonArtifact;
     case "state artifact":
@@ -3573,6 +3792,10 @@ function runnerArtifactLimits(env: CloudflareWorkerEnv): RunnerArtifactLimits {
       RUNNER_ARTIFACT_LIMIT_ENV.plan,
       RUNNER_ARTIFACT_LIMIT_DEFAULTS.plan,
     ),
+    // The lockfile cap is intentionally fixed to the existing configuration
+    // max-file limit; unlike the larger plan cap it must never be operator
+    // widened for a private continuity artifact.
+    providerLockfile: RUNNER_ARTIFACT_LIMIT_DEFAULTS.providerLockfile,
     output: configuredArtifactLimit(
       env,
       RUNNER_ARTIFACT_LIMIT_ENV.output,
@@ -4911,6 +5134,21 @@ function positiveIntegerField(
   return field;
 }
 
+function nonNegativeIntegerField(
+  value: Record<string, unknown>,
+  key: string,
+): number {
+  const field = value[key];
+  if (
+    typeof field !== "number" ||
+    !Number.isSafeInteger(field) ||
+    field < 0
+  ) {
+    throw new Error(`${key} must be a non-negative integer`);
+  }
+  return field;
+}
+
 function planArtifactKey(runId: string, scope?: StateScope): string {
   if (scope) {
     const collection =
@@ -4920,6 +5158,23 @@ function planArtifactKey(runId: string, scope?: StateScope): string {
     )}/runs/${safeKeySegment(runId)}/plan.bin`;
   }
   return `opentofu-plan-runs/${runId.replace(/[^a-zA-Z0-9._-]+/g, "_")}/tfplan`;
+}
+
+function providerLockfileArtifactKey(
+  runId: string,
+  scope?: StateScope,
+): string {
+  if (scope) {
+    const collection =
+      scope.subjectKind === "resource" ? "resources" : "capsules";
+    return `workspaces/${safeKeySegment(scope.workspaceId)}/${collection}/${safeKeySegment(
+      scope.subjectId,
+    )}/runs/${safeKeySegment(runId)}/provider-lockfile.hcl`;
+  }
+  return `opentofu-plan-runs/${runId.replace(
+    /[^a-zA-Z0-9._-]+/g,
+    "_",
+  )}/provider-lockfile.hcl`;
 }
 
 function planJsonArtifactKey(runId: string, scope?: StateScope): string {

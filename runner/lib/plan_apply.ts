@@ -7,12 +7,14 @@
 import {
   cp,
   mkdir,
+  open,
   readFile,
   realpath,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type {
   JsonRecord,
@@ -65,6 +67,8 @@ import {
 import { ensureSourceAvailable, gitRevParseHead } from "./source_sync.ts";
 import {
   writePlanJsonArtifact,
+  readProviderLockfileBytes,
+  providerLockfilePath,
   workspaceForRun,
   writeModuleInfo,
   restoreUploadedState,
@@ -387,10 +391,15 @@ export async function initPlanAndBuildResponse(
   }
   const postInitProviderScan =
     await requiredProviderSourcesFromTerraformTree(moduleDir);
+  // Capture the lockfile immediately after init, before plan can execute any
+  // provider code or a later phase can rewrite the file. The returned digest is
+  // over these exact raw bytes; the runner-local copy is the sole source for
+  // the private relay route after the module workspace is torn down.
+  const providerLockfile = await captureProviderLockfile(workspace, moduleDir);
   assertProviderSetStableAfterInit(
     options.providerScan,
     postInitProviderScan,
-    await readDependencyLockIfPresent(moduleDir),
+    providerLockfile?.text,
   );
   // OpenTofu requires an ephemeral variable set at plan to be set again at
   // apply, so plan supplies the same variables with an empty map. The body
@@ -448,13 +457,15 @@ export async function initPlanAndBuildResponse(
   const planJsonArtifact = planJson
     ? await writePlanJsonArtifact(workspace, planJson)
     : undefined;
-  const providerLockDigest = await digestFileIfExists(
-    join(moduleDir, ".terraform.lock.hcl"),
-  );
   const requiredProviders = normalizedProviderList([
     ...options.requiredProviders,
     ...(planJson ? providersFromPlanJson(planJson) : []),
   ]);
+  if (!providerLockfile && requiredProviders.length > 0) {
+    throw new Error(
+      "OpenTofu provider lockfile artifact is missing after init for required providers",
+    );
+  }
   const providerInstallation = await providerInstallationEvidence(
     moduleDir,
     requiredProviders,
@@ -502,7 +513,18 @@ export async function initPlanAndBuildResponse(
             },
           }
         : {}),
-      ...(providerLockDigest ? { providerLockDigest } : {}),
+      ...(providerLockfile
+        ? {
+            providerLockDigest: providerLockfile.digest,
+            providerLockArtifact: {
+              kind: "runner-local",
+              ref: `runner-local://${runId}/provider-lockfile`,
+              digest: providerLockfile.digest,
+              contentType: "application/vnd.opentofu.lock.hcl",
+              sizeBytes: providerLockfile.sizeBytes,
+            },
+          }
+        : { providerLockArtifact: null }),
       ...(options.extra ?? {}),
       stdout: redactRunnerOutput(
         [options.buildLog, init.stdout, plan.stdout].filter(Boolean).join("\n"),
@@ -1036,5 +1058,66 @@ async function readDependencyLockIfPresent(
         : "";
     if (code === "ENOENT") return undefined;
     throw error;
+  }
+}
+
+async function captureProviderLockfile(
+  workspace: RunWorkspace,
+  moduleDir: string,
+): Promise<
+  | {
+      readonly digest: string;
+      readonly sizeBytes: number;
+      readonly text: string;
+    }
+  | undefined
+> {
+  const sourcePath = join(moduleDir, ".terraform.lock.hcl");
+  // A run workspace may be reused after an interrupted request. Never let a
+  // stale copy make a provider-free plan look portable.
+  await rm(providerLockfilePath(workspace), { force: true });
+  const bytes = await readProviderLockfileBytes(sourcePath, {
+    nonRegularError:
+      "OpenTofu dependency lock is not a physical regular file after init",
+    changedError: "OpenTofu provider lockfile changed while it was captured",
+  });
+  if (bytes === undefined) return undefined;
+  const digest = await digestBytes(bytes);
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  await writeProviderLockfileCapture(providerLockfilePath(workspace), bytes);
+  return { digest, sizeBytes: bytes.byteLength, text };
+}
+
+async function writeProviderLockfileCapture(
+  path: string,
+  bytes: Uint8Array,
+): Promise<void> {
+  // O_EXCL prevents a replacement final-component symlink (or another stale
+  // path) from redirecting the captured bytes. The caller removes the prior
+  // copy first so a successful capture still has the old overwrite semantics
+  // and 0600 mode.
+  const destination = await open(
+    path,
+    fsConstants.O_WRONLY |
+      fsConstants.O_CREAT |
+      fsConstants.O_EXCL |
+      fsConstants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    let bytesWritten = 0;
+    while (bytesWritten < bytes.byteLength) {
+      const result = await destination.write(
+        bytes,
+        bytesWritten,
+        bytes.byteLength - bytesWritten,
+      );
+      if (result.bytesWritten === 0) {
+        throw new Error("OpenTofu provider lockfile capture write made no progress");
+      }
+      bytesWritten += result.bytesWritten;
+    }
+  } finally {
+    await destination.close();
   }
 }

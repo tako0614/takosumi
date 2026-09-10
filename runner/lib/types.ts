@@ -39,6 +39,8 @@ export interface RunWorkspace {
   readonly sourceRoot: string;
   readonly moduleDir: string;
   readonly planPath: string;
+  /** Exact post-init `.terraform.lock.hcl` bytes retained for private promotion. */
+  readonly providerLockfilePath: string;
   readonly restoredStatePath: string;
   readonly moduleInfoPath: string;
   // Generated-root workspace dirs. `generatedRootDir` is where tofu runs (it

@@ -279,6 +279,13 @@ export interface PlanRun {
   readonly sourceCommit?: string;
   readonly providerLockDigest?: string;
   /**
+   * Private immutable `.terraform.lock.hcl` artifact captured immediately after
+   * init. `null` is an explicit provider-free/no-file result from a current
+   * runner; `undefined` is historical/older-runner unknown. This field is
+   * intentionally omitted from public Run/PlanRun projections.
+   */
+  readonly providerLockArtifact?: OpenTofuPlanArtifact | null;
+  /**
    * Capsule CompatibilityReport reviewed for this plan. Set for Capsule
    * runs when the Capsule carries a compatibility report. The queue
    * consumer verifies the report before provider credential mint.
@@ -423,7 +430,10 @@ export interface PlanRunCapsuleContext {
   readonly environment: string;
 }
 
-export type PublicPlanRun = Omit<PlanRun, "executionInputsDigest">;
+export type PublicPlanRun = Omit<
+  PlanRun,
+  "executionInputsDigest" | "providerLockArtifact"
+>;
 
 export interface PlanRunSummary {
   readonly add?: number;
@@ -432,7 +442,12 @@ export interface PlanRunSummary {
 }
 
 export interface OpenTofuPlanArtifact {
-  readonly kind: "runner-local" | "object-storage" | "remote" | string;
+  readonly kind:
+    | "runner-local"
+    | "object-storage"
+    | "local"
+    | "remote"
+    | string;
   readonly ref: string;
   readonly digest: string;
   readonly contentType?: string;

@@ -61,6 +61,8 @@ import { assertRunExecutionEvidence } from "../../../contract/runs.ts";
 import { handleRunnerRequest } from "../../../runner/entrypoint.ts";
 
 export const LOCAL_OPENTOFU_RUNNER_PROFILE_ID = "local-opentofu";
+const PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES = 1024 * 1024;
+const PROVIDER_LOCKFILE_CONTENT_TYPE = "application/vnd.opentofu.lock.hcl";
 
 interface RunnerTransport {
   fetch(path: string, init?: RequestInit): Promise<Response>;
@@ -101,6 +103,15 @@ export interface LocalOpenTofuRawOutputArtifact {
   readonly outputs: OpenTofuOutputEnvelope;
 }
 
+/** Private immutable lockfile bytes retained by the local encrypted artifact store. */
+export interface LocalOpenTofuProviderLockfileArtifact {
+  readonly ref: string;
+  readonly runId: string;
+  readonly digest: string;
+  readonly sizeBytes: number;
+  readonly bytes: Uint8Array;
+}
+
 /**
  * Durable exact-key authority for local-substrate OpenTofu state. A target ref
  * is immutable: replay by the same ApplyRun adopts it, while a different run
@@ -117,6 +128,13 @@ export interface LocalOpenTofuStateArtifactStore {
   commitRawOutput(
     artifact: LocalOpenTofuRawOutputArtifact,
   ): Promise<LocalOpenTofuRawOutputArtifact>;
+  /** Optional for stores predating lockfile continuity; new provider plans fail closed when absent. */
+  readProviderLockfile?(
+    ref: string,
+  ): Promise<LocalOpenTofuProviderLockfileArtifact | undefined>;
+  commitProviderLockfile?(
+    artifact: LocalOpenTofuProviderLockfileArtifact,
+  ): Promise<LocalOpenTofuProviderLockfileArtifact>;
 }
 
 export function createFileSourceArchiveStore(root: string): SourceArchiveStore {
@@ -166,6 +184,19 @@ export function createFileOpenTofuStateArtifactStore(
       rawOutputRef,
       cryptoBoundary,
     );
+  };
+  const readProviderLockfile = async (
+    ref: string,
+  ): Promise<LocalOpenTofuProviderLockfileArtifact | undefined> => {
+    const path = await providerLockfileArtifactPath(normalizedRoot, ref);
+    let text: string;
+    try {
+      text = await readFile(path, "utf8");
+    } catch (error) {
+      if (isErrno(error, "ENOENT")) return undefined;
+      throw error;
+    }
+    return await parseProviderLockfileArtifactEnvelope(text, ref, cryptoBoundary);
   };
   return {
     read,
@@ -300,6 +331,70 @@ export function createFileOpenTofuStateArtifactStore(
         });
       }
     },
+    readProviderLockfile,
+    commitProviderLockfile: async (artifact) => {
+      await assertLocalProviderLockfileArtifact(artifact);
+      const path = await providerLockfileArtifactPath(
+        normalizedRoot,
+        artifact.ref,
+      );
+      const artifactRoot = resolve(normalizedRoot, "provider-lockfile");
+      const artifactDirectory = dirname(path);
+      await mkdir(normalizedRoot, { recursive: true });
+      await syncDirectory(dirname(normalizedRoot));
+      await mkdir(artifactRoot, { recursive: true });
+      await syncDirectory(normalizedRoot);
+      await mkdir(artifactDirectory, { recursive: true });
+      await syncDirectory(artifactRoot);
+      const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
+      const metadata = {
+        version: 1,
+        kind: "provider_lockfile" as const,
+        ref: artifact.ref,
+        runId: artifact.runId,
+        digest: artifact.digest,
+        sizeBytes: artifact.sizeBytes,
+      } as const;
+      const sealed = await cryptoBoundary.seal(
+        JSON.stringify({
+          bytesBase64: Buffer.from(artifact.bytes).toString("base64"),
+        }),
+        "global",
+        localProviderLockfileArtifactAad(metadata),
+      );
+      const envelope = `${JSON.stringify({
+        ...metadata,
+        ciphertextBase64: Buffer.from(sealed).toString("base64"),
+      })}\n`;
+      try {
+        const temporary = await open(temporaryPath, "wx", 0o600);
+        try {
+          await temporary.writeFile(envelope);
+          await temporary.sync();
+        } finally {
+          await temporary.close();
+        }
+        try {
+          await link(temporaryPath, path);
+          await syncDirectory(artifactDirectory);
+          return artifact;
+        } catch (error) {
+          if (!isErrno(error, "EEXIST")) throw error;
+          const existing = await readProviderLockfile(artifact.ref);
+          if (!existing) {
+            throw new Error(
+              `local OpenTofu provider lockfile ${artifact.ref} disappeared during immutable commit`,
+            );
+          }
+          assertSameProviderLockfileArtifact(existing, artifact);
+          return existing;
+        }
+      } finally {
+        await unlink(temporaryPath).catch((error) => {
+          if (!isErrno(error, "ENOENT")) throw error;
+        });
+      }
+    },
   };
 }
 
@@ -394,6 +489,18 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       control?.signal,
     );
     const planDigest = requiredString(result, "planDigest");
+    const providerLockDigest = stringValue(result, "providerLockDigest");
+    const providerLockArtifact = parseProviderLockArtifact(
+      result,
+      job.planRun.id,
+      providerLockDigest,
+    );
+    const durableProviderLockArtifact =
+      await this.persistProviderLockArtifact(
+        job.planRun.id,
+        providerLockArtifact,
+        control?.signal,
+      );
     return {
       planDigest,
       planArtifact: parsePlanArtifact(result, job.planRun.id, planDigest),
@@ -403,8 +510,11 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       ...(stringValue(result, "sourceCommit")
         ? { sourceCommit: stringValue(result, "sourceCommit") }
         : {}),
-      ...(stringValue(result, "providerLockDigest")
-        ? { providerLockDigest: stringValue(result, "providerLockDigest") }
+      ...(providerLockDigest
+        ? { providerLockDigest }
+        : {}),
+      ...(durableProviderLockArtifact !== undefined
+        ? { providerLockArtifact: durableProviderLockArtifact }
         : {}),
       ...(providerInstallation(result)
         ? { providerInstallation: providerInstallation(result) }
@@ -421,6 +531,64 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         ? { planResourceChanges: planResourceChanges(result) }
         : {}),
       diagnostics: diagnostics(result),
+    };
+  }
+
+  private async persistProviderLockArtifact(
+    runId: string,
+    artifact: OpenTofuPlanResult["providerLockArtifact"],
+    signal?: AbortSignal,
+  ): Promise<OpenTofuPlanResult["providerLockArtifact"]> {
+    if (!artifact || artifact.kind !== "runner-local") return artifact;
+    const commit = this.stateStore.commitProviderLockfile;
+    if (typeof commit !== "function") {
+      throw new Error(
+        "local OpenTofu state artifact store cannot persist provider lockfile artifact",
+      );
+    }
+    const bytes = await fetchRunnerArtifact(
+      this.transport,
+      runId,
+      `/runs/${encodeURIComponent(runId)}/artifacts/tf-lockfile`,
+      signal,
+      PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES,
+    );
+    if (bytes.byteLength !== artifact.sizeBytes) {
+      throw new Error(
+        `local OpenTofu provider lockfile size mismatch: expected ${artifact.sizeBytes}, got ${bytes.byteLength}`,
+      );
+    }
+    await assertDigest(bytes, artifact.digest, "provider lockfile artifact");
+    const durableRef = `local-opentofu://runs/${runId}/provider-lockfile`;
+    const committed = await commit({
+      ref: durableRef,
+      runId,
+      digest: artifact.digest,
+      sizeBytes: bytes.byteLength,
+      bytes,
+    });
+    if (
+      committed.ref !== durableRef ||
+      committed.runId !== runId ||
+      committed.digest !== artifact.digest ||
+      committed.sizeBytes !== bytes.byteLength
+    ) {
+      throw new Error(
+        "local OpenTofu provider lockfile commit returned mismatched immutable identity",
+      );
+    }
+    await assertDigest(
+      committed.bytes,
+      artifact.digest,
+      "local OpenTofu provider lockfile committed bytes",
+    );
+    return {
+      kind: "local",
+      ref: committed.ref,
+      digest: committed.digest,
+      contentType: PROVIDER_LOCKFILE_CONTENT_TYPE,
+      sizeBytes: committed.sizeBytes,
+      createdAt: Date.now(),
     };
   }
 
@@ -1360,6 +1528,7 @@ async function fetchRunnerArtifact(
   runId: string,
   path: string,
   signal?: AbortSignal,
+  maxBytes?: number,
 ): Promise<Uint8Array> {
   const response = await transport.fetch(path, {
     method: "GET",
@@ -1370,7 +1539,25 @@ async function fetchRunnerArtifact(
       `OpenTofu runner artifact fetch failed for ${runId}: ${response.status} ${await response.text()}`,
     );
   }
-  return new Uint8Array(await response.arrayBuffer());
+  const declaredLength = response.headers.get("content-length");
+  if (maxBytes !== undefined && declaredLength !== null) {
+    const parsedLength = Number(declaredLength);
+    if (
+      Number.isSafeInteger(parsedLength) &&
+      parsedLength > maxBytes
+    ) {
+      throw new Error(
+        `OpenTofu runner ${path} artifact exceeds ${maxBytes} byte limit`,
+      );
+    }
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (maxBytes !== undefined && bytes.byteLength > maxBytes) {
+    throw new Error(
+      `OpenTofu runner ${path} artifact exceeds ${maxBytes} byte limit`,
+    );
+  }
+  return bytes;
 }
 
 async function fetchRunnerArtifactIfPresent(
@@ -1421,6 +1608,61 @@ function parsePlanArtifact(
       : {}),
     ...(numberValue(artifact, "createdAt") !== undefined
       ? { createdAt: numberValue(artifact, "createdAt") }
+      : {}),
+  };
+}
+
+function parseProviderLockArtifact(
+  result: Record<string, unknown>,
+  runId: string,
+  providerLockDigest: string | undefined,
+): OpenTofuPlanResult["providerLockArtifact"] {
+  const raw = result.providerLockArtifact;
+  if (raw === undefined) return undefined;
+  if (raw === null) {
+    if (providerLockDigest !== undefined) {
+      throw new Error(
+        "OpenTofu runner providerLockArtifact is explicitly absent but providerLockDigest is present",
+      );
+    }
+    return null;
+  }
+  const artifact = recordValue(result, "providerLockArtifact");
+  if (!artifact) {
+    throw new Error("OpenTofu runner providerLockArtifact must be an object or null");
+  }
+  const kind = requiredString(artifact, "kind");
+  const ref = requiredString(artifact, "ref");
+  const digest = requiredString(artifact, "digest");
+  const sizeBytes = numberValue(artifact, "sizeBytes");
+  if (
+    kind !== "runner-local" ||
+    !/^sha256:[0-9a-f]{64}$/u.test(digest) ||
+    providerLockDigest === undefined ||
+    providerLockDigest !== digest ||
+    sizeBytes === undefined ||
+    !Number.isSafeInteger(sizeBytes) ||
+    sizeBytes < 0 ||
+    sizeBytes > PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES ||
+    ref !== `runner-local://${runId}/provider-lockfile` ||
+    (artifact.contentType !== undefined &&
+      artifact.contentType !== PROVIDER_LOCKFILE_CONTENT_TYPE) ||
+    (artifact.createdAt !== undefined &&
+      (typeof artifact.createdAt !== "number" ||
+        !Number.isFinite(artifact.createdAt)))
+  ) {
+    throw new Error("OpenTofu runner providerLockArtifact metadata is invalid");
+  }
+  return {
+    kind,
+    ref,
+    digest,
+    ...(stringValue(artifact, "contentType")
+      ? { contentType: stringValue(artifact, "contentType") }
+      : {}),
+    sizeBytes,
+    ...(typeof artifact.createdAt === "number"
+      ? { createdAt: artifact.createdAt }
       : {}),
   };
 }
@@ -1644,6 +1886,32 @@ async function rawOutputArtifactPath(
   return resolve(root, "raw-output", key.slice(0, 2), `${key}.json`);
 }
 
+async function providerLockfileArtifactPath(
+  root: string,
+  ref: string,
+): Promise<string> {
+  if (
+    !ref.startsWith("local-opentofu://runs/") ||
+    !ref.endsWith("/provider-lockfile") ||
+    ref.includes("..") ||
+    ref.includes("\\") ||
+    ref.includes("\0")
+  ) {
+    throw new Error(`unsafe local OpenTofu provider lockfile ref: ${ref}`);
+  }
+  const runId = ref.slice(
+    "local-opentofu://runs/".length,
+    -"/provider-lockfile".length,
+  );
+  if (!runId || runId.includes("/")) {
+    throw new Error(`unsafe local OpenTofu provider lockfile ref: ${ref}`);
+  }
+  const key = (await digestBytes(new TextEncoder().encode(ref))).slice(
+    "sha256:".length,
+  );
+  return resolve(root, "provider-lockfile", key.slice(0, 2), `${key}.json`);
+}
+
 async function parseStateArtifactEnvelope(
   text: string,
   expectedStateRef: string,
@@ -1799,6 +2067,74 @@ async function parseRawOutputArtifactEnvelope(
   return artifact;
 }
 
+async function parseProviderLockfileArtifactEnvelope(
+  text: string,
+  expectedRef: string,
+  cryptoBoundary: SecretBoundaryCrypto,
+): Promise<LocalOpenTofuProviderLockfileArtifact> {
+  const envelope = parseObject(text);
+  if (
+    envelope.version !== 1 ||
+    envelope.kind !== "provider_lockfile" ||
+    stringValue(envelope, "ref") !== expectedRef ||
+    !stringValue(envelope, "runId") ||
+    !stringValue(envelope, "digest") ||
+    !Number.isSafeInteger(envelope.sizeBytes) ||
+    (envelope.sizeBytes as number) < 0 ||
+    (envelope.sizeBytes as number) > PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES ||
+    !stringValue(envelope, "ciphertextBase64")
+  ) {
+    throw new Error(
+      `local OpenTofu provider lockfile ${expectedRef} is malformed`,
+    );
+  }
+  const metadata = {
+    version: 1,
+    kind: "provider_lockfile" as const,
+    ref: expectedRef,
+    runId: requiredString(envelope, "runId"),
+    digest: requiredString(envelope, "digest"),
+    sizeBytes: envelope.sizeBytes as number,
+  } as const;
+  const protectedPayload = parseObject(
+    await cryptoBoundary.open(
+      decodeCanonicalBase64(
+        requiredString(envelope, "ciphertextBase64"),
+        `local OpenTofu provider lockfile ${expectedRef} ciphertext`,
+      ),
+      "global",
+      localProviderLockfileArtifactAad(metadata),
+    ),
+  );
+  const encodedBytes = protectedPayload.bytesBase64;
+  if (typeof encodedBytes !== "string") {
+    throw new Error(
+      `local OpenTofu provider lockfile ${expectedRef} bytes are malformed`,
+    );
+  }
+  const bytes = decodeCanonicalBase64(
+    encodedBytes,
+    `local OpenTofu provider lockfile ${expectedRef} bytes`,
+  );
+  const artifact: LocalOpenTofuProviderLockfileArtifact = {
+    ...metadata,
+    bytes,
+  };
+  await assertLocalProviderLockfileArtifact(artifact);
+  return artifact;
+}
+
+function localProviderLockfileArtifactAad(metadata: {
+  readonly version: 1;
+  readonly kind: "provider_lockfile";
+  readonly ref: string;
+  readonly runId: string;
+  readonly digest: string;
+  readonly sizeBytes: number;
+}): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(metadata));
+}
+
 function localRawOutputArtifactAad(metadata: {
   readonly version: 1;
   readonly kind: "raw_output";
@@ -1947,6 +2283,40 @@ async function assertLocalRawOutputArtifact(
   }
 }
 
+async function assertLocalProviderLockfileArtifact(
+  artifact: LocalOpenTofuProviderLockfileArtifact,
+): Promise<void> {
+  if (
+    !artifact.ref.startsWith("local-opentofu://runs/") ||
+    !artifact.ref.endsWith("/provider-lockfile") ||
+    artifact.ref.includes("..") ||
+    artifact.ref.includes("\\") ||
+    artifact.ref.includes("\0") ||
+    !artifact.runId.trim() ||
+    !Number.isSafeInteger(artifact.sizeBytes) ||
+    artifact.sizeBytes < 0 ||
+    artifact.sizeBytes > PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES ||
+    artifact.bytes.byteLength !== artifact.sizeBytes ||
+    !/^sha256:[0-9a-f]{64}$/u.test(artifact.digest)
+  ) {
+    throw new Error("local OpenTofu provider lockfile artifact metadata is invalid");
+  }
+  const refRunId = artifact.ref.slice(
+    "local-opentofu://runs/".length,
+    -"/provider-lockfile".length,
+  );
+  if (!refRunId || refRunId !== artifact.runId || refRunId.includes("/")) {
+    throw new Error(
+      "local OpenTofu provider lockfile artifact ref does not match runId",
+    );
+  }
+  await assertDigest(
+    artifact.bytes,
+    artifact.digest,
+    `local OpenTofu provider lockfile ${artifact.ref}`,
+  );
+}
+
 function assertSameStateMutation(
   existing: LocalOpenTofuStateArtifact,
   candidate: LocalOpenTofuStateArtifact,
@@ -1985,6 +2355,22 @@ function assertSameRawOutputMutation(
   ) {
     throw new Error(
       `local OpenTofu raw output target ${candidate.rawOutputRef} is already committed by a different mutation`,
+    );
+  }
+}
+
+function assertSameProviderLockfileArtifact(
+  existing: LocalOpenTofuProviderLockfileArtifact,
+  candidate: LocalOpenTofuProviderLockfileArtifact,
+): void {
+  if (
+    existing.runId !== candidate.runId ||
+    existing.ref !== candidate.ref ||
+    existing.digest !== candidate.digest ||
+    existing.sizeBytes !== candidate.sizeBytes
+  ) {
+    throw new Error(
+      `local OpenTofu provider lockfile target ${candidate.ref} is already committed by a different run`,
     );
   }
 }

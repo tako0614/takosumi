@@ -26,6 +26,7 @@ import type {
   Capsule,
   OpenTofuExecutionSource,
   OpenTofuModuleSource,
+  OpenTofuPlanArtifact,
   PlanRun,
   PlanRunCapsuleContext,
   PlanRunResponse,
@@ -7467,6 +7468,12 @@ export class RunEngine {
         running.requiredProviderRequirements,
       );
     }
+    assertProviderLockArtifactContinuity(
+      running.id,
+      requiredProviders,
+      result.providerLockDigest,
+      result.providerLockArtifact,
+    );
     // Re-evaluate against the SAME provider-free allowance as the create gate:
     // a provider-free Capsule that observes zero providers at
     // plan time stays passed instead of tripping the "providers before init"
@@ -7615,6 +7622,9 @@ export class RunEngine {
       ...(result.sourceCommit ? { sourceCommit: result.sourceCommit } : {}),
       ...(result.providerLockDigest
         ? { providerLockDigest: result.providerLockDigest }
+        : {}),
+      ...(result.providerLockArtifact !== undefined
+        ? { providerLockArtifact: result.providerLockArtifact }
         : {}),
       ...(summary ? { summary } : {}),
       ...(result.planResourceChanges
@@ -11116,5 +11126,91 @@ function restoreRunMatchesStateVersion(
     restoreRun.restoredStateVersionId === stateVersion.id &&
     typeof restoreRun.restoredFromStateVersionId === "string" &&
     restoreRun.restoredFromStateVersionId.trim() !== ""
+  );
+}
+
+const PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES = 1024 * 1024;
+const PROVIDER_LOCKFILE_CONTENT_TYPE = "application/vnd.opentofu.lock.hcl";
+
+/**
+ * Validates the private lockfile continuity metadata before a plan can become
+ * terminal. Current runners return an object (provider-using) or explicit null
+ * (proven provider-free); an absent field is intentionally retained as the
+ * historical/older-runner unknown state and is not upgraded here.
+ */
+function assertProviderLockArtifactContinuity(
+  runId: string,
+  requiredProviders: readonly string[],
+  providerLockDigest: string | undefined,
+  artifact: OpenTofuPlanArtifact | null | undefined,
+): void {
+  if (artifact === undefined) return;
+  const externalProviders = requiredProviders.filter(
+    (provider) => !isOpenTofuBuiltinProviderSource(provider),
+  );
+  if (artifact === null) {
+    if (externalProviders.length > 0 || providerLockDigest !== undefined) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "provider lockfile artifact is explicitly absent for a provider-using plan",
+      );
+    }
+    return;
+  }
+  if (artifact.kind === "runner-local") {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "provider lockfile artifact must be promoted to durable storage before the PlanRun can complete",
+    );
+  }
+  if (
+    (artifact.kind !== "object-storage" && artifact.kind !== "local") ||
+    typeof artifact.ref !== "string" ||
+    artifact.ref.trim().length === 0 ||
+    !/^sha256:[0-9a-f]{64}$/u.test(artifact.digest) ||
+    providerLockDigest === undefined ||
+    !/^sha256:[0-9a-f]{64}$/u.test(providerLockDigest) ||
+    providerLockDigest !== artifact.digest ||
+    typeof artifact.sizeBytes !== "number" ||
+    !Number.isSafeInteger(artifact.sizeBytes) ||
+    artifact.sizeBytes < 0 ||
+    artifact.sizeBytes > PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES ||
+    artifact.contentType !== PROVIDER_LOCKFILE_CONTENT_TYPE ||
+    (artifact.createdAt !== undefined &&
+      (typeof artifact.createdAt !== "number" ||
+        !Number.isFinite(artifact.createdAt)))
+  ) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "provider lockfile artifact metadata is invalid",
+    );
+  }
+  if (
+    artifact.kind === "local" &&
+    artifact.ref !== `local-opentofu://runs/${runId}/provider-lockfile`
+  ) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "provider lockfile artifact ref does not match the PlanRun",
+    );
+  }
+  if (
+    artifact.kind === "object-storage" &&
+    !providerLockfileObjectRefMatchesRun(artifact.ref, runId)
+  ) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "provider lockfile object-storage ref does not match the PlanRun",
+    );
+  }
+}
+
+function providerLockfileObjectRefMatchesRun(ref: string, runId: string): boolean {
+  const sanitizedRunId = runId.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  return (
+    /^r2:\/\/[^/]+\//u.test(ref) &&
+    (ref.endsWith(`/runs/${runId}/provider-lockfile.hcl`) ||
+      ref.endsWith(`/runs/${sanitizedRunId}/provider-lockfile.hcl`) ||
+      ref.endsWith(`/opentofu-plan-runs/${sanitizedRunId}/provider-lockfile.hcl`))
   );
 }

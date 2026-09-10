@@ -35,6 +35,7 @@ function testWorkspace(root: string): RunWorkspace {
     sourceRoot: join(root, "source"),
     moduleDir: join(root, "module"),
     planPath: join(root, "tfplan"),
+    providerLockfilePath: join(root, "provider-lockfile.hcl"),
     restoredStatePath: join(root, "terraform.tfstate"),
     moduleInfoPath: join(root, "module-info.json"),
     generatedRootDir: join(root, "generated-root"),

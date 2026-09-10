@@ -73,6 +73,21 @@ Run は runner sandbox の中で実行されます。認証情報が渡るのは
 **値ではなく名前だけを残す**のが原則です。どの環境変数を注入したかは後から分かり
 ますが、中身は残りません。
 
+### provider lockfile の連続性
+
+provider を使う plan では、runner が `tofu init` の直後に読んだ
+`.terraform.lock.hcl` の**生バイト列**を 0 バイト以上 1 MiB 以下の private artifact として保持します。
+SHA-256 はこのバイト列そのものに対して計算され、`providerLockDigest` と一致しなければ
+plan は成功しません。runner の終了後も、既存の暗号化 artifact store に run と結び付いた
+immutable object として残り、権限のある内部処理だけが読み出せます。Run / Output / log の
+公開 projection には lockfile の本文も artifact ref も含めません。
+
+現在の runner が provider-free で lockfile を生成しなかった場合だけ、private metadata に
+明示的な `null` を記録します。空の lockfile は存在した生バイト列（サイズ 0）として `null` と
+区別します。古い runner の digest-only 記録は `undefined`（不明）のまま
+扱い、後から lockfile を取得・再生成して過去のバイト列だとは主張しません。lockfile が
+欠落、上限超過、改変、または別 Run の ref になった provider plan は成功になりません。
+
 ## 自動で進む範囲
 
 Git の変更や drift を見つけただけで、Takosumi が apply を始めることはありません。

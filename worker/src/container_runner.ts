@@ -91,6 +91,8 @@ const MAX_RUNNER_EXECUTION_DETAIL_CHARS = 4_096;
 const UNSAFE_PROVIDER_FAILURE_DETAIL_LINE =
   /(?:\b(?:authorization|bearer|cookie|token|password|passwd|secret|credential|api[_-]?key|body)\b|\/work\/)/iu;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
+const PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES = 1024 * 1024;
+const PROVIDER_LOCKFILE_CONTENT_TYPE = "application/vnd.opentofu.lock.hcl";
 type ContainerRunnerAction = OpenTofuRunAction | "release" | "stable_semver_tag";
 
 export class CloudflareContainerOpenTofuRunner
@@ -121,6 +123,10 @@ export class CloudflareContainerOpenTofuRunner
         stderr: stringFromRecord(result, "stderr") ?? "",
       }));
     const planArtifact = planArtifactFromContainerResult(result, planDigest);
+    const providerLockArtifact = providerLockArtifactFromContainerResult(
+      result,
+      job.planRun.id,
+    );
     const planResourceChanges = planResourceChangesFromContainerResult(result);
     const plannedOutputs = plannedOutputsFromContainerResult(result);
     return {
@@ -140,6 +146,11 @@ export class CloudflareContainerOpenTofuRunner
       ...(stringFromRecord(result, "providerLockDigest")
         ? {
             providerLockDigest: stringFromRecord(result, "providerLockDigest"),
+          }
+        : {}),
+      ...(providerLockArtifact !== undefined
+        ? {
+            providerLockArtifact,
           }
         : {}),
       ...(providerInstallationFromContainerResult(result)
@@ -1371,6 +1382,82 @@ function planArtifactFromContainerResult(
       ? { createdAt: artifact.createdAt }
       : {}),
   };
+}
+
+function providerLockArtifactFromContainerResult(
+  result: Record<string, unknown>,
+  runId: string,
+): OpenTofuPlanResult["providerLockArtifact"] {
+  const raw = result.providerLockArtifact;
+  if (raw === undefined) return undefined;
+  if (raw === null) {
+    if (result.providerLockDigest !== undefined) {
+      throw new Error(
+        "runner providerLockArtifact is explicitly absent but providerLockDigest is present",
+      );
+    }
+    return null;
+  }
+  const artifact = recordFromRecord(result, "providerLockArtifact");
+  if (!artifact) {
+    throw new Error("runner providerLockArtifact must be an object or null");
+  }
+  const kind = stringFromRecord(artifact, "kind");
+  const ref = stringFromRecord(artifact, "ref");
+  const digest = stringFromRecord(artifact, "digest");
+  const sizeBytes = artifact.sizeBytes;
+  if (
+    kind !== "object-storage" ||
+    !ref ||
+    !digest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(digest) ||
+    !providerLockfileObjectRefMatchesRun(ref, runId)
+  ) {
+    throw new Error("runner providerLockArtifact metadata is invalid");
+  }
+  if (
+    typeof sizeBytes !== "number" ||
+    !Number.isSafeInteger(sizeBytes) ||
+    sizeBytes < 0 ||
+    sizeBytes > PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES ||
+    (artifact.contentType !== undefined &&
+      artifact.contentType !== PROVIDER_LOCKFILE_CONTENT_TYPE) ||
+    (artifact.createdAt !== undefined &&
+      (typeof artifact.createdAt !== "number" ||
+        !Number.isFinite(artifact.createdAt)))
+  ) {
+    throw new Error("runner providerLockArtifact metadata is invalid");
+  }
+  const providerLockDigest = stringFromRecord(result, "providerLockDigest");
+  if (!providerLockDigest || providerLockDigest !== digest) {
+    throw new Error(
+      "runner providerLockArtifact.digest must match providerLockDigest",
+    );
+  }
+  return {
+    kind,
+    ref,
+    digest,
+    ...(artifact.contentType
+      ? { contentType: artifact.contentType }
+      : {}),
+    sizeBytes,
+    ...(typeof artifact.createdAt === "number"
+      ? { createdAt: artifact.createdAt }
+      : {}),
+  };
+}
+
+function providerLockfileObjectRefMatchesRun(ref: string, runId: string): boolean {
+  const sanitizedRunId = runId.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  return (
+    /^r2:\/\/[^/]+\//u.test(ref) &&
+    (ref.endsWith(`/runs/${runId}/provider-lockfile.hcl`) ||
+      ref.endsWith(`/runs/${sanitizedRunId}/provider-lockfile.hcl`) ||
+      ref.endsWith(
+        `/opentofu-plan-runs/${sanitizedRunId}/provider-lockfile.hcl`,
+      ))
+  );
 }
 
 function runnerRunIdFromPlanArtifact(

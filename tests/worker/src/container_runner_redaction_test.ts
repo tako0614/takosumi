@@ -93,6 +93,32 @@ test("container runner returns provider installation attestation from plan resul
   });
 });
 
+test("container runner rejects an unpromoted runner-local provider lockfile artifact", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning({
+      planDigest: PLAN_DIGEST,
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_lock_ephemeral/tfplan",
+        digest: PLAN_DIGEST,
+      },
+      providerLockDigest: `sha256:${"a".repeat(64)}`,
+      providerLockArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_lock_ephemeral/provider-lockfile",
+        digest: `sha256:${"a".repeat(64)}`,
+        sizeBytes: 10,
+      },
+    }),
+  );
+
+  await expect(
+    runner.plan({
+      planRun: { id: "plan_lock_ephemeral" },
+    } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]),
+  ).rejects.toThrow(/providerLockArtifact metadata is invalid/);
+});
+
 test("container runner rejects live provider installation evidence for an OpenTofu builtin", async () => {
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning({

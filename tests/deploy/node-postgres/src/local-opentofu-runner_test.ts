@@ -14,8 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createFileOpenTofuStateArtifactStore,
+  createHttpOpenTofuRunner,
   createLocalOpenTofuRunner,
   createLocalOpenTofuRunnerProfile,
+  type LocalOpenTofuProviderLockfileArtifact,
   type SourceArchiveStore,
 } from "../../../../deploy/node-postgres/src/local-opentofu-runner.ts";
 import { generateOpenTofuChildModuleRoot } from "../../../../lib/rootgen/src/mod.ts";
@@ -414,6 +416,162 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
     ).rejects.toThrow(`already owned by ApplyRun ${destroyApplyId}`);
   } finally {
     await Promise.all(runIds.map(removeRunWorkspace));
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("local OpenTofu plan promotes exact post-init provider lockfile bytes", async () => {
+  const runId = `plan_lock_${crypto.randomUUID()}`;
+  const provider = "registry.opentofu.org/example/provider";
+  const lockBytes = new Uint8Array([
+    0x70,
+    0x72,
+    0x6f,
+    0x76,
+    0x69,
+    0x64,
+    0x65,
+    0x72,
+    0x20,
+    0x22,
+    0xc3,
+    0xa9,
+    0x22,
+    0x20,
+    0x7b,
+    0x0a,
+    0x7d,
+    0x0a,
+  ]);
+  const lockDigest = `sha256:${createHash("sha256")
+    .update(lockBytes)
+    .digest("hex")}`;
+  const planBytes = new TextEncoder().encode("portable-plan");
+  const planDigest = `sha256:${createHash("sha256")
+    .update(planBytes)
+    .digest("hex")}`;
+  const requests: string[] = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      requests.push(`${request.method} ${url.pathname}`);
+      if (
+        request.method === "POST" &&
+        url.pathname === `/runs/${runId}`
+      ) {
+        return Response.json({
+          status: "succeeded",
+          exitCode: 0,
+          planDigest,
+          planArtifact: {
+            kind: "runner-local",
+            ref: `runner-local://${runId}/tfplan`,
+            digest: planDigest,
+          },
+          requiredProviders: [provider],
+          providerLockDigest: lockDigest,
+          providerLockArtifact: {
+            kind: "runner-local",
+            ref: `runner-local://${runId}/provider-lockfile`,
+            digest: lockDigest,
+            contentType: "application/vnd.opentofu.lock.hcl",
+            sizeBytes: lockBytes.byteLength,
+          },
+        });
+      }
+      if (
+        request.method === "GET" &&
+        url.pathname === `/runs/${runId}/artifacts/tf-lockfile`
+      ) {
+        return new Response(lockBytes, {
+          headers: {
+            "content-type": "application/vnd.opentofu.lock.hcl",
+            "content-length": String(lockBytes.byteLength),
+          },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+  const committed: LocalOpenTofuProviderLockfileArtifact[] = [];
+  const stateStore = {
+    read: async () => undefined,
+    commit: async <T>(artifact: T): Promise<T> => artifact,
+    readRawOutput: async () => undefined,
+    commitRawOutput: async <T>(artifact: T): Promise<T> => artifact,
+    commitProviderLockfile: async (
+      artifact: LocalOpenTofuProviderLockfileArtifact,
+    ) => {
+      committed.push(artifact);
+      return artifact;
+    },
+  };
+  try {
+    const runner = createHttpOpenTofuRunner({
+      archiveStore: {
+        write: async () => {},
+        read: async () => {
+          throw new Error("not used");
+        },
+      },
+      stateStore,
+      baseUrl: server.url.href,
+    });
+    const result = await runner.plan({
+      planRun: {
+        ...localPlanRun(runId, "create"),
+        requiredProviders: [provider],
+      },
+      runnerProfile: createLocalOpenTofuRunnerProfile(),
+      variables: {},
+    });
+    expect(result.providerLockDigest).toBe(lockDigest);
+    expect(result.providerLockArtifact).toEqual({
+      kind: "local",
+      ref: `local-opentofu://runs/${runId}/provider-lockfile`,
+      digest: lockDigest,
+      contentType: "application/vnd.opentofu.lock.hcl",
+      sizeBytes: lockBytes.byteLength,
+      createdAt: expect.any(Number),
+    });
+    expect(committed).toHaveLength(1);
+    expect([...committed[0]!.bytes]).toEqual([...lockBytes]);
+    expect(
+      createHash("sha256").update(committed[0]!.bytes).digest("hex"),
+    ).toBe(lockDigest.slice("sha256:".length));
+    expect(requests).toEqual([
+      `POST /runs/${runId}`,
+      `GET /runs/${runId}/artifacts/tf-lockfile`,
+    ]);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("local provider lockfile store preserves an empty present artifact separately from absence", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-lockfile-empty-"));
+  try {
+    const ref = "local-opentofu://runs/empty_lockfile/provider-lockfile";
+    const bytes = new Uint8Array();
+    const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    const store = createFileOpenTofuStateArtifactStore(
+      join(tempDir, "state-artifacts"),
+      TEST_STATE_CRYPTO,
+    );
+    const artifact: LocalOpenTofuProviderLockfileArtifact = {
+      ref,
+      runId: "empty_lockfile",
+      digest,
+      sizeBytes: 0,
+      bytes,
+    };
+    const committed = await store.commitProviderLockfile!(artifact);
+    const reopened = await store.readProviderLockfile!(ref);
+    expect(committed.sizeBytes).toBe(0);
+    expect(reopened?.digest).toBe(digest);
+    expect(reopened?.bytes).toEqual(bytes);
+  } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 });

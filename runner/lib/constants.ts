@@ -54,6 +54,11 @@ export const DEFAULT_SOURCE_ARCHIVE_MAX_DECOMPRESSED_BYTES =
 // it, but the optional raw artifact is capped so the Durable Object relay does
 // not buffer huge review-only JSON.
 export const DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
+// Provider lockfiles are private continuity artifacts. Keep this bound aligned
+// with the existing OpenTofu configuration file limit so promotion never
+// buffers an unbounded runner-local file.
+export const DEFAULT_PROVIDER_LOCKFILE_ARTIFACT_MAX_BYTES =
+  DEFAULT_OPENTOFU_CONFIGURATION_LIMITS.maxFileBytes;
 export const RUNNER_REDACTED_VALUE = "[redacted]";
 export const RUNNER_SECRET_WORD =
   "(?:secret|token|password|passwd|pwd|credential|credentials|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|auth[_-]?token|bearer[_-]?token|connection[_-]?string|database[_-]?url|dsn)";

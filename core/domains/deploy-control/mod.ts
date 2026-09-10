@@ -323,8 +323,11 @@ export function publicCapsule(capsule: Capsule): PublicCapsule {
 }
 
 export function publicPlanRun(planRun: PlanRun): PublicPlanRun {
-  const { executionInputsDigest: _executionInputsDigest, ...publicRecord } =
-    planRun;
+  const {
+    executionInputsDigest: _executionInputsDigest,
+    providerLockArtifact: _providerLockArtifact,
+    ...publicRecord
+  } = planRun;
   return publicRecord;
 }
 
@@ -520,6 +523,8 @@ export interface OpenTofuPlanResult {
   readonly requiredProviders?: readonly string[];
   readonly sourceCommit?: string;
   readonly providerLockDigest?: string;
+  /** Private immutable lockfile artifact; never exposed by public projections. */
+  readonly providerLockArtifact?: OpenTofuPlanArtifact | null;
   readonly providerInstallation?: readonly ProviderInstallationEvidence[];
   readonly summary?: PlanRunSummary;
   readonly diagnostics?: readonly RunDiagnostic[];
