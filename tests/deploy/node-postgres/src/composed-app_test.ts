@@ -17,6 +17,11 @@ import {
 import type { ComposedAppInput } from "../../../../deploy/node-postgres/src/composed-app.ts";
 import type { NodeAccountsServerConfig } from "../../../../deploy/node-postgres/src/handler.ts";
 import type { OpenTofuRunner } from "../../../../core/domains/deploy-control/mod.ts";
+import {
+  defaultCapsuleInstallConfig,
+} from "../../../../core/domains/capsules/default_install_config.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { createPlatformExtensionCapsulePublicOriginLedger } from "../../../../deploy/platform/platform_extension_provider_credentials.ts";
 import type {
   RuntimeInputOidcClientSource,
   RuntimeInputOidcRequest,
@@ -139,6 +144,73 @@ test("composed app builds Accounts with the canonical control operations facade"
     new Request("http://localhost/dashboard"),
   );
   assert.equal(res.headers.get("x-handled-by"), "accounts");
+});
+
+test("composed app forwards one explicit OpenTofu store and operator config set", async () => {
+  const opentofuControlStore = new InMemoryOpenTofuControlStore();
+  const operatorInstallConfig = {
+    ...defaultCapsuleInstallConfig(new Date("2026-08-18T00:00:00.000Z")),
+    id: "cfg_node_operator",
+    name: "node-operator",
+  };
+  const { buildComposedApp } =
+    await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const created = await buildComposedApp({
+    config: testConfig(),
+    store: new PostgresAccountsStore(stubQueryClient()),
+    accountsHandler: accountsHandlerSpy().handler,
+    opentofuControlStore,
+    operatorInstallConfigs: [operatorInstallConfig],
+  });
+
+  const workspace = await created.operations.workspaces.createWorkspace({
+    handle: "node-store-forwarding",
+    displayName: "Node store forwarding",
+    type: "personal",
+    ownerUserId: "principal_node_store",
+  });
+  assert.equal(
+    (await opentofuControlStore.getWorkspace(workspace.id))?.id,
+    workspace.id,
+  );
+  assert.deepEqual(
+    (await created.operations.capsules.listSharedInstallConfigs()).map(
+      (config) => config.id,
+    ),
+    ["cfg-default-opentofu-capsule", operatorInstallConfig.id],
+  );
+  const { source } = await created.operations.createSource({
+    workspaceId: workspace.id,
+    name: "node-shared-ledger",
+    url: "https://example.test/node-shared-ledger.git",
+  });
+  const { capsule } =
+    await created.operations.capsules.createCapsuleInitialAuthority({
+      capsuleId: "cap_node_shared_ledger",
+      providerBindingSetId: "binding_node_shared_ledger",
+      workspaceId: workspace.id,
+      name: "node-shared-ledger",
+      environment: "test",
+      sourceId: source.id,
+      installingPrincipalId: "principal_node_store",
+      installConfig: { ...operatorInstallConfig, workspaceId: workspace.id },
+      providerBindings: [],
+    });
+  const reservation = {
+    reservationRef: "reservation_node_shared_ledger",
+    origin: "https://node-shared-ledger.example.test",
+    requestedLabel: "node-shared-ledger",
+    reservedAt: new Date().toISOString(),
+  };
+  const ledger =
+    createPlatformExtensionCapsulePublicOriginLedger(opentofuControlStore);
+  await ledger.write(capsule.id, reservation);
+  assert.deepEqual(await ledger.read(capsule.id), reservation);
+  assert.deepEqual(
+    (await created.operations.capsules.getCapsule(capsule.id))
+      .publicOriginReservation,
+    reservation,
+  );
 });
 
 test("Bun composition forwards one shared coordinator to ordered Capsule abandonment", async () => {

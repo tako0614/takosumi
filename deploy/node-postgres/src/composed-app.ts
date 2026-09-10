@@ -105,6 +105,11 @@ export interface ComposedAppInput {
    */
   readonly sqlClient?: CreateTakosumiServiceArg["sqlClient"];
   /**
+   * Optional pre-built OpenTofu Capsule / Run ledger. When supplied, Core uses
+   * this exact store rather than deriving another one from `sqlClient`.
+   */
+  readonly opentofuControlStore?: CreateTakosumiServiceArg["opentofuControlStore"];
+  /**
    * Optional OpenTofu runner injected by an operator composition. The generic
    * reference server leaves this absent; local-substrate wires a local runner
    * so the browser/CLI smoke can exercise real source sync -> plan -> apply.
@@ -226,6 +231,9 @@ export async function buildComposedApp(
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.buildConnectionSetupRequest,
     ...(connectionOAuthHelpers ? { connectionOAuthHelpers } : {}),
     ...(input.sqlClient ? { sqlClient: input.sqlClient } : {}),
+    ...(input.opentofuControlStore
+      ? { opentofuControlStore: input.opentofuControlStore }
+      : {}),
     ...(deferredRuntimeInputOidcClientSource
       ? {
           runtimeInputOidcClientSource:

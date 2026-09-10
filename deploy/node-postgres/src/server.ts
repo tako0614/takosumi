@@ -124,6 +124,9 @@ function structuredLog(
  */
 export interface ComposedServerOverrides {
   readonly sqlClient?: Parameters<typeof buildComposedApp>[0]["sqlClient"];
+  readonly opentofuControlStore?: Parameters<
+    typeof buildComposedApp
+  >[0]["opentofuControlStore"];
   readonly opentofuRunner?: Parameters<
     typeof buildComposedApp
   >[0]["opentofuRunner"];
@@ -142,6 +145,9 @@ export interface ComposedServerOverrides {
   readonly credentialRecipes?: Parameters<
     typeof buildComposedApp
   >[0]["credentialRecipes"];
+  readonly operatorInstallConfigs?: Parameters<
+    typeof buildComposedApp
+  >[0]["operatorInstallConfigs"];
   readonly credentialRecipeDrivers?: Parameters<
     typeof buildComposedApp
   >[0]["credentialRecipeDrivers"];
@@ -216,6 +222,9 @@ export async function buildComposedServer(
     ...(overrides.credentialRecipes !== undefined
       ? { credentialRecipes: overrides.credentialRecipes }
       : {}),
+    ...(overrides.operatorInstallConfigs !== undefined
+      ? { operatorInstallConfigs: overrides.operatorInstallConfigs }
+      : {}),
     ...(overrides.credentialRecipeDrivers !== undefined
       ? { credentialRecipeDrivers: overrides.credentialRecipeDrivers }
       : {}),
@@ -243,6 +252,9 @@ export async function buildComposedServer(
       ? { runtimeBindingDerivationKey: overrides.runtimeBindingDerivationKey }
       : {}),
     sqlClient: overrides.sqlClient ?? wrapServiceSqlClient(pool),
+    ...(overrides.opentofuControlStore !== undefined
+      ? { opentofuControlStore: overrides.opentofuControlStore }
+      : {}),
   });
 
   const port = config.port;

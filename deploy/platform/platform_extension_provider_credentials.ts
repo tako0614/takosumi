@@ -9,6 +9,10 @@ import type {
 import type { InstallConfig } from "../../contract/install-configs.ts";
 import { installExperienceServiceNameVariable } from "../../contract/install-experience.ts";
 import {
+  capsuleLifecycleExpected,
+  type OpenTofuControlStore,
+} from "../../core/domains/deploy-control/store.ts";
+import {
   capsuleSlug,
   workspaceSlugSuffix,
 } from "../../core/domains/capsules/repository_install_ux_compiler.ts";
@@ -457,6 +461,59 @@ export interface PlatformExtensionCapsulePublicOriginLedger {
     capsuleId: string,
     reservation: CapsulePublicOriginReservation,
   ): Promise<void>;
+}
+
+/**
+ * Adapt the canonical OpenTofu Capsule ledger to the platform-extension
+ * reservation seam.
+ *
+ * Public-origin reservations are Capsule lifecycle metadata, not a second
+ * platform ledger. Reads therefore return the exact persisted record (including
+ * released evidence), while writes use the same execution-authority epoch and
+ * lifecycle CAS boundary as every other Capsule metadata mutation. One retry
+ * absorbs a benign concurrent lifecycle update; a second conflict fails closed
+ * instead of dropping the plan-pinned reservation.
+ */
+export function createPlatformExtensionCapsulePublicOriginLedger(
+  store: Pick<
+    OpenTofuControlStore,
+    | "getCapsule"
+    | "getCapsuleExecutionAuthorityEpoch"
+    | "updateCapsuleLifecycle"
+  >,
+  clock: () => Date = () => new Date(),
+): PlatformExtensionCapsulePublicOriginLedger {
+  return {
+    read: async (capsuleId) =>
+      (await store.getCapsule(capsuleId))?.publicOriginReservation,
+    write: async (capsuleId, reservation) => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const capsule = await store.getCapsule(capsuleId);
+        const epoch =
+          await store.getCapsuleExecutionAuthorityEpoch(capsuleId);
+        if (!capsule || epoch === undefined) {
+          throw new TypeError(
+            "capsule public origin reservation has no current Capsule",
+          );
+        }
+        const result = await store.updateCapsuleLifecycle({
+          capsuleId,
+          expected: capsuleLifecycleExpected(capsule, epoch),
+          mutation: { kind: "public-origin-reservation", reservation },
+          updatedAt: clock().toISOString(),
+        });
+        if (result.kind === "updated" || result.kind === "unchanged") return;
+        if (result.kind === "not-found") {
+          throw new TypeError(
+            "capsule public origin reservation has no current Capsule",
+          );
+        }
+      }
+      throw new TypeError(
+        "capsule public origin reservation lost its Capsule revision twice",
+      );
+    },
+  };
 }
 
 /**

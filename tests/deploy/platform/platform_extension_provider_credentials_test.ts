@@ -1,5 +1,14 @@
 import { expect, spyOn, test } from "bun:test";
-import { platformExtensionProviderCredentialComposition } from "../../../deploy/platform/platform_extension_provider_credentials.ts";
+import type { Capsule } from "../../../contract/capsules.ts";
+import type {
+  OpenTofuControlStore,
+  UpdateCapsuleLifecycleCommand,
+  UpdateCapsuleLifecycleResult,
+} from "../../../core/domains/deploy-control/store.ts";
+import {
+  createPlatformExtensionCapsulePublicOriginLedger,
+  platformExtensionProviderCredentialComposition,
+} from "../../../deploy/platform/platform_extension_provider_credentials.ts";
 
 const ROUTES = JSON.stringify([
   {
@@ -311,4 +320,151 @@ test("broker failures log only a stable status boundary", async () => {
   } finally {
     warn.mockRestore();
   }
+});
+
+const LEDGER_CAPSULE: Capsule = {
+  id: "cap_ledger",
+  workspaceId: "ws_ledger",
+  projectId: "prj_ledger",
+  name: "ledger",
+  slug: "ledger",
+  sourceId: "src_ledger",
+  installConfigId: "cfg_ledger",
+  environment: "production",
+  currentStateGeneration: 0,
+  status: "pending",
+  createdAt: "2026-08-18T00:00:00.000Z",
+  updatedAt: "2026-08-18T00:00:00.000Z",
+};
+
+const LEDGER_RESERVATION = {
+  reservationRef: "reservation_ledger",
+  origin: "https://ledger.example.test",
+  requestedLabel: "ledger-ws",
+  reservedAt: "2026-08-18T00:00:00.000Z",
+} as const;
+
+function ledgerStore(input: {
+  readonly capsule?: Capsule;
+  readonly epoch?: number;
+  readonly results?: readonly UpdateCapsuleLifecycleResult["kind"][];
+} = {}): {
+  readonly store: Pick<
+    OpenTofuControlStore,
+    | "getCapsule"
+    | "getCapsuleExecutionAuthorityEpoch"
+    | "updateCapsuleLifecycle"
+  >;
+  readonly updates: UpdateCapsuleLifecycleCommand[];
+} {
+  let current = Object.prototype.hasOwnProperty.call(input, "capsule")
+    ? input.capsule
+    : LEDGER_CAPSULE;
+  let resultIndex = 0;
+  const updates: UpdateCapsuleLifecycleCommand[] = [];
+  const store: Pick<
+    OpenTofuControlStore,
+    | "getCapsule"
+    | "getCapsuleExecutionAuthorityEpoch"
+    | "updateCapsuleLifecycle"
+  > = {
+    getCapsule: async () => current,
+    getCapsuleExecutionAuthorityEpoch: async () =>
+      Object.prototype.hasOwnProperty.call(input, "epoch")
+        ? input.epoch
+        : 7,
+    updateCapsuleLifecycle: async (command) => {
+      updates.push(command);
+      if (command.mutation.kind !== "public-origin-reservation") {
+        throw new TypeError(
+          "unexpected Capsule lifecycle mutation in ledger test",
+        );
+      }
+      const kind = input.results?.[resultIndex++] ?? "updated";
+      if (kind === "not-found") return { kind };
+      if (kind === "conflict") return { kind, current: current! };
+      current = {
+        ...current!,
+        publicOriginReservation: command.mutation.reservation,
+        updatedAt: command.updatedAt,
+      };
+      return { kind, capsule: current! };
+    },
+  };
+  return { store, updates };
+}
+
+test("the public-origin ledger reads the injected Capsule record, including released evidence", async () => {
+  const released = {
+    ...LEDGER_RESERVATION,
+    releasedAt: "2026-08-19T00:00:00.000Z",
+  };
+  const { store } = ledgerStore({
+    capsule: { ...LEDGER_CAPSULE, publicOriginReservation: released },
+  });
+  const ledger = createPlatformExtensionCapsulePublicOriginLedger(store);
+
+  expect(await ledger.read(LEDGER_CAPSULE.id)).toEqual(released);
+});
+
+test("the public-origin ledger writes through lifecycle CAS with a bounded retry", async () => {
+  const { store, updates } = ledgerStore();
+  const ledger = createPlatformExtensionCapsulePublicOriginLedger(
+    store,
+    () => new Date("2026-08-20T00:00:00.000Z"),
+  );
+
+  await ledger.write(LEDGER_CAPSULE.id, LEDGER_RESERVATION);
+
+  expect(updates).toHaveLength(1);
+  expect(updates[0]).toMatchObject({
+    capsuleId: LEDGER_CAPSULE.id,
+    expected: {
+      executionAuthorityEpoch: 7,
+      currentStateGeneration: 0,
+      status: "pending",
+    },
+    mutation: {
+      kind: "public-origin-reservation",
+      reservation: LEDGER_RESERVATION,
+    },
+    updatedAt: "2026-08-20T00:00:00.000Z",
+  });
+});
+
+test("the public-origin ledger retries one lifecycle conflict and then succeeds", async () => {
+  const { store, updates } = ledgerStore({ results: ["conflict", "updated"] });
+  const ledger = createPlatformExtensionCapsulePublicOriginLedger(store);
+
+  await ledger.write(LEDGER_CAPSULE.id, LEDGER_RESERVATION);
+
+  expect(updates).toHaveLength(2);
+});
+
+test("the public-origin ledger fails after two lifecycle conflicts", async () => {
+  const { store, updates } = ledgerStore({
+    results: ["conflict", "conflict"],
+  });
+  const ledger = createPlatformExtensionCapsulePublicOriginLedger(store);
+
+  await expect(
+    ledger.write(LEDGER_CAPSULE.id, LEDGER_RESERVATION),
+  ).rejects.toThrow("lost its Capsule revision twice");
+  expect(updates).toHaveLength(2);
+});
+
+test("the public-origin ledger fails when the Capsule or execution epoch is missing", async () => {
+  const missingCapsule = ledgerStore({ capsule: undefined });
+  await expect(
+    createPlatformExtensionCapsulePublicOriginLedger(
+      missingCapsule.store,
+    ).write(LEDGER_CAPSULE.id, LEDGER_RESERVATION),
+  ).rejects.toThrow("has no current Capsule");
+
+  const missingEpoch = ledgerStore({ epoch: undefined });
+  await expect(
+    createPlatformExtensionCapsulePublicOriginLedger(
+      missingEpoch.store,
+    ).write(LEDGER_CAPSULE.id, LEDGER_RESERVATION),
+  ).rejects.toThrow("has no current Capsule");
 });

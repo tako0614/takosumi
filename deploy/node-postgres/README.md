@@ -85,6 +85,18 @@ a commercial host extension and are not part of this public distribution.
 
 - Run `bun run cli -- accounts migrate` against Postgres before first start, or use the docker-compose `migrations`
   init container which does it for you. See `cli-accounts-db.ts` for the migration entry point.
+- A custom Node composition that supplies a durable `opentofuControlStore` to
+  `buildComposedApp` or `buildComposedServer` must pass that same store to
+  `createPlatformExtensionCapsulePublicOriginLedger` when it composes a
+  platform-extension reservation port. Core operations and the reservation
+  adapter then share the canonical Capsule lifecycle ledger; the adapter does
+  not create a second store or infer a public origin.
+- Operator composition remains explicit: `operatorInstallConfigs` is forwarded
+  unchanged, while provider recipe drivers, the actual extension handler, and
+  hostname/origin policy are supplied by the operator closure. Environment
+  descriptors alone cannot create handler functions—the platform helper looks
+  up the handler object at `env[handlerKey]`. The stock CLI and env-only
+  reference profile therefore does not claim an end-to-end extension flow.
 - A host that composes manifest-gated runtime `identity.oidc` bindings passes
   `createRuntimeInputOidcClientSource` to `buildComposedApp`/`buildComposedServer`.
   The factory receives only frozen `{ control, accounts, issuer }` wrappers:
