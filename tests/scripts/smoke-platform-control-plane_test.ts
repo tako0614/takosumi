@@ -2387,6 +2387,7 @@ test("platform smoke rejects partial service identity and unsafe private evidenc
     const session = join(root, "session");
     const evidence = join(root, "evidence.json");
     await writeFile(session, "session-token\n", { mode: 0o644 });
+    await chmod(session, 0o644);
     await expect(
       resolveOptions(
         {
