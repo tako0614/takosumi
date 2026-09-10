@@ -560,6 +560,37 @@ test("rootgen declares one ephemeral sensitive map per declaring provider instan
   );
 });
 
+test("rootgen renders nonce-only provider wiring without an ephemeral map", () => {
+  const { files } = generateOpenTofuChildModuleRoot({
+    rootProviderRequirements: [
+      { source: TAKOFORM, moduleLocalName: "takoform" },
+    ],
+    inputs: {},
+    outputAllowlist: {},
+    providerBindings: [
+      {
+        provider: TAKOFORM,
+        moduleLocalName: "takoform",
+        runtimeInputs: {
+          nonce: NONCE_A,
+          nonceArgument: "runtime_input_nonce",
+        },
+      },
+    ],
+  });
+
+  expect(files["variables.tf"]).toBeUndefined();
+  expect(files["main.tf"]).toContain(
+    [
+      'provider "takoform" {',
+      `  runtime_input_nonce = "${NONCE_A}"`,
+      "}",
+    ].join("\n"),
+  );
+  expect(files["main.tf"]).not.toContain("runtime_inputs =");
+  expect(files["main.tf"]).not.toContain(ROOT_RUNTIME_INPUTS_VARIABLE_PREFIX);
+});
+
 test("rootgen keeps run-scoped sensitive inputs on their exact provider instance", () => {
   const { files } = generateOpenTofuChildModuleRoot(runtimeInputRootInput());
 

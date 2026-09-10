@@ -6,13 +6,17 @@
 import { expect, test } from "bun:test";
 
 import type { InstallConfig } from "takosumi-contract/install-configs";
-import type { OpenTofuPlanJob } from "../../../../core/domains/deploy-control/mod.ts";
+import type {
+  OpenTofuDestroyJob,
+  OpenTofuPlanJob,
+} from "../../../../core/domains/deploy-control/mod.ts";
 import type {
   OpenTofuPlanResult,
   OpenTofuRunner,
   RunnerProfile,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
+  applyExpectedGuardFromPlanRun,
   DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
   OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
@@ -22,6 +26,7 @@ import {
 } from "../../../../core/domains/deploy-control/store.ts";
 import {
   createRuntimeInputMaterializer,
+  type RuntimeInputMaterializer,
   type RuntimeInputOidcClientSource,
 } from "../../../../core/domains/deploy-control/runtime_input_materializer.ts";
 import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod.ts";
@@ -30,6 +35,8 @@ import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/s
 import { analyzeOpenTofuCapsuleFiles } from "../../../../core/domains/sources/capsule_compatibility.ts";
 import { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../../providers/registry.ts";
 import {
+  FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
+  fixtureExecutionEvidence,
   seedCapsuleModel,
   transitionProviderBindingSetForFixture,
 } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -221,7 +228,50 @@ async function seedFenceModel(
     createdAt: NOW,
     updatedAt: NOW,
   });
-  const observed: { plan?: OpenTofuPlanJob } = {};
+  const observed: {
+    plan?: OpenTofuPlanJob;
+    destroy?: OpenTofuDestroyJob;
+  } = {};
+  const runtimeInputMaterializerDelegate = createRuntimeInputMaterializer({
+    store,
+    crypto: new PartitionedSecretBoundaryCrypto({
+      globalPassphrase: "runtime-input-fence-material-0123456789",
+    }),
+    clock: () => new Date(NOW),
+    ...(options.oidcClient ? { oidcClient: options.oidcClient } : {}),
+  });
+  const runtimeInputMaterializerCalls = {
+    profile: 0,
+    nonce: 0,
+    materialize: 0,
+  };
+  let refuseRuntimeInputMaterialization = false;
+  const runtimeInputMaterializer: RuntimeInputMaterializer = {
+    async profile(input) {
+      runtimeInputMaterializerCalls.profile += 1;
+      if (refuseRuntimeInputMaterialization) {
+        throw new Error("runtime input profile is deliberately unavailable");
+      }
+      return await runtimeInputMaterializerDelegate.profile(input);
+    },
+    async nonce(input) {
+      runtimeInputMaterializerCalls.nonce += 1;
+      if (refuseRuntimeInputMaterialization) {
+        throw new Error("runtime input nonce is deliberately unavailable");
+      }
+      return await runtimeInputMaterializerDelegate.nonce(input);
+    },
+    async materialize(input) {
+      runtimeInputMaterializerCalls.materialize += 1;
+      if (refuseRuntimeInputMaterialization) {
+        throw new Error("runtime input material is deliberately unavailable");
+      }
+      return await runtimeInputMaterializerDelegate.materialize(input);
+    },
+    async retire(input) {
+      await runtimeInputMaterializerDelegate.retire(input);
+    },
+  };
   let runId = 0;
   const controller = new OpenTofuController({
     store,
@@ -230,26 +280,41 @@ async function seedFenceModel(
         observed.plan = job;
         return planResult();
       },
-      apply: async () => ({ stateDigest: `sha256:${"d".repeat(64)}` }),
-      destroy: async () => ({ stateDigest: `sha256:${"d".repeat(64)}` }),
+      apply: async (job) => ({
+        stateDigest: `sha256:${"d".repeat(64)}`,
+        providerInstallation: planResult().providerInstallation,
+        rawOutputRef: job.rawOutputRef,
+        executionEvidence: fixtureExecutionEvidence(job, "apply"),
+      }),
+      destroy: async (job) => {
+        observed.destroy = job;
+        return {
+          stateDigest: `sha256:${"d".repeat(64)}`,
+          providerInstallation: planResult().providerInstallation,
+          executionEvidence: fixtureExecutionEvidence(job, "destroy"),
+        };
+      },
     } as OpenTofuRunner,
     vault,
-    runtimeInputMaterializer: createRuntimeInputMaterializer({
-      store,
-      crypto: new PartitionedSecretBoundaryCrypto({
-        globalPassphrase: "runtime-input-fence-material-0123456789",
-      }),
-      clock: () => new Date(NOW),
-      ...(options.oidcClient ? { oidcClient: options.oidcClient } : {}),
-    }),
+    runtimeInputMaterializer,
     runnerProfiles: [runnerProfile()],
     defaultRunnerProfileId: runnerProfile().id,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: () => Date.parse(NOW),
     newId: (prefix) =>
       `${prefix}_${options.capsuleId}_${String((runId += 1)).padStart(2, "0")}`,
   });
-  return { seeded, controller, observed, compatibilityReportId };
+  return {
+    seeded,
+    controller,
+    observed,
+    compatibilityReportId,
+    runtimeInputMaterializerCalls,
+    refuseRuntimeInputMaterialization() {
+      refuseRuntimeInputMaterialization = true;
+    },
+  };
 }
 
 test("a provider pinned at or above the floor receives the run-scoped sensitive input wiring", async () => {
@@ -317,6 +382,74 @@ test("a provider below the floor stays inert and the plan says why", async () =>
   expect(
     await store.getSecretBlob(`runtime_input_${seeded.capsule.id}`),
   ).toBeUndefined();
+});
+
+test("destroy carries stable nonce-only provider wiring without opening runtime input material", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const {
+    seeded,
+    controller,
+    observed,
+    compatibilityReportId,
+    runtimeInputMaterializerCalls,
+    refuseRuntimeInputMaterialization,
+  } = await seedFenceModel(store, {
+    providerVersion: "4.0.0",
+    capsuleId: "cap_fence_destroy",
+  });
+
+  const create = await controller.createCapsulePlan(
+    seeded.capsule.id,
+    {},
+    { compatibilityReportId },
+  );
+  const applied = await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  expect(applied.applyRun.status).toBe("succeeded");
+
+  const callsBeforeDestroy = { ...runtimeInputMaterializerCalls };
+  const materialBeforeDestroy = await store.getSecretBlob(
+    `runtime_input_${seeded.capsule.id}`,
+  );
+  expect(materialBeforeDestroy).toBeDefined();
+  refuseRuntimeInputMaterialization();
+
+  observed.plan = undefined;
+  const first = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+  const firstJob = observed.plan;
+  expect(first.planRun.status).toBe("waiting_approval");
+  expect(firstJob).toBeDefined();
+
+  observed.plan = undefined;
+  const second = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+  const secondJob = observed.plan;
+  expect(secondJob).toBeDefined();
+
+  const firstFiles = firstJob?.generatedRoot?.files ?? {};
+  expect(
+    firstFiles["main.tf"]?.match(
+      /runtime_input_nonce\s*=\s*"[A-Za-z0-9_-]{43}"/gu,
+    ),
+  ).toHaveLength(1);
+  expect(firstFiles["main.tf"]).not.toContain("runtime_inputs =");
+  expect(firstFiles["variables.tf"]).toBeUndefined();
+  expect(firstJob?.credentials?.runtimeInputs).toBeUndefined();
+  expect(secondJob?.generatedRoot?.files).toEqual(firstFiles);
+  expect(runtimeInputMaterializerCalls).toEqual(callsBeforeDestroy);
+  expect(
+    await store.getSecretBlob(`runtime_input_${seeded.capsule.id}`),
+  ).toEqual(materialBeforeDestroy);
+
+  await controller.approveRun(first.planRun.id);
+  const destroyed = await controller.createApplyRun({
+    planRunId: first.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(first.planRun),
+  });
+  expect(destroyed.applyRun.status).toBe("succeeded");
+  expect(observed.destroy?.generatedRoot?.files).toEqual(firstFiles);
+  expect(observed.destroy?.credentials?.runtimeInputs).toBeUndefined();
 });
 
 /**
@@ -400,8 +533,9 @@ test("a plan for an OIDC-delivering profile reviews all five names and no value"
     expect(planned_json).not.toContain(fragment);
   }
 
-  // A destroy plan pins no descriptor at all: its provider teardown never reads
-  // the map, and minting for a teardown would widen exposure for no purpose.
+  // A destroy plan pins no descriptor at all. Its generated root may carry the
+  // value-free destroy nonce, but its provider teardown receives no map and
+  // minting material for teardown would widen exposure for no purpose.
   observed.plan = undefined;
   const destroyed = await controller.createCapsuleDestroyPlan(
     seeded.capsule.id,

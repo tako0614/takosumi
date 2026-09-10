@@ -62,6 +62,7 @@ import {
   RUNTIME_INPUT_MAX_VALUE_BYTES,
   RUNTIME_INPUT_MIN_VALUE_LENGTH,
   RUNTIME_INPUT_NAME_PATTERN,
+  runtimeInputProviderInstanceFromStorage,
   type RuntimeInputMaterializer,
 } from "./runtime_input_materializer.ts";
 import { runtimeInputWiringFromResolved } from "./runtime_input_wiring.ts";
@@ -381,7 +382,10 @@ export class RunCredentialBroker {
       return undefined;
     }
     const wiring = runtimeInputWiringFromResolved(mintable);
-    if (!wiring || wiring.providerInstance !== descriptor.providerInstance) {
+    const descriptorProviderInstance = runtimeInputProviderInstanceFromStorage(
+      descriptor.providerInstance,
+    );
+    if (!wiring || wiring.providerInstance !== descriptorProviderInstance) {
       // The plan pinned a descriptor, so the reviewed root declares a
       // defaultless ephemeral variable. Delivering nothing would fail inside
       // `tofu` with an unattributable "No value for required variable".

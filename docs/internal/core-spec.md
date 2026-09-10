@@ -447,10 +447,16 @@ rule for splitting itself. A Capsule without a generated root also fails closed:
 Takosumi owns no provider block there, so it can declare neither the ephemeral
 variable nor the two arguments.
 
-A destroy plan wires nothing at all. Both provider-block arguments are optional
-and a provider's teardown reads neither, so a destroy needs no nonce, no
-variable, and no minted material — and keeping the destroy lane free of the
-wiring is what makes teardown the recovery path for a Capsule whose profile has
+A destroy plan wires only a deterministic, value-free nonce literal into the
+exact declaring provider instance. Provider teardown reads no sensitive map,
+but providers may still validate the nonce during planning before Delete, so
+omitting it can make teardown impossible. The destroy nonce is a dedicated-domain
+SHA-256 derivation over the immutable Workspace, Capsule, provider instance, and
+captured current StateVersion id/null plus generation. It therefore stays stable
+from Plan through Apply and across retries against the same state without opening
+or creating runtime material. Destroy declares no ephemeral variable, pins no
+runtime-input dispatch descriptor, and calls no profile/nonce/value materializer,
+which preserves teardown as the recovery path when the Capsule's profile has
 drifted. A lifecycle release command likewise mints none: its dispatch has no
 generated root and no ephemeral variable, so nothing there could consume a map.
 

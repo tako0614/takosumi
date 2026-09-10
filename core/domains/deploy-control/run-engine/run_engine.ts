@@ -89,7 +89,10 @@ import {
   type RootProviderBinding,
   type RootProviderRequirement,
 } from "takosumi-rootgen";
-import { stableJsonDigest } from "../../../adapters/source/digest.ts";
+import {
+  stableJsonDigest,
+  stableStringify,
+} from "../../../adapters/source/digest.ts";
 import { log } from "../../../shared/log.ts";
 import {
   ConnectionsService,
@@ -216,7 +219,10 @@ import type {
   RuntimeSecretFileBundle,
   RuntimeSecretFileMaterializer,
 } from "../runtime_secret_file_materializer.ts";
-import type { RuntimeInputMaterializer } from "../runtime_input_materializer.ts";
+import {
+  runtimeInputProviderInstanceForStorage,
+  type RuntimeInputMaterializer,
+} from "../runtime_input_materializer.ts";
 import { runtimeInputWiringFromResolved } from "../runtime_input_wiring.ts";
 // Shared helpers, constants, and run-engine types stay in the controller module
 // (`../mod.ts`) so the domain's public entry point and external importers are
@@ -331,6 +337,45 @@ interface CapsulePlanExecutionAuthority {
   /** Stateful destroy provenance cursor captured before request construction. */
   readonly currentStateVersionId?: string | null;
   readonly currentStateGeneration?: number;
+}
+
+interface DestroyRuntimeInputNonceAuthority {
+  readonly currentStateVersionId: string | null;
+  readonly currentStateGeneration: number;
+}
+
+interface RunEngineGenericRootPlanContext extends GenericRootPlanContext {
+  /** Immutable Capsule cursor captured before the destroy root is compiled. */
+  readonly destroyRuntimeInputNonceAuthority?: DestroyRuntimeInputNonceAuthority;
+}
+
+const DESTROY_RUNTIME_INPUT_NONCE_DOMAIN =
+  "takosumi.runtime-inputs.destroy-nonce/v1";
+
+async function destroyRuntimeInputNonce(input: {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly providerInstance: string;
+  readonly currentStateVersionId: string | null;
+  readonly currentStateGeneration: number;
+}): Promise<string> {
+  const preimage = stableStringify({
+    domain: DESTROY_RUNTIME_INPUT_NONCE_DOMAIN,
+    workspaceId: input.workspaceId,
+    capsuleId: input.capsuleId,
+    providerInstance: input.providerInstance,
+    currentStateVersionId: input.currentStateVersionId,
+    currentStateGeneration: input.currentStateGeneration,
+  });
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(preimage)),
+  );
+  let binary = "";
+  for (const byte of digest) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
 }
 
 /**
@@ -3227,7 +3272,7 @@ export class RunEngine {
     readonly request: CreatePlanRunRequest;
     readonly capsulePlan: CapsulePlanContext;
     readonly requiredProviderRequirements: readonly CapsuleProviderRequirement[];
-    readonly genericRootPlan?: GenericRootPlanContext;
+    readonly genericRootPlan?: RunEngineGenericRootPlanContext;
     readonly capsulePlanExecutionAuthority: CapsulePlanExecutionAuthority;
   }> {
     const moduleSource = snapshotModuleSource(
@@ -3269,7 +3314,7 @@ export class RunEngine {
     readonly request: CreatePlanRunRequest;
     readonly capsulePlan: CapsulePlanContext;
     readonly requiredProviderRequirements: readonly CapsuleProviderRequirement[];
-    readonly genericRootPlan: GenericRootPlanContext;
+    readonly genericRootPlan: RunEngineGenericRootPlanContext;
     readonly capsulePlanExecutionAuthority: CapsulePlanExecutionAuthority;
   }> {
     const profile = await this.#requireRunnerProfile(
@@ -3373,6 +3418,12 @@ export class RunEngine {
     const runtimeInputWiring = runtimeInputWiringFromResolved(
       capsulePlan.resolvedProviderBindings,
     );
+    const destroyRuntimeInputNonceAuthority = input.operation === "destroy"
+      ? {
+          currentStateVersionId: input.capsule.currentStateVersionId ?? null,
+          currentStateGeneration: input.capsule.currentStateGeneration,
+        }
+      : undefined;
     return {
       capsulePlan,
       requiredProviderRequirements,
@@ -3387,8 +3438,7 @@ export class RunEngine {
               // Preserve the exact no-state cursor too. `undefined` would
               // disable the final re-read fence and let a generation-0 → 1
               // Apply race mint a destroy Plan from an obsolete Capsule.
-              currentStateVersionId: input.capsule.currentStateVersionId ?? null,
-              currentStateGeneration: input.capsule.currentStateGeneration,
+              ...destroyRuntimeInputNonceAuthority,
             }
           : {}),
       },
@@ -3414,6 +3464,9 @@ export class RunEngine {
                 capsuleId: input.capsule.id,
                 installConfigId: input.installConfig.id,
               },
+              ...(destroyRuntimeInputNonceAuthority
+                ? { destroyRuntimeInputNonceAuthority }
+                : {}),
             }
           : {}),
         ...(input.installConfig.sourceBuild
@@ -3551,15 +3604,17 @@ export class RunEngine {
    * deliverable name set, but never opens the sealed material. The values are
    * minted only at Apply, by the credential broker.
    *
-   * Two situations leave the path inert rather than failing the Run:
-   *   - a destroy plan, whose provider teardown reads neither argument and for
-   *     which no value may be minted at all; and
+   * Destroy uses separate nonce-only wiring derived from the already-captured
+   * StateVersion cursor. It never asks the materializer for a profile, nonce,
+   * or values and never pins a dispatch descriptor.
+   *
+   * One situation leaves the path inert rather than failing the Run:
    *   - a Capsule whose pinned provider version does not PROVE the provider
    *     accepts the arguments, which is reported as a value-free warning so a
    *     Capsule that does not need run-scoped inputs still plans.
    */
   async #runtimeInputsForPlan(
-    context: GenericRootPlanContext,
+    context: RunEngineGenericRootPlanContext,
     input: {
       readonly destroy: boolean;
       readonly rootProviderRequirements: readonly RootProviderRequirement[];
@@ -3575,14 +3630,6 @@ export class RunEngine {
     const wiring = context.runtimeInputWiring;
     const authority = context.runtimeInputAuthority;
     if (!wiring || !authority) return undefined;
-    if (input.destroy) {
-      // A destroy plan's provider teardown never reads the map, and both
-      // arguments are optional on the provider block. Minting material for a
-      // teardown would widen exposure for no purpose, and pinning a descriptor
-      // would block the very teardown that is the recovery path for a Capsule
-      // whose profile has drifted.
-      return undefined;
-    }
     const pinnedVersion = input.rootProviderRequirements.find(
       (requirement) =>
         requirement.moduleLocalName === wiring.moduleLocalName &&
@@ -3604,6 +3651,30 @@ export class RunEngine {
             `least ${wiring.minimumProviderVersion}, which is the first release ` +
             `that accepts them`,
           ...(pinnedVersion ? { detail: `pinned version ${pinnedVersion}` } : {}),
+        },
+      };
+    }
+    if (input.destroy) {
+      const stateAuthority = context.destroyRuntimeInputNonceAuthority;
+      if (!stateAuthority) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "destroy runtime input nonce requires an immutable Capsule state cursor",
+          { reason: "destroy_runtime_input_authority_missing" },
+        );
+      }
+      const nonce = await destroyRuntimeInputNonce({
+        workspaceId: authority.workspaceId,
+        capsuleId: authority.capsuleId,
+        providerInstance: runtimeInputProviderInstanceForStorage(wiring),
+        ...stateAuthority,
+      });
+      return {
+        rootWiring: {
+          moduleLocalName: wiring.moduleLocalName,
+          ...(wiring.rootAlias ? { rootAlias: wiring.rootAlias } : {}),
+          nonce,
+          nonceArgument: wiring.nonceArgument,
         },
       };
     }
@@ -3644,7 +3715,7 @@ export class RunEngine {
       descriptor: {
         contract: "takosumi.dispatch-runtime-inputs/v1",
         variableName: wiring.variableName,
-        providerInstance: wiring.providerInstance,
+        providerInstance: runtimeInputProviderInstanceForStorage(wiring),
         nonce,
         names: [...profile.names].sort(),
         profileDigest: profile.profileDigest,
@@ -3661,7 +3732,7 @@ export class RunEngine {
 
   async #genericRootDispatchForRequest(
     request: CreatePlanRunRequest,
-    context: GenericRootPlanContext,
+    context: RunEngineGenericRootPlanContext,
     compatibilityReport: CapsuleCompatibilityReport | undefined,
   ): Promise<GenericRootDispatchContext> {
     if (context.moduleVariableMaterialization) {
@@ -3814,6 +3885,15 @@ export class RunEngine {
                 capsuleId: capsule.id,
                 installConfigId: installConfig.id,
               },
+              ...(request.operation === "destroy"
+                ? {
+                    destroyRuntimeInputNonceAuthority: {
+                      currentStateVersionId:
+                        capsule.currentStateVersionId ?? null,
+                      currentStateGeneration: capsule.currentStateGeneration,
+                    },
+                  }
+                : {}),
             }
           : {}),
         ...(installConfig.sourceBuild

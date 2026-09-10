@@ -7,6 +7,8 @@ import {
   createRuntimeInputMaterializer,
   runtimeInputNonce,
   runtimeInputProviderInstance,
+  runtimeInputProviderInstanceForStorage,
+  runtimeInputProviderInstanceFromStorage,
   RUNTIME_INPUT_BUNDLE_MARKER,
 } from "../../../../core/domains/deploy-control/runtime_input_materializer.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -52,6 +54,65 @@ async function fixture(
     request: { ...authority, providerInstance: DEFAULT_INSTANCE },
   };
 }
+
+test("provider instance storage is canonical while runtime identity stays opaque", async () => {
+  const defaultBinding = { moduleLocalName: "takoform" } as const;
+  const edgeBinding = { moduleLocalName: "takoform", rootAlias: "edge" } as const;
+  const delimiterInModule = {
+    moduleLocalName: "tako\u0000form",
+    rootAlias: "edge",
+  } as const;
+  const delimiterInAlias = {
+    moduleLocalName: "tako",
+    rootAlias: "form\u0000edge",
+  } as const;
+  const defaultIdentity = runtimeInputProviderInstance(defaultBinding);
+  const emptyAliasIdentity = runtimeInputProviderInstance({
+    ...defaultBinding,
+    rootAlias: "",
+  });
+  const edgeIdentity = runtimeInputProviderInstance(edgeBinding);
+  const delimiterModuleIdentity = runtimeInputProviderInstance(delimiterInModule);
+  const delimiterAliasIdentity = runtimeInputProviderInstance(delimiterInAlias);
+
+  expect(defaultIdentity).toContain("\u0000");
+  expect(emptyAliasIdentity).toBe(defaultIdentity);
+  expect(edgeIdentity).not.toBe(defaultIdentity);
+  // The old separator encoding made these two tuples collide.
+  expect(delimiterModuleIdentity).toBe(delimiterAliasIdentity);
+
+  for (const [binding, identity, tuple] of [
+    [defaultBinding, defaultIdentity, ["takoform", ""]],
+    [edgeBinding, edgeIdentity, ["takoform", "edge"]],
+    [delimiterInModule, delimiterModuleIdentity, ["tako\u0000form", "edge"]],
+    [delimiterInAlias, delimiterAliasIdentity, ["tako", "form\u0000edge"]],
+  ] as const) {
+    const descriptor = runtimeInputProviderInstanceForStorage(binding);
+    expect(descriptor).not.toContain("\u0000");
+    expect(JSON.parse(descriptor)).toEqual(tuple);
+    expect(runtimeInputProviderInstanceFromStorage(descriptor)).toBe(identity);
+  }
+  expect(runtimeInputProviderInstanceForStorage(defaultBinding)).toBe(
+    JSON.stringify(["takoform", ""]),
+  );
+  expect(
+    runtimeInputProviderInstanceForStorage(delimiterInModule),
+  ).not.toBe(runtimeInputProviderInstanceForStorage(delimiterInAlias));
+
+  const { materializer, request } = await fixture();
+  const legacyRequest = { ...request, providerInstance: defaultIdentity };
+  const storedRequest = {
+    ...request,
+    providerInstance: runtimeInputProviderInstanceFromStorage(
+      runtimeInputProviderInstanceForStorage(defaultBinding),
+    ),
+  };
+  const legacyNonce = await materializer.nonce(legacyRequest);
+  expect(await materializer.nonce(storedRequest)).toBe(legacyNonce);
+  expect(
+    (await materializer.materialize({ ...legacyRequest, phase: "apply" })).nonce,
+  ).toBe(legacyNonce);
+});
 
 test("the nonce is deterministic and changes only with the material generation", async () => {
   const { store, seeded, materializer, request } = await fixture();

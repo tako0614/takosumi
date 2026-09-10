@@ -160,7 +160,9 @@ export function providerBindingsFromResolved(
             runtimeInputs: {
               nonce: runtimeInputs.nonce,
               nonceArgument: runtimeInputs.nonceArgument,
-              mapArgument: runtimeInputs.mapArgument,
+              ...(runtimeInputs.mapArgument === undefined
+                ? {}
+                : { mapArgument: runtimeInputs.mapArgument }),
             },
           }
         : {}),

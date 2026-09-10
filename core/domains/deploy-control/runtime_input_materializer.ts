@@ -933,6 +933,48 @@ export function runtimeInputProviderInstance(binding: {
   return `${binding.moduleLocalName}${NUL}${binding.rootAlias ?? ""}`;
 }
 
+/**
+ * Canonical JSON representation for a persisted PlanRun descriptor. The
+ * runtime-facing identity above intentionally remains opaque and byte-stable;
+ * only this storage representation crosses a JSON/JSONB boundary.
+ */
+export function runtimeInputProviderInstanceForStorage(binding: {
+  readonly moduleLocalName: string;
+  readonly rootAlias?: string;
+}): string {
+  return JSON.stringify([binding.moduleLocalName, binding.rootAlias ?? ""]);
+}
+
+/**
+ * Decodes the canonical descriptor representation back to the opaque runtime
+ * identity. Descriptors written before the JSON representation are returned
+ * unchanged so retained PlanRuns continue to fence against the same bytes.
+ */
+export function runtimeInputProviderInstanceFromStorage(value: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return value;
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length !== 2 ||
+    typeof parsed[0] !== "string" ||
+    typeof parsed[1] !== "string"
+  ) {
+    return value;
+  }
+  const moduleLocalName = parsed[0];
+  const rootAlias = parsed[1];
+  const canonical = runtimeInputProviderInstanceForStorage({
+    moduleLocalName,
+    rootAlias,
+  });
+  if (canonical !== value) return value;
+  return runtimeInputProviderInstance({ moduleLocalName, rootAlias });
+}
+
 function exactProviderInstance(value: string): string {
   if (typeof value !== "string" || value.length === 0 || value.length > 512) {
     invalid("runtime input provider instance is invalid");

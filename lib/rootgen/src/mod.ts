@@ -10,11 +10,12 @@
  *                   child-module requirements, preserving exact versions when
  *                   present without inferring version pins.
  *   - main.tf     : `module "child" { source = "./module"; <inputs> }`.
- *   - variables.tf : generated ONLY when a provider binding declares run-scoped
- *                   sensitive inputs. It declares one ephemeral, sensitive,
- *                   defaultless `map(string)` root variable per declaring
- *                   provider instance. Values never appear here, in the plan,
- *                   or in state; the runner supplies them to `tofu` out of
+ *   - variables.tf : generated ONLY when a provider binding declares a
+ *                   run-scoped sensitive input map. It declares one ephemeral,
+ *                   sensitive, defaultless `map(string)` root variable per
+ *                   declaring provider instance. A nonce-only destroy binding
+ *                   needs no variable. Values never appear here, in the plan,
+ *                   or in state; the runner supplies maps to `tofu` out of
  *                   band, at plan and again at apply.
  *   - outputs.tf  : passthrough of the explicit output allowlist only:
  *                   `output "<public>" { value = module.child.<from> }`.
@@ -104,11 +105,12 @@ export interface RootProviderBinding {
    * Run-scoped sensitive provider inputs for THIS provider instance.
    *
    * Only the plan-stable `nonce` is rendered (it is not a secret). The map
-   * argument is rendered as a bare `var.<name>` reference to an ephemeral,
-   * sensitive root variable the runner supplies at plan and apply. No value is
-   * ever written into the generated root, so nothing reaches the plan file,
-   * `tfplan.json`, outputs, or state. A provider instance that does not declare
-   * this receives neither argument.
+   * argument, when present, is rendered as a bare `var.<name>` reference to an
+   * ephemeral, sensitive root variable the runner supplies at plan and apply.
+   * A nonce-only destroy binding omits the map argument and variable entirely.
+   * No value is ever written into the generated root, so nothing reaches the
+   * plan file, `tfplan.json`, outputs, or state. A provider instance that does
+   * not declare this receives neither argument.
    */
   readonly runtimeInputs?: RootProviderRuntimeInputs;
 }
@@ -119,8 +121,8 @@ export interface RootProviderRuntimeInputs {
   readonly nonce: string;
   /** Provider-block argument receiving the nonce. */
   readonly nonceArgument: string;
-  /** Provider-block argument receiving the ephemeral sensitive map. */
-  readonly mapArgument: string;
+  /** Provider-block argument receiving the ephemeral sensitive map, when any. */
+  readonly mapArgument?: string;
 }
 
 /**
@@ -246,7 +248,9 @@ export function generateOpenTofuChildModuleRoot(
 
 interface RuntimeInputVariableDeclaration {
   readonly variableName: string;
-  readonly runtimeInputs: RootProviderRuntimeInputs;
+  readonly runtimeInputs: RootProviderRuntimeInputs & {
+    readonly mapArgument: string;
+  };
 }
 
 /**
@@ -265,12 +269,22 @@ function runtimeInputVariableDeclarations(
 ): readonly RuntimeInputVariableDeclaration[] {
   const byVariableName = new Map<
     string,
-    { readonly identity: string; readonly runtimeInputs: RootProviderRuntimeInputs }
+    {
+      readonly identity: string;
+      readonly runtimeInputs: RootProviderRuntimeInputs & {
+        readonly mapArgument: string;
+      };
+    }
   >();
   for (const binding of providerBindings) {
     const runtimeInputs = binding.runtimeInputs;
     if (!runtimeInputs) continue;
     assertRuntimeInputs(binding, runtimeInputs);
+    if (runtimeInputs.mapArgument === undefined) continue;
+    const mapRuntimeInputs = {
+      ...runtimeInputs,
+      mapArgument: runtimeInputs.mapArgument,
+    };
     const variableName = rootRuntimeInputsVariableName(binding);
     const identity = JSON.stringify([
       binding.moduleLocalName,
@@ -280,16 +294,19 @@ function runtimeInputVariableDeclarations(
     if (
       existing &&
       (existing.identity !== identity ||
-        existing.runtimeInputs.nonce !== runtimeInputs.nonce ||
-        existing.runtimeInputs.nonceArgument !== runtimeInputs.nonceArgument ||
-        existing.runtimeInputs.mapArgument !== runtimeInputs.mapArgument)
+        existing.runtimeInputs.nonce !== mapRuntimeInputs.nonce ||
+        existing.runtimeInputs.nonceArgument !== mapRuntimeInputs.nonceArgument ||
+        existing.runtimeInputs.mapArgument !== mapRuntimeInputs.mapArgument)
     ) {
       throw new RootgenValidationError(
         "rootgen_runtime_input_argument_conflict",
         `rootgen: conflicting run-scoped sensitive input wiring for ${variableName}`,
       );
     }
-    byVariableName.set(variableName, { identity, runtimeInputs });
+    byVariableName.set(variableName, {
+      identity,
+      runtimeInputs: mapRuntimeInputs,
+    });
   }
   return Array.from(byVariableName.entries())
     .sort(([left], [right]) => left.localeCompare(right))
@@ -309,7 +326,13 @@ function assertRuntimeInputs(
       "rootgen: run-scoped sensitive input nonce must be 22..128 canonical unpadded base64url characters decoding to at least 16 bytes",
     );
   }
-  for (const name of [runtimeInputs.nonceArgument, runtimeInputs.mapArgument]) {
+  const argumentNames = [
+    runtimeInputs.nonceArgument,
+    ...(runtimeInputs.mapArgument === undefined
+      ? []
+      : [runtimeInputs.mapArgument]),
+  ];
+  for (const name of argumentNames) {
     if (!isOpenTofuIdentifier(name) || name === "alias") {
       throw new RootgenValidationError(
         "rootgen_runtime_input_argument_invalid",
@@ -317,14 +340,17 @@ function assertRuntimeInputs(
       );
     }
   }
-  if (runtimeInputs.nonceArgument === runtimeInputs.mapArgument) {
+  if (
+    runtimeInputs.mapArgument !== undefined &&
+    runtimeInputs.nonceArgument === runtimeInputs.mapArgument
+  ) {
     throw new RootgenValidationError(
       "rootgen_runtime_input_argument_conflict",
       "rootgen: run-scoped sensitive input nonce and map arguments must differ",
     );
   }
   const configuration = binding.configuration ?? {};
-  for (const name of [runtimeInputs.nonceArgument, runtimeInputs.mapArgument]) {
+  for (const name of argumentNames) {
     if (Object.hasOwn(configuration, name)) {
       throw new RootgenValidationError(
         "rootgen_runtime_input_argument_conflict",
@@ -452,15 +478,17 @@ function appendProviderSections(
       const runtimeInputs = binding.runtimeInputs;
       if (runtimeInputs) {
         assertRuntimeInputs(binding, runtimeInputs);
-        // The nonce is a non-secret, plan-stable identifier. The map is a bare
-        // variable reference: rendering a literal here would put the values in
-        // the generated root, the plan, and state.
+        // The nonce is a non-secret, plan-stable identifier. A map, when
+        // present, is a bare variable reference: rendering a literal here would
+        // put the values in the generated root, the plan, and state.
         aliasLines.push(
           `  ${runtimeInputs.nonceArgument} = ${hclString(runtimeInputs.nonce)}`,
         );
-        aliasLines.push(
-          `  ${runtimeInputs.mapArgument} = var.${rootRuntimeInputsVariableName(binding)}`,
-        );
+        if (runtimeInputs.mapArgument !== undefined) {
+          aliasLines.push(
+            `  ${runtimeInputs.mapArgument} = var.${rootRuntimeInputsVariableName(binding)}`,
+          );
+        }
       }
       aliasLines.push("}");
       sections.push(aliasLines.join("\n"));
