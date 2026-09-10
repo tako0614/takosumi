@@ -430,6 +430,56 @@ async function expectWithin<T>(
   }
 }
 
+function deferredSignal(): {
+  readonly promise: Promise<void>;
+  resolve(): void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((accepted) => {
+    resolve = accepted;
+  });
+  return { promise, resolve };
+}
+
+/** Makes the fixed Plan-creation deadline deterministic without a 25s sleep. */
+function capturedPlanCreationDeadlines(): {
+  fireLatest(): void;
+  restore(): void;
+} {
+  const realSetTimeout = globalThis.setTimeout;
+  const deadlines: Array<() => void> = [];
+  globalThis.setTimeout = ((
+    callback: TimerHandler,
+    milliseconds?: number,
+    ...args: unknown[]
+  ) => {
+    if (milliseconds !== 25_000) {
+      return realSetTimeout(callback, milliseconds, ...args);
+    }
+    if (typeof callback !== "function") {
+      throw new TypeError("Plan creation deadline callback must be callable");
+    }
+    deadlines.push(() => callback(...args));
+    // The production callback is fired explicitly by the test. The real handle
+    // lets the production finally block keep clearing its own timer unchanged.
+    return realSetTimeout(() => undefined, 60_000);
+  }) as typeof globalThis.setTimeout;
+  return {
+    fireLatest() {
+      const deadline = deadlines.at(-1);
+      if (!deadline) throw new Error("Plan creation deadline was not armed");
+      deadline();
+    },
+    restore() {
+      globalThis.setTimeout = realSetTimeout;
+    },
+  };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 16; index += 1) await Promise.resolve();
+}
+
 function observingCapsuleCoordination(now: () => number): {
   readonly coordination: CapsuleCoordination;
   readonly renewCalls: () => number;
@@ -1159,6 +1209,109 @@ test("capsule plan dispatch carries sourceArchive + stateScope at the current ge
   expect(run.environment).toEqual("preview");
   expect(run.sourceSnapshotId).toEqual("snap_fixture");
   expect(run.baseStateGeneration).toEqual(0);
+});
+
+test("Capsule Plan creation deadline ends before awaited inline runner execution", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const delegate = recordingRunner();
+  const started = deferredSignal();
+  const release = deferredSignal();
+  const runner: RecordingRunner = {
+    ...delegate,
+    async plan(job) {
+      started.resolve();
+      await release.promise;
+      return await delegate.plan(job);
+    },
+  };
+  const controller = controllerWith(store, runner);
+  const deadlines = capturedPlanCreationDeadlines();
+  let settled = false;
+  try {
+    const outcome = controller.createCapsulePlan("cap_fixture1").then(
+      (response) => ({ status: "fulfilled" as const, response }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    void outcome.then(() => {
+      settled = true;
+    });
+    await started.promise;
+
+    // Crossing the creation deadline while the actual runner is already
+    // executing must leave the historical synchronous call pending, not turn a
+    // live Plan into capsule_plan_creation_timeout.
+    deadlines.fireLatest();
+    await flushMicrotasks();
+    const settledAtCreationDeadline = settled;
+    release.resolve();
+    const result = await outcome;
+
+    expect(settledAtCreationDeadline).toBe(false);
+    if (result.status === "rejected") throw result.error;
+    expect(result.response.planRun.status).toBe("succeeded");
+    expect(delegate.planJobs).toHaveLength(1);
+  } finally {
+    release.resolve();
+    deadlines.restore();
+  }
+});
+
+test("a timed-out Plan preparation cannot dispatch after its late durable completion", async () => {
+  const inner = new InMemoryOpenTofuControlStore();
+  await seedRunnableCapsuleModel(inner, { environment: "preview" });
+  const preparationStarted = deferredSignal();
+  const releasePreparation = deferredSignal();
+  const preparationReturned = deferredSignal();
+  const store = new Proxy(inner, {
+    get(target, property, receiver) {
+      if (property === "preparePlanRun") {
+        return async (input: PreparePlanRunInput): Promise<PreparePlanRunResult> => {
+          preparationStarted.resolve();
+          await releasePreparation.promise;
+          try {
+            return await target.preparePlanRun(input);
+          } finally {
+            preparationReturned.resolve();
+          }
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as OpenTofuControlStore;
+  let enqueueCalls = 0;
+  const controller = controllerWith(store, recordingRunner(), {
+    enqueueRun: () => {
+      enqueueCalls += 1;
+      return Promise.resolve();
+    },
+  });
+  const deadlines = capturedPlanCreationDeadlines();
+  try {
+    const attempt = controller.createCapsulePlan("cap_fixture1");
+    await preparationStarted.promise;
+    deadlines.fireLatest();
+    await expect(attempt).rejects.toMatchObject({
+      code: "failed_precondition",
+      details: {
+        reason: "capsule_plan_creation_timeout",
+        stage: "plan_run_create",
+        timeoutMs: 25_000,
+      },
+    });
+
+    // Promise.race cannot cancel the store call. When it eventually commits,
+    // its discarded preparation result must not cross the dispatch boundary.
+    releasePreparation.resolve();
+    await preparationReturned.promise;
+    await flushMicrotasks();
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    expect(enqueueCalls).toBe(0);
+  } finally {
+    releasePreparation.resolve();
+    deadlines.restore();
+  }
 });
 
 test("Capsule Plan preserves the server-owned actor in the durable and public Run", async () => {

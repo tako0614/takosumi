@@ -388,6 +388,11 @@ type RunEnginePlanRunInternalContext = PlanRunInternalContext & {
   readonly capsulePlanExecutionAuthority?: CapsulePlanExecutionAuthority;
 };
 
+interface PreparedPlanRun {
+  readonly planRun: PlanRun;
+  readonly profile: RunnerProfile;
+}
+
 function assertCapsulePlanStateAuthority(
   capsule: Capsule,
   authority: CapsulePlanExecutionAuthority | undefined,
@@ -1696,6 +1701,21 @@ export class RunEngine {
     context: DeployControlActorContext = {},
     internal: RunEnginePlanRunInternalContext = {},
   ): Promise<PlanRunResponse> {
+    return await this.#dispatchPreparedPlanRun(
+      await this.#preparePlanRun(request, context, internal),
+    );
+  }
+
+  /**
+   * Durably creates or adopts one complete Plan and publishes its queued
+   * notification. Runner delivery is deliberately a separate awaited step:
+   * local dispatch executes OpenTofu inline and is not Plan creation latency.
+   */
+  async #preparePlanRun(
+    request: InternalCreatePlanRunRequest,
+    context: DeployControlActorContext,
+    internal: RunEnginePlanRunInternalContext,
+  ): Promise<PreparedPlanRun> {
     const workspaceId = request.workspaceId;
     requireNonEmptyString(workspaceId, "workspaceId");
     const requestCapsuleId = request.capsuleId;
@@ -2152,6 +2172,19 @@ export class RunEngine {
       // clear the matching pending condition deterministically.
       await this.#notifyPlanQueued(planRun);
     }
+    return { planRun, profile };
+  }
+
+  /**
+   * Delivers an already-durable Plan and awaits the host dispatcher. This keeps
+   * both the historical inline completion semantics and external enqueue
+   * acknowledgement, while preventing either from being reported as a
+   * pre-dispatch Plan-creation timeout.
+   */
+  async #dispatchPreparedPlanRun(
+    prepared: PreparedPlanRun,
+  ): Promise<PlanRunResponse> {
+    const { planRun, profile } = prepared;
     // Re-enqueue an existing queued row to recover a lost enqueue
     // acknowledgement, but never enqueue a Plan that a consumer has already
     // completed (or parked for approval). The queue consumer's own CAS remains
@@ -2634,9 +2667,9 @@ export class RunEngine {
           ),
         )
       : undefined;
-    const response = await planCreationStage(
+    const prepared = await planCreationStage(
       "plan_run_create",
-      this.createPlanRun(injectedRequest, context, {
+      this.#preparePlanRun(injectedRequest, context, {
         capsuleContext,
         sourceSnapshotId: snapshot.id,
         ...(internal.planRunId ? { planRunId: internal.planRunId } : {}),
@@ -2666,7 +2699,7 @@ export class RunEngine {
           : {}),
       }),
     );
-    return response;
+    return await this.#dispatchPreparedPlanRun(prepared);
   }
 
   /** Merges dependency-injected values into ordinary root-module variables. */
