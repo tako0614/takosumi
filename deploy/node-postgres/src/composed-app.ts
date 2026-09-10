@@ -51,6 +51,20 @@ import {
   InMemoryCapsuleCoordination,
   type CapsuleCoordination,
 } from "../../../core/domains/deploy-control/capsule_lease.ts";
+import { OpenTofuControllerError } from "../../../core/domains/deploy-control/errors.ts";
+import type { RuntimeInputOidcClientSource } from "../../../core/domains/deploy-control/runtime_input_materializer.ts";
+import type { RuntimeInputOidcControlLedger } from "../../../deploy/platform/runtime_input_oidc_client_source.ts";
+import type { CapsuleOidcAccountsLedger } from "../../../deploy/platform/accounts_oidc_client_registration.ts";
+
+export interface RuntimeInputOidcClientSourceFactoryInput {
+  readonly control: RuntimeInputOidcControlLedger;
+  readonly accounts: CapsuleOidcAccountsLedger;
+  readonly issuer: string;
+}
+
+export type RuntimeInputOidcClientSourceFactory = (
+  input: RuntimeInputOidcClientSourceFactoryInput,
+) => RuntimeInputOidcClientSource | Promise<RuntimeInputOidcClientSource>;
 
 export interface ComposedAppInput {
   readonly config: NodeAccountsServerConfig;
@@ -74,6 +88,16 @@ export interface ComposedAppInput {
    * own protected runner/callback routes.
    */
   readonly runtimeEnv?: CreateTakosumiServiceArg["runtimeEnv"];
+  /**
+   * Optional Accounts authority for manifest-gated runtime `identity.oidc`
+   * bindings. Core owns the runtime-input protocol but not Accounts client
+   * registration, so the host supplies the existing registration authority
+   * after the embedded service operations facade has been created.
+   */
+  readonly createRuntimeInputOidcClientSource?: RuntimeInputOidcClientSourceFactory;
+  /** Private host key forwarded to Core's runtime-binding derivation lane. */
+  readonly runtimeBindingDerivationKey?:
+    CreateTakosumiServiceArg["runtimeBindingDerivationKey"];
   /**
    * Optional SQL client backing the Takosumi Deploy Control API ledger so
    * Capsule / Run / StateVersion / Output records survive restarts. When omitted the
@@ -99,6 +123,14 @@ export interface ComposedAppInput {
   readonly capsuleCoordination?: CapsuleCoordination;
   /** Complete host-installed recipe catalog; defaults at this composition root. */
   readonly credentialRecipes?: CreateTakosumiServiceArg["credentialRecipes"];
+  /** Fixed, credentialless operator Connections projected by the host release. */
+  readonly operatorProviderConnections?:
+    CreateTakosumiServiceArg["operatorProviderConnections"];
+  /** Host-owned signer for canonical Run-scoped recipe credentials. */
+  readonly runCredentialIssuer?: CreateTakosumiServiceArg["runCredentialIssuer"];
+  /** Explicit opt-in for workspace bindings to projected operator Connections. */
+  readonly allowOperatorScopedProviderConnections?:
+    CreateTakosumiServiceArg["allowOperatorScopedProviderConnections"];
   /** Complete host-installed config set; omitted means no app-specific entries. */
   readonly operatorInstallConfigs?: CreateTakosumiServiceArg["operatorInstallConfigs"];
   /** Complete host-installed recipe driver registry. */
@@ -156,6 +188,10 @@ export async function buildComposedApp(
     });
   const capsuleCoordination =
     input.capsuleCoordination ?? new InMemoryCapsuleCoordination();
+  const deferredRuntimeInputOidcClientSource =
+    input.createRuntimeInputOidcClientSource
+      ? createDeferredRuntimeInputOidcClientSource()
+      : undefined;
   let controlPlaneOperations: CreatedTakosumiService["operations"] | undefined;
   const created = await createTakosumiService({
     runtimeEnv,
@@ -166,10 +202,22 @@ export async function buildComposedApp(
     credentialRecipes:
       input.credentialRecipes ??
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes,
+    ...(input.operatorProviderConnections !== undefined
+      ? { operatorProviderConnections: input.operatorProviderConnections }
+      : {}),
     operatorInstallConfigs: input.operatorInstallConfigs ?? [],
     credentialRecipeDrivers:
       input.credentialRecipeDrivers ??
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    ...(input.runCredentialIssuer !== undefined
+      ? { runCredentialIssuer: input.runCredentialIssuer }
+      : {}),
+    ...(input.allowOperatorScopedProviderConnections !== undefined
+      ? {
+          allowOperatorScopedProviderConnections:
+            input.allowOperatorScopedProviderConnections,
+        }
+      : {}),
     sourceCredentialDrivers:
       input.sourceCredentialDrivers ??
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
@@ -178,6 +226,15 @@ export async function buildComposedApp(
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.buildConnectionSetupRequest,
     ...(connectionOAuthHelpers ? { connectionOAuthHelpers } : {}),
     ...(input.sqlClient ? { sqlClient: input.sqlClient } : {}),
+    ...(deferredRuntimeInputOidcClientSource
+      ? {
+          runtimeInputOidcClientSource:
+            deferredRuntimeInputOidcClientSource.client,
+        }
+      : {}),
+    ...(input.runtimeBindingDerivationKey !== undefined
+      ? { runtimeBindingDerivationKey: input.runtimeBindingDerivationKey }
+      : {}),
     ...(input.opentofuRunner ? { opentofuRunner: input.opentofuRunner } : {}),
     ...(input.opentofuRunnerExecutors
       ? { opentofuRunnerExecutors: input.opentofuRunnerExecutors }
@@ -279,6 +336,16 @@ export async function buildComposedApp(
     },
   });
   controlPlaneOperations = created.operations;
+  if (input.createRuntimeInputOidcClientSource) {
+    const source = await input.createRuntimeInputOidcClientSource(
+      Object.freeze({
+        control: createRuntimeInputOidcControlLedger(created.operations),
+        accounts: createRuntimeInputOidcAccountsLedger(input.store),
+        issuer: input.config.issuer,
+      }),
+    );
+    deferredRuntimeInputOidcClientSource!.initialize(source);
+  }
 
   const serviceApp = created.app;
   // Account-plane fallback INSIDE the embedded Takosumi service app. The Takosumi Accounts
@@ -349,6 +416,104 @@ export async function buildComposedApp(
   // while this composer imports Hono from its own node_modules. Runtime Hono
   // objects are compatible; keep the cast at the framework/composer boundary.
   return { ...created, app: app as unknown as CreatedTakosumiService["app"] };
+}
+
+/**
+ * The runtime-input host seam receives only the three Core reads needed to
+ * validate Capsule authority. Missing rows map to `undefined`; other control
+ * errors remain visible to the source instead of being mistaken for absence.
+ */
+function createRuntimeInputOidcControlLedger(
+  operations: CreatedTakosumiService["operations"],
+): RuntimeInputOidcControlLedger {
+  return Object.freeze({
+    getCapsule: async (id: string) =>
+      await readOptional(() => operations.capsules.getCapsule(id)),
+    getInstallConfig: async (id: string) =>
+      await readOptional(() => operations.capsules.getInstallConfig(id)),
+    getCapsuleExecutionAuthorityEpoch: async (id: string) =>
+      await readOptional(() =>
+        operations.capsules.getCapsuleExecutionAuthorityEpoch(id),
+      ),
+  });
+}
+
+/**
+ * Accounts registration methods are the only mutable authority the source
+ * needs. Bind them to the existing store instance without exposing its wider
+ * query, migration, or account-management surface.
+ */
+function createRuntimeInputOidcAccountsLedger(
+  store: PostgresAccountsStore,
+): CapsuleOidcAccountsLedger {
+  return Object.freeze({
+    findOidcClient: store.findOidcClient.bind(store),
+    findOidcClientForCapsule: store.findOidcClientForCapsule.bind(store),
+    saveOidcClient: store.saveOidcClient.bind(store),
+  });
+}
+
+async function readOptional<T>(read: () => Promise<T>): Promise<T | undefined> {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof OpenTofuControllerError && error.code === "not_found") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+interface DeferredRuntimeInputOidcClientSource {
+  readonly client: RuntimeInputOidcClientSource;
+  initialize(source: RuntimeInputOidcClientSource): void;
+}
+
+/**
+ * Core constructs its runtime materializer before the host has a chance to
+ * finish composing Accounts. Keep the Core port present from construction, but
+ * defer every call until the host has supplied the one existing Accounts
+ * authority. A call before initialization is a boot error, never a partial
+ * runtime-input delivery.
+ */
+function createDeferredRuntimeInputOidcClientSource(): DeferredRuntimeInputOidcClientSource {
+  let source: RuntimeInputOidcClientSource | undefined;
+  const requireSource = (): RuntimeInputOidcClientSource => {
+    if (!source) {
+      throw new TypeError(
+        "runtime input OIDC client source is not initialized",
+      );
+    }
+    return source;
+  };
+  return {
+    client: {
+      generation: async (input) => await requireSource().generation(input),
+      materialize: async (input) => await requireSource().materialize(input),
+      retire: async (input) => {
+        const current = requireSource();
+        if (current.retire) await current.retire(input);
+      },
+    },
+    initialize(next) {
+      if (
+        next === null ||
+        typeof next !== "object" ||
+        typeof next.generation !== "function" ||
+        typeof next.materialize !== "function"
+      ) {
+        throw new TypeError(
+          "createRuntimeInputOidcClientSource must return generation and materialize methods",
+        );
+      }
+      if (source) {
+        throw new TypeError(
+          "runtime input OIDC client source is already initialized",
+        );
+      }
+      source = next;
+    },
+  };
 }
 
 /**

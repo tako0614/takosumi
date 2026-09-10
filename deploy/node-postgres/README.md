@@ -85,6 +85,20 @@ a commercial host extension and are not part of this public distribution.
 
 - Run `bun run cli -- accounts migrate` against Postgres before first start, or use the docker-compose `migrations`
   init container which does it for you. See `cli-accounts-db.ts` for the migration entry point.
+- A host that composes manifest-gated runtime `identity.oidc` bindings passes
+  `createRuntimeInputOidcClientSource` to `buildComposedApp`/`buildComposedServer`.
+  The factory receives only frozen `{ control, accounts, issuer }` wrappers:
+  `control` exposes the three Capsule/InstallConfig authority reads and
+  `accounts` exposes the three OIDC registration ledger methods. It does not
+  receive full service operations, the Accounts store, server config, or
+  secrets. The host keeps its pairwise subject secret, derivation key, and
+  public-origin authority outside this factory seam.
+- Operator-owned credential composition is explicit: pass the complete
+  `credentialRecipes` and `credentialRecipeDrivers` together with any fixed
+  `operatorProviderConnections`. A host may also supply the generic
+  `runCredentialIssuer`; `allowOperatorScopedProviderConnections` defaults to
+  `false` and must be explicitly enabled when those declared Connections are
+  intended for Workspace bindings.
 - Secrets (`POSTGRES_PASSWORD`, OAuth client secrets) belong in your operator secret store, not in the compose file. Use Docker secrets, Kubernetes Secrets, or a `.env` file outside version control.
 - The Caddyfile expects `TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME` to resolve to the host running the stack. Caddy will obtain a Let's Encrypt cert automatically on port 80/443. The Caddyfile pins TLS to 1.2 / 1.3, emits structured JSON logs, and sets a default-deny `Content-Security-Policy` (`default-src 'self'; frame-ancestors 'none'`); override this header with the exact source allowlist your dashboard payload needs rather than removing it.
 

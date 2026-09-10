@@ -7,8 +7,23 @@ import {
   type PostgresQueryClient,
 } from "@takosjp/takosumi-accounts-service";
 import type { InstallConfig } from "takosumi-contract/install-configs";
+import type { Run } from "takosumi-contract/runs";
+import type { CredentialRecipe } from "takosumi-contract/credential-recipes";
+import {
+  credentialRecipeDriverKey,
+  type CredentialRecipeRuntimeDriver,
+  type FixedOperatorProviderConnectionDeclaration,
+} from "takosumi-contract/credential-recipe-host";
 import type { ComposedAppInput } from "../../../../deploy/node-postgres/src/composed-app.ts";
 import type { NodeAccountsServerConfig } from "../../../../deploy/node-postgres/src/handler.ts";
+import type { OpenTofuRunner } from "../../../../core/domains/deploy-control/mod.ts";
+import type {
+  RuntimeInputOidcClientSource,
+  RuntimeInputOidcRequest,
+} from "../../../../core/domains/deploy-control/runtime_input_materializer.ts";
+import type {
+  RuntimeInputOidcClientSourceFactoryInput,
+} from "../../../../deploy/node-postgres/src/composed-app.ts";
 import {
   InMemoryCapsuleCoordination,
   type CapsuleCoordination,
@@ -863,4 +878,579 @@ test("composed app runs preHandle ahead of composed routing", async () => {
   assert.equal(res.status, 200);
   assert.equal(res.headers.get("x-pre"), "1");
   assert.equal(spy.calls.length, 0);
+});
+
+const RUNTIME_INPUT_PROVIDER =
+  "registry.terraform.io/tako0614/takoform" as const;
+const RUNTIME_INPUT_PROFILE = {
+  contract: "takosumi.runtime-binding-profile/v2",
+  generatedSecrets: [
+    { binding: "ENCRYPTION_KEY", bytes: 32, encoding: "hex" },
+  ],
+  oidcClient: {
+    issuerBinding: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+    clientIdBinding: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+    ownerSubjectBinding: "TAKOSUMI_ACCOUNTS_OWNER_SUB",
+    redirectUriBinding: "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
+    callbackPath: "/api/auth/callback/takos",
+    scopes: ["openid", "profile", "email"],
+  },
+} as const;
+
+const RUNTIME_INPUT_RUNNER_PROFILE = {
+  id: "opentofu-default",
+  name: "Composed App runtime-input test runner",
+  substrate: "local",
+  executorId: "opentofu.default",
+  lifecycle: { state: "active" as const },
+  availability: { state: "available" as const },
+  stateBackend: {
+    kind: "local",
+    ref: "state://fixture/composed-app-runtime-input",
+    lock: { kind: "operator", ref: "lock://fixture/composed-app-runtime-input" },
+  },
+  allowedProviders: [RUNTIME_INPUT_PROVIDER],
+  requireProviderBindings: true,
+  networkPolicy: { mode: "operator-managed" },
+  createdAt: Date.now(),
+} as const;
+
+const COMPOSED_RUN_ISSUED_RECIPE = {
+  id: "composed-run-credential",
+  displayName: "Composed Run credential",
+  terraformSource: "*",
+  envNames: ["COMPOSED_RUN_CREDENTIAL"],
+  authModes: {
+    broker: {
+      preRun: { type: "issue_run_credential" },
+      runIssuance: {
+        context: "capsule-run.v1",
+        operatorConnection: "workspace-bindable",
+        storedMaterial: "none",
+        audience: "composed-app.example.v1",
+        scopes: ["provider:invoke"],
+      },
+    },
+  },
+} as const satisfies CredentialRecipe;
+
+const COMPOSED_OPERATOR_CONNECTION = {
+  id: "conn_composedRun01",
+  providerSource: RUNTIME_INPUT_PROVIDER,
+  displayName: "Composed operator provider",
+  runCredentialSettings: { requiredAvailableMinor: 2300 },
+  credentialRecipe: {
+    id: COMPOSED_RUN_ISSUED_RECIPE.id,
+    authMode: "broker",
+  },
+} as const satisfies FixedOperatorProviderConnectionDeclaration;
+
+const COMPOSED_RUN_DRIVER: CredentialRecipeRuntimeDriver = {
+  evidenceIssuer: "composed-app-run-credential",
+  verify: async () => ({ ok: true }),
+  mint: async ({ connection, run, issueRunCredential }) => {
+    if (!run || !issueRunCredential) {
+      throw new Error("composed app run issuer was not wired");
+    }
+    const issued = await issueRunCredential({ ttlSeconds: 600 });
+    return {
+      env: { COMPOSED_RUN_CREDENTIAL: issued.token },
+      evidence: {
+        connectionId: connection.id,
+        provider: connection.provider,
+        temporary: true,
+        ttlEnforced: true,
+        expiresAt: issued.expiresAt,
+        ttlSeconds: issued.ttlSeconds,
+        issuer: "composed-app-run-credential",
+        secretValueStored: false,
+      },
+    };
+  },
+};
+
+function runtimeInputRunner(options: {
+  readonly planJobs: unknown[];
+  readonly sourceJobs: unknown[];
+}): OpenTofuRunner {
+  return {
+    sourceSync: async (job) => {
+      options.sourceJobs.push(job);
+      return {
+        resolvedCommit: "a".repeat(40),
+        archiveDigest: `sha256:${"b".repeat(64)}`,
+        archiveSizeBytes: 1024,
+        repositoryInstallMetadata: { status: "absent" },
+        repositoryManifest: { status: "absent" },
+        repositoryModules: {
+          status: "ready",
+          scopePath: ".",
+          modules: [
+            {
+              path: ".",
+              providerPackages: [{ source: RUNTIME_INPUT_PROVIDER }],
+              rootProviderRequirements: [
+                {
+                  source: RUNTIME_INPUT_PROVIDER,
+                  moduleLocalName: "takoform",
+                  version: "4.0.0",
+                },
+              ],
+            },
+          ],
+        },
+      };
+    },
+    readCapsuleSourceFiles: async () => [
+      {
+        path: "main.tf",
+        text: `terraform {
+  required_providers {
+    takoform = {
+      source = "${RUNTIME_INPUT_PROVIDER}"
+      version = "= 4.0.0"
+    }
+  }
+}
+
+provider "takoform" {}
+
+output "launch_url" {
+  value = "https://example.test"
+}
+`,
+      },
+    ],
+    plan: async (job) => {
+      options.planJobs.push(job);
+      return {
+        planDigest: `sha256:${"c".repeat(64)}`,
+        planArtifact: {
+          kind: "runner-local",
+          ref: "runner-local://runtime-input/plan",
+          digest: `sha256:${"c".repeat(64)}`,
+        },
+        requiredProviders: [RUNTIME_INPUT_PROVIDER],
+        requiredProviderRequirements: [
+          {
+            source: RUNTIME_INPUT_PROVIDER,
+            moduleLocalName: "takoform",
+            version: "4.0.0",
+          },
+        ],
+        providerLockDigest: `sha256:${"d".repeat(64)}`,
+        providerInstallation: [
+          {
+            provider: RUNTIME_INPUT_PROVIDER,
+            mirrored: true,
+            installationMethod: "filesystem_mirror",
+            attested: true,
+            attestationMethod: "forced_filesystem_mirror_init",
+            mirrorPath: `/opt/opentofu/provider-mirror/${RUNTIME_INPUT_PROVIDER}`,
+            installedDigest: `sha256:${"e".repeat(64)}`,
+          },
+        ],
+      };
+    },
+  };
+}
+
+async function buildRuntimeInputPlanFixture(options: {
+  readonly oidcSource?: RuntimeInputOidcClientSource;
+  readonly onFactoryInput?: (
+    input: RuntimeInputOidcClientSourceFactoryInput,
+  ) => void;
+  readonly operatorProviderConnections?: ComposedAppInput["operatorProviderConnections"];
+  readonly credentialRecipes?: ComposedAppInput["credentialRecipes"];
+  readonly credentialRecipeDrivers?: ComposedAppInput["credentialRecipeDrivers"];
+  readonly runCredentialIssuer?: ComposedAppInput["runCredentialIssuer"];
+  readonly allowOperatorScopedProviderConnections?: ComposedAppInput["allowOperatorScopedProviderConnections"];
+} = {}) {
+  const sourceJobs: unknown[] = [];
+  const planJobs: unknown[] = [];
+  const { buildComposedApp } =
+    await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const store = new PostgresAccountsStore(stubQueryClient());
+  const created = await buildComposedApp({
+    config: testConfig(),
+    store,
+    accountsHandler: accountsHandlerSpy().handler,
+    runtimeEnv: {
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN,
+    },
+    opentofuRunner: runtimeInputRunner({ sourceJobs, planJobs }),
+    runnerProfiles: [RUNTIME_INPUT_RUNNER_PROFILE],
+    defaultRunnerProfileId: RUNTIME_INPUT_RUNNER_PROFILE.id,
+    ...(options.operatorProviderConnections !== undefined
+      ? { operatorProviderConnections: options.operatorProviderConnections }
+      : {}),
+    ...(options.credentialRecipes !== undefined
+      ? { credentialRecipes: options.credentialRecipes }
+      : {}),
+    ...(options.credentialRecipeDrivers !== undefined
+      ? { credentialRecipeDrivers: options.credentialRecipeDrivers }
+      : {}),
+    ...(options.runCredentialIssuer !== undefined
+      ? { runCredentialIssuer: options.runCredentialIssuer }
+      : {}),
+    ...(options.allowOperatorScopedProviderConnections !== undefined
+      ? {
+          allowOperatorScopedProviderConnections:
+            options.allowOperatorScopedProviderConnections,
+        }
+      : {}),
+    ...(options.oidcSource
+      ? {
+          createRuntimeInputOidcClientSource: async (
+            input: RuntimeInputOidcClientSourceFactoryInput,
+          ) => {
+            options.onFactoryInput?.(input);
+            return options.oidcSource!;
+          },
+        }
+      : {}),
+    runtimeBindingDerivationKey: "runtime-binding-key-for-composed-app-tests",
+  });
+  const workspace = await created.operations.workspaces.createWorkspace({
+    handle: `runtime-input-${crypto.randomUUID().slice(0, 8)}`,
+    displayName: "Runtime Input Composition",
+    type: "personal",
+    ownerUserId: "tsub_runtime_input_owner",
+  });
+  const sourceResponse = await created.operations.createSource({
+    workspaceId: workspace.id,
+    name: "runtime-input-source",
+    url: "https://github.com/acme/runtime-input.git",
+  });
+  await created.operations.createSourceSync(sourceResponse.source.id);
+  let connectionId = options.operatorProviderConnections?.[0]?.id;
+  if (!connectionId) {
+    const connection = await created.operations.createConnection({
+      workspaceId: workspace.id,
+      provider: RUNTIME_INPUT_PROVIDER,
+      credentialRecipe: {
+        id: "takoform",
+        authMode: "token",
+        secretPartition: "provider-credentials",
+      },
+      values: {
+        TAKOFORM_ENDPOINT: "https://forms.example.test",
+        TAKOFORM_SPACE: "runtime-input",
+        TAKOFORM_TOKEN: "runtime-input-token",
+      },
+    });
+    await created.operations.testConnection(connection.connection.id);
+    connectionId = connection.connection.id;
+  }
+  const now = new Date(0).toISOString();
+  const installConfig: InstallConfig = {
+    id: `cfg_runtimeinput${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`,
+    workspaceId: workspace.id,
+    name: "runtime-input-install",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    runtimeBindingMaterialization: RUNTIME_INPUT_PROFILE,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const capsule = await created.operations.capsules.createCapsuleInitialAuthority({
+    capsuleId: `cap_runtimeinput${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`,
+    providerBindingSetId: `ipcset_runtimeinput${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`,
+    workspaceId: workspace.id,
+    name: "runtime-input",
+    environment: "preview",
+    sourceId: sourceResponse.source.id,
+    installingPrincipalId: "tsub_runtime_input_owner",
+    installConfig,
+    providerBindings: [
+      {
+        provider: RUNTIME_INPUT_PROVIDER,
+        moduleLocalName: "takoform",
+        connectionId,
+      },
+    ],
+  });
+  return {
+    created,
+    capsule: capsule.capsule,
+    installConfig,
+    planJobs,
+    sourceJobs,
+    workspace,
+    store,
+    connectionId,
+  };
+}
+
+test("composed app supplies its injected OIDC authority to a binding-delivered Capsule plan", async () => {
+  const requests: RuntimeInputOidcRequest[] = [];
+  let factoryInput: RuntimeInputOidcClientSourceFactoryInput | undefined;
+  const oidcSource: RuntimeInputOidcClientSource = {
+    generation: async (request) => {
+      requests.push(request);
+      return "sha256:composed-app-oidc-generation";
+    },
+    materialize: async (request) => {
+      requests.push(request);
+      return {
+        generation: "sha256:composed-app-oidc-generation",
+        values: {
+          TAKOSUMI_ACCOUNTS_ISSUER_URL: "https://app.takosumi.test",
+          TAKOSUMI_ACCOUNTS_CLIENT_ID: "client_runtime_input",
+          TAKOSUMI_ACCOUNTS_OWNER_SUB: "owner_runtime_input",
+          TAKOSUMI_ACCOUNTS_REDIRECT_URI:
+            "https://runtime-input.example.test/api/auth/callback/takos",
+        },
+      };
+    },
+  };
+  const { created, capsule, installConfig, planJobs } =
+    await buildRuntimeInputPlanFixture({
+      oidcSource,
+      onFactoryInput: (input) => {
+        factoryInput = input;
+      },
+  });
+  assert(factoryInput);
+  assert.deepEqual(Object.keys(factoryInput), ["control", "accounts", "issuer"]);
+  assert.deepEqual(Object.keys(factoryInput.control), [
+    "getCapsule",
+    "getInstallConfig",
+    "getCapsuleExecutionAuthorityEpoch",
+  ]);
+  assert.deepEqual(Object.keys(factoryInput.accounts), [
+    "findOidcClient",
+    "findOidcClientForCapsule",
+    "saveOidcClient",
+  ]);
+  assert.equal(factoryInput.issuer, testConfig().issuer);
+  assert.equal(Object.isFrozen(factoryInput), true);
+  assert.equal(Object.isFrozen(factoryInput.control), true);
+  assert.equal(Object.isFrozen(factoryInput.accounts), true);
+  assert.equal("controlPlaneOperations" in factoryInput, false);
+  assert.equal("accountsStore" in factoryInput, false);
+  assert.equal("config" in factoryInput, false);
+  assert.equal("query" in factoryInput.accounts, false);
+  assert.throws(() => {
+    (factoryInput as unknown as { issuer: string }).issuer =
+      "https://attacker.example.test";
+  });
+  assert.equal(factoryInput.issuer, testConfig().issuer);
+  assert.equal(
+    (await factoryInput.control.getCapsule(capsule.id))?.id,
+    capsule.id,
+  );
+  assert.equal(
+    (await factoryInput.control.getInstallConfig(installConfig.id))?.id,
+    installConfig.id,
+  );
+  assert.equal(
+    await factoryInput.control.getCapsuleExecutionAuthorityEpoch(capsule.id),
+    1,
+  );
+  const response = await created.app.fetch(
+    new Request(`http://localhost/internal/v1/capsules/${capsule.id}/plan`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TEST_DEPLOY_CONTROL_TOKEN}` },
+    }),
+  );
+  if (response.status !== 201) {
+    throw new Error(
+      `unexpected plan response ${response.status}: ${await response.text()}`,
+    );
+  }
+  const body = (await response.json()) as { run: Run };
+  if (body.run.status !== "succeeded") {
+    throw new Error(
+      JSON.stringify(await created.operations.getPlanRun(body.run.id)),
+    );
+  }
+  assert.equal(body.run.planDigest, `sha256:${"c".repeat(64)}`);
+  assert.equal(requests.length > 0, true);
+  assert.deepEqual(requests[0], {
+    profileContract: RUNTIME_INPUT_PROFILE.contract,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    installConfigId: installConfig.id,
+    bindings: RUNTIME_INPUT_PROFILE.oidcClient,
+  });
+  assert.equal(planJobs.length, 1);
+  assert.match(
+    JSON.stringify(planJobs[0]),
+    /runtime_input_nonce/u,
+  );
+});
+
+test("composed app keeps binding-delivered OIDC plans fail-closed without an authority", async () => {
+  const { created, capsule } = await buildRuntimeInputPlanFixture();
+  const response = await created.app.fetch(
+    new Request(`http://localhost/internal/v1/capsules/${capsule.id}/plan`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TEST_DEPLOY_CONTROL_TOKEN}` },
+    }),
+  );
+  assert.equal(response.status, 409);
+  const body = (await response.json()) as {
+    error: { code: string; details?: { reason?: string } };
+  };
+  assert.equal(body.error.code, "failed_precondition");
+  assert.equal(body.error.details?.reason, "runtime_inputs_material_unusable");
+});
+
+test("composed app refuses to boot when its runtime-input authority cannot initialize", async () => {
+  const { buildComposedApp } =
+    await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  await assert.rejects(
+    buildComposedApp({
+      config: testConfig(),
+      store: new PostgresAccountsStore(stubQueryClient()),
+      accountsHandler: accountsHandlerSpy().handler,
+      createRuntimeInputOidcClientSource: async () => {
+        throw new Error("operator OIDC authority unavailable");
+      },
+    }),
+    /operator OIDC authority unavailable/u,
+  );
+});
+
+test("composed app forwards operator recipe and Run issuer into Capsule materialization", async () => {
+  const issued: Array<{
+    readonly connectionId: string;
+    readonly runId: string;
+    readonly phase: string;
+    readonly audience: string;
+    readonly scopes: readonly string[];
+  }> = [];
+  const fixture = await buildRuntimeInputPlanFixture({
+    oidcSource: {
+      generation: async () => "sha256:composed-app-oidc-generation",
+      materialize: async () => ({
+        generation: "sha256:composed-app-oidc-generation",
+        values: {
+          TAKOSUMI_ACCOUNTS_ISSUER_URL: "https://app.takosumi.test",
+          TAKOSUMI_ACCOUNTS_CLIENT_ID: "client_runtime_input",
+          TAKOSUMI_ACCOUNTS_OWNER_SUB: "owner_runtime_input",
+          TAKOSUMI_ACCOUNTS_REDIRECT_URI:
+            "https://runtime-input.example.test/api/auth/callback/takos",
+        },
+      }),
+    },
+    operatorProviderConnections: [COMPOSED_OPERATOR_CONNECTION],
+    credentialRecipes: [COMPOSED_RUN_ISSUED_RECIPE],
+    credentialRecipeDrivers: {
+      [credentialRecipeDriverKey({
+        id: COMPOSED_RUN_ISSUED_RECIPE.id,
+        authMode: "broker",
+      })]: COMPOSED_RUN_DRIVER,
+    },
+    runCredentialIssuer: async ({ connection, run, request }) => {
+      issued.push({
+        connectionId: connection.id,
+        runId: run.runId,
+        phase: run.phase,
+        audience: request.audience,
+        scopes: [...request.scopes],
+      });
+      return {
+        token: `composed-issued:${run.runId}`,
+        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+        ttlSeconds: request.ttlSeconds ?? 900,
+      };
+    },
+    allowOperatorScopedProviderConnections: true,
+  });
+  const response = await fixture.created.app.fetch(
+    new Request(
+      `http://localhost/internal/v1/capsules/${fixture.capsule.id}/plan`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${TEST_DEPLOY_CONTROL_TOKEN}` },
+      },
+    ),
+  );
+  if (response.status !== 201) {
+    throw new Error(
+      `operator plan failed ${response.status}: ${await response.text()}`,
+    );
+  }
+  const body = (await response.json()) as { run: Run };
+  if (body.run.status !== "succeeded") {
+    throw new Error(
+      `operator plan run failed: ${JSON.stringify(
+        await fixture.created.operations.getPlanRun(body.run.id),
+      )}`,
+    );
+  }
+  assert.equal(fixture.planJobs.length, 1);
+  assert.equal(
+    fixture.planJobs[0]?.credentials?.env.COMPOSED_RUN_CREDENTIAL,
+    `composed-issued:${body.run.id}`,
+  );
+  assert.deepEqual(issued, [
+    {
+      connectionId: COMPOSED_OPERATOR_CONNECTION.id,
+      runId: body.run.id,
+      phase: "plan",
+      audience: "composed-app.example.v1",
+      scopes: ["provider:invoke"],
+    },
+  ]);
+});
+
+test("composed app keeps operator-scoped provider bindings denied by default", async () => {
+  const fixtureOptions = {
+    oidcSource: {
+      generation: async () => "sha256:composed-app-oidc-generation",
+      materialize: async () => ({
+        generation: "sha256:composed-app-oidc-generation",
+        values: {
+          TAKOSUMI_ACCOUNTS_ISSUER_URL: "https://app.takosumi.test",
+          TAKOSUMI_ACCOUNTS_CLIENT_ID: "client_runtime_input",
+          TAKOSUMI_ACCOUNTS_OWNER_SUB: "owner_runtime_input",
+          TAKOSUMI_ACCOUNTS_REDIRECT_URI:
+            "https://runtime-input.example.test/api/auth/callback/takos",
+        },
+      }),
+    },
+    operatorProviderConnections: [COMPOSED_OPERATOR_CONNECTION],
+    credentialRecipes: [COMPOSED_RUN_ISSUED_RECIPE],
+    credentialRecipeDrivers: {
+      [credentialRecipeDriverKey({
+        id: COMPOSED_RUN_ISSUED_RECIPE.id,
+        authMode: "broker",
+      })]: COMPOSED_RUN_DRIVER,
+    },
+  } satisfies Parameters<typeof buildRuntimeInputPlanFixture>[0];
+  for (const allow of [undefined, false] as const) {
+    const fixture = await buildRuntimeInputPlanFixture({
+      ...fixtureOptions,
+      ...(allow === undefined
+        ? {}
+        : { allowOperatorScopedProviderConnections: allow }),
+    });
+    const response = await fixture.created.app.fetch(
+      new Request(
+        `http://localhost/internal/v1/capsules/${fixture.capsule.id}/plan`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${TEST_DEPLOY_CONTROL_TOKEN}` },
+        },
+      ),
+    );
+    if (response.status !== 403) {
+      throw new Error(
+        `operator denial returned ${response.status}: ${await response.text()}`,
+      );
+    }
+    const body = (await response.json()) as {
+      error: { code: string; details?: { reason?: string } };
+    };
+    assert.equal(body.error.code, "permission_denied");
+    assert.equal(
+      body.error.details?.reason,
+      "provider_connection_setup_required",
+    );
+    assert.equal(fixture.planJobs.length, 0);
+  }
 });

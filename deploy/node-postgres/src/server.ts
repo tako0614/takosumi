@@ -139,6 +139,27 @@ export interface ComposedServerOverrides {
   readonly defaultRunnerProfileId?: Parameters<
     typeof buildComposedApp
   >[0]["defaultRunnerProfileId"];
+  readonly credentialRecipes?: Parameters<
+    typeof buildComposedApp
+  >[0]["credentialRecipes"];
+  readonly credentialRecipeDrivers?: Parameters<
+    typeof buildComposedApp
+  >[0]["credentialRecipeDrivers"];
+  readonly operatorProviderConnections?: Parameters<
+    typeof buildComposedApp
+  >[0]["operatorProviderConnections"];
+  readonly runCredentialIssuer?: Parameters<
+    typeof buildComposedApp
+  >[0]["runCredentialIssuer"];
+  readonly allowOperatorScopedProviderConnections?: Parameters<
+    typeof buildComposedApp
+  >[0]["allowOperatorScopedProviderConnections"];
+  readonly createRuntimeInputOidcClientSource?: Parameters<
+    typeof buildComposedApp
+  >[0]["createRuntimeInputOidcClientSource"];
+  readonly runtimeBindingDerivationKey?: Parameters<
+    typeof buildComposedApp
+  >[0]["runtimeBindingDerivationKey"];
 }
 
 /**
@@ -191,6 +212,35 @@ export async function buildComposedServer(
       : {}),
     ...(overrides.defaultRunnerProfileId
       ? { defaultRunnerProfileId: overrides.defaultRunnerProfileId }
+      : {}),
+    ...(overrides.credentialRecipes !== undefined
+      ? { credentialRecipes: overrides.credentialRecipes }
+      : {}),
+    ...(overrides.credentialRecipeDrivers !== undefined
+      ? { credentialRecipeDrivers: overrides.credentialRecipeDrivers }
+      : {}),
+    ...(overrides.operatorProviderConnections !== undefined
+      ? {
+          operatorProviderConnections: overrides.operatorProviderConnections,
+        }
+      : {}),
+    ...(overrides.runCredentialIssuer !== undefined
+      ? { runCredentialIssuer: overrides.runCredentialIssuer }
+      : {}),
+    ...(overrides.allowOperatorScopedProviderConnections !== undefined
+      ? {
+          allowOperatorScopedProviderConnections:
+            overrides.allowOperatorScopedProviderConnections,
+        }
+      : {}),
+    ...(overrides.createRuntimeInputOidcClientSource
+      ? {
+          createRuntimeInputOidcClientSource:
+            overrides.createRuntimeInputOidcClientSource,
+        }
+      : {}),
+    ...(overrides.runtimeBindingDerivationKey !== undefined
+      ? { runtimeBindingDerivationKey: overrides.runtimeBindingDerivationKey }
       : {}),
     sqlClient: overrides.sqlClient ?? wrapServiceSqlClient(pool),
   });
